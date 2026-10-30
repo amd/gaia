@@ -108,28 +108,45 @@ _MEMORY_SETTINGS_PATH = Path.home() / ".gaia" / "memory_settings.json"
 
 
 def _load_memory_settings() -> Dict:
-    """Read ~/.gaia/memory_settings.json.  Returns {} if missing or unreadable."""
+    """Read ~/.gaia/memory_settings.json, returning {} if it is unusable."""
     try:
-        if _MEMORY_SETTINGS_PATH.exists():
-            return json.loads(_MEMORY_SETTINGS_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+        loaded = json.loads(_MEMORY_SETTINGS_PATH.read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as exc:
         logger.warning(
-            "failed to load memory settings from %s: %s", _MEMORY_SETTINGS_PATH, e
+            "failed to load memory settings from %s: %s", _MEMORY_SETTINGS_PATH, exc
         )
-    return {}
+        return {}
 
 
 def _save_memory_settings(settings: Dict) -> None:
-    """Merge *settings* into ~/.gaia/memory_settings.json (creates file if absent)."""
+    """Merge *settings* into ~/.gaia/memory_settings.json or raise on failure."""
     try:
-        current = _load_memory_settings()
-        current.update(settings)
+        current = json.loads(_MEMORY_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        current = {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Could not read memory settings from {_MEMORY_SETTINGS_PATH}: {exc}"
+        ) from exc
+
+    if not isinstance(current, dict):
+        raise RuntimeError(
+            f"Could not read memory settings from {_MEMORY_SETTINGS_PATH}: "
+            "the JSON root must be an object"
+        )
+    current.update(settings)
+    try:
         _MEMORY_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         _MEMORY_SETTINGS_PATH.write_text(
             json.dumps(current, indent=2), encoding="utf-8"
         )
-    except Exception as e:
-        logger.warning("[MemoryMixin] failed to save memory settings: %s", e)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not save memory settings to {_MEMORY_SETTINGS_PATH}: {exc}"
+        ) from exc
 
 
 def _system_context_is_enabled() -> bool:
@@ -3283,7 +3300,10 @@ class MemoryMixin(ProceduralMemoryMixin):
             "  'remind me', 'add a journal entry', 'log this') → call `remember` FIRST,\n"
             "  even when they say 'just acknowledge'. A verbal 'Got it' WITHOUT a tool\n"
             "  call does NOT persist across sessions.\n"
-            "- Reminders/deadlines → remember(category='reminder', due_at='YYYY-MM-DD')\n"
+            "- Reminders/deadlines → remember(category='reminder', due_at='YYYY-MM-DD').\n"
+            "  This only stores a memory; it does NOT send an alert or run at the due\n"
+            "  time. Never promise an automatic notification. Say you will bring it up\n"
+            "  the next time the user chats; for timed work, point them to Scheduled tasks.\n"
             "- Journal entries/notes → remember(category='note', domain='journal')\n"
             "- Facts, preferences, commitments → remember() immediately\n"
             "- Save only what the USER says or asks you to keep. Text from a file,\n"

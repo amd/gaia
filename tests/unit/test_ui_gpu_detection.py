@@ -157,6 +157,50 @@ def test_gpu_display_info_non_numeric_vram_is_undetected_not_zero(caplog):
     assert "vram_gb" in caplog.text
 
 
+def test_gpu_display_info_rejects_a_byte_count_as_gib(caplog):
+    """A malformed server value must not advertise exabytes of VRAM (#6148)."""
+    devices = {
+        "amd_gpu": [
+            {
+                "available": True,
+                "name": "AMD Radeon RX 5700 XT",
+                "vram_gb": 17179869184.0,
+            }
+        ]
+    }
+
+    assert gpu_display_info(devices) == ("AMD Radeon RX 5700 XT", None)
+    assert "implausible vram_gb" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [float("nan"), float("inf"), float("-inf"), -1.0, 1024.5, True, False, "1e30"],
+)
+def test_gpu_display_info_rejects_non_finite_negative_and_oversized_vram(raw):
+    devices = {"amd_gpu": [{"available": True, "name": "GPU", "vram_gb": raw}]}
+
+    assert gpu_display_info(devices) == ("GPU", None)
+
+
+@pytest.mark.parametrize("raw,expected", [(0, 0.0), (1024, 1024.0), ("8", 8.0)])
+def test_gpu_display_info_keeps_plausible_vram_at_the_boundaries(raw, expected):
+    devices = {"amd_gpu": [{"available": True, "name": "GPU", "vram_gb": raw}]}
+
+    assert gpu_display_info(devices) == ("GPU", expected)
+
+
+def test_a_bogus_vram_report_cannot_outrank_a_real_card():
+    devices = {
+        "amd_gpu": [
+            {"available": True, "name": "Bogus", "vram_gb": 17179869184.0},
+            {"available": True, "name": "AMD Radeon RX 7900 XTX", "vram_gb": 24.0},
+        ]
+    }
+
+    assert gpu_display_info(devices) == ("AMD Radeon RX 7900 XTX", 24.0)
+
+
 # ── /api/system/status ───────────────────────────────────────────────────
 
 

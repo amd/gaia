@@ -6,6 +6,59 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The agent ships as one Python package.** `ChatAgent`, the class the agent
+  builds on, moved into `gaia-agent-gaia` (`gaia_agent.chat_agent`), so the
+  binary and a pip install no longer need `gaia-agent-chat`. Prompts and tools
+  are unchanged. API, MCP and scheduled callers that still name the retired
+  `chat`, `doc` or `file` agents get this agent instead; Agent UI chats saved
+  under them stay read-only. MCP settings saved for `installed:chat` no
+  longer apply (#6099).
+### For integrators: contract 2.26
+
+- **"Always" answers can be listed and revoked** (contract **2.26**).
+  `GET /v1/gaia/sessions/{session_id}/grants` lists what a session's user
+  answered "always" to, as `{ key, label }`, including answers given in a turn
+  still running; `DELETE` on the same path revokes one (`?key=`) or all, from
+  the very next gated call. The Agent UI uses it to offer **Always allow** on
+  the flagship's prompts and to list and revoke those grants with the chat's
+  own. An unknown session or key is a `404`.
+- **`needs_confirmation` carries `always_label`** beside `always_scope`: the
+  same grant in plain words (`editing notes.md`), when there is one.
+
+### Fixed
+
+- **A repository indexed with `index_codebase` stays the code-search folder**
+  (#6055). In the Agent UI, each new turn reset code search to the session's
+  starting folder, so the next `search_code_index` looked in the wrong place
+  instead of the repository just indexed. The repository is still dropped if
+  the allowed folders no longer contain it.
+- **The binary carries the starter skills and their tools.** The release build
+  shipped none of `hub/skills`, so a skill like `rss-digest` loaded in a
+  checkout but its tools were missing from the binary. The pack is now
+  bundled with every module its code imports. A skill tool named like a
+  confirmation-gated core tool (`write_file`, `run_python`) always asks first,
+  and a skill's `write_*` / `edit_*` tool counts as a file change.
+
+### Added
+
+- **Mail: whole conversations, what's waiting on you, and which account.**
+  Three read-only tools join the mail set, for Gmail and Outlook alike.
+  `get_thread` reads a whole conversation, oldest first, clipping long bodies
+  so no message is dropped, and refuses a thread too long for what is left of
+  the turn's reading budget rather than overflow the context window. `list_waiting_on_you` finds the inbox threads where
+  someone asked you directly for a reply and you were already in that
+  conversation. Newsletters, cold outreach and automated mail never qualify.
+  `list_connected_mailboxes` says which mailboxes are connected and which one
+  the agent reads, without a network call, so it still answers with the
+  internet off. The registered tool count is now 101.
+- **A forwarded read-only Gmail connection is accepted.** A host app that
+  forwarded a connection carrying `gmail.readonly`, which is all the agent
+  asks for, without naming the required scopes, was refused because GAIA
+  defaulted to the email agent's `gmail.modify` + `gmail.send`. Any one mail
+  read scope now satisfies the default, for Gmail and Outlook.
+
 ## [0.3.3]
 
 Released with GAIA 0.25.3, and requires the `gaia` Python CLI 0.25.3+ on `PATH`.
@@ -27,22 +80,6 @@ so probe `/version` before sending it.
   can't read is refused instead of being indexed as binary text.
 - **Two agents starting together on a new database no longer fail** with
   `database is locked`.
-
-- **Mail: whole conversations, what's waiting on you, and which account.**
-  Three read-only tools join the mail set, for Gmail and Outlook alike.
-  `get_thread` reads a whole conversation, oldest first, clipping long bodies
-  so no message is dropped, and refuses a thread too long for what is left of
-  the turn's reading budget rather than overflow the context window. `list_waiting_on_you` finds the inbox threads where
-  someone asked you directly for a reply and you were already in that
-  conversation. Newsletters, cold outreach and automated mail never qualify.
-  `list_connected_mailboxes` says which mailboxes are connected and which one
-  the agent reads, without a network call, so it still answers with the
-  internet off. The registered tool count is now 101.
-- **A forwarded read-only Gmail connection is accepted.** A host app that
-  forwarded a connection carrying `gmail.readonly`, which is all the agent
-  asks for, without naming the required scopes, was refused because GAIA
-  defaulted to the email agent's `gmail.modify` + `gmail.send`. Any one mail
-  read scope now satisfies the default, for Gmail and Outlook.
 
 ### For integrators: contract 2.25
 

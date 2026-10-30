@@ -151,6 +151,12 @@ class AgentLoop:
         self._lingering_ticks: Dict[str, asyncio.Future] = {}
         # Track in-flight tick (prevents overlapping runs)
         self._running_lock: Optional[asyncio.Lock] = None
+        # Goal id -> the cooperative stop handles for the tick working on it.
+        # A user can cancel a goal or begin a foreground turn while it runs.
+        self._active_goal_ticks: Dict[
+            str, tuple[threading.Event, Any, threading.Event]
+        ] = {}
+        self._active_goal_ticks_lock = threading.Lock()
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -196,6 +202,44 @@ class AgentLoop:
             )
         except asyncio.QueueFull as exc:
             logger.error("Agent trigger queue unexpectedly full: %s", exc)
+
+    def cancel_goal(self, goal_id: str) -> bool:
+        """Tell the in-flight background tick for *goal_id* to stop.
+
+        The GoalStore records cancellation separately; this only reaches the
+        live agent so a cancelled goal stops holding the shared model slot. A
+        tick can work on several goals; stopping one pauses the shared tick and
+        leaves its other goals queued for the next run.
+        """
+        with self._active_goal_ticks_lock:
+            active = self._active_goal_ticks.get(goal_id)
+        if active is None:
+            return False
+        self._stop_active_tick(active)
+        return True
+
+    def yield_to_user(self) -> bool:
+        """Stop a background tick so a newly submitted foreground turn can run."""
+        with self._active_goal_ticks_lock:
+            active_ticks = list(self._active_goal_ticks.values())
+        seen = set()
+        for active in active_ticks:
+            if id(active) in seen:
+                continue
+            seen.add(id(active))
+            self._stop_active_tick(active)
+        return bool(active_ticks)
+
+    @staticmethod
+    def _stop_active_tick(
+        active: tuple[threading.Event, Any, threading.Event],
+    ) -> None:
+        cancel_event, handler, stopped_for_foreground = active
+        stopped_for_foreground.set()
+        cancel_event.set()
+        handler.cancelled.set()
+        # A relayed run can be blocked in a socket read, so wake it as Stop does.
+        handler.close_active_relay_response()
 
     # ── Internal: trigger consumer ────────────────────────────────────────────
 
@@ -434,6 +478,12 @@ class AgentLoop:
         result_holder: Dict[str, Any] = {"error": None}
         # Set on timeout so the agent loop stops at its next step boundary.
         cancel_event = threading.Event()
+        stopped_for_foreground = threading.Event()
+        active_tick = (cancel_event, sse_handler, stopped_for_foreground)
+        active_goal_ids = [goal.id for goal in goals if getattr(goal, "id", None)]
+        with self._active_goal_ticks_lock:
+            for goal_id in active_goal_ids:
+                self._active_goal_ticks[goal_id] = active_tick
         db = self._db
 
         def _run_agent() -> None:
@@ -456,7 +506,7 @@ class AgentLoop:
                 custom_model = db.get_setting("custom_model")
                 if custom_model:
                     model_id = custom_model
-                elif registry and agent_type != "chat":
+                elif registry:
                     model_id = registry.resolve_model(agent_type) or model_id
                 model_id, device_ctx = _helpers._apply_device_model(
                     session, agent_type, model_id, custom_model, registry
@@ -531,10 +581,30 @@ class AgentLoop:
                 sse_handler.signal_done()
 
         worker = run_in_own_thread(_run_agent, name=f"gaia-tick-{session_id[:8]}")
+
+        def _clear_active_goals(_worker) -> None:
+            with self._active_goal_ticks_lock:
+                for goal_id in active_goal_ids:
+                    if self._active_goal_ticks.get(goal_id) is active_tick:
+                        self._active_goal_ticks.pop(goal_id, None)
+
+        worker.add_done_callback(_clear_active_goals)
         try:
-            done, _ = await asyncio.wait({worker}, timeout=_TICK_TIMEOUT)
+            deadline = time.monotonic() + _TICK_TIMEOUT
+            done = set()
+            # Poll so a cancel or foreground turn is seen mid-tool, not at the timeout.
+            while not done and not stopped_for_foreground.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                done, _ = await asyncio.wait({worker}, timeout=min(0.5, remaining))
             if not done:
-                logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
+                if stopped_for_foreground.is_set():
+                    reason = "tick stopped for user"
+                    logger.info("AgentLoop: tick stopped for a user request")
+                else:
+                    reason = "tick timed out"
+                    logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
                 cancel_event.set()
                 sse_handler.cancelled.set()
                 finished = await wait_until_off_the_model(
@@ -548,7 +618,7 @@ class AgentLoop:
                         session_id[:8],
                     )
                     self._lingering_ticks[session_id] = worker
-                    return LoopDirective("idle", reason="tick timed out")
+                    return LoopDirective("idle", reason=reason)
         except asyncio.CancelledError:
             cancel_event.set()
             sse_handler.cancelled.set()
@@ -568,6 +638,10 @@ class AgentLoop:
         except Exception as exc:
             logger.error("Could not persist autonomous turn: %s", exc, exc_info=True)
 
+        if stopped_for_foreground.is_set():
+            # A cancel or foreground chat paused this shared tick: its error is
+            # the stop itself, and sibling goals stay queued for the next tick.
+            return LoopDirective("idle", reason="tick stopped for user")
         if result_holder["error"]:
             # The goals are still actionable, so continuing would rerun the
             # failure at once until the hourly budget is gone.

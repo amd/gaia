@@ -81,7 +81,7 @@ def test_scenarios_exist():
 def test_hub_entry_points_parsed():
     # The flagship must be visible, or the default check below would pass
     # vacuously on a pyproject-parsing regression.
-    assert {"chat", "gaia"} <= _hub_agent_ids()
+    assert "gaia" in _hub_agent_ids()
 
 
 def test_default_agent_type_resolves():

@@ -1,8 +1,9 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Guards the amd-gaia dependency floor against the agent's real core needs.
+"""Guards the amd-gaia dependency floor against ChatAgent's real core needs.
 
-The chat agent imports ``get_embedding_model_for_device`` from
+ChatAgent (``gaia_agent.chat_agent``, moved here from gaia-agent-chat in #6099)
+imports ``get_embedding_model_for_device`` from
 ``gaia.agents.registry`` at module load; that symbol first shipped in core
 v0.22.0. With a lower floor a fresh resolver may legally select an older
 core and the agent dies at startup with ImportError (#2112). These tests
@@ -20,8 +21,7 @@ from pathlib import Path
 
 import pytest
 
-CHAT_ROOT = Path(__file__).resolve().parents[1]
-AGENTS_ROOT = CHAT_ROOT.parents[1]
+FLAGSHIP_ROOT = Path(__file__).resolve().parents[1]
 
 # First core release shipping gaia.agents.registry.get_embedding_model_for_device
 # (introduced by commit 89db99d6, first tagged in v0.22.0).
@@ -48,7 +48,8 @@ def _floor_tuple(version: str) -> tuple[int, ...]:
 
 def test_agent_module_imports_and_registry_symbol_exists():
     """The exact import chain that crashed fresh installs in #2112."""
-    import gaia_agent_chat.agent  # noqa: F401
+    import gaia_agent.chat_agent  # noqa: F401
+
     from gaia.agents.registry import get_embedding_model_for_device
 
     assert callable(get_embedding_model_for_device)
@@ -57,14 +58,15 @@ def test_agent_module_imports_and_registry_symbol_exists():
 def test_agent_module_imports_and_gaia_home_symbol_exists():
     """#4381: the agent imports gaia.config.gaia_home at module load; a
     core released before that symbol (e.g. 0.24.1) dies here."""
-    import gaia_agent_chat.agent  # noqa: F401
+    import gaia_agent.chat_agent  # noqa: F401
+
     from gaia.config import gaia_home
 
     assert callable(gaia_home)
 
 
 def test_pyproject_floor_covers_registry_symbol():
-    pyproject = (CHAT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    pyproject = (FLAGSHIP_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     match = re.search(_AMD_GAIA_FLOOR_RE, pyproject)
     assert match, "pyproject.toml must declare an amd-gaia>=X.Y.Z floor"
     assert _floor_tuple(match.group(1)) >= REQUIRED_FLOOR, (
@@ -80,7 +82,7 @@ def test_pyproject_floor_covers_path_access():
     from gaia.agents.tools.path_access import read_access_error
 
     assert callable(read_access_error)
-    pyproject = (CHAT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    pyproject = (FLAGSHIP_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     match = re.search(_AMD_GAIA_FLOOR_RE, pyproject)
     assert match
     assert _floor_tuple(match.group(1)) >= PATH_ACCESS_FLOOR, (
@@ -97,11 +99,7 @@ def _core_release() -> tuple[int, ...]:
     return (Version(__version__).release + (0, 0, 0))[:3]
 
 
-@pytest.mark.parametrize(
-    "pyproject",
-    [CHAT_ROOT / "pyproject.toml", AGENTS_ROOT / "gaia" / "python" / "pyproject.toml"],
-    ids=["chat", "gaia"],
-)
+@pytest.mark.parametrize("pyproject", [FLAGSHIP_ROOT / "pyproject.toml"], ids=["gaia"])
 def test_floor_rises_with_the_core_that_ships_reasoning_tools(pyproject):
     """The floor can't name an unreleased core, so it must rise at that release.
 
@@ -121,7 +119,7 @@ def test_floor_rises_with_the_core_that_ships_reasoning_tools(pyproject):
     )
     if _core_release() >= REASONING_TOOLS_FLOOR:
         assert floor >= REASONING_TOOLS_FLOOR, (
-            f"core is now {_core_release()}, but {pyproject.parent.parent.name}'s "
+            f"core is now {_core_release()}, but {pyproject.parent.name}'s "
             f"amd-gaia floor is still {match.group(1)}; raise it (and "
             "min_gaia_version) to 0.25.1, the first core with reasoning_tools"
         )
@@ -140,9 +138,9 @@ def test_floor_guard_fails_a_release_that_forgets_the_bump(monkeypatch, tmp_path
         test_floor_rises_with_the_core_that_ships_reasoning_tools(ahead)
 
 
-@pytest.mark.parametrize("pyproject", [CHAT_ROOT / "pyproject.toml"], ids=["chat"])
+@pytest.mark.parametrize("pyproject", [FLAGSHIP_ROOT / "pyproject.toml"], ids=["gaia"])
 def test_chat_floor_rises_with_the_core_that_ships_held_by_another_program(pyproject):
-    """The chat agent imports gaia.utils.file_lock.held_by_another_program at
+    """ChatAgent imports gaia.utils.file_lock.held_by_another_program at
     start, which no core before 0.25.1 ships."""
     from gaia.utils.file_lock import held_by_another_program
 
@@ -152,7 +150,7 @@ def test_chat_floor_rises_with_the_core_that_ships_held_by_another_program(pypro
     floor = _floor_tuple(match.group(1))
     if _core_release() >= FILE_LOCK_HELD_FLOOR:
         assert floor >= FILE_LOCK_HELD_FLOOR, (
-            f"core is now {_core_release()}, but the chat agent's amd-gaia floor "
+            f"core is now {_core_release()}, but the flagship's amd-gaia floor "
             f"is still {match.group(1)}; raise it (and min_gaia_version) to "
             "0.25.1, the first core with file_lock.held_by_another_program"
         )
@@ -170,13 +168,13 @@ def test_held_by_another_program_guard_fails_a_release_that_forgets_the_bump(
 
 def test_manifest_floors_match_pyproject():
     """gaia-agent.yaml repeats the floor twice; both must stay in lock-step."""
-    manifest = (CHAT_ROOT / "gaia-agent.yaml").read_text(encoding="utf-8")
+    manifest = (FLAGSHIP_ROOT / "gaia-agent.yaml").read_text(encoding="utf-8")
     min_gaia = re.search(r'min_gaia_version:\s*"([0-9.]+)"', manifest)
     dep = re.search(_AMD_GAIA_FLOOR_RE, manifest)
     assert min_gaia, "gaia-agent.yaml must declare min_gaia_version"
     assert dep, "gaia-agent.yaml must declare an amd-gaia>=X.Y.Z dependency"
 
-    pyproject = (CHAT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    pyproject = (FLAGSHIP_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     pyproject_floor = re.search(_AMD_GAIA_FLOOR_RE, pyproject)
     assert pyproject_floor
 

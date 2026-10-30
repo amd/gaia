@@ -21,6 +21,8 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("GAIA_HOME", home)
+	// A developer's own Local only must not change what these tests send.
+	os.Setenv("GAIA_POLICY_FILE", home+"/policy.json")
 	os.Setenv("LEMONADE_BASE_URL", "")
 	lemonade.StubEnsureEmbeddedForTest(func(context.Context) error {
 		return errors.New("test: no daemon")

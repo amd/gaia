@@ -13,7 +13,7 @@ from gaia.agents.base.memory import MemoryMixin
 
 @pytest.fixture
 def agent(monkeypatch):
-    from gaia_agent_chat.agent import ChatAgent
+    from gaia_agent.chat_agent import ChatAgent
 
     monkeypatch.setattr(MemoryMixin, "_after_process_query", lambda self, u, a: None)
     built = ChatAgent.__new__(ChatAgent)
@@ -43,7 +43,7 @@ def test_only_an_answered_turn_marks_results_told(agent, status, answer, told):
 
 
 def test_a_fired_runs_session_id_is_one_the_agent_accepts():
-    from gaia_agent_chat.session import validate_session_id
+    from gaia_agent.session import validate_session_id
 
     from gaia.daemon import followups
 

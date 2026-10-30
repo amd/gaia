@@ -34,7 +34,7 @@ from __future__ import annotations
 import multiprocessing
 import sys
 
-from gaia_agent_chat.python_runner import dispatch as python_dispatch
+from gaia_agent.python_runner import dispatch as python_dispatch
 
 if __name__ == "__main__":
     # A script's multiprocessing workers re-launch this binary too.

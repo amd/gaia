@@ -24,7 +24,7 @@ never ``-m``::
 Surface mechanisms (one per surface, no fallback hedges):
 
 - Registered tools — a pure AST parse of the flagship's tool source of truth:
-  ``gaia_agent_chat.tool_bundles``'s ``FULL_CORE_TOOLS`` ∪ every
+  ``gaia_agent.tool_bundles``'s ``FULL_CORE_TOOLS`` ∪ every
   ``FULL_BUNDLES`` member. The full-profile CORE ∪ bundles must equal the
   registry exactly (drift-guarded by ``tests/unit/test_chat_tool_bundles.py``
   and this package's ``tests/test_gaia_agent.py``, which builds the live
@@ -59,15 +59,7 @@ _PYTHON_ROOT = _PACKAGING_DIR.parent
 _AGENT_ROOT = _PYTHON_ROOT.parent
 _REPO_ROOT = _AGENT_ROOT.parent.parent.parent
 
-_TOOL_BUNDLES_PATH = (
-    _REPO_ROOT
-    / "hub"
-    / "agents"
-    / "chat"
-    / "python"
-    / "gaia_agent_chat"
-    / "tool_bundles.py"
-)
+_TOOL_BUNDLES_PATH = _PYTHON_ROOT / "gaia_agent" / "tool_bundles.py"
 _SKILL_LIBRARY_TOOLS_PATH = (
     _REPO_ROOT / "src" / "gaia" / "agents" / "tools" / "skill_library_tools.py"
 )
@@ -92,7 +84,7 @@ _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 TOOLS_COUNT_DEFINITION = (
     "tools_count = the number of registered agent-loop tools for the default "
     "construction (prompt_profile='full', memory available): FULL_CORE_TOOLS "
-    "unioned with every FULL_BUNDLES member in gaia_agent_chat.tool_bundles "
+    "unioned with every FULL_BUNDLES member in gaia_agent.tool_bundles "
     "(which the flagship's registry must equal exactly, including the 8 "
     "skill-library tools and the 4 code-index tools), less the load_tools "
     "escape hatch, which registers only when GAIA_DYNAMIC_TOOLS=1 turns "
@@ -127,6 +119,7 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     "query/{run_id}/tool_decision": _NO_EVAL_SENTINEL,
     "sessions/{session_id}/bypass": _NO_EVAL_SENTINEL,
     "sessions/{session_id}/internet": _NO_EVAL_SENTINEL,
+    "sessions/{session_id}/grants": _NO_EVAL_SENTINEL,
     "memory": _NO_EVAL_SENTINEL,
     "skills": _NO_EVAL_SENTINEL,
 }
@@ -486,7 +479,7 @@ def derive_matrix(repo_root: Path | None = None) -> CapabilityMatrix:
         raise ValueError(
             f"SKILL_LIBRARY_TOOL_NAMES entries {sorted(missing)} are not in the "
             "full-profile bundle union — the skills/skill_hub bundles in "
-            "gaia_agent_chat.tool_bundles drifted from the framework mixin."
+            "gaia_agent.tool_bundles drifted from the framework mixin."
         )
 
     # Fail loud at generation/--check time too, not only under pytest: a

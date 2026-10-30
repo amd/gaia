@@ -277,8 +277,8 @@ def test_title_runs_on_the_side_slot_under_the_lease(title_client):
 
 
 def test_title_gives_up_on_a_long_model_queue(title_client, monkeypatch):
-    """A title waits at most 30 s for the model, then returns None instead of
-    holding a worker thread behind a long turn."""
+    """A title waits at most 30 s for the model, then says it is busy instead
+    of holding a worker thread behind a long turn."""
     client, _made, _posts = title_client
     limits = []
 
@@ -293,13 +293,13 @@ def test_title_gives_up_on_a_long_model_queue(title_client, monkeypatch):
 
     monkeypatch.setattr(broker_client, "model_lease", busy_lease)
 
-    title = asyncio.run(
-        helpers._generate_session_title(
-            _URL, "Gemma-4-E4B-it-GGUF", "plan a trip", "ok"
+    with pytest.raises(helpers._TitleModelBusy):
+        asyncio.run(
+            helpers._generate_session_title(
+                _URL, "Gemma-4-E4B-it-GGUF", "plan a trip", "ok"
+            )
         )
-    )
 
-    assert title is None
     assert limits == [30.0]
     client.chat_completions.assert_not_called()
     # The cap is the title's alone; it does not leak into the caller's scope.
