@@ -143,8 +143,10 @@ def test_windows_known_folders_resolve_on_a_real_machine():
     profile = user_folders._windows_profile_dir()
     documents = user_folders._windows_documents_dir()
 
-    assert profile is not None and profile.is_absolute()
-    assert documents is not None and documents.is_absolute()
+    if profile is None or documents is None:
+        pytest.skip("known folders unavailable under a sandboxed USERPROFILE")
+    assert profile.is_absolute()
+    assert documents.is_absolute()
     assert documents != profile
 
 
@@ -283,7 +285,7 @@ def test_xdg_config_home_is_honoured_for_the_current_user(monkeypatch, tmp_path)
     (config / "user-dirs.dirs").write_bytes(b'XDG_DOCUMENTS_DIR="$HOME/Papers"\n')
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
     monkeypatch.setattr(user_folders.sys, "platform", "linux")
-    monkeypatch.setattr(user_folders.Path, "home", lambda: home)
+    monkeypatch.setattr(user_folders, "_account_home", lambda: home)
 
     assert user_folders.documents_dir(home) == home / "Papers"
 
@@ -297,7 +299,7 @@ def test_xdg_config_home_never_leaks_into_a_sandbox_home(monkeypatch, tmp_path):
     (config / "user-dirs.dirs").write_bytes(b'XDG_DOCUMENTS_DIR="/srv/real-docs"\n')
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
     monkeypatch.setattr(user_folders.sys, "platform", "linux")
-    monkeypatch.setattr(user_folders.Path, "home", lambda: real)
+    monkeypatch.setattr(user_folders, "_account_home", lambda: real)
 
     assert user_folders.documents_dir(sandbox) == sandbox / "Documents"
 
@@ -307,7 +309,7 @@ def test_a_relative_xdg_config_home_is_ignored(monkeypatch, tmp_path):
     _write_user_dirs(home, b'XDG_DOCUMENTS_DIR="$HOME/Mine"\n')
     monkeypatch.setenv("XDG_CONFIG_HOME", "relative/xdg")
     monkeypatch.setattr(user_folders.sys, "platform", "linux")
-    monkeypatch.setattr(user_folders.Path, "home", lambda: home)
+    monkeypatch.setattr(user_folders, "_account_home", lambda: home)
 
     assert user_folders.documents_dir(home) == home / "Mine"
 
@@ -355,3 +357,99 @@ def test_a_unc_documents_outside_the_roots_is_never_touched(monkeypatch, tmp_pat
 
     assert "Documents" not in links
     assert touched == []
+
+
+def _inherited_xdg_config(monkeypatch, tmp_path):
+    """A sandbox HOME that still inherits the real account's XDG_CONFIG_HOME."""
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    config = tmp_path / "real-xdg"
+    config.mkdir()
+    (config / "user-dirs.dirs").write_bytes(b'XDG_DOCUMENTS_DIR="/srv/real-docs"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
+    monkeypatch.setenv("HOME", str(sandbox))
+    monkeypatch.setattr(user_folders.Path, "home", lambda: sandbox)
+    monkeypatch.setattr(user_folders.sys, "platform", "linux")
+    return sandbox
+
+
+def test_a_sandboxed_home_ignores_the_inherited_xdg_config_home(
+    monkeypatch, tmp_path
+):
+    """Swapping HOME must not hand back the real account's Documents."""
+    sandbox = _inherited_xdg_config(monkeypatch, tmp_path)
+
+    assert user_folders.documents_dir() == sandbox / "Documents"
+    assert user_folders.documents_dir(sandbox) == sandbox / "Documents"
+
+
+def test_an_unknown_account_never_honours_xdg_config_home(monkeypatch, tmp_path):
+    sandbox = _inherited_xdg_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(user_folders, "_account_home", lambda: None)
+
+    assert user_folders.documents_dir(sandbox) == sandbox / "Documents"
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "getuid"), reason="POSIX account")
+def test_account_home_comes_from_the_password_database(monkeypatch, tmp_path):
+    import pwd
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    expected = pwd.getpwuid(__import__("os").getuid()).pw_dir
+
+    assert str(user_folders._account_home()) == expected
+
+
+def test_the_xdg_documents_path_is_never_touched_while_resolving(
+    monkeypatch, tmp_path
+):
+    """A Documents folder on a dead network mount must not stall the lookup."""
+    home = tmp_path / "home"
+    dead = tmp_path / "dead-share" / "Docs"
+    _write_user_dirs(home, f'XDG_DOCUMENTS_DIR="{dead}"\n'.encode())
+    monkeypatch.setattr(user_folders.sys, "platform", "linux")
+    touched = []
+    real_resolve, real_stat = user_folders.Path.resolve, user_folders.Path.stat
+
+    def resolve(self, *a, **k):
+        if "dead-share" in str(self):
+            touched.append(("resolve", str(self)))
+        return real_resolve(self, *a, **k)
+
+    def stat(self, *a, **k):
+        if "dead-share" in str(self):
+            touched.append(("stat", str(self)))
+        return real_stat(self, *a, **k)
+
+    monkeypatch.setattr(user_folders.Path, "resolve", resolve)
+    monkeypatch.setattr(user_folders.Path, "stat", stat)
+
+    assert user_folders.documents_dir(home) == dead
+    assert touched == []
+
+
+def test_a_trailing_slash_home_still_counts_as_disabled(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    _write_user_dirs(home, b'XDG_DOCUMENTS_DIR="$HOME/"\n')
+    monkeypatch.setattr(user_folders.sys, "platform", "linux")
+
+    assert user_folders.documents_dir(home) == home / "Documents"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows known folders")
+def test_known_folder_lookup_does_not_verify_the_folder(monkeypatch):
+    """A redirect to a dead share must not be probed by the shell lookup."""
+    import ctypes
+
+    seen = []
+
+    class _Shell32:
+        @staticmethod
+        def SHGetKnownFolderPath(_rfid, flags, _token, _out):
+            seen.append(flags)
+            return 1  # failure: no path is handed back
+
+    monkeypatch.setattr(ctypes.windll, "shell32", _Shell32())
+
+    assert user_folders._windows_documents_dir() is None
+    assert seen == [0x4000]

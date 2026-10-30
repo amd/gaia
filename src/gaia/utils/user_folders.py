@@ -23,6 +23,9 @@ _WINDOWS_PROFILE_FOLDER = (
     (0x9A, 0xFE, 0xEA, 0x33, 0x17, 0xB6, 0x71, 0x73),
 )
 _XDG_DOCUMENTS_DIR = re.compile(r"^XDG_DOCUMENTS_DIR=(?P<value>.*)$")
+# Return the configured path without checking it exists, so a redirect to an
+# unreachable share is never touched before the caller's roots check.
+_KF_FLAG_DONT_VERIFY = 0x4000
 
 
 def _windows_known_folder(folder: tuple) -> Path | None:
@@ -42,7 +45,7 @@ def _windows_known_folder(folder: tuple) -> Path | None:
         folder_id = _GUID(*folder)
         path = wintypes.LPWSTR()
         result = ctypes.windll.shell32.SHGetKnownFolderPath(
-            ctypes.byref(folder_id), 0, None, ctypes.byref(path)
+            ctypes.byref(folder_id), _KF_FLAG_DONT_VERIFY, None, ctypes.byref(path)
         )
         try:
             if result or not path.value:
@@ -71,14 +74,38 @@ def _same_folder(a: Path, b: Path) -> bool:
         return a == b
 
 
+def _same_path(a: Path, b: Path) -> bool:
+    """Compare two paths without touching the filesystem."""
+    return os.path.normpath(os.path.abspath(a)) == os.path.normpath(
+        os.path.abspath(b)
+    )
+
+
+def _account_home() -> Path | None:
+    """Return the OS account's home folder, independent of HOME."""
+    try:
+        import pwd
+
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except (ImportError, KeyError, AttributeError):
+        return None
+
+
 def _xdg_config_home(home: Path) -> Path:
     """Return the XDG config folder for *home*.
 
-    ``$XDG_CONFIG_HOME`` belongs to this process' user, so it is honoured only
-    when *home* is that user's home; a sandbox home keeps its own ``.config``.
+    ``$XDG_CONFIG_HOME`` belongs to this process' account, so it is honoured
+    only when *home* is that account's home; a sandbox HOME keeps its own
+    ``.config`` even when the variable is inherited.
     """
     configured = os.environ.get("XDG_CONFIG_HOME", "")
-    if configured and os.path.isabs(configured) and _same_folder(home, Path.home()):
+    account = _account_home()
+    if (
+        configured
+        and os.path.isabs(configured)
+        and account is not None
+        and _same_path(home, account)
+    ):
         return Path(configured)
     return home / ".config"
 
@@ -111,7 +138,7 @@ def _linux_documents_dir(home: Path) -> Path | None:
         path = Path(_expand_home(value, home))
         path = path if path.is_absolute() else home / path
         # xdg-user-dirs marks a disabled folder by pointing it at $HOME.
-        return None if _same_folder(path, home) else path
+        return None if _same_path(path, home) else path
     return None
 
 
