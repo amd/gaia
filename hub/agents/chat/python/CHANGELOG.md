@@ -12,6 +12,10 @@
   `gaia-lite`, to the flagship `gaia` agent for API, MCP and scheduled
   callers. Agent UI chats saved under a retired agent stay read-only.
   MCP settings saved under `installed:chat` no longer apply.
+- The data profile's prompt no longer says it can browse the web or transcribe
+  audio and video. It registers neither, so the model promised a tool it could not
+  call. The web and media lines now appear only for profiles that register those
+  tools (#6036).
 - `gaia chat --index <file>` indexes the named file from any working
   directory. A file outside the folder `gaia chat` ran in was refused as "not
   in allowed paths", the error was only logged, and the agent answered without

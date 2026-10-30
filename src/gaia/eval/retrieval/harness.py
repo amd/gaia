@@ -103,10 +103,10 @@ def make_rag(
 
 
 def agent_query_tool(rag) -> Callable[[str], dict]:
-    """The registered ``query_documents`` tool, bound to ``rag`` as a chat agent binds it."""
+    """The registered ``query_documents`` tool, bound to ``rag`` as the flagship binds it."""
     try:
-        from gaia_agent.chat_agent import (  # pylint: disable=import-outside-toplevel
-            ChatAgent,
+        from gaia_agent.agent import (  # pylint: disable=import-outside-toplevel
+            GaiaAgent,
         )
     except ImportError as e:
         raise ImportError(
@@ -122,7 +122,7 @@ def agent_query_tool(rag) -> Callable[[str], dict]:
 
     class _Host(RAGToolsMixin):
         _generate_search_keys = (
-            ChatAgent._generate_search_keys  # pylint: disable=protected-access
+            GaiaAgent._generate_search_keys  # pylint: disable=protected-access
         )
 
         def __init__(self):

@@ -1426,8 +1426,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
 **FILE BROWSING:** browse_directory (navigate), list_recent_files (recent), get_file_info (metadata).
 
-**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`. Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process.
 """
+        # Only advertise web and media tools the profile registers.
+        unsupported = "**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md ."
+        if "web_browse" in spec.tool_groups:
+            unsupported += " Web browsing IS supported via `search_web` / `fetch_page` / `download_file`."
+        unsupported += " Image analysis IS supported via `analyze_image`."
+        if "media_transcribe" in spec.tool_groups:
+            unsupported += " Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process."
+        data_file_rules += unsupported + "\n"
         # A rule about a tool the session lacks made the model offer images.
         if getattr(self.config, "enable_sd_tools", False):
             data_file_rules += """

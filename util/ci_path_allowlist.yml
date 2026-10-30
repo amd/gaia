@@ -24,6 +24,14 @@ dependencies:
       tests/unit/test_flagship_ci.py names it as the docs page that must NOT
       trigger this lane; it is a probe string, not a file the test reads.
 
+  test_email_agent_unit.yml:
+    hub/agents/gaia/python/gaia_agent/chat_agent.py: >-
+      Only tests/unit/eval/test_harness_flagship_target.py imports it, and that
+      file skips wholesale in this lane (no flagship wheel); test_gaia_agent.yml
+      runs it and triggers on hub/agents/**.
+    hub/agents/gaia/python/gaia_agent/agent.py: >-
+      Same file, same reason: it skips here and runs in test_gaia_agent.yml.
+
   build-installers.yml:
     src/gaia/apps/webui/**: >-
       The installer build compiles the Agent UI, but its source is already

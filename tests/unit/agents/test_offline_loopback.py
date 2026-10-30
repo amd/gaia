@@ -234,7 +234,11 @@ class TestOnlineServiceTools:
     def test_every_mailbox_tool_is_covered(self):
         mailbox = _tool_names(_TOOLS / "email_tools.py")
         assert mailbox, "found no mailbox tools to check"
-        assert mailbox <= ONLINE_SERVICE_TOOLS
+        # Reads local connector state only, so it stays answerable offline.
+        local_only = {"list_connected_mailboxes"}
+        assert local_only <= mailbox
+        assert mailbox - local_only <= ONLINE_SERVICE_TOOLS
+        assert not local_only & ONLINE_SERVICE_TOOLS
 
     @pytest.mark.parametrize(
         "tool",

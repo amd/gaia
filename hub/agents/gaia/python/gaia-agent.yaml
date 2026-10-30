@@ -21,7 +21,7 @@ icon: sparkles
 # and the persistent shell session's get_shell_state / reset_shell_session)
 # + 8 skill-library tools
 # (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES) + 4 code-index tools
-# + 5 read-only email tools (gaia.agents.tools.email_tools)
+# + 8 read-only email tools (gaia.agents.tools.email_tools)
 # + 3 Stable Diffusion tools (enable_sd_tools is on for this agent)
 # + 8 live-browser tools, which register only with the `browser` extra
 #   installed (gaia.agents.tools.browser_use_tools)
@@ -29,7 +29,7 @@ icon: sparkles
 # registers only when GAIA_DYNAMIC_TOOLS=1 turns per-turn selection on.
 # + 3 audio-generation tools (enabled on the flagship, disabled in fast mode).
 # This is the REGISTERED size — what the agent can do.
-tools_count: 98
+tools_count: 101
 
 language: python
 # ChatAgent (gaia_agent.chat_agent) imports gaia.agents.tools.reasoning_tools;

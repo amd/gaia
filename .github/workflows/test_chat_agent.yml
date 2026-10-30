@@ -208,8 +208,8 @@ jobs:
           uv pip install --system -e .[dev,rag,ui,api]
           # Install pytest-mock for mocking tests
           uv pip install --system pytest-mock
-          # ChatAgent ships in the flagship wheel (#6099); the chat package
-          # is its deprecated re-export shim.
+          # ChatAgent ships in the flagship wheel (#6099), which the retrieval
+          # harness also binds; the chat package is its deprecated re-export shim.
           uv pip install --system -e hub/agents/gaia/python -e hub/agents/chat/python
 
       - name: Check no test file skips wholesale
