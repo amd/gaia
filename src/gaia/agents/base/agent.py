@@ -7809,11 +7809,8 @@ Do NOT wrap conversational replies in JSON.
                     continue
 
                 ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                # Clamp like the load path: a model at its max can't reload larger.
-                # An exact client pin is the requested window for this
-                # agent. Without this, a deliberate 16K pin is compared with
-                # the registry's normal 64K target and is misclassified as a
-                # bad load (#5284).
+                # An exact client pin is the requested window; otherwise clamp
+                # like the load path (a model at its max can't reload larger).
                 backend = getattr(getattr(self, "chat", None), "llm_client", None)
                 backend = getattr(backend, "_backend", backend)
                 pin = getattr(backend, "ctx_size_override", None)
@@ -10211,14 +10208,8 @@ Do NOT wrap conversational replies in JSON.
                         logger.error(f"Unexpected error during streaming: {e}")
                         err_text = str(e).lower()
                         is_ctx_overflow = is_context_overflow_error(err_text)
-                        # See the non-streaming branch for explanation: re-raise
-                        # only when the backend loaded below the requested
-                        # window, so the chat helper can reload it correctly.
-                        # Do not infer a bad load from the error's numeric
-                        # context size: that same number is valid when the
-                        # user intentionally pinned a smaller window. The
-                        # health probe compares the loaded window with the
-                        # requested one instead (#5284).
+                        # Same rule as the non-streaming branch: only the probe
+                        # decides a bad load, never the window in the error.
                         is_wrong_ctx_loaded = (
                             is_ctx_overflow and self._is_loaded_ctx_too_small()
                         )
@@ -10408,16 +10399,9 @@ Do NOT wrap conversational replies in JSON.
                         # varies (llama.cpp vs. FastFlowLM, #2513).
                         err_text = str(e).lower()
                         is_ctx_overflow = is_context_overflow_error(err_text)
-                        # Detect "wrong ctx size loaded" — substring match on
-                        # error text first (when raw payload is preserved),
-                        # then probe Lemonade health if substring missed
-                        # (typical: AgentSDK stringifies typed exception to
-                        # user_message, dropping n_ctx detail).
-                        # Do not infer a bad load from the error's numeric
-                        # context size: that same number is valid when the
-                        # user intentionally pinned a smaller window. The
-                        # health probe compares the loaded window with the
-                        # requested one instead (#5284).
+                        # Only the loaded-vs-requested probe decides a bad
+                        # load: the window named in the error is equally valid
+                        # for a deliberately small pin.
                         is_wrong_ctx_loaded = (
                             is_ctx_overflow and self._is_loaded_ctx_too_small()
                         )
