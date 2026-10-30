@@ -625,8 +625,7 @@ def profile_for(agent_id: str) -> Optional[RelayProfile]:
 
     profile = _PROFILES.get(agent_id)
     if profile is None:
-        # pylint: disable-next=protected-access
-        canonical = AgentRegistry._LEGACY_ID_ALIASES.get(agent_id)
+        canonical = AgentRegistry.legacy_alias(agent_id)
         profile = _PROFILES.get(canonical) if canonical else None
     return profile
 

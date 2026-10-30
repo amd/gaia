@@ -614,6 +614,15 @@ class AgentRegistry:
     # Legacy ID resolution
     # ------------------------------------------------------------------
 
+    @classmethod
+    def legacy_alias(cls, agent_id: str) -> Optional[str]:
+        """The id a retired *agent_id* now resolves to, or ``None``.
+
+        Static: it reads only the alias table, never what is registered, so a
+        caller without a discovered registry can ask it.
+        """
+        return cls._LEGACY_ID_ALIASES.get(agent_id)
+
     def canonical_id(self, agent_id: str) -> str:
         """Return the current canonical ID for *agent_id*, resolving aliases.
 

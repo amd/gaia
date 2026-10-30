@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""A stored ``chat``/``doc``/``file`` session reopens on the flagship (#6099).
+"""A ``chat``/``doc``/``file`` session is served by the flagship (#6099).
 
 ChatAgent folded into the flagship package, so its old ids are registry
 aliases of ``gaia``. On a binary install the flagship runs as a daemon
@@ -28,16 +28,14 @@ class _Registry:
     """Just the lookups dispatch makes, with the real alias semantics."""
 
     def __init__(self, regs):
-        from gaia.agents.registry import AgentRegistry
-
         self._regs = regs
-        # pylint: disable-next=protected-access
-        self._aliases = AgentRegistry._LEGACY_ID_ALIASES
 
     def get(self, agent_id):
+        from gaia.agents.registry import AgentRegistry
+
         if agent_id in self._regs:
             return self._regs[agent_id]
-        return self._regs.get(self._aliases.get(agent_id, agent_id))
+        return self._regs.get(AgentRegistry.legacy_alias(agent_id) or agent_id)
 
     def get_load_error(self, _agent_id):
         return None

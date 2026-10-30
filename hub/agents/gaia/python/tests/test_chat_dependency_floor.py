@@ -36,9 +36,6 @@ REASONING_TOOLS_FLOOR = (0, 25, 1)
 # First core release shipping gaia.utils.file_lock.held_by_another_program.
 FILE_LOCK_HELD_FLOOR = (0, 25, 1)
 
-# gaia.sidecar.session_ids ships in the first core release after this one.
-SESSION_IDS_AFTER = (0, 25, 3)
-
 # Matches the version in "amd-gaia>=X.Y.Z" with or without an extras suffix
 # (e.g. "amd-gaia[api]>=X.Y.Z") — the extras are #1617's concern, not the floor's.
 _AMD_GAIA_FLOOR_RE = r'"amd-gaia(?:\[[^\]]*\])?>=([0-9.]+)"'
@@ -186,36 +183,3 @@ def test_manifest_floors_match_pyproject():
         f"({pyproject_floor.group(1)}) vs gaia-agent.yaml min_gaia_version "
         f"({min_gaia.group(1)}) / python dependency ({dep.group(1)})"
     )
-
-
-@pytest.mark.parametrize("pyproject", [FLAGSHIP_ROOT / "pyproject.toml"], ids=["gaia"])
-def test_floor_rises_with_the_core_that_ships_session_ids(pyproject):
-    """gaia_agent.session and gaia_agent.server import gaia.sidecar.session_ids,
-    which no core up to 0.25.3 ships; the floor must rise past it at the next
-    core release."""
-    from gaia.sidecar.session_ids import validate_session_id
-
-    assert callable(validate_session_id)
-    match = re.search(_AMD_GAIA_FLOOR_RE, pyproject.read_text(encoding="utf-8"))
-    assert match, f"{pyproject} must declare an amd-gaia>=X.Y.Z floor"
-    if _core_release() > SESSION_IDS_AFTER:
-        assert _floor_tuple(match.group(1)) > SESSION_IDS_AFTER, (
-            f"core is now {_core_release()}, but the flagship's amd-gaia floor "
-            f"is still {match.group(1)}; raise it (and min_gaia_version) to the "
-            "first core that ships gaia.sidecar.session_ids"
-        )
-
-
-def test_session_ids_guard_fails_a_release_that_forgets_the_bump(monkeypatch, tmp_path):
-    stale = tmp_path / "pyproject.toml"
-    stale.write_text('dependencies = ["amd-gaia>=0.25.3"]', encoding="utf-8")
-    monkeypatch.setitem(globals(), "_core_release", lambda: (0, 25, 3))
-    test_floor_rises_with_the_core_that_ships_session_ids(stale)
-
-    monkeypatch.setitem(globals(), "_core_release", lambda: (0, 26, 0))
-    with pytest.raises(AssertionError, match="session_ids"):
-        test_floor_rises_with_the_core_that_ships_session_ids(stale)
-
-    raised = tmp_path / "raised.toml"
-    raised.write_text('dependencies = ["amd-gaia>=0.26.0"]', encoding="utf-8")
-    test_floor_rises_with_the_core_that_ships_session_ids(raised)

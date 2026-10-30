@@ -163,7 +163,7 @@ jobs:
           # registrable on a full install, and the browser tools register only
           # when Playwright is importable (the Chromium download is not needed
           # for that).
-          uv pip install --system -e ".[dev,api,browser]"
+          uv pip install --system -e ".[dev,api,browser,rag]"
           uv pip install --system -e hub/agents/gaia/python
 
       - name: Check no test file skips wholesale

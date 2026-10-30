@@ -7,6 +7,7 @@ Session management for Chat Agent with path validation and history.
 import json
 import logging
 import os
+import re
 import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -14,13 +15,27 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia import config as gaia_config
-from gaia.sidecar.session_ids import validate_session_id
 
 logger = logging.getLogger(__name__)
+
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
 
 
 class SessionCorruptError(RuntimeError):
     """A session file exists but cannot be parsed into a ChatSession."""
+
+
+def validate_session_id(session_id: Any) -> None:
+    """Raise ValueError unless ``session_id`` is safe to use as a file name."""
+    if (
+        not isinstance(session_id, str)
+        or not _SESSION_ID_RE.fullmatch(session_id)
+        or not session_id.strip(".")
+    ):
+        raise ValueError(
+            f"Invalid session_id {session_id!r}: use 1-128 characters from "
+            "A-Z, a-z, 0-9, '.', '_' and '-' (not only dots)."
+        )
 
 
 def default_session_dir() -> Path:

@@ -133,11 +133,16 @@ class TestBuiltinRegistration:
         installed = registry.get("gaia") is not None
         for legacy in self._LEGACY_IDS + self._LEGACY_LITE_IDS:
             assert registry.canonical_id(legacy) == "gaia", legacy
+            assert AgentRegistry.legacy_alias(legacy) == "gaia", legacy
             reg = registry.get(legacy)
             if installed:
                 assert reg is not None and reg.id == "gaia", legacy
             else:
                 assert reg is None, legacy
+
+    def test_legacy_alias_answers_only_for_retired_ids(self):
+        for current in ("gaia", "email", "", "Chat", "unknown-agent"):
+            assert AgentRegistry.legacy_alias(current) is None, current
 
     def test_a_registered_id_is_never_rewritten_by_an_alias(self):
         """A real registration under a legacy id wins over the alias, so an

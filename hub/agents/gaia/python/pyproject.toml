@@ -19,9 +19,6 @@ requires-python = ">=3.10"
 #   (0.25.0 added gaia.agents.tools.path_access, #4656; 0.24.1 was the first
 #   core whose daemon can supervise this sidecar, #2932.) Raise it in step
 #   with min_gaia_version, never ahead of a real release.
-# - The first core after 0.25.3 ships gaia.sidecar.session_ids, which
-#   gaia_agent.session and gaia_agent.server import; the floor rises to it at
-#   that release (tests/test_chat_dependency_floor.py guards it).
 #
 # ChatAgent lives in this package (#6099); it no longer depends on
 # gaia-agent-chat, which is now a deprecated re-export shim of this one.

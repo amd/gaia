@@ -5,12 +5,13 @@
 - **Deprecated: `ChatAgent` moved into the flagship package (#6099).** Import
   it from `gaia_agent.chat_agent`; `gaia_agent_chat.agent` and the other
   submodules keep working for one release as aliases of their new homes in
-  `gaia_agent`, with a `DeprecationWarning`. `validate_session_id` moved to
-  `gaia.sidecar.session_ids`. The package now depends on `gaia-agent-gaia`
+  `gaia_agent`, with a `DeprecationWarning`. The package now depends on `gaia-agent-gaia`
   instead of the other way round, and is deleted in #6103.
 - The `chat`, `doc` and `file` agent ids are no longer registered here. The
   registry resolves them, and `chat-lite` / `doc-lite` / `file-lite` /
-  `gaia-lite`, to the flagship `gaia` agent, so stored sessions reopen on it.
+  `gaia-lite`, to the flagship `gaia` agent for API, MCP and scheduled
+  callers. Agent UI chats saved under a retired agent stay read-only.
+  MCP settings saved under `installed:chat` no longer apply.
 - `gaia chat --index <file>` indexes the named file from any working
   directory. A file outside the folder `gaia chat` ran in was refused as "not
   in allowed paths", the error was only logged, and the agent answered without

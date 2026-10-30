@@ -13,7 +13,6 @@ Importing it emits a `DeprecationWarning`.
 | `gaia_agent_chat.agent` | `gaia_agent.chat_agent` |
 | `gaia_agent_chat.app.interactive_mode` | `gaia_agent.interactive.interactive_mode` |
 | `gaia_agent_chat.profiles`, `.tool_bundles`, `.session`, `.python_jobs`, `.python_runner`, `.tool_requests` | `gaia_agent.<same name>` |
-| `gaia_agent_chat.session.validate_session_id` | `gaia.sidecar.session_ids.validate_session_id` |
 
 ```python
 from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
@@ -33,8 +32,8 @@ pip install -e hub/agents/gaia/python
 
 This package no longer registers the `chat`, `doc` and `file` agent ids. The
 registry resolves them, and their `*-lite` aliases, to the flagship `gaia`
-agent, so a stored Agent UI session that names one of them reopens on the
-flagship.
+agent, so API, MCP and scheduled callers that still name one get the
+flagship. Agent UI chats saved under a retired agent stay read-only.
 
 `ChatAgentLite` (`gaia_agent_chat.lite_agent`) still lives here and goes away
 with this package.

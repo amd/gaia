@@ -49,6 +49,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
 from gaia_agent.entry import main as _entry_main
 from gaia_agent.memory_dump import build_memory_dump
+from gaia_agent.session import validate_session_id
 from gaia_agent.session_registry import (
     AGENT_BUILD_LOCK,
     PROVIDER_CLAUDE,
@@ -66,7 +67,6 @@ from gaia.agents.base.readiness import start_advice, version_meets_min
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
-from gaia.sidecar.session_ids import validate_session_id
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 from gaia.ui.turn_insights import turn_record
 from gaia.version import LEMONADE_MIN_VERSION
