@@ -787,3 +787,90 @@ class TestSendMessageSentSignal:
         backend, rec, _ = _backend(lambda r: httpx.Response(202))
         backend.send_message(to="bob@example.com", subject="Hi", body="Hello")
         assert rec.requests[0].url.path.endswith("/me/sendMail")
+
+
+# ---------------------------------------------------------------------------
+# Graph's $filter + $orderby rule (#4806), checked on every list shape
+# ---------------------------------------------------------------------------
+
+
+def _filter_properties(odata_filter: str) -> List[str]:
+    return [clause.split()[0] for clause in odata_filter.split(" and ")]
+
+
+def assert_graph_accepts_sort(params: dict) -> None:
+    """Graph's documented rule: every $orderby property is also in $filter,
+    in the same order, ahead of any other filtered property; $search takes
+    neither."""
+    if "$search" in params:
+        assert "$orderby" not in params and "$filter" not in params
+        return
+    if "$orderby" not in params or "$filter" not in params:
+        return
+    ordered = [part.split()[0] for part in params["$orderby"][0].split(",")]
+    filtered = _filter_properties(params["$filter"][0])
+    leading = []
+    for prop in filtered:
+        if prop not in ordered:
+            break
+        leading.append(prop)
+    assert [
+        p for i, p in enumerate(leading) if p not in leading[:i]
+    ] == ordered, f"$filter {params['$filter'][0]!r} must lead with {ordered}"
+    assert set(filtered[len(leading) :]).isdisjoint(ordered)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"label_ids": ["UNREAD"]},
+        {"label_ids": ["INBOX", "UNREAD"]},
+        {"label_ids": ["INBOX"]},
+        {"label_ids": ["SENT"]},
+        {},
+        {"query": "is:unread"},
+        {"query": "is:read"},
+        {"query": "(is:unread)"},
+        {"query": "IS:UNREAD"},
+        {"query": "is:unread is:read"},
+        {"query": "is:unread newer_than:7d"},
+        {"query": "newer_than:7d is:unread"},
+        {"query": "is:unread older_than:30d newer_than:1y"},
+        {"query": "older_than:30d"},
+        {"query": "quarterly report"},
+        {"query": "from:alice"},
+        {"query": "is:unread", "label_ids": ["UNREAD"]},
+    ],
+)
+def test_every_list_shape_meets_graph_sort_rule(kwargs):
+    backend, rec, _ = _backend(lambda r: _ok({"value": []}))
+    backend.list_messages(max_results=5, **kwargs)
+    params = parse_qs(urlparse(str(rec.requests[0].url)).query)
+    assert_graph_accepts_sort(params)
+
+
+def test_a_real_date_bound_replaces_the_floor():
+    """The 1900 floor is only a placeholder; a user's own bound must not be
+    joined by it, or the request would carry a redundant third predicate."""
+    backend, rec, _ = _backend(lambda r: _ok({"value": []}))
+    backend.list_messages(query="is:unread newer_than:7d", max_results=5)
+    (odata_filter,) = parse_qs(urlparse(str(rec.requests[0].url)).query)["$filter"]
+    assert "1900-01-01" not in odata_filter
+    assert odata_filter.startswith("receivedDateTime ge ")
+    assert odata_filter.endswith(" and isRead eq false")
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"$filter": ["isRead eq false"], "$orderby": ["receivedDateTime desc"]},
+        {
+            "$filter": ["isRead eq false and receivedDateTime ge 2026-01-01T00:00:00Z"],
+            "$orderby": ["receivedDateTime desc"],
+        },
+        {"$search": ['"x"'], "$orderby": ["receivedDateTime desc"]},
+    ],
+)
+def test_sort_rule_checker_rejects_the_shapes_graph_rejects(params):
+    with pytest.raises(AssertionError):
+        assert_graph_accepts_sort(params)

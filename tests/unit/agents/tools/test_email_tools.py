@@ -154,6 +154,23 @@ def test_list_inbox_unread_only_sets_filter():
     )
 
 
+@pytest.mark.parametrize("unread_only", [True, False])
+def test_list_inbox_filter_leads_with_the_sorted_property(unread_only):
+    """Graph answers InefficientFilter when $orderby's property does not lead
+    $filter (#4806)."""
+    seen = {}
+
+    def handler(request):
+        seen["url"] = request.url
+        return json_response({"value": []})
+
+    make_backend(handler).list_inbox(unread_only=unread_only)
+    params = seen["url"].params
+    assert params["$orderby"] == "receivedDateTime desc"
+    if "$filter" in params:
+        assert params["$filter"].startswith("receivedDateTime ")
+
+
 def test_list_inbox_without_unread_sends_no_filter():
     seen = {}
 
