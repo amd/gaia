@@ -221,3 +221,137 @@ def test_a_crlf_user_dirs_file_still_resolves(monkeypatch, tmp_path):
     monkeypatch.setattr(user_folders.sys, "platform", "linux")
 
     assert user_folders.documents_dir(home) == home / "Docs"
+
+
+def _write_user_dirs(home, data: bytes):
+    config = home / ".config"
+    config.mkdir(parents=True, exist_ok=True)
+    (config / "user-dirs.dirs").write_bytes(data)
+
+
+def test_a_non_utf8_user_dirs_file_never_raises(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    _write_user_dirs(home, b'XDG_DOCUMENTS_DIR="$HOME/Dok\xffumente"\n')
+    monkeypatch.setattr(user_folders.sys, "platform", "linux")
+
+    docs = user_folders.documents_dir(home)
+
+    # POSIX keeps the raw byte as a surrogate; elsewhere it falls back.
+    assert docs.parent == home
+
+
+def test_a_nul_byte_in_the_xdg_value_falls_back(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    _write_user_dirs(home, b'XDG_DOCUMENTS_DIR="$HOME/Docs\x00/../../etc"\n')
+    monkeypatch.setattr(user_folders.sys, "platform", "linux")
+
+    assert user_folders.documents_dir(home) == home / "Documents"
+
+
+def test_a_nul_byte_in_home_never_raises(monkeypatch):
+    monkeypatch.setattr(user_folders.sys, "platform", "linux")
+    home = user_folders.Path("/home/u\x00ser")
+
+    assert user_folders.documents_dir(home) == home / "Documents"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("$HOME/Docs", "Docs"),
+        ("${HOME}/Docs", "Docs"),
+        ("~/Docs", "Docs"),
+        ("$HOMEevil/Docs", "$HOMEevil/Docs"),
+        ("~evil/Docs", "~evil/Docs"),
+    ],
+)
+def test_home_expands_only_as_a_whole_prefix(monkeypatch, tmp_path, value, expected):
+    home = tmp_path / "home"
+    _write_user_dirs(home, f'XDG_DOCUMENTS_DIR="{value}"\n'.encode())
+    monkeypatch.setattr(user_folders.sys, "platform", "linux")
+    # ``~`` must come from the home passed in, never this process' HOME.
+    monkeypatch.setattr(user_folders.Path, "home", lambda: tmp_path / "real")
+
+    assert user_folders.documents_dir(home) == home / expected
+
+
+def test_xdg_config_home_is_honoured_for_the_current_user(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    config = tmp_path / "xdg"
+    config.mkdir()
+    (config / "user-dirs.dirs").write_bytes(b'XDG_DOCUMENTS_DIR="$HOME/Papers"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
+    monkeypatch.setattr(user_folders.sys, "platform", "linux")
+    monkeypatch.setattr(user_folders.Path, "home", lambda: home)
+
+    assert user_folders.documents_dir(home) == home / "Papers"
+
+
+def test_xdg_config_home_never_leaks_into_a_sandbox_home(monkeypatch, tmp_path):
+    real, sandbox = tmp_path / "real", tmp_path / "sandbox"
+    real.mkdir()
+    sandbox.mkdir()
+    config = tmp_path / "xdg"
+    config.mkdir()
+    (config / "user-dirs.dirs").write_bytes(b'XDG_DOCUMENTS_DIR="/srv/real-docs"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
+    monkeypatch.setattr(user_folders.sys, "platform", "linux")
+    monkeypatch.setattr(user_folders.Path, "home", lambda: real)
+
+    assert user_folders.documents_dir(sandbox) == sandbox / "Documents"
+
+
+def test_a_relative_xdg_config_home_is_ignored(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    _write_user_dirs(home, b'XDG_DOCUMENTS_DIR="$HOME/Mine"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", "relative/xdg")
+    monkeypatch.setattr(user_folders.sys, "platform", "linux")
+    monkeypatch.setattr(user_folders.Path, "home", lambda: home)
+
+    assert user_folders.documents_dir(home) == home / "Mine"
+
+
+def test_quick_links_survive_a_corrupt_user_dirs_file(monkeypatch, tmp_path):
+    ui_utils = pytest.importorskip("gaia.ui.utils")
+    home = tmp_path / "home"
+    _write_user_dirs(home, b'XDG_DOCUMENTS_DIR="\xff\xfe\x00"\n')
+    monkeypatch.setattr(user_folders.sys, "platform", "linux")
+    monkeypatch.setattr(ui_utils.Path, "home", lambda: home)
+    monkeypatch.setattr(ui_utils, "document_roots", lambda: [home.resolve()])
+
+    links = {link.name for link in ui_utils.build_quick_links()}
+
+    assert "Home" in links
+
+
+def test_a_unc_documents_outside_the_roots_is_never_touched(monkeypatch, tmp_path):
+    """Probing an unreachable SMB share can hang for its whole timeout."""
+    ui_utils = pytest.importorskip("gaia.ui.utils")
+    home = tmp_path / "home"
+    home.mkdir()
+    unc = ui_utils.Path(r"\fileserver\share\Documents")
+    monkeypatch.setattr(ui_utils.Path, "home", lambda: home)
+    monkeypatch.setattr(ui_utils, "documents_dir", lambda _home: unc)
+    monkeypatch.setattr(ui_utils, "document_roots", lambda: [home.resolve()])
+    touched = []
+    real_is_dir, real_resolve = ui_utils.Path.is_dir, ui_utils.Path.resolve
+
+    def is_dir(self, *a, **k):
+        if "fileserver" in str(self):
+            touched.append(("is_dir", self))
+            return True
+        return real_is_dir(self, *a, **k)
+
+    def resolve(self, *a, **k):
+        if "fileserver" in str(self):
+            touched.append(("resolve", self))
+        return real_resolve(self, *a, **k)
+
+    monkeypatch.setattr(ui_utils.Path, "is_dir", is_dir)
+    monkeypatch.setattr(ui_utils.Path, "resolve", resolve)
+
+    links = {link.name for link in ui_utils.build_quick_links()}
+
+    assert "Documents" not in links
+    assert touched == []

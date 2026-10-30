@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -66,19 +67,38 @@ def _windows_profile_dir() -> Path | None:
 def _same_folder(a: Path, b: Path) -> bool:
     try:
         return a.resolve() == b.resolve()
-    except OSError:
+    except (OSError, ValueError):
         return a == b
+
+
+def _xdg_config_home(home: Path) -> Path:
+    """Return the XDG config folder for *home*.
+
+    ``$XDG_CONFIG_HOME`` belongs to this process' user, so it is honoured only
+    when *home* is that user's home; a sandbox home keeps its own ``.config``.
+    """
+    configured = os.environ.get("XDG_CONFIG_HOME", "")
+    if configured and os.path.isabs(configured) and _same_folder(home, Path.home()):
+        return Path(configured)
+    return home / ".config"
+
+
+def _expand_home(value: str, home: Path) -> str:
+    """Expand ``$HOME``, ``${HOME}`` and ``~`` against *home*, not the environment."""
+    value = value.replace("${HOME}", str(home))
+    for prefix in ("$HOME", "~"):
+        if value == prefix or value.startswith(prefix + "/"):
+            return str(home) + value[len(prefix) :]
+    return value
 
 
 def _linux_documents_dir(home: Path) -> Path | None:
     """Read ``XDG_DOCUMENTS_DIR`` without using this process' HOME variable."""
     try:
-        lines = (
-            (home / ".config" / "user-dirs.dirs")
-            .read_text(encoding="utf-8")
-            .splitlines()
-        )
-    except OSError:
+        raw = (_xdg_config_home(home) / "user-dirs.dirs").read_bytes()
+        # The file holds raw filesystem bytes; decode them the way paths are.
+        lines = os.fsdecode(raw).splitlines()
+    except (OSError, ValueError):
         return None
 
     for line in lines:
@@ -86,10 +106,9 @@ def _linux_documents_dir(home: Path) -> Path | None:
         if not match:
             continue
         value = match.group("value").strip().strip('"')
-        if not value:
+        if not value or "\x00" in value:
             return None
-        value = value.replace("${HOME}", str(home)).replace("$HOME", str(home))
-        path = Path(value).expanduser()
+        path = Path(_expand_home(value, home))
         path = path if path.is_absolute() else home / path
         # xdg-user-dirs marks a disabled folder by pointing it at $HOME.
         return None if _same_folder(path, home) else path

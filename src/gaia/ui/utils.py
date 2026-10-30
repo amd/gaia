@@ -664,12 +664,20 @@ def _describe_roots(roots: Sequence[Path]) -> str:
 
 
 def is_within_document_roots(path: Path) -> bool:
-    """Return whether *path* is browseable under the configured document roots."""
+    """Return whether *path* is browseable under the configured document roots.
+
+    The lexical check runs first, so a path outside every root (a UNC share,
+    say) is rejected without touching the filesystem.
+    """
+    roots = document_roots()
     try:
+        lexical = Path(os.path.abspath(str(path)))
+        if not any(lexical.is_relative_to(root) for root in roots):
+            return False
         resolved = path.resolve()
-    except OSError:
+    except (OSError, ValueError):
         return False
-    return any(resolved.is_relative_to(root) for root in document_roots())
+    return any(resolved.is_relative_to(root) for root in roots)
 
 
 def ensure_within_home(resolved: Path) -> None:
@@ -875,7 +883,8 @@ def build_quick_links() -> list:
     ]
 
     for name, candidate_path, icon in candidates:
-        if candidate_path.is_dir() and is_within_document_roots(candidate_path):
+        # Roots first: is_dir() on a UNC path outside them can hang on SMB.
+        if is_within_document_roots(candidate_path) and candidate_path.is_dir():
             links.append(QuickLink(name=name, path=str(candidate_path), icon=icon))
 
     return links
