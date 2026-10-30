@@ -1,0 +1,63 @@
+---
+title: "Local Music and Sound Effects"
+description: "Generate original music and sound effects through Lemonade in GAIA."
+---
+
+GAIA can generate WAV music and sound effects locally using Lemonade Server.
+The flagship agent exposes three tools: `list_audio_generation_models`,
+`generate_music`, and `generate_sound_effect`. They use existing Lemonade
+models; GAIA does not install a second audio runtime.
+
+## Models and server support
+
+| Model | Lemonade recipe | GAIA tool |
+| --- | --- | --- |
+| `ACE-Step-Music` | `acestep` | `generate_music` |
+| `ThinkSound-SFX` | `thinksound` | `generate_sound_effect` |
+| `MOSS-SoundEffect` | `openmoss` | `generate_sound_effect` |
+
+Your Lemonade version must expose `POST /api/v1/audio/generations` and the
+models in `/api/v1/models?show_all=true`. Model availability depends on the
+installed Lemonade version and enabled backend.
+
+See the [Lemonade audio-generation guide](https://github.com/lemonade-sdk/lemonade/blob/main/docs/guide/app/audio-and-3d.md)
+and [model registry](https://github.com/lemonade-sdk/lemonade/blob/main/src/cpp/resources/server_models.json).
+
+## Generate audio
+
+1. Install or download the desired model in Lemonade Server.
+2. Ask the flagship GAIA agent to list the available audio generators.
+3. Ask for instrumental music or a sound effect, specifying the style or sound.
+4. Use the WAV path returned by the tool. For a game, copy it into the project's
+   asset directory before referencing it from scripts.
+
+GAIA lists downloaded audio models and refuses unavailable models; it does not
+silently download a large model when a user requests audio. ACE-Step accepts
+lyrics and vocal language; ThinkSound accepts guidance (`cfg`). Unspecified
+options use Lemonade's backend defaults.
+
+<Warning>
+Loading an audio generator can evict the chat model from GPU memory. GAIA
+should run audio generation only when explicitly requested, and chat may need
+to reload its model afterwards.
+</Warning>
+
+## Development verification
+
+Run deterministic tests first:
+
+```bash
+python -m pytest tests/unit/test_audio_generation_tools.py
+```
+
+On a machine with a real Lemonade Server and supported hardware, run the
+opt-in integration test from a fresh model cache (the test will download
+ThinkSound-SFX and generate a WAV). It does not remove existing user models:
+
+```bash
+GAIA_RUN_AUDIO_GENERATION_LIVE=1 python -m pytest \
+  tests/integration/test_audio_generation_live.py -v -rs
+```
+
+If ThinkSound-SFX is already downloaded, this test skips rather than deleting
+that model. Use a clean Lemonade model cache for a true fresh-pull test.

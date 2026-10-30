@@ -6,6 +6,44 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.3]
+
+Released with GAIA 0.25.3, and requires the `gaia` Python CLI 0.25.3+ on `PATH`.
+Integrators: the sidecar contract is now **2.25**; clients built for 2.18
+keep working, and older binaries refuse the new `turns` field with `422`,
+so probe `/version` before sending it.
+
+- **AMD LLM Gateway models run their tool calls.** The agent asks each cloud
+  model once whether it calls tools natively, and runs tool calls written as
+  text instead of dropping them, so a turn no longer ends without the work.
+- **Music and sound effects can be generated locally** with Lemonade's
+  audio-generation models (three new tools, 98 in total).
+- **The first code search on a large repo no longer hangs the turn.** The
+  index builds in the background and search reports its progress meanwhile.
+- **A bare file name means a file in the chat's folder** for reading,
+  listing, browsing, finding, searching and running, as it already did for
+  writing.
+- **`.epub` books are indexed chapter by chapter**, and a file the agent
+  can't read is refused instead of being indexed as binary text.
+- **Two agents starting together on a new database no longer fail** with
+  `database is locked`.
+
+### For integrators: contract 2.25
+
+- **The agent remembers its own tool calls across turns** (contract **2.25**,
+  #5701). A caller that pushed history as `context` could send only text, so
+  on the next turn the agent saw its earlier answers but not the commands it
+  ran or their errors, and "why did that fail?" got "I have no record of the
+  tool calls". Send the new `turns` field (`[]` on the first turn) and that
+  turn's `final` carries `model_messages`, the turn as the model saw it, tool
+  calls and results included. Send those back in `turns`, oldest first, and
+  the agent replays them, keeping the newest whole turns that fit its context
+  window. `turns` replaces `context` when sent (a non-empty `context` beside
+  it is a `422`), and `[]` clears a retained session's history. A caller that
+  sends no `turns` gets no `model_messages`, so a `final` stays small for
+  text-only clients. Pre-2.25 binaries refuse the field with `422`, so probe
+  `/version` first.
+
 ## [0.3.2]
 
 Released with GAIA 0.25.2, and requires the `gaia`
