@@ -241,6 +241,10 @@ def cancel_goal(goal_id: str):
     goal = _get_store().cancel_goal(goal_id)
     if goal is None:
         raise HTTPException(status_code=404, detail="Goal not found")
+    # Persist first, then stop an in-flight background tick if this goal owns it.
+    from gaia.ui.agent_loop import agent_loop
+
+    agent_loop.cancel_goal(goal_id)
     return _goal_to_dict(goal)
 
 
