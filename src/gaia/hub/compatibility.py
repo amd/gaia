@@ -59,6 +59,9 @@ class CompatibilityReport:
     disk_ok: bool
     warnings: List[str] = field(default_factory=list)
     blockers: List[str] = field(default_factory=list)
+    #: The disk entry of ``blockers``, so a caller that knows the real download
+    #: size can replace this estimate.
+    disk_blocker: Optional[str] = None
     # Observed values, surfaced so the UI can render "needs 8 GB, have 6 GB".
     detected_platform: Optional[str] = None
     total_memory_gb: Optional[float] = None
@@ -75,6 +78,7 @@ class CompatibilityReport:
             "disk_ok": self.disk_ok,
             "warnings": list(self.warnings),
             "blockers": list(self.blockers),
+            "disk_blocker": self.disk_blocker,
             "detected_platform": self.detected_platform,
             "total_memory_gb": self.total_memory_gb,
             "free_disk_gb": self.free_disk_gb,
@@ -272,6 +276,7 @@ def check_compatibility(
             download_size_bytes * _INSTALL_SIZE_HEADROOM
         ) / _BYTES_PER_GB
     disk_ok = True
+    disk_blocker = None
     if required_disk_gb > 0:
         if free_disk is None:
             warnings.append(
@@ -280,10 +285,11 @@ def check_compatibility(
             )
         elif free_disk < required_disk_gb:
             disk_ok = False
-            blockers.append(
+            disk_blocker = (
                 f"Not enough disk space: install needs ~{required_disk_gb:.1f} GB "
                 f"but only {free_disk:.1f} GB is free on {install_dir}."
             )
+            blockers.append(disk_blocker)
 
     # --- NPU / GPU (advisory) ---
     # When the caller passes a real hardware scan (detected_npu /
@@ -340,6 +346,7 @@ def check_compatibility(
         disk_ok=disk_ok,
         warnings=warnings,
         blockers=blockers,
+        disk_blocker=disk_blocker,
         detected_platform=detected,
         total_memory_gb=round(total_mem, 2) if total_mem is not None else None,
         free_disk_gb=round(free_disk, 2) if free_disk is not None else None,

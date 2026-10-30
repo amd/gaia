@@ -11,14 +11,11 @@ window asked for, the load refused or sent), never a real load.
 
 from __future__ import annotations
 
-import json
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from gaia.installer.init_command import INIT_PROFILES
 from gaia.llm import lemonade_client as lc
 from gaia.llm import model_fit
 from gaia.llm.model_fit import FreeMemory, GpuMemoryUse, OsMemory
@@ -277,6 +274,8 @@ class TestStrixHaloUnchanged:
         machine(STRIX_HALO_128, _ram(32, 20))
 
         class FakeClient:
+            base_url = URL
+
             def get_system_info(self, timeout=None):
                 return STRIX_HALO_128
 
@@ -287,7 +286,165 @@ class TestStrixHaloUnchanged:
         assert model_id == QWEN
 
 
+# ── The default model is chosen against the memory free now ────────────────
+
+# A 48 GB Apple Silicon Mac: Metal can use ~36 GB, which holds Qwen3.6.
 MAC_48 = {
+    "Physical Memory": "48 GB",
+    "devices": {"amd_gpu": [], "metal": {"available": True, "vram_gb": 36.0}},
+    "model_storage": {"free_bytes": 400e9},
+}
+
+
+class _Lemonade:
+    base_url = URL
+
+    def __init__(self, info):
+        self.info = info
+
+    def get_system_info(self, timeout=None):
+        return self.info
+
+    def health_check(self):
+        return {"version": "2026.40.0"}
+
+
+class _Machine(_Lemonade):
+    """A whole GAIA Lemonade: what setup, the check and the free-memory read ask."""
+
+    def __init__(self, info):
+        super().__init__(info)
+        self.downloaded = set()
+
+    def get_system_info(self, timeout=None, verbose=False):
+        return self.info
+
+    def health_check(self, timeout=None):
+        return {"status": "ok", "version": "2026.40.0", "all_models_loaded": []}
+
+    def check_model_available(self, model_id):
+        return model_id in self.downloaded
+
+    def list_models(self, show_all=False):
+        return {"data": [{"id": m, "downloaded": True} for m in self.downloaded]}
+
+
+class TestDefaultModelFollowsFreeMemory:
+    """#5582: the pick was made on total memory, then the 23 GB download failed
+    to load because only 20.4 GB was free."""
+
+    def test_48gb_mac_with_20gb_free_gets_gemma_and_says_why(self, machine):
+        machine(MAC_48, _ram(48, 20.4))
+        model_id, skipped, _ = lc.recommend_default_chat_model(_Lemonade(MAC_48))
+        assert model_id == GEMMA
+        reason = dict(skipped)[QWEN]
+        assert "20.4 GB" in reason and "free" in reason
+        assert "Close" in reason
+
+    def test_48gb_mac_with_room_free_gets_qwen(self, machine):
+        machine(MAC_48, _ram(48, 40))
+        model_id, _, _ = lc.recommend_default_chat_model(_Lemonade(MAC_48))
+        assert model_id == QWEN
+
+    def test_a_loaded_qwen_counts_its_own_memory_as_free(self, machine):
+        machine(MAC_48, _ram(48, 4), loaded={QWEN: 32768})
+        model_id, _, _ = lc.recommend_default_chat_model(_Lemonade(MAC_48))
+        assert model_id == QWEN
+
+    def test_a_finished_setup_stays_finished_when_more_memory_is_free_later(
+        self, machine, monkeypatch
+    ):
+        """Set up at 20 GB free (Gemma); a later launch with 40 GB free must not
+        expect Qwen3.6 and send a working user back to a 23 GB download."""
+        from unittest.mock import MagicMock, patch
+
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import InitCommand, check_setup_status
+
+        lemonade = _Machine(MAC_48)
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        machine(MAC_48, _ram(48, 20.4))
+        cmd = InitCommand(profile="gaia", yes=True)
+        assert cmd._chat_model(lemonade) == GEMMA
+        lemonade.downloaded |= {GEMMA, EMBEDDER}
+        cmd._chat_model_ready = True
+        GaiaConfig.update(cmd._record_chat_choice)
+
+        machine(MAC_48, _ram(48, 40))
+        embedded = MagicMock()
+        embedded.status.return_value = MagicMock(
+            installed=True,
+            running=True,
+            unresponsive_pid=None,
+            version=embedded.version,
+            base_url=URL,
+        )
+        with (
+            patch("gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded),
+            patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.start_embedded_if_stopped"
+            ),
+            patch("gaia.llm.lemonade_client.LemonadeClient", return_value=lemonade),
+        ):
+            status = check_setup_status(profile="gaia")
+        assert status.ready, status.reasons
+
+    def test_setup_says_the_downgraded_pick_is_kept(self, machine, capsys):
+        from gaia.installer.init_command import InitCommand
+
+        machine(MAC_48, _ram(48, 20.4))
+        InitCommand(profile="gaia", yes=True)._chat_model(_Machine(MAC_48))
+        out = " ".join(capsys.readouterr().out.split())
+        assert f"gaia config set default_model {QWEN}" in out
+
+    def test_a_planned_model_is_the_one_set_up_even_with_more_memory_free(
+        self, machine
+    ):
+        """The screen named Gemma at 20 GB free; the run must not switch to Qwen3.6."""
+        from gaia.installer.init_command import InitCommand
+
+        machine(MAC_48, _ram(48, 40))
+        cmd = InitCommand(profile="gaia", yes=True, chat_model=GEMMA)
+        assert cmd._chat_model(_Machine(MAC_48)) == GEMMA
+
+    def test_a_planned_model_that_no_longer_fits_free_memory_is_refused(self, machine):
+        from gaia.installer.init_command import InitCommand
+
+        machine(MAC_48, _ram(48, 10))
+        cmd = InitCommand(profile="gaia", yes=True, chat_model=QWEN)
+        with pytest.raises(model_fit.ModelFitError, match="10.0 GB is free"):
+            cmd._chat_model(_Machine(MAC_48))
+
+    def test_the_plan_warns_when_even_the_smallest_model_cannot_load_now(self, machine):
+        """Setup named Gemma, then its load failed: 7.8 GB needed, 6.2 GB free."""
+        machine(CPU_16, _ram(16, 6.2))
+        capacity = model_fit.capacity_from_system_info(CPU_16)
+        warning = lc.free_memory_load_warning(
+            URL, lc.find_model_requirement(GEMMA), capacity
+        )
+        assert warning.startswith(
+            f"Not enough free memory to load {GEMMA} with a 32,768-token window"
+        )
+        assert "7.8 GB" in warning and "6.2 GB is free" in warning
+        assert "Close apps" in warning
+
+    def test_no_plan_warning_when_the_model_fits_free_memory(self, machine):
+        machine(CPU_16, _ram(16, 12))
+        capacity = model_fit.capacity_from_system_info(CPU_16)
+        assert (
+            lc.free_memory_load_warning(URL, lc.find_model_requirement(GEMMA), capacity)
+            is None
+        )
+
+    def test_a_remote_server_is_not_judged_by_this_pcs_memory(self, machine):
+        machine(MAC_48, _ram(48, 2))
+        remote = _Lemonade(MAC_48)
+        remote.base_url = "http://10.0.0.5:13305/api/v1"
+        model_id, _, _ = lc.recommend_default_chat_model(remote)
+        assert model_id == QWEN
+
+
+MAC_48_M4 = {
     "devices": {
         "metal": {"available": True, "name": "Apple M4 Pro", "vram_gb": 36.0},
     },
@@ -319,17 +476,17 @@ class TestDefaultPickedByFreeMemory:
         return run
 
     def test_a_mac_that_holds_qwen_but_has_little_free_gets_gemma(self, recommend):
-        model_id, skipped = recommend(MAC_48, _ram(48, 20.4))
+        model_id, skipped = recommend(MAC_48_M4, _ram(48, 20.4))
         assert model_id == GEMMA
         assert "free memory" in skipped[QWEN] and "20.4 GB" in skipped[QWEN]
         assert "re-run `gaia init`" in skipped[QWEN]
 
     def test_the_same_mac_with_room_free_gets_qwen(self, recommend):
-        assert recommend(MAC_48, _ram(48, 40))[0] == QWEN
+        assert recommend(MAC_48_M4, _ram(48, 40))[0] == QWEN
 
     def test_the_pick_agrees_with_the_load_guard(self, recommend, client):
         """Whatever is skipped for free memory, the load refuses too."""
-        recommend(MAC_48, _ram(48, 20.4))
+        recommend(MAC_48_M4, _ram(48, 20.4))
         with pytest.raises(lc.InsufficientMemoryError):
             client.load_model(QWEN, ctx_size=model_fit.MIN_CONTEXT_TOKENS)
 
@@ -340,7 +497,7 @@ class TestDefaultPickedByFreeMemory:
             raise model_fit.ModelFitError("no memory reported")
 
         monkeypatch.setattr(lc, "_free_memory_snapshot", unreadable)
-        model_id, skipped = recommend(MAC_48, _ram(48, 40))
+        model_id, skipped = recommend(MAC_48_M4, _ram(48, 40))
         assert model_id == GEMMA
         assert "no memory reported" in skipped[QWEN]
 
@@ -568,58 +725,16 @@ def test_gemma_size_and_kv_cache_match_its_architecture():
 # ── First launch ──────────────────────────────────────────────────────────
 
 
-def _installer_init_argv():
-    """The `gaia init` arguments the desktop app's first install runs."""
+def test_the_desktop_installer_leaves_model_setup_to_the_app():
+    """#5629: the installer downloads no model. The app's setup screen is the one
+    place first launch runs `gaia init`, after the user picks cloud or local."""
     source = (
         REPO_ROOT / "src/gaia/apps/webui/services/backend-installer.cjs"
     ).read_text(encoding="utf-8")
-    match = re.search(r'\[\s*("init",[^\]]*)\]', source)
-    assert match, "backend-installer.cjs no longer runs `gaia init`"
-    # Spread elements (the Lemonade choice) are runtime-only; keep the literals.
-    literals = [
-        part.strip()
-        for part in match.group(1).split(",")
-        if part.strip() and not part.strip().startswith("...")
-    ]
-    return json.loads(f"[{', '.join(literals)}]")
-
-
-def test_first_launch_runs_setup_exactly_once(monkeypatch):
-    """The installer's init must leave the app's own setup check satisfied."""
-    from gaia.ui import setup_runner
-
-    runs = []
-    set_up = set()
-
-    def gaia_init(argv):
-        profile = argv[argv.index("--profile") + 1]
-        runs.append(profile)
-        set_up.update(INIT_PROFILES[profile]["models"])
-
-    def fake_run(cmd, **kwargs):
-        args = cmd[3:]  # [python, -m, gaia.cli, ...]
-        assert "--check" in args, f"setup ran {args} through subprocess.run"
-        profile = args[args.index("--profile") + 1]
-        ready = set(INIT_PROFILES[profile]["models"]) <= set_up
-        return subprocess.CompletedProcess(
-            cmd, 0 if ready else 1, stdout=json.dumps({"ready": ready}), stderr=""
-        )
-
-    monkeypatch.setattr(setup_runner.subprocess, "run", fake_run)
-
-    gaia_init(_installer_init_argv())  # first install
-    if not setup_runner.check()["ready"]:  # first launch: SetupScreen's gate
-        gaia_init(setup_runner.run_args(skip_chat_model=False))
-
-    assert len(runs) == 1, f"first launch ran gaia init {len(runs)} times: {runs}"
-
-
-def test_installer_runs_the_profile_the_app_checks():
-    from gaia.ui.setup_runner import PROFILE
-
-    argv = _installer_init_argv()
-    assert argv[argv.index("--profile") + 1] == PROFILE
-    assert "--yes" in argv
+    assert not re.search(r'\[\s*"init"', source), (
+        "backend-installer.cjs runs `gaia init` again; model setup belongs to "
+        "the app's first-run setup screen"
+    )
 
 
 def test_warm_up_does_not_load_the_model_on_a_small_machine(monkeypatch):

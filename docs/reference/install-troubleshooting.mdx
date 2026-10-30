@@ -96,14 +96,15 @@ The Electron app launches but the backend install fails with an error dialog. Co
 
 ### Insufficient disk space
 
-**Symptom**: Error dialog says "Not enough free disk space. Required: 5120 MB, available: X MB".
+**Symptom**: Error dialog says "Not enough free disk space. Required: 2048 MB, available: X MB".
 
-**Fix**: Free at least 5 GB of disk space and click **Retry**. That covers the app's Python environment only.
+**Fix**: Free at least 2 GB of disk space and click **Retry**. That covers the Python environment; the installer downloads no model.
 
-The models come next. Before downloading them, setup checks that they fit in Lemonade's
-model store: about 6 GB on most PCs, about 30 GB where the larger Qwen3.6 model fits. When
-they don't fit, the install log says `Not enough disk space`, with how much the models need,
-how much is free, and where. Free that much there, then relaunch the app.
+The model comes next, from the app's setup screen, once you choose to run one on this PC. Before
+downloading, setup checks that it fits in Lemonade's model store: about 6 GB for Gemma 4 E4B,
+about 30 GB where the larger Qwen3.6 model fits. When it doesn't fit, the setup screen says how
+much the model needs and how much is free. Free that much, pick a smaller model, or choose a
+cloud provider.
 
 ### No internet connection
 
@@ -116,10 +117,12 @@ surfaces here, at the actual download, with a precise error.
 - `uv` (~30 MB)
 - Python 3.12 (~100 MB)
 - amd-gaia + dependencies (~1.5 GB)
-- Lemonade Server (~50 MB)
-- The default model, Gemma-4-E4B-it-GGUF (~6 GB; ~23 GB Qwen3.6-35B-A3B-GGUF on PCs whose GPU can hold it)
 
-Subsequent launches work fully offline.
+The app's setup screen then downloads Lemonade Server (~50 MB) and the model you
+choose: under 1 GB for a cloud provider, or a chat model to run on this PC,
+Gemma-4-E4B-it-GGUF (~6 GB) or Qwen3.6-35B-A3B-GGUF (~23 GB) where it fits.
+
+Once a local model is set up, later launches work fully offline.
 
 ### Corporate proxy / firewall
 

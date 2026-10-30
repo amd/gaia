@@ -153,8 +153,8 @@ function Check-TuiVersion([string[]]$Expected) {
 function Start-AgentUi {
     $dir = Ui-Dir
     if (-not $dir -or -not (Test-Path "$dir\gaia-desktop.exe")) { Fail "no installed gaia-desktop.exe to launch (InstallLocation: '$dir')" }
-    # gaia init downloads Lemonade and several GB of models; that needs hardware
-    # and is covered elsewhere. Everything up to a serving backend is under test.
+    # These rows install a published release; one before #5629 runs gaia init
+    # (several GB of models) on first launch. Later apps ignore the variable.
     $env:GAIA_SKIP_GAIA_INIT = '1'
     $p = Start-Process -FilePath "$dir\gaia-desktop.exe" -WindowStyle Hidden -PassThru
     Set-Content -Path "$work\app.pid" -Value $p.Id

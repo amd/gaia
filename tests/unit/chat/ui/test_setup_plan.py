@@ -48,6 +48,8 @@ def config_file(tmp_path, monkeypatch):
 class _FakeLemonade:
     """A running Lemonade on a PC with *capacity*; *downloaded* models are on disk."""
 
+    base_url = "http://127.0.0.1:9/api/v1"
+
     def __init__(self, capacity, downloaded=(), version="11.8.0"):
         self.capacity = capacity
         self.downloaded = set(downloaded)
@@ -142,6 +144,7 @@ def test_use_mine_on_a_big_pc_names_the_large_model_and_its_real_size(running):
         "user_set": False,
         "size_gb": 23.3,
         "downloaded": False,
+        "memory_warning": None,
     }
     assert plan["decided_after_server"] is False
     assert plan["recommended_model"] == LARGE_DEFAULT_MODEL_NAME
@@ -203,6 +206,95 @@ def test_picking_the_recommendation_again_hands_the_choice_back_to_setup(
     sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
     assert json.loads(config_file.read_text())["default_model"] is None
     assert sp.build_plan()["chat_model"]["user_set"] is False
+
+
+@pytest.fixture
+def short_of_free_memory(monkeypatch):
+    """The large model fits the PC's total memory but not what is free now."""
+    from gaia.llm import lemonade_client
+
+    reason = (
+        "not enough free memory to load it now: it needs about 26.1 GB and only "
+        "20.4 GB is free"
+    )
+
+    def rules_out(_client, requirement, _capacity):
+        if requirement.model_id == LARGE_DEFAULT_MODEL_NAME:
+            return reason
+        return None
+
+    monkeypatch.setattr(lemonade_client, "_free_memory_rules_out", rules_out)
+    return reason
+
+
+def test_free_memory_decides_the_pick_and_the_plan_says_why(
+    running, short_of_free_memory
+):
+    """#5582: a 48 GB Mac with 20 GB free got the 23 GB model, which then would not load."""
+    running(BIG_GPU)
+    plan = sp.build_plan()
+    assert plan["recommended_model"] == DEFAULT_MODEL_NAME
+    assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
+    assert LARGE_DEFAULT_MODEL_NAME not in _plan_ids(plan)
+    assert plan["passed_over"] == [
+        {"id": LARGE_DEFAULT_MODEL_NAME, "reason": short_of_free_memory}
+    ]
+    options = {o["id"]: o for o in plan["options"]}
+    assert options[LARGE_DEFAULT_MODEL_NAME]["fits"] is False
+    assert "20.4 GB is free" in options[LARGE_DEFAULT_MODEL_NAME]["reason"]
+    with pytest.raises(sp.SetupPlanError, match="won't fit"):
+        sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
+
+
+def test_the_plan_says_when_the_chosen_model_cannot_load_right_now(
+    running, monkeypatch
+):
+    """The floor model is always setup's pick, so the plan warns instead of
+    hiding that its load will fail until memory is freed."""
+    from gaia.llm import lemonade_client
+
+    warning = (
+        f"Not enough free memory to load {DEFAULT_MODEL_NAME} with a 32,768-token "
+        "window: it needs about 7.8 GB and only 6.2 GB is free."
+    )
+    seen = []
+
+    def load_warning(url, requirement, _capacity):
+        seen.append((url, requirement.model_id))
+        return warning
+
+    monkeypatch.setattr(lemonade_client, "free_memory_load_warning", load_warning)
+    running(SMALL_GPU)
+    plan = sp.build_plan()
+    assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
+    assert plan["chat_model"]["memory_warning"] == warning
+    assert seen == [("http://127.0.0.1:9/api/v1", DEFAULT_MODEL_NAME)]
+    assert plan["disk_problem"] is None
+
+
+def test_no_memory_warning_before_the_server_answers(no_server):
+    assert sp.build_plan()["chat_model"]["memory_warning"] is None
+
+
+def test_a_user_chosen_model_names_nothing_passed_over(running, config_file):
+    config_file.write_text(json.dumps({"default_model": DEFAULT_MODEL_NAME}))
+    running(BIG_GPU)
+    assert sp.build_plan()["passed_over"] == []
+
+
+def test_the_plan_says_when_the_download_will_not_fit_the_disk(running):
+    tight = MachineCapacity(memory_gb=96, memory_source="AMD iGPU", disk_free_gb=5)
+    running(tight)
+    plan = sp.build_plan()
+    assert plan["disk_free_gb"] == pytest.approx(5)
+    assert plan["download_gb"] > 5
+    assert "5.0 GB free" in plan["disk_problem"]
+    assert "5.9 GB" in plan["disk_problem"]
+
+
+def test_a_download_that_fits_the_disk_has_no_disk_problem(running):
+    running(BIG_GPU)
+    assert sp.build_plan()["disk_problem"] is None
 
 
 def test_a_model_that_does_not_fit_is_refused(running):

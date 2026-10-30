@@ -184,17 +184,13 @@ class TestSystemStatus:
         for field in expected_fields:
             assert field in data, f"Missing field: {field}"
 
-    def test_system_status_reports_a_failed_desktop_setup(
-        self, client, tmp_path, monkeypatch
-    ):
+    def test_system_status_reports_a_failed_setup(self, client, tmp_path, monkeypatch):
         monkeypatch.setenv("GAIA_HOME", str(tmp_path))
         assert client.get("/api/system/status").json()["setup_error"] is None
 
         reason = "Gemma-4-E4B-it-GGUF - Not enough free memory to load it."
-        (tmp_path / "electron-install-state.json").write_text(
-            f'{{"state": "ready", "init": "failed", "initError": "{reason}"}}',
-            encoding="utf-8",
-        )
+        (tmp_path / "chat").mkdir()
+        (tmp_path / "chat" / "setup-error").write_text(reason, encoding="utf-8")
         assert client.get("/api/system/status").json()["setup_error"] == reason
 
     def test_system_status_disk_space_non_negative(self, client):

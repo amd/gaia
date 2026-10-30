@@ -66,7 +66,7 @@ class SystemStatus(BaseModel):
     # any agent declaring ``min_memory_gb > 0`` would appear to be over budget.
     memory_available_gb: Optional[float] = None
     initialized: bool = False
-    # Why the desktop app's first-run ``gaia init`` failed; None when it did not.
+    # Why the last first-run setup failed; None once one has succeeded.
     setup_error: Optional[str] = None
     # A factory keeps the version out of the exported schema, which RC builds restamp.
     version: str = Field(default_factory=lambda: _gaia_version)
