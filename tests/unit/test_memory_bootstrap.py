@@ -868,3 +868,19 @@ def test_onboarding_writes_a_profile_row(tmp_path):
         assert tuple(row) == ("profile", "User is a nurse")
     finally:
         store.close()
+
+
+def test_first_boot_decline_persistence_failure_does_not_abort_chat(
+    monkeypatch, tmp_path, capsys
+):
+    from gaia import cli
+
+    _first_boot_env(monkeypatch, tmp_path)
+    monkeypatch.setattr("builtins.input", lambda prompt: "n")
+    monkeypatch.setattr(
+        cli, "_mark_onboarding_completed", _raise(RuntimeError("disk full"))
+    )
+
+    cli._offer_first_boot_onboarding()
+
+    assert "disk full" in capsys.readouterr().out

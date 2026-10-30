@@ -93,7 +93,8 @@
                       "guides/browser-use",
                       "guides/harness-engineering",
                       "guides/talk",
-                      "guides/transcription"
+                      "guides/transcription",
+                      "guides/audio-generation"
                     ]
                   },
                   {
@@ -439,6 +440,7 @@
               "plans/tool-loader",
               "plans/nightly-benchmarks",
               "plans/eval-hillclimbing",
+              "plans/release-train",
               "plans/release-eval-hardening"
             ]
           },
@@ -457,6 +459,8 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.25.3",
+              "releases/v0.25.2",
               "releases/v0.25.1",
               "releases/v0.25.0",
               "releases/v0.24.1",
@@ -520,7 +524,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.25.1 \u00b7 Lemonade 2026.42.1",
+        "label": "v0.25.3 \u00b7 Lemonade 2026.44.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

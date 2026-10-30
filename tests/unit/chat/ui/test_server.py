@@ -184,6 +184,19 @@ class TestSystemStatus:
         for field in expected_fields:
             assert field in data, f"Missing field: {field}"
 
+    def test_system_status_reports_a_failed_desktop_setup(
+        self, client, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        assert client.get("/api/system/status").json()["setup_error"] is None
+
+        reason = "Gemma-4-E4B-it-GGUF - Not enough free memory to load it."
+        (tmp_path / "electron-install-state.json").write_text(
+            f'{{"state": "ready", "init": "failed", "initError": "{reason}"}}',
+            encoding="utf-8",
+        )
+        assert client.get("/api/system/status").json()["setup_error"] == reason
+
     def test_system_status_disk_space_non_negative(self, client):
         resp = client.get("/api/system/status")
         data = resp.json()
@@ -1506,7 +1519,49 @@ class TestExportEndpoint:
         resp = client.get(f"/api/sessions/{session_id}/export?format=markdown")
         content = resp.json()["content"]
         assert "*Created:" in content
-        assert "*Model:" in content
+        assert "*Model (current setting):" in content
+
+    def test_export_names_the_model_that_answers(self, client, db):
+        sid = client.post("/api/sessions", json={"model": "Stored-GGUF"}).json()["id"]
+        client.put("/api/settings", json={"custom_model": "My-Override-GGUF"})
+        db.add_message(sid, "user", "Hi")
+        db.add_message(sid, "assistant", "Hello")
+        db.add_message(
+            sid, "assistant", "Retried", inference_stats={"model": "Retry-GGUF"}
+        )
+
+        md = client.get(f"/api/sessions/{sid}/export?format=markdown").json()
+        # "Hello" has no recorded model, so the header can only name the setting.
+        assert "*Model (current setting): My-Override-GGUF*" in md["content"]
+        assert "Stored-GGUF" not in md["content"]
+        assert "**Assistant:**\n\nHello" in md["content"]
+        assert "**Assistant (Retry-GGUF):**\n\nRetried" in md["content"]
+
+        js = client.get(f"/api/sessions/{sid}/export?format=json").json()
+        assert js["session"]["model"] == "Stored-GGUF"
+        assert js["session"]["effective_model"] == "My-Override-GGUF"
+
+    def test_export_names_each_answers_own_model_after_a_switch(self, client, db):
+        sid = client.post("/api/sessions", json={"model": "Old-GGUF"}).json()["id"]
+        db.add_message(sid, "user", "Q1")
+        db.add_message(sid, "assistant", "A1", inference_stats={"model": "Old-GGUF"})
+        db.add_message(sid, "user", "Q2")
+        db.add_message(sid, "assistant", "A2", inference_stats={"model": "New-GGUF"})
+        client.put("/api/settings", json={"custom_model": "Later-GGUF"})
+
+        content = client.get(f"/api/sessions/{sid}/export").json()["content"]
+        assert "*Models: Old-GGUF, New-GGUF*" in content
+        assert "Later-GGUF" not in content
+        assert "**Assistant (Old-GGUF):**\n\nA1" in content
+        assert "**Assistant (New-GGUF):**\n\nA2" in content
+
+    def test_export_single_recorded_model_is_singular(self, client, db):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        db.add_message(sid, "user", "Q")
+        db.add_message(sid, "assistant", "A", inference_stats={"model": "Only-GGUF"})
+
+        content = client.get(f"/api/sessions/{sid}/export").json()["content"]
+        assert "*Model: Only-GGUF*" in content
 
     def test_export_json(self, client, db):
         create_resp = client.post("/api/sessions", json={"title": "JSON Export"})
@@ -1577,6 +1632,42 @@ class TestChatSendEndpoint:
         assert "content" in data
         assert data["content"] == "This is a response."
         assert "message_id" in data
+
+    @patch("gaia.ui.agent_loop.agent_loop.yield_to_user")
+    @patch("gaia.ui.routers.chat.turn_takes_the_line", return_value=True)
+    @patch("gaia.ui.server._get_chat_response")
+    def test_local_chat_request_preempts_a_goal_tick(
+        self, mock_chat, mock_takes_line, mock_yield, client
+    ):
+        mock_chat.return_value = "This is a response."
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+
+        response = client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+
+        assert response.status_code == 200
+        mock_takes_line.assert_called_once()
+        mock_yield.assert_called_once_with()
+
+    @patch("gaia.ui.agent_loop.agent_loop.yield_to_user")
+    @patch("gaia.ui.routers.chat.turn_takes_the_line", return_value=False)
+    @patch("gaia.ui.server._get_chat_response")
+    def test_cloud_chat_request_does_not_preempt_a_goal_tick(
+        self, mock_chat, mock_takes_line, mock_yield, client
+    ):
+        mock_chat.return_value = "This is a response."
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+
+        response = client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+
+        assert response.status_code == 200
+        mock_takes_line.assert_called_once()
+        mock_yield.assert_not_called()
 
     @patch("gaia.ui.server._get_chat_response")
     def test_non_streaming_saves_both_messages(self, mock_chat, client, db):

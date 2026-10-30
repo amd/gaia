@@ -12,13 +12,12 @@ Tests the following endpoints through the HTTP API layer:
 
 LLM/RAG calls are mocked via ``gaia.ui.server._index_document`` so
 the tests run without a Lemonade server.  Temporary files are created
-inside ``Path.home() / ".gaia" / "test_temp"`` to satisfy the
-``ensure_within_home`` security check.
+inside a per-test fake home (``isolated_gaia_home``) to satisfy the
+``ensure_within_home`` security check without touching the real one.
 """
 
 import logging
 import platform
-import shutil
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -61,17 +60,13 @@ def session_id(client):
 
 
 @pytest.fixture
-def temp_folder():
-    """Create a temporary folder inside the user's home directory.
-
-    The folder is placed under ``~/.gaia/test_temp`` so it passes the
-    ``ensure_within_home`` security check enforced by the index-folder
-    endpoint.  Cleaned up after each test.
-    """
-    base = Path.home() / ".gaia" / "test_temp"
-    base.mkdir(parents=True, exist_ok=True)
-    yield base
-    shutil.rmtree(str(base), ignore_errors=True)
+def temp_folder(isolated_gaia_home):
+    """A folder inside this test's own fake home, so it passes the
+    index-folder endpoint's ``ensure_within_home`` check and parallel
+    workers never share it."""
+    folder = isolated_gaia_home / "test_temp"
+    folder.mkdir()
+    return folder
 
 
 def _create_file(folder: Path, name: str, content: str = "test content") -> Path:
@@ -114,6 +109,29 @@ class TestFolderIndexing:
 
         # _index_document should have been called once per file
         assert mock_index.call_count == 3
+
+    @patch("gaia.ui.server._index_document", new_callable=AsyncMock, return_value=2)
+    def test_index_folder_skips_images(self, mock_index, client, temp_folder):
+        """A folder walk never sends images to the vision model (#730)."""
+        from gaia.utils.image_formats import IMAGE_EXTENSIONS
+
+        _create_file(temp_folder, "readme.txt", "Hello world")
+        for ext in IMAGE_EXTENSIONS:
+            (temp_folder / f"icon{ext}").write_bytes(b"\x89PNG\r\n\x1a\n")
+        (temp_folder / "sub").mkdir()
+        (temp_folder / "sub" / "logo.PNG").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        resp = client.post(
+            "/api/documents/index-folder",
+            json={"folder_path": str(temp_folder), "recursive": True},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+        assert [d["filename"] for d in body["documents"]] == ["readme.txt"]
+        assert body["failed"] == 0
+        indexed = [Path(c.args[0]).name for c in mock_index.call_args_list]
+        assert indexed == ["readme.txt"]
 
     @patch("gaia.ui.server._index_document", new_callable=AsyncMock, return_value=3)
     def test_index_folder_recursive(self, mock_index, client, temp_folder):
@@ -216,9 +234,9 @@ class TestFolderIndexing:
         assert body["errors"] == []
         assert mock_index.call_count == 0
 
-    def test_index_folder_nonexistent_path(self, client):
+    def test_index_folder_nonexistent_path(self, client, temp_folder):
         """A nonexistent folder path should return 404."""
-        fake_path = str(Path.home() / ".gaia" / "test_temp" / "does_not_exist_xyz")
+        fake_path = str(temp_folder / "does_not_exist_xyz")
         resp = client.post(
             "/api/documents/index-folder",
             json={"folder_path": fake_path},
@@ -258,7 +276,7 @@ class TestFolderIndexing:
             json={"folder_path": outside_path},
         )
         assert resp.status_code == 403
-        assert "restricted" in resp.json()["detail"].lower()
+        assert "outside them" in resp.json()["detail"]
 
     @patch("gaia.ui.server._index_document", new_callable=AsyncMock)
     def test_index_folder_partial_failure(self, mock_index, client, temp_folder):

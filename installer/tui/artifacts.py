@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""The installer files each platform produces, and the hub key each publishes under.
+"""The installer files each platform produces, and the hub key each was published under.
 
 One table, because these names were previously spelled by hand in the build
-scripts, the smoke tests and the publish step at once -- and the publisher uploads
-serially into immutable paths, so a rename that reaches only two of the three
-half-publishes a version that can never be completed.
+scripts, the smoke tests and the release attach step at once -- and a rename
+that reaches only two of the three ships a release missing an installer.
 
 ``tests/unit/test_installer_artifacts.py`` asserts the three build scripts still
 agree with this table; ``publish-args`` asserts every named file exists before the
@@ -29,11 +28,12 @@ from fetch_sidecar import platform_has_sidecar
 
 # terminal-hub platform key -> [(filename template, hub publish key), ...]
 #
-# The publish keys are deliberately NOT the six raw-binary ones. The hub
-# installer picks an artifact with `_filename_matches_platform`
-# (src/gaia/hub/installer.py), which is an `endswith` on the platform key -- so a
-# setup published under "win-x64" would be a candidate wherever the raw
-# gaia-win-x64.exe is expected.
+# Installers attach to the GitHub release only (release_components.yml); the
+# keys are what they were published under on the Agent Hub until 0.25.0. They
+# are deliberately NOT the six raw-binary keys: the hub installer picks an
+# artifact with an `endswith` on the platform key (`_filename_matches_platform`
+# in src/gaia/hub/installer.py), so a setup under "win-x64" would be a
+# candidate wherever the raw gaia-win-x64.exe is expected.
 ARTIFACTS: dict[str, list[tuple[str, str]]] = {
     "win-x64": [("gaia-{version}-win-x64-setup.exe", "win-x64-setup")],
     "darwin-arm64": [("gaia-{version}-darwin-arm64.pkg", "darwin-arm64-pkg")],

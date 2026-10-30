@@ -12,6 +12,7 @@ lookup under the wrong type evicts (and disconnects) the user's agent.
 import asyncio
 import sys
 import threading
+import time
 import types
 from unittest.mock import MagicMock
 
@@ -24,7 +25,7 @@ from gaia.ui.database import ChatDatabase
 from gaia.ui.run_manager import run_manager
 from gaia.ui.turn_queue import TurnQueue
 
-_GOAL = types.SimpleNamespace(priority="high", title="t", description="")
+_GOAL = types.SimpleNamespace(id="goal-1", priority="high", title="t", description="")
 
 
 class _FakeAgent:
@@ -55,6 +56,8 @@ def env(monkeypatch, tmp_path):
     registry = MagicMock()
     registry.canonical_id.side_effect = lambda t: t
     registry.resolve_model.return_value = None
+    # An in-process install: the flagship's wheel is importable.
+    registry.get.return_value.is_sidecar = False
     monkeypatch.setattr(helpers, "_agent_registry", registry)
 
     initialized = tmp_path / ".gaia" / "chat" / "initialized"
@@ -72,7 +75,8 @@ def env(monkeypatch, tmp_path):
 def _make(agent_type="gaia"):
     db = ChatDatabase(":memory:")
     db.set_setting("agent_mode", "goal_driven")
-    session = db.create_session(model="M-GGUF", agent_type=agent_type)
+    session = db.create_session(model="M-GGUF", agent_type=agent_type, kind="scheduled")
+    db.set_setting(agent_loop_mod.GOALS_SESSION_SETTING, session["id"])
     agent = _FakeAgent("M-GGUF")
     helpers._store_agent(session["id"], "M-GGUF", [], agent, agent_type)
     loop = AgentLoop()
@@ -89,6 +93,48 @@ async def test_tick_reuses_gaia_agent_without_evicting_it(env):
     assert helpers._agent_cache[session["id"]]["agent"] is agent
     agent._mcp_manager.disconnect_all.assert_not_called()
     assert len(agent.calls) == 1
+
+
+async def test_tick_never_runs_in_or_locks_the_users_chat(env):
+    loop, goals_session, agent = _make("gaia")
+    chat = loop._db.create_session(model="M-GGUF", agent_type="gaia")
+    seen = {}
+
+    def _process_query(message):
+        seen["chat_locked"] = loop._app_state.session_locks.get(
+            chat["id"], asyncio.Lock()
+        ).locked()
+        return "ok"
+
+    agent.process_query = _process_query
+
+    await loop._run_step(AgentTrigger("user_message_followup", chat["id"]))
+
+    assert seen == {"chat_locked": False}
+    assert loop._db.get_messages(chat["id"]) == []
+
+
+async def test_a_private_chats_turn_sets_off_no_tick(env):
+    loop, _, agent = _make("gaia")
+    chat = loop._db.create_session(model="M-GGUF", agent_type="gaia", private=True)
+
+    directive = await loop._run_step(AgentTrigger("user_message_followup", chat["id"]))
+
+    assert directive.directive == "idle"
+    assert agent.calls == []
+
+
+async def test_goals_get_their_own_background_chat_once(env):
+    loop, _, _ = _make("gaia")
+    loop._db.set_setting(agent_loop_mod.GOALS_SESSION_SETTING, None)
+
+    first = loop._goals_session_id()
+    second = loop._goals_session_id()
+
+    assert first == second
+    session = loop._db.get_session(first)
+    assert session["title"] == agent_loop_mod.GOALS_SESSION_TITLE
+    assert session["kind"] == "scheduled"
 
 
 async def test_tick_skips_session_whose_lock_is_held(env):
@@ -192,6 +238,134 @@ async def test_tick_without_a_cached_agent_builds_the_flagship(env, monkeypatch)
     assert config.kwargs["ui_session_id"] == session["id"]
     assert config.kwargs["silent_mode"] is True
     assert len(agent.calls) == 1
+
+
+async def test_cancelling_an_inflight_goal_stops_its_background_tick(env):
+    loop, session, agent = _make("chat")
+    started = threading.Event()
+
+    def wait_for_stop(_message):
+        started.set()
+        while not agent._cancel_event.is_set():
+            time.sleep(0.01)
+        return "stopped"
+
+    agent.process_query = wait_for_stop
+    step = asyncio.create_task(loop._run_step(AgentTrigger("idle_tick", session["id"])))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        assert loop.cancel_goal(_GOAL.id) is True
+        await asyncio.wait_for(step, 5)
+        assert not agent_loop_mod.turn_queue.locked()
+        assert loop._active_goal_ticks == {}
+    finally:
+        if not step.done():
+            loop.cancel_goal(_GOAL.id)
+            await asyncio.wait_for(step, 5)
+
+
+async def test_cancelling_a_goal_frees_the_model_from_a_tick_stuck_in_a_tool(env):
+    # #6006: the tick was inside index_document; a stop must not wait out the timeout.
+    loop, session, agent = _make("chat")
+    started, unstick = threading.Event(), threading.Event()
+
+    def hung_tool(_message):
+        agent.console.print_tool_usage("index_document")
+        started.set()
+        unstick.wait(30)
+        return "late"
+
+    agent.process_query = hung_tool
+    step = asyncio.create_task(loop._run_step(AgentTrigger("idle_tick", session["id"])))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        assert loop.cancel_goal(_GOAL.id) is True
+        directive = await asyncio.wait_for(step, 5)
+        assert directive.reason == "tick stopped for user"
+        assert not agent_loop_mod.turn_queue.locked()
+        # The thread still drives the session's agent until the tool returns.
+        lock = loop._app_state.session_locks[session["id"]]
+        assert lock.locked()
+        unstick.set()
+        for _ in range(100):
+            if not lock.locked():
+                break
+            await asyncio.sleep(0.02)
+        assert not lock.locked()
+    finally:
+        unstick.set()
+        if not step.done():
+            await asyncio.wait_for(step, 5)
+
+
+async def test_a_waiting_chat_gets_the_model_and_a_rerun_tick_stays_behind_it(env):
+    loop, session, agent = _make("chat")
+    started, unstick = threading.Event(), threading.Event()
+
+    def hung_tool(_message):
+        agent.console.print_tool_usage("index_document")
+        started.set()
+        unstick.wait(30)
+        return "late"
+
+    agent.process_query = hung_tool
+    queue = agent_loop_mod.turn_queue
+    step = asyncio.create_task(loop._run_step(AgentTrigger("idle_tick", session["id"])))
+    chat = None
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        chat = asyncio.create_task(queue.acquire("user-chat"))
+        await asyncio.sleep(0.05)
+        assert queue.position("user-chat") == 1
+        assert loop.yield_to_user() is True
+        await asyncio.wait_for(chat, 5)
+        assert queue.holder == "user-chat"
+        # The loop's next run must not take the model back from the chat.
+        agent.process_query = lambda _m: pytest.fail("tick ran ahead of the chat")
+        directive = await loop._run_step(AgentTrigger("continuation", None))
+        assert directive.reason == "session busy"
+        assert queue.holder == "user-chat"
+    finally:
+        unstick.set()
+        if not step.done():
+            await asyncio.wait_for(step, 5)
+        if chat is not None and chat.done() and queue.holder == "user-chat":
+            queue.release()
+
+
+async def test_a_preempted_tick_mid_model_call_keeps_the_model_until_it_stops(env):
+    loop, session, agent = _make("chat")
+    started, unstick = threading.Event(), threading.Event()
+
+    def generating(_message):
+        started.set()
+        unstick.wait(30)
+        return "late"
+
+    agent.process_query = generating
+    step = asyncio.create_task(loop._run_step(AgentTrigger("idle_tick", session["id"])))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        assert loop.yield_to_user() is True
+        await asyncio.sleep(0.8)
+        assert not step.done()
+        assert agent_loop_mod.turn_queue.locked(), "freed the GPU mid-generation"
+        unstick.set()
+        directive = await asyncio.wait_for(step, 5)
+        assert directive.reason == "tick stopped for user"
+        assert not agent_loop_mod.turn_queue.locked()
+    finally:
+        unstick.set()
+
+
+async def test_a_tick_started_after_a_cancel_is_not_stopped_by_it(env):
+    loop, session, agent = _make("chat")
+    assert loop.cancel_goal(_GOAL.id) is False
+    assert loop.yield_to_user() is False
+
+    directive = await loop._run_step(AgentTrigger("idle_tick", session["id"]))
+
+    assert agent.calls and directive.reason != "tick stopped for user"
 
 
 async def test_a_timed_out_tick_stuck_in_a_tool_frees_the_model_not_the_session(

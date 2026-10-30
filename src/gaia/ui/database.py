@@ -8,6 +8,7 @@ Manages sessions, messages, documents, and their relationships using SQLite.
 
 import json
 import logging
+import math
 import sqlite3
 import threading
 import uuid
@@ -18,6 +19,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gaia.config import GaiaConfig, gaia_home
 from gaia.utils.process_owner import current_owner, owner_is_gone
+from gaia.utils.sqlite_wal import enable_wal
+
+from .chat_search import fold, snippet
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,8 @@ def resolved_default_model() -> str:
 # Auto-generated placeholder titles the auto-retitler may replace (#2165).
 # Anything else is treated as explicitly chosen and pinned via title_is_custom.
 SESSION_KINDS = ("chat", "eval", "scheduled")
+#: Kinds the sidebar hides until "Show background runs" is on.
+AUTOMATED_SESSION_KINDS = ("eval", "scheduled")
 
 
 def session_kind_for_title(title: str | None) -> str:
@@ -69,6 +75,23 @@ PLACEHOLDER_TITLES = {
     "untitled session",
     "chat",
 }
+
+
+def non_finite_field(value: Any, path: str = "") -> Optional[str]:
+    """The dotted path of the first Infinity or NaN inside *value*, else None."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return path or "value"
+    if isinstance(value, dict):
+        items = ((f"{path}.{k}" if path else str(k), v) for k, v in value.items())
+    elif isinstance(value, list):
+        items = ((f"{path}[{i}]", v) for i, v in enumerate(value))
+    else:
+        return None
+    for child_path, child in items:
+        found = non_finite_field(child, child_path)
+        if found:
+            return found
+    return None
 
 
 def is_placeholder_title(title: str | None) -> bool:
@@ -95,7 +118,8 @@ CREATE TABLE IF NOT EXISTS documents (
     chunk_count INTEGER DEFAULT 0,
     indexed_at TEXT DEFAULT (datetime('now')),
     last_accessed_at TEXT,
-    last_error TEXT
+    last_error TEXT,
+    error_kind TEXT
 );
 
 -- Sessions (conversations)
@@ -179,7 +203,8 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     run_count        INTEGER DEFAULT 0,
     error_count      INTEGER DEFAULT 0,
     session_id       TEXT,
-    schedule_config  TEXT
+    schedule_config  TEXT,
+    last_error       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS schedule_results (
@@ -234,7 +259,8 @@ class ChatDatabase:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
-        self._conn.execute("PRAGMA journal_mode = WAL")
+        self._conn.execute("PRAGMA busy_timeout = 5000")
+        enable_wal(self._conn)
         self._init_schema()
         logger.info("Chat database initialized: %s", db_path)
 
@@ -342,6 +368,9 @@ class ChatDatabase:
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
+        # Why a failure is permanent (corrupted, encrypted, empty, empty_file,
+        # unsupported_workbook); NULL otherwise.
+        self._add_column("documents", "error_kind", "TEXT")
         # The server indexing it, so a restart can tell a dead index from a live one.
         self._add_column("documents", "indexing_owner", "TEXT")
         # Per-session incognito mode and agent selection.
@@ -381,6 +410,8 @@ class ChatDatabase:
         self._add_column("sessions", "pinned", "INTEGER NOT NULL DEFAULT 0")
         self._add_column("sessions", "unread", "INTEGER NOT NULL DEFAULT 0")
         self._add_column("sessions", "last_run_status", "TEXT")
+        # The last run's error text, or NULL when it succeeded.
+        self._add_column("scheduled_tasks", "last_error", "TEXT")
         self._add_column(
             "sessions",
             "kind",
@@ -390,6 +421,21 @@ class ChatDatabase:
             "WHEN title LIKE 'Schedule:%' THEN 'scheduled' "
             "ELSE 'chat' END",
         )
+
+        # Chat search: content folded for case and accents, filled lazily by
+        # search_sessions. Any writer that edits content marks it stale.
+        self._add_column("messages", "search_text", "TEXT")
+        with self._transaction():
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_unfolded "
+                "ON messages(id) WHERE search_text IS NULL"
+            )
+            self._conn.execute(
+                "CREATE TRIGGER IF NOT EXISTS messages_search_stale "
+                "AFTER UPDATE OF content ON messages "
+                "WHEN NEW.search_text IS OLD.search_text "
+                "BEGIN UPDATE messages SET search_text = NULL WHERE id = NEW.id; END"
+            )
 
     @property
     def db_path(self) -> str:
@@ -525,7 +571,7 @@ class ChatDatabase:
                 """SELECT s.*,
                           (SELECT COUNT(*) FROM messages WHERE session_id = s.id AND role != 'autonomous') as message_count
                    FROM sessions s
-                   ORDER BY s.updated_at DESC
+                   ORDER BY s.updated_at DESC, s.rowid DESC
                    LIMIT ? OFFSET ?""",
                 (limit, offset),
             ).fetchall()
@@ -541,6 +587,86 @@ class ChatDatabase:
                 sessions.append(session)
 
             return sessions
+
+    def search_sessions(
+        self, query: str, limit: int = 20, include_automated: bool = False
+    ) -> tuple[List[Dict[str, Any]], bool]:
+        """Chats whose title or messages contain *query*, newest first.
+
+        Matching ignores case and accents. Each result carries a snippet
+        around its first hit: the earliest message, else the title. Eval and
+        scheduled chats count only with *include_automated*, so they never
+        push a chat the sidebar shows past *limit*.
+
+        Returns:
+            The results, and whether more chats matched than *limit*.
+        """
+        needle = fold(query.strip())
+        if not needle:
+            return [], False
+        # One batch per transaction, so a large first backfill lets other
+        # writers in between batches.
+        while True:
+            with self._transaction():
+                unfolded = self._conn.execute(
+                    "SELECT id, content FROM messages "
+                    "WHERE search_text IS NULL LIMIT 2000"
+                ).fetchall()
+                self._conn.executemany(
+                    "UPDATE messages SET search_text = ? WHERE id = ?",
+                    [(fold(r["content"] or ""), r["id"]) for r in unfolded],
+                )
+            if not unfolded:
+                break
+        automated = "" if include_automated else " WHERE kind NOT IN (?, ?)"
+        with self._transaction():
+            sessions = self._conn.execute(
+                f"SELECT id, title FROM sessions{automated} ORDER BY updated_at DESC, rowid DESC",
+                () if include_automated else AUTOMATED_SESSION_KINDS,
+            ).fetchall()
+            first_hit = {
+                r["session_id"]: r["first_id"]
+                for r in self._conn.execute(
+                    "SELECT session_id, MIN(id) AS first_id FROM messages "
+                    "WHERE role IN ('user', 'assistant') "
+                    "AND instr(search_text, ?) > 0 GROUP BY session_id",
+                    (needle,),
+                )
+            }
+            matched = [
+                s
+                for s in sessions
+                if s["id"] in first_hit or needle in fold(s["title"])
+            ]
+            truncated = len(matched) > limit
+            matched = matched[:limit]
+            hit_ids = [first_hit[s["id"]] for s in matched if s["id"] in first_hit]
+            content = {}
+            if hit_ids:
+                marks = ", ".join("?" for _ in hit_ids)
+                content = {
+                    r["id"]: r["content"]
+                    for r in self._conn.execute(
+                        f"SELECT id, content FROM messages WHERE id IN ({marks})",
+                        hit_ids,
+                    )
+                }
+
+        results: List[Dict[str, Any]] = []
+        for s in matched:
+            if s["id"] in first_hit:
+                field, text = "message", content[first_hit[s["id"]]]
+            else:
+                field, text = "title", s["title"]
+            results.append(
+                {
+                    "session_id": s["id"],
+                    "title": s["title"],
+                    "field": field,
+                    "snippet": snippet(text, needle),
+                }
+            )
+        return results, truncated
 
     def set_session_pinned(self, session_id: str, pinned: bool) -> bool:
         """Pin or unpin a chat. Leaves ``updated_at`` alone so it keeps its place."""
@@ -650,6 +776,39 @@ class ChatDatabase:
                     )
 
         return self.get_session(session_id)
+
+    def set_provisional_title(self, session_id: str, title: str) -> bool:
+        """Name a chat that still has a placeholder title; True when renamed.
+
+        ``title_is_custom`` stays off, so the auto-titler can still replace it.
+        A title the user or an API caller chose is never touched.
+        """
+        with self._transaction():
+            row = self._conn.execute(
+                "SELECT title, title_is_custom FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None or row[1] or not is_placeholder_title(row[0]):
+                return False
+            self._conn.execute(
+                "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?",
+                (title, self._now(), session_id),
+            )
+        return True
+
+    def replace_auto_title(self, session_id: str, expected: str, title: str) -> bool:
+        """Swap an auto title for *title* only if it is still *expected*.
+
+        True when renamed. A rename that lands first (a new title or a pin)
+        makes this a no-op, in one statement, so it can never be overwritten.
+        """
+        with self._transaction():
+            cursor = self._conn.execute(
+                """UPDATE sessions SET title = ?, updated_at = ?
+                   WHERE id = ? AND title = ? AND title_is_custom = 0""",
+                (title, self._now(), session_id, expected),
+            )
+            return cursor.rowcount > 0
 
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and its messages."""
@@ -977,6 +1136,17 @@ class ChatDatabase:
                 ) from exc
             performance = stats.get("performance") if isinstance(stats, dict) else None
             if isinstance(performance, dict):
+                # Rows saved before totals were checked can hold Infinity/NaN.
+                bad = non_finite_field(performance)
+                if bad:
+                    logger.warning(
+                        "Skipping turn performance of message %s in chat %s: "
+                        "%s is not finite",
+                        row["id"],
+                        session_id,
+                        bad,
+                    )
+                    continue
                 turns.append(
                     {
                         "message_id": row["id"],
@@ -1428,6 +1598,7 @@ class ChatDatabase:
         status: str,
         chunk_count: int | None = None,
         last_error: str | None = _UNSET,
+        error_kind: str | None = None,
     ) -> bool:
         """Update a document's indexing status and optionally its chunk count.
 
@@ -1439,6 +1610,8 @@ class ChatDatabase:
                         Omit (default) to leave the existing value unchanged.
                         Pass None to clear the column (SQL NULL).
                         Pass a string to store that error message.
+            error_kind: Stored with ``last_error`` whenever that is written, so
+                        a stale kind never outlives the error it described.
 
         Returns:
             True if the document was found and updated.
@@ -1457,7 +1630,11 @@ class ChatDatabase:
             if status == "complete":
                 parts.append("last_error = ?")
                 params.append(None)
+                parts.append("error_kind = ?")
+                params.append(None)
             elif last_error is not _UNSET:
+                parts.append("error_kind = ?")
+                params.append(error_kind if last_error is not None else None)
                 parts.append("last_error = ?")
                 if (
                     isinstance(last_error, str)
@@ -1485,7 +1662,7 @@ class ChatDatabase:
             ids = [row["id"] for row in rows if owner_is_gone(row["indexing_owner"])]
             self._conn.executemany(
                 "UPDATE documents SET indexing_status = 'failed', last_error = ?, "
-                "last_accessed_at = ? WHERE id = ?",
+                "error_kind = NULL, last_accessed_at = ? WHERE id = ?",
                 [(error, self._now(), doc_id) for doc_id in ids],
             )
         return ids
@@ -1663,13 +1840,15 @@ class ChatDatabase:
         error_count: int = 0,
         session_id: str | None = None,
         schedule_config: str | None = None,
+        last_error: str | None = None,
     ) -> None:
         """Update the mutable fields of a scheduled task row."""
         with self._transaction():
             self._conn.execute(
                 """UPDATE scheduled_tasks
                    SET status = ?, last_run_at = ?, next_run_at = ?, last_result = ?,
-                       run_count = ?, error_count = ?, session_id = ?, schedule_config = ?
+                       run_count = ?, error_count = ?, session_id = ?, schedule_config = ?,
+                       last_error = ?
                    WHERE id = ?""",
                 (
                     status,
@@ -1680,6 +1859,7 @@ class ChatDatabase:
                     error_count,
                     session_id,
                     schedule_config,
+                    last_error,
                     task_id,
                 ),
             )

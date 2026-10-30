@@ -33,6 +33,7 @@ beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date(2026, 8, 29, 12));
     mockedApi.deleteSession.mockResolvedValue(undefined);
+    mockedApi.searchSessions.mockResolvedValue({ query: '', results: [] });
     useModelStore.setState({
         active: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma', remote: false, is_default: true },
     });
@@ -59,8 +60,26 @@ describe('Sidebar', () => {
     it('filters chats by search', () => {
         render(<Sidebar onNewChat={vi.fn()} />);
         fireEvent.change(screen.getByRole('searchbox', { name: /Search chats/ }), { target: { value: 'trip' } });
-        expect(screen.getByText('Plan the trip')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Plan the trip' })).toBeInTheDocument();
         expect(screen.queryByText('Fix the build')).not.toBeInTheDocument();
+    });
+
+    it('puts search above New chat, expanded and collapsed', () => {
+        const above = (a: HTMLElement, b: HTMLElement) =>
+            !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+        const { unmount } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(above(
+            screen.getByRole('searchbox', { name: /Search chats/ }),
+            screen.getByRole('button', { name: 'New chat' }),
+        )).toBe(true);
+        unmount();
+
+        useChatStore.setState({ sidebarCollapsed: true });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(above(
+            screen.getByRole('button', { name: 'Search chats' }),
+            screen.getByRole('button', { name: /New chat/ }),
+        )).toBe(true);
     });
 
     it('New chat calls onNewChat', () => {

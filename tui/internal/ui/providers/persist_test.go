@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,8 @@ var store keyStoreCalls
 var realRestoreKey = restoreKey
 
 func TestMain(m *testing.M) {
+	// A developer's own Local only must not change what these tests send.
+	os.Setenv("GAIA_POLICY_FILE", filepath.Join(os.TempDir(), "gaia-providers-test-no-policy.json"))
 	callDaemon = func(method, path string, body []byte, start bool, op, alternative string) ([]byte, error) {
 		return nil, errors.New("a test reached the daemon")
 	}
@@ -56,6 +59,8 @@ func TestMain(m *testing.M) {
 		store.restored = append(store.restored, provider)
 		return store.restoreErr
 	}
+	// Nor may a test reach the network to check the AMD gateway.
+	probeGateway = func(context.Context, string, string) error { return nil }
 	// The user's own GAIA Lemonade would otherwise be where a pasted key goes.
 	home, err := os.MkdirTemp("", "gaia-providers-test-")
 	if err != nil {

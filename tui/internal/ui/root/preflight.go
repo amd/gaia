@@ -11,6 +11,7 @@ import (
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
+	"github.com/amd/gaia/tui/internal/update"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -143,17 +144,37 @@ func (m *FlagshipModel) closeGate() {
 
 func (m FlagshipModel) proceedFromGate() (tea.Model, tea.Cmd) {
 	agent := *m.pending
+	report := m.preflight.Report()
 	// The gate has just asked whether setup is ready, so the chat's own
 	// first-boot check must not ask again — each costs a fresh Python
 	// interpreter for up to 30s, and a cold launch was paying that twice.
-	verified := gateAskedAboutSetup(m.preflight.Report())
-	m.gateChatModel = m.preflight.Report().ChatModel
+	verified := gateAskedAboutSetup(report)
+	m.gateChatModel = report.ChatModel
+	m = m.noteTerminalUpdate(report.CoreVersion)
 	// Before closeGate clears halted: proceeding IS the deliberate choice
 	// the halt exists to gate, so mark these StepIDs accepted for the rest
 	// of the session before the record of them is gone.
 	m.suppressHalted()
 	m.closeGate()
 	return m.launchAgent(agent, verified)
+}
+
+func (m FlagshipModel) noteTerminalUpdate(coreVersion string) FlagshipModel {
+	if m.terminalVersionChecked {
+		return m
+	}
+	m.terminalVersionChecked = true
+	coreVersion = strings.TrimPrefix(strings.TrimSpace(coreVersion), "v")
+	if coreVersion == "" || !update.Newer("v"+coreVersion, m.terminalVersion) {
+		return m
+	}
+	notice := fmt.Sprintf("[!] Terminal UI v%s is older than installed GAIA v%s. Download the current Terminal UI: %s", strings.TrimPrefix(m.terminalVersion, "v"), coreVersion, update.ReleasesPage)
+	if m.launchNotice == "" {
+		m.launchNotice = notice
+	} else {
+		m.launchNotice += "\n" + notice
+	}
+	return m
 }
 
 // gateAskedAboutSetup reports whether the AI model row was actually PROBED —
