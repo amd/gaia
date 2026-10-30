@@ -32,7 +32,7 @@ const base: Schedule = {
 };
 
 function show(schedule: Schedule) {
-    useScheduleStore.setState({ schedules: [schedule], loading: false, error: null, loadSchedules: vi.fn(async () => {}) });
+    useScheduleStore.setState({ schedules: [schedule], loading: false, error: null, actionError: null, loadSchedules: vi.fn(async () => {}) });
     render(<ScheduleManager />);
 }
 
@@ -58,6 +58,31 @@ describe('Run now', () => {
 
         await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Run now/ })); });
 
-        expect(useScheduleStore.getState().error).toContain('already running');
+        expect(screen.getByRole('alert')).toHaveTextContent('already running');
+        expect(screen.getByText('news')).toBeInTheDocument();
+        expect(useScheduleStore.getState().error).toBeNull();
+    });
+
+    it('clears an earlier action error once a run starts', async () => {
+        vi.mocked(api.runScheduleNow)
+            .mockRejectedValueOnce(new Error("'news' is already running"))
+            .mockResolvedValueOnce({ ...base, running: true });
+        show(base);
+
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Run now/ })); });
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Run now/ })); });
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Running…/ })).toBeDisabled();
+    });
+
+    it('does not wipe a list-load error on success', async () => {
+        vi.mocked(api.runScheduleNow).mockResolvedValue({ ...base, running: true });
+        show(base);
+        await act(async () => { useScheduleStore.setState({ error: 'Failed to load schedules', schedules: [base] }); });
+
+        await act(async () => { await useScheduleStore.getState().runScheduleNow('news'); });
+        expect(useScheduleStore.getState().error).toBe('Failed to load schedules');
     });
 });
