@@ -388,6 +388,14 @@ model's failure reads "the model server at `host:port`", not "Lemonade on this
 machine". Pre-2.20 binaries `422` the field and word every such error for the
 TUI.
 
+Follow-ups: `schedule_follow_up`, `list_follow_ups` and `cancel_follow_up` call
+the daemon's `/daemon/v1/followups` routes with its client token. A due
+follow-up is run by the daemon as a fresh `/v1/gaia/query` turn on the model
+the scheduling chat used and its `internet_off` and `memory` switches, with
+no one to approve a gated tool (`can_answer_questions: false`). Its answer is
+kept and prepended to the next turn's context (`follow_up_context`), then marked
+seen. With no daemon the tools return an error and a turn adds nothing.
+
 `turns` (contract ≥ 2.25) is the conversation so far as the model saw it,
 oldest first. Each entry is one earlier turn's `final.model_messages`, which
 holds the assistant's tool calls and the tool results, or a user/assistant text
