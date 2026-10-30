@@ -97,8 +97,8 @@ def test_the_browser_mixin_adds_its_site_to_a_prompt_without_hiding_others():
     from gaia.agents.tools.shell_tools import ShellToolsMixin
 
     class _Pane:
-        def current_origin(self):
-            return "https://example.com"
+        def page_origins(self):
+            return "https://example.com", []
 
     host = _host(ShellToolsMixin, BrowserUseToolsMixin)
     host._browser_routed, host._browser_route = True, _Pane()

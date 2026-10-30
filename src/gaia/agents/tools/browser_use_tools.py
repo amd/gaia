@@ -26,7 +26,7 @@ import os
 import re
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import DEV_SERVER_TOOL, SITE_ARG
@@ -254,20 +254,42 @@ class BrowserUseToolsMixin:
     def _reading(self, tool_name: str) -> Iterator["BrowserDriver"]:
         """The driver for one tool call, scoped to the site its gate approved.
 
-        A pane op may read this chat's dev servers plus the one origin the
-        user approved for this call; main refuses any other page, so content
-        the user was never asked about cannot reach the model even if the
-        gate was skipped.
+        A pane op may read this chat's dev servers plus the origins the user
+        approved for this call, and frames from sites already granted
+        "always"; main refuses any other page and skips any other frame, so
+        content the user was never asked about cannot reach the model even if
+        the gate was skipped.
         """
         from gaia.browser.pane_driver import PaneDriver
 
         driver = self._ensure_driver()
         approved = self._take_site_approval(tool_name)
         if isinstance(driver, PaneDriver):
-            with driver.scoped(approved):
+            with driver.scoped(approved, self._granted_frames(tool_name)):
                 yield driver
         else:
             yield driver
+
+    def _site_granted(self, tool_name: str, origin: str) -> bool:
+        """Whether reading ``origin`` would not ask: an earlier "always" on it, or a run that approves everything."""
+        console = getattr(self, "console", None)
+        if console is None:
+            return False
+        if console.auto_approve_confirmations_enabled():
+            return True
+        return bool(console.call_is_granted(tool_name, {SITE_ARG: origin}))
+
+    def _granted_frames(self, tool_name: str) -> Optional[Callable[[str], bool]]:
+        """The frame-origin check a read uses, or None when nothing is granted yet (saves a lookup)."""
+        console = getattr(self, "console", None)
+        if console is None:
+            return None
+        if (
+            not console.auto_approve_confirmations_enabled()
+            and not console.session_grants()
+        ):
+            return None
+        return lambda origin: self._site_granted(tool_name, origin)
 
     def _take_site_approval(self, tool_name: str) -> List[str]:
         """The origins this call's gate asked about, once. Only a running tool body takes them."""
@@ -291,6 +313,11 @@ class BrowserUseToolsMixin:
         the user may have changed, and a click or typing in a frame also acts
         on that frame's site. A lookup failure gives none: no approval is
         recorded, so main then refuses anything but this chat's dev servers.
+
+        ``browser_snapshot`` also reads the page's frames. Once the page needs
+        no asking, it asks for the first frame site not yet approved, one
+        site per prompt like any other; frames from sites still not approved
+        are left out of the read.
         """
         from gaia.browser._pane_bridge import is_loopback_origin, origin_of
 
@@ -299,6 +326,7 @@ class BrowserUseToolsMixin:
         self._site_memo = None
         if memo is not None and memo[:2] == (tool_name, id(tool_args)):
             return memo[2]
+        frame_origins: List[str] = []
         if tool_name == "browser_open":
             origins = [origin_of(str(args.get("url") or ""))]
         elif tool_name == "browser_dialog":
@@ -308,10 +336,11 @@ class BrowserUseToolsMixin:
             origins = [origin_of(str(box.get("url") or ""))] if needs_site else []
         else:
             try:
-                origins = [pane.current_origin()]
+                page, frame_origins = pane.page_origins()
             except BrowserError as e:
                 logger.warning("Could not read the pane's page origin: %s", e)
                 return ()
+            origins = [page]
             ref = str(args.get("ref") or "")
             if tool_name in _PANE_ELEMENT_TOOLS and ref:
                 origins.insert(0, pane.frame_origin(ref))
@@ -319,13 +348,27 @@ class BrowserUseToolsMixin:
         if tool_name == "browser_eval":
             # Main refuses browser_eval off this computer, so the user is never asked.
             origins = [o for o in origins if is_loopback_origin(o)]
+        frames: List[str] = []
+        if tool_name == "browser_snapshot":
+            frames = [o for o in frame_origins if o and o not in origins]
         trusted: frozenset = frozenset()
-        if any(is_loopback_origin(o) for o in origins):
+        if any(is_loopback_origin(o) for o in origins + frames):
             try:
                 trusted = pane.trusted_origins()
             except BrowserError as e:
                 logger.warning("Could not read this chat's dev servers: %s", e)
-        return tuple(dict.fromkeys(o for o in origins if o not in trusted))
+        needed = tuple(dict.fromkeys(o for o in origins if o not in trusted))
+        if any(not self._site_granted(tool_name, o) for o in needed):
+            return needed
+        ask = next(
+            (
+                o
+                for o in frames
+                if o not in trusted and not self._site_granted(tool_name, o)
+            ),
+            None,
+        )
+        return (ask, *needed) if ask else needed
 
     def _gate_dialog(self, pane, tool_args) -> Optional[dict]:
         """The box browser_dialog would answer, read once per call; unreadable reads as an unknown confirm."""

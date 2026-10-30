@@ -133,6 +133,29 @@ const FRAME_BOX_JS = `([index, x, y]) => {
 
 const call = (fn, arg) => `(${fn})(${JSON.stringify(arg)})`;
 
+// Runs in the parent of a frame: hides that frame's element for a picture, remembering its own visibility.
+const HIDE_FRAME_JS = `async (index) => {
+  const fe = [...document.querySelectorAll("iframe, frame")].find((f) => f.contentWindow === window[index]);
+  if (!fe) return false;
+  if (!fe.hasAttribute("data-gaia-hidden")) {
+    fe.setAttribute("data-gaia-hidden", JSON.stringify([fe.style.getPropertyValue("visibility"), fe.style.getPropertyPriority("visibility")]));
+  }
+  fe.style.setProperty("visibility", "hidden", "important");
+  await new Promise((r) => { requestAnimationFrame(() => requestAnimationFrame(r)); setTimeout(r, 120); });
+  return true;
+}`;
+
+// Undoes HIDE_FRAME_JS for every frame element this document hid.
+const SHOW_FRAMES_JS = `() => {
+  for (const fe of document.querySelectorAll("[data-gaia-hidden]")) {
+    const [value, priority] = JSON.parse(fe.getAttribute("data-gaia-hidden"));
+    fe.removeAttribute("data-gaia-hidden");
+    if (value) fe.style.setProperty("visibility", value, priority);
+    else fe.style.removeProperty("visibility");
+  }
+  return true;
+}`;
+
 /** @param {string} name */
 function keyFor(name) {
   if (!Object.prototype.hasOwnProperty.call(KEYS, name)) {
@@ -325,4 +348,44 @@ async function perform({ ctx, action, frame, selector }) {
   else await fill(ctx, frame, selector, action.text, action.pressEnter);
 }
 
-module.exports = { FRAME_BOX_JS, FRAME_INDEX_JS, KEYS, PROBE_JS, context, elementBox, frameFor, frameUrl, keyFor, locate, perform };
+/**
+ * Hide `frames` (each one's element in its parent) for a picture of the page.
+ * Throws when one can't be hidden, so a picture never shows it by accident.
+ *
+ * @returns {Promise<() => Promise<void>>} Shows them again.
+ */
+async function hideFrames(ctx, frames, describe) {
+  const parents = new Set();
+  const show = async () => {
+    for (const parent of parents) {
+      try {
+        await parent.executeJavaScript(`(${SHOW_FRAMES_JS})()`, false);
+      } catch (err) {
+        console.error(`[browser-pane] Could not show a frame hidden for a picture again: ${err.message}`);
+      }
+    }
+  };
+  try {
+    for (const frame of frames) {
+      let hidden = false;
+      try {
+        const index = await ctx.exec(frame, `(${FRAME_INDEX_JS})()`);
+        if (index >= 0) {
+          parents.add(frame.parent);
+          hidden = await ctx.exec(frame.parent, call(HIDE_FRAME_JS, index));
+        }
+      } catch (err) {
+        if (err instanceof BridgeError && err.code === "dialog_open") throw err;
+      }
+      if (!hidden) {
+        throw new BridgeError("off_scope", `No picture was taken: the page holds a frame from ${describe(frame)}, which was not approved, and GAIA could not leave it out.`);
+      }
+    }
+  } catch (err) {
+    await show();
+    throw err;
+  }
+  return show;
+}
+
+module.exports = { FRAME_BOX_JS, FRAME_INDEX_JS, HIDE_FRAME_JS, KEYS, PROBE_JS, SHOW_FRAMES_JS, context, elementBox, frameFor, frameUrl, hideFrames, keyFor, locate, perform };

@@ -350,37 +350,78 @@ describe("agent ops", () => {
     ]);
   });
 
-  test("a frame from another program on this PC is not read unless approved; other frames are", async () => {
+  /** A tab on the chat's dev server at localhost:5173, holding `urls` as frames: [url] or [url, origin]. */
+  function framedPage(specs) {
     const { host } = makeHost();
     host.navigate(host.activeTabId, "http://localhost:5173/");
     const wc = host.tabs.get(host.activeTabId).view.webContents;
     wc.mainFrame.executeJavaScript.mockResolvedValue({ title: "App" });
-    let next = 1;
-    const frame = (url, origin = undefined) => ({ url, origin, processId: 9, routingId: next++, executeJavaScript: jest.fn(() => Promise.resolve({ read: url })) });
-    const lemonade = frame("http://127.0.0.1:13305/");
-    const sandboxed = frame("http://127.0.0.1:13305/admin", "null");
-    const mapped = frame("http://[::ffff:7f00:1]:13305/");
-    const anyAddr = frame("http://0.0.0.0:8888/");
-    const otherLocal = frame("http://app.localhost:9000/");
-    const own = frame("http://localhost:5173/inner");
-    const srcdoc = frame("about:srcdoc", "http://localhost:5173");
-    const widget = frame("https://widget.example/pay");
-    wc.mainFrame.framesInSubtree = [wc.mainFrame, lemonade, sandboxed, mapped, anyAddr, otherLocal, own, srcdoc, widget];
+    const frames = specs.map(([url, origin], i) => ({ url, origin, processId: 9, routingId: i + 1, parent: wc.mainFrame, executeJavaScript: jest.fn(() => Promise.resolve({ read: url })) }));
+    wc.mainFrame.framesInSubtree = [wc.mainFrame, ...frames];
+    return { host, wc, frames };
+  }
 
+  test("a frame from a site that is not approved is not read; approving its site reads it", async () => {
+    const { host, frames } = framedPage([
+      ["https://widget.example/pay"],
+      ["http://127.0.0.1:13305/"],
+      ["http://127.0.0.1:13305/admin", "null"],
+      ["http://[::ffff:7f00:1]:13305/"],
+      ["http://0.0.0.0:8888/"],
+      ["data:text/html,<p>hi</p>", "null"],
+    ]);
+    const [widget, lemonade, sandboxed, mapped, anyAddr, data] = frames;
     const res = await host.agentEvaluate("chat-1", null, "() => 1", null, "all", ["http://localhost:5173"]);
-    for (const f of [lemonade, sandboxed, mapped, anyAddr, otherLocal]) expect(f.executeJavaScript).not.toHaveBeenCalled();
-    for (const f of [own, srcdoc, widget]) expect(f.executeJavaScript).toHaveBeenCalled();
-    const unread = res.frames.filter((f) => !f.ok);
-    expect(unread.map((f) => f.url)).toEqual([lemonade.url, sandboxed.url, mapped.url, anyAddr.url, otherLocal.url]);
-    for (const f of unread) {
+    for (const f of frames) expect(f.executeJavaScript).not.toHaveBeenCalled();
+    expect(res.frames[0]).toMatchObject({ frameId: null, ok: true });
+    expect(res.frames.slice(1).map((f) => [f.ok, f.unapproved])).toEqual([
+      [false, "https://widget.example"],
+      [false, "http://127.0.0.1:13305"],
+      [false, "http://127.0.0.1:13305"],
+      [false, "http://[::ffff:7f00:1]:13305"],
+      [false, "http://0.0.0.0:8888"],
+      [false, null],
+    ]);
+    for (const f of res.frames.slice(1)) {
       expect(f).not.toHaveProperty("value");
       expect(f.error).toMatch(/not approved/);
     }
 
-    // Once the user approves that local site, its frame is read like any other.
+    // Approval is per frame origin: approving one site reads its frames and nothing else.
+    const again = await host.agentEvaluate("chat-1", null, "() => 1", null, "all", ["http://localhost:5173", "https://widget.example"]);
+    expect(widget.executeJavaScript).toHaveBeenCalled();
+    expect(again.frames[1]).toMatchObject({ ok: true, value: { read: widget.url } });
+    for (const f of [lemonade, sandboxed, mapped, anyAddr, data]) expect(f.executeJavaScript).not.toHaveBeenCalled();
     await host.agentEvaluate("chat-1", null, "() => 1", null, "all", ["http://localhost:5173", "http://127.0.0.1:13305"]);
     for (const f of [lemonade, sandboxed]) expect(f.executeJavaScript).toHaveBeenCalled();
-    for (const f of [mapped, anyAddr, otherLocal]) expect(f.executeJavaScript).not.toHaveBeenCalled();
+    for (const f of [mapped, anyAddr, data]) expect(f.executeJavaScript).not.toHaveBeenCalled();
+  });
+
+  test("the page's own frames and the chat's dev server frames are read with no further approval", async () => {
+    const { host, frames } = framedPage([
+      ["http://localhost:5173/inner"],
+      ["about:srcdoc", "http://localhost:5173"],
+      ["about:blank"],
+      ["http://127.0.0.1:5000/embed"],
+    ]);
+    const res = await host.agentEvaluate("chat-1", null, "() => 1", null, "all", ["http://localhost:5173", ...devServerOrigins(5000)]);
+    for (const f of frames) expect(f.executeJavaScript).toHaveBeenCalled();
+    expect(res.frames.every((f) => f.ok)).toBe(true);
+  });
+
+  test("origin lists the page's frame origins, so a read can ask for them", async () => {
+    const { host } = framedPage([
+      ["https://widget.example/pay"],
+      ["http://localhost:5173/inner"],
+      ["https://widget.example/other"],
+      ["about:srcdoc", "http://localhost:5173"],
+      ["http://127.0.0.1:13305/", "null"],
+      ["data:text/html,x", "null"],
+    ]);
+    await expect(host.agentOrigin("chat-1", null)).resolves.toMatchObject({
+      origin: "http://localhost:5173",
+      frameOrigins: ["https://widget.example", "http://127.0.0.1:13305"],
+    });
   });
 
   test("a new tab page has nothing to read", async () => {

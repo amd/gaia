@@ -49,7 +49,7 @@ Signing in is a hand-off, not something GAIA does for you:
 | Tool | What it does | Needs approval |
 |---|---|---|
 | `browser_open(url)` | Open a page, return its elements | no |
-| `browser_snapshot()` | Re-read the current page | no |
+| `browser_snapshot()` | Re-read the current page | no (in the browser pane: other sites, and frames from sites not yet approved) |
 | `browser_click(ref)` | Click an element; `ref` is a snapshot ref like `g2e5`, or `p1` for an element the user [picked in the pane](/guides/agent-ui#send-page-elements-to-the-chat) | only when signed in |
 | `browser_type(ref, text, press_enter)` | Fill a field or pick an option | only when signed in |
 | `browser_login(url)` | Hand over for sign-in, then save the session | always |
@@ -86,10 +86,13 @@ never asks. A box GAIA's own step opened and left unanswered is cancelled when
 its turn ends.
 
 GAIA reads and acts inside frames too, including frames from another site, such
-as a payment or sign-in widget embedded in your app. Acting in a frame from a
-site other than the chat's own dev servers asks for that site, as opening it
-would. A frame served by another program on this PC isn't read until you
-approve its site.
+as a payment or sign-in widget embedded in your app. A frame doesn't inherit
+the page's approval: reading or acting in a frame from a site other than the
+page's own or the chat's dev servers asks for that site first, one site per
+prompt, and **Always allow** covers that site from then on. Until you approve
+it, the frame is left out of what GAIA reads, and out of its pictures of the
+page. `browser_snapshot` is the read that asks; other tools leave such a frame
+out and say so.
 
 Elements are addressed by **ref** (`e1`, `e7`) from the last snapshot, never by
 screen coordinates:

@@ -296,6 +296,8 @@ export interface FrameEval {
   ok: boolean;
   value?: unknown;
   error?: string;
+  /** Set when the frame was not read because its site isn't approved: that origin, or null when it has no http(s) one. */
+  unapproved?: string | null;
 }
 
 export interface LogEntry {
@@ -347,7 +349,8 @@ export interface BridgeOps {
   };
   origin: {
     req: { sessionId: string; tabId: TabRef };
-    res: { tabId: TabId; url: string | null; origin: string | null; hasCookies: boolean };
+    /** frameOrigins: the http(s) origins of the page's frames, other than the page's own, in document order. */
+    res: { tabId: TabId; url: string | null; origin: string | null; hasCookies: boolean; frameOrigins: string[] };
   };
   screenshot: {
     req: { sessionId: string; tabId: TabRef; clip: { frameId: string | null; selector: string } | null; maxWidth: number; allowedOrigins: AllowedOrigins };

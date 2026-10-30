@@ -779,9 +779,13 @@ each step happen.
   "Delete account?". If GAIA opened the box and its turn ends without an
   answer, the box is cancelled, so the page is never left frozen. GAIA never
   answers a box in a tab you paused or made private.
-- **Frames work like the page.** GAIA can read, click and type inside frames,
-  including ones from another site, and asks before acting on that site. A
-  frame served by another program on this PC isn't read until you approve it.
+- **Frames from another site ask for that site.** GAIA can read, click and
+  type inside frames, including ones from another site, but a frame doesn't
+  inherit the page's approval: before reading or acting in a frame from a
+  site other than the page's own or the chat's dev servers, GAIA asks for that
+  site, with the same **Allow once**, **Always allow** and **Deny**. Until
+  you approve it, the frame is left out of what GAIA reads and out of its
+  pictures of the page.
 - **GAIA never signs in or types a password.** It asks you to sign in
   yourself in the pane, and the pane keeps that sign-in.
 

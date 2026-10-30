@@ -10,9 +10,10 @@ looking at, so "the page open in the browser pane" means what it says.
 
 Every op that reads or loads a page carries ``allowedOrigins``. The chat's
 own running dev servers need no entry; localhost otherwise does, like any
-site. Main refuses to read a page on any other origin, and stops a
-navigation that would land on one during the op, so a page that wanders off
-while the agent reads it is never handed to the model.
+site. Main refuses to read a page on any other origin, skips frames from
+any other origin (and hides them in pictures), and stops a navigation that
+would land on one during the op, so a page that wanders off while the agent
+reads it is never handed to the model.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import (
     Any,
+    Callable,
     Dict,
     FrozenSet,
     Iterator,
@@ -122,6 +124,8 @@ class PaneDriver:
         self._touched = False
         self._cursors: Dict[str, int] = {"console": 0, "network": 0}
         self._allowed: Tuple[str, ...] = ()
+        #: Whether a frame from this origin may be read without asking (an earlier "always").
+        self._frame_ok: Optional[Callable[[str], bool]] = None
 
     @property
     def started(self) -> bool:
@@ -132,14 +136,23 @@ class PaneDriver:
         """The tabs belong to the user, so there is nothing to close."""
 
     @contextmanager
-    def scoped(self, origins: Sequence[str]) -> Iterator[None]:
-        """Let the ops inside read pages on ``origins`` as well as the chat's dev servers."""
-        before = self._allowed
+    def scoped(
+        self,
+        origins: Sequence[str],
+        frame_ok: Optional[Callable[[str], bool]] = None,
+    ) -> Iterator[None]:
+        """Let the ops inside read pages on ``origins`` as well as the chat's dev servers.
+
+        ``frame_ok`` names the other frame origins already approved for the
+        site, so a read includes those frames without asking again.
+        """
+        before = self._allowed, self._frame_ok
         self._allowed = tuple(origins)
+        self._frame_ok = frame_ok
         try:
             yield
         finally:
-            self._allowed = before
+            self._allowed, self._frame_ok = before
 
     # ----------------------------------------------------------------- reading
 
@@ -173,7 +186,7 @@ class PaneDriver:
                 "script": _SNAPSHOT_JS,
                 "args": snapshot_args(gen),
                 "frames": "all",
-                **self._scope(),
+                **self._frame_scope(),
             },
         )
         main, *subframes = res["frames"]
@@ -188,6 +201,9 @@ class PaneDriver:
         ]
         self._frame_urls = {f["frameId"]: f["url"] for f in subframes}
         snap, self._frames_by_ref = merge_frames(main["value"], readable, gen)
+        unread = [f.get("unapproved") for f in subframes if not f["ok"]]
+        if any(unread):
+            snap["unread_frames"] = list(dict.fromkeys(o for o in unread if o))
         self._check_scope(snap.get("url") or "")
         return snap
 
@@ -219,6 +235,11 @@ class PaneDriver:
     def current_origin(self) -> Optional[str]:
         """Live from the pane: the user may have browsed since the last call."""
         return self._call("origin", {"tabId": None})["origin"]
+
+    def page_origins(self) -> Tuple[Optional[str], List[str]]:
+        """The page's origin and its frames' other origins, live from the pane."""
+        res = self._call("origin", {"tabId": None})
+        return res["origin"], list(res.get("frameOrigins") or [])
 
     def origin_has_cookies(self, origin: str) -> bool:
         res = self._call("origin", {"tabId": None})
@@ -253,7 +274,7 @@ class PaneDriver:
         clip = self._target(ref) if ref else None
         res = self._call(
             "screenshot",
-            {"tabId": None, "clip": clip, "maxWidth": max_width, **self._scope()},
+            {"tabId": None, "clip": clip, "maxWidth": max_width, **self._frame_scope()},
         )
         self._check_scope(res["url"])
         return Shot(
@@ -467,6 +488,14 @@ class PaneDriver:
 
     def _scope(self) -> Dict[str, List[str]]:
         return {"allowedOrigins": list(self._allowed)}
+
+    def _frame_scope(self) -> Dict[str, List[str]]:
+        """``_scope`` plus the page's frame origins already approved; main leaves out the rest."""
+        allowed = list(self._allowed)
+        if self._frame_ok is not None:
+            _, frames = self.page_origins()
+            allowed += [o for o in frames if o not in allowed and self._frame_ok(o)]
+        return {"allowedOrigins": allowed}
 
     def _check_scope(self, url: str) -> None:
         """Main checks too; this covers a page that moved while it was read."""

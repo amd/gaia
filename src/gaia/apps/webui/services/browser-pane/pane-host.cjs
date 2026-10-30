@@ -22,7 +22,7 @@
 "use strict";
 
 const { WebContentsView, nativeImage } = require("electron");
-const { attachTabPolicy, classifyNavigation, isLocalPageHost, isLoopbackHost } = require("./navigation-policy.cjs");
+const { attachTabPolicy, classifyNavigation, isLocalPageHost } = require("./navigation-policy.cjs");
 const { TabCdp } = require("./cdp-session.cjs");
 const { BridgeError } = require("./bridge-error.cjs");
 const input = require("./input.cjs");
@@ -99,16 +99,33 @@ function isLoopbackUrl(url) {
   }
 }
 
-/** True for a frame served from this computer that the op was not approved to read. */
-function isUnapprovedLocalFrame(frame, allowedOrigins) {
-  const onThisPc = [input.frameUrl(frame), frame.url].some((u) => {
-    try {
-      return isLoopbackHost(new URL(u).hostname);
-    } catch {
-      return false;
+/** The origin a frame acts as, for approval: its site's, or null when it has no http(s) one. */
+function frameOriginOf(frame) {
+  const origin = originOf(input.frameUrl(frame));
+  return origin && /^https?:\/\//.test(origin) ? origin : null;
+}
+
+/** True for a frame the op was not approved to read: approval is per frame origin, like a page's. */
+function isUnapprovedFrame(frame, allowedOrigins) {
+  return !inScope(input.frameUrl(frame), allowedOrigins);
+}
+
+/** True when `frame` sits somewhere inside `outer`. */
+function isInside(frame, outer) {
+  for (let up = frame.parent; up; up = up.parent) if (up === outer) return true;
+  return false;
+}
+
+/** The unapproved frames a picture must leave out: each one whose ancestors up to the page are all approved. */
+function unapprovedTopFrames(wc, allowedOrigins) {
+  const main = wc.mainFrame;
+  return main.framesInSubtree.filter((frame) => {
+    if (frame === main || !isUnapprovedFrame(frame, allowedOrigins)) return false;
+    for (let up = frame.parent; up && up !== main; up = up.parent) {
+      if (isUnapprovedFrame(up, allowedOrigins)) return false;
     }
+    return true;
   });
-  return onThisPc && !inScope(input.frameUrl(frame), allowedOrigins);
 }
 
 /**
@@ -620,9 +637,8 @@ class PaneHost {
   //
   // Every op that loads or reads a page takes allowedOrigins: this chat's dev
   // servers plus the origins Python's site gate approved for that one call. A
-  // page on any other origin is never read, nor is a frame from another
-  // program on this PC, and a navigation that would land on one while the op
-  // runs is stopped.
+  // page or frame on any other origin is never read or shown in a picture,
+  // and a navigation that would land on one while the op runs is stopped.
   //
   // Every op names its chat (sessionId) and only ever finds that chat's
   // tabs: another chat's tab id is "no such tab", like a closed one.
@@ -875,9 +891,10 @@ class PaneHost {
       const results = [];
       for (const frame of targets) {
         const frameId = frame === main ? null : `${frame.processId}:${frame.routingId}`;
-        // Another program on this PC is not the user's app just because a page frames it.
-        if (frame !== main && isUnapprovedLocalFrame(frame, allowedOrigins)) {
-          results.push({ frameId, url: frame.url, ok: false, error: `Not read: a frame from ${originOf(input.frameUrl(frame)) || frame.url} on this PC, which was not approved.` });
+        // A frame from another site is read only once that site is approved, like a page on it.
+        if (frame !== main && isUnapprovedFrame(frame, allowedOrigins)) {
+          const origin = frameOriginOf(frame);
+          results.push({ frameId, url: frame.url, ok: false, error: `Not read: a frame from ${origin || frame.url}, which was not approved.`, unapproved: origin });
           continue;
         }
         try {
@@ -900,7 +917,11 @@ class PaneHost {
     const url = tab.view ? tab.view.webContents.getURL() || tab.state.url : tab.state.url;
     const origin = url ? originOf(url) : null;
     const hasCookies = origin ? (await this.deps.session.cookies.get({ url: origin })).length > 0 : false;
-    return { tabId: tab.state.id, url, origin, hasCookies };
+    const main = tab.view ? tab.view.webContents.mainFrame : null;
+    const frameOrigins = main
+      ? [...new Set(main.framesInSubtree.filter((f) => f !== main).map(frameOriginOf))].filter((o) => o && o !== origin)
+      : [];
+    return { tabId: tab.state.id, url, origin, hasCookies, frameOrigins };
   }
 
   async agentScreenshot(sessionId, id, clip, maxWidth, allowedOrigins) {
@@ -908,20 +929,29 @@ class PaneHost {
     const wc = this.requirePage(tab, allowedOrigins);
     this.requireNoDialog(tab);
     return this.withAgent(tab, allowedOrigins, async () => {
+      const ctx = input.context(tab.cdp);
       let rect = null;
       if (clip) {
-        const ctx = input.context(tab.cdp);
-        const box = await input.elementBox(ctx, input.frameFor(wc, clip.frameId), clip.selector);
+        const frame = input.frameFor(wc, clip.frameId);
+        if (frame !== wc.mainFrame && unapprovedTopFrames(wc, allowedOrigins).some((f) => f === frame || isInside(frame, f))) {
+          const origin = frameOriginOf(frame) || frame.url;
+          throw new BridgeError("off_scope", `That element is in a frame from ${origin}, which this call was not approved to show.`, { origin });
+        }
+        const box = await input.elementBox(ctx, frame, clip.selector);
         // The clip is in page coordinates: the box is in the viewport, so add how far the page scrolled.
         const scrolled = await ctx.exec(wc.mainFrame, "({ x: scrollX, y: scrollY })");
         rect = { ...box, x: box.x + scrolled.x, y: box.y + scrolled.y };
       }
+      // Frames from sites the user hasn't approved are left out of the picture.
+      const show = await input.hideFrames(ctx, unapprovedTopFrames(wc, allowedOrigins), (f) => frameOriginOf(f) || f.url);
       let image;
       try {
         image = nativeImage.createFromBuffer(await withTimeout(tab.cdp.screenshot(rect), EVAL_TIMEOUT_MS, "Taking the picture"));
       } catch (err) {
         if (err instanceof BridgeError) throw err;
         throw new BridgeError("internal", `Could not take a picture of the page: ${err.message}`);
+      } finally {
+        await show();
       }
       if (image.getSize().width > maxWidth) image = image.resize({ width: maxWidth });
       const size = image.getSize();

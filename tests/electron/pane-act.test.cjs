@@ -28,6 +28,7 @@ const TARGET = { frameId: null, selector: SEL };
 const POINT = { x: 120, y: 48, tag: "button", type: "submit", editable: false };
 // The form page and its frames are served by the chat's own dev server on port 5000.
 const APP = devServerOrigins(5000);
+const PAY_SITE = "https://pay.example";
 
 function makeHost() {
   const ses = new EventEmitter();
@@ -278,6 +279,89 @@ describe("elements inside frames", () => {
     await expect(host.agentScreenshot("chat-1", null, target, 1280, APP)).resolves.toMatchObject({ width: 40, height: 10 });
     // Box (5, 6, 40x10) in the frame, plus the frame's offset, plus the page's scroll of 300.
     expect(cdp.screenshot).toHaveBeenCalledWith({ x: 5 + 26, y: 6 + 33 + 300, width: 40, height: 10 });
+  });
+});
+
+describe("pictures leave out frames from sites that are not approved", () => {
+  /** frames: [origin, parentIndex|null]; each child answers its index, each parent hides on request. */
+  function framedShot(specs) {
+    const { host, wc, cdp } = makeHost();
+    const { nativeImage } = require("electron");
+    const image = { getSize: () => ({ width: 800, height: 600 }), toPNG: () => Buffer.from("png"), resize: () => image };
+    nativeImage.createFromBuffer = jest.fn(() => image);
+    const events = [];
+    cdp.screenshot.mockImplementation(() => {
+      events.push("capture");
+      return Promise.resolve(Buffer.from("png"));
+    });
+    const main = wc.mainFrame;
+    const frames = [];
+    const answer = (frame) => (code) => {
+      if (code.includes("parent.length")) return Promise.resolve(0);
+      if (code.includes("data-gaia-hidden") && code.includes('"hidden"')) {
+        events.push(`hide in ${frame === main ? "main" : frame.url}`);
+        return Promise.resolve(true);
+      }
+      if (code.includes("removeAttribute")) {
+        events.push(`show in ${frame === main ? "main" : frame.url}`);
+        return Promise.resolve(true);
+      }
+      return Promise.resolve(true);
+    };
+    main.executeJavaScript.mockImplementation(answer(main));
+    specs.forEach(([origin, parentAt], i) => {
+      const frame = { processId: 20 + i, routingId: 1, url: `${origin}/f${i}.html`, origin, parent: parentAt === null ? main : frames[parentAt], executeJavaScript: jest.fn() };
+      frame.executeJavaScript.mockImplementation(answer(frame));
+      frames.push(frame);
+    });
+    main.framesInSubtree = [main, ...frames];
+    return { host, frames, events, cdp };
+  }
+
+  test("an unapproved frame is hidden for the picture and shown again after", async () => {
+    const { host, events } = framedShot([[PAY_SITE, null], ["http://localhost:5000", null]]);
+    await host.agentScreenshot("chat-1", null, null, 1280, APP);
+    expect(events).toEqual(["hide in main", "capture", "show in main"]);
+  });
+
+  test("approving the frame's site shows it in the picture", async () => {
+    const { host, events } = framedShot([[PAY_SITE, null]]);
+    await host.agentScreenshot("chat-1", null, null, 1280, [...APP, PAY_SITE]);
+    expect(events).toEqual(["capture"]);
+  });
+
+  test("a frame inside an unapproved frame goes with it; only the outer one is hidden", async () => {
+    const { host, events } = framedShot([[PAY_SITE, null], ["http://127.0.0.1:13305", 0]]);
+    await host.agentScreenshot("chat-1", null, null, 1280, APP);
+    expect(events).toEqual(["hide in main", "capture", "show in main"]);
+  });
+
+  test("an unapproved frame inside an approved one is hidden in that frame", async () => {
+    const { host, events, frames } = framedShot([[PAY_SITE, null], ["http://127.0.0.1:13305", 0]]);
+    await host.agentScreenshot("chat-1", null, null, 1280, [...APP, PAY_SITE]);
+    expect(events).toEqual([`hide in ${frames[0].url}`, "capture", `show in ${frames[0].url}`]);
+  });
+
+  test("a frame that can't be hidden means no picture at all", async () => {
+    const { host, frames, cdp } = framedShot([[PAY_SITE, null]]);
+    frames[0].executeJavaScript.mockImplementation(() => Promise.resolve(-1));
+    await expect(host.agentScreenshot("chat-1", null, null, 1280, APP)).rejects.toMatchObject({ code: "off_scope", message: expect.stringContaining(PAY_SITE) });
+    expect(cdp.screenshot).not.toHaveBeenCalled();
+  });
+
+  test("the frames are shown again when the picture fails", async () => {
+    const { host, events, cdp } = framedShot([[PAY_SITE, null]]);
+    cdp.screenshot.mockImplementation(() => Promise.reject(new Error("gone")));
+    await expect(host.agentScreenshot("chat-1", null, null, 1280, APP)).rejects.toMatchObject({ code: "internal" });
+    expect(events).toEqual(["hide in main", "show in main"]);
+  });
+
+  test("a picture of an element inside an unapproved frame is refused before the page is touched", async () => {
+    const { host, frames, cdp } = framedShot([[PAY_SITE, null]]);
+    const target = { frameId: `${frames[0].processId}:${frames[0].routingId}`, selector: SEL };
+    await expect(host.agentScreenshot("chat-1", null, target, 1280, APP)).rejects.toMatchObject({ code: "off_scope", data: { origin: PAY_SITE } });
+    expect(frames[0].executeJavaScript).not.toHaveBeenCalled();
+    expect(cdp.screenshot).not.toHaveBeenCalled();
   });
 });
 

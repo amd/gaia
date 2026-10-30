@@ -350,6 +350,114 @@ def test_an_irreversible_label_inside_a_frame_asks_every_time(bridge):
     assert "Delete account" in shown["_risk_note"]
 
 
+# ------------------------------------------------- reading frames from other sites
+
+
+def page_frames(bridge, *frame_origins, page="http://127.0.0.1:5000"):
+    """The pane's page is ``page``, holding frames from ``frame_origins``."""
+    bridge.replies["origin"] = {
+        **fixture("origin_loopback.json"),
+        "url": f"{page}/index.html",
+        "origin": page,
+        "frameOrigins": list(frame_origins),
+    }
+
+
+def unread_frame(origin):
+    """The snapshot main sends back when it left a frame from ``origin`` out."""
+    snap = copy.deepcopy(fixture("evaluate_snapshot.json"))
+    snap["frames"][1] = {
+        "frameId": "4:7",
+        "url": f"{origin}/widget.html",
+        "ok": False,
+        "error": f"Not read: a frame from {origin}, which was not approved.",
+        "unapproved": origin,
+    }
+    return snap
+
+
+def read(agent, name, **args):
+    """Run ``name`` the way the agent does: the gate first, then the body."""
+    shown = agent.confirmation_args_for_call(name, args)
+    asks = agent.browser_call_needs_confirmation(name, args)
+    return shown, asks
+
+
+def test_a_snapshot_asks_before_reading_a_frame_from_another_site(agent, bridge):
+    page_frames(bridge, PAY)
+    shown, asks = read(agent, "browser_snapshot")
+    assert asks is True
+    assert shown[SITE_ARG] == PAY
+    # Approved: that one call reads the frame's site as well as the page.
+    tool(agent, "browser_snapshot")()
+    assert PAY in bridge.last("evaluate")["body"]["allowedOrigins"]
+
+
+def test_a_denied_frame_stays_out_of_every_read(agent, bridge):
+    page_frames(bridge, PAY)
+    bridge.replies["evaluate"] = unread_frame(PAY)
+    _, asks = read(agent, "browser_snapshot")
+    assert asks is True
+    # Denied: the snapshot never runs. The next read, by any tool, leaves the frame out.
+    out = tool(agent, "browser_back")()
+    assert PAY not in bridge.last("evaluate")["body"]["allowedOrigins"]
+    assert f"Not read: frames from {PAY}" in out
+    assert "Say hello" not in out
+
+
+def test_always_on_a_frames_site_reads_it_without_asking_again(agent, bridge):
+    page_frames(bridge, PAY)
+    agent.console.grant_call_for_session("browser_snapshot", {SITE_ARG: PAY})
+    _, asks = read(agent, "browser_snapshot")
+    assert asks is False
+    tool(agent, "browser_snapshot")()
+    assert PAY in bridge.last("evaluate")["body"]["allowedOrigins"]
+    # The grant is per site: a frame from another one still asks.
+    page_frames(bridge, PAY, "https://ads.example")
+    shown, asks = read(agent, "browser_snapshot")
+    assert asks is True
+    assert shown[SITE_ARG] == "https://ads.example"
+
+
+def test_the_page_is_asked_about_before_its_frames(agent, bridge):
+    page_frames(bridge, PAY, page="https://shop.example")
+    shown, asks = read(agent, "browser_snapshot")
+    assert asks is True
+    assert shown[SITE_ARG] == "https://shop.example"
+    tool(agent, "browser_snapshot")()
+    assert bridge.last("evaluate")["body"]["allowedOrigins"] == ["https://shop.example"]
+
+
+@pytest.mark.parametrize(
+    "frame_origin",
+    ["http://127.0.0.1:5000", "http://localhost:5000", "http://[::1]:5000"],
+)
+def test_own_and_dev_server_frames_never_ask(agent, bridge, frame_origin):
+    page_frames(bridge, frame_origin)
+    _, asks = read(agent, "browser_snapshot")
+    assert asks is False
+
+
+def test_only_a_snapshot_asks_for_frames(agent, bridge):
+    page_frames(bridge, PAY)
+    for name, args in [
+        ("browser_find", {"query": "x"}),
+        ("browser_screenshot", {}),
+        ("browser_click", {"ref": "g1e2"}),
+    ]:
+        _, asks = read(agent, name, **args)
+        assert asks is False, name
+
+
+def test_a_picture_carries_only_approved_frame_sites(agent, bridge, monkeypatch):
+    page_frames(bridge, PAY, "https://ads.example")
+    agent.console.grant_call_for_session("browser_snapshot", {SITE_ARG: PAY})
+    driver = agent._ensure_driver()
+    with driver.scoped([], agent._granted_frames("browser_screenshot")):
+        driver.screenshot()
+    assert bridge.last("screenshot")["body"]["allowedOrigins"] == [PAY]
+
+
 # ------------------------------------------------------------ browser_eval
 
 

@@ -361,6 +361,15 @@ def render(snap: Dict[str, Any], include_text: bool = True) -> str:
         "",
     ]
 
+    if snap.get("unread_frames"):
+        lines.insert(
+            2,
+            "Not read: frames from "
+            + ", ".join(snap["unread_frames"])
+            + ", because the user has not approved those sites. browser_snapshot "
+            "asks the user before reading them.",
+        )
+
     if snap.get("dialog"):
         lines.insert(
             2,
