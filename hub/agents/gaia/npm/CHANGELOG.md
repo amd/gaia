@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Requires the `gaia` Python CLI 0.25.3+ on `PATH`.
+
 ### For integrators: contract 2.25
 
 - **The agent remembers its own tool calls across turns** (contract **2.25**,
