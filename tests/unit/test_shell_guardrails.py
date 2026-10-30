@@ -1624,6 +1624,27 @@ class TestBlanketApproval:
     @pytest.mark.parametrize(
         "command",
         [
+            'powershell -c "Get-Content -Path (ri f)"',
+            'powershell -c "Get-ChildItem,(ri f)"',
+            'powershell -c "Get-Date -Format (ri f)"',
+            "powershell -c \"Get-ChildItem -Path ('a'+(ri f))\"",
+            "powershell -c Get-ChildItem",
+            'POWERSHELL -c "Get-Content -Path (ri f)"',
+            'pwsh -c "Get-Date -Format (ri f)"',
+            "pwsh.exe -c Get-ChildItem",
+        ],
+    )
+    @pytest.mark.parametrize("dialect", ["posix", "cmd"])
+    def test_full_access_powershell_is_never_classified_read_only(
+        self, command, dialect, monkeypatch
+    ):
+        # Any cmdlet can run inside a subexpression, so no PowerShell line is a read.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
             "sort -^o made.txt src.txt",
             "sort -%OS:Windows_NT=o% made.txt src.txt",
             "find sub -dele^te",

@@ -3375,6 +3375,9 @@ class ShellToolsMixin:
         # cmd.exe rewrites ^ escapes and %VAR% / !VAR! expansions the same way.
         if _pipe_dialect() == "cmd" and any(char in command for char in "^%!"):
             return False
+        # A PowerShell body can run any cmdlet inside a subexpression; never a read.
+        if "powershell" in command.lower() or "pwsh" in command.lower():
+            return False
         steps, parse_error = _parse_line(command, bypass_gates=False)
         if parse_error is not None or not steps:
             return False
