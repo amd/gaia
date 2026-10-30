@@ -175,3 +175,49 @@ def test_the_ui_hides_documents_outside_document_roots(monkeypatch, tmp_path):
     links = {link.name for link in ui_utils.build_quick_links()}
 
     assert "Documents" not in links
+
+
+def test_a_symlinked_documents_escaping_the_roots_is_not_browseable(tmp_path):
+    ui_utils = pytest.importorskip("gaia.ui.utils")
+    home = tmp_path / "home"
+    home.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = home / "Documents"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks need privileges on this host")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(ui_utils, "document_roots", lambda: [home.resolve()])
+        assert ui_utils.is_within_document_roots(link) is False
+        assert ui_utils.is_within_document_roots(home / "Downloads") is True
+
+
+def test_an_xdg_traversal_out_of_home_gets_no_ui_quick_link(monkeypatch, tmp_path):
+    ui_utils = pytest.importorskip("gaia.ui.utils")
+    home = tmp_path / "home"
+    config = home / ".config"
+    config.mkdir(parents=True)
+    (tmp_path / "escaped").mkdir()
+    (config / "user-dirs.dirs").write_text(
+        'XDG_DOCUMENTS_DIR="$HOME/../escaped"\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(user_folders.sys, "platform", "linux")
+    monkeypatch.setattr(ui_utils.Path, "home", lambda: home)
+    monkeypatch.setattr(ui_utils, "document_roots", lambda: [home.resolve()])
+
+    links = {link.name for link in ui_utils.build_quick_links()}
+
+    assert "Documents" not in links
+
+
+def test_a_crlf_user_dirs_file_still_resolves(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    config = home / ".config"
+    config.mkdir(parents=True)
+    (config / "user-dirs.dirs").write_bytes(b'XDG_DOCUMENTS_DIR="$HOME/Docs"\r\n')
+    monkeypatch.setattr(user_folders.sys, "platform", "linux")
+
+    assert user_folders.documents_dir(home) == home / "Docs"
