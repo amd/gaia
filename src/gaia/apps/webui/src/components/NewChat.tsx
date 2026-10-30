@@ -9,6 +9,7 @@ import { ModelChip } from './ModelChip';
 import { NpuBackdrop } from './NpuBackdrop';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
+import { TryChips } from './TryChips';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
@@ -279,6 +280,11 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         );
     });
 
+    const fillPrompt = useCallback((prompt: string) => {
+        setText(prompt);
+        inputRef.current?.focus();
+    }, []);
+
     const downloading = download?.state === 'starting' || download?.state === 'downloading';
     const activity = sending ? 'sending' : downloading ? 'download' : starting || warming !== null ? 'loading' : 'idle';
     const folder = start?.working_folder;
@@ -317,6 +323,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming, t)}</p>
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
+                <TryChips onPick={fillPrompt} disabled={starting || sending} />
                 {startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>

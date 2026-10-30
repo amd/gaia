@@ -68,9 +68,18 @@ class _ScriptedAgent:
     #: agent thread, exactly as the base loop does for a gated tool.
     gated_call = None
 
+    #: When set, the loop calls this (tool, result) before answering, the way
+    #: the base loop reports a tool's result to the console.
+    tool_call = None
+
     def process_query(self, query, max_steps=None):
         if self.block is not None:
             self.block.wait(timeout=10)
+        if self.tool_call is not None:
+            tool, result = self.tool_call
+            self.console.print_tool_usage(tool)
+            self.console.pretty_print_json({}, title="Arguments")
+            self.console.pretty_print_json(result, title="Result")
         if self.gated_call is not None:
             tool, args = self.gated_call
             self.approved = self.console.confirm_tool_execution(tool, args)
@@ -362,6 +371,23 @@ def test_one_terminal_event_per_run(built):
 # not cut a model call short. test_relayed_answer_streams.py drives the whole
 # hop on a real socket; these pin the route's side of it.
 # ---------------------------------------------------------------------------
+
+
+def test_a_render_tool_result_carries_its_card_type(built, monkeypatch):
+    """The sidecar's translator once had no render map, so no card ever drew."""
+    client, _ = built
+    card = {"kind": "guide", "guideType": "checklist", "title": "Camping"}
+    monkeypatch.setattr(
+        _ScriptedAgent, "tool_call", ("show_checklist", {"ok": True, "data": card})
+    )
+
+    r = client.post("/v1/gaia/query", json=_body())
+
+    assert r.status_code == 200, r.text
+    (result,) = [e for e in _events(r) if e["type"] == "tool_result"]
+    assert result["tool"] == "show_checklist"
+    assert result["render"] == "guide"
+    assert result["data"] == card
 
 
 @pytest.mark.parametrize("session_id", [None, "s-stream"])

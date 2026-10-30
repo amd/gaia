@@ -3,7 +3,7 @@
 
 /** Pure helpers ChatView uses to turn the chat stream into messages. */
 
-import type { AgentStep, Message, StreamEvent } from '../types';
+import type { AgentStep, Message, RenderCardData, StreamEvent } from '../types';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -65,11 +65,21 @@ export function isEchoOfFailedTool(event: StreamEvent, steps: AgentStep[]): bool
     return last.success === false || (!!last.active && last.success == null);
 }
 
-/** Messages as the API sends them, with steps and stats under the names the view reads. */
+/** The cards a saved turn drew: the server keeps each one on the tool step that made it. */
+export function cardsFromSteps(steps: unknown): RenderCardData[] | undefined {
+    if (!Array.isArray(steps)) return undefined;
+    const cards = steps
+        .filter((s): s is { render: string; data: unknown } => typeof s?.render === 'string' && s.render.length > 0)
+        .map((s) => ({ render: s.render, data: s.data }));
+    return cards.length ? cards : undefined;
+}
+
+/** Messages as the API sends them, with steps, stats and cards under the names the view reads. */
 export function fromApiMessages(raw: unknown[] | undefined): Message[] {
     return (raw || []).map((m: any) => ({
         ...m,
         agentSteps: m.agentSteps || m.agent_steps || undefined,
+        cards: m.cards || cardsFromSteps(m.agentSteps || m.agent_steps),
         stats: m.stats || m.inference_stats || undefined,
         turnSummary: m.turnSummary || m.turn_summary || undefined,
     }));
