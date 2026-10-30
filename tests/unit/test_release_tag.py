@@ -377,12 +377,13 @@ def test_an_rc_github_release_is_a_prerelease(publish):
     assert rc["with"]["files"] == final["with"]["files"]
 
 
-def test_only_an_rc_requests_the_website_redeploy_from_publish(publish):
-    # A final's redeploy comes from release_components.yml; a second one here
-    # would change the final path.
-    job = publish["redeploy-website-rc"]
-    assert IS_RC in job["if"]
+def test_every_release_requests_the_website_redeploy_from_publish(publish):
+    # A final must not wait on release_components.yml's hub-publish approval to
+    # show up on the site.
+    job = publish["redeploy-website"]
+    assert IS_RC not in job["if"]
     assert "!cancelled()" in job["if"]
+    assert "needs.github-release.result == 'success'" in job["if"]
 
 
 def test_an_rc_builds_the_windows_setup_for_its_own_prerelease_only(publish):
