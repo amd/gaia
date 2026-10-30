@@ -134,9 +134,9 @@
     display: inline-flex;
     align-items: center;
     gap: 3px;
-    margin-left: 6px;
-    padding-left: 6px;
-    border-left: 1px solid var(--border-light);
+    margin-inline-start: 6px;
+    padding-inline-start: 6px;
+    border-inline-start: 1px solid var(--border-light);
     color: var(--text-muted);
     font-size: 11px;
     cursor: default;
@@ -251,3 +251,9 @@
     background: var(--bg-secondary);
 }
 .doc-folder-notice > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+/* The progress bar takes the row's width; the Cancel button stays beside it. */
+.doc-indexing-status .index-progress {
+    flex: 1 1 220px;
+    max-inline-size: 320px;
+}

@@ -15,25 +15,19 @@ import { PrivacySettings } from './PrivacySettings';
 import { NotificationSettings } from './NotificationSettings';
 import '../SettingsModal.css';
 import './SettingsDialog.css';
+import { useT } from '../../i18n/useT';
 
 // The two heaviest panes load on first open.
 const ConnectorsPane = lazy(() => import('./ConnectorsPane').then((m) => ({ default: m.ConnectorsPane })));
 const AdvancedPane = lazy(() => import('./AdvancedSettings').then((m) => ({ default: m.AdvancedSettings })));
 
-const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
-    { id: 'general', label: 'General' },
-    { id: 'model', label: 'Model' },
-    { id: 'permissions', label: 'Permissions' },
-    { id: 'skills', label: 'Skills' },
-    { id: 'connectors', label: 'Connectors' },
-    { id: 'memory', label: 'Memory' },
-    { id: 'notifications', label: 'Notifications' },
-    { id: 'privacy', label: 'Privacy' },
-    { id: 'advanced', label: 'Advanced' },
+const SECTIONS: SettingsSection[] = [
+    'general', 'model', 'permissions', 'skills', 'connectors', 'memory', 'notifications', 'privacy', 'advanced',
 ];
 
 /** One settings window with a section list on the left. */
 export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => void }) {
+    const t = useT();
     const section = useChatStore((s) => s.settingsSection);
     const open = useChatStore((s) => s.openSettings);
     const close = useChatStore((s) => s.closeSettings);
@@ -74,28 +68,28 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
 
     return (
         <div className="settings-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
-            <div ref={panel} className="settings-dialog" role="dialog" aria-modal="true" aria-label="Settings">
-                <nav className="settings-nav" aria-label="Settings sections">
-                    <h1 className="settings-nav-title">Settings</h1>
-                    {SECTIONS.map((s) => (
+            <div ref={panel} className="settings-dialog" role="dialog" aria-modal="true" aria-label={t('settings.title')}>
+                <nav className="settings-nav" aria-label={t('settings.sections')}>
+                    <h1 className="settings-nav-title">{t('settings.title')}</h1>
+                    {SECTIONS.map((id) => (
                         <button
-                            key={s.id}
+                            key={id}
                             type="button"
-                            data-section={s.id}
-                            className={`settings-nav-item${section === s.id ? ' is-active' : ''}`}
-                            aria-current={section === s.id ? 'page' : undefined}
+                            data-section={id}
+                            className={`settings-nav-item${section === id ? ' is-active' : ''}`}
+                            aria-current={section === id ? 'page' : undefined}
                             // The focus ring follows the selection instead of staying on the tab focused at open.
-                            onClick={(e) => { e.currentTarget.focus(); open(s.id); }}
+                            onClick={(e) => { e.currentTarget.focus(); open(id); }}
                         >
-                            {s.label}
+                            {t(`settings.section.${id}`)}
                         </button>
                     ))}
                 </nav>
                 <div className="settings-body">
-                    <button type="button" className="settings-close" onClick={close} aria-label="Close settings">
+                    <button type="button" className="settings-close" onClick={close} aria-label={t('settings.close')}>
                         <X size={18} />
                     </button>
-                    <Suspense fallback={<p className="settings-hint"><Loader2 size={13} className="spin" /> Loading…</p>}>
+                    <Suspense fallback={<p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}>
                         {pane}
                     </Suspense>
                 </div>

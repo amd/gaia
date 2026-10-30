@@ -48,6 +48,18 @@ programmatically through `gaia.logger` (`set_level(name, level)`); the default
 is `INFO`.
 </Note>
 
+Importing `gaia` does not touch your process's logging. GAIA's own commands
+install its handlers and open `~/.gaia/gaia.log`; an application embedding the
+SDK opts in explicitly:
+
+```python
+from gaia.logger import configure
+log_manager = configure()
+```
+
+`configure()` returns the manager that `set_level` is called on. It is
+idempotent and safe to call more than once.
+
 `~/.gaia/gaia.log` is size-capped and shared safely by every GAIA process. Two
 variables tune the cap:
 

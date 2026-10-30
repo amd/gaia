@@ -34,7 +34,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 8px 12px 8px 16px;
+    padding-block: 8px;
+    padding-inline: 16px 12px;
     min-height: 52px;
     flex-shrink: 0;
     background: var(--bg-primary);
@@ -68,9 +69,17 @@
 .task-title span {
     overflow: hidden;
     white-space: nowrap;
-    padding-right: 24px;
+    padding-inline-end: 24px;
     -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
     mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+}
+.task-title span {
+    unicode-bidi: plaintext;
+}
+.task-title span:dir(rtl) {
+    text-align: right;
+    -webkit-mask-image: linear-gradient(to left, black calc(100% - 24px), transparent);
+    mask-image: linear-gradient(to left, black calc(100% - 24px), transparent);
 }
 
 .task-title-edit {
@@ -120,7 +129,7 @@
     transition: all var(--duration) var(--ease);
     flex-shrink: 0;
     width: 100%;
-    text-align: left;
+    text-align: start;
 }
 .doc-context-expanded {
     flex-wrap: wrap;
@@ -194,7 +203,7 @@
     width: 14px;
     height: 14px;
     padding: 0;
-    margin-left: 1px;
+    margin-inline-start: 1px;
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
@@ -276,7 +285,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding-left: 32px;
+    padding-inline-start: 32px;
 }
 
 .skeleton-line {
@@ -369,7 +378,7 @@
 }
 
 @media (max-width: 768px) {
-    .task-header { padding-left: var(--sidebar-toggle-clearance); }
+    .task-header { padding-inline-start: var(--sidebar-toggle-clearance); }
     .messages-column,
     .input-column { padding: 0 12px; }
 }
@@ -453,7 +462,7 @@
         padding: 12px 16px;
     }
     .skeleton-lines {
-        padding-left: 0;
+        padding-inline-start: 0;
     }
 
 }

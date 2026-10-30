@@ -494,6 +494,10 @@ class TestRAGSDK:
                     assert seed_rag.index_document(str(doc1))["success"] is True
                     assert seed_rag.index_document(str(doc2))["success"] is True
 
+            # With saved vectors there is nothing to embed; without them, one pass.
+            for saved in Path(temp_dir).glob("vectors_*.npy"):
+                saved.unlink()
+
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
 

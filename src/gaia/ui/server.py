@@ -1239,8 +1239,10 @@ def main():
     """Run the Agent UI server."""
     import argparse
 
+    from gaia.logger import configure
     from gaia.tls import use_os_trust_store
 
+    configure()
     use_os_trust_store()
 
     import uvicorn

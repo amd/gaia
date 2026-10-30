@@ -298,6 +298,29 @@ installs the package. That lane must name the file and run the check too.
 </Note>
 
 <Note>
+A pull request can run part of the unit suite, but only when every file it
+changes is a unit test or modified Python code under `src/gaia` or a hub agent
+package that the nightly coverage map records. `util/select_tests.py` then picks
+the test files that change can reach, from that map plus imports and
+patch-target strings. Any other change runs the full suite: data files, `util/`
+scripts, test helpers and fixtures, `eval/`, configs, workflows, any
+`conftest.py`, a source file the map has no entry for (such as a new one), a
+deleted or renamed file, or a missing or stale map. Tests
+load those by path, and neither imports nor coverage can follow what such a
+script reads. Of the last 600 merges to main, about one in five (21%) would have
+had a narrowed run; the rest run everything. Linux runs the selection; Windows
+and macOS run the part of it that touches the OS (processes, paths, locks,
+permissions). Every push to main runs the full suite on Linux, and the nightly
+run covers all three operating systems. The coverage map has one known blind
+spot: code behind a cache or a shared fixture is credited only to the first test
+that ran it, so a test that only reaches it second can be left out until the
+nightly run.
+See what your branch will run with
+`python util/select_tests.py select --base origin/main --explain`, and dispatch
+`test_unit.yml` on the branch to run the full suite.
+</Note>
+
+<Note>
 `--ci-paths` fails when a workflow's `paths:` filter would not fire on a file the
 workflow runs, imports directly, installs, or reads by literal path. A PR changing
 only that file would merge with the lane never running. It also fails when a file
