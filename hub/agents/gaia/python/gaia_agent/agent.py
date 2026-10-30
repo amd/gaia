@@ -48,14 +48,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, FrozenSet, List, Optional, Tuple
 
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 from gaia_agent.connectors import MAILBOX_REQUIREMENTS
 from gaia_agent.engineering_tools import (
     ENGINEERING_SKILL,
     ENGINEERING_TOOL_NAMES,
     EngineeringToolsMixin,
 )
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
-from gaia_agent_chat.profiles import get_profile_spec
+from gaia_agent.profiles import get_profile_spec
 
 from gaia.agents.base.agent import default_max_steps, parse_skill_manifest
 from gaia.agents.base.project_map import ProjectMapMixin, is_code_repository

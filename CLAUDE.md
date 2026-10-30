@@ -535,8 +535,8 @@ gaia/
 │   │   ├── tools/      # Cross-agent tool mixins (rag, file, shell, browser, scratchpad, screenshot…)
 │   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
-│   │   #   Packaged agents live in hub/agents/<id>/python/: gaia (flagship),
-│   │   #   chat (its base class), email. Per-task agents were collapsed into
+│   │   #   Packaged agents live in hub/agents/<id>/python/: gaia (flagship,
+│   │   #   incl. its ChatAgent base), email. Per-task agents were collapsed into
 │   │   #   skills under hub/skills/.
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
@@ -636,7 +636,7 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 | Agent | Description |
 |-------|-------------|
 | **GaiaAgent** | The flagship — conversation, documents, data, web, memory, skills — hub (`gaia/`) |
-| **ChatAgent** | The flagship's base class. Its `chat`/`doc`/`file` ids are `hidden` — resolvable, not selectable — hub (`chat/`) |
+| **ChatAgent** | The flagship's base class, in the flagship package (`gaia/`, `gaia_agent.chat_agent`). Its old `chat`/`doc`/`file` ids resolve to `gaia`; `hub/agents/chat/` is a deprecated re-export shim for one release (#6099) |
 | **EmailTriageAgent** | Email triage for Gmail or Outlook (local inference; needs the Google or Microsoft connector) — hub (`email/`) |
 
 Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
@@ -792,7 +792,7 @@ adaptive memory/skills/recovery, desktop-installer, browser-use, eval-hillclimbi
 Browse the directory rather than a partial list here.
 
 **Key architectural decisions (April 2026):**
-- **GaiaAgent** rename (#696) landed, but resolved differently than planned: rather than renaming `ChatAgent`, `GaiaAgent` became the flagship (`hub/agents/gaia/python/gaia_agent/agent.py`) and `ChatAgent` (`hub/agents/chat/python/gaia_agent_chat/agent.py`) was kept as its base class — see [Agent Implementations](#agent-implementations)
+- **GaiaAgent** rename (#696) landed, but resolved differently than planned: rather than renaming `ChatAgent`, `GaiaAgent` became the flagship (`hub/agents/gaia/python/gaia_agent/agent.py`) and `ChatAgent` (`hub/agents/gaia/python/gaia_agent/chat_agent.py`, folded into the flagship package in #6099) was kept as its base class — see [Agent Implementations](#agent-implementations)
 - Voice-first is P0 enabling technology (#702)
 - No context compaction — memory + RAG handles long conversations
 - Configuration dashboard + Observability dashboard as separate Agent UI panels

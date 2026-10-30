@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Deprecated: `ChatAgent` moved into the flagship package (#6099).** Import
+  it from `gaia_agent.chat_agent`; `gaia_agent_chat.agent` and the other
+  submodules keep working for one release as aliases of their new homes in
+  `gaia_agent`, with a `DeprecationWarning`. The package now depends on `gaia-agent-gaia`
+  instead of the other way round, and is deleted in #6103.
+- The `chat`, `doc` and `file` agent ids are no longer registered here. The
+  registry resolves them, and `chat-lite` / `doc-lite` / `file-lite` /
+  `gaia-lite`, to the flagship `gaia` agent for API, MCP and scheduled
+  callers. Agent UI chats saved under a retired agent stay read-only.
+  MCP settings saved under `installed:chat` no longer apply.
 - With Local only on (`gaia config set network_policy local_ai_only`), the
   Perplexity-backed `search_web` tool is not registered, because it answers
   through Perplexity's cloud AI. A cached agent that still has it refuses with
@@ -85,11 +95,6 @@
   0.25.0 it fails at import. The `amd-gaia` floor rises to 0.25.1 in that
   release (a floor above the in-tree core cannot resolve), and
   `tests/test_chat_dependency_floor.py` fails the release until it does.
-- The `full` profile's tool loader gains a `guide` bundle for the flagship's
-  five guide-card tools (`show_recipe`, `show_workout`, `show_how_to`,
-  `show_checklist`, `show_itinerary`) and a `calculator` bundle for
-  `show_tip_calculator` and `show_loan_calculator`. They are optional here
-  because only `GaiaAgent` registers them.
 
 ## 0.2.0
 

@@ -31,7 +31,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("gaia_agent")
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
 import yaml  # noqa: E402
 

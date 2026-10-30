@@ -6,8 +6,8 @@ import re
 from unittest.mock import patch
 
 import pytest
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
-from gaia_agent_chat.profiles import PROFILE_SPECS
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+from gaia_agent.profiles import PROFILE_SPECS
 
 # Prompt names with no registered tool; remove an entry once its prompt is fixed.
 _KNOWN_GAPS = {
@@ -22,8 +22,8 @@ def prompts_and_tools():
     built = {}
     with (
         patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
-        patch("gaia_agent_chat.agent.RAGSDK"),
-        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
         patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
         patch("gaia.llm.lemonade_client.LemonadeClient"),
     ):
@@ -81,12 +81,12 @@ def test_data_profile_unsupported_line_keeps_image_analysis(prompts_and_tools):
 
 def _prompt_for_spec(spec):
     """Render the prompt with ``spec`` substituted for the data profile."""
-    import gaia_agent_chat.agent as agent_mod
+    import gaia_agent.chat_agent as agent_mod
 
     with (
         patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
-        patch("gaia_agent_chat.agent.RAGSDK"),
-        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
         patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
         patch("gaia.llm.lemonade_client.LemonadeClient"),
     ):
@@ -121,8 +121,8 @@ def test_unknown_profile_falls_back_to_full_and_keeps_web_and_media():
     """An unrecognised profile registers full's tools, so it must advertise them."""
     with (
         patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
-        patch("gaia_agent_chat.agent.RAGSDK"),
-        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
         patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
         patch("gaia.llm.lemonade_client.LemonadeClient"),
     ):

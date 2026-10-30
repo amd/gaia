@@ -25,7 +25,7 @@ dependencies:
       trigger this lane; it is a probe string, not a file the test reads.
 
   test_email_agent_unit.yml:
-    hub/agents/chat/python/gaia_agent_chat/agent.py: >-
+    hub/agents/gaia/python/gaia_agent/chat_agent.py: >-
       Only tests/unit/eval/test_harness_flagship_target.py imports it, and that
       file skips wholesale in this lane (no flagship wheel); test_gaia_agent.yml
       runs it and triggers on hub/agents/**.

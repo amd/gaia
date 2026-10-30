@@ -502,6 +502,9 @@ class TestChatAgentGoesThroughTheRegistry:
 
     def test_chat_agent_type_is_created_through_the_registry(self):
         registry, captured = _make_registry()
+        # ``chat`` resolves to the flagship (#6099), which has a relay profile,
+        # so dispatch reads is_sidecar: answer as an in-process registration.
+        registry.get.return_value = MagicMock(is_sidecar=False)
         db = _make_db(custom_model=None)
         session = _make_session(model=_DB_DEFAULT, agent_type="chat")
 
@@ -515,7 +518,7 @@ class TestChatAgentGoesThroughTheRegistry:
         assert registry.create_agent.call_args.args[0] == "chat"
 
     def test_a_missing_chat_registration_is_not_silently_substituted(self):
-        """No direct `from gaia_agent_chat.agent import ChatAgent` left to fall
+        """No direct `from gaia_agent.chat_agent import ChatAgent` left to fall
         back on: an unregistered `chat` surfaces the install hint instead."""
         registry, _ = _make_registry()
         registry.get.return_value = None
@@ -531,4 +534,4 @@ class TestChatAgentGoesThroughTheRegistry:
             result = _call_non_streaming(session, db, agent_type_override=None)
 
         registry.create_agent.assert_not_called()
-        assert "gaia-agent-chat" in str(result)
+        assert "gaia-agent-gaia" in str(result)

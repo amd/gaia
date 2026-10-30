@@ -153,16 +153,16 @@ def test_stdlib_is_offered_without_gui_or_test_suite():
 
 def test_every_library_the_tools_advertise_is_bundled():
     """The run_python description names them; the binary must have them."""
-    pytest.importorskip("gaia_agent_chat")
-    from gaia_agent_chat.python_runner import BUNDLED_LIBRARIES
+    pytest.importorskip("gaia_agent")
+    from gaia_agent.python_runner import BUNDLED_LIBRARIES
 
     missing = set(BUNDLED_LIBRARIES.values()) - set(freeze.SCRIPT_LIBRARIES)
     assert not missing, f"advertised to the model but not bundled: {missing}"
 
 
 def test_smoke_test_uses_the_runner_flag():
-    pytest.importorskip("gaia_agent_chat")
-    from gaia_agent_chat.python_runner import RUN_PYTHON_FILE_FLAG
+    pytest.importorskip("gaia_agent")
+    from gaia_agent.python_runner import RUN_PYTHON_FILE_FLAG
 
     spec = importlib.util.spec_from_file_location(
         "gaia_smoke", PACKAGING / "smoke_test.py"

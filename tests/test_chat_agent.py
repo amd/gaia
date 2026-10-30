@@ -10,11 +10,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); skip the
+# ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 
 class TestChatAgent:
@@ -639,7 +639,7 @@ class TestChatAgentHostAttributeContract:
         property — the read-time check added by #3316 must not probe
         speculatively (hasattr/getattr-with-default) at any point outside an
         actual tool call."""
-        from gaia_agent_chat.agent import _UNSET
+        from gaia_agent.chat_agent import _UNSET
 
         config = ChatAgentConfig(
             silent_mode=True, max_steps=1, allowed_paths=[str(tmp_path)]

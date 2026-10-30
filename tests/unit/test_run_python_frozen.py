@@ -18,12 +18,12 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat import python_runner  # noqa: E402
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
-from gaia_agent_chat.python_jobs import PythonJob  # noqa: E402
-from gaia_agent_chat.python_runner import (  # noqa: E402
+from gaia_agent import python_runner  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent.python_jobs import PythonJob  # noqa: E402
+from gaia_agent.python_runner import (  # noqa: E402
     RUN_PYTHON_FILE_FLAG,
     python_command,
     requests_run_python_file,
@@ -61,8 +61,8 @@ def tools(project, monkeypatch):
     monkeypatch.chdir(project)
     saved = dict(_TOOL_REGISTRY)
     with (
-        patch("gaia_agent_chat.agent.RAGSDK"),
-        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
     ):
         ChatAgent(ChatAgentConfig(silent_mode=True, allowed_paths=[str(project)]))
     try:
@@ -82,7 +82,7 @@ def _completed(argv, returncode=0, stdout="", stderr=""):
 def _spawn(**finished):
     """Stand in for the child: a job that ran to completion."""
     return patch(
-        "gaia_agent_chat.agent.run_python_job",
+        "gaia_agent.chat_agent.run_python_job",
         return_value=PythonJob(_completed([], **finished), None, []),
     )
 
@@ -178,7 +178,7 @@ def test_a_start_failure_is_an_error_naming_the_program(tool, frozen, tools, pro
     script = project / "t.py"
     script.write_text("print(1)\n", encoding="utf-8")
     with patch(
-        "gaia_agent_chat.agent.run_python_job",
+        "gaia_agent.chat_agent.run_python_job",
         side_effect=FileNotFoundError(2, "not found"),
     ):
         if tool == "run_python":
@@ -214,7 +214,7 @@ def test_the_ui_event_reports_the_failure(tools):
 #: Stand-in for the frozen binary's entry point: the same dispatch call.
 _CHILD = (
     "import sys\n"
-    "from gaia_agent_chat.python_runner import requests_run_python_file, "
+    "from gaia_agent.python_runner import requests_run_python_file, "
     "run_python_file\n"
     "assert requests_run_python_file(sys.argv[1:])\n"
     "sys.exit(run_python_file(sys.argv[2:]))\n"
@@ -360,7 +360,7 @@ def test_frozen_output_is_utf8_whatever_the_console_codec(project, child_env):
 # A script that starts sys.executable itself reaches the binary too
 # ---------------------------------------------------------------------------
 
-from gaia_agent_chat.python_runner import (  # noqa: E402
+from gaia_agent.python_runner import (  # noqa: E402
     BUNDLED_LIBRARIES,
     interpreter_request,
 )
@@ -368,7 +368,7 @@ from gaia_agent_chat.python_runner import (  # noqa: E402
 #: Stand-in for the frozen entry point's ``dispatch`` call; 97 = "not Python".
 _DISPATCH = (
     "import sys\n"
-    "from gaia_agent_chat.python_runner import dispatch\n"
+    "from gaia_agent.python_runner import dispatch\n"
     "code = dispatch(sys.argv[1:])\n"
     "sys.exit(97 if code is None else code)\n"
 )

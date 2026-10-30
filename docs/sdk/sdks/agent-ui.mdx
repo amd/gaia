@@ -2887,7 +2887,7 @@ def test_message_ordering():
 The Agent UI server delegates to the GAIA [Agent](/sdk/core/agent-system) for LLM communication and tool execution:
 
 ```python
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 # The server creates a ChatAgent instance per request. ChatAgent derives its
 # system prompt from `prompt_profile` ("chat" | "doc" | "file" | "data" |

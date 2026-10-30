@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 import pytest
-from gaia_agent_chat.session import SessionCorruptError, SessionManager
+from gaia_agent.session import SessionCorruptError, SessionManager
 
 from gaia import config as gaia_config
 
@@ -105,7 +105,7 @@ def test_failed_write_keeps_previous_file(monkeypatch):
     def boom(*_args, **_kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr("gaia_agent_chat.session.json.dump", boom)
+    monkeypatch.setattr("gaia_agent.session.json.dump", boom)
     session.metadata = {"v": 2}
     assert manager.save_session(session) is False
 
@@ -129,7 +129,7 @@ def isolated_tool_registry():
 def test_agent_refuses_to_replace_corrupt_ui_session(gaia_home, work_cwd, monkeypatch):
     from unittest.mock import patch
 
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
     monkeypatch.setenv("HOME", str(work_cwd.parent))
     sessions = gaia_home / "sessions"
@@ -139,8 +139,8 @@ def test_agent_refuses_to_replace_corrupt_ui_session(gaia_home, work_cwd, monkey
     before = path.read_text(encoding="utf-8")
 
     with (
-        patch("gaia_agent_chat.agent.RAGSDK"),
-        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
         pytest.raises(SessionCorruptError),
     ):
         ChatAgent(

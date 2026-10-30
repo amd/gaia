@@ -1,50 +1,42 @@
-# gaia-agent-chat
+# gaia-agent-chat (deprecated)
 
-The conversational ChatAgent — the class `GaiaAgent` subclasses, so this is a
-hard dependency of `gaia-agent` and fully supported as a library. It is no
-longer a product of its own: the flagship supersedes its three prompt profiles
-(`chat`, `doc`, `file`), and all three are retired as user-facing choices.
-Depends on the published `amd-gaia` framework wheel.
+`ChatAgent` now ships inside the flagship package, `gaia-agent-gaia`
+([#6099](https://github.com/amd/gaia/issues/6099)). This package is a re-export
+shim kept for one release so existing imports keep working, and it is deleted
+in the release after ([#6103](https://github.com/amd/gaia/issues/6103)).
+Importing it emits a `DeprecationWarning`.
 
-## Install
+## Migrate
 
-`gaia-agent-chat` is not on PyPI yet ([#2240](https://github.com/amd/gaia/issues/2240)),
-and `gaia init` / `gaia hub install gaia` don't install it — they install the
-flagship as a native binary. When GAIA needs this package it prints the exact
-install command (the Agent UI, `gaia chat`): run that command, then restart the
-Agent UI server. It targets the Python GAIA runs in and the release tag that
-matches your `amd-gaia`.
+| Old import | New import |
+|------------|------------|
+| `gaia_agent_chat.agent` | `gaia_agent.chat_agent` |
+| `gaia_agent_chat.app.interactive_mode` | `gaia_agent.interactive.interactive_mode` |
+| `gaia_agent_chat.profiles`, `.tool_bundles`, `.session`, `.python_jobs`, `.python_runner`, `.tool_requests` | `gaia_agent.<same name>` |
 
-To install it yourself, do the same two things — install into the environment
-GAIA runs in, and pin the tag of your `amd-gaia` version (`gaia --version`;
-`0.24.1` is tagged `v0.24.1`, and a release candidate `0.25.0rc12` is tagged
-`v0.25.0-rc12`). `--python` names that environment's interpreter; drop it if the
-environment is already activated:
-
-```bash
-uv pip install --python <path-to-GAIA's-python> "gaia-agent-chat @ git+https://github.com/amd/gaia.git@v0.24.1#subdirectory=hub/agents/chat/python"
-pip install -e hub/agents/chat/python    # editable, from a checkout, for development
+```python
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 ```
 
-Installing into a different environment than the one serving the Agent UI is
-why it keeps asking for the package after an install; an unpinned URL installs
-`main`, which can fail to import against a released `amd-gaia`.
+Each old submodule is the new module object itself, so `isinstance` checks and
+`unittest.mock.patch("gaia_agent_chat.agent.X")` behave exactly as before.
 
-Installing registers `chat`, `doc`, and `file` via the `gaia.agent` entry-point
-group, all marked `hidden`: the registry resolves them by id — which is what
-keeps stored sessions, the `*-lite` aliases, and the eval scenarios working —
-but they are absent from the Agent UI picker and the Hub catalog. Pick the
-flagship `gaia` agent instead.
-
-`gaia chat` and `gaia chat --ui` import `ChatAgent` directly rather than going
-through the registry, so both are unaffected by the hidden flag.
-
-## Develop / test
+Install the flagship package instead of this one. It is not on PyPI yet
+([#2240](https://github.com/amd/gaia/issues/2240)); from a checkout:
 
 ```bash
-pip install -e ".[test]"
-pytest hub/agents/chat/python/tests/ -x
+pip install -e hub/agents/gaia/python
 ```
+
+## Agent ids
+
+This package no longer registers the `chat`, `doc` and `file` agent ids. The
+registry resolves them, and their `*-lite` aliases, to the flagship `gaia`
+agent, so API, MCP and scheduled callers that still name one get the
+flagship. Agent UI chats saved under a retired agent stay read-only.
+
+`ChatAgentLite` (`gaia_agent_chat.lite_agent`) still lives here and goes away
+with this package.
 
 ## Provider migration
 

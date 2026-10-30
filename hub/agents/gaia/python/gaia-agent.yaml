@@ -35,7 +35,7 @@ icon: sparkles
 tools_count: 108
 
 language: python
-# The chat agent this one subclasses imports gaia.agents.tools.reasoning_tools;
+# ChatAgent (gaia_agent.chat_agent) imports gaia.agents.tools.reasoning_tools;
 # 0.25.1 is the first core that ships it. (0.25.0 added the allowed-folders
 # check, #4656; 0.24.1 was the first whose daemon can supervise this, #2932.)
 min_gaia_version: "0.25.3"
@@ -46,7 +46,6 @@ python:
   entry_class: GaiaAgent
   dependencies:
     - "amd-gaia>=0.25.3"
-    - "gaia-agent-chat>=0.2.0"
 
 interfaces:
   tui: true

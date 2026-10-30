@@ -611,7 +611,7 @@ async def async_main(action, **kwargs):
         # `gaia chat` runs the flagship; it ships as the gaia-agent-gaia wheel.
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent_chat.app import interactive_mode
+            from gaia_agent.interactive import interactive_mode
         except ImportError as e:
             raise RuntimeError(
                 agent_import_error_message(
@@ -977,7 +977,7 @@ def _launch_interactive_cli(log=None):
 
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent_chat.app import interactive_mode
+            from gaia_agent.interactive import interactive_mode
         except ImportError as e:
             raise RuntimeError(
                 agent_import_error_message(

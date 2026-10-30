@@ -23,7 +23,7 @@ class _Console:
 
 @pytest.fixture
 def ask():
-    from gaia_agent_chat.agent import ChatAgent
+    from gaia_agent.chat_agent import ChatAgent
 
     stub = object.__new__(ChatAgent)
     stub.console = _Console()
@@ -39,7 +39,7 @@ def ask():
 
 
 def test_the_watchdog_outlasts_the_longest_wait(ask):
-    from gaia_agent_chat.agent import USER_INPUT_MAX_WAIT_S
+    from gaia_agent.chat_agent import USER_INPUT_MAX_WAIT_S
 
     from gaia.agents.base.agent import tool_execution_timeout
 

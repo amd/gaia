@@ -638,8 +638,18 @@ _NO_PROFILE = RelayProfile(
 
 
 def profile_for(agent_id: str) -> Optional[RelayProfile]:
-    """The relay profile for *agent_id*, or ``None`` if it is not a sidecar."""
-    return _PROFILES.get(agent_id)
+    """The relay profile for *agent_id*, or ``None`` if it is not a sidecar.
+
+    A legacy id that resolves to a sidecar agent (``chat`` -> ``gaia``) gets
+    that agent's profile, so a stored session relays like a new one.
+    """
+    from gaia.agents.registry import AgentRegistry
+
+    profile = _PROFILES.get(agent_id)
+    if profile is None:
+        canonical = AgentRegistry.legacy_alias(agent_id)
+        profile = _PROFILES.get(canonical) if canonical else None
+    return profile
 
 
 def full_access_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:

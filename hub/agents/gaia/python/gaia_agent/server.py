@@ -50,6 +50,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
 from gaia_agent.entry import main as _entry_main
 from gaia_agent.memory_dump import build_memory_dump
+from gaia_agent.session import validate_session_id
 from gaia_agent.session_registry import (
     AGENT_BUILD_LOCK,
     PROVIDER_CLAUDE,
@@ -58,7 +59,6 @@ from gaia_agent.session_registry import (
     close_agent,
 )
 from gaia_agent.session_registry import registry as session_registry
-from gaia_agent_chat.session import validate_session_id
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import StreamingResponse
 

@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 from gaia.agents.base.memory import MemoryMixin
 

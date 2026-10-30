@@ -47,9 +47,8 @@ class _StubConfig:
 
 @pytest.fixture
 def stub_agent(monkeypatch):
-    """Serve the stub from both the chat wheel and the flagship wheel."""
+    """Serve the stub from the flagship wheel."""
     for pkg, mod, cls, cfg in (
-        ("gaia_agent_chat", "agent", "ChatAgent", "ChatAgentConfig"),
         ("gaia_agent", "agent", "GaiaAgent", "GaiaAgentConfig"),
     ):
         agent_mod = types.ModuleType(f"{pkg}.{mod}")
@@ -57,9 +56,9 @@ def stub_agent(monkeypatch):
         setattr(agent_mod, cfg, _StubConfig)
         monkeypatch.setitem(sys.modules, pkg, types.ModuleType(pkg))
         monkeypatch.setitem(sys.modules, f"{pkg}.{mod}", agent_mod)
-    app_mod = types.ModuleType("gaia_agent_chat.app")
+    app_mod = types.ModuleType("gaia_agent.interactive")
     app_mod.interactive_mode = lambda agent: None
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat.app", app_mod)
+    monkeypatch.setitem(sys.modules, "gaia_agent.interactive", app_mod)
 
 
 @pytest.fixture

@@ -202,7 +202,7 @@ installed:
 
 ```bash
 uv pip install --python <venv>/Scripts/python.exe \
-  -e hub/agents/gaia/python -e hub/agents/chat/python --no-deps
+  -e hub/agents/gaia/python --no-deps
 ```
 
 `--no-deps` is mandatory: without it pip pulls `amd-gaia` from PyPI and the agent
