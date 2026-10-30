@@ -176,6 +176,58 @@ def test_long_documents_keep_section_detail_for_final_style_synthesis(summarize)
     )
 
 
+_STYLE_MARKERS = {
+    "brief": "at most three complete sentences",
+    "detailed": "at least 250 words",
+    "bullets": "at most three top-level bullets",
+}
+
+
+@pytest.mark.parametrize("summary_type", sorted(_STYLE_MARKERS))
+@pytest.mark.parametrize("pages", [1, 6])
+def test_no_prompt_leaks_metadata_or_drops_grounding(summarize, summary_type, pages):
+    chat = _Chat()
+    tool = summarize(chat, pages=pages)
+
+    result = tool(file_path=DOC, summary_type=summary_type, max_words_per_section=120)
+
+    assert result["status"] == "success"
+    final_prompt = chat.prompts[-1]
+    assert "CRITICAL GROUNDING RULE" in final_prompt
+    last_paragraph = final_prompt.strip().split(chr(10) * 2)[-1]
+    assert _STYLE_MARKERS[summary_type] in last_paragraph
+    other_styles = [m for t, m in _STYLE_MARKERS.items() if t != summary_type]
+    for prompt in chat.prompts:
+        for leaked in ("Document Information", "**Pages**", "Total Words"):
+            assert leaked not in prompt
+        assert all(marker not in prompt for marker in other_styles)
+    for prompt in chat.prompts[:-1]:
+        assert all(marker not in prompt for marker in _STYLE_MARKERS.values())
+
+
+@pytest.mark.parametrize("pages", [1, 6])
+def test_result_tells_the_agent_to_reshape_unsupported_styles(summarize, pages):
+    tool = summarize(_Chat(), pages=pages)
+
+    result = tool(file_path=DOC, summary_type="brief", max_words_per_section=120)
+
+    assert "reshape the draft" in result["instruction"]
+    assert "document metadata" not in result["instruction"]
+
+
+@pytest.mark.parametrize("summary_type", ["executive", "action_items", "Brief", ""])
+def test_unsupported_styles_are_still_rejected_before_any_llm_call(
+    summarize, summary_type
+):
+    chat = _Chat()
+    tool = summarize(chat, pages=1)
+
+    result = tool(file_path=DOC, summary_type=summary_type)
+
+    assert result["status"] == "error"
+    assert chat.prompts == []
+
+
 def test_a_summary_cut_off_at_the_limit_is_an_error_not_a_summary(summarize):
     chat = _Chat(finish_reasons=["length"])
     tool = summarize(chat, pages=1)
