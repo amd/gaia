@@ -19,6 +19,7 @@ on:
       - 'hub/agents/email/python/**'
       - 'hub/agents/email/npm/**'
       - 'src/gaia/agents/base/**'
+      - 'src/gaia/utils/sqlite_wal.py'
       - 'src/gaia/connectors/**'
       - 'src/gaia/eval/**'
       # Triage runs against Lemonade: the pinned version and the client that
@@ -94,6 +95,7 @@ on:
       - 'hub/agents/email/python/**'
       - 'hub/agents/email/npm/**'
       - 'src/gaia/agents/base/**'
+      - 'src/gaia/utils/sqlite_wal.py'
       - 'src/gaia/connectors/**'
       - 'src/gaia/eval/**'
       # Triage runs against Lemonade: the pinned version and the client that

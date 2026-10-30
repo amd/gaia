@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Resolves the user's real Documents folder for the session guidance, including
+  Windows Known Folder Move/OneDrive and Linux `XDG_DOCUMENTS_DIR`, instead of
+  assuming it is always `~/Documents` (#5885). File search and the Agent UI's
+  Documents quick link use the same folder.
+- The data profile's prompt no longer says it can browse the web or transcribe
+  audio and video. It registers neither, so the model promised a tool it could not
+  call. The web and media lines now appear only for profiles that register those
+  tools (#6036).
+- `gaia chat --index <file>` indexes the named file from any working
+  directory. A file outside the folder `gaia chat` ran in was refused as "not
+  in allowed paths", the error was only logged, and the agent answered without
+  the document. Naming a file grants read access to that file, not its folder.
 - `get_system_info` reports free disk space (`disk_free_gb`) and available
   memory (`memory_available_gb`), and computes disk use from free space. On a
   Mac it reported only the share macOS's system volume uses, so a nearly full
