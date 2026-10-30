@@ -40,6 +40,7 @@ LEVEL_RANK: dict[str, int] = {
     "connect": 1,
     "control": 1,
     "execute": 1,
+    "run": 1,
     "write": 2,
 }
 
@@ -161,7 +162,10 @@ def check_permission_truth(
             )
             continue
 
-        findings.extend(_scope_findings(use, _scopes_for(matching, use.domain)))
+        if use.domain == "program":
+            findings.extend(_program_findings(use, _scopes_for(matching, "program")))
+        else:
+            findings.extend(_scope_findings(use, _scopes_for(matching, use.domain)))
 
     findings.extend(_unused_findings(declared, analysis))
     return tuple(findings)
@@ -197,6 +201,34 @@ def _scope_findings(use: DomainUse, scopes: Sequence[str]) -> list[Finding]:
                 "Keep the access inside the declared scope, or widen the "
                 "declaration to cover it. A scope the code ignores gives the "
                 f"installing user a false picture. See {_PERMISSION_DOCS}"
+            ),
+            snippet=f"{use.detail} -> {target}",
+        )
+    ]
+
+
+def _program_findings(use: DomainUse, scopes: Sequence[str]) -> list[Finding]:
+    """Flag ``run_program("<name>")`` naming a program no permission declares.
+
+    A computed name is left to the runtime, which refuses an undeclared one.
+    """
+    target = use.literal_target
+    if not target or target in scopes:
+        return []
+    return [
+        Finding(
+            rule_id="permission.scope_violation",
+            severity="high",
+            category=CATEGORY_PERMISSION_TRUTH,
+            message=(
+                f"Runs a program the manifest does not name (declared: "
+                f"{', '.join(scopes) or 'none'})."
+            ),
+            file=use.file,
+            line=use.line,
+            remediation=(
+                f"Declare 'program:run:{target}', or run a declared program. "
+                f"See {_PERMISSION_DOCS}"
             ),
             snippet=f"{use.detail} -> {target}",
         )

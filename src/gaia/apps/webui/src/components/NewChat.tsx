@@ -17,7 +17,6 @@ import { useChatStore } from '../stores/chatStore';
 import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
 import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
-import { STARTING_REASON } from '../utils/constants';
 import { log } from '../utils/logger';
 import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
@@ -25,6 +24,8 @@ import type { StartScreen } from '../types';
 import './NewChat.css';
 import { useSavedDraft } from '../hooks/useSavedDraft';
 import { NEW_CHAT_DRAFT_KEY } from '../utils/savedDraft';
+import { ref, type MessageKey } from '../i18n/registry';
+import { tEn, useT, type Translate } from '../i18n/useT';
 
 interface NewChatProps {
     /**
@@ -41,29 +42,38 @@ interface NewChatProps {
 /** How often the start screen is asked for again while the assistant is unavailable. */
 export const START_RETRY_MS = 15_000;
 
-export function greeting(now: Date = new Date()): string {
+export function greeting(now: Date = new Date(), t: Translate = tEn): string {
     const h = now.getHours();
     const part = h < 5 ? 'evening' : h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
-    return `Good ${part}. What should we work on?`;
+    return t(`newChat.greeting.${part}`);
 }
 
-export function warmUpLine({ seconds, model, device }: WarmUpProgress): string {
-    if (!model) return `Getting GAIA ready… ${seconds}s`;
-    const where = deviceLabel(device);
-    return `Loading ${displayModelName(model)}${where ? ` on ${where}` : ''}… ${seconds}s`;
+const DEVICE_KEYS: Record<string, MessageKey> = { gpu: 'device.gpu', npu: 'device.npu', cpu: 'device.cpu' };
+
+export function warmUpLine({ seconds, model, device }: WarmUpProgress, t: Translate = tEn): string {
+    if (!model) return t('newChat.warmup.ready', { s: seconds });
+    const name = displayModelName(model);
+    const where = device ? DEVICE_KEYS[device] : undefined;
+    if (where) return t('newChat.warmup.loadingOn', { model: name, where: ref(where), s: seconds });
+    // A device the labels don't know yet still reads in English rather than vanishing.
+    const raw = deviceLabel(device);
+    return raw
+        ? t('newChat.warmup.loadingOn', { model: name, where: raw, s: seconds })
+        : t('newChat.warmup.loading', { model: name, s: seconds });
 }
 
 /** The assistant didn't start: one plain sentence, a retry, and the full error behind Details. */
 function AssistantUnavailable({ detail, onRetry }: { detail: string; onRetry: () => void }) {
+    const t = useT();
     const [open, setOpen] = useState(false);
     return (
         <div className="new-chat-note">
             <p>
-                GAIA&rsquo;s assistant didn&rsquo;t start yet.{' '}
-                <button type="button" className="link-btn" onClick={onRetry}>Try again</button>
+                {t('newChat.assistantUnavailable')}{' '}
+                <button type="button" className="link-btn" onClick={onRetry}>{t('newChat.tryAgain')}</button>
             </p>
             <button type="button" className="new-chat-details" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-                <ChevronRight size={12} className={open ? 'is-open' : ''} aria-hidden="true" /> Details
+                <ChevronRight size={12} className={open ? 'is-open' : ''} aria-hidden="true" /> {t('newChat.details')}
             </button>
             {open && <pre className="new-chat-details-text">{detail}</pre>}
         </div>
@@ -83,6 +93,7 @@ function attachWholeLibrary() {
  * get, and offer the rest of the library.
  */
 function LibraryDocuments() {
+    const t = useT();
     const documents = useChatStore((s) => s.documents);
     const draftIds = useChatStore((s) => s.draftDocumentIds);
     const removeDraftDocument = useChatStore((s) => s.removeDraftDocument);
@@ -94,16 +105,16 @@ function LibraryDocuments() {
     return (
         <div className="new-chat-docs">
             {attached.length > 0 && (
-                <ul className="new-chat-doc-list" aria-label="Documents for this chat">
+                <ul className="new-chat-doc-list" aria-label={t('newChat.docs.forChat')}>
                     {attached.map((d) => (
                         <li key={d.id} className="new-chat-doc">
                             <FileText size={12} aria-hidden="true" />
-                            <span>{d.filename}</span>
+                            <span dir="auto">{d.filename}</span>
                             <button
                                 type="button"
                                 className="new-chat-doc-remove"
                                 onClick={() => removeDraftDocument(d.id)}
-                                aria-label={`Don't attach ${d.filename}`}
+                                aria-label={t('newChat.docs.dontAttach', { name: d.filename })}
                             >
                                 <X size={12} aria-hidden="true" />
                             </button>
@@ -114,16 +125,16 @@ function LibraryDocuments() {
             {n > 0 && (
                 <p className="new-chat-note">
                     {attached.length
-                        ? `${n} more document${n !== 1 ? 's' : ''} in your library. `
-                        : `Your library has ${n} document${n !== 1 ? 's' : ''}; this chat can search only the ones you attach. `}
+                        ? t.plural('newChat.docs.more', n)
+                        : t.plural('newChat.docs.library', n)}{' '}
                     <button type="button" className="link-btn" onClick={attachWholeLibrary}>
-                        Attach {n === 1 ? 'it' : `all ${n}`}
+                        {n === 1 ? t('newChat.docs.attachIt') : t('newChat.docs.attachAll', { n })}
                     </button>
                     {n > 1 && (
                         <>
                             {' · '}
                             <button type="button" className="link-btn" onClick={() => setShowDocLibrary(true)}>
-                                Choose
+                                {t('newChat.docs.choose')}
                             </button>
                         </>
                     )}
@@ -135,14 +146,15 @@ function LibraryDocuments() {
 
 /** First-run setup failed: say so before the first message fails with the same error. */
 function SetupFailed({ error }: { error: string }) {
+    const t = useT();
     const openSettings = useChatStore((s) => s.openSettings);
     return (
         <div className="new-chat-setup-failed" role="alert">
-            <p className="new-chat-setup-failed-title">GAIA&rsquo;s first-run setup didn&rsquo;t finish, so a chat on this PC&rsquo;s model will fail.</p>
+            <p className="new-chat-setup-failed-title">{t('newChat.setupFailed.title')}</p>
             <p className="new-chat-setup-failed-error">{error}</p>
             <p>
-                Use a cloud model, or pick a smaller one.{' '}
-                <button type="button" className="link-btn" onClick={() => openSettings('model')}>Choose a model</button>
+                {t('newChat.setupFailed.hint')}{' '}
+                <button type="button" className="link-btn" onClick={() => openSettings('model')}>{t('newChat.setupFailed.choose')}</button>
             </p>
         </div>
     );
@@ -150,6 +162,7 @@ function SetupFailed({ error }: { error: string }) {
 
 /** An empty chat: a greeting and the composer over the NPU backdrop. Created on the first message. */
 export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatProps) {
+    const t = useT();
     const starting = useChatStore((s) => s.systemStatus?.init_state === 'initializing');
     const download = useChatStore((s) => s.systemStatus?.download_progress ?? null);
     // Moot once chats run in the cloud or a local model has loaded after all.
@@ -277,7 +290,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
     const folder = start?.working_folder;
 
     return (
-        <main className={`new-chat${docked ? ' is-docked' : ''}`} aria-label="New chat">
+        <main className={`new-chat${docked ? ' is-docked' : ''}`} aria-label={t('newChat.label')}>
             <NpuBackdrop
                 activity={activity}
                 progress={(download?.percent ?? 0) / 100}
@@ -287,7 +300,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                 composerRef={composerRef}
             />
             <div className="new-chat-inner" ref={innerRef}>
-                <h1 className="new-chat-greeting" aria-hidden={docked}>{greeting()}</h1>
+                <h1 className="new-chat-greeting" aria-hidden={docked}>{greeting(new Date(), t)}</h1>
                 {setupError && !remote && <SetupFailed error={setupError} />}
                 <div ref={composerRef}>
                     <Composer
@@ -295,7 +308,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                         onChange={setText}
                         onSubmit={submit}
                         attachments={attachments}
-                        disabledReason={starting ? STARTING_REASON : null}
+                        disabledReason={starting ? t('composer.starting') : null}
                         autoFocus
                         inputRef={inputRef}
                         leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /></>}
@@ -307,7 +320,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                 </div>
                 <LibraryDocuments />
                 {warming !== null && !starting && (
-                    <p className="new-chat-warmup" role="status">{warmUpLine(warming)}</p>
+                    <p className="new-chat-warmup" role="status">{warmUpLine(warming, t)}</p>
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
                 <TryChips onPick={fillPrompt} disabled={starting || sending} />

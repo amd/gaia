@@ -268,3 +268,86 @@ def test_exclude_tags_match_the_workflow_run_step():
         f"'--exclude-tag', '{tag}'" for tag in lane_matrix.GAIA_LANE_EXCLUDE_TAGS
     )
     assert f"$extraArgs = @({expected})" in workflow
+
+
+def test_the_gemma_lane_workflow_excludes_the_same_tags():
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "eval_scenario_lane.yml"
+    ).read_text("utf-8")
+    expected = ", ".join(
+        f"'--exclude-tag', '{tag}'" for tag in lane_matrix.GAIA_LANE_EXCLUDE_TAGS
+    )
+    assert f"$extraArgs = @({expected})" in workflow
+
+
+# --- one category per lane (eval_flagship_gemma_stx.yml) ----------------------
+
+GEMMA_DEFAULT = "tool_selection,error_recovery,context_retention,adversarial"
+
+
+def test_each_selected_category_gets_its_own_lane(real_matrix, index, excluded):
+    chosen = _select(real_matrix, index, excluded, categories=GEMMA_DEFAULT)
+    split = lane_matrix.one_category_per_lane(chosen["include"])
+
+    assert [lane["lane"] for lane in split] == [
+        "tool_selection",
+        "error_recovery",
+        "context_retention",
+        "adversarial",
+    ]
+    for lane in split:
+        assert lane["categories"] == lane["lane"]
+        assert lane["memory_disabled"] == "1" and lane["gaia_fixtures"] == "0"
+
+
+def test_a_split_lane_re_derives_its_environment():
+    lanes = [
+        {
+            "lane": "mixed",
+            "categories": "memory tool_selection",
+            **lane_matrix.lane_env(["memory", "tool_selection"]),
+        }
+    ]
+    split = {lane["lane"]: lane for lane in lane_matrix.one_category_per_lane(lanes)}
+
+    assert split["memory"]["memory_mcp"] == "1"
+    # Memory on for one category must not switch it on for its neighbour.
+    assert split["tool_selection"]["memory_disabled"] == "1"
+
+
+def test_a_split_lane_keeps_only_its_own_scenarios(real_matrix, index, excluded):
+    chosen = _select(
+        real_matrix,
+        index,
+        excluded,
+        categories="tool_selection,error_recovery",
+        scenarios="file_not_found,smart_discovery",
+    )
+    split = lane_matrix.one_category_per_lane(chosen["include"])
+
+    assert {lane["lane"]: lane["scenarios"] for lane in split} == {
+        "tool_selection": "tool_selection=smart_discovery",
+        "error_recovery": "error_recovery=file_not_found",
+    }
+
+
+def test_a_full_run_is_not_split_unless_asked(capsys, monkeypatch):
+    monkeypatch.setenv("EVAL_SELECT_CATEGORIES", "tool_selection,error_recovery")
+    monkeypatch.delenv("EVAL_SELECT_SCENARIOS", raising=False)
+    monkeypatch.delenv("EVAL_ONE_CATEGORY_PER_LANE", raising=False)
+    assert lane_matrix.main() == 0
+    lanes = json.loads(_outputs(capsys)["matrix"])["include"]
+    assert [lane["lane"] for lane in lanes] == ["tools"]
+
+
+def test_main_splits_and_says_so(capsys, monkeypatch):
+    monkeypatch.setenv("EVAL_SELECT_CATEGORIES", "tool_selection,error_recovery")
+    monkeypatch.delenv("EVAL_SELECT_SCENARIOS", raising=False)
+    monkeypatch.setenv("EVAL_ONE_CATEGORY_PER_LANE", "1")
+    assert lane_matrix.main() == 0
+    out = _outputs(capsys)
+    assert [lane["lane"] for lane in json.loads(out["matrix"])["include"]] == [
+        "tool_selection",
+        "error_recovery",
+    ]
+    assert "lanes tool_selection, error_recovery (one per category)" in out["selection"]

@@ -33,8 +33,12 @@ function saveSidebarWidth(w: number): void {
     }
 }
 
+function isRtl(el: Element): boolean {
+    return getComputedStyle(el).direction === 'rtl';
+}
+
 /**
- * The sidebar's width and the handle on its right edge: drag to resize, release
+ * The sidebar's width and the handle on its inner edge: drag to resize, release
  * narrow to collapse, double-click to reset, arrow keys from the keyboard.
  */
 export function useSidebarWidth(onCollapse: () => void) {
@@ -53,10 +57,12 @@ export function useSidebarWidth(onCollapse: () => void) {
         const startX = e.clientX;
         const startWidth = width;
         const target = e.currentTarget;
+        // Right to left the sidebar is on the right, so dragging left widens it.
+        const sign = isRtl(target) ? -1 : 1;
         target.setPointerCapture?.(e.pointerId);
         let raw = startWidth;
         const move = (ev: globalThis.PointerEvent) => {
-            raw = startWidth + (ev.clientX - startX);
+            raw = startWidth + sign * (ev.clientX - startX);
             setDragWidth(raw < SIDEBAR_COLLAPSE_BELOW ? raw : clampSidebarWidth(raw));
         };
         const up = () => {
@@ -73,9 +79,10 @@ export function useSidebarWidth(onCollapse: () => void) {
     }, [onCollapse, setWidth, width]);
 
     const onKey = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
+        const step = isRtl(e.currentTarget) ? -KEY_STEP : KEY_STEP;
         const next = {
-            ArrowLeft: width - KEY_STEP,
-            ArrowRight: width + KEY_STEP,
+            ArrowLeft: width - step,
+            ArrowRight: width + step,
             Home: SIDEBAR_MIN_WIDTH,
             End: SIDEBAR_MAX_WIDTH,
         }[e.key];

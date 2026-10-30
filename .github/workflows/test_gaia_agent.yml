@@ -172,7 +172,7 @@ jobs:
           # when Playwright is importable (the Chromium download is not needed
           # for that).
           uv pip install --system -e ".[dev,api,browser,rag]"
-          uv pip install --system -e hub/agents/gaia/python
+          uv pip install --system -e hub/agents/gaia/python "setuptools>=70.0"
 
       - name: Check no test file skips wholesale
         run: python util/check_module_skips.py --workflow test_gaia_agent.yml --job test-gaia-agent

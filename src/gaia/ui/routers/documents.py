@@ -22,8 +22,9 @@ from pathlib import Path
 from typing import List
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 
-from .._chat_helpers import UnreadableDocumentError
+from .._chat_helpers import UnreadableDocumentError, index_progress
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_indexing_tasks, get_upload_locks
 from ..models import (
@@ -294,7 +295,7 @@ async def upload_by_path(
                         doc_id,
                     )
                     chunk_count = await _index_document(
-                        temp_file, display_name=original_name
+                        temp_file, display_name=original_name, progress_key=doc_id
                     )
                     if doc_id in indexing_tasks:
                         if chunk_count == 0:
@@ -566,7 +567,40 @@ async def get_document_status(
         "indexing_status": doc.get("indexing_status", "complete"),
         "chunk_count": doc.get("chunk_count", 0),
         "is_active": is_active,
+        "progress": index_progress(doc_id),
     }
+
+
+_INLINE_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/plain; charset=utf-8",
+}
+
+
+@router.get("/api/documents/{doc_id}/file")
+async def get_document_file(doc_id: str, db: ChatDatabase = Depends(get_db)):
+    """Serve a library document's file inline, so a citation can open it at its page."""
+    doc = db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    path = Path(doc.get("filepath") or "")
+    real = Path(ensure_document_path_allowed(path))
+    if path.is_symlink():
+        raise HTTPException(status_code=403, detail="Symbolic links are not served")
+    if not real.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"{doc.get('filename') or doc_id} is no longer on disk at {path}",
+        )
+    return FileResponse(
+        path=str(real),
+        media_type=_INLINE_MEDIA_TYPES.get(
+            path.suffix.lower(), "application/octet-stream"
+        ),
+        filename=doc.get("filename") or path.name,
+        content_disposition_type="inline",
+    )
 
 
 @router.post("/api/documents/{doc_id}/cancel")
@@ -622,7 +656,9 @@ async def reindex_document(
         with safe_open_document(filepath) as (fd, _file_stat, safe_filepath):
             temp_path = _copy_fd_to_temp(fd, safe_filepath.suffix)
         chunk_count = await _index_document(
-            temp_path, display_name=doc.get("filename") or safe_filepath.name
+            temp_path,
+            display_name=doc.get("filename") or safe_filepath.name,
+            progress_key=doc_id,
         )
     except Exception as exc:
         error_msg = str(exc)

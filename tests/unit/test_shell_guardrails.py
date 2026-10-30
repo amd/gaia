@@ -1506,3 +1506,242 @@ class TestBlanketApproval:
         result = run_tool(_Host(full_access=True), "cp src.txt made.txt", tmp_path)
         assert result["status"] == "success", result
         assert (tmp_path / "made.txt").exists()
+
+    def test_full_access_read_does_not_warn_that_undo_cannot_restore_it(
+        self, env_pre_approves, monkeypatch, tmp_path
+    ):
+        notes = []
+        monkeypatch.setattr(
+            shell_tools,
+            "note_untracked",
+            lambda kind, command: notes.append((kind, command)),
+        )
+
+        result = run_tool(_Host(full_access=True), "ls", tmp_path)
+
+        assert result["status"] == "success", result
+        assert notes == []
+
+    def test_full_access_write_still_warns_undo_cannot_restore_it(
+        self, env_pre_approves, monkeypatch, tmp_path
+    ):
+        notes = []
+        monkeypatch.setattr(
+            shell_tools,
+            "note_untracked",
+            lambda kind, command: notes.append((kind, command)),
+        )
+        (tmp_path / "src.txt").write_text("x")
+
+        result = run_tool(_Host(full_access=True), "cp src.txt made.txt", tmp_path)
+
+        assert result["status"] == "success", result
+        assert notes == [("shell", "cp src.txt made.txt")]
+
+    def test_full_access_redirect_still_warns_undo_cannot_restore_it(
+        self, env_pre_approves, monkeypatch, tmp_path
+    ):
+        notes = []
+        monkeypatch.setattr(
+            shell_tools,
+            "note_untracked",
+            lambda kind, command: notes.append((kind, command)),
+        )
+
+        result = run_tool(_Host(full_access=True), "echo x > made.txt", tmp_path)
+
+        assert result["status"] == "success", result
+        assert notes == [("shell", "echo x > made.txt")]
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "ls; touch made.txt",
+            "ls && touch made.txt",
+            "cat src.txt | tee made.txt",
+            "ls 2>made.txt",
+            "echo $(touch made.txt)",
+            "echo `touch made.txt`",
+            "find . -delete",
+            "sed -i s/x/y/ src.txt",
+            "sort -o made.txt src.txt",
+            "git log --output=made.txt",
+            "Remove-Item src.txt",
+            "Get-ChildItem | Remove-Item",
+            "cd .. && ls",
+            "ls\ntouch made.txt",
+        ],
+    )
+    def test_full_access_write_shapes_are_never_classified_read_only(self, command):
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command", ["ls", "cat src.txt", "git status", "wc -l src.txt"]
+    )
+    @pytest.mark.parametrize("dialect", ["posix", "cmd"])
+    def test_full_access_plain_reads_are_classified_read_only(
+        self, command, dialect, monkeypatch
+    ):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
+        assert _Host(full_access=True)._line_is_read_only(command) is True
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'echo "$(rm -rf sub)"',
+            'echo "`rm made.txt`"',
+            'cat "$(touch made.txt)"',
+            'ls "$(mv src.txt made.txt)"',
+            'echo "pre $(cp src.txt made.txt) post"',
+            'grep x "$(rm src.txt)"',
+            'echo "${X:=$(rm src.txt)}"',
+            "head \"$(sh -c 'rm src.txt')\"",
+            'printf "%s" "$(touch made.txt)"',
+            'wc -l "`touch made.txt`"',
+            'git status "$(touch made.txt)"',
+            'echo "$((1))$(touch made.txt)"',
+            'ls "a`touch made.txt`b"',
+            'echo "${HOME}$(touch made.txt)"',
+            'echo "$HOME"',
+        ],
+    )
+    def test_full_access_off_windows_quoted_substitution_may_write(
+        self, command, monkeypatch
+    ):
+        # sh expands these inside double quotes; the shell-less parse does not.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "posix")
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "dir",
+            "dir src\\sub",
+            "ls -la src",
+            "git status",
+            "cat a.txt",
+            "cat C:\\work\\a.txt",
+            "git log -n 5",
+        ],
+    )
+    def test_cmd_exe_plain_reads_stay_read_only(self, command, monkeypatch):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
+        assert _Host(full_access=True)._line_is_read_only(command) is True
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'power"shell" -c "Get-Content -Path (ri f)"',
+            '"power"shell -c "Get-Content -Path (ri f)"',
+            'pow"ers"hell.exe -c "Get-Content -Path (ri f)"',
+            'cat "a.txt"',
+            "cat 'a.txt'",
+            "dir src,sub",
+            "ls src=sub",
+            "dir @src",
+            "ls src\tsub",
+            "cat caf\u00e9.txt",
+            "cat a\uff0etxt",
+            'echo "$(rm -rf sub)"',
+            "cat (a)",
+            "git status (x)",
+        ],
+    )
+    def test_cmd_exe_line_with_any_metacharacter_may_write(self, command, monkeypatch):
+        # cmd.exe strips quotes and rewrites escapes before the program runs.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'power"shell" -c Get-ChildItem',
+            "pow'er'shell -c Get-ChildItem",
+            '"pow"er"sh"ell -c Get-ChildItem',
+        ],
+    )
+    @pytest.mark.parametrize("dialect", ["posix", "cmd"])
+    def test_a_quote_split_powershell_name_is_never_read_only(
+        self, command, dialect, monkeypatch
+    ):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'powershell -c "Get-Content -Path (ri f)"',
+            'powershell -c "Get-ChildItem,(ri f)"',
+            'powershell -c "Get-Date -Format (ri f)"',
+            "powershell -c \"Get-ChildItem -Path ('a'+(ri f))\"",
+            "powershell -c Get-ChildItem",
+            'POWERSHELL -c "Get-Content -Path (ri f)"',
+            'pwsh -c "Get-Date -Format (ri f)"',
+            "pwsh.exe -c Get-ChildItem",
+        ],
+    )
+    @pytest.mark.parametrize("dialect", ["posix", "cmd"])
+    def test_full_access_powershell_is_never_classified_read_only(
+        self, command, dialect, monkeypatch
+    ):
+        # Any cmdlet can run inside a subexpression, so no PowerShell line is a read.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "sort -^o made.txt src.txt",
+            "sort -%OS:Windows_NT=o% made.txt src.txt",
+            "find sub -dele^te",
+            "find sub %OS:Windows_NT=-delete%",
+            "find sub -delet%COMSPEC:~-1%",
+            "find sub !DEL_FLAG!",
+        ],
+    )
+    def test_full_access_cmd_escapes_and_expansion_may_write(
+        self, command, monkeypatch
+    ):
+        # cmd.exe rewrites these before the program sees them.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "find . {-delete,}",
+            "find . {-delete,-print}",
+            "sort {-o,}x f",
+            "git log {--output=x,}",
+            "find . -delet[e]",
+            "find . -delet?",
+            "git log --outpu[t]=x",
+            "sort -[o] x f",
+            "ls *",
+        ],
+    )
+    @pytest.mark.parametrize("dialect", ["posix", "cmd"])
+    def test_full_access_brace_and_glob_expansion_may_write(
+        self, command, dialect, monkeypatch
+    ):
+        # sh expands these off Windows; Git's GNU tools expand their own argv on it.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.skipif(os.name == "nt", reason="needs sh to run the line")
+    def test_full_access_quoted_substitution_warns_undo_cannot_restore_it(
+        self, env_pre_approves, monkeypatch, tmp_path
+    ):
+        notes = []
+        monkeypatch.setattr(
+            shell_tools,
+            "note_untracked",
+            lambda kind, command: notes.append((kind, command)),
+        )
+        command = 'echo "$(touch made.txt)"'
+
+        result = run_tool(_Host(full_access=True), command, tmp_path)
+
+        assert result["status"] == "success", result
+        assert (tmp_path / "made.txt").exists()
+        assert notes == [("shell", command)]
