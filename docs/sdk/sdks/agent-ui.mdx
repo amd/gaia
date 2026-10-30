@@ -702,13 +702,21 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "title": "Code Review",
       "model": "Qwen3.5-35B-A3B-GGUF",
       "system_prompt": "You are a code reviewer.",
-      "document_ids": ["doc-abc123"]
+      "document_ids": ["doc-abc123"],
+      "folders": ["/home/me/projects/site"]
     }
     ```
 
     **Response:** `SessionResponse`
 
-    A `title` longer than 200 characters is a **422**.
+    A `title` longer than 200 characters is a **422**. `folders` lets the chat
+    read and write those folders from its first message, as
+    `POST /api/sessions/{session_id}/environment/folders` would. A folder that
+    is missing or too broad (a drive root, the home folder, a protected
+    folder), or any folder for an agent that can't be given one, is a **400**
+    and no chat is created. An agent that runs as its own process can be given
+    folders when its contract is 2.18 or later; an older one, the email agent,
+    or one that fails to start is refused.
 
     From the Agent UI (`X-Gaia-Client: agent-ui`) a chat is always the GAIA
     agent: an omitted `agent_type` becomes `gaia` and any other value is a
@@ -721,6 +729,21 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     **Query params:** `limit` (default 50), `offset` (default 0)
 
     **Response:** `SessionListResponse`
+  </Accordion>
+
+  <Accordion title="GET /api/sessions/search">
+    Find chats whose title or message text contains `q`, ignoring case and
+    accents (`resume` matches `Résumé`). Private chats are included. Results are
+    newest first; each names where its first hit was (`message` or `title`) and
+    carries a `snippet` split into `before`, `match` and `after`. Eval and
+    scheduled chats are left out, as the sidebar leaves them out, unless
+    `include_automated` is true. `truncated` is true when more chats matched
+    than `limit`.
+
+    **Query params:** `q` (required, 1–200 chars), `limit` (default 20, max 50),
+    `include_automated` (default false)
+
+    **Response:** `SessionSearchResponse`
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}">
@@ -985,6 +1008,7 @@ Deleting a chat deletes its copies.
     | `thinking` | `content` (string) | Agent reasoning or progress message. Emitted when the agent starts processing, thinks through a problem, or begins a long-running operation. |
     | `step` | `step` (int), `total` (int), `status` (string) | Agent step progress. `step` is the current step number, `total` is the step limit, and `status` is `"started"`. |
     | `status` | `status` (string), `message` (string) | General status update. `status` is one of `"working"`, `"complete"`, `"warning"`, or `"info"`. May also include `steps` (int) and `elapsed` (number) when `status` is `"complete"`. |
+    | `commentary` | `content` (string) | The text the model streamed since the last tool call, sent just before the next `tool_start`. Those `chunk` events narrated the call rather than answering, so a client moves the text out of the answer and shows it as a note in the turn. Only sent when the text is not empty; the saved turn keeps it as a step of type `commentary`. |
     | `plan` | `steps` (string[]), `step_narrations` (string[]), `current_step` (int or null) | Agent execution plan, re-sent before each step it executes. `steps` names each planned tool call with its arguments; `step_narrations` is the same list as one plain line per step (e.g. `"Reading file: notes.txt"`). `current_step` is the zero-based index of the step being executed. |
 
     **Tool Execution**
@@ -1116,11 +1140,16 @@ Deleting a chat deletes its copies.
     Hand `{session_id, text}` to the session's running turn. The agent reads it
     at its next step without restarting. The stream then carries
     `followup_taken` (`text`) and the message is saved as a user message. A turn
-    that ends first sends `followup_returned` (`texts`) before `done`. 404: no
-    turn is running. 409: the running turn can't take it yet (it hasn't reached
-    the model, or a relayed agent runs it). The Agent UI calls it only when the
-    user picks **Add to this reply** on a queued message; otherwise a message
-    typed mid-turn waits and is sent as its own turn.
+    that ends first sends `followup_returned` (`texts`) before `done`. A turn
+    relayed to the GAIA agent sidecar (contract 2.15+) gets the message over the
+    sidecar's `/query/{run_id}/followup`; the sidecar can't say when its agent
+    reads it, so one it accepts counts as taken at once and nothing is
+    returned. A relayed turn that can't take one at all (email, or an older
+    agent) says so with a `followup_unavailable` event as it starts. 404: no
+    turn is running. 409: the running turn can't take it (it hasn't reached the
+    model, or the agent refused it). The Agent UI calls it only when the user
+    picks **Add to this reply** on a queued message; otherwise a message typed
+    mid-turn waits and is sent as its own turn.
   </Accordion>
 
   <Accordion title="GET /api/chat/followup/{session_id}">
@@ -1337,8 +1366,9 @@ Deleting a chat deletes its copies.
   </Accordion>
 
   <Accordion title="GET /api/files/search">
-    Search files by name across `~/Documents`, `~/Downloads`, `~/Desktop`,
-    `~/OneDrive`, then the rest of the home directory. The walk is bounded: it
+    Search files by name across the user's Documents folder (the OneDrive or
+    `XDG_DOCUMENTS_DIR` location when the OS moved it), `~/Downloads`,
+    `~/Desktop`, `~/OneDrive`, then the rest of the home directory. The walk is bounded: it
     stops at `max_results` matches, after 20,000 directory entries, or after
     about 10 seconds. `truncated: true` in the response means a bound cut the walk
     short and more matches may exist.
@@ -1422,7 +1452,8 @@ agent at once, so they take effect on its next step.
       "folders": [{"path": "C:\\work", "kind": "folder", "source": "added", "removable": true}],
       "removed": ["C:\\work\\private"],
       "internet": true,
-      "enforced": true
+      "enforced": true,
+      "internet_enforced": true
     }
     ```
 
@@ -1430,9 +1461,18 @@ agent at once, so they take effect on its next step.
     `source` is `added`, `gaia_documents`, `scratch`, `document`,
     `working_folder` or `approved` (granted during the chat). `removable` is
     false for an attached document, which leaves through the chat's document
-    list. `enforced` is false for an agent that runs as its own process (a
-    relayed sidecar); the folder and internet endpoints then refuse changes
-    with **409** (**400** for adding a folder).
+    list. `enforced` covers the folders and is false for an agent that runs as
+    its own process (a relayed sidecar); removing a folder then refuses with
+    **409**. Adding a folder works when the sidecar's contract is 2.18 or
+    later, since each turn sends it the chat's folders, and is a **400**
+    otherwise. A chat that had a folder removed while its agent ran in process
+    stops its turns once the agent is relayed, since the sidecar can't be kept
+    out of a removed folder; start a new chat. `internet_enforced` covers the
+    internet switch: it is true in process and for a relayed GAIA agent (for
+    one older than contract 2.23, the Agent UI refuses an internet-off turn
+    with an update message instead of sending it), and false for an agent
+    that keeps its own network rules (the email agent), where the internet
+    endpoint refuses changes with **409**.
   </Accordion>
 
   <Accordion title="POST /api/sessions/{session_id}/environment/folders">
@@ -1460,6 +1500,14 @@ agent at once, so they take effect on its next step.
     is: `localhost` exactly or a loopback IP (`127.0.0.0/8`, `::1`). Each
     command in a chained shell line is checked on its own. The refusal tells the model the
     internet is off for this chat.
+
+    For a relayed GAIA chat with a turn running, the change is also sent to
+    that turn's agent, which follows it from its next tool call. A change
+    made while the turn is still starting is sent as soon as the agent has
+    taken the turn. If it can't be delivered, the endpoint answers **502**:
+    the setting is saved and applies from the next message, and switching
+    off also ends the turn in the Agent UI. A turn that ended before it
+    could be told needs nothing, so that change answers **200**.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/outputs">
@@ -1540,6 +1588,12 @@ Used to reach the UI from a phone.
     **Errors:** **404** when the chat has no running turn; **409** when
     `confirm_id` no longer matches the live prompt, or `always` was requested
     for a call with no scope narrow enough to grant.
+
+    A turn relayed to the GAIA agent sidecar offers `always_scope` only from
+    agent contract 2.26, and never for a call that needs fresh consent each
+    time (folder access, engineering-context sharing, skill capture). Its
+    "always" is granted in the sidecar's session; the chat then re-reads the
+    sidecar's grants so they are listed and revocable here.
   </Accordion>
 
   <Accordion title="GET /api/chat/permissions">
@@ -1585,6 +1639,10 @@ Used to reach the UI from a phone.
     Revoke one "always allow" grant (`?key=<grant key>`) or, without `key`,
     all of them. Applies to a running turn too. **404** when `key` names no
     grant in the chat. Returns the chat's permission view.
+
+    A grant the relayed GAIA agent holds is revoked in its sidecar first; if
+    the sidecar can't be reached it is a **502** and the grant stays listed,
+    because it is still in force.
   </Accordion>
 
   <Accordion title="POST /api/eval/scripted-user">
@@ -2229,6 +2287,11 @@ Recurring prompts run on a cron-like interval — see [`gaia schedule`](/referen
     Pause, resume, or cancel a scheduled task via `{"status": ...}`.
   </Accordion>
 
+  <Accordion title="POST /api/schedules/{name}/run">
+    Run a scheduled task once now; its next scheduled time stays as it was. Returns the task with
+    `running: true` and runs in the background. `409` while a run of it is already in flight.
+  </Accordion>
+
   <Accordion title="DELETE /api/schedules/{name}">
     Delete a scheduled task.
   </Accordion>
@@ -2253,13 +2316,16 @@ First-run hardware scan (issues #1726, #1727).
 
   <Accordion title="GET /api/onboarding/start">
     What a new chat's empty screen offers: up to four `cards` and the
-    `working_folder` (`{path, name, gaia_folder}`) a new chat's agent works in.
+    `working_folder` (`{path, name, gaia_folder, choosable}`) a new chat's agent
+    works in. `choosable` says whether a new chat can be given another folder:
+    true for an in-process agent or a sidecar at contract 2.18 or later.
     Each card is `{skill, title, note, prompt, needs_input}`. Its task runs on
     the agent's own tools, so it appears whether or not `skill` is installed;
     only the check-in card needs its skill. Cards for what the user set up
     (indexed documents, a connected mail account) come first. `needs_input` means the prompt ends
-    where the user types the subject. When the agent can't list its skills,
-    `cards` is empty and `skills_error` says why. Makes no model call.
+    where the user types the subject. When the agent can't list its skills or
+    can't start, `cards` is empty, `choosable` is false and `skills_error` says
+    why. Makes no model call.
   </Accordion>
 </AccordionGroup>
 
@@ -2447,7 +2513,42 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     `/health` for a loaded model) or `expected` (its recipe), and a `warning`
     when the two differ; `size_gb`; `fits` this PC's memory; `available` with
     an `unavailable_reason` (no NPU, no usable backend, too large); and
-    `tokens_per_second`, the median of its recent turns on this PC.
+    `tokens_per_second`, the median of its recent turns on this PC. A model
+    the user added from a Hugging Face link has `custom: true` and its
+    `source_url`, and is listed before it is downloaded.
+  </Accordion>
+
+  <Accordion title="POST /api/providers/local/custom/check">
+    Check a pasted Hugging Face link without saving or downloading anything.
+    Body: `{"url", "quant"}`; `quant` (such as `Q4_K_M`) is optional, and
+    without it GAIA picks one that fits this PC. Any page of a model repo
+    works, query string and all; a `/blob/` or `/resolve/` link to a `.gguf`
+    file picks that file. Returns `ok`, the `checks` run (`link`, `repo`,
+    `gguf`, `chat`, `architecture`, `fit`, `new`, each with `ok` and `detail`),
+    `error` (the first failure), `warnings` (a chat template without tool
+    support), every quantization in `variants` with its `size_gb` and `fits`,
+    and for a model that passes its `model_id`, `display_name`, `checkpoint`,
+    `size_gb`, `architecture` and `llamacpp_version`. The architecture is
+    checked against the llama.cpp release Lemonade reports for the backend
+    GAIA uses.
+  </Accordion>
+
+  <Accordion title="POST /api/providers/local/custom">
+    Check a link as above and, when it passes, add the model to
+    `custom_models` in `~/.gaia/config.json`, which the TUI and `gaia model`
+    share. Returns `{"model", "report"}`. Nothing downloads until the user
+    picks Download; the first pull registers it with Lemonade as a `user.`
+    model. **422** with the failed check's reason, including a model already
+    added; **409** when the same model is added twice at once and the second
+    save finds it already there.
+  </Accordion>
+
+  <Accordion title="DELETE /api/providers/local/custom/{model_id}">
+    Remove a model the user added: delete it from Lemonade if it was
+    downloaded, forget it, and clear `default_model` / `last_model` if either
+    named it. Returns `{"removed", "display_name", "cleared"}`. **404** for a
+    model the user didn't add; **502** when Lemonade refuses the delete, and
+    the model stays in the list.
   </Accordion>
 
   <Accordion title="GET /api/providers/local/context">

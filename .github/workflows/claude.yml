@@ -315,7 +315,7 @@ jobs:
             ## Review Checklist
 
             ### 1. Code Quality & Patterns
-            - **Architecture Consistency:** For new agents, compare with existing agents — in-core ones under `src/gaia/agents/` (builder) and hub ones under `hub/agents/<id>/python/gaia_agent_<id>/agent.py` (chat, email, gaia, connectors-demo, hello-world, word-count)
+            - **Architecture Consistency:** For new agents, compare with existing agents under `hub/agents/<id>/python/gaia_agent_<id>/agent.py` (chat, email, gaia) and the reference package `tests/fixtures/agents/hello-world/`
               - Does it extend `src/gaia/agents/base/agent.py` (`class Agent`)?
               - Does it register tools via `@tool` (see `src/gaia/agents/base/tools.py`)?
               - Does error handling use `src/gaia/agents/base/errors.py` formatters?
@@ -933,8 +933,7 @@ jobs:
             - `question` — a usage question with no defect claimed.
 
             Apply AT MOST ONE component label, only if the issue clearly belongs to it:
-            `agent::email`, `agent::connectors-demo`, `agent::examples`,
-            `cli`, `agent-ui`, `rag`, `eval`, `tests`, `installer`, `connectors`,
+            `agent::email`, `cli`, `agent-ui`, `rag`, `eval`, `tests`, `installer`, `connectors`,
             `mcp`, `llm`, `audio`, `electron`, `lemonade 🍋` (the emoji is part of the name),
             `performance`, `security`.
 
@@ -1067,7 +1066,7 @@ jobs:
 
       - name: Attempt auto-fix
         id: claude   # referenced by the Notify step's execution_file check below
-        uses: anthropics/claude-code-action@16f9f71ab9c490faf367f94dd294897edc25be33  # v1.0.261
+        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
           anthropic_api_key: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1545,7 +1544,7 @@ jobs:
         # continue-on-error: a rate-limit / expired-token / outage failure here is
         # caught by the "Verify and validate release notes" step (which fails the job)
         # and the "Notify on failure" step opens a tracking issue.
-        uses: anthropics/claude-code-action@16f9f71ab9c490faf367f94dd294897edc25be33  # v1.0.261
+        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
         continue-on-error: true
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.

@@ -30,6 +30,7 @@ export interface ApiSchemas {
   ContextRequest: ContextRequest;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
+  CustomModelRequest: CustomModelRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
@@ -90,10 +91,13 @@ export interface ApiSchemas {
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
   ScriptedUserRequest: ScriptedUserRequest;
+  SearchSnippet: SearchSnippet;
   SelectModelRequest: SelectModelRequest;
   SessionListResponse: SessionListResponse;
   SessionPinRequest: SessionPinRequest;
   SessionResponse: SessionResponse;
+  SessionSearchResponse: SessionSearchResponse;
+  SessionSearchResult: SessionSearchResult;
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
   SetupRunRequest: SetupRunRequest;
@@ -392,11 +396,19 @@ export interface CreateSessionRequest {
   agent_type?: string | null;
   device?: string | null;
   document_ids?: string[];
+  folders?: string[];
   mail_provider?: string | null;
   model?: string | null;
   private?: boolean;
   system_prompt?: string | null;
   title?: string | null;
+}
+/**
+ * ``quant`` picks a quantization; None lets GAIA choose one that fits.
+ */
+export interface CustomModelRequest {
+  quant?: string | null;
+  url: string;
 }
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];
@@ -980,6 +992,7 @@ export interface ScheduleResponse {
   next_run_at?: string | null;
   prompt: string;
   run_count?: number;
+  running?: boolean;
   schedule_config?: string | null;
   session_id?: string | null;
   status: string;
@@ -996,6 +1009,14 @@ export interface ScheduleResultsResponse {
  */
 export interface ScriptedUserRequest {
   decline_commands?: string[];
+}
+/**
+ * Text around a search hit, split so the UI can highlight ``match``.
+ */
+export interface SearchSnippet {
+  after: string;
+  before: string;
+  match: string;
 }
 export interface SelectModelRequest {
   model: string;
@@ -1039,6 +1060,23 @@ export interface SessionResponse {
  */
 export interface SessionPinRequest {
   pinned: boolean;
+}
+/**
+ * Chats matching a search query, newest first, at most ``limit``.
+ */
+export interface SessionSearchResponse {
+  query: string;
+  results: SessionSearchResult[];
+  truncated?: boolean;
+}
+/**
+ * One chat that matches a search, with where the first hit was.
+ */
+export interface SessionSearchResult {
+  field: "title" | "message";
+  session_id: string;
+  snippet: SearchSnippet;
+  title: string;
 }
 /**
  * Current user settings.

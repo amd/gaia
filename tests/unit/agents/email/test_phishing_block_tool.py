@@ -11,8 +11,9 @@ Covers:
 3. The tool refuses to act on a non-phishing-flagged message (safety gate).
 4. The tool is in ``TOOLS_REQUIRING_CONFIRMATION`` — it MUST NOT execute
    without explicit user confirmation.
-5. The agent system prompt does NOT follow links or instructions in the body
-   of a phishing message (prompt-injection guard).
+
+The prompt-injection guard is covered on the flagship path in
+``tests/unit/agents/tools/test_email_phishing_guard.py``.
 """
 
 from __future__ import annotations
@@ -315,37 +316,3 @@ class TestConfirmationGating:
             "confirmation set. This tool mutates message state and must require "
             "explicit user confirmation."
         )
-
-
-# ---------------------------------------------------------------------------
-# Prompt-injection safety
-# ---------------------------------------------------------------------------
-
-
-class TestPhishingBodyPromptInjection:
-    """The agent MUST NOT follow instructions embedded in phishing email bodies.
-
-    The system prompt uses <<<UNTRUSTED_EMAIL_BODY_*>>> delimiters and
-    explicitly tells the LLM that body content is DATA, never instructions.
-    This test verifies the system prompt contains the safety language
-    and that the phishing flag propagates through the contract.
-    """
-
-    def test_system_prompt_contains_untrusted_input_warning(self):
-        from gaia_agent_email.agent import _SYSTEM_PROMPT
-
-        assert (
-            "UNTRUSTED" in _SYSTEM_PROMPT
-        ), "System prompt must contain the UNTRUSTED INPUT warning section."
-        assert (
-            "UNTRUSTED_EMAIL_BODY_START" in _SYSTEM_PROMPT
-        ), "System prompt must reference the <<<UNTRUSTED_EMAIL_BODY_START>>> delimiter."
-
-    def test_system_prompt_refuses_phishing_action_instructions(self):
-        from gaia_agent_email.agent import _SYSTEM_PROMPT
-
-        # The system prompt must tell the LLM to refuse acting on body instructions.
-        assert (
-            "refuse" in _SYSTEM_PROMPT.lower()
-            or "must refuse" in _SYSTEM_PROMPT.lower()
-        ), "System prompt must instruct the LLM to refuse acting on email body instructions."

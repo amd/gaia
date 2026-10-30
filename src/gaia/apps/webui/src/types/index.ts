@@ -369,10 +369,10 @@ export interface ChatPerformance {
         tokens_in: number | null;
         tokens_cached: number | null;
         tokens_out: number | null;
-        tool_calls: number;
+        tool_calls: number | null;
         loads: number;
         load_seconds: number | null;
-        usd: number;
+        usd: number | null;
         unpriced_turns: number;
     };
     /** The model as Lemonade reports it now. */
@@ -700,6 +700,8 @@ export interface Schedule {
     description: string;
     /** The last run's error; null when it succeeded. */
     last_error: string | null;
+    /** A run is in flight right now, timed or Run now. */
+    running?: boolean;
 }
 
 /** A single execution result for a scheduled task. */
@@ -768,7 +770,7 @@ export interface RetrievalChunk {
 /** A single step in the agent's execution. */
 export interface AgentStep {
     id: number;
-    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
+    type: 'thinking' | 'commentary' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
     /** Short label shown in collapsed view. */
     label: string;
     /** Detailed content shown when expanded. */
@@ -836,6 +838,7 @@ export type StreamEventType =
     | 'status'       // Agent state change
     | 'step'         // Step progress
     | 'thinking'     // Agent reasoning
+    | 'commentary'   // A note the agent wrote before a tool call
     | 'plan'         // Agent plan
     | 'tool_start'   // Tool execution started
     | 'tool_end'     // Tool execution completed
@@ -851,6 +854,7 @@ export type StreamEventType =
     | 'agent_created' // New agent created — triggers agent list refresh
     | 'followup_taken'    // The running turn took a message sent mid-turn
     | 'followup_returned' // The turn ended without taking these mid-turn messages
+    | 'followup_unavailable' // The running turn can't take a message mid-turn
     | 'context_usage';    // What this turn's model call holds, by kind
 
 export interface StreamEvent {
@@ -1059,7 +1063,8 @@ export interface StartCard {
 /** GET /api/onboarding/start */
 export interface StartScreen {
     cards: StartCard[];
-    working_folder: { path: string; name: string; gaia_folder: boolean };
+    /** choosable: a new chat can be given another folder. */
+    working_folder: { path: string; name: string; gaia_folder: boolean; choosable: boolean };
     /** Why there are no cards: the agent couldn't list its skills. */
     skills_error?: string | null;
 }
@@ -1183,6 +1188,50 @@ export interface ProviderModel {
     download_progress?: DownloadProgress | null;
     /** List price per million tokens; null when unknown (never shown as $0). Cloud models only. */
     price?: ModelPrice | null;
+    /** Added by the user from a Hugging Face link, so it can be removed. */
+    custom?: boolean;
+    /** The link it was added from. */
+    source_url?: string | null;
+}
+
+/** One check run on a pasted Hugging Face link. */
+export interface CustomModelCheck {
+    id: 'link' | 'repo' | 'gguf' | 'chat' | 'architecture' | 'fit' | 'new';
+    label: string;
+    ok: boolean;
+    detail: string;
+}
+
+/** POST /api/providers/local/custom/check — what a pasted link would add. */
+export interface CustomModelReport {
+    ok: boolean;
+    url: string;
+    checks: CustomModelCheck[];
+    error: string | null;
+    warnings: string[];
+    /** Every quantization, by its first file (two can share a quant name). */
+    variants: { quant: string; file: string; size_gb: number; fits: boolean; reason: string | null }[];
+    repo?: string;
+    model_id?: string;
+    display_name?: string;
+    quant?: string;
+    /** The chosen quantization's first file. */
+    file?: string;
+    checkpoint?: string;
+    size_gb?: number;
+    architecture?: string | null;
+    context_length?: number | null;
+    vision?: boolean;
+    tool_calling?: boolean;
+    llamacpp_version?: string;
+}
+
+/** DELETE /api/providers/local/custom/{id}. */
+export interface CustomModelRemoved {
+    removed: string;
+    display_name: string;
+    /** Config keys that named the model and were cleared: default_model, last_model. */
+    cleared: string[];
 }
 
 export type LocalModelState = 'loaded' | 'downloaded' | 'not_downloaded';
@@ -1295,6 +1344,9 @@ export interface SessionPermissions {
 
 // ── Skills (GET /api/skills) ──────────────────────────────────────────────
 
+/** Which discovery root a skill was found in. */
+export type SkillSource = 'agent-bundled' | 'user' | 'claude-import';
+
 export interface SkillInfo {
     name: string;
     description: string;
@@ -1304,4 +1356,6 @@ export interface SkillInfo {
     tier: string | null;
     tools: string[];
     path: string;
+    /** Absent when an older GAIA agent answered the listing. */
+    source?: SkillSource | null;
 }

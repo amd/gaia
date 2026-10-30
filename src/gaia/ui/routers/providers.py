@@ -27,6 +27,11 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from gaia.llm.local_only import (
+    SETTINGS_HINT,
+    cloud_blocked,
+    local_only_key_message,
+)
 from gaia.logger import get_logger
 
 from ..database import ChatDatabase
@@ -352,6 +357,8 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
         offered = [*_suggested_local_models()]
         if offer_optional:
             offered += _optional_models_that_fit()
+    added = _added_models() if provider == LOCAL else []
+    offered += [e["id"] for e in added]
     out: List[Dict[str, Any]] = []
     for m in body.get("data") or []:
         model_id = str(m.get("id") or "")
@@ -403,10 +410,27 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
                     "price": None,
                 }
             )
+    for m in out:
+        entry = next((e for e in added if _model_ids_match(e["id"], m["id"])), None)
+        m["custom"] = entry is not None
+        m["source_url"] = entry["source_url"] if entry else None
     if provider == AMD:
         _rank_gateway_models(out)
     out.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["id"].lower()))
     return out
+
+
+def _added_models() -> List[Dict[str, Any]]:
+    """Models the user added from a link; none when config.json can't be read."""
+    from gaia.config import GaiaConfigError
+    from gaia.llm.custom_models import list_custom_models
+
+    try:
+        return list_custom_models()
+    except GaiaConfigError as e:
+        # The active view reports the broken config; the list still shows the rest.
+        logger.warning("Listing models without the ones you added: %s", e)
+        return []
 
 
 def _optional_models_that_fit() -> List[str]:
@@ -551,6 +575,8 @@ def _check_model_available(model_id: str) -> Optional[str]:
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
 
     provider = provider_of(model_id)
+    if provider != LOCAL and cloud_blocked():
+        return "Local only is on, so cloud models can't run"
     try:
         if provider != LOCAL:
             _require_loopback(_base_url())
@@ -742,6 +768,10 @@ def connect_provider(
     _known(provider)
     if provider == LOCAL:
         raise HTTPException(status_code=422, detail="Local models need no connection.")
+    if cloud_blocked():
+        raise HTTPException(
+            status_code=409, detail=local_only_key_message(_NAMES[provider])
+        )
     key = (body.api_key or "").strip()
     if key and via_tunnel(request):
         raise HTTPException(
@@ -970,6 +1000,14 @@ def select_model(
     model_id = body.model.strip()
     if not model_id:
         raise HTTPException(status_code=422, detail="No model given.")
+    if provider_of(model_id) != LOCAL and cloud_blocked():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Can't switch to {model_label(model_id)}: Local only is on. "
+                f"{SETTINGS_HINT}"
+            ),
+        )
     from gaia.connectors.credential_wait import CredentialStoreWaiting
 
     try:
@@ -1015,6 +1053,44 @@ _CLOUD_CONTEXT_DETAIL = (
 )
 
 
+def _trained_window(model_id: str) -> Optional[int]:
+    """The window Lemonade's catalog says *model_id* was trained for, if GAIA has no entry."""
+    from gaia.llm.lemonade_client import _model_ids_match, find_model_requirement
+
+    if find_model_requirement(model_id) is not None:
+        return None
+    status, body = _lemonade("GET", "models?show_all=true")
+    if status >= 400:
+        raise ProviderError(
+            f"Lemonade answered /models with HTTP {status}, so GAIA can't read "
+            f"the context sizes {model_id} was trained for. Try again once the "
+            "local model server is answering; `gaia diagnostics` bundles its log "
+            "for a bug report."
+        )
+    for m in body.get("data") or []:
+        if _model_ids_match(str(m.get("id") or ""), model_id):
+            # ``context_length`` is the configured window; this is the trained one.
+            window = m.get("max_context_window")
+            ok = isinstance(window, int) and not isinstance(window, bool)
+            return window if ok and window > 0 else None
+    return None
+
+
+def _context_note(span: Optional[Dict[str, Any]], name: str) -> Optional[str]:
+    if span is None:
+        return (
+            "GAIA doesn't know how much memory this model needs per token, "
+            "so it keeps the automatic size."
+        )
+    if not span["fit_checked"]:
+        return (
+            f"Up to {span['max_fit'] // 1024}K, the most {name} was trained for. "
+            "GAIA doesn't know how much memory it needs per token, so it can't "
+            "check these fit this PC; a size too large fails to load and says so."
+        )
+    return None
+
+
 def _context_view(model_id: str) -> Dict[str, Any]:
     from gaia.config import GaiaConfigError
     from gaia.llm.context_choice import context_range, saved_context_size
@@ -1026,18 +1102,20 @@ def _context_view(model_id: str) -> Dict[str, Any]:
         capacity = capacity_from_system_info(_read_system_info())
         loaded_ctx = _loaded_ctx(_read_health(), model_id)
         chosen = saved_context_size(model_id)
+        trained = _trained_window(model_id)
     except ProviderError as e:
         _raise(e)
     except (ModelFitError, GaiaConfigError) as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     from gaia.llm.lemonade_client import GPU_CTX_SIZE, NPU_CTX_SIZE, runs_on_npu
 
-    span = context_range(model_id, capacity)
+    span = context_range(model_id, capacity, trained)
     # A model GAIA has no entry for loads at its device's flat window.
     flat = NPU_CTX_SIZE if runs_on_npu(model_id) else GPU_CTX_SIZE
+    name = display_name(model_id)
     return {
         "model": model_id,
-        "display_name": display_name(model_id),
+        "display_name": name,
         "chosen": chosen,
         "automatic": span["automatic"] if span else flat,
         "min": span["min"] if span else None,
@@ -1045,12 +1123,7 @@ def _context_view(model_id: str) -> Dict[str, Any]:
         "options": span["options"] if span else [],
         "loaded_ctx": loaded_ctx,
         "memory_source": capacity.memory_source,
-        "note": (
-            None
-            if span
-            else "GAIA doesn't know how much memory this model needs per token, "
-            "so it keeps the automatic size."
-        ),
+        "note": _context_note(span, name),
     }
 
 
@@ -1081,7 +1154,8 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=422, detail=_CLOUD_CONTEXT_DETAIL)
     try:
         capacity = capacity_from_system_info(_read_system_info())
-        save_context_size(model_id, body.ctx_size, capacity)
+        trained = _trained_window(model_id) if body.ctx_size is not None else None
+        save_context_size(model_id, body.ctx_size, capacity, trained)
     except ProviderError as e:
         _raise(e)
     except ContextChoiceError as e:
@@ -1110,6 +1184,113 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
         else:
             reload = {"started": False, "reason": "restarting"}
     return {**view, "reload": reload}
+
+
+# ── Models the user adds from a Hugging Face link ─────────────────────────
+
+
+class CustomModelRequest(BaseModel):
+    """``quant`` picks a quantization; None lets GAIA choose one that fits."""
+
+    url: str
+    quant: Optional[str] = None
+
+
+def _inspect_custom(body: CustomModelRequest) -> Dict[str, Any]:
+    from gaia.config import GaiaConfigError
+    from gaia.llm.custom_models import inspect_link
+
+    try:
+        system_info = _read_system_info()
+        backend = _preferred_backend()
+        catalog = _lemonade_catalog()
+    except ProviderError as e:
+        _raise(e)
+    try:
+        return inspect_link(
+            body.url,
+            system_info=system_info,
+            preferred_backend=backend,
+            variant=(body.quant or "").strip() or None,
+            catalog=catalog,
+        )
+    except GaiaConfigError as e:
+        # A broken custom_models entry: say how to fix it, not a bare 500.
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+def _lemonade_catalog() -> List[Dict[str, Any]]:
+    status, body = _lemonade("GET", "models?show_all=true")
+    if status >= 400:
+        raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
+    return list(body.get("data") or [])
+
+
+@router.post("/api/providers/local/custom/check")
+def check_custom_model(body: CustomModelRequest) -> Dict[str, Any]:
+    """Check a pasted link without saving or downloading anything."""
+    return _inspect_custom(body)
+
+
+@router.post("/api/providers/local/custom")
+def add_custom_model(body: CustomModelRequest) -> Dict[str, Any]:
+    """Check a pasted link and, when it passes, add the model to the list."""
+    from gaia.config import GaiaConfigError
+    from gaia.llm.custom_models import CustomModelError
+    from gaia.llm.custom_models import add_custom_model as save
+
+    report = _inspect_custom(body)
+    if not report["ok"]:
+        raise HTTPException(status_code=422, detail=report["error"])
+    try:
+        entry = save(report)
+    except CustomModelError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return {"model": entry, "report": report}
+
+
+def _delete_from_lemonade(entry: Dict[str, Any]) -> None:
+    """Delete an added model from Lemonade if it registered it; nothing otherwise."""
+    from gaia.llm.custom_models import listed_entry
+
+    listed = listed_entry(_lemonade_catalog(), entry)
+    if listed is None:
+        return
+    status, result = _lemonade("POST", "delete", {"model_name": listed})
+    if status >= 400:
+        detail = (result.get("error") or {}) if isinstance(result, dict) else {}
+        message = detail.get("message") if isinstance(detail, dict) else detail
+        raise ProviderError(
+            f"Lemonade could not delete {listed} (HTTP {status}): "
+            f"{message or 'no reason given'}. The model is still in your list; "
+            "try again once nothing is using it.",
+            status=502,
+        )
+
+
+@router.delete("/api/providers/local/custom/{model_id}")
+def remove_custom_model(
+    model_id: str, db: ChatDatabase = Depends(get_db)
+) -> Dict[str, Any]:
+    """Remove a model the user added, and delete its download."""
+    from gaia.config import GaiaConfigError
+    from gaia.llm.custom_models import CustomModelError
+    from gaia.llm.custom_models import remove_custom_model as forget
+    from gaia.llm.lemonade_client import _model_ids_match
+
+    try:
+        result = forget(model_id, _delete_from_lemonade)
+    except CustomModelError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ProviderError as e:
+        _raise(e)
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    if _model_ids_match(db.get_setting("custom_model"), result["removed"]):
+        db.set_setting("custom_model", None)
+    return result
 
 
 # ── Live status of the local model (sidebar popover) ──────────────────────

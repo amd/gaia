@@ -67,7 +67,7 @@ const HARDWARE = {
 
 const START: StartScreen = {
     cards: [{ skill: 'check-in', title: 'Check in', note: 'Pick up where you left off', prompt: 'Good morning.', needs_input: false }],
-    working_folder: { path: '/w', name: 'w', gaia_folder: false },
+    working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true },
 };
 
 beforeEach(() => {

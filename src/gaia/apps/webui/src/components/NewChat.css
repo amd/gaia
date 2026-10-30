@@ -2,6 +2,7 @@
 /* SPDX-License-Identifier: MIT */
 
 .new-chat {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -10,7 +11,19 @@
     padding: 24px 16px 18vh;
 }
 
+/* Typing drops the composer to the bottom, where the chat will continue. */
+.new-chat.is-docked {
+    align-items: flex-end;
+    padding-bottom: 16px;
+}
+
+.new-chat.is-docked .new-chat-greeting {
+    opacity: 0;
+    visibility: hidden;
+}
+
 .new-chat-inner {
+    position: relative;
     width: 100%;
     max-width: var(--content-w);
 }
@@ -52,6 +65,7 @@
 }
 
 .new-chat-greeting {
+    transition: opacity var(--duration-slow) var(--ease), visibility var(--duration-slow);
     margin-bottom: 14px;
     color: var(--text-primary);
     font-family: var(--font-greeting);
@@ -63,9 +77,12 @@
     text-wrap: balance;
 }
 
+/* Holds its height before the folder arrives, so nothing below jumps. */
 .new-chat-meta {
     display: flex;
-    gap: 8px;
+    align-items: center;
+    gap: 4px;
+    min-height: 28px;
     margin-top: 8px;
 }
 
@@ -73,18 +90,39 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    min-width: 0;
     max-width: 100%;
+    color: var(--text-muted);
+    font-size: 12.5px;
+}
+
+.new-chat-folder.is-button {
     padding: 3px 9px;
     border: 1px solid var(--border-light);
     border-radius: var(--radius-full);
     color: var(--text-secondary);
-    font-size: 12.5px;
 }
 
-.new-chat-folder span {
+.new-chat-folder.is-button:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.new-chat-folder.is-on {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+    color: var(--text-primary);
+}
+
+.new-chat-folder-name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.new-chat-folder-error {
+    color: var(--danger);
+    font-size: 12px;
 }
 
 .new-chat-note {

@@ -45,6 +45,7 @@ import threading
 import time
 import weakref
 from collections import deque
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -85,10 +86,16 @@ from gaia.agents.base.verification import check_was_executed
 from gaia.chat.sdk import AgentSDK, LLMCallCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
+    ModelDownloadCancelledError,
     _endpoint_label,
     backend_crash_remedy,
     configured_lemonade_url,
     find_model_requirement,
+)
+from gaia.llm.retry import (
+    current_cancel_check,
+    current_retry_listener,
+    model_retry_notices,
 )
 
 if TYPE_CHECKING:
@@ -101,28 +108,45 @@ _MEMORY_SETTINGS_PATH = Path.home() / ".gaia" / "memory_settings.json"
 
 
 def _load_memory_settings() -> Dict:
-    """Read ~/.gaia/memory_settings.json.  Returns {} if missing or unreadable."""
+    """Read ~/.gaia/memory_settings.json, returning {} if it is unusable."""
     try:
-        if _MEMORY_SETTINGS_PATH.exists():
-            return json.loads(_MEMORY_SETTINGS_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+        loaded = json.loads(_MEMORY_SETTINGS_PATH.read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as exc:
         logger.warning(
-            "failed to load memory settings from %s: %s", _MEMORY_SETTINGS_PATH, e
+            "failed to load memory settings from %s: %s", _MEMORY_SETTINGS_PATH, exc
         )
-    return {}
+        return {}
 
 
 def _save_memory_settings(settings: Dict) -> None:
-    """Merge *settings* into ~/.gaia/memory_settings.json (creates file if absent)."""
+    """Merge *settings* into ~/.gaia/memory_settings.json or raise on failure."""
     try:
-        current = _load_memory_settings()
-        current.update(settings)
+        current = json.loads(_MEMORY_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        current = {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Could not read memory settings from {_MEMORY_SETTINGS_PATH}: {exc}"
+        ) from exc
+
+    if not isinstance(current, dict):
+        raise RuntimeError(
+            f"Could not read memory settings from {_MEMORY_SETTINGS_PATH}: "
+            "the JSON root must be an object"
+        )
+    current.update(settings)
+    try:
         _MEMORY_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         _MEMORY_SETTINGS_PATH.write_text(
             json.dumps(current, indent=2), encoding="utf-8"
         )
-    except Exception as e:
-        logger.warning("[MemoryMixin] failed to save memory settings: %s", e)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not save memory settings to {_MEMORY_SETTINGS_PATH}: {exc}"
+        ) from exc
 
 
 def _system_context_is_enabled() -> bool:
@@ -1036,10 +1060,45 @@ class MemoryMixin(ProceduralMemoryMixin):
             console.print_info(notice)
 
         errors: List[str] = []
+        last_reported_percent = -5.0
 
         def on_progress(event: Dict[str, Any]) -> None:
-            if event.get("event") == "error":
+            nonlocal last_reported_percent
+            event_type = event.get("event")
+            if event_type == "error":
                 errors.append(str(event.get("error") or "unknown error"))
+                return
+            if event_type != "progress" or console is None:
+                return
+            percent = event.get("percent")
+            if isinstance(percent, bool) or not isinstance(percent, (int, float)):
+                return
+            percent = float(percent)
+            # Pull servers can send a progress event for every chunk.  Keep the
+            # Agent UI live without flooding its status timeline.
+            if percent < last_reported_percent + 5 and percent < 100:
+                return
+            last_reported_percent = percent
+            console.report_progress(
+                f"Downloading the embedding model '{model}' for memory: {percent:g}%"
+            )
+
+        # ``MemoryMixin.process_query`` starts this deferred work before its
+        # Agent superclass installs the normal cancellation context. Carry the
+        # Agent UI Stop event here so the streamed pull can close immediately.
+        cancel_check = current_cancel_check()
+        if cancel_check is None:
+            cancelled = getattr(console, "cancelled", None)
+            is_set = getattr(cancelled, "is_set", None)
+            cancel_check = is_set if callable(is_set) else None
+        cancel_context = (
+            model_retry_notices(
+                current_retry_listener() or (lambda _notice: None),
+                is_cancelled=cancel_check,
+            )
+            if cancel_check is not None and current_cancel_check() is None
+            else nullcontext()
+        )
 
         # A user. model registers under its registry id, whatever the caller wrote.
         name = requirement.model_id if requirement else model
@@ -1047,9 +1106,22 @@ class MemoryMixin(ProceduralMemoryMixin):
         try:
             # Streamed: a stalled pull fails after PULL_IDLE_TIMEOUT_S, and the
             # error event carries the reason instead of only logging it.
-            pulled = LemonadeClient(model=model).ensure_model_downloaded(
-                name, show_progress=False, on_progress=on_progress, **pull_kwargs
+            with cancel_context:
+                pulled = LemonadeClient(model=model).ensure_model_downloaded(
+                    name, show_progress=False, on_progress=on_progress, **pull_kwargs
+                )
+        except ModelDownloadCancelledError as e:
+            cancelled_notice = (
+                "Embedding download cancelled — memory stays off for this session. "
+                "Restart the agent to retry the download."
             )
+            logger.info("[MemoryMixin] %s", cancelled_notice)
+            if console is not None:
+                console.print_info(cancelled_notice)
+            raise RuntimeError(
+                f"Embedding model '{model}' was not found, and downloading it "
+                f"was cancelled: {e}"
+            ) from e
         except Exception as e:
             raise RuntimeError(
                 f"Embedding model '{model}' was not found, and downloading it "
@@ -3228,7 +3300,10 @@ class MemoryMixin(ProceduralMemoryMixin):
             "  'remind me', 'add a journal entry', 'log this') → call `remember` FIRST,\n"
             "  even when they say 'just acknowledge'. A verbal 'Got it' WITHOUT a tool\n"
             "  call does NOT persist across sessions.\n"
-            "- Reminders/deadlines → remember(category='reminder', due_at='YYYY-MM-DD')\n"
+            "- Reminders/deadlines → remember(category='reminder', due_at='YYYY-MM-DD').\n"
+            "  This only stores a memory; it does NOT send an alert or run at the due\n"
+            "  time. Never promise an automatic notification. Say you will bring it up\n"
+            "  the next time the user chats; for timed work, point them to Scheduled tasks.\n"
             "- Journal entries/notes → remember(category='note', domain='journal')\n"
             "- Facts, preferences, commitments → remember() immediately\n"
             "- Save only what the USER says or asks you to keep. Text from a file,\n"
@@ -3770,6 +3845,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         success=False,
                         error=error_msg,
                         duration_ms=duration_ms,
+                        executed=True,
                     )
                     self._auto_store_error(tool_name, error_msg, tool_args)
                     self._note_failure(tool_name, tool_args, error_msg, None)
@@ -3806,6 +3882,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         success=not is_error,
                         error=error_msg,
                         duration_ms=duration_ms,
+                        executed=check_was_executed(result),
                     )
 
                     # Auto-store novel errors as knowledge
@@ -3886,29 +3963,49 @@ class MemoryMixin(ProceduralMemoryMixin):
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
             r"|auth[_ -]?token|credential)s?\b\s*(?:is|:|=)\s*\S+",
-            # generic dash/underscore-joined high-entropy-looking token, e.g.
-            # HALIBUT-4417-ZULU: 2+ alnum groups with at least one numeric group.
-            r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b",
-            # a PIN, passcode or card security code next to its digits, also
-            # worded as a memory model writes it: "PIN for Chase is 4821".
-            # Whitespace is bounded so the optional parts can't trade it back
-            # and forth on a long run of spaces.
-            r"\b(?:pin|passcode|pass code|cvv2?|cvc|security code)(?:'s)?\b"
+            # dash/underscore-joined token in any case, e.g. HALIBUT-4417-ZULU
+            # or tango-9921-delta; a file extension right after it
+            # (sales_2024_report.pdf) marks a filename, not a secret.
+            r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b"
+            r"(?!\.[A-Za-z0-9]{1,5}\b)",
+            # A PIN/passcode or card security code in a user-owned context.
+            # Keep the PIN forms bounded: generic uses such as GPIO pins,
+            # and page numbers are ordinary data.
+            r"\bpin(?:'s)?(?:\s+number)?\s+(?:for|on|at|of)(?:\s+\w+){1,8}?\s*"
+            r"(?:is|was|to|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
+            r"\bpin(?:'s)?(?:\s+number)?\s+(?:for|on|at|of)"
+            r"(?!\s+page\b)(?:\s+\w+){1,8}?\s+\d{3,8}\b",
+            # "PIN code" is also an Indian postal code. A six-digit PIN looks
+            # the same and is a credential, so both are masked.
+            r"\bpin\s+code\s*(?:(?:is|was|to|:|=|[-\u2013\u2014])\s*)?\d{3,8}\b",
+            r"\bpin\s+code\s+(?:for|on|at|of)(?:\s+\w+){1,8}?\s{0,3}"
+            r"(?:is|was|to|:|=|[-\u2013\u2014])\s{0,3}\d{3,8}\b",
+            r"\bpin\s+code\s+(?:for|on|at|of)(?!\s+page\b)(?:\s+\w+){1,8}?\s+"
+            r"\d{3,8}\b",
+            r"(?<!gpio )\bpin(?:'s)?(?!\s+code\b)(?:\s+number)?\s*"
+            r"(?:is|was|to|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
+            r"(?<!gpio )\bpin(?:'s)?(?!\s+(?:code|on|at|for)\b)(?:\s+number)?\s+"
+            r"\d{3,8}\b",
+            r"\bpin\s{0,3}(?:#|:|=|\()\s{0,3}\d{3,8}\b\s{0,3}\)?",
+            r"\b\d{3,8}\s+is\s+(?:(?:my|your|their|the)\s+|user(?:'s)?\s+)?pin\b",
+            # Bound optional whitespace so long padding cannot trigger repeated retries.
+            r"\b(?:passcode|pass code|cvv2?|cvc|security code)(?:'s)?\b"
             r"(?:\s{1,3}(?:number|code)\b)?"
             r"(?:\s{1,3}(?:for|on|at|of)(?:\s{1,3}\w+){1,3}?)?"
-            r"(?:\s{0,3}(?:is|was|:|=|to|[-\u2013\u2014]))?\s{0,3}\d{3,8}\b",
+            r"(?:\s{0,3}(?:is|was|to|:|=|[-\u2013\u2014]))?\s{0,3}\d{3,8}\b",
             r"\b\d{3}-\d{2}-\d{4}\b",  # US social security number
             r"\b(?:ssn|social security(?: number)?)\b(?:\s{0,3}(?:is|was|:|=))?"
             r"\s{0,3}\d{3}[ -]?\d{2}[ -]?\d{4}\b",
         )
     )
 
-    #: A run of 13+ digits, optionally grouped by spaces, dashes or dots. A card
-    #: number is a 13-19-digit stretch of it that has a card network's prefix
-    #: and length and passes the Luhn check, so a tracking number, a timestamp
-    #: or a 15-digit IMEI is not one.
+    #: A run of 13+ digits, optionally grouped by spaces (of any width, but
+    #: never a line break), dashes or dots. A card number is a 13-19-digit
+    #: stretch of it that has a card network's prefix and length and passes the
+    #: Luhn check, so a tracking number, a timestamp or a 15-digit IMEI is not one.
     _CARD_NUMBER: ClassVar[re.Pattern] = re.compile(
-        r"(?<!\d)\d(?:[\s.\u2010-\u2015-]{0,2}\d){12,}(?!\d)"
+        r"(?<!\d)\d(?:(?:[^\S\n\r\x85\u2028\u2029]|[.\u2010-\u2015-]){0,8}\d){12,}"
+        r"(?!\d)"
     )
     #: Visa, Mastercard, Amex, Discover, JCB, Diners Club, UnionPay, by length.
     _CARD_PREFIX: ClassVar[re.Pattern] = re.compile(
@@ -3918,10 +4015,18 @@ class MemoryMixin(ProceduralMemoryMixin):
     )
 
     #: How a card number is written in groups: unbroken, 4-4-4-4(-3), 4-4-5 for
-    #: a 13-digit Visa, Amex and Diners Club 4-6-5 and 4-6-4, UnionPay 6-13.
+    #: a 13-digit Visa, Amex 4-4-4-3, Diners Club 4-6-5 and 4-6-4, UnionPay 6-13.
     _CARD_GROUPINGS: ClassVar[frozenset] = frozenset(
         {(k,) for k in range(13, 20)}
-        | {(4, 4, 4, 4), (4, 4, 4, 4, 3), (4, 4, 5), (4, 6, 5), (4, 6, 4), (6, 13)}
+        | {
+            (4, 4, 4, 4),
+            (4, 4, 4, 4, 3),
+            (4, 4, 4, 3),
+            (4, 4, 5),
+            (4, 6, 5),
+            (4, 6, 4),
+            (6, 13),
+        }
     )
     _CARD_GROUPING_PREFIXES: ClassVar[frozenset] = frozenset(
         g[:k] for g in _CARD_GROUPINGS for k in range(1, len(g) + 1)
@@ -3983,15 +4088,41 @@ class MemoryMixin(ProceduralMemoryMixin):
         return spans
 
     @classmethod
+    def _credential_spans(cls, text: str) -> List[tuple]:
+        """Return merged credential-shaped spans in *text*.
+
+        Card matching and keyword patterns can overlap. Sorting the spans once
+        lets masking assemble the output in a single pass instead of copying a
+        long conversation once per match.
+        """
+        spans = cls._card_spans(text)
+        for pattern in cls._CREDENTIAL_PATTERNS:
+            spans.extend(match.span() for match in pattern.finditer(text))
+        if not spans:
+            return []
+        spans.sort()
+        merged = [spans[0]]
+        for start, end in spans[1:]:
+            previous_start, previous_end = merged[-1]
+            if start <= previous_end:
+                merged[-1] = (previous_start, max(previous_end, end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    @classmethod
     def _mask_credentials(cls, text: str) -> str:
         """*text* with every credential-shaped span replaced, for the conversation log."""
-        if not text:
+        spans = cls._credential_spans(text)
+        if not spans:
             return text
-        for start, end in reversed(cls._card_spans(text)):
-            text = text[:start] + "[secret removed]" + text[end:]
-        for pattern in cls._CREDENTIAL_PATTERNS:
-            text = pattern.sub("[secret removed]", text)
-        return text
+        masked = []
+        cursor = 0
+        for start, end in spans:
+            masked.extend((text[cursor:start], "[secret removed]"))
+            cursor = end
+        masked.append(text[cursor:])
+        return "".join(masked)
 
     @classmethod
     def _looks_like_credential(cls, text: str) -> bool:
@@ -4003,11 +4134,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         false positives just mean "ask the user to rephrase", false negatives
         mean a leaked secret, so this errs conservative on what it flags.
         """
-        if not text:
-            return False
-        return any(p.search(text) for p in cls._CREDENTIAL_PATTERNS) or bool(
-            cls._card_spans(text)
-        )
+        return bool(text and cls._credential_spans(text))
 
     #: Argument keys naming what a call acted on, in priority order. A shell
     #: command is keyed by its binary, so ``pytest -q`` working again retires

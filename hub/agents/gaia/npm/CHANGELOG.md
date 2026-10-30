@@ -6,12 +6,154 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### For integrators: contract 2.26
+
+- **"Always" answers can be listed and revoked** (contract **2.26**).
+  `GET /v1/gaia/sessions/{session_id}/grants` lists what a session's user
+  answered "always" to, as `{ key, label }`, including answers given in a turn
+  still running; `DELETE` on the same path revokes one (`?key=`) or all, from
+  the very next gated call. The Agent UI uses it to offer **Always allow** on
+  the flagship's prompts and to list and revoke those grants with the chat's
+  own. An unknown session or key is a `404`.
+- **`needs_confirmation` carries `always_label`** beside `always_scope`: the
+  same grant in plain words (`editing notes.md`), when there is one.
+
+### Fixed
+
+- **A repository indexed with `index_codebase` stays the code-search folder**
+  (#6055). In the Agent UI, each new turn reset code search to the session's
+  starting folder, so the next `search_code_index` looked in the wrong place
+  instead of the repository just indexed. The repository is still dropped if
+  the allowed folders no longer contain it.
+- **The binary carries the starter skills and their tools.** The release build
+  shipped none of `hub/skills`, so a skill like `rss-digest` loaded in a
+  checkout but its tools were missing from the binary. The pack is now
+  bundled with every module its code imports. A skill tool named like a
+  confirmation-gated core tool (`write_file`, `run_python`) always asks first,
+  and a skill's `write_*` / `edit_*` tool counts as a file change.
+
+### Added
+
+- **Mail: whole conversations, what's waiting on you, and which account.**
+  Three read-only tools join the mail set, for Gmail and Outlook alike.
+  `get_thread` reads a whole conversation, oldest first, clipping long bodies
+  so no message is dropped, and refuses a thread too long for what is left of
+  the turn's reading budget rather than overflow the context window. `list_waiting_on_you` finds the inbox threads where
+  someone asked you directly for a reply and you were already in that
+  conversation. Newsletters, cold outreach and automated mail never qualify.
+  `list_connected_mailboxes` says which mailboxes are connected and which one
+  the agent reads, without a network call, so it still answers with the
+  internet off. The registered tool count is now 101.
+- **A forwarded read-only Gmail connection is accepted.** A host app that
+  forwarded a connection carrying `gmail.readonly`, which is all the agent
+  asks for, without naming the required scopes, was refused because GAIA
+  defaulted to the email agent's `gmail.modify` + `gmail.send`. Any one mail
+  read scope now satisfies the default, for Gmail and Outlook.
+
+## [0.3.3]
+
+Released with GAIA 0.25.3, and requires the `gaia` Python CLI 0.25.3+ on `PATH`.
+Integrators: the sidecar contract is now **2.25**; clients built for 2.18
+keep working, and older binaries refuse the new `turns` field with `422`,
+so probe `/version` before sending it.
+
+- **AMD LLM Gateway models run their tool calls.** The agent asks each cloud
+  model once whether it calls tools natively, and runs tool calls written as
+  text instead of dropping them, so a turn no longer ends without the work.
+- **Music and sound effects can be generated locally** with Lemonade's
+  audio-generation models (three new tools, 98 in total).
+- **The first code search on a large repo no longer hangs the turn.** The
+  index builds in the background and search reports its progress meanwhile.
+- **A bare file name means a file in the chat's folder** for reading,
+  listing, browsing, finding, searching and running, as it already did for
+  writing.
+- **`.epub` books are indexed chapter by chapter**, and a file the agent
+  can't read is refused instead of being indexed as binary text.
+- **Two agents starting together on a new database no longer fail** with
+  `database is locked`.
+
+### For integrators: contract 2.25
+
+- **The agent remembers its own tool calls across turns** (contract **2.25**,
+  #5701). A caller that pushed history as `context` could send only text, so
+  on the next turn the agent saw its earlier answers but not the commands it
+  ran or their errors, and "why did that fail?" got "I have no record of the
+  tool calls". Send the new `turns` field (`[]` on the first turn) and that
+  turn's `final` carries `model_messages`, the turn as the model saw it, tool
+  calls and results included. Send those back in `turns`, oldest first, and
+  the agent replays them, keeping the newest whole turns that fit its context
+  window. `turns` replaces `context` when sent (a non-empty `context` beside
+  it is a `422`), and `[]` clears a retained session's history. A caller that
+  sends no `turns` gets no `model_messages`, so a `final` stays small for
+  text-only clients. Pre-2.25 binaries refuse the field with `422`, so probe
+  `/version` first.
+
+## [0.3.2]
+
+Released with GAIA 0.25.2, and requires the `gaia`
+Python CLI 0.25.2+ on `PATH`. Integrators: the sidecar contract is now
+**2.24**; clients built for 2.18 keep working, and the new
+`/query` fields are refused with `422` by older binaries, so probe
+`/version` before sending them.
+
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
+- **Unknown or misplaced switches are refused.** `gaia --forse` and
+  `gaia fetch --developer-mode` now exit 2 instead of silently starting the TUI;
+  pass terminal-UI arguments after a bare `--`.
+
+- **The Agent UI's "Under the hood" figures cover GAIA chats.** It said every
+  answer was "not measured", because only the agent saw its own step timings.
+  `final` now carries `performance` with them: the turn's model and tool
+  seconds and each model call's token counts. Older binaries never send it.
+- **`GET /v1/gaia/skills` says where each skill came from.** Each skill now
+  carries a `source` (`agent-bundled`, `user` or `claude-import`; `null` for
+  any other root), so the Agent UI can group the Skills list by origin. An
+  older agent omits it and the UI shows the list flat.
 - **One very long turn no longer vanishes from the conversation.** A turn
   bigger than the whole history budget, like a pasted log or a long document
   read, was dropped from what the model saw next, answer included, so "now
   shorten that" ran with no record of it. It is now kept: long tool results
   become a short note naming the tool, and its longest messages are cut with
   a note saying how much.
+- **Internet off also stops the mailbox and Agent Hub tools.** With a chat's
+  Internet switched off, GAIA could still read Gmail or Outlook and search or
+  install skills from the Agent Hub, because those tools carry no URL for the
+  check to see. They are now refused with the same message as a web search.
+
+### For integrators: contract 2.24
+
+- **Relative file paths use the chat workspace.** A new `working_directory` field
+  on `/query` tells the agent where bare file names resolve, separately from
+  `allowed_paths`. New and retained sessions use the same workspace for reads,
+  writes, edits and approval prompts. Send it only after `/version` reports
+  contract 2.24 or later.
+
+### For integrators: contract 2.23
+
+- **`/query` takes `internet_off`** (contract **2.23**, #5883). The Agent UI
+  never told the agent when a chat's Internet switch was off, so the switch
+  stayed locked in every GAIA chat on a standard install. `true` refuses web
+  search, page fetches, the browser, connector, mailbox and Agent Hub tools and
+  commands that contact another host, as it does when the agent runs inside the Agent UI. `false`
+  allows them, and omitting it leaves the agent as it is. A retained session
+  keeps the last value. Older binaries `422` the field.
+- **`POST /v1/gaia/sessions/{session_id}/internet`** (contract **2.23**)
+  reaches a turn already running. Without it, a user who turned the internet
+  off mid-turn watched the agent keep searching until the turn ended. Body
+  `{"internet_off": bool}`; the session's next tool call follows it. An
+  unknown session is a `404`, as for `/bypass`. Post it only once `/query`
+  has answered: until then the turn's own `internet_off` replaces it.
+
+### For integrators: contract 2.22
+
+- **A client can show the model's reasoning.** Over `/query` the reasoning
+  only arrived folded into `status` lines, so the Agent UI showed none of it
+  for an installed GAIA. A request with `reasoning: true` now gets it as
+  `reasoning` events, `{ delta }`, kept apart from the answer. Without the
+  field nothing changes. Older binaries reject it with `422`.
 
 ### For integrators: contract 2.21
 
@@ -26,6 +168,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   write resolves to in `prompt_context.file_path`, so a front-end can show
   `/Users/you/shop2.txt` instead of a bare name. `args` still holds exactly the
   model's `file_path`.
+- **A web search's results reach the client.** The Agent UI listed no Sources
+  for a GAIA web search, because a `search_web` `tool_result` carried only a
+  300-character summary. Its `data` now also carries `sources`, a list of
+  `{ title, url }` for each hit. Older binaries never send it.
 
 - **An old failure in memory no longer stops a request you make now.** A note
   like "this page returned 503, don't waste tool calls on it" was obeyed as a
@@ -84,6 +230,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sent when the cancel lands is dropped.
 ### Fixed
 
+- **"Save it to my Documents folder" saves to the user's Documents folder.**
+  The system prompt told GAIA that "my documents" meant its own documents
+  folder (`~/.gaia/documents`), so a new file the user asked for in Documents
+  went into GAIA's hidden folder, where they would never find it. Finding an
+  existing file still checks GAIA's folders first.
 - **Secrets stay out of memory and the conversation log.** A bank PIN was saved
   as a memory, because the filter knew passwords and API keys but not PINs. The
   conversation log also kept the PIN, a password the agent had refused, a card

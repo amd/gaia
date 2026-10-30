@@ -53,7 +53,10 @@
     },
     "requirements": { "$ref": "#/definitions/requirements" },
     "interfaces": { "$ref": "#/definitions/interfaces" },
-    "latest_version": { "type": "string" },
+    "latest_version": {
+      "type": "string",
+      "description": "The stable channel. Empty only while the package has next versions and no stable one; such a package is left out of index.json."
+    },
     "deprecated": { "type": "boolean" },
     "deprecation_message": {
       "type": "string",
@@ -67,9 +70,24 @@
       "type": "string",
       "description": "Localhost playground URL served by the agent's sidecar; absent otherwise."
     },
+    "channels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stable", "next"],
+      "description": "The version each release channel resolves to. Absent on manifests written before channels existed, where stable is latest_version and next is the same.",
+      "properties": {
+        "stable": { "type": "string", "description": "Always equal to latest_version (empty while only next versions exist)." },
+        "next": { "type": "string", "description": "The newest version in versions or next_versions." }
+      }
+    },
     "versions": {
       "type": "object",
-      "description": "Map of version string -> published version entry.",
+      "description": "Map of version string -> published version entry, stable channel only. A client that installs the newest entry here never gets a release candidate.",
+      "additionalProperties": { "$ref": "#/definitions/versionEntry" }
+    },
+    "next_versions": {
+      "type": "object",
+      "description": "Versions published to the next channel only (release candidates). Absent until the first next publish.",
       "additionalProperties": { "$ref": "#/definitions/versionEntry" }
     }
   },

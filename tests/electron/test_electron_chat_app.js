@@ -946,7 +946,7 @@ describe('Chat App Integration', () => {
     it('should have keyboard accessibility on session items', () => {
       // Session rows are native buttons, so Tab/Enter/Space work without handlers.
       expect(sidebarContent).toMatch(
-        /<button\s+type="button"\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
+        /<button\s+type="button"\s+id=\{rowId\}\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
       );
       expect(sidebarContent).not.toContain('role="button"');
     });
@@ -961,7 +961,7 @@ describe('Chat App Integration', () => {
     it('should have ARIA labels on session actions', () => {
       expect(sidebarContent).toContain("? `Confirm delete ${session.title}${unsent > 0 ? ` and its ${unsentWords}` : ''}`");
       expect(sidebarContent).toContain(': `Delete ${session.title}`}');
-      expect(sidebarContent).toContain('<nav className="sb-list" aria-label="Recent chats">');
+      expect(sidebarContent).toContain('<nav className="sb-list" id="sb-chat-list" aria-label="Recent chats">');
     });
 
     it('should have aria-current on active session', () => {

@@ -83,7 +83,7 @@ class OAuthClientNotConfiguredError(ConfigurationError):
             f"{example_block}"
             f"(Power users / CI can instead set {env_prefix}_CLIENT_ID and "
             f"{env_prefix}_CLIENT_SECRET in the environment before launching "
-            f"GAIA.) In the Agent UI you can instead use Settings -> Connections "
+            f"GAIA.) In the Agent UI you can instead use Settings -> Connectors "
             f"-> {label}. Full walkthrough: {docs}"
         )
 
@@ -140,7 +140,7 @@ class AuthRequiredError(ConnectorsError):
         pid = self.provider or "<provider>"
         if self.reason is AuthRequiredError.Reason.NOT_CONNECTED:
             return (
-                f"No {prov} connection. Connect via Settings → Connections in "
+                f"No {prov} connection. Connect via Settings → Connectors in "
                 "AgentUI, or run `gaia connectors connect "
                 f"{pid}`. "
                 "See docs/sdk/infrastructure/connections.mdx."
@@ -166,7 +166,7 @@ class AuthRequiredError(ConnectorsError):
                 )
             return (
                 f"Agent '{agent}' has no grant for {prov}. Grant the required "
-                f"scopes in Settings → Connections, or run {command}. "
+                f"scopes in Settings → Connectors, or run {command}. "
                 "See docs/sdk/infrastructure/connections.mdx."
             )
         if self.reason is AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES:
@@ -186,7 +186,7 @@ class AuthRequiredError(ConnectorsError):
                 )
             return (
                 f"The {prov} connection lacks required scopes ({scopes}). "
-                "Reconnect with the missing scopes from Settings → Connections, "
+                "Reconnect with the missing scopes from Settings → Connectors, "
                 f"or run {command}. "
                 "See docs/sdk/infrastructure/connections.mdx."
             )
@@ -194,7 +194,7 @@ class AuthRequiredError(ConnectorsError):
             return (
                 f"The stored {prov} credentials are no longer valid (client "
                 "rotation or remote revocation). Reconnect from Settings → "
-                f"Connections, or run `gaia connectors connect "
+                f"Connectors, or run `gaia connectors connect "
                 f"{pid}`. "
                 "See docs/runbooks/google-oauth-client.md."
             )
@@ -202,7 +202,7 @@ class AuthRequiredError(ConnectorsError):
             return (
                 f"The stored {prov} connection was authenticated against a "
                 "different Microsoft tenant than the connector currently "
-                "resolves to. Reconnect from Settings → Connections, or run "
+                "resolves to. Reconnect from Settings → Connectors, or run "
                 f"`gaia connectors connect {pid}`. "
                 "See docs/connectors/microsoft.mdx."
             )
@@ -220,7 +220,7 @@ class ConnectionRevokedError(ConnectorsError):
             or (
                 f"The {provider} connection was revoked or its refresh token "
                 "is no longer accepted by the provider. Reconnect from "
-                f"Settings → Connections, or run `gaia connectors connect "
+                f"Settings → Connectors, or run `gaia connectors connect "
                 f"{provider}`. See docs/security/connections.mdx."
             )
         )
@@ -280,7 +280,7 @@ class ScopeMismatchError(ConnectorsError):
         return (
             f"The {prov} stored connection is missing required scopes "
             f"({missing}). Reconnect with the missing scopes via Settings → "
-            f"Connections, or run `gaia connectors connect "
+            f"Connectors, or run `gaia connectors connect "
             f"{pid} --scopes "
             f"{' '.join(full_scopes) or '<none>'}`. "
             "See docs/sdk/infrastructure/connections.mdx."

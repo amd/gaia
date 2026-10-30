@@ -31,6 +31,7 @@ from gaia.ui.database import ChatDatabase
 from gaia.ui.models import ChatRequest
 from gaia.ui.routers import chat
 from gaia.ui.run_manager import RunManager
+from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.turn_queue import TurnQueue
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.allow_network]
@@ -658,6 +659,49 @@ def _answer_relayed(handler, kind):
         assert handler.resolve_relay_input("q-1", "the second")
 
 
+async def test_unexpected_model_slot_retake_emits_named_error(caplog):
+    events = []
+    handler = object.__new__(SSEOutputHandler)
+    handler.cancelled = threading.Event()
+    handler.turn_slot = SimpleNamespace(come_back=lambda _cancelled: False)
+    handler.on_model_regained = None
+    handler._emit = events.append
+
+    SSEOutputHandler.come_back_to_model(handler)
+
+    assert events == [
+        {
+            "type": "agent_error",
+            "content": (
+                "This chat ended while your approved step was waiting for the "
+                "model, so it didn't run. Send your message again to retry."
+            ),
+            "fatal": True,
+        }
+    ]
+    assert handler.cancelled.is_set()
+    assert "approved step did not run" in caplog.text
+
+
+async def test_a_stop_during_the_retake_wait_is_not_an_error():
+    events = []
+    handler = object.__new__(SSEOutputHandler)
+    handler.cancelled = threading.Event()
+
+    def stopped_while_waiting(cancelled):
+        cancelled.set()
+        return False
+
+    handler.turn_slot = SimpleNamespace(come_back=stopped_while_waiting)
+    handler.on_model_regained = None
+    handler._emit = events.append
+
+    SSEOutputHandler.come_back_to_model(handler)
+
+    assert events == []
+    assert handler.cancelled.is_set()
+
+
 @pytest.mark.parametrize(
     "kind,expected",
     [("permission", "answer=allow"), ("question", "answer=the second")],
@@ -744,6 +788,40 @@ async def test_answered_relayed_turn_requeues_at_the_front_and_says_so(runtime):
         await _cleanup(rt, a, b, c)
 
 
+async def test_stopping_an_answered_relayed_turn_waiting_in_line(runtime):
+    rt = runtime
+    sidecar = _ParkingSidecar("permission")
+    a = rt.db.create_session(model="M-GGUF", agent_type="gaia")["id"]
+    b_release = threading.Event()
+    b, _ = _seed(rt.db, lambda _agent: b_release.wait(5) and "B")
+    try:
+        with _relay_through(sidecar):
+            await _start_detached(await _send(rt, a, "run echo"))
+            run_a = rt.manager.get(a)
+            await _until(
+                lambda: run_a.handler is not None and run_a.handler.waiting_on()
+            )
+            await _until(lambda: rt.queue.holder is None)
+
+            await _start_detached(await _send(rt, b, "long"))
+            await _until(lambda: rt.queue.holder == b)
+            _answer_relayed(run_a.handler, "permission")
+            await _until(lambda: rt.queue.waiting() == [a])
+
+            await chat.cancel_stream(chat.CancelStreamRequest(session_id=a))
+            await asyncio.wait_for(run_a.task, 5)
+
+        events = _events(run_a)
+        assert events[-1].get("cancelled") is True
+        assert not [event for event in events if event.get("type") == "agent_error"]
+        assert rt.queue.holder == b, "a stopped turn never retakes the model"
+        assert rt.queue.waiting() == []
+    finally:
+        b_release.set()
+        sidecar.answered.set()
+        await _cleanup(rt, a, b)
+
+
 async def test_stopping_a_relayed_turn_while_it_waits_on_the_user(runtime):
     rt = runtime
     sidecar = _ParkingSidecar("permission")
@@ -760,7 +838,9 @@ async def test_stopping_a_relayed_turn_while_it_waits_on_the_user(runtime):
             await chat.cancel_stream(chat.CancelStreamRequest(session_id=a))
             sidecar.answered.set()
             await asyncio.wait_for(run_a.task, 5)
-        assert _events(run_a)[-1].get("cancelled") is True
+        events = _events(run_a)
+        assert events[-1].get("cancelled") is True
+        assert not [event for event in events if event.get("type") == "agent_error"]
         assert rt.queue.holder == "another-chat", "a stopped turn never retakes it"
         assert rt.queue.waiting() == []
     finally:

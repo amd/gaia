@@ -592,6 +592,13 @@ class TestSystemContext:
         prompt = mixin_host.get_memory_system_prompt()
         assert "No personal memories stored yet" in prompt
 
+    def test_reminder_instruction_does_not_promise_an_alert(self, mixin_host):
+        prompt = mixin_host.get_memory_system_prompt()
+
+        assert "does NOT send an alert" in prompt
+        assert "Never promise an automatic notification" in prompt
+        assert "next time the user chats" in prompt
+
     def test_stable_prompt_no_nudge_when_personal_memories_exist(self, mixin_host):
         """The 'no personal memories' nudge disappears once user data is stored."""
         mixin_host.memory_store.store(
@@ -1663,6 +1670,7 @@ class TestToolExecutionLogging:
         rows = mixin_host.memory_store.get_tool_history("write_file")
         assert len(rows) == 1
         assert rows[0]["success"] == 0
+        assert rows[0]["executed"] is False
         assert rows[0]["error"] == error
 
     def test_execute_tool_logs_failure(self, mixin_host):

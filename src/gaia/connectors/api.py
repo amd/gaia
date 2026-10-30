@@ -73,26 +73,26 @@ from gaia.connectors.tokens import get_or_refresh, load_current_connection
 logger = logging.getLogger(__name__)
 
 
-# Per-provider minimum scopes a forwarded grant must cover when the caller
-# passes no explicit ``required_scopes``. Authoritative validation is the
-# caller's job (the UI router resolves the union from the granted agents'
-# ``REQUIRED_CONNECTORS``); this map is a defense-in-depth default so a
-# None-path forward never demands one provider's scopes of another. Unknown
-# providers default to no requirement — the use-time gate in
-# ``get_access_token`` still enforces per-agent scope coverage at the point an
-# agent actually requests a token.
-_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
-    # Built-in Email Triage Agent (#962) mailbox union — MUST equal
-    # gaia_agent_email/scopes.py's REQUIRED_SCOPES (mail only). Calendar is
-    # DELIBERATELY absent (#2730 D1): this gates whether a forwarded
-    # connection (Path A, #1292) is usable at import time, and calendar is
-    # requested but never required, mirroring the same enforcement the
-    # daemon's forward-out mint applies. Requiring it here would reject a
-    # mail-only forwarded connection outright — the exact all-or-nothing
-    # failure this issue removes, just relocated to the import boundary.
+# What a forwarded mailbox connection must carry when the caller passes no
+# explicit ``required_scopes``: at least ONE of these mail read scopes,
+# narrowest first. Authoritative validation is the caller's job (the UI router
+# resolves the union from the granted agents' ``REQUIRED_CONNECTORS``); this
+# is a defense-in-depth default. It is any-of, not all-of, because the
+# read-only flagship holds ``gmail.readonly`` while the email agent holds
+# ``gmail.modify`` — demanding modify + send rejected every forwarded flagship
+# connection. Unknown providers default to no requirement; the use-time gate
+# in ``get_access_token`` still enforces per-agent coverage.
+#
+# Mirrors ``gaia.agents.tools._email.scopes.READ_CAPABLE_SCOPES`` — duplicated
+# because this module never imports ``gaia.agents``; a drift test pins them.
+_DEFAULT_READ_SCOPES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
     "google": (
-        "https://www.googleapis.com/auth/gmail.modify",  # from gaia_agent_email/scopes.py
-        "https://www.googleapis.com/auth/gmail.send",  # from gaia_agent_email/scopes.py
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.modify",
+    ),
+    "microsoft": (
+        "https://graph.microsoft.com/Mail.Read",
+        "https://graph.microsoft.com/Mail.ReadWrite",
     ),
 }
 
@@ -274,7 +274,7 @@ async def get_access_token(
 
     Two layers of authorization gate the call:
       a. Per-agent grant — the user must have explicitly granted this
-         agent the required scopes via Settings → Connections, or
+         agent the required scopes via Settings → Connectors, or
          ``gaia connectors grants grant``.
       b. OAuth scopes — the stored connection's actual scopes must
          cover the requested ones; otherwise reconnect with the
@@ -571,9 +571,10 @@ def import_forwarded_connection(
       - a forwarded scope outside the connector's catalog ceiling, when
         ``grant_agents`` is set → ``ScopeNotAllowedError``;
       - forwarded scopes don't cover ``required_scopes`` → ``ScopeMismatchError``.
-        ``required_scopes is None`` falls back to the per-provider default
-        (``_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER``, empty for unknown providers);
-        an explicit ``[]`` means "require nothing" at import time. GAIA cannot
+        ``required_scopes is None`` falls back to the per-provider default: a
+        mailbox connection must carry at least one mail read scope
+        (``_DEFAULT_READ_SCOPES_BY_PROVIDER``; no requirement for other
+        providers). An explicit ``[]`` means "require nothing" at import time. GAIA cannot
         widen scope at refresh time, so a shortfall is unrecoverable without
         re-consent by the host app;
       - a keyring write that fails partway → the previous client config and
@@ -616,16 +617,30 @@ def import_forwarded_connection(
     # 3. Scope coverage (AC3). Forwarded scopes must be a superset of what the
     #    agent needs — GAIA cannot add scope at refresh time. ``is not None`` so
     #    an explicit ``[]`` means "require nothing", not "use the default".
+    granted = set(scopes)
     if required_scopes is not None:
         required = list(required_scopes)
+        missing = [s for s in required if s not in granted]
+        if missing:
+            raise ScopeMismatchError(
+                required=required, granted=list(scopes), provider=provider
+            )
     else:
-        required = list(_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER.get(provider, ()))
-    granted = set(scopes)
-    missing = [s for s in required if s not in granted]
-    if missing:
-        raise ScopeMismatchError(
-            required=required, granted=list(scopes), provider=provider
-        )
+        read_scopes = _DEFAULT_READ_SCOPES_BY_PROVIDER.get(provider, ())
+        if read_scopes and not granted & set(read_scopes):
+            raise ScopeMismatchError(
+                # The narrowest one, so the remedy never asks for more.
+                required=[read_scopes[0]],
+                granted=list(scopes),
+                provider=provider,
+                message=(
+                    f"The forwarded {provider} connection carries no mail read "
+                    f"scope; it needs one of: {', '.join(read_scopes)}. GAIA "
+                    "cannot add a scope at refresh time, so the host app must "
+                    "re-consent the user with one of them, then forward again. "
+                    "See docs/sdk/infrastructure/connectors.mdx."
+                ),
+            )
 
     # 3b. Grant ceiling (#915). Step 8 hands these scopes to ``grant_agent``,
     #     which refuses any the connector never advertised — check it here so a
@@ -696,7 +711,7 @@ def import_forwarded_connection(
                     f"Forwarding the {provider} connection failed ({e}), and "
                     "putting back the previous client config and connection also "
                     f"failed ({restore_err}). They may no longer match: reconnect "
-                    f"from Settings → Connections, or run `gaia connectors connect "
+                    f"from Settings → Connectors, or run `gaia connectors connect "
                     f"{provider}`, or forward the connection again."
                 ) from restore_err
             raise

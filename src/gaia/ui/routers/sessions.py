@@ -11,13 +11,14 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
+from .. import session_environment
 from .._chat_helpers import (
     _SIDECAR_AGENT_TYPES,
     _agent_type_unknown,
@@ -43,6 +44,7 @@ from ..models import (
     SessionListResponse,
     SessionPinRequest,
     SessionResponse,
+    SessionSearchResponse,
     UpdateSessionRequest,
 )
 from ..run_manager import run_manager
@@ -230,6 +232,16 @@ async def create_session(
     request.agent_type = flagship_only(http_request, request.agent_type)
     _reject_unknown_agent_type(request.agent_type)
     try:
+        # Off the loop: a relayed agent is asked over the daemon.
+        await asyncio.to_thread(
+            session_environment.check_new_chat_folders,
+            request.agent_type,
+            request.folders,
+        )
+    except session_environment.EnvironmentChangeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    session = None
+    try:
         # Read before the chat exists, so a bad config leaves no chat behind.
         start_mode = session_permissions.default_mode()
         session = db.create_session(
@@ -243,8 +255,25 @@ async def create_session(
             mail_provider=request.mail_provider,
         )
         session_permissions.seed_new_session(session["id"], start_mode)
+        for folder in request.folders:
+            session_environment.grant_folder(db, session["id"], folder)
         return await _session_response(db, session)
     except Exception as e:
+        if session is not None:
+            # A chat is made whole or not at all.
+            try:
+                db.delete_session(session["id"])
+            except Exception as cleanup_err:  # the original error stays the answer
+                logger.error(
+                    "Could not remove half-made chat %s: %s",
+                    session["id"],
+                    cleanup_err,
+                    exc_info=True,
+                )
+            finally:
+                session_permissions.forget_session(session["id"])
+        if isinstance(e, session_environment.EnvironmentChangeError):
+            raise HTTPException(status_code=400, detail=str(e)) from e
         logger.error("Failed to create session: %s", e, exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -253,7 +282,7 @@ async def create_session(
                 if _is_gaia_config_error(e)
                 else "Failed to create session. Check server logs for details."
             ),
-        )
+        ) from e
 
 
 @router.get("/api/sessions/events")
@@ -279,6 +308,27 @@ async def session_events():
             await _system_emitter.unsubscribe(q)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# Declared before /api/sessions/{session_id}, which would otherwise claim "search".
+@router.get("/api/sessions/search", response_model=SessionSearchResponse)
+async def search_sessions(
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = 20,
+    include_automated: bool = False,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Find chats by title or message text, ignoring case and accents.
+
+    Eval and scheduled chats are left out unless *include_automated*, as the
+    sidebar leaves them out. Private chats are included: the search runs on
+    this PC and its results go only to the local UI that already lists them.
+    """
+    limit = max(1, min(limit, 50))
+    results, truncated = await asyncio.to_thread(
+        db.search_sessions, q, limit, include_automated
+    )
+    return SessionSearchResponse(query=q, results=results, truncated=truncated)
 
 
 @router.post("/api/sessions/{session_id}/activate", status_code=200)

@@ -6,6 +6,7 @@ import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle
 import { MessageBubble, isErrorContent } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
+import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -22,6 +23,7 @@ import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } fr
 import './ChatView.css';
 import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
+import { SessionFolderChip } from './FolderChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { QueuedMessages } from './QueuedMessages';
@@ -47,16 +49,7 @@ import { isPlaceholderTitle } from '../utils/sessionTitle';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
-
-/**
- * Safety-net regex to strip raw tool-call JSON from streaming content.
- *
- * Primary filtering happens server-side in sse_handler.py (see _TOOL_CALL_JSON_RE).
- * This frontend regex is a secondary safety net in case any tool-call JSON leaks
- * through the SSE stream. The canonical pattern is defined in sse_handler.py;
- * keep this in sync if the server-side pattern changes.
- */
-const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?(?:tool|thought|goal)"?\s*:\s*"[^"]*"[^}]*(?:"?tool_args"?\s*:\s*\{[^}]*\})?\s*\}/g;
+import { useChatDraft } from '../hooks/useSavedDraft';
 
 /** Events that only come after the agent got past a permission prompt. */
 const RESOLVES_PROMPTS = new Set(['tool_start', 'tool_end', 'tool_result']);
@@ -69,76 +62,12 @@ export { QUEUE_BUSY_WAIT_MS } from '../services/queueDispatch';
 
 const NO_QUEUE: QueuedMessage[] = [];
 
-/**
- * Strip the LLM JSON envelope from streamed/accumulated content.
- * Handles responses like {"thought":"...", "goal":"...", "answer":"<content>"}
- * where the entire response is wrapped in a structured JSON object.
- * During streaming, progressively reveals the answer content as it arrives.
- */
-function stripStreamingEnvelope(text: string): string {
-    const trimmed = text.trim();
-    if (!trimmed.startsWith('{')) return text;
-    if (!trimmed.includes('"thought"') && !trimmed.includes('"answer"') && !trimmed.includes('"goal"')) return text;
-
-    // Try full JSON parse first (works when message is complete and well-formed)
-    try {
-        const parsed = JSON.parse(trimmed);
-        if (parsed.answer !== undefined) return String(parsed.answer);
-    } catch {
-        // Incomplete or malformed JSON (literal newlines in values) — fall through
-    }
-
-    // Find "answer" field and extract content progressively
-    const answerIdx = trimmed.indexOf('"answer"');
-    if (answerIdx === -1) return ''; // Still in thought/goal — suppress during streaming
-
-    const colonIdx = trimmed.indexOf(':', answerIdx + 8);
-    if (colonIdx === -1) return '';
-    let start = colonIdx + 1;
-    while (start < trimmed.length && /\s/.test(trimmed[start])) start++;
-    if (start >= trimmed.length || trimmed[start] !== '"') return '';
-
-    let content = trimmed.slice(start + 1);
-    // Strip closing "} if the JSON envelope is complete
-    if (content.endsWith('"}')) content = content.slice(0, -2);
-    else if (content.endsWith('"')) content = content.slice(0, -1);
-
-    return content.replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
-}
-
-/**
- * A recoverable error right after a failed tool repeats that tool's error, which
- * its card already shows; the agent retries, so it isn't a turn-level error.
- * A tool that raises or times out reports the error before its result lands, so a
- * still-running tool counts too — its result always follows as failed.
- */
-export function isEchoOfFailedTool(event: StreamEvent, steps: AgentStep[]): boolean {
-    if (event.type !== 'agent_error' || event.recoverable !== true) return false;
-    const last = steps[steps.length - 1];
-    if (!last || last.type !== 'tool') return false;
-    return last.success === false || (!!last.active && last.success == null);
-}
-
 /** Notices by server message id: a refetch replaces messages, so they cannot live on them alone. */
 const historyNotices = new Map<number, string>();
 
 /** One quiet line saying older turns left the model's view. */
 function HistoryNotice({ text }: { text: string }) {
     return <div className="history-notice" role="note">{text}</div>;
-}
-
-/** Messages as the API sends them, with steps and stats under the names the view reads. */
-function fromApiMessages(raw: unknown[] | undefined): Message[] {
-    return (raw || []).map((m: any) => ({
-        ...m,
-        agentSteps: m.agentSteps || m.agent_steps || undefined,
-        stats: m.stats || m.inference_stats || undefined,
-        turnSummary: m.turnSummary || m.turn_summary || undefined,
-    }));
-}
-
-function policyReceiptAnchor(receiptId: string): string {
-    return `policy-receipt-${encodeURIComponent(receiptId)}`;
 }
 
 interface ChatViewProps {
@@ -172,7 +101,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const notificationPanelVisible = useNotificationStore((s) => s.showPanel);
     const setNotificationPanelVisible = useNotificationStore((s) => s.setShowPanel);
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
-    const pendingPrompt = useChatStore((s) => s.pendingPrompt);
+    const pendingPrompt = useChatStore((s) => (s.pendingPrompt?.sessionId === sessionId ? s.pendingPrompt : null));
     const liveStatus = useChatStore((s) => s.liveStatus);
     const awaitingUser = useChatStore((s) => s.awaitingUser);
     // Other events can arrive while a question waits; it still waits on the user.
@@ -183,7 +112,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const session = sessions.find((s) => s.id === sessionId);
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
-    const [input, setInput] = useState('');
+    const [input, setInput] = useChatDraft(sessionId, session?.private);
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
@@ -250,7 +179,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const closeStoppedTurnLocallyRef = useRef<(() => void) | null>(null);
     const stepIdRef = useRef(0);
     /** The agent's own step number for the live turn, from its `step` events. */
-    const [liveAgentStep, setLiveAgentStep] = useState(0);
     const toolOccurredRef = useRef(false);
     const sendMessageRef = useRef<(text?: string, options?: SendOptions) => void>(() => {});
     // Messages typed while a reply runs, kept per chat in the store, and whether the user stopped that reply.
@@ -260,6 +188,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         [sessionId],
     );
     const userStoppedRef = useRef(false);
+    /** The running reply said up front that it can't take a message mid-turn. */
+    const [followupsUnavailable, setFollowupsUnavailable] = useState(false);
     /** This view saw its chat's last turn end, so the queue need not wait for a poll to say so. */
     const observedEndRef = useRef(false);
     /** A queued message's send that the server has not yet taken; leaving the chat must not abort it. */
@@ -379,9 +309,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
         return () => { mountedRef.current = false; };
     }, []);
     useEffect(() => {
-        const { pendingPrompt: pending, isLoadingMessages: loading } = useChatStore.getState();
+        const pending = pendingPrompt?.text;
         // Wait for the history load, or it would replace the message just sent.
-        if (!pending || loading) return;
+        if (!pending || useChatStore.getState().isLoadingMessages) return;
         useChatStore.getState().setPendingPrompt(null);
         openingRef.current = true;
         // A timer, not rAF: rAF never fires while the window is hidden, and
@@ -459,6 +389,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             }
             dismissPolicyToast();
             streamBufferRef.current = '';
+            // Clear this view's live turn now, before the next view's effects re-attach theirs.
+            useChatStore.getState().resetStreaming();
         };
     }, [sessionId]);
 
@@ -621,7 +553,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // from the start, so stale cards would double up without this.
         clearCards();
         stepIdRef.current = 0;
-        setLiveAgentStep(0);
         toolOccurredRef.current = false;
         if (reconnect) {
             useChatStore.getState().setLiveStatus(`${RECONNECTING_PREFIX} (attempt ${reconnect} of ${MAX_STREAM_RECONNECTS})…`);
@@ -635,6 +566,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setLiveHistoryNotice(null);
         let doneHandled = false;
         observedEndRef.current = false;
+        if (!reattach) setFollowupsUnavailable(false);
         let streamController: AbortController | null = null;
         let queuedSettled = !fromQueue;
         queuedSendPendingRef.current = fromQueue;
@@ -741,6 +673,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             toolOccurredRef.current = false;
                         }
                         fullContent += content;
+                        // The answer has begun, so the reasoning before it is over.
+                        const steps = useChatStore.getState().agentSteps;
+                        const last = steps[steps.length - 1];
+                        if (last?.type === 'thinking' && last.active) {
+                            updateLastAgentStep({ active: false, latencyMs: Date.now() - last.timestamp });
+                        }
                     }
                     // Safety net: strip any tool-call JSON that leaked past the
                     // backend SSE filter (see sse_handler.py _TOOL_CALL_JSON_RE).
@@ -784,6 +722,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         created_at: new Date().toISOString(),
                         rag_sources: null,
                     });
+                    return;
+                }
+                if (event.type === 'followup_unavailable') {
+                    if (!isStale()) setFollowupsUnavailable(true);
                     return;
                 }
                 if (event.type === 'followup_returned') {
@@ -932,6 +874,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
                 // Tool completion updates the last TOOL step (not just the last step,
                 // since thinking/status events may have been interleaved during execution)
+                // The call is over, so the live line must stop naming it; the model has the turn again.
+                if ((event.type === 'tool_end' || event.type === 'tool_result')
+                    && useChatStore.getState().livePhase === 'tool') {
+                    useChatStore.getState().setLiveStatus(null);
+                }
                 if (event.type === 'tool_end') {
                     updateLastToolStep({ active: false, success: event.success !== false });
                     return;
@@ -1003,13 +950,19 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                // ── Consolidate thinking events ──────────────────────────
-                // Instead of creating a new step for every thought, update
-                // the existing thinking step so we get ONE "Thinking" entry
-                // that shows the latest thought, not a massive stream.
-                // Uses appendThinkingContent() which atomically reads the
-                // current detail and appends inside a single set() call,
-                // preventing stale-read races that can lose accumulated text.
+                // The text streamed so far narrated the call that follows: it leaves the answer for the timeline.
+                if (event.type === 'commentary') {
+                    fullContent = '';
+                    toolOccurredRef.current = false;
+                    streamBufferRef.current = '';
+                    setStreamContent('');
+                    const step = agentEventToStep(event, stepIdRef);
+                    if (step) addAgentStep(step);
+                    return;
+                }
+
+                // One "Thinking" step per turn. appendThinkingContent() appends
+                // inside a single set(), so racing chunks never lose text.
                 if (event.type === 'thinking') {
                     const currentSteps = useChatStore.getState().agentSteps;
                     const lastStep = currentSteps[currentSteps.length - 1];
@@ -1066,11 +1019,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                if (event.type === 'step') {
-                    // No row of its own, but it is the turn's step count.
-                    if (typeof event.step === 'number') setLiveAgentStep(event.step);
-                    return;
-                }
+                // The step counter measures the harness; the timeline shows the work.
+                if (event.type === 'step') return;
 
                 if (event.type === 'agent_error' && isEchoOfFailedTool(event, useChatStore.getState().agentSteps)) {
                     return;
@@ -1479,7 +1429,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             .then(() => setQueue((q) => messageQueue.promote(q, id, 'sending', 'delivered')))
             .catch((err) => {
                 log.chat.info(`Follow-up not taken by the running reply; it stays queued: ${err instanceof Error ? err.message : err}`);
-                setQueue((q) => messageQueue.promote(q, id, 'sending', 'queued'));
+                setQueue((q) => messageQueue.steerRefused(q, id));
             });
     }, [queue, isStreaming, sessionId, setQueue]);
 
@@ -1792,7 +1742,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 isStreaming={isStreaming}
                                 agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
                                 agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
-                                agentStepCount={liveAgentStep}
                                 cards={isStreaming ? cards : lastCardsRef.current}
                                 liveStatus={isStreaming ? liveStatus : null}
                                 awaitingUser={isStreaming && (awaitingUser || hasLiveQuestion || hasOpenPrompt)}
@@ -1860,7 +1809,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         items={queue}
                         onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}
                         onRetry={(id) => setQueue((q) => messageQueue.promote(q, id, 'failed', 'queued'))}
-                        onSteer={isStreaming && !stopping ? handleSteer : undefined}
+                        onSteer={isStreaming && !stopping && !followupsUnavailable ? handleSteer : undefined}
                         replying={isStreaming}
                         busyRetry={!!queueHold}
                     />
@@ -1889,6 +1838,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onUsage={showContextUsage}
                                     onDetails={() => revealPanelSection('context')}
                                 />
+                                <SessionFolderChip sessionId={sessionId} onOpen={() => revealPanelSection('environment')} />
                                 <ModelChip />
                             </>
                         )}

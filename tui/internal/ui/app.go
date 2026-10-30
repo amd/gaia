@@ -24,6 +24,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
 	"github.com/amd/gaia/tui/internal/ui/theme"
+	"github.com/amd/gaia/tui/internal/update"
 )
 
 // prepareTerminal does everything that has to TALK to the terminal before
@@ -79,8 +80,10 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithFullAccessNotice(notice).
-		WithClaude(useClaude, claudeModel)).
+		WithClaude(useClaude, claudeModel).
+		WithTerminalVersion(update.Current)).
 		WithTrace(trace).
+		WithUpdateCheck().
 		WithLocalPreflight(preflight.LocalOptions{
 			// The gate has to answer about the binary this launch will actually
 			// spawn — with --mock that is the mock, not the name the seed carries.
@@ -207,9 +210,11 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 				p.Quit()
 			}
 		}()
-		if _, err := p.Run(); err != nil {
+		final, err := p.Run()
+		if err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
+		beforeExit(final)
 		return nil
 	}
 
@@ -251,12 +256,35 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	// Bracket Run: tea.Program.Send silently discards messages outside it, so
 	// the control API must refuse injection rather than report a false success.
 	srv.MarkRunning()
-	_, err = p.Run()
+	final, err := p.Run()
 	srv.MarkStopped()
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
+	beforeExit(final)
 	return nil
+}
+
+// exitHook is a model with work to finish once the program has stopped —
+// however it stopped: a key, a closed terminal, a signal.
+type exitHook interface{ BeforeExit() error }
+
+// beforeExit runs the final model's exit work, after unwrapping the
+// recorder and repaint wrappers around it.
+func beforeExit(m tea.Model) {
+	for m != nil {
+		if h, ok := m.(exitHook); ok {
+			if err := h.BeforeExit(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+			return
+		}
+		u, ok := m.(interface{ Unwrap() tea.Model })
+		if !ok {
+			return
+		}
+		m = u.Unwrap()
+	}
 }
 
 // RunAgent launches one catalog agent by id, over whatever transport that entry
@@ -400,7 +428,8 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithClaude(useClaude, claudeModel).
-		WithModel(model)).
+		WithModel(model).
+		WithTerminalVersion(update.Current)).
 		WithTrace(trace)
 	if err := run(m, dev, ctrl); err != nil {
 		return 1, err

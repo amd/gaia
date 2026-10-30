@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
@@ -16,7 +16,7 @@ const START: StartScreen = {
         { skill: 'document-brief', title: 'Ask about your documents', note: '2 indexed documents', prompt: 'Using my indexed documents, give me the key points.', needs_input: false },
         { skill: 'research-report', title: 'Research a topic', note: 'A cited report from the web', prompt: 'Research and write a short cited report on: ', needs_input: true },
     ],
-    working_folder: { path: '/home/u/my-project', name: 'my-project', gaia_folder: false },
+    working_folder: { path: '/home/u/my-project', name: 'my-project', gaia_folder: false, choosable: true },
 };
 
 beforeEach(() => {
@@ -75,17 +75,6 @@ describe('NewChat and the document library', () => {
         fireEvent.click(await screen.findByRole('button', { name: 'Choose' }));
 
         expect(useChatStore.getState().showDocLibrary).toBe(true);
-    });
-
-    it('attaches the library when the documents card is picked', async () => {
-        const onSend = vi.fn().mockResolvedValue(undefined);
-        render(<NewChat onSend={onSend} />);
-        await screen.findByText(/Your library has 2 documents/);
-
-        fireEvent.click(await screen.findByText('Ask about your documents'));
-
-        await waitFor(() => expect(onSend).toHaveBeenCalled());
-        expect(useChatStore.getState().draftDocumentIds).toEqual(['d1', 'd2']);
     });
 
     it('offers nothing when the library is empty', async () => {
@@ -239,44 +228,112 @@ describe('NewChat empty state', () => {
         other.remove();
     });
 
-    it('offers the task cards the backend picked', async () => {
+    it('stays clean: no task cards, only the greeting and the composer', async () => {
         render(<NewChat onSend={vi.fn()} />);
-        const list = await screen.findByRole('list', { name: 'Things to try' });
-        expect(list.querySelectorAll('li')).toHaveLength(2);
-        expect(screen.getByText('2 indexed documents')).toBeInTheDocument();
+        await screen.findByText('my-project');
+        expect(screen.queryByRole('list', { name: 'Things to try' })).not.toBeInTheDocument();
+        expect(screen.queryByText('Ask about your documents')).not.toBeInTheDocument();
     });
 
-    it('a complete task card starts the chat with its prompt', async () => {
-        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
-        const onSend = vi.fn().mockResolvedValue(undefined);
-        render(<NewChat onSend={onSend} />);
-        fireEvent.click(await screen.findByRole('button', { name: /Ask about your documents/ }));
-        expect(onSend).toHaveBeenCalledWith(START.cards[0].prompt);
+    it('draws the NPU backdrop behind the content', () => {
+        const { container } = render(<NewChat onSend={vi.fn()} />);
+        expect(container.querySelector('main.new-chat > canvas.npu-backdrop')).toHaveAttribute('aria-hidden', 'true');
     });
 
-    it('a card that needs a subject fills the box and waits for it', async () => {
-        const onSend = vi.fn().mockResolvedValue(undefined);
-        render(<NewChat onSend={onSend} />);
-        fireEvent.click(await screen.findByRole('button', { name: /Research a topic/ }));
-        const box = screen.getByLabelText('Message');
-        expect(box).toHaveValue(START.cards[1].prompt);
-        expect(box).toHaveFocus();
-        expect(onSend).not.toHaveBeenCalled();
+    it('drops the composer to the bottom once typing starts, and back when the box is cleared', () => {
+        const { container } = render(<NewChat onSend={vi.fn()} />);
+        const main = container.querySelector('main.new-chat')!;
+        expect(main).not.toHaveClass('is-docked');
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'h' } });
+        expect(main).toHaveClass('is-docked');
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: '' } });
+        expect(main).not.toHaveClass('is-docked');
     });
 
-    it('shows the working folder', async () => {
-        render(<NewChat onSend={vi.fn()} />);
+    it('shows the working folder under the message box, where its picker opens', async () => {
+        const { container } = render(<NewChat onSend={vi.fn()} />);
         const chip = (await screen.findByText('my-project')).parentElement!;
         expect(chip).toHaveAttribute('title', expect.stringContaining('/home/u/my-project'));
+        expect(container.querySelector('.new-chat-meta')).toContainElement(chip);
+        expect(container.querySelector('.composer')).not.toContainElement(chip);
     });
 
     it("says when GAIA works in its own folder", async () => {
         vi.mocked(api.getStartScreen).mockResolvedValue({
-            ...START, working_folder: { path: '/home/u/.gaia/documents', name: 'documents', gaia_folder: true },
+            ...START, working_folder: { path: '/home/u/.gaia/documents', name: 'documents', gaia_folder: true, choosable: true },
         });
         render(<NewChat onSend={vi.fn()} />);
         const chip = (await screen.findByText('documents')).parentElement!;
         expect(chip.getAttribute('title')).toMatch(/its own folder/);
+    });
+
+    it('picks a folder for the chat from the folder chip, and drops it again', async () => {
+        useChatStore.setState({ draftFolder: null });
+        vi.mocked(api.browseFiles).mockResolvedValueOnce({
+            current_path: '/home/u',
+            parent_path: null,
+            entries: [{ name: 'site', path: '/home/u/site', type: 'folder', size: 0, extension: null, modified: null }],
+            quick_links: [],
+        }).mockResolvedValueOnce({ current_path: '/home/u/site', parent_path: '/home/u', entries: [], quick_links: [] });
+        render(<NewChat onSend={vi.fn()} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Folder for this chat: my-project' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'site' }));
+        await screen.findByText('No folders inside.');
+        fireEvent.click(screen.getByRole('button', { name: 'Use this folder' }));
+
+        expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        const chip = screen.getByRole('button', { name: 'Folder for this chat: my-project, plus site' });
+        // Picking adds a folder; the working folder stays in the label.
+        expect(chip).toHaveTextContent('my-project + site');
+
+        fireEvent.click(screen.getByRole('button', { name: "Don't give this chat site" }));
+        expect(useChatStore.getState().draftFolder).toBeNull();
+        expect(screen.getByRole('button', { name: 'Folder for this chat: my-project' })).toBeInTheDocument();
+    });
+
+    describe('in the desktop app', () => {
+        const pickFolder = vi.fn<(defaultPath?: string) => Promise<string | null>>();
+        beforeEach(() => {
+            useChatStore.setState({ draftFolder: null });
+            window.gaiaAPI = { dialog: { pickFolder } } as unknown as NonNullable<typeof window.gaiaAPI>;
+        });
+        afterEach(() => {
+            delete window.gaiaAPI;
+        });
+
+        it('picks the folder in the OS picker, starting from the working folder', async () => {
+            pickFolder.mockResolvedValue('/home/u/site');
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Folder for this chat: my-project' }));
+
+            expect(await screen.findByRole('button', { name: 'Folder for this chat: my-project, plus site' })).toBeInTheDocument();
+            expect(pickFolder).toHaveBeenCalledWith('/home/u/my-project');
+            expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+            expect(api.browseFiles).not.toHaveBeenCalled();
+        });
+
+        it('keeps the folder as it was when the OS picker is cancelled', async () => {
+            pickFolder.mockResolvedValue(null);
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Folder for this chat: my-project' }));
+
+            await waitFor(() => expect(pickFolder).toHaveBeenCalledTimes(1));
+            expect(useChatStore.getState().draftFolder).toBeNull();
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        });
+    });
+
+    it("shows the folder as plain text when this chat's agent can't be given another", async () => {
+        vi.mocked(api.getStartScreen).mockResolvedValue({ ...START, working_folder: { ...START.working_folder, choosable: false } });
+        render(<NewChat onSend={vi.fn()} />);
+
+        expect(await screen.findByText('my-project')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Folder for this chat/ })).not.toBeInTheDocument();
     });
 
     it('starts with text handed over from setup', () => {
@@ -284,30 +341,30 @@ describe('NewChat empty state', () => {
         expect(screen.getByLabelText('Message')).toHaveValue('Summarize this: ');
     });
 
-    it('says in one plain sentence why there are no suggestions, with the detail behind Details', async () => {
+    it('says in one plain sentence that the assistant did not start, with the detail behind Details', async () => {
         const detail = `The GAIA agent could not be started: sidecar binary lock ${'PENDING-sha256 '.repeat(60).trim()}`;
         vi.mocked(api.getStartScreen).mockResolvedValue({ ...START, cards: [], skills_error: detail });
         render(<NewChat onSend={vi.fn()} />);
-        expect(await screen.findByText(/assistant didn.t start, so it can.t suggest tasks yet/)).toBeInTheDocument();
+        expect(await screen.findByText(/assistant didn.t start yet/)).toBeInTheDocument();
         expect(screen.queryByText(detail)).not.toBeInTheDocument();
-        // The folder still shows: only the cards depend on the agent.
+        // The folder still shows: it does not depend on the agent.
         expect(screen.getByText('my-project')).toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('button', { name: /Details/ }));
         expect(screen.getByText(detail)).toBeInTheDocument();
     });
 
-    it('tries the suggestions again', async () => {
+    it('tries the start screen again', async () => {
         vi.mocked(api.getStartScreen)
             .mockRejectedValueOnce(new Error('backend restarting'))
             .mockResolvedValue(START);
         render(<NewChat onSend={vi.fn()} />);
         fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
-        expect(await screen.findByRole('list', { name: 'Things to try' })).toBeInTheDocument();
+        expect(await screen.findByText('my-project')).toBeInTheDocument();
         expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument();
     });
 
-    it('fetches the suggestions again on its own once the assistant has started', async () => {
+    it('fetches the start screen again on its own once the assistant has started', async () => {
         vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
         try {
             vi.mocked(api.getStartScreen)
@@ -325,8 +382,7 @@ describe('NewChat empty state', () => {
             expect(screen.getByText(/didn.t start/)).toBeInTheDocument();
 
             await act(async () => { vi.advanceTimersByTime(START_RETRY_MS); });
-            expect(await screen.findByRole('list', { name: 'Things to try' })).toBeInTheDocument();
-            expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument();
+            await waitFor(() => expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument());
         } finally {
             vi.useRealTimers();
         }
@@ -334,7 +390,7 @@ describe('NewChat empty state', () => {
 
     it('makes no model call of its own', async () => {
         render(<NewChat onSend={vi.fn()} />);
-        await screen.findByRole('list', { name: 'Things to try' });
+        await screen.findByText('my-project');
         expect(api.sendMessageStream).not.toHaveBeenCalled();
         expect(api.loadModel).not.toHaveBeenCalled();
     });

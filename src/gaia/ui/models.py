@@ -392,6 +392,8 @@ class CreateSessionRequest(BaseModel):
     # Mailbox provider for email-backed agents. Gmail by default; "microsoft"
     # routes the email agent to the Outlook backend (see EmailAgentConfig).
     mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
+    # Folders the chat may read and write from its first message.
+    folders: List[str] = Field(default_factory=list)
 
 
 class UpdateSessionRequest(BaseModel):
@@ -458,6 +460,32 @@ class SessionListResponse(BaseModel):
 
     sessions: List[SessionResponse]
     total: int
+
+
+class SearchSnippet(BaseModel):
+    """Text around a search hit, split so the UI can highlight ``match``."""
+
+    before: str
+    match: str
+    after: str
+
+
+class SessionSearchResult(BaseModel):
+    """One chat that matches a search, with where the first hit was."""
+
+    session_id: str
+    title: str
+    field: Literal["title", "message"]
+    snippet: SearchSnippet
+
+
+class SessionSearchResponse(BaseModel):
+    """Chats matching a search query, newest first, at most ``limit``."""
+
+    query: str
+    results: List[SessionSearchResult]
+    #: More chats matched than ``limit``; only the newest are listed.
+    truncated: bool = False
 
 
 # ── Messages ────────────────────────────────────────────────────────────────
@@ -530,7 +558,7 @@ class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
     id: int
-    type: str  # 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert'
+    type: str  # 'thinking' | 'commentary' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert'
     label: str
     detail: Optional[str] = None
     tool: Optional[str] = None
