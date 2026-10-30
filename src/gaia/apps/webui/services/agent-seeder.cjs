@@ -41,10 +41,11 @@
  * Recovery: to get a deleted bundled agent back, remove
  * `~/.gaia/seeder/<id>.seeded` and relaunch.
  *
- * Legacy cleanup: the retired `zoo-agent` demo is removed from
- * ~/.gaia/agents/ when it is provably an unmodified seeded copy — sentinel
- * present, no file newer than its seededAt (+5s slack), never through a
- * symlink. Removed ids are reported via the additive `cleaned` array.
+ * Legacy cleanup: the retired `zoo-agent` and `example-agent` demos are
+ * removed from ~/.gaia/agents/ when provably an unmodified seeded copy —
+ * sentinel present, no file newer than its seededAt (+5s slack), never
+ * through a symlink, and never while this build still bundles that id.
+ * Removed ids are reported via the additive `cleaned` array.
  *
  * Behaviour:
  *   - `process.resourcesPath` unset (dev / Jest) → empty result, no error,
@@ -310,7 +311,7 @@ function seedOneAgent(sourceDir, targetRoot, id) {
 // ── Legacy cleanup ───────────────────────────────────────────────────────
 
 // Retired bundled ids removed from user machines when provably unmodified.
-const LEGACY_CLEANUP_IDS = ["zoo-agent"];
+const LEGACY_CLEANUP_IDS = ["zoo-agent", "example-agent"];
 
 // Filesystem mtime granularity + copy latency headroom for the
 // modified-since-seed check.
@@ -334,19 +335,27 @@ function listFilesRecursive(dir) {
 }
 
 /**
- * Remove retired seeded demo agents (currently `zoo-agent`) from
+ * Remove retired seeded demo agents (LEGACY_CLEANUP_IDS) from
  * ~/.gaia/agents/. Deletes ONLY when the dir is provably an unmodified
- * seeded copy; anything ambiguous is left in place. Failures are logged
+ * seeded copy; anything ambiguous is left in place. An id the current
+ * installer still bundles is skipped: deleting it would leave a marker
+ * that blocks the re-seed, so the bundled agent would vanish for good. Failures are logged
  * and retried on the next launch (the sentinel keys the retry — no marker
  * is involved, since a retired id can never be re-seeded anyway).
  *
+ * @param {string} sourceDir  `<resourcesPath>/agents` of this build.
  * @returns {string[]} ids actually removed (verified gone from disk).
  */
-function cleanupLegacyAgents() {
+function cleanupLegacyAgents(sourceDir) {
   const cleaned = [];
 
   for (const id of LEGACY_CLEANUP_IDS) {
     const target = path.join(agentsTargetRoot(), id);
+
+    if (sourceDir && isDirectory(path.join(sourceDir, id))) {
+      log("INFO", `Legacy "${id}" is still bundled by this build — not removing it`);
+      continue;
+    }
 
     let st;
     try {
@@ -467,12 +476,12 @@ async function seedBundledAgents() {
     return result;
   }
 
-  // Legacy cleanup runs before the missing-source guard: an upgraded
-  // install must shed the retired zoo-agent even if this build ships no
-  // bundled agents.
-  result.cleaned = cleanupLegacyAgents();
-
   const sourceDir = path.join(process.resourcesPath, "agents");
+
+  // Legacy cleanup runs before the missing-source guard: an upgraded
+  // install must shed retired demos even if this build ships no bundled
+  // agents.
+  result.cleaned = cleanupLegacyAgents(sourceDir);
 
   if (!fs.existsSync(sourceDir) || !isDirectory(sourceDir)) {
     // Not an error — a build might simply ship without bundled agents.

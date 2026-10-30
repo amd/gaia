@@ -571,7 +571,7 @@ class ChatDatabase:
                 """SELECT s.*,
                           (SELECT COUNT(*) FROM messages WHERE session_id = s.id AND role != 'autonomous') as message_count
                    FROM sessions s
-                   ORDER BY s.updated_at DESC
+                   ORDER BY s.updated_at DESC, s.rowid DESC
                    LIMIT ? OFFSET ?""",
                 (limit, offset),
             ).fetchall()
@@ -621,7 +621,7 @@ class ChatDatabase:
         automated = "" if include_automated else " WHERE kind NOT IN (?, ?)"
         with self._transaction():
             sessions = self._conn.execute(
-                f"SELECT id, title FROM sessions{automated} ORDER BY updated_at DESC",
+                f"SELECT id, title FROM sessions{automated} ORDER BY updated_at DESC, rowid DESC",
                 () if include_automated else AUTOMATED_SESSION_KINDS,
             ).fetchall()
             first_hit = {

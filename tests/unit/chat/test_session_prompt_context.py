@@ -71,17 +71,18 @@ def test_the_prompt_names_exactly_the_sessions_existing_folders(gaia_docs, tmp_p
     assert '"my documents"' in line and "look here first" in line
 
 
-def test_saving_to_my_documents_names_the_users_folder_not_gaias(gaia_docs):
+def test_saving_to_my_documents_names_the_users_folder_not_gaias(
+    gaia_docs, monkeypatch
+):
     # "my Documents folder" sent new files into the hidden GAIA folder.
+    documents = Path.home() / "OneDrive" / "Documents"
+    monkeypatch.setattr("gaia_agent_chat.agent.documents_dir", lambda: documents)
     agent = _build(allowed_paths=[str(gaia_docs)])
     try:
         line = _folders_line(agent._get_system_prompt())
     finally:
         agent.__del__()
-    assert (
-        f"save a new file to the user's Documents folder, use {Path.home() / 'Documents'}"
-        in line
-    )
+    assert f"save a new file to the user's Documents folder, use {documents}" in line
 
 
 def test_no_documents_note_without_gaias_documents_folder(gaia_docs, tmp_path):
