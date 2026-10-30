@@ -98,6 +98,45 @@ def test_an_emptied_file_is_reported(agent, tmp_path):
     assert "is empty" in problem
 
 
+@pytest.mark.parametrize("name", ["__init__.py", "py.typed", ".gitkeep"])
+def test_a_file_empty_by_design_is_not_reported(agent, tmp_path, name):
+    target = tmp_path / "pkg" / name
+    target.parent.mkdir()
+    target.write_text("")
+    _edited(agent, target)
+
+    assert agent._verify_turn_edits() == []
+
+
+def test_a_file_the_user_asked_to_be_empty_is_not_reported(agent, tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("")
+    _edited(agent, target)
+    agent._current_query = "Create an empty notes.txt"
+
+    assert agent._verify_turn_edits() == []
+
+
+def test_an_empty_file_the_user_wanted_filled_is_still_reported(agent, tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("")
+    _edited(agent, target)
+    agent._current_query = "Put the meeting summary in notes.txt"
+
+    (problem,) = agent._verify_turn_edits()
+    assert "is empty" in problem
+
+
+def test_another_files_empty_request_does_not_exempt_this_one(agent, tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("")
+    _edited(agent, target)
+    agent._current_query = "Create an empty todo.txt and write the plan to notes.txt"
+
+    (problem,) = agent._verify_turn_edits()
+    assert "is empty" in problem
+
+
 def test_a_python_file_that_no_longer_parses_is_reported(agent, tmp_path):
     target = tmp_path / "broken.py"
     target.write_text("def f(:\n    return 1\n")

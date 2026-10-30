@@ -9251,7 +9251,14 @@ Do NOT wrap conversational replies in JSON.
                 continue
             text = data.decode("utf-8-sig", errors="replace")
             if not text.strip():
-                problems.append(f"`{path}` is empty after this turn's edit.")
+                # Same exemptions the write-time stand-in check grants.
+                if not (
+                    _empty_by_design(str(path))
+                    or _requested_empty(
+                        str(path), getattr(self, "_current_query", None)
+                    )
+                ):
+                    problems.append(f"`{path}` is empty after this turn's edit.")
                 continue
             suffix = path.suffix.lower()
             if suffix in (".py", ".pyi"):
