@@ -804,51 +804,16 @@ class TestStreamingRegisteredAgentDoesNotDoubleIndex:
         )
 
 
-# ── _stamp_chat_identity ─────────────────────────────────────────────
+# ── ChatAgent namespaced identity ───────────────────────────────────────────
 #
 # Regression coverage for the activation-filter bypass discovered during #1005
-# UI verification: ``_chat_helpers`` constructs ``ChatAgent(config)`` directly
-# at four call sites (built-in Chat streaming/non-streaming + two fallback
-# branches). Without stamping the namespaced id, those instances appear to the
-# activation filter as ``_gaia_namespaced_agent_id is None``, and
+# UI verification: an agent constructed without its namespaced id appears to
+# the activation filter as ``_gaia_namespaced_agent_id is None``, and
 # ``Agent._active_mcp_servers`` falls back to "ad-hoc agent — show every MCP
-# server unfiltered". The activations.json ledger gets written but ignored,
-# so deactivating ``mcp-github`` for ``installed:chat`` has no effect on what the
-# UI's Chat sees.
+# server unfiltered".
 
 
-class TestStampBuiltinChatIdentity:
-    """Tests for _stamp_chat_identity().
-
-    The stamp must hit the ChatAgentConfig BEFORE ChatAgent.__init__ runs,
-    because ``__init__`` calls ``_register_tools`` which reads the namespaced
-    id to decide which MCP servers' tools to surface. Stamping the instance
-    after construction is too late and reproduces the bypass bug.
-    """
-
-    def test_stamps_field_on_fresh_config(self):
-        pytest.importorskip("gaia_agent_chat")
-        from gaia_agent_chat.agent import ChatAgentConfig
-
-        from gaia.ui._chat_helpers import _stamp_chat_identity
-
-        config = ChatAgentConfig()
-        assert config.namespaced_agent_id is None
-        _stamp_chat_identity(config)
-        assert config.namespaced_agent_id == "installed:chat"
-
-    def test_is_idempotent_no_overwrite_when_already_set(self):
-        # Callers that pre-fill the field with a custom id (e.g. a future
-        # custom-Chat wrapper) must NOT be clobbered.
-        pytest.importorskip("gaia_agent_chat")
-        from gaia_agent_chat.agent import ChatAgentConfig
-
-        from gaia.ui._chat_helpers import _stamp_chat_identity
-
-        config = ChatAgentConfig(namespaced_agent_id="custom:abc:chat")
-        _stamp_chat_identity(config)
-        assert config.namespaced_agent_id == "custom:abc:chat"
-
+class TestChatAgentNamespacedIdentity:
     def test_chat_agent_init_propagates_config_to_instance_attr_before_super(
         self,
     ):
@@ -866,16 +831,15 @@ class TestStampBuiltinChatIdentity:
         """
         from pathlib import Path as _Path
 
-        # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); its
-        # source now lives under hub/agents/chat/python/.
+        # ChatAgent ships in the flagship package (#6099).
         src = (
             _Path(__file__).parents[4]
             / "hub"
             / "agents"
-            / "chat"
+            / "gaia"
             / "python"
-            / "gaia_agent_chat"
-            / "agent.py"
+            / "gaia_agent"
+            / "chat_agent.py"
         ).read_text(encoding="utf-8")
         init_start = src.index("def __init__(self, config: Optional[ChatAgentConfig]")
         super_init = src.index("super().__init__(", init_start)
@@ -890,55 +854,17 @@ class TestStampBuiltinChatIdentity:
             "UI Chat session."
         )
 
-    def test_every_direct_ChatAgent_construction_is_pre_stamped(self):
-        """Every ``agent = ChatAgent(config)`` in _chat_helpers.py must be
-        PRECEDED by ``_stamp_chat_identity(config)`` (within the
-        last 5 non-blank lines).
-
-        Structural guard: a fifth direct construction site added without
-        the prior stamp would silently re-introduce the activation-filter
-        bypass. This catches it at PR time instead of user-bug-report
-        time.
-
-        Why "before, not after": ``_register_tools`` runs inside
-        ``ChatAgent.__init__``; the activation filter consults the
-        namespaced id at that point. Stamping the instance after
-        construction is too late — the unfiltered tool set has already
-        been registered.
-        """
+    def test_the_ui_never_constructs_chat_agent_directly(self):
+        """Every in-process agent comes from the registry, which stamps the
+        namespaced id before construction. A direct ``ChatAgent(config)``
+        here would bypass that and re-open #1005."""
         import re
         from pathlib import Path as _Path
 
         src = (
             _Path(__file__).parents[4] / "src" / "gaia" / "ui" / "_chat_helpers.py"
         ).read_text(encoding="utf-8")
-
-        lines = src.splitlines()
-        offenders = []
-        for i, line in enumerate(lines):
-            if re.search(r"\bagent\s*=\s*ChatAgent\(", line):
-                # Look BACKWARD up to 5 non-blank lines for the stamp call.
-                window = []
-                j = i - 1
-                while j >= 0 and len(window) < 5:
-                    if lines[j].strip():
-                        window.append(lines[j])
-                    j -= 1
-                if not any("_stamp_chat_identity(config)" in w for w in window):
-                    offenders.append(
-                        f"line {i + 1}: {line.strip()!r} — missing prior "
-                        f"_stamp_chat_identity(config)"
-                    )
-
-        assert not offenders, (
-            "Every direct ``agent = ChatAgent(config)`` in _chat_helpers.py "
-            "must be PRECEDED by ``_stamp_chat_identity(config)`` "
-            "(within the last 5 non-blank lines) so the per-agent "
-            "activation filter (#1005) fires correctly. Post-construction "
-            "stamping is too late — ChatAgent.__init__ runs "
-            "_register_tools immediately and the filter would silently "
-            "bypass. Offending sites:\n  - " + "\n  - ".join(offenders)
-        )
+        assert not re.search(r"\bChatAgent\(", src)
 
 
 # ── Non-streaming email chat fails loud (#2109) ──────────────────────────────

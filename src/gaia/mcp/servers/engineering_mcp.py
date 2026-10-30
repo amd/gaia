@@ -89,6 +89,9 @@ def create_engineering_mcp(
 
 
 def main(argv: list[str] | None = None) -> None:
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--developer-mode",

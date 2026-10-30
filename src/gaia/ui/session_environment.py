@@ -124,7 +124,7 @@ def takes_folders(agent_type: Optional[str]) -> bool:
     if profile is None or profile.min_scope_api_version is None:
         return False
     try:
-        handle = daemon_client.acquire_handle(agent_type)
+        handle = daemon_client.acquire_handle(profile.agent_id)
     except SidecarError as e:
         logger.error("Could not start the %s agent to check folders: %s", agent_type, e)
         raise EnvironmentChangeError(profile.start_failed_text(e.kind)) from e

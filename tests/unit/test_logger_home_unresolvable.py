@@ -16,9 +16,11 @@ from gaia import logger as gaia_logger
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Runs in a fresh interpreter so the import-time logger is really exercised.
+# Runs in a fresh interpreter; importing must not configure logging, and
+# only the explicit opt-in does (#4775).
 _IMPORT_AND_LOG = (
-    "from gaia.logger import get_logger, log_manager\n"
+    "from gaia.logger import configure, get_logger\n"
+    "log_manager = configure()\n"
     "get_logger('gaia.probe').warning('probe-c38')\n"
     "print(log_manager.log_file)\n"
 )

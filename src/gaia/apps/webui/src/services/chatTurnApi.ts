@@ -84,6 +84,11 @@ export async function listAllPermissions(): Promise<{ default_mode: PermissionMo
     return apiFetch('GET', '/chat/permissions');
 }
 
+/** Set the mode new chats start in (`full_access` in the config the TUI shares). */
+export async function setDefaultPermissionMode(mode: PermissionMode): Promise<{ default_mode: PermissionMode }> {
+    return apiFetch('PUT', '/chat/permissions', { mode });
+}
+
 export async function setPermissionMode(sessionId: string, mode: PermissionMode): Promise<SessionPermissions> {
     return apiFetch('PUT', `/chat/permissions/${encodeURIComponent(sessionId)}`, { mode });
 }

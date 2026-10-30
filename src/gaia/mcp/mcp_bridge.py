@@ -871,6 +871,9 @@ def build_parser():
 
 
 def main():
+    from gaia.logger import configure
+
+    configure()
     from gaia.login_path import apply_login_path
     from gaia.tls import use_os_trust_store
 

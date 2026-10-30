@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The agent ships as one Python package.** `ChatAgent`, the class the agent
+  builds on, moved into `gaia-agent-gaia` (`gaia_agent.chat_agent`), so the
+  binary and a pip install no longer need `gaia-agent-chat`. Prompts and tools
+  are unchanged. API, MCP and scheduled callers that still name the retired
+  `chat`, `doc` or `file` agents get this agent instead; Agent UI chats saved
+  under them stay read-only. MCP settings saved for `installed:chat` no
+  longer apply (#6099).
 ### For integrators: contract 2.26
 
 - **"Always" answers can be listed and revoked** (contract **2.26**).
@@ -20,6 +29,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The doc profile names a search tool it has.** Its discovery rules told the
+  model to start with `find_files`, which that profile does not register, so the
+  first discovery step failed. They now name `search_file`, which it does
+  register. Profiles with the filesystem tools keep `find_files` (#6070).
 - **A repository indexed with `index_codebase` stays the code-search folder**
   (#6055). In the Agent UI, each new turn reset code search to the session's
   starting folder, so the next `search_code_index` looked in the wrong place
