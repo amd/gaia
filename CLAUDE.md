@@ -9,8 +9,8 @@ GAIA (Generative AI Is Awesome) is AMD's open-source framework for running gener
 **Key Documentation:**
 - External site: https://amd-gaia.ai
 - Development setup: [`docs/reference/dev.mdx`](docs/reference/dev.mdx)
-- SDK Reference: https://amd-gaia.ai/sdk
-- Guides: https://amd-gaia.ai/guides
+- SDK Reference: https://amd-gaia.ai/docs/sdk
+- Guides: https://amd-gaia.ai/docs/guides
 
 ## How You Communicate
 
@@ -205,12 +205,13 @@ This self-review step is mandatory - never skip verification of your output.
 ```
 
 **`amd-gaia.ai` links in `src/gaia/` MUST keep the `/docs/` path prefix.** Use
-`https://amd-gaia.ai/docs/guides/...`, never `https://amd-gaia.ai/guides/...` — the
+`https://amd-gaia.ai/docs/guides/...`, never `amd-gaia.ai/guides/...` — the
 Mintlify docs tab serves under `/docs/` and bare paths 404. This is enforced by
 `tests/unit/test_amd_gaia_urls.py` (issue #1058), which scans every `amd-gaia.ai`
-URL literal in `src/gaia/`; dropping `/docs/` from a runtime string is a CI failure,
-not a cleanup. Only the site root and install scripts (`/install.ps1`, `/install.sh`)
-are allowlisted without the prefix.
+URL literal in `src/gaia/`, plus `scripts/`, `installer/`, `.github/` and this
+file; dropping `/docs/` from a runtime string is a CI failure,
+not a cleanup. Only the site root, `/#install`, `/docs`, and the install scripts
+(`/install.ps1`, `/install.sh`) are allowlisted without the prefix.
 
 #### IMPORTANT: A functional change must update EVERY doc that describes it — not just one
 
@@ -641,8 +642,10 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
 docker, blender, sd, emr, routing) were **deleted**: their capability is the flagship's
 tool surface driven by a `SKILL.md` in [`hub/skills/`](hub/skills/). Adding a capability
-means writing a skill, not shipping an agent. `hub/agents/{hello-world,word-count,
-connectors-demo}` remain as teaching templates and are not catalog agents.
+means writing a skill, not shipping an agent. Custom agents stay supported (`gaia agent
+init/pack/publish`, `~/.gaia/agents/` discovery); the one reference package `gaia agent
+init` mirrors is [`tests/fixtures/agents/hello-world/`](tests/fixtures/agents/hello-world/),
+a test fixture, not a catalog agent.
 
 `gaia telegram` is a messaging adapter, not an agent.
 
@@ -676,7 +679,7 @@ When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can c
 
 ### Default Models
 - The default chat model follows the hardware. `gaia init` adds `Qwen3.6-35B-A3B-GGUF` (`LARGE_DEFAULT_MODEL_NAME`, a Lemonade built-in MoE with 3B active, listed since Lemonade v11.7.0, run with thinking on) where it fits — 23.3 GB of weights and vision projector plus its KV cache at the window it loads with (20 KiB/token, at least 64K, so ~27 GB for models), and only where a GPU holds it: a 64 GB+ Strix Halo or a 32 GB GPU, not a 24 GB card or a CPU-only PC — and records it as `default_model` in `~/.gaia/config.json` once downloaded; every smaller PC runs `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`). Gemma is also the vision model, so `gaia init` downloads it on every PC — except when the user has set `default_model`, which replaces it; the first image question then downloads Gemma. "Fits" is [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py), read off Lemonade's `/system-info` and `/health`; the TUI picker applies the same rule from `tui/internal/lemonade/recommended_models.json` (a drift test pins the two). `user.Qwen3.8-Flash-Next-GGUF` (`FLASH_OPTION_MODEL_NAME`, 82.86 GB plus its KV cache at 64K — 24 KiB/token, 1.6 GB — so ~90 GB, multimodal, thinking on, needs Lemonade v2026.39.1+) is opt-in only on a 128 GB Strix Halo — never in `DEFAULT_MODEL_LADDER` — chosen with `gaia config set default_model`; `util/compare_local_models.py` measures both on real hardware.
-- Agents that leave `model_id` unset call `resolve_default_chat_model()` — `default_model`, else `DEFAULT_MODEL_NAME`. That covers GaiaAgent, ChatAgent, and the example templates. Sharing one model id is what keeps switching agents from evicting and cold-reloading the resident model.
+- Agents that leave `model_id` unset call `resolve_default_chat_model()` — `default_model`, else `DEFAULT_MODEL_NAME`. That covers GaiaAgent and ChatAgent. Sharing one model id is what keeps switching agents from evicting and cold-reloading the resident model.
 - **EmailTriageAgent is the one exception.** With no explicit `model_id` it calls `resolve_default_email_model()` (`hub/agents/email/python/gaia_agent_email/model_select.py`), which returns `gemma4-it-e2b-FLM` when an NPU is present *and* that model is already servable, and `DEFAULT_MODEL_NAME` in every other case.
 - Context window: a model that declares `max_ctx_size` and `kv_bytes_per_token` in `MODELS` ([`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)) gets the largest window that fits the GPU memory Lemonade reports (`largest_context` in [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py)), and the fit check charges the KV cache at that same window. Every other model gets its `min_ctx_size`, else `GPU_CTX_SIZE` (65536). `NPU_CTX_SIZE` (32768, the FLM ceiling) applies only to models that run on the NPU, never to a GPU model on a machine whose `default_device` is `npu`. Gemma-4-E4B loads at 65536 (the eval baseline was captured there) when memory allows. Before every load, free memory is checked too (`check_free_memory` in `model_fit.py`): when it is short, the window drops in 8K steps to a 32K floor, and below that the load is refused with how much is needed and free.
 - Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported, and is the RAG SDK's `vlm_model` default (`src/gaia/rag/sdk.py`)
@@ -780,7 +783,7 @@ navigation — consult it rather than a hand-maintained copy here. Where things 
 
 ## Roadmap & Plans
 
-The roadmap is at [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://amd-gaia.ai/roadmap)).
+The roadmap is at [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://amd-gaia.ai/docs/roadmap)).
 Plan documents live in [`docs/plans/`](docs/plans/) (run `ls docs/plans/` for the full
 set — security-model, messaging, autonomy-engine, daemon-convergence, skill-format,
 adaptive memory/skills/recovery, desktop-installer, browser-use, eval-hillclimbing, and more).

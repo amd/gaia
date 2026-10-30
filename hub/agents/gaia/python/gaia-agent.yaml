@@ -1,6 +1,6 @@
 id: gaia
 name: GAIA
-version: 0.3.2
+version: 0.3.3
 description: "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills"
 author: AMD
 license: MIT
@@ -21,7 +21,7 @@ icon: sparkles
 # and the persistent shell session's get_shell_state / reset_shell_session)
 # + 8 skill-library tools
 # (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES) + 4 code-index tools
-# + 5 read-only email tools (gaia.agents.tools.email_tools)
+# + 8 read-only email tools (gaia.agents.tools.email_tools)
 # + 3 Stable Diffusion tools (enable_sd_tools is on for this agent)
 # + 8 live-browser tools, which register only with the `browser` extra
 #   installed (gaia.agents.tools.browser_use_tools)
@@ -29,20 +29,20 @@ icon: sparkles
 # registers only when GAIA_DYNAMIC_TOOLS=1 turns per-turn selection on.
 # + 3 audio-generation tools (enabled on the flagship, disabled in fast mode).
 # This is the REGISTERED size — what the agent can do.
-tools_count: 99
+tools_count: 102
 
 language: python
 # The chat agent this one subclasses imports gaia.agents.tools.reasoning_tools;
 # 0.25.1 is the first core that ships it. (0.25.0 added the allowed-folders
 # check, #4656; 0.24.1 was the first whose daemon can supervise this, #2932.)
-min_gaia_version: "0.25.2"
+min_gaia_version: "0.25.3"
 models: [Gemma-4-E4B-it-GGUF]
 
 python:
   entry_module: gaia_agent
   entry_class: GaiaAgent
   dependencies:
-    - "amd-gaia>=0.25.2"
+    - "amd-gaia>=0.25.3"
     - "gaia-agent-chat>=0.2.0"
 
 interfaces:
