@@ -1,12 +1,12 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-
-"""Reranking stays optional and never changes retrieval on a failed request."""
+"""Opt-in reranking is explicit, bounded, and score-compatible."""
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 from gaia.llm.lemonade_client import LemonadeClient
 from gaia.rag.sdk import RAGSDK
@@ -18,6 +18,7 @@ def _rag(client, **config):
         "enable_reranking": True,
         "reranking_model": None,
         "reranking_candidate_multiplier": 3,
+        "reranking_timeout": 30,
         "base_url": None,
         "show_stats": False,
         "max_chunks": 2,
@@ -28,8 +29,6 @@ def _rag(client, **config):
     rag.log = MagicMock()
     rag._reranking_model = None
     rag._reranking_checked = False
-    rag._reranking_unavailable_logged = False
-    rag._reranking_failure_logged = False
     return rag
 
 
@@ -37,7 +36,6 @@ def test_client_rerank_posts_the_current_lemonade_request_shape():
     client = object.__new__(LemonadeClient)
     client.base_url = "http://localhost:13305/v1"
     client._send_request = MagicMock(return_value={"results": []})
-
     assert client.rerank("capital of France", ["Paris", "Berlin"], "jina-reranker") == {
         "results": []
     }
@@ -63,15 +61,22 @@ def test_reranking_selects_only_a_downloaded_reranker():
         ]
     }
     rag = _rag(client)
-
     assert rag._resolve_reranking_model() == "jina-reranker"
     assert rag._resolve_reranking_model() == "jina-reranker"
     client.list_models.assert_called_once_with(show_all=False)
 
 
-def test_search_reranks_three_times_the_final_result_limit():
+def test_missing_requested_reranker_is_actionable():
     client = MagicMock()
-    rag = _rag(client)
+    client.list_models.return_value = {"data": []}
+    rag = _rag(client, reranking_model="bge-reranker-v2-m3-GGUF")
+    with pytest.raises(RuntimeError, match="not downloaded"):
+        rag._resolve_reranking_model()
+    client.rerank.assert_not_called()
+
+
+def test_search_reranks_three_times_the_final_result_limit():
+    rag = _rag(MagicMock())
     rag._load_embedder = MagicMock()
     rag._resolve_reranking_model = MagicMock(return_value="jina-reranker")
     rag._encode_query = MagicMock(return_value=np.ones((1, 2), dtype="float32"))
@@ -88,22 +93,46 @@ def test_search_reranks_three_times_the_final_result_limit():
         }
     )
     rag._rerank_candidates = MagicMock(
-        return_value=([2, 0, 3, 1], [9.0, 8.0, 7.0, 6.0])
+        return_value=([2, 0, 3, 1], [0.9, 0.8, 0.7, 0.6])
     )
-
     result = rag._search_chunks("needle")
-
     assert index.search.call_args.args[1] == 4
-    rag._rerank_candidates.assert_called_once_with(
-        "needle", ["first", "second", "third", "fourth"], "jina-reranker"
-    )
     assert result["retrieved_chunks"] == ["third", "first"]
-    assert result["scores"] == [9.0, 8.0]
+    assert result["scores"] == [0.9, 0.8]
 
 
-def test_search_keeps_vector_order_when_reranking_fails():
+def test_reranking_normalizes_scores_to_retrieval_range():
     client = MagicMock()
+    client.rerank.return_value = {
+        "results": [
+            {"index": 1, "relevance_score": 10.0},
+            {"index": 0, "relevance_score": 0.0},
+        ]
+    }
+    order, scores = _rag(client)._rerank_candidates(
+        "needle", ["a", "b"], "jina-reranker"
+    )
+    assert order == [1, 0]
+    assert scores[0] > 0.99
+    assert scores[1] == pytest.approx(0.5)
+    client.rerank.assert_called_once_with(
+        "needle", ["a", "b"], model="jina-reranker", timeout=30
+    )
+
+
+def test_rerank_failure_is_visible_and_does_not_disable_future_attempts():
+    client = MagicMock()
+    client.rerank.side_effect = RuntimeError("model is unavailable")
     rag = _rag(client)
+    with pytest.raises(RuntimeError, match="Lemonade rerank failed"):
+        rag._rerank_candidates("needle", ["a", "b"], "jina-reranker")
+    with pytest.raises(RuntimeError, match="Lemonade rerank failed"):
+        rag._rerank_candidates("needle", ["a", "b"], "jina-reranker")
+    assert client.rerank.call_count == 2
+
+
+def test_search_surfaces_rerank_failure_instead_of_using_vector_results():
+    rag = _rag(MagicMock())
     rag._load_embedder = MagicMock()
     rag._resolve_reranking_model = MagicMock(return_value="jina-reranker")
     rag._encode_query = MagicMock(return_value=np.ones((1, 2), dtype="float32"))
@@ -115,30 +144,6 @@ def test_search_keeps_vector_order_when_reranking_fails():
     rag._snapshot_query_state = MagicMock(
         return_value={"chunks": ["first", "second", "third"], "index": index}
     )
-    rag._rerank_candidates = MagicMock(return_value=None)
-
-    result = rag._search_chunks("needle")
-
-    assert result["retrieved_chunks"] == ["first", "second"]
-    assert result["scores"] == [1.0, 0.5]
-
-
-def test_rerank_failure_keeps_vector_result_available():
-    client = MagicMock()
-    client.rerank.side_effect = RuntimeError("model is unavailable")
-    rag = _rag(client)
-
-    assert rag._rerank_candidates("needle", ["a", "b"], "jina-reranker") is None
-    assert rag._rerank_candidates("needle", ["a", "b"], "jina-reranker") is None
-    assert rag.log.warning.call_count == 1
-
-
-def test_missing_requested_reranker_is_not_downloaded_or_loaded():
-    client = MagicMock()
-    client.list_models.return_value = {"data": []}
-    rag = _rag(client, reranking_model="bge-reranker-v2-m3-GGUF")
-
-    assert rag._resolve_reranking_model() is None
-    client.rerank.assert_not_called()
-    client.load_model.assert_not_called()
-    client.ensure_model_downloaded.assert_not_called()
+    rag._rerank_candidates = MagicMock(side_effect=RuntimeError("rerank failed"))
+    with pytest.raises(RuntimeError, match="rerank failed"):
+        rag._search_chunks("needle")

@@ -11,6 +11,7 @@ import errno
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -390,6 +391,7 @@ class RAGConfig:
     enable_reranking: bool = False
     reranking_model: Optional[str] = None
     reranking_candidate_multiplier: int = 3
+    reranking_timeout: int = 30
     # Security settings
     allowed_paths: Optional[List[str]] = None
 
@@ -499,8 +501,6 @@ class RAGSDK:
         self._embedding_cache = None  # content-keyed query-embed cache (lazy)
         self._reranking_model: Optional[str] = None
         self._reranking_checked = False
-        self._reranking_unavailable_logged = False
-        self._reranking_failure_logged = False
         self.index = None
         self.chunks = []
         self.indexed_files = set()
@@ -3925,69 +3925,57 @@ These positions indicate where to split the text."""
         return snapshot["retrieved_chunks"], snapshot["scores"]
 
     def _resolve_reranking_model(self) -> Optional[str]:
-        """Return one downloaded reranker, without downloading or prompting."""
         if not self.config.enable_reranking:
             return None
         if self._reranking_checked:
             return self._reranking_model
-
-        self._reranking_checked = True
         try:
             if self.llm_client is None:
                 from gaia.llm.lemonade_client import LemonadeClient
 
                 self.llm_client = LemonadeClient(base_url=self.config.base_url)
             models = self.llm_client.list_models(show_all=False).get("data", [])
-            requested = self.config.reranking_model
-            candidates = [
-                item
-                for item in models
-                if item.get("downloaded") is not False
-                and "reranking"
-                in {str(label).lower() for label in item.get("labels", [])}
-            ]
-            if requested:
-                self._reranking_model = next(
-                    (
-                        item.get("id")
-                        for item in candidates
-                        if item.get("id") == requested
-                    ),
-                    None,
+        except Exception as error:
+            raise RuntimeError(
+                "Unable to inspect downloaded Lemonade rerankers. Ensure Lemonade Server is running and try again."
+            ) from error
+        requested = self.config.reranking_model
+        candidates = [
+            item
+            for item in models
+            if item.get("downloaded") is not False
+            and "reranking" in {str(label).lower() for label in item.get("labels", [])}
+        ]
+        if requested:
+            self._reranking_model = next(
+                (item.get("id") for item in candidates if item.get("id") == requested),
+                None,
+            )
+            if not self._reranking_model:
+                raise RuntimeError(
+                    f"Reranker {requested!r} is not downloaded. Download it in Settings -> Models, or clear reranking_model."
                 )
-            elif candidates:
-                self._reranking_model = candidates[0].get("id")
-        except Exception as error:  # noqa: BLE001 - optional feature fallback
-            self.log.warning(
-                "Reranking is unavailable; using vector retrieval: %s", error
+        elif candidates:
+            self._reranking_model = candidates[0].get("id")
+        else:
+            raise RuntimeError(
+                "Reranking is enabled, but no downloaded model has the reranking label. Download a reranker in Settings -> Models, or disable enable_reranking."
             )
-
-        if not self._reranking_model and not self._reranking_unavailable_logged:
-            wanted = (
-                f" '{self.config.reranking_model}'"
-                if self.config.reranking_model
-                else ""
-            )
-            self.log.info(
-                "Reranking is enabled but no downloaded%s reranker is available; "
-                "using vector retrieval. Download one in Settings → Models.",
-                wanted,
-            )
-            self._reranking_unavailable_logged = True
+        self._reranking_checked = True
         return self._reranking_model
 
     def _rerank_candidates(
         self, query: str, candidate_chunks: List[str], model: str
-    ) -> Optional[Tuple[List[int], List[float]]]:
-        """Return candidate positions sorted by Lemonade relevance, or ``None``.
-
-        A malformed or failed optional response is ignored: FAISS remains the
-        complete deterministic fallback, and this path never pulls a model.
-        """
+    ) -> Tuple[List[int], List[float]]:
         if len(candidate_chunks) < 2:
-            return None
+            return list(range(len(candidate_chunks))), [1.0] * len(candidate_chunks)
         try:
-            response = self.llm_client.rerank(query, candidate_chunks, model=model)
+            response = self.llm_client.rerank(
+                query,
+                candidate_chunks,
+                model=model,
+                timeout=self.config.reranking_timeout,
+            )
             results = response.get("results")
             if not isinstance(results, list):
                 raise ValueError("response has no results list")
@@ -3998,28 +3986,24 @@ These positions indicate where to split the text."""
                 index = item.get("index") if isinstance(item, dict) else None
                 score = item.get("relevance_score") if isinstance(item, dict) else None
                 if (
-                    not isinstance(index, int)
+                    type(index) is not int
                     or index < 0
                     or index >= len(candidate_chunks)
                     or index in seen
-                    or not isinstance(score, (int, float))
+                    or type(score) not in (int, float)
+                    or not math.isfinite(float(score))
                 ):
                     raise ValueError("response contains an invalid rerank result")
                 seen.add(index)
                 order.append(index)
-                scores.append(float(score))
+                scores.append(1.0 / (1.0 + math.exp(-float(score))))
             if len(order) != len(candidate_chunks):
                 raise ValueError("response does not score every candidate")
             return order, scores
-        except Exception as error:  # noqa: BLE001 - optional feature fallback
-            self._reranking_model = None
-            if not self._reranking_failure_logged:
-                self.log.warning(
-                    "Reranking failed; using vector retrieval for this session: %s",
-                    error,
-                )
-                self._reranking_failure_logged = True
-            return None
+        except Exception as error:
+            raise RuntimeError(
+                f"Lemonade rerank failed for model {model}: {error}"
+            ) from error
 
     def _search_chunks(self, query: str) -> Dict[str, Any]:
         """Retrieve chunks from a snapshot, optionally reranking FAISS candidates."""
@@ -4062,11 +4046,10 @@ These positions indicate where to split the text."""
 
         if reranking_model:
             reranked = self._rerank_candidates(query, retrieved_chunks, reranking_model)
-            if reranked is not None:
-                order, rerank_scores = reranked
-                retrieved_indices = [retrieved_indices[i] for i in order]
-                retrieved_chunks = [retrieved_chunks[i] for i in order]
-                scores = rerank_scores
+            order, rerank_scores = reranked
+            retrieved_indices = [retrieved_indices[i] for i in order]
+            retrieved_chunks = [retrieved_chunks[i] for i in order]
+            scores = rerank_scores
         retrieved_indices = retrieved_indices[:result_limit]
         retrieved_chunks = retrieved_chunks[:result_limit]
         scores = scores[:result_limit]

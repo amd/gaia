@@ -1314,8 +1314,8 @@ Complete document Q&A examples
 passing the final `max_chunks` to the answering model. GAIA uses a reranker only
 when it is already downloaded in Lemonade and carries the `reranking` label.
 Set `reranking_model` to require a specific downloaded model, or leave it unset
-to use the first downloaded reranker. A missing or failed reranker logs once and
-falls back to the original vector ranking; it is never downloaded automatically.
+to use the first downloaded reranker. A missing or failed reranker raises an actionable error; it is never
+downloaded automatically.
 
 ```python
 config = RAGConfig(
