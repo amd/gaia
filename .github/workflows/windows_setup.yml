@@ -13,13 +13,25 @@
 # Callers name exactly one desktop app source -- never "whatever is latest":
 #
 #   agent_ui_release           a published vX.Y.Z release (PR gate, manual runs)
-#   agent_ui_publish_run_sha   publish.yml's push run for this commit (tags),
-#                              which builds the installers before its approval
-#                              gate, so a release does not wait on a human.
+#   agent_ui_publish_run_sha   publish.yml's push run for this commit and
+#                              version's tag, which builds the installers before
+#                              its approval gate, so a release does not wait on a
+#                              human. A release candidate's own publish.yml run
+#                              passes its own SHA and embeds its own build.
+#   agent_ui_artifact          an artifact of the caller's own run, holding the
+#                              windows-installer build-installers.yml uploaded
+#                              (the release-train dry run).
+#
+# `artifact_prefix` lets one run build twice (a release candidate and its
+# final-stamped twin) without the artifacts colliding. It defaults to empty,
+# which is exactly the behaviour every other caller gets.
 #
 # `sidecar` works as it does in tui_installers.yml: pinned fetches the real
 # gaia-agent against the committed digest; stub stands gaia-tui in for it on
 # PRs, where that digest is a placeholder. Nothing stub-built is published.
+# A release candidate passes `artifact`: the gaia-agent its own run froze
+# (build_flagship_sidecar.yml), because the committed pin is the last
+# published flagship, not one built from the candidate's commit.
 #
 # Reads the `tui-binaries` artifact the caller's tui_installers.yml run uploaded,
 # so the setup wraps the same gaia-tui bytes the raw downloads publish.
@@ -30,21 +42,31 @@ on:
   workflow_call:
     inputs:
       version:
-        description: 'Version stamped into the setup and its filename (x.y.z).'
+        description: 'Version stamped into the setup and its filename (x.y.z, or x.y.z-rc.N for a release candidate).'
         required: true
         type: string
       sidecar:
-        description: 'pinned (fetch + verify the real gaia-agent) or stub (PR gate).'
+        description: "pinned (fetch + verify the hub's gaia-agent), artifact (this run's gaia-agent-win32-x64 build), or stub (PR gate)."
         required: false
         default: pinned
         type: string
       agent_ui_release:
-        description: 'Take the desktop app setup from this published release tag (vX.Y.Z).'
+        description: 'Take the desktop app setup from this published release tag (vX.Y.Z or vX.Y.Z-rcN).'
         required: false
         default: ''
         type: string
       agent_ui_publish_run_sha:
         description: "Take the desktop app setup from publish.yml's push run for this commit."
+        required: false
+        default: ''
+        type: string
+      agent_ui_artifact:
+        description: "Take the desktop app setup from this artifact of the caller's own run."
+        required: false
+        default: ''
+        type: string
+      artifact_prefix:
+        description: 'Prefix for every artifact this uploads or reads, except the sidecar. Empty (the default) keeps today''s names.'
         required: false
         default: ''
         type: string
@@ -73,28 +95,50 @@ jobs:
         with:
           python-version: '3.x'
 
+      - uses: actions/download-artifact@v8
+        if: inputs.agent_ui_artifact != ''
+        with:
+          name: ${{ inputs.agent_ui_artifact }}
+          path: agent-ui-artifact
+
       - name: Fetch
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.agent_ui_release }}
           RUN_SHA: ${{ inputs.agent_ui_publish_run_sha }}
+          ARTIFACT: ${{ inputs.agent_ui_artifact }}
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [ -n "${RELEASE}" ] && [ -z "${RUN_SHA}" ]; then
+          if [ -n "${RELEASE}" ] && [ -z "${RUN_SHA}" ] && [ -z "${ARTIFACT}" ]; then
             python installer/tui/fetch_agent_ui_setup.py --release "${RELEASE}" --out agent-ui
-          elif [ -n "${RUN_SHA}" ] && [ -z "${RELEASE}" ]; then
+          elif [ -n "${RUN_SHA}" ] && [ -z "${RELEASE}" ] && [ -z "${ARTIFACT}" ]; then
             python installer/tui/fetch_agent_ui_setup.py \
               --publish-run-sha "${RUN_SHA}" --version "${VERSION}" \
               --wait-minutes 60 --out agent-ui
+          elif [ -n "${ARTIFACT}" ] && [ -z "${RELEASE}" ] && [ -z "${RUN_SHA}" ]; then
+            # The same name, PE and size checks the other two sources get.
+            python - "${VERSION}" <<'PY'
+          import shutil, sys
+          from pathlib import Path
+          sys.path.insert(0, "installer/tui")
+          from fetch_agent_ui_setup import setup_name, verify
+          version = sys.argv[1]
+          src = Path("agent-ui-artifact") / setup_name(version)
+          if not src.is_file():
+              raise SystemExit(f"the desktop app artifact has no {src.name}")
+          out = Path("agent-ui")
+          out.mkdir(parents=True, exist_ok=True)
+          print(verify(Path(shutil.copy(src, out / src.name)), version))
+          PY
           else
-            echo "::error::name exactly one desktop app source: agent_ui_release or agent_ui_publish_run_sha (got '${RELEASE}' and '${RUN_SHA}')."
+            echo "::error::name exactly one desktop app source: agent_ui_release, agent_ui_publish_run_sha or agent_ui_artifact (got '${RELEASE}', '${RUN_SHA}' and '${ARTIFACT}')."
             exit 1
           fi
 
       - uses: actions/upload-artifact@v7
         with:
-          name: agent-ui-win-setup
+          name: ${{ inputs.artifact_prefix }}agent-ui-win-setup
           path: agent-ui/
           if-no-files-found: error
           retention-days: 7
@@ -116,13 +160,19 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: tui-binaries
+          name: ${{ inputs.artifact_prefix }}tui-binaries
           path: bin
 
       - uses: actions/download-artifact@v8
         with:
-          name: agent-ui-win-setup
+          name: ${{ inputs.artifact_prefix }}agent-ui-win-setup
           path: agent-ui
+
+      - uses: actions/download-artifact@v8
+        if: inputs.sidecar == 'artifact'
+        with:
+          name: gaia-agent-win32-x64
+          path: flagship
 
       # What build-setup.sh consumes: gaia-tui.exe, gaia-agent.exe, LICENSE.md.
       - name: Stage the terminal payload
@@ -133,16 +183,27 @@ jobs:
           mkdir -p stage/win-x64
           cp bin/gaia-win-x64.exe stage/win-x64/gaia-tui.exe
           cp LICENSE.md stage/win-x64/LICENSE.md
-          if [ "${SIDECAR}" = "stub" ]; then
-            # The committed sidecar digest is a placeholder between releases, so
-            # a PR cannot fetch a real one and must not pretend to. Everything
-            # but the sidecar's identity stays under test; nothing is published.
-            cp stage/win-x64/gaia-tui.exe stage/win-x64/gaia-agent.exe
-          else
-            # Verified against hub/agents/gaia/npm/binaries.lock.json; a
-            # placeholder or mismatched digest fails the build.
-            python installer/tui/fetch_sidecar.py --platform win-x64 --out stage/win-x64
-          fi
+          case "${SIDECAR}" in
+            stub)
+              # The committed sidecar digest is a placeholder between releases, so
+              # a PR cannot fetch a real one and must not pretend to. Everything
+              # but the sidecar's identity stays under test; nothing is published.
+              cp stage/win-x64/gaia-tui.exe stage/win-x64/gaia-agent.exe
+              ;;
+            artifact)
+              # Verified against the hash its freeze leg recorded.
+              python util/flagship_rc_assets.py stage --artifacts flagship --platform win32-x64 --out stage/win-x64
+              ;;
+            pinned)
+              # Verified against hub/agents/gaia/npm/binaries.lock.json; a
+              # placeholder or mismatched digest fails the build.
+              python installer/tui/fetch_sidecar.py --platform win-x64 --out stage/win-x64
+              ;;
+            *)
+              echo "::error::sidecar must be pinned, artifact or stub (got '${SIDECAR}')."
+              exit 1
+              ;;
+          esac
           ls -l stage/win-x64
 
       # Verified against the digests committed in installer/tui/fonts/fonts.lock.json.
@@ -173,7 +234,45 @@ jobs:
           fi
 
       - name: Install NSIS
-        run: choco install nsis --no-progress -y
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Find-Nsis {
+            $command = Get-Command makensis.exe -ErrorAction SilentlyContinue
+            if ($command) {
+              return $command.Source
+            }
+
+            @(
+              (Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe"),
+              (Join-Path $env:ProgramFiles "NSIS\makensis.exe")
+            ) |
+              Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+              Select-Object -First 1
+          }
+
+          $nsisPath = Find-Nsis
+          for ($attempt = 1; -not $nsisPath -and $attempt -le 2; $attempt++) {
+            choco install nsis --no-progress -y
+            $chocoExitCode = $LASTEXITCODE
+            $nsisPath = Find-Nsis
+            if (-not $nsisPath -and $attempt -lt 2) {
+              Write-Host "NSIS was not found after Chocolatey attempt $attempt (exit code $chocoExitCode); retrying once."
+              Start-Sleep -Seconds 5
+            }
+          }
+
+          if (-not $nsisPath) {
+            if ($chocoExitCode -ne 0) {
+              throw "Chocolatey failed to install NSIS (exit code $chocoExitCode); makensis.exe was not found. See the Chocolatey output above for the feed error."
+            }
+            throw "Chocolatey reported success, but makensis.exe was not found after two attempts. See the Chocolatey output above (e.g. 'Unable to find package')."
+          }
+
+          $nsisDir = Split-Path -Parent $nsisPath
+          $nsisDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $nsisPath /VERSION
 
       - name: Build the setup
         run: |
@@ -188,7 +287,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: windows-setup
+          name: ${{ inputs.artifact_prefix }}windows-setup
           path: dist/
           if-no-files-found: error
           retention-days: 7
@@ -210,7 +309,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: windows-setup
+          name: ${{ inputs.artifact_prefix }}windows-setup
           path: dist
 
       - name: Install, verify, uninstall

@@ -181,12 +181,19 @@ def read_first_preflight(
             validator = getattr(host, "path_validator", None) or getattr(
                 host, "_path_validator", None
             )
-            # Out of scope or write-blocked, the tool's own refusal is the true
-            # one, and it doesn't reveal whether a file exists there.
-            if validator is not None and (
-                not validator.is_path_allowed(str(target), prompt_user=False)
-                or validator.is_write_blocked(str(target))[0]
+            if validator is not None and not validator.is_path_allowed(
+                str(target), prompt_user=False
             ):
+                # No answer could grant it, so refuse before the approval prompt.
+                if validator.grant_refusal_reason(str(target)):
+                    reason = validator.access_denied_message(str(target))
+                    validator.audit_write("write", str(target), 0, "denied", reason)
+                    return {"status": "error", "error": reason}
+                # Askable: the tool's own path-access question comes next.
+                return None
+            # Write-blocked, the tool's own refusal is the true one, and it
+            # doesn't reveal whether a file exists there.
+            if validator is not None and validator.is_write_blocked(str(target))[0]:
                 return None
             return file_read_record(host).refusal(target, verb)
         except (KeyError, TypeError, ValueError, OSError) as e:
@@ -194,6 +201,8 @@ def read_first_preflight(
             logger.debug("read-first preflight deferred to the tool: %s", e)
             return None
 
+    # The confirmation prompt names this path, so it shows where the write lands.
+    preflight.target_of = target_of
     return preflight
 
 
@@ -211,6 +220,18 @@ def _match_offsets(content: str, needle: str) -> List[int]:
             return offsets
         offsets.append(found)
         start = found + len(needle)
+
+
+def _retarget_newlines(block: str, reference: str) -> str:
+    """*block* with the line endings *reference* uses.
+
+    The caller composes ``old_content`` from text it was shown, which may have
+    been normalised on the way, while the file on disk keeps whatever endings
+    it was authored with. A CRLF-vs-LF difference is never a semantic one, so
+    it must not be the reason an otherwise exact edit is refused.
+    """
+    flat = block.replace("\r\n", "\n")
+    return flat.replace("\n", "\r\n") if "\r\n" in reference else flat
 
 
 def _collapse_whitespace(text: str) -> str:
@@ -351,6 +372,18 @@ def apply_unique_replacement(
         )
 
     offsets = _match_offsets(current_content, old_content)
+
+    if not offsets:
+        # Retry once with old_content's line endings rewritten to the file's.
+        # Only a line-ending difference can be rescued this way, and only when
+        # it then matches exactly one place, so nothing ambiguous is guessed at.
+        retargeted = _retarget_newlines(old_content, current_content)
+        if retargeted != old_content:
+            retargeted_offsets = _match_offsets(current_content, retargeted)
+            if len(retargeted_offsets) == 1:
+                old_content = retargeted
+                new_content = _retarget_newlines(new_content, current_content)
+                offsets = retargeted_offsets
 
     if not offsets:
         hint = ""

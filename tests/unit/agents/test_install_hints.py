@@ -10,6 +10,8 @@ must never recommend either broken command, and the source-install command it
 does recommend must reference a directory that actually exists on disk.
 """
 
+import importlib.metadata
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -19,6 +21,7 @@ import pytest
 from gaia.agents import install_hints
 from gaia.agents.install_hints import (
     _AGENT_SOURCE_SUBDIRS,
+    agent_import_error_message,
     agent_not_installed_message,
     source_install_command,
 )
@@ -29,6 +32,7 @@ AGENTS_DIR = REPO_ROOT / "hub" / "agents"
 
 CHAT_SPEC = (
     "gaia-agent-chat @ git+https://github.com/amd/gaia.git"
+    f"@{install_hints._core_release_tag(importlib.metadata.version('amd-gaia'))}"
     "#subdirectory=hub/agents/chat/python"
 )
 
@@ -102,6 +106,54 @@ class TestResolvePipFrontend:
         assert sys.executable in message
         assert "docs.astral.sh/uv" in message
         assert "ensurepip" in message
+
+
+@pytest.fixture
+def frozen_build(monkeypatch, stock_venv):
+    """A PyInstaller binary: sys.executable is the app, even with uv on PATH."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "C:\\GAIA\\gaia-agent.exe")
+
+
+class TestFrozenBuild:
+    """Every install hint named the binary as a Python to run pip with."""
+
+    def test_resolve_pip_frontend_refuses(self, frozen_build):
+        with pytest.raises(install_hints.PackageInstallerUnavailableError) as exc:
+            install_hints.resolve_pip_frontend()
+        assert str(exc.value) == install_hints.FROZEN_NO_INSTALL
+
+    def test_pip_install_hint_names_no_command(self, frozen_build):
+        hint = install_hints.pip_install_hint("psutil")
+        assert hint == install_hints.FROZEN_NO_INSTALL
+        assert "gaia-agent.exe" not in hint
+        assert "/docs/" in hint
+
+    def test_missing_package_hint_says_it_is_not_bundled(self, frozen_build):
+        hint = install_hints.missing_package_hint("pyperclip")
+        assert hint.startswith("pyperclip isn't bundled in this GAIA build.")
+        assert "pip install" not in hint
+
+    def test_missing_package_hint_from_source_gives_the_command(self, stock_venv):
+        assert install_hints.missing_package_hint("pyperclip") == (
+            f"Install with: {sys.executable} -m pip install pyperclip"
+        )
+
+    def test_missing_extra_hint_says_it_is_not_bundled(self, frozen_build):
+        hint = install_hints.missing_extra_hint("rag")
+        assert hint.startswith("GAIA[rag] isn't bundled in this GAIA build.")
+        assert "pip install" not in hint
+        assert "gaia-agent.exe" not in hint
+
+    def test_missing_extra_hint_from_source_gives_the_command(
+        self, stock_venv, monkeypatch
+    ):
+        monkeypatch.setattr(
+            install_hints, "gaia_extras_install_args", lambda e: ["amd-gaia[rag]"]
+        )
+        assert install_hints.missing_extra_hint("rag") == (
+            f'Install with: {sys.executable} -m pip install "amd-gaia[rag]"'
+        )
 
 
 class TestFormatCommand:
@@ -230,6 +282,120 @@ class TestAgentNotInstalledMessage:
         assert not message.endswith(" ")
 
 
+class TestSourceInstallRef:
+    """The command must name a tag that exists for the installed core."""
+
+    @pytest.mark.parametrize(
+        "installed, ref",
+        [
+            ("0.25.0", "@v0.25.0"),
+            ("0.15.4.1", "@v0.15.4.1"),
+            ("0.25.0rc1", "@v0.25.0-rc1"),
+            ("0.25.0rc12", "@v0.25.0-rc12"),
+            ("0.25.0.dev3+g1a2b3c4", ""),
+            (None, ""),
+        ],
+    )
+    def test_ref_matches_the_release_tag(self, monkeypatch, installed, ref):
+        monkeypatch.setattr(install_hints, "_installed_version", lambda _pkg: installed)
+        command = source_install_command("gaia-agent-chat")
+        assert f"gaia.git{ref}#subdirectory=hub/agents/chat/python" in command
+
+    def test_rc_tag_agrees_with_the_release_tooling(self):
+        spec = importlib.util.spec_from_file_location(
+            "release_tag", REPO_ROOT / "util" / "release_tag.py"
+        )
+        release_tag = importlib.util.module_from_spec(spec)
+        sys.modules["release_tag"] = release_tag  # dataclasses resolve it by name
+        try:
+            spec.loader.exec_module(release_tag)
+            released = release_tag.parse_tag("v0.25.0-rc2").pep440_version
+        finally:
+            del sys.modules["release_tag"]
+        assert install_hints._core_release_tag(released) == "v0.25.0-rc2"
+
+
+class TestAgentImportErrorMessage:
+    def test_missing_top_level_module_name_reports_not_installed(self):
+        # No CI environment can produce this for real -- gaia-agent-chat is
+        # installed for the wheel's own tests. CPython assigns ImportError.name
+        # exactly this way at raise time, so the constructed object is the
+        # identical shape the real import machinery produces.
+        error = ModuleNotFoundError("No module named 'gaia_agent_chat'")
+        error.name = "gaia_agent_chat"
+        message = agent_import_error_message(
+            error, "The chat agent is not installed", "gaia-agent-chat"
+        )
+        assert "is not installed" in message
+
+    def test_version_skew_reports_failed_import_not_missing(self):
+        """An ImportError raised *inside* the installed wheel must not be
+        declared "not installed" (the old misdiagnosis) -- report the real
+        error and both package versions. Produced via a real failed import of
+        a symbol the core doesn't export, the exact shape of the 0.24.1 +
+        gaia-agent-chat@main failure."""
+        try:
+            from gaia.config import _symbol_not_exported_by_core  # noqa: F401
+
+            pytest.fail("import of an unexported symbol should fail")
+        except ImportError as exc:
+            error = exc
+        message = agent_import_error_message(
+            error, "The chat agent is not installed", "gaia-agent-chat"
+        )
+        assert "is not installed" not in message
+        assert "is installed, but it could not be imported" in message
+        assert "_symbol_not_exported_by_core" in message
+        assert "Detected versions:" in message
+        assert "amd-gaia" in message
+        assert (
+            source_install_command("gaia-agent-chat", force_reinstall=True) in message
+        )
+        assert "--force-reinstall" in message
+        assert "--no-deps" in message
+
+    def test_missing_transitive_dependency_reports_failed_import(self):
+        # Real ModuleNotFoundError from importing a module that will never
+        # exist -- a wheel missing a transitive dep raises exactly this.
+        try:
+            import _gaia_missing_transitive_dep  # noqa: F401
+
+            pytest.fail("import of a missing module should fail")
+        except ModuleNotFoundError as exc:
+            error = exc
+        assert error.name == "_gaia_missing_transitive_dep"
+        message = agent_import_error_message(
+            error, "The chat agent is not installed", "gaia-agent-chat"
+        )
+        assert "is installed, but it could not be imported" in message
+        assert "_gaia_missing_transitive_dep" in message
+
+    def test_gaia_agent_gaia_missing_top_level_reports_not_installed(self):
+        """gaia-agent-gaia's top-level package is gaia_agent (not gaia_agent_gaia).
+        A ModuleNotFoundError for gaia_agent must be treated as 'not installed'."""
+        error = ModuleNotFoundError("No module named 'gaia_agent'")
+        error.name = "gaia_agent"
+        message = agent_import_error_message(
+            error, "The GAIA agent is not installed", "gaia-agent-gaia"
+        )
+        assert "is not installed" in message
+        assert source_install_command("gaia-agent-gaia") in message
+        assert "--no-deps" not in message
+
+    def test_gaia_agent_gaia_missing_sibling_chat_reports_not_installed(self):
+        """A missing required sibling should reinstall the primary wheel with
+        dependencies enabled, restoring gaia-agent-chat."""
+        error = ModuleNotFoundError("No module named 'gaia_agent_chat'")
+        error.name = "gaia_agent_chat"
+        message = agent_import_error_message(
+            error, "The GAIA agent is not installed", "gaia-agent-gaia"
+        )
+        assert "is not installed" in message
+        assert source_install_command("gaia-agent-gaia") in message
+        assert "subdirectory=hub/agents/gaia/python" in message
+        assert "--no-deps" not in message
+
+
 class TestGaiaExtraRequirements:
     """Adding extras installs their requirements, never GAIA itself."""
 
@@ -283,3 +449,103 @@ class TestGaiaExtraRequirements:
 
         extras = {e for p in INIT_PROFILES.values() for e in p.get("pip_extras", [])}
         assert install_hints.gaia_extra_requirements(sorted(extras))
+
+
+# ---------------------------------------------------------------------------
+# Adversarial: a hint is true for the build the user is running
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(params=["stock", "installer", "none"])
+def any_installer(request, monkeypatch, tmp_path):
+    """Every kind of source environment, to freeze on top of."""
+    pip = request.param == "stock"
+    uv = "/home/u/.local/bin/uv" if request.param == "installer" else None
+    monkeypatch.setattr(install_hints, "_pip_available", lambda: pip)
+    monkeypatch.setattr(
+        install_hints.shutil, "which", lambda name: uv if name == "uv" else None
+    )
+    monkeypatch.setattr(install_hints.Path, "home", lambda: tmp_path)
+    return request.param
+
+
+@pytest.mark.parametrize("frozen_value", [True, 1, "macosx_app", "windows_exe"])
+def test_a_frozen_build_never_names_an_install_command(
+    any_installer, monkeypatch, frozen_value
+):
+    monkeypatch.setattr(sys, "frozen", frozen_value, raising=False)
+    monkeypatch.setattr(sys, "executable", r"C:\GAIA\gaia-agent.exe")
+
+    hints = [
+        install_hints.pip_install_hint("psutil"),
+        install_hints.missing_package_hint("pypdf", "openpyxl"),
+        install_hints.missing_extra_hint("rag"),
+    ]
+
+    for hint in hints:
+        assert "pip install" not in hint, hint
+        assert "gaia-agent.exe" not in hint, hint
+        assert "-m pip" not in hint, hint
+
+
+@pytest.mark.parametrize("frozen_value", [False, 0, None, ""])
+def test_a_falsy_frozen_flag_is_a_source_build(stock_venv, monkeypatch, frozen_value):
+    monkeypatch.setattr(sys, "frozen", frozen_value, raising=False)
+
+    assert install_hints.missing_package_hint("pypdf") == (
+        f"Install with: {sys.executable} -m pip install pypdf"
+    )
+
+
+def test_a_source_build_without_pip_never_says_python_m_pip(installer_venv):
+    hint = install_hints.missing_package_hint("pypdf")
+
+    assert "-m pip" not in hint
+    assert hint == f"Install with: uv pip install --python {sys.executable} pypdf"
+
+
+def test_a_source_build_with_no_installer_says_to_get_uv_first(no_installer):
+    hint = install_hints.missing_package_hint("pypdf")
+
+    assert "install uv" in hint
+    assert hint.endswith(f"uv pip install --python {sys.executable} pypdf")
+    assert "-m pip install" not in hint
+
+
+@pytest.mark.parametrize(
+    "spec", ["watchdog>=2.1.0", "requests<3", "pkg; sys_platform == 'win32'"]
+)
+def test_a_requirement_spec_is_quoted_so_pasting_it_does_not_redirect(stock_venv, spec):
+    hint = install_hints.missing_package_hint(spec)
+
+    assert f'"{spec}"' in hint
+
+
+def test_an_interpreter_path_with_spaces_is_quoted(stock_venv, monkeypatch):
+    exe = r"C:\Program Files\Python313\python.exe"
+    monkeypatch.setattr(sys, "executable", exe)
+
+    assert install_hints.missing_package_hint("pypdf").startswith(
+        f'Install with: "{exe}" -m pip install'
+    )
+
+
+def test_converted_tool_errors_follow_the_build(frozen_build):
+    from gaia.agents.tools import code_index_tools, rag_tools
+
+    for message in (
+        rag_tools._rag_not_available(),
+        code_index_tools._missing_deps_msg(),
+    ):
+        assert "isn't bundled in this GAIA build" in message
+        assert "pip install" not in message
+
+
+def test_converted_tool_errors_give_the_command_from_source(stock_venv, monkeypatch):
+    from gaia.agents.tools import rag_tools
+
+    monkeypatch.setattr(
+        install_hints, "gaia_extras_install_args", lambda e: ["amd-gaia[rag]"]
+    )
+
+    assert f"{sys.executable} -m pip install" in rag_tools._rag_not_available()

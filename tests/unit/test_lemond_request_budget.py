@@ -28,6 +28,7 @@ from gaia.llm.lemonade_client import (
     request_budget_seconds,
 )
 from gaia.llm.lemonade_embedded import _lemond_config
+from gaia.llm.stream_watchdog import STREAM_READ_BACKSTOP
 
 
 @pytest.fixture(autouse=True)
@@ -104,7 +105,11 @@ def test_the_client_spends_the_budget_on_a_streamed_turn(mock_openai, _ensure):
         )
     )
 
-    assert mock_openai.call_args.kwargs["timeout"] == request_budget_seconds()
+    # The stall watchdog enforces the budget; the SDK's read timeout backs it up.
+    assert (
+        mock_openai.call_args.kwargs["timeout"]
+        == request_budget_seconds() + STREAM_READ_BACKSTOP
+    )
 
 
 def test_the_written_config_keeps_the_private_instance_settings():

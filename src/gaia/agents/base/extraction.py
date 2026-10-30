@@ -10,6 +10,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import stat
@@ -21,8 +22,10 @@ from gaia.agents.base.completion import (
     _BINARY_SUFFIXES,
     _normalize_key,
     _scan_paths,
-    save_obligations,
+    named_outputs,
 )
+
+logger = logging.getLogger(__name__)
 
 PAGE_CHARS = 4000
 OVERLAP = 600
@@ -111,13 +114,17 @@ def exhaustive_request(text):
     return False
 
 
-def read_snapshot(path, validator, limit=None):
-    """Read once through the existing file permission boundary, with a hard cap."""
+def read_snapshot(path, validator, limit=None, *, prompt_user=False):
+    """Read once through the existing file permission boundary, with a hard cap.
+
+    ``prompt_user`` asks for an out-of-scope source the way ``read_file`` does;
+    re-reads of an already-approved file leave it off.
+    """
     limit = MAX_CHARS if limit is None else limit
     if validator is None:
         raise ValueError("File permission validator is unavailable")
     real = os.path.realpath(os.path.expanduser(path))
-    allowed, reason = validator.validate_read(real, prompt_user=False)
+    allowed, reason = validator.validate_read(real, prompt_user=prompt_user)
     if not allowed:
         raise ValueError(reason)
     descriptor = os.open(real, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
@@ -576,6 +583,7 @@ def extract_pages(source, request, ask, check_cancelled, fields=()):
                 check_cancelled()
                 if time.monotonic() - started > MAX_SECONDS:
                     raise ValueError("Extraction time budget exhausted")
+                reply = None
                 try:
                     schema_system = SYSTEM
                     if fields:
@@ -599,6 +607,16 @@ def extract_pages(source, request, ask, check_cancelled, fields=()):
                     found.extend(parsed)
                     break
                 except (ValueError, TypeError) as error:
+                    # The reply is the only evidence of why a page was refused.
+                    logger.warning(
+                        "Extractor reply rejected (page %d, pass %d, attempt %d): "
+                        "%s; raw reply: %s",
+                        pages + 1,
+                        pass_number + 1,
+                        attempt + 1,
+                        error,
+                        repr(reply)[:4000],
+                    )
                     if attempt:
                         raise ValueError(
                             f"Extraction failed on page {pages + 1}: {error}"
@@ -682,8 +700,8 @@ class ExtractionLedger:
         self.root = root or os.getcwd()
         # Without a read permission boundary the tool cannot run at all.
         self.available = available
-        saves, _ = save_obligations(query)
-        self.destinations = {self.key(p) for p in saves}
+        # Every deliverable the user named, never only the last one.
+        self.destinations = {self.key(p) for p in named_outputs(query)}
         source_clause = re.split(
             r"\b(?:save|write|export|store)\b|\b(?:into|to)\s", query, flags=re.I
         )[0]
@@ -736,7 +754,13 @@ class ExtractionLedger:
             )
             and not self.code_symbols_only
         )
+        # A skill alone offers the tools; it enforces only when the user's own
+        # request names a source document or asks for an inventory.
+        self.asked = exhaustive_request(query)
+        self._offered = False
         self.sources = set()
+        # Files this turn wrote: the agent's own outputs, never sources.
+        self.written = set()
         self.results = {}
         self.errors = {}
         self.lock = threading.Lock()
@@ -755,19 +779,31 @@ class ExtractionLedger:
     def key(self, path):
         return _normalize_key(path, self.root)
 
+    @property
+    def offered(self):
+        """Whether the extraction tools belong in this turn's tool set."""
+        return self.enabled or self._offered
+
+    def is_output(self, key, outputs=()):
+        """A named deliverable or a file written this turn, never a source."""
+        return key in self.destinations or key in self.written or key in outputs
+
     def activate_skill(self, instructions):
         if (
             self.available
             and not self.code_symbols_only
             and exhaustive_request(instructions)
         ):
+            self._offered = True
+            if not (self.requested or self.asked):
+                return
             self.enabled = True
             if instructions not in self.query:
                 self.query += "\nActive extraction instructions:\n" + instructions
                 self.results.clear()
 
     def observe(self, tool, args, result):
-        if not self.enabled or not isinstance(result, dict):
+        if not isinstance(result, dict):
             return
         if tool in {
             "write_file",
@@ -778,24 +814,35 @@ class ExtractionLedger:
         }:
             path = args.get("file_path")
             if isinstance(path, str) and "\x00" not in path:
+                # Tracked while extraction is off too: it may switch on later.
+                self.written.add(self.key(path))
+                self.sources.discard(self.key(path))
                 self.results.pop(self.key(path), None)
                 self.output_errors.pop(self.key(path), None)
+        if not self.enabled:
+            return
         if tool in {"read_file", "read_python_file", "read_markdown_file"}:
             path = args.get("file_path") or result.get("file_path")
+            extension = (
+                os.path.splitext(path)[1].lower() if isinstance(path, str) else ""
+            )
             if (
                 isinstance(path, str)
                 and "\x00" not in path
-                and self.key(path) not in self.destinations
+                and not self.is_output(self.key(path))
                 and (
                     self.key(path) in self.requested
-                    # Code read on the way is a lookup, not a document to inventory.
+                    # Code, data and binaries read on the way are lookups the
+                    # extractor cannot inventory, not documents.
                     or not self.requested
-                    and os.path.splitext(path)[1].lower() not in _CODE_EXTENSIONS
+                    and extension
+                    not in _CODE_EXTENSIONS | _DATA_EXTENSIONS | _BINARY_SUFFIXES
                 )
             ):
                 self.sources.add(self.key(path))
 
-    def gaps(self):
+    def gaps(self, outputs=()):
+        """Sources not extracted; *outputs* are files this turn wrote any way."""
         if not self.enabled:
             return []
         # Nothing named or read: the answer comes from the query or knowledge.
@@ -804,6 +851,8 @@ class ExtractionLedger:
             f"Incomplete extraction of `{path}`: {self.errors.get(path, 'use extract_document_items; reading all pages alone does not establish an inventory')}."
             for path in sorted(sources)
             if path not in self.results
+            # A failed extraction stays a gap even on a file the turn wrote.
+            and (path in self.errors or not self.is_output(path, outputs))
         ]
 
         gaps.extend(self.output_errors.values())
@@ -880,7 +929,11 @@ class ExtractionLedger:
         self.verified = set()
         if not self.results:
             return
-        for path in sorted(self.destinations | self.exported):
+        # With several deliverables, only the exporter's file is the inventory.
+        inventories = self.exported | (
+            self.destinations if len(self.destinations) == 1 else set()
+        )
+        for path in sorted(inventories):
             try:
                 expected = self.export(path)
                 content = read(path, len(expected) + 1)

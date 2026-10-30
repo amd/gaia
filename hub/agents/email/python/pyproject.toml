@@ -14,26 +14,15 @@ requires-python = ">=3.10"
 # AND keyring automatically — the email REST router's import chain needs keyring
 # at module load and at request time (connected_mailbox_providers). Closes the
 # "consumer forgot [api]" half of #1617.
-# Floor: 0.22.0 is the first core release shipping
-# gaia.agents.registry.get_embedding_model_for_device, imported at agent
-# start (#2112). tests/test_dependency_floor.py guards this floor.
-#
-# NOTE (#2590): tools/setup_walkthrough.py now also imports
-# gaia.connectors.setup_routes, a core module that ships in the NEXT core
-# release, not 0.22.0. The floor CANNOT be bumped to reflect that yet — core
-# on this branch is still 0.22.0 and no higher version is published, so a
-# naive bump makes this package uninstallable everywhere (verified: a cold
-# `pip install -e .[dev,api] -e hub/agents/email/python` produces
-# ResolutionImpossible). Raise this floor to the release that actually
-# contains setup_routes once it is cut; until then the real protection is
-# the publish-time gate in .github/workflows/release_agent_email.yml, which
-# refuses to publish a build whose resolved core lacks the module.
+# Floor: 0.25.3 is the first core release containing the WAL retry helper
+# used when the email state database opens concurrently with another agent.
+# tests/test_dependency_floor.py guards this floor.
 #
 # specific-ai-tools is pinned exactly, not floored: it supplies the SLM
 # classifier the agent loads model weights through, so the version that ships
 # is the version the SLM path was validated against.
 dependencies = [
-    "amd-gaia[api]>=0.22.0",
+    "amd-gaia[api]>=0.25.3",
     "specific-ai-tools==0.1.1",
 ]
 

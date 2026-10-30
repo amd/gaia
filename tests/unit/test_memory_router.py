@@ -7,7 +7,7 @@ Tests all endpoints using FastAPI TestClient with an injected in-memory
 MemoryStore — no real database file or running server required.
 
 Endpoints covered:
-  GET  /api/memory/stats              (v1 + v2 embedding/reconciliation)
+  GET  /api/memory/stats              (v1 + v2 embedding coverage)
   GET  /api/memory/activity
   GET  /api/memory/knowledge          (v1 + v2 include_superseded, time_from, time_to)
   POST /api/memory/knowledge
@@ -34,6 +34,7 @@ Endpoints covered:
 """
 
 import contextlib
+import json
 import sqlite3
 import sys
 from unittest.mock import MagicMock, patch
@@ -247,6 +248,8 @@ class TestKnowledgeCRUD:
         resp = client.delete(f"/api/memory/knowledge/{kid}")
         assert resp.status_code == 200
         assert resp.json()["status"] == "deleted"
+        # A dashboard delete is the user forgetting it (#4730).
+        assert memory_router_mod._store.is_forgotten("To be deleted")
 
         # Verify deletion
         listing = client.get("/api/memory/knowledge").json()
@@ -1371,16 +1374,6 @@ class TestStatsV2Fields:
         assert "without_embedding" in emb
         assert "coverage_pct" in emb
 
-    def test_stats_includes_reconciliation_section(self, client):
-        """GET /api/memory/stats response includes 'reconciliation' section."""
-        resp = client.get("/api/memory/stats")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "reconciliation" in data
-        recon = data["reconciliation"]
-        assert "pairs_checked" in recon
-        assert "contradictions_found" in recon
-
     def test_stats_embedding_populated_when_store_supports(self, client, test_store):
         """When store supports get_embedding_coverage, stats are populated."""
         test_store.get_embedding_coverage = lambda: {
@@ -1394,30 +1387,23 @@ class TestStatsV2Fields:
         assert data["embedding"]["total_items"] == 50
         assert data["embedding"]["coverage_pct"] == 90.0
 
-    def test_stats_reconciliation_populated_when_store_supports(
-        self, client, test_store
-    ):
-        """When store supports get_reconciliation_stats, stats are populated."""
-        test_store.get_reconciliation_stats = lambda: {
-            "last_run": "2026-04-01T10:00:00-07:00",
-            "pairs_checked": 25,
-            "contradictions_found": 3,
-        }
-        resp = client.get("/api/memory/stats")
-        data = resp.json()
-        assert data["reconciliation"]["pairs_checked"] == 25
-        assert data["reconciliation"]["contradictions_found"] == 3
+    def test_stats_has_no_reconciliation_zeros(self, client):
+        """The store never computed reconciliation stats; the zeros were made up (#4824)."""
+        data = client.get("/api/memory/stats").json()
+        assert "reconciliation" not in data
 
-    def test_stats_defaults_when_store_lacks_v2_methods(self, client, test_store):
-        """Stats returns safe defaults when store lacks v2 methods."""
-        v2_methods = ("get_embedding_coverage", "get_reconciliation_stats")
-        if all(hasattr(test_store, m) for m in v2_methods):
-            pytest.skip("MemoryStore now implements v2 stats methods")
+    def test_a_failed_coverage_query_is_an_error_not_zero(self, client, test_store):
+        def broken():
+            raise sqlite3.OperationalError("database disk image is malformed")
+
+        test_store.get_embedding_coverage = broken
         resp = client.get("/api/memory/stats")
+
+        assert resp.status_code == 200
         data = resp.json()
-        # Should still have embedding/reconciliation with default values
-        assert data["embedding"]["total_items"] == 0
-        assert data["reconciliation"]["pairs_checked"] == 0
+        assert data["embedding"] is None
+        assert "could not be read" in data["embedding_error"]
+        assert "knowledge" in data
 
 
 # ===========================================================================
@@ -1664,6 +1650,121 @@ class TestMemorySettings:
         data = resp.json()
         assert data["memory_enabled"] is False
         assert data["mcp_memory_enabled"] is True
+
+    def test_put_system_discovery_consent_keeps_db_unchanged_when_json_save_fails(
+        self, client
+    ):
+        """The dashboard must not claim consent changed when its source of truth failed."""
+        with patch(
+            "gaia.agents.base.memory._save_memory_settings",
+            side_effect=RuntimeError("disk full"),
+        ):
+            resp = client.put(
+                "/api/memory/settings", json={"system_discovery_consent": True}
+            )
+
+        assert resp.status_code == 500
+        assert "Could not save system discovery setting" in resp.json()["detail"]
+        assert (
+            client.get("/api/memory/settings").json()["system_discovery_consent"]
+            is False
+        )
+
+
+class TestMemorySettingsFile:
+    def test_save_refuses_to_overwrite_malformed_settings(self, tmp_path, monkeypatch):
+        """A parse failure must preserve unrelated settings instead of replacing the file."""
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "memory_settings.json"
+        malformed = "{not valid json"
+        settings_path.write_text(malformed, encoding="utf-8")
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        with pytest.raises(RuntimeError, match="Could not read memory settings"):
+            memory_module._save_memory_settings({"system_context_enabled": False})
+
+        assert settings_path.read_text(encoding="utf-8") == malformed
+
+    def test_save_refuses_to_overwrite_non_object_root(self, tmp_path, monkeypatch):
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "memory_settings.json"
+        settings_path.write_text("[1, 2]", encoding="utf-8")
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        with pytest.raises(RuntimeError, match="must be an object"):
+            memory_module._save_memory_settings({"system_context_enabled": True})
+
+        assert settings_path.read_text(encoding="utf-8") == "[1, 2]"
+        assert memory_module._load_memory_settings() == {}
+
+    def test_save_raises_when_the_file_cannot_be_written(self, tmp_path, monkeypatch):
+        from gaia.agents.base import memory as memory_module
+
+        blocker = tmp_path / "not_a_dir"
+        blocker.write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            memory_module, "_MEMORY_SETTINGS_PATH", blocker / "memory_settings.json"
+        )
+
+        with pytest.raises(RuntimeError, match="Could not"):
+            memory_module._save_memory_settings({"system_context_enabled": True})
+
+    def test_save_merges_and_keeps_unrelated_keys(self, tmp_path, monkeypatch):
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "sub" / "memory_settings.json"
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        memory_module._save_memory_settings({"onboarding_completed_at": "t0"})
+        memory_module._save_memory_settings({"system_context_enabled": True})
+
+        assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+            "onboarding_completed_at": "t0",
+            "system_context_enabled": True,
+        }
+
+    def test_failed_consent_save_applies_no_other_key(self, client):
+        """A 500 must not leave half the request applied."""
+        with patch(
+            "gaia.agents.base.memory._save_memory_settings",
+            side_effect=RuntimeError("read-only"),
+        ):
+            resp = client.put(
+                "/api/memory/settings",
+                json={
+                    "memory_enabled": False,
+                    "mcp_memory_enabled": True,
+                    "system_discovery_consent": True,
+                },
+            )
+
+        assert resp.status_code == 500
+        data = client.get("/api/memory/settings").json()
+        assert data["memory_enabled"] is True
+        assert data["mcp_memory_enabled"] is False
+        assert data["system_discovery_consent"] is False
+
+    def test_consent_withdrawal_writes_file_then_db(
+        self, client, tmp_path, monkeypatch
+    ):
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "memory_settings.json"
+        settings_path.write_text('{"keep": 1}', encoding="utf-8")
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        resp = client.put(
+            "/api/memory/settings", json={"system_discovery_consent": False}
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["system_discovery_consent"] is False
+        assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+            "keep": 1,
+            "system_context_enabled": False,
+        }
 
 
 # ===========================================================================
@@ -2173,3 +2274,114 @@ class TestStreamInferenceModel:
         create.assert_not_called()
         assert '"type": "error"' in resp.text
         assert "gaia config set default_model" in resp.text
+
+
+# ===========================================================================
+# Failures the dashboard used to show as success (#4824)
+# ===========================================================================
+
+
+class TestFailuresAreReported:
+    def test_reinitialize_reports_a_failed_discovery(self, client, test_store):
+        _create_knowledge(client, "Wiped by reinitialize")
+        with patch.object(
+            memory_router_mod,
+            "_do_system_context_refresh",
+            side_effect=RuntimeError("WMI query timed out"),
+        ):
+            resp = client.post("/api/memory/reinitialize")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cleared"]["knowledge"] == 1
+        assert body["system_context"]["stored"] == 0
+        assert "system discovery failed" in body["system_context"]["error"]
+
+    def test_a_failed_inference_save_keeps_the_old_profile(self, client, test_store):
+        test_store.replace_by_source(
+            "inferred",
+            [{"category": "profile", "content": "Prefers concise answers"}],
+            allow_privileged=True,
+        )
+        real_insert = test_store._insert_bulk_locked
+
+        def insert_then_fail(rows):
+            real_insert(rows[:1])
+            raise sqlite3.OperationalError("disk I/O error")
+
+        test_store._insert_bulk_locked = insert_then_fail
+        resp = client.post(
+            "/api/memory/commit-inference",
+            json={
+                "insights": [
+                    {"content": "Works in finance", "confidence": 0.7},
+                    {"content": "Lives in Calgary", "confidence": 0.7},
+                ]
+            },
+        )
+
+        assert resp.status_code == 500
+        assert "previous one was kept" in resp.json()["detail"]
+        rows = [
+            r[0]
+            for r in test_store._conn.execute(
+                "SELECT content FROM knowledge WHERE source = 'inferred'"
+            )
+        ]
+        assert rows == ["Prefers concise answers"]
+
+    def test_a_good_inference_save_replaces_the_old_profile(self, client, test_store):
+        test_store.replace_by_source(
+            "inferred",
+            [{"category": "profile", "content": "Prefers concise answers"}],
+            allow_privileged=True,
+        )
+
+        resp = client.post(
+            "/api/memory/commit-inference",
+            json={"insights": [{"content": "Works in finance", "confidence": 0.7}]},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"stored": 1}
+        rows = [
+            r[0]
+            for r in test_store._conn.execute(
+                "SELECT content FROM knowledge WHERE source = 'inferred'"
+            )
+        ]
+        assert rows == ["Works in finance"]
+
+
+class TestDeleteForgetsOnlyFactsAboutTheUser:
+    def test_deleting_a_tool_lesson_forgets_nothing(self, client, test_store):
+        kid = test_store.store(
+            category="note",
+            content="read_file needs an absolute path",
+            source="tool_lesson",
+        )
+
+        assert client.delete(f"/api/memory/knowledge/{kid}").status_code == 200
+
+        assert test_store.get_item(kid) is None
+        assert test_store.get_forgotten() == []
+
+    def test_deleting_a_session_summary_forgets_nothing(self, client, test_store):
+        kid = test_store.store(
+            category="note",
+            content="The user prefers window seats and asked about flights",
+            source="consolidation",
+            domain="session:abcd1234",
+        )
+
+        assert client.delete(f"/api/memory/knowledge/{kid}").status_code == 200
+
+        assert not test_store.is_forgotten("User prefers window seats")
+
+    def test_about_user_filter(self, client, test_store):
+        test_store.store(category="fact", content="User lives in Calgary")
+        test_store.store(category="note", content="a lesson", source="tool_lesson")
+
+        data = client.get("/api/memory/knowledge?about_user=true").json()
+
+        assert [i["content"] for i in data["items"]] == ["User lives in Calgary"]

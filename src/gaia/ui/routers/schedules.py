@@ -30,6 +30,13 @@ class CreateScheduleRequest(BaseModel):
         ..., description="Interval string, e.g. 'every 6h', 'every 30m', 'daily'"
     )
     prompt: str = Field(..., description="The prompt to execute on each run")
+    timezone: Optional[str] = Field(
+        None,
+        description=(
+            "IANA time zone the schedule's times are in, e.g. "
+            "'America/Los_Angeles'. Defaults to the server machine's zone."
+        ),
+    )
 
 
 class UpdateScheduleRequest(BaseModel):
@@ -56,6 +63,9 @@ class ScheduleResponse(BaseModel):
     error_count: int = 0
     session_id: Optional[str] = None
     schedule_config: Optional[str] = None
+    description: str
+    last_error: Optional[str] = None
+    running: bool = False
 
 
 class ScheduleListResponse(BaseModel):
@@ -86,6 +96,13 @@ class ParseScheduleRequest(BaseModel):
     """Request to parse a natural language schedule description."""
 
     input: str = Field(..., description="Natural language schedule description")
+    timezone: Optional[str] = Field(
+        None,
+        description=(
+            "IANA time zone the schedule's times are in, e.g. "
+            "'America/Los_Angeles'. Defaults to the server machine's zone."
+        ),
+    )
 
 
 class ParseScheduleResponse(BaseModel):
@@ -98,6 +115,7 @@ class ParseScheduleResponse(BaseModel):
     days_of_week: Optional[List[int]] = None
     description: str
     next_run_at: Optional[str] = None
+    timezone: Optional[str] = None
     valid: bool  # True if the schedule could be parsed
 
 
@@ -124,11 +142,15 @@ def get_scheduler(request: Request) -> Scheduler:
 @router.post("/api/schedules/parse", response_model=ParseScheduleResponse)
 async def parse_schedule(request: ParseScheduleRequest):
     """Parse a natural language schedule description into structured config."""
-    from ..scheduler import compute_next_run, parse_schedule_input
+    from ..scheduler import compute_next_run, parse_schedule_input, resolve_zone
 
     config = parse_schedule_input(request.input)
     next_run = None
     if config.interval_seconds > 0:
+        try:
+            config.timezone = resolve_zone(request.timezone).key
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         next_dt = compute_next_run(config)
         next_run = next_dt.isoformat()
 
@@ -140,6 +162,7 @@ async def parse_schedule(request: ParseScheduleRequest):
         days_of_week=config.days_of_week,
         description=config.description,
         next_run_at=next_run,
+        timezone=config.timezone,
         valid=config.interval_seconds > 0,
     )
 
@@ -155,6 +178,7 @@ async def create_schedule(
             name=request.name,
             interval=request.interval,
             prompt=request.prompt,
+            tz=request.timezone,
         )
         return task
     except ValueError as e:
@@ -208,6 +232,20 @@ async def update_schedule(
         raise HTTPException(status_code=404, detail=f"Schedule '{name}' not found")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/api/schedules/{name}/run", response_model=ScheduleResponse)
+async def run_schedule_now(
+    name: str,
+    scheduler: Scheduler = Depends(get_scheduler),
+):
+    """Run a scheduled task once now; its next scheduled time stays as it was."""
+    try:
+        return await scheduler.run_task_now(name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Schedule '{name}' not found")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.delete("/api/schedules/{name}")

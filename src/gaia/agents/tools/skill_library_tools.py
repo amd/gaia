@@ -65,8 +65,10 @@ this turn's query matched it.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List
 
+from gaia.agents.tools.search_scope import in_env_scope
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -424,6 +426,7 @@ class SkillLibraryToolsMixin:
             Returns:
                 Name, path, tier, whether code is inert, and audit findings.
             """
+            from gaia.skills.capture import _classify_source
             from gaia.skills.capture import capture_skill as _capture
             from gaia.skills.errors import SkillError
 
@@ -434,6 +437,21 @@ class SkillLibraryToolsMixin:
 
             # A local source may sit outside the allowed folders: every capture
             # is confirmed by the user with the source shown, and is never grantable.
+            # GAIA_ALLOWED_PATHS is the exception — a confined run must not copy
+            # a folder from outside its scope and then load it.
+            if _classify_source(source) == "path" and not in_env_scope(
+                agent, Path(source.strip()).expanduser()
+            ):
+                return {
+                    "status": "error",
+                    "action": "capture_skill",
+                    "error_type": "PermissionError",
+                    "error": (
+                        f"'{source.strip()}' is outside GAIA_ALLOWED_PATHS, which "
+                        "confines this session's file access. Capture a skill "
+                        "from inside that scope, or from a URL or pasted text."
+                    ),
+                }
             try:
                 result = _capture(
                     source,
@@ -541,7 +559,8 @@ class SkillLibraryToolsMixin:
 
             Returns:
                 The skill's tier, its directory (resolve relative paths
-                against it), the tools it registered, and a warning if a
+                against it), the tools it registered, companion skills it
+                pairs with that are not loaded yet, and a warning if a
                 needed tool or command is missing.
             """
             from gaia.skills.errors import SkillError
@@ -568,6 +587,11 @@ class SkillLibraryToolsMixin:
                 skill = agent.load_skill(skill_name)
             except SkillError as exc:
                 return _failure("load_skill", exc)
+            # Tools the framework supplies for this skill register now, so the
+            # unmet-tools warning below describes what the model can really call.
+            activate = getattr(agent, "_activate_extraction_skills", None)
+            if callable(activate):
+                activate(skill_name)
 
             # Captured-but-unpromoted code never registered (gaia.skills.capture)
             # — report that honestly instead of listing tools that do not exist.
@@ -601,6 +625,20 @@ class SkillLibraryToolsMixin:
                     agent.get_skills_system_prompt()
                 ),
             }
+            from gaia.agents.base.skill_catalog import companions
+
+            unloaded_companions = [
+                other
+                for other in companions(agent.skill_manager.discover(), skill.name)
+                if other not in agent.loaded_skills
+            ]
+            if unloaded_companions:
+                payload["companion_skills"] = unloaded_companions
+                payload["companion_hint"] = (
+                    f"'{skill.name}' pairs with {', '.join(unloaded_companions)}, "
+                    "not loaded yet. If the request also involves what one of them "
+                    "covers, load it too before starting."
+                )
             if deferred:
                 payload["deferred_tools"] = list(skill.tool_names)
                 payload["warning"] = (

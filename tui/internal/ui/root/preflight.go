@@ -11,6 +11,7 @@ import (
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
+	"github.com/amd/gaia/tui/internal/update"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -30,12 +31,25 @@ import (
 // works — and the launch was let through ungated instead. It now gets the LOCAL
 // runner, which probes the same facts directly on this machine.
 func (m FlagshipModel) beginPreflight(agent catalog.Agent) (tea.Model, tea.Cmd) {
+	return m.beginPreflightCarrying(agent, 0)
+}
+
+// beginPreflightCarrying is beginPreflight for a gate that replaces one the
+// user left part-way through first-run setup, stepsDone steps in.
+func (m FlagshipModel) beginPreflightCarrying(agent catalog.Agent, stepsDone int) (tea.Model, tea.Cmd) {
 	cfg := preflight.ConfigFor(agent.ID, agent.Name)
+	opts := m.preflightOptions()
+	opts.StepsDone = stepsDone
+	m.gateSteps = 0
 	var gate preflight.Model
 	if agent.Transport == catalog.TransportDaemon {
-		gate = preflight.New(m.preflightTransport(), cfg, m.preflightOptions())
+		// Only the flagship's sidecar takes a per-turn model; email ignores one.
+		if agent.ID == catalog.FlagshipID {
+			cfg.Model = m.launchModel(agent)
+		}
+		gate = preflight.New(m.preflightTransport(), cfg, opts)
 	} else {
-		gate = preflight.NewLocal(m.localOptions(agent), cfg, m.preflightOptions())
+		gate = preflight.NewLocal(m.localOptions(agent), cfg, opts)
 	}
 	m.preflight = &gate
 	m.pending = &agent
@@ -52,13 +66,31 @@ func (m FlagshipModel) beginPreflight(agent catalog.Agent) (tea.Model, tea.Cmd) 
 // localOptions describes the agent to the local runner: the binary the launch
 // will actually spawn, and whether this session runs on Claude.
 func (m FlagshipModel) localOptions(agent catalog.Agent) preflight.LocalOptions {
+	opts := preflight.LocalOptions{Binary: agent.BinaryPath}
 	if m.pfLocal != nil {
-		opts := *m.pfLocal
-		opts.Model = m.launchModel(agent)
-		opts.ClaudeMode = m.useClaude
-		return opts
+		opts = *m.pfLocal
 	}
-	return preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: m.useClaude, Model: m.launchModel(agent)}
+	opts.Model = m.launchModel(agent)
+	opts.ClaudeMode = m.useClaude
+	// Only the flagship can switch where chat runs, so only it is asked.
+	opts.AskWhereChatRuns = agent.ID == catalog.FlagshipID
+	opts.ChatProvider = m.chatProvider(agent)
+	return opts
+}
+
+// chatProvider is where chat already runs for agent: the choice made on the
+// gate this session, else the saved one, else "" — nothing known.
+func (m FlagshipModel) chatProvider(agent catalog.Agent) string {
+	if agent.ID != catalog.FlagshipID {
+		return ""
+	}
+	if m.chatChoice != "" {
+		return m.chatChoice
+	}
+	if provider, _, ok := m.restoring(agent); ok {
+		return provider
+	}
+	return ""
 }
 
 // preflightTransport builds the gate's transport on first use and keeps it for
@@ -112,17 +144,37 @@ func (m *FlagshipModel) closeGate() {
 
 func (m FlagshipModel) proceedFromGate() (tea.Model, tea.Cmd) {
 	agent := *m.pending
+	report := m.preflight.Report()
 	// The gate has just asked whether setup is ready, so the chat's own
 	// first-boot check must not ask again — each costs a fresh Python
 	// interpreter for up to 30s, and a cold launch was paying that twice.
-	verified := gateAskedAboutSetup(m.preflight.Report())
-	m.gateChatModel = m.preflight.Report().ChatModel
+	verified := gateAskedAboutSetup(report)
+	m.gateChatModel = report.ChatModel
+	m = m.noteTerminalUpdate(report.CoreVersion)
 	// Before closeGate clears halted: proceeding IS the deliberate choice
 	// the halt exists to gate, so mark these StepIDs accepted for the rest
 	// of the session before the record of them is gone.
 	m.suppressHalted()
 	m.closeGate()
 	return m.launchAgent(agent, verified)
+}
+
+func (m FlagshipModel) noteTerminalUpdate(coreVersion string) FlagshipModel {
+	if m.terminalVersionChecked {
+		return m
+	}
+	m.terminalVersionChecked = true
+	coreVersion = strings.TrimPrefix(strings.TrimSpace(coreVersion), "v")
+	if coreVersion == "" || !update.Newer("v"+coreVersion, m.terminalVersion) {
+		return m
+	}
+	notice := fmt.Sprintf("[!] Terminal UI v%s is older than installed GAIA v%s. Download the current Terminal UI: %s", strings.TrimPrefix(m.terminalVersion, "v"), coreVersion, update.ReleasesPage)
+	if m.launchNotice == "" {
+		m.launchNotice = notice
+	} else {
+		m.launchNotice += "\n" + notice
+	}
+	return m
 }
 
 // gateAskedAboutSetup reports whether the AI model row was actually PROBED —

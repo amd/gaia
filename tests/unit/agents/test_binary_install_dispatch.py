@@ -130,5 +130,50 @@ def test_a_wheel_install_is_not_clobbered_into_a_sidecar(tmp_path, monkeypatch):
     assert _should_relay_to_sidecar("gaia", registry) is False
 
 
+def test_a_flagship_installed_after_startup_opens_a_chat(tmp_path, monkeypatch):
+    """The setup wizard installs the flagship after the UI built its registry;
+    the first new chat must work without restarting the server."""
+    from fastapi import HTTPException
+
+    from gaia.ui.routers import sessions
+
+    root = tmp_path / "agents"
+    root.mkdir()
+    monkeypatch.setattr(
+        "gaia.hub.installer.default_install_root", lambda: root, raising=False
+    )
+    registry = AgentRegistry()
+    registry._agents.clear()
+    # Isolate the binary-install path from any wheel in the dev environment.
+    monkeypatch.setattr(registry, "_discover_installed_agents", lambda: None)
+    register_installed_sidecars(registry)
+    assert registry.get("gaia") is None  # the fresh-install startup state
+
+    (root / "gaia").mkdir()
+    (root / "gaia" / ".installed").write_text(
+        json.dumps(
+            {
+                "id": "gaia",
+                "version": "0.2.0",
+                "language": "python",
+                "installed_at": "2026-09-23T00:00:00Z",
+                "artifact_sha256": "0" * 64,
+                "artifact_kind": "binary",
+                "executable": "gaia-agent-gaia",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sessions, "get_agent_registry", lambda: registry)
+
+    sessions._reject_unknown_agent_type("gaia")
+    assert registry.get("gaia").is_sidecar is True
+
+    with pytest.raises(HTTPException) as exc:
+        sessions._reject_unknown_agent_type("not-an-agent")
+    assert exc.value.status_code == 422
+    assert "restart the server" not in exc.value.detail
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

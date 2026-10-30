@@ -126,16 +126,81 @@ def test_each_file_is_reported_once_however_often_it_was_edited(agent, tmp_path)
     assert len(agent._verify_turn_edits()) == 1
 
 
-def test_findings_accumulate_across_rounds(agent, tmp_path):
+def test_findings_hold_the_latest_round_only(agent, tmp_path):
+    """A problem fixed in round 2 must not linger as an unresolved finding."""
     target = tmp_path / "broken.py"
     target.write_text("def f(:\n")
     _edited(agent, target)
 
     agent._verify_turn_edits()
+    assert len(agent._edit_verification_findings) == 1
+    target.write_text("def f():\n    return 1\n")
     agent._verify_turn_edits()
 
     assert agent._edit_verification_rounds == 2
-    assert len(agent._edit_verification_findings) == 2
+    assert agent._edit_verification_findings == []
+
+
+def test_a_utf8_bom_is_not_a_parse_error(agent, tmp_path):
+    py = tmp_path / "bom.py"
+    py.write_bytes(b"\xef\xbb\xbfx = 1\n")
+    js = tmp_path / "bom.json"
+    js.write_bytes(b'\xef\xbb\xbf{"a": 1}')
+    _edited(agent, py, js)
+
+    assert agent._verify_turn_edits() == []
+
+
+def test_a_bom_does_not_hide_a_real_parse_error(agent, tmp_path):
+    js = tmp_path / "bom.json"
+    js.write_bytes(b'\xef\xbb\xbf{"a": ')
+    _edited(agent, js)
+
+    (problem,) = agent._verify_turn_edits()
+    assert "no longer valid JSON" in problem
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "tsconfig.json",
+        "tsconfig.build.json",
+        "jsconfig.json",
+        ".vscode/settings.json",
+        ".devcontainer/devcontainer.json",
+        ".eslintrc.json",
+    ],
+)
+def test_jsonc_files_with_comments_are_not_reported(agent, tmp_path, relative):
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('{\n  // a comment the user wants\n  "a": 1,\n}\n')
+    _edited(agent, target)
+
+    assert agent._verify_turn_edits() == []
+
+
+@pytest.mark.parametrize("relative", ["settings.json", "vscode/settings.json"])
+def test_an_ordinary_json_file_with_comments_is_still_reported(
+    agent, tmp_path, relative
+):
+    """Only the JSONC conventions are exempt, not any file named like them."""
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('{\n  // not allowed here\n  "a": 1\n}\n')
+    _edited(agent, target)
+
+    (problem,) = agent._verify_turn_edits()
+    assert "no longer valid JSON" in problem
+
+
+def test_an_empty_jsonc_file_is_still_reported(agent, tmp_path):
+    target = tmp_path / "tsconfig.json"
+    target.write_text("  \n")
+    _edited(agent, target)
+
+    (problem,) = agent._verify_turn_edits()
+    assert "is empty" in problem
 
 
 # ------------------------------------------------------- the loop wiring
@@ -216,7 +281,7 @@ def test_the_loop_reads_the_edit_back_and_asks_for_a_repair(editing_agent):
     result = editing_agent.process_query("change mod.py", max_steps=2)
 
     assert editing_agent._edit_verification_rounds == 2
-    assert len(editing_agent._edit_verification_findings) == 1
+    assert editing_agent._edit_verification_findings == []
     repair_prompt = next(
         m["content"]
         for m in sent[-1]
@@ -261,9 +326,44 @@ def test_the_loop_stops_asking_after_the_bound(editing_agent):
     turns = [BREAK] + [{"answer": "Done."}] * 8
     _script(editing_agent, *turns)
 
-    editing_agent.process_query("change mod.py", max_steps=2)
+    result = editing_agent.process_query("change mod.py", max_steps=2)
 
     assert editing_agent._edit_verification_rounds == _MAX_EDIT_VERIFICATIONS
+    assert "mod.py" in result["result"]
+    assert "no longer parses as Python" in result["result"]
+
+
+def test_an_edit_still_broken_after_the_repair_rounds_is_named_in_the_answer(
+    editing_agent,
+):
+    """The model must not say "done" over a file that does not parse."""
+    turns = [BREAK] + [{"answer": "All done, mod.py is fixed."}] * 8
+    _script(editing_agent, *turns)
+
+    result = editing_agent.process_query("change mod.py", max_steps=2)
+
+    answer = result["result"]
+    assert answer.startswith("All done")
+    assert "couldn't confirm" in answer
+    assert answer.count("no longer parses as Python") == 1
+
+
+def test_an_edit_fixed_in_the_last_round_is_not_named(editing_agent):
+    turns = [
+        BREAK,
+        {"answer": "Done."},
+        BREAK,
+        {"answer": "Done."},
+        REPAIR,
+        {"answer": "Fixed for real."},
+    ]
+    _script(editing_agent, *turns)
+
+    result = editing_agent.process_query("change mod.py", max_steps=2)
+
+    assert editing_agent._edit_verification_rounds == _MAX_EDIT_VERIFICATIONS
+    assert result["result"].startswith("Fixed for real.")
+    assert "parses" not in result["result"]
 
 
 def test_the_loop_never_asks_when_the_check_is_off(editing_agent, monkeypatch):
@@ -350,7 +450,7 @@ def test_a_real_write_file_is_seen_by_the_check(real_agent):
     result carrying `operation == "edit_file"`, which nothing in
     `file_io_tools` sets. Reading it made this check silently do nothing for
     every shipped file tool — the exact failure it exists to catch."""
-    _script(
+    sent = _script(
         real_agent,
         {
             "tool": "write_file",
@@ -366,11 +466,9 @@ def test_a_real_write_file_is_seen_by_the_check(real_agent):
 
     real_agent.process_query("write mod.py", max_steps=2)
 
-    assert real_agent._edit_verification_rounds >= 1
-    assert any(
-        "no longer parses as Python" in f
-        for f in real_agent._edit_verification_findings
-    )
+    assert real_agent._edit_verification_rounds == 2
+    assert "no longer parses as Python" in json.dumps(sent[-1])
+    assert real_agent._edit_verification_findings == []
 
 
 def test_the_written_path_is_found_without_the_operation_field(real_agent):

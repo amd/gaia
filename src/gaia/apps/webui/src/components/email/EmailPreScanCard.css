@@ -59,8 +59,6 @@
 
 .email-pre-scan__section-title {
     flex: 1;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
 }
 
 .email-pre-scan__section-count {
@@ -168,7 +166,7 @@
     font-weight: 500;
     color: var(--text-secondary);
     cursor: pointer;
-    transition: background-color 120ms ease, border-color 120ms ease;
+    transition: background-color var(--duration-fast) var(--ease), border-color var(--duration-fast) var(--ease);
 }
 .email-pre-scan__action:hover {
     background: var(--bg-hover);

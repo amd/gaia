@@ -15,8 +15,18 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from gaia.agents.base.errors import missing_host_attr_message, require_host_attr
+from gaia.agents.base.file_snapshots import before_change
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools.document_text import (
+    cached_document_text,
+    document_type,
+    index_only_error,
+    read_budget,
+    read_document,
+    text_page_notes,
+    with_small_limit_warning,
+)
 from gaia.agents.tools.edit_impact import edit_impact
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
@@ -24,12 +34,54 @@ from gaia.agents.tools.file_edit import (
     read_first_preflight,
     stamp_of,
 )
-from gaia.agents.tools.path_access import readable_entry
+from gaia.agents.tools.path_access import missing_file_error, readable_entry
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
+from gaia.agents.tools.workspace_paths import (
+    _project_target_for,
+    _resolve_target,
+    _workspace_default,
+    _workspace_target,
+)
 from gaia.logger import get_logger
 from gaia.security import BackupError
 
 logger = get_logger(__name__)
+
+
+def _read_exact(path) -> str:
+    """Read *path* as text without translating its line endings.
+
+    ``open()`` in text mode, and ``Path.read_text``, default to universal
+    newlines: every CRLF in the file arrives as a bare LF. Paired with
+    :func:`_write_exact` this keeps a read/modify/write round trip
+    byte-exact, so a one-line edit stays a one-line diff on every platform.
+    """
+    with open(path, "r", encoding="utf-8", newline="") as fh:
+        return fh.read()
+
+
+def _write_exact(path, content: str) -> None:
+    """Write *content* to *path* with its line endings left alone.
+
+    ``open()`` in text mode, and ``Path.write_text``, translate every LF to
+    ``os.linesep`` on write. On Windows that silently turns an LF-terminated
+    file into a CRLF one, which no byte-comparing tool treats as a no-op: a
+    three-line edit to a 400-line file is reported as 400 lines changed.
+    """
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(content)
+
+
+def _match_newlines(block: str, reference: str) -> str:
+    """Rewrite *block*'s line endings to the ones *reference* already uses.
+
+    Generated text arrives LF-terminated. Splicing it into a CRLF file
+    unchanged would leave that file with two different line endings, which
+    is worse than consistently either one.
+    """
+    if "\r\n" not in reference:
+        return block
+    return block.replace("\r\n", "\n").replace("\n", "\r\n")
 
 
 def _python_syntax_error(path: Path, content: str) -> Optional[str]:
@@ -54,26 +106,6 @@ def _python_syntax_error(path: Path, content: str) -> Optional[str]:
         # a successful write into a reported failure.
         return f"{e} — the file was saved but will not run. Fix it before answering."
     return None
-
-
-def _resolve_target(file_path: str, project_dir: Optional[str] = None) -> Path:
-    """Where write_file / edit_file act: ``file_path``, under ``project_dir``."""
-    path = Path(file_path).expanduser()
-    if project_dir and not path.is_absolute():
-        path = Path(project_dir).resolve() / path
-    return path.resolve()
-
-
-def _project_target(args: Dict[str, Any]) -> Path:
-    return _resolve_target(args["file_path"], args.get("project_dir"))
-
-
-def _file_path_target(args: Dict[str, Any]) -> str:
-    return os.path.expanduser(args["file_path"])
-
-
-def _gaia_md_target(args: Dict[str, Any]) -> str:
-    return os.path.join(args.get("project_root", "."), "GAIA.md")
 
 
 def _directory_path_error(file_path: str) -> Dict[str, Any]:
@@ -230,14 +262,8 @@ def _function_span(node, lines: list) -> tuple:
 
 #: Lines one ranged read returns at most.
 MAX_READ_LINES = 400
-#: Chars a read returns when the host has no model-sized budget.
-DEFAULT_READ_CHARS = 20000
-
-
-def _read_budget(host: Any) -> int:
-    """Chars one read may return: the host's tool-result target, so it is never truncated."""
-    budget = getattr(host, "_truncation_budget", None)
-    return budget()[1] if callable(budget) else DEFAULT_READ_CHARS
+#: Lines a past-the-end read is pointed at instead: the end of the file.
+TAIL_LINES = 50
 
 
 def _line_window(
@@ -251,8 +277,17 @@ def _line_window(
     if total == 0:
         return {"content": "", "start_line": 1, "end_line": 0, "total_lines": 0}
     if start > total:
+        tail = max(1, total - TAIL_LINES + 1)
         return {
-            "error": f"start_line {start} is past the end: the file has {total} lines."
+            "error": (
+                f"start_line {start} is past the end: the file has {total} lines "
+                f"(1-{total}). Use a start_line from 1 to {total}; for the last "
+                f"{total - tail + 1} lines, start_line={tail}."
+            ),
+            "total_lines": total,
+            "suggested_start_line": tail,
+            # The error says exactly how to fix the call: a retry is a correction.
+            "correctable": True,
         }
     end = total if end_line is None else min(end_line, total)
     if end < start:
@@ -274,6 +309,10 @@ def _line_window(
     }
     if end < total:
         window["next_start_line"] = end + 1
+        window["note"] = (
+            f"Partial: lines {start}-{end} of {total}. Continue with "
+            f"start_line={end + 1} if you need the rest."
+        )
     return window
 
 
@@ -358,8 +397,33 @@ class FileIOToolsMixin:
             "file may have changed since."
         )
 
+    def get_document_reading_system_prompt(self) -> str:
+        """Read a few documents in full rather than through retrieved snippets.
+
+        Auto-discovered by ``Agent._get_mixin_prompts``; static text, so it sits
+        in the cacheable head of the prompt. Only rendered when the agent has
+        both ways to read a document, since the rule is a choice between them.
+        """
+        registry = getattr(self, "_tools_registry", {})
+        if "read_file" not in registry or "index_document" not in registry:
+            return ""
+        return (
+            "==== READING DOCUMENTS ====\n"
+            "To review, compare, reconcile, audit or summarise a few documents, "
+            "read each one in full with read_file instead of indexing it — it "
+            "returns the text of .docx, .pdf and .xlsx files, in parts when long "
+            "(continue at next_offset until it is null). Retrieved snippets miss "
+            "what no query asked for, such as a date that differs between two "
+            "documents. For these tasks this replaces the index-then-query "
+            "rules; index and query only a large collection, or to look up one "
+            "fact."
+        )
+
     def register_file_io_tools(self) -> None:
         """Register all file I/O tools."""
+
+        def target_of(args: Dict[str, Any]) -> Path:
+            return _project_target_for(self, args)
 
         @tool
         def read_file(
@@ -369,12 +433,12 @@ class FileIOToolsMixin:
             start_line: Optional[int] = None,
             end_line: Optional[int] = None,
         ) -> Dict[str, Any]:
-            """Read any file and intelligently analyze based on file type.
+            """Read any file, analyzed by type.
 
-            Automatically detects file type and provides appropriate analysis:
-            - Python files (.py): Syntax validation + symbol extraction (functions/classes)
-            - Markdown files (.md): Headers + code blocks + links
-            - Other text files: Raw content
+            - Python (.py): syntax validation + functions/classes
+            - Word (.docx), PDF and Excel (.xlsx): extracted text, in parts when
+              long; continue at next_offset until it is null
+            - Other text files: raw content
 
             Read the part you need with start_line/end_line, e.g. the line a
             search reported.
@@ -382,14 +446,14 @@ class FileIOToolsMixin:
             Args:
                 file_path: Path to the file to read
                 offset: Zero-based character offset for a bounded text page.
-                limit: Page size (1..8000 characters); omitted preserves full analysis.
+                limit: Page size in characters, not lines (1..8000 for text files); omitted preserves full analysis. For lines use start_line/end_line.
                 start_line: First line to return (1-based); the result is line-numbered.
                 end_line: Last line to return, inclusive (at most 400 lines per read).
 
             Returns:
                 Dictionary with file content and type-specific metadata
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(target_of({"file_path": file_path}))
             path_validator = _require_path_validator(self)
             try:
                 # Scope *and* secrets: being in an allowed directory never made
@@ -399,9 +463,14 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
+
+                unreadable = index_only_error(file_path)
+                if unreadable:
+                    return unreadable
+                is_document = document_type(file_path) is not None
 
                 reads = file_read_record(self)
                 seen = stamp_of(file_path)
@@ -414,17 +483,28 @@ class FileIOToolsMixin:
                             "start_line/end_line (lines), not both.",
                         }
                     try:
-                        lines = read_text(file_path)[0].splitlines()
+                        if is_document:
+                            text = cached_document_text(self, file_path)[0]
+                        else:
+                            text = read_text(file_path)[0]
+                        lines = text.splitlines()
                     except UnicodeDecodeError:
                         return {
                             "status": "error",
                             "error": f"{file_path} is binary: it has no lines to read.",
                         }
-                    page = _line_window(lines, start_line, end_line, _read_budget(self))
+                    except (ImportError, ValueError) as e:
+                        return {"status": "error", "error": str(e)}
+                    page = _line_window(lines, start_line, end_line, read_budget(self))
                     if "error" in page:
                         return {"status": "error", **page}
                     reads.note(file_path, seen)
                     return {"status": "success", "file_path": file_path, **page}
+
+                if is_document:
+                    return with_small_limit_warning(
+                        read_document(self, file_path, offset, limit), limit
+                    )
 
                 if offset or limit is not None:
                     from gaia.agents.base.artifacts import read_text_page
@@ -436,7 +516,14 @@ class FileIOToolsMixin:
                         encoding=text_encoding(file_path),
                     )
                     reads.note(file_path, seen)
-                    return {"status": "success", "file_path": file_path, **page}
+                    return with_small_limit_warning(
+                        {
+                            "status": "success",
+                            "file_path": file_path,
+                            **text_page_notes(page, os.path.getsize(file_path)),
+                        },
+                        limit,
+                    )
 
                 # Read file content
                 try:
@@ -467,15 +554,13 @@ class FileIOToolsMixin:
                     "file_path": file_path,
                     "content": content,
                     "line_count": len(content.splitlines()),
-                    "size_bytes": len(content.encode("utf-8")),
+                    "size_bytes": os.path.getsize(file_path),
                 }
                 if encoding != "utf-8":
                     result["encoding"] = encoding
 
                 # Python file - add syntax validation and symbol extraction
                 if ext == ".py":
-                    import re
-
                     result["file_type"] = "python"
 
                     try:
@@ -513,27 +598,10 @@ class FileIOToolsMixin:
                                 )
                         result["symbols"] = symbols
 
-                # Markdown file - extract structure
-                elif ext == ".md":
-                    import re
-
+                # No extracted headers/code blocks/links: they repeat the content
+                # and push a long document past the result truncation cap.
+                elif ext in (".md", ".mdx"):
                     result["file_type"] = "markdown"
-
-                    # Extract headers
-                    headers = re.findall(r"^#{1,6}\s+(.+)$", content, re.MULTILINE)
-                    result["headers"] = headers
-
-                    # Extract code blocks
-                    code_blocks = re.findall(r"```(\w*)\n(.*?)```", content, re.DOTALL)
-                    result["code_blocks"] = [
-                        {"language": lang, "code": code} for lang, code in code_blocks
-                    ]
-
-                    # Extract links
-                    links = re.findall(r"\[([^\]]+)\]\(([^)]+)\)", content)
-                    result["links"] = [
-                        {"text": text, "url": url} for text, url in links
-                    ]
 
                 # Other text files
                 else:
@@ -544,7 +612,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _file_path_target, "overwriting"))
+        @tool(preflight=read_first_preflight(self, target_of, "overwriting"))
         def write_python_file(
             file_path: str,
             content: str,
@@ -567,7 +635,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with write operation results
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(target_of({"file_path": file_path}))
             try:
                 # Validate syntax if requested
                 if validate:
@@ -612,6 +680,7 @@ class FileIOToolsMixin:
                     )
                     return refusal
 
+                before_change(file_path, "write_python_file")
                 # Backup existing file before overwrite
                 backup_path = None
                 if os.path.exists(file_path):
@@ -622,7 +691,7 @@ class FileIOToolsMixin:
                     os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
                 # Write the file
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(content)
                 reads.note(file_path)
 
@@ -658,7 +727,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _file_path_target))
+        @tool(preflight=read_first_preflight(self, target_of))
         def edit_python_file(
             file_path: str,
             old_content: str,
@@ -687,7 +756,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with edit operation results
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(target_of({"file_path": file_path}))
             try:
                 # Security: validate write access.
                 # Report missing setup instead of writing without a check.
@@ -732,7 +801,7 @@ class FileIOToolsMixin:
 
                 # Read current content
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
@@ -741,7 +810,7 @@ class FileIOToolsMixin:
                 if refusal is not None:
                     return refusal
 
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(file_path, "r", encoding="utf-8", newline="") as f:
                     current_content = f.read()
 
                 modified_content, edit_error = apply_unique_replacement(
@@ -790,8 +859,9 @@ class FileIOToolsMixin:
                 if backup:
                     backup_path = path_validator.create_backup(str(file_path))
 
+                before_change(file_path, "edit_python_file")
                 # Write the modified content
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(modified_content)
                 reads.note(file_path)
 
@@ -855,7 +925,7 @@ class FileIOToolsMixin:
                 Dictionary with search results
             """
             path_validator = _require_path_validator(self)
-            directory = os.path.expanduser(directory)
+            directory = str(_workspace_target(self, directory))
             try:
                 is_allowed, reason = path_validator.validate_read(directory)
                 if not is_allowed:
@@ -939,7 +1009,7 @@ class FileIOToolsMixin:
                 Dictionary with diff information
             """
             path_validator = _require_path_validator(self)
-            file_path = os.path.expanduser(file_path)
+            file_path = str(target_of({"file_path": file_path}))
             try:
                 # A diff prints the original file, so it is a read.
                 is_allowed, reason = path_validator.validate_read(file_path)
@@ -948,7 +1018,7 @@ class FileIOToolsMixin:
 
                 # Read original content
                 if os.path.exists(file_path):
-                    with open(file_path, "r", encoding="utf-8") as f:
+                    with open(file_path, "r", encoding="utf-8", newline="") as f:
                         original_content = f.read()
                 else:
                     original_content = ""
@@ -987,7 +1057,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _file_path_target, "overwriting"))
+        @tool(preflight=read_first_preflight(self, target_of, "overwriting"))
         def write_markdown_file(
             file_path: str, content: str, create_dirs: bool = True
         ) -> Dict[str, Any]:
@@ -1006,7 +1076,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with write operation results
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(target_of({"file_path": file_path}))
             try:
                 content_size = len(content.encode("utf-8"))
 
@@ -1037,6 +1107,7 @@ class FileIOToolsMixin:
                     )
                     return refusal
 
+                before_change(file_path, "write_markdown_file")
                 # Backup existing file before overwrite
                 backup_path = None
                 if os.path.exists(file_path):
@@ -1049,7 +1120,7 @@ class FileIOToolsMixin:
                         os.makedirs(dir_name, exist_ok=True)
 
                 # Write the file
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(content)
                 reads.note(file_path)
 
@@ -1085,7 +1156,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _project_target, "overwriting"))
+        @tool(preflight=read_first_preflight(self, target_of, "overwriting"))
         def write_file(
             file_path: str,
             content: str,
@@ -1109,7 +1180,7 @@ class FileIOToolsMixin:
                 Status, the resolved path, size, and any backup made.
             """
             try:
-                path = _resolve_target(file_path, project_dir)
+                path = _resolve_target(file_path, project_dir, _workspace_default(self))
                 content_size = len(content.encode("utf-8"))
 
                 # Security: validate write access.
@@ -1139,6 +1210,7 @@ class FileIOToolsMixin:
                     )
                     return refusal
 
+                before_change(path, "write_file")
                 # Backup existing file before overwrite
                 backup_path = None
                 if path.exists():
@@ -1149,7 +1221,7 @@ class FileIOToolsMixin:
                     path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Write content to file
-                path.write_text(content, encoding="utf-8")
+                _write_exact(path, content)
                 reads.note(path)
 
                 console = getattr(self, "console", None)
@@ -1207,7 +1279,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _project_target))
+        @tool(preflight=read_first_preflight(self, target_of))
         def edit_file(
             file_path: str,
             old_content: str,
@@ -1230,7 +1302,7 @@ class FileIOToolsMixin:
                 project_dir: Project root for resolving a relative file_path.
             """
             try:
-                path = _resolve_target(file_path, project_dir)
+                path = _resolve_target(file_path, project_dir, _workspace_default(self))
 
                 # Security: validate write access.
                 # Report missing setup instead of writing without a check.
@@ -1273,7 +1345,7 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not path.exists():
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
 
                 reads = file_read_record(self)
                 refusal = reads.refusal(path)
@@ -1281,7 +1353,7 @@ class FileIOToolsMixin:
                     return refusal
 
                 # Read current content
-                current_content = path.read_text(encoding="utf-8")
+                current_content = _read_exact(path)
 
                 updated_content, edit_error = apply_unique_replacement(
                     str(path), current_content, old_content, new_content
@@ -1307,8 +1379,9 @@ class FileIOToolsMixin:
                     )
                 )
 
+                before_change(path, "edit_file")
                 # Write updated content
-                path.write_text(updated_content, encoding="utf-8")
+                _write_exact(path, updated_content)
                 reads.note(path)
 
                 console = getattr(self, "console", None)
@@ -1377,7 +1450,14 @@ class FileIOToolsMixin:
                     path_validator.audit_write("edit", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _gaia_md_target, "overwriting"))
+        def _workspace_gaia_md_target(args: Dict[str, Any]) -> Path:
+            return _workspace_target(self, args.get("project_root", ".")) / "GAIA.md"
+
+        @tool(
+            preflight=read_first_preflight(
+                self, _workspace_gaia_md_target, "overwriting"
+            )
+        )
         def update_gaia_md(
             project_root: str = ".",
             project_name: str = None,
@@ -1403,7 +1483,7 @@ class FileIOToolsMixin:
             try:
                 from datetime import datetime
 
-                gaia_path = os.path.join(os.path.expanduser(project_root), "GAIA.md")
+                gaia_path = str(_workspace_target(self, project_root) / "GAIA.md")
 
                 is_blocked, reason = path_validator.is_write_blocked(gaia_path)
                 if is_blocked:
@@ -1472,11 +1552,12 @@ class FileIOToolsMixin:
                 content += "- Use Black formatter for consistent style\n"
                 content += "- Ensure proper error handling\n\n"
 
+                before_change(gaia_path, "update_gaia_md")
                 # Check existence BEFORE writing for accurate created/updated msg
                 is_new_file = not os.path.exists(gaia_path)
 
                 # Write the file
-                with open(gaia_path, "w", encoding="utf-8") as f:
+                with open(gaia_path, "w", encoding="utf-8", newline="") as f:
                     f.write(content)
                 reads.note(gaia_path)
 
@@ -1489,7 +1570,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _file_path_target))
+        @tool(preflight=read_first_preflight(self, target_of))
         def replace_function(
             file_path: str,
             function_name: str,
@@ -1514,7 +1595,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with replacement result
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(target_of({"file_path": file_path}))
             try:
                 # Security: validate write access.
                 # Report missing setup instead of writing without a check.
@@ -1558,7 +1639,7 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
@@ -1574,7 +1655,7 @@ class FileIOToolsMixin:
                     )
                     return refusal
 
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(file_path, "r", encoding="utf-8", newline="") as f:
                     content = f.read()
 
                 # Parse the file to find the function
@@ -1597,11 +1678,14 @@ class FileIOToolsMixin:
                     backup_path = path_validator.create_backup(str(file_path))
 
                 # Replace the function
-                new_lines = (
-                    lines[:start_line]
-                    + [new_implementation.rstrip("\n") + "\n"]
-                    + lines[end_line:]
+                # The replacement always arrives LF-terminated. Splicing it into a
+                # CRLF file unchanged would leave that file carrying both endings, so
+                # it is converted to whatever the file already uses.
+                replacement = _match_newlines(
+                    new_implementation.replace("\r\n", "\n").rstrip("\n") + "\n",
+                    content,
                 )
+                new_lines = lines[:start_line] + [replacement] + lines[end_line:]
                 modified_content = "".join(new_lines)
 
                 # Validate new content
@@ -1630,8 +1714,9 @@ class FileIOToolsMixin:
                 if misplaced:
                     return {"status": "error", "error": misplaced}
 
+                before_change(file_path, "replace_function")
                 # Write the modified content
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(modified_content)
                 reads.note(file_path)
 

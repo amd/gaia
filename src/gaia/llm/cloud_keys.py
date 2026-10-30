@@ -21,15 +21,21 @@ reused here so both providers answer to one implementation.
 from __future__ import annotations
 
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
 from gaia.llm.gateway import GATEWAY_PROVIDER, GATEWAY_SECRET_NAME
 from gaia.llm.lemonade_client import (
     LemonadeClient,
+    LemonadeClientError,
     lemonade_auth_headers,
     resolve_lemonade_api_key,
+)
+from gaia.llm.local_only import (
+    CloudDisabledError,
+    cloud_blocked,
+    local_only_key_message,
 )
 from gaia.llm.providers.fireworks import API_KEY_SECRET_NAME
 from gaia.logger import get_logger
@@ -46,11 +52,17 @@ _SECRET_NAMES = {
 
 PROVIDERS = tuple(_SECRET_NAMES)
 
+_LABELS = {"fireworks": "Fireworks AI", GATEWAY_PROVIDER: "AMD LLM Gateway"}
+
 _TIMEOUT = 60
 
 
 class CloudKeyError(Exception):
     """A key could not be kept or replayed, with what to do about it."""
+
+
+class CloudKeyBlockedError(CloudKeyError, CloudDisabledError):
+    """Local only is on, so no cloud key is handed to Lemonade."""
 
 
 def _check(provider: str) -> str:
@@ -120,27 +132,47 @@ def forget_key(provider: str) -> bool:
 
 
 def ensure_authenticated(
-    provider: str, client: Optional[LemonadeClient] = None
+    provider: str,
+    client: Optional[LemonadeClient] = None,
+    *,
+    recall: Optional[Callable[[], Optional[str]]] = None,
 ) -> bool:
     """Give Lemonade the kept key if it has the provider but no key.
 
     True when the provider is usable afterwards — models discovered, not merely
     a key held: Lemonade stores a key without checking it, so a revoked one
     reports authenticated and discovers nothing.
+
+    *recall* replaces :func:`recall_key` for reading the kept key, so a caller
+    that must not block on the credential store can bound the read.
     """
+    from gaia.llm.lemonade_choice import is_users_server
+
     _check(provider)
+    if cloud_blocked():
+        raise CloudKeyBlockedError(local_only_key_message(provider))
+    client = client or LemonadeClient(verbose=False)
+    try:
+        base_url = client.credential_base_url()
+    except LemonadeClientError as e:
+        raise CloudKeyError(str(e)) from e
+    if is_users_server(base_url):
+        # Use the provider as the user's server has it; never hand it a key.
+        entry = _provider_entry(base_url, provider)
+        if provider_usable(entry):
+            return True
+        raise CloudKeyError(users_server_provider_message(base_url, provider))
     if provider == GATEWAY_PROVIDER:
         from gaia.llm.gateway import GatewayManager
 
-        return GatewayManager(client).ensure_authenticated()
+        return GatewayManager(client).ensure_authenticated(recall=recall)
 
-    base_url = (client or LemonadeClient(verbose=False)).base_url
     entry = _provider_entry(base_url, provider)
     if entry is None:
         return False
     if entry.get("env_var_set") or entry.get("runtime_key_set"):
         return bool(entry.get("models_discovered"))
-    key = recall_key(provider)
+    key = recall() if recall else recall_key(provider)
     if not key:
         return False
     result = _request(
@@ -157,6 +189,65 @@ def ensure_authenticated(
     return True
 
 
+def drop_runtime_keys() -> List[str]:
+    """Take back the keys a running GAIA Lemonade holds; return those providers.
+
+    Local only stops new keys at the source; this removes the ones Lemonade
+    already holds in memory. A Lemonade that isn't running holds none, and a
+    server the user runs is never changed.
+
+    Raises:
+        CloudKeyError: Lemonade could not be asked or refused the removal.
+    """
+    from gaia.llm.lemonade_choice import is_users_server
+    from gaia.llm.lemonade_client import (
+        resolve_lemonade_base_url,
+        running_embedded_lemonade_url,
+    )
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    if gaia_runs_lemonade():
+        base_url = running_embedded_lemonade_url()
+        if base_url is None:
+            return []
+    else:
+        base_url = resolve_lemonade_base_url(None)
+        if is_users_server(base_url):
+            return []
+    dropped = []
+    for provider in PROVIDERS:
+        entry = _provider_entry(base_url, provider)
+        if entry and entry.get("runtime_key_set"):
+            _request(base_url, "DELETE", f"cloud/auth/{provider}")
+            dropped.append(provider)
+    return dropped
+
+
+def provider_usable(entry: Optional[Dict[str, Any]]) -> bool:
+    """A ``/system-info`` cloud entry that holds a key and found models."""
+    return bool(
+        entry
+        and (entry.get("env_var_set") or entry.get("runtime_key_set"))
+        and entry.get("models_discovered")
+    )
+
+
+def users_server_provider_message(base_url: str, provider: str) -> str:
+    """Why a provider can't be connected on the user's own server, and what to do."""
+    from gaia.llm.lemonade_choice import SWITCH_BACK_HINT, users_server_route
+
+    match = users_server_route(base_url)
+    server = match[0] if match else base_url
+    return (
+        f"Your Lemonade Server at {server} has no working "
+        f"{_LABELS.get(provider, provider)} provider, "
+        "and GAIA does not change your server's setup: it doesn't register "
+        "providers or hand your server keys. Set the provider up on your server "
+        f"yourself (its key goes in {env_var_for(provider)} where your server "
+        f"runs), or {SWITCH_BACK_HINT}."
+    )
+
+
 def _provider_entry(base_url: str, provider: str) -> Optional[Dict[str, Any]]:
     info = _request(base_url, "GET", "system-info")
     for entry in (info.get("cloud") or {}).get("providers") or []:
@@ -168,10 +259,15 @@ def _provider_entry(base_url: str, provider: str) -> Optional[Dict[str, Any]]:
 def _request(
     base_url: str, method: str, path: str, payload: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
+    from gaia.llm.lemonade_choice import setup_change_refusal
+
     url = f"{base_url.rstrip('/')}/{path}"
+    refusal = setup_change_refusal(url, method, payload)
+    if refusal:
+        raise CloudKeyError(refusal)
     headers = {
         "Content-Type": "application/json",
-        **lemonade_auth_headers(resolve_lemonade_api_key()),
+        **lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url)),
     }
     try:
         response = requests.request(

@@ -5,8 +5,8 @@
 Every repository is pinned to a full commit, every sample to a seed, so two
 runs of a suite on the same code score the same queries over the same trees.
 
-Indexing runs at about 10 chunks/s on the CPU-pinned embedder, so a suite's
-cost is its repositories' size. ``pr`` uses the three smallest SWE-bench
+Indexing throughput bounds every suite, so a suite's cost is its
+repositories' size. ``pr`` uses the three smallest SWE-bench
 Verified repositories, all of their instances. ``nightly`` samples Verified
 and SWE-rebench but skips any repository over :data:`NIGHTLY_MAX_CHUNKS`
 (named in the results, never silently). ``scale`` indexes five repositories

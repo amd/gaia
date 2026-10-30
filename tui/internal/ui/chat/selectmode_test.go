@@ -103,21 +103,22 @@ func TestEscStillCancelsATurn(t *testing.T) {
 	}
 }
 
-// The status bar says how to get drag-select back only when it is gone.
-func TestTheHintNamesDragSelectOnlyWhenTheAppHasTheMouse(t *testing.T) {
-	has := func(m ChatModel) bool {
+// The status bar names Ctrl+T either way: by default as the way to select past
+// the window's edge, and once the app has the mouse as the way to hand it back.
+func TestTheHintNamesCtrlTForEitherMouseOwner(t *testing.T) {
+	hintWith := func(m ChatModel) string {
 		for _, h := range m.statusHints() {
-			if strings.Contains(h.text, "drag-select") {
-				return true
+			if strings.HasPrefix(h.text, "Ctrl+T") {
+				return h.text
 			}
 		}
-		return false
+		return ""
 	}
-	if has(selectModel()) {
-		t.Error("the default already selects; a hint about it is noise")
+	if got := hintWith(selectModel()); got != "Ctrl+T scroll-select" {
+		t.Errorf("default hint = %q, want the way to select past the screen", got)
 	}
 	on, _ := pressCtrlT(selectModel())
-	if !has(on) {
-		t.Error("with the app holding the mouse, the bar must say how to select again")
+	if got := hintWith(on); got != "Ctrl+T terminal mouse" {
+		t.Errorf("app-mouse hint = %q, want the way to give the mouse back", got)
 	}
 }

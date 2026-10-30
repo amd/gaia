@@ -227,3 +227,54 @@ class TestProcessQueryDispatchesEmbeddedFunctionCallSyntax:
         text = result.get("result") if isinstance(result, dict) else str(result)
         # Raw internal call syntax never reached the user-visible output.
         assert "remember(" not in (text or "")
+
+
+def test_a_name_followed_by_a_space_and_paren_is_prose(agent):
+    # "tree (v2 layout)" in an answer once failed a finished turn as a broken call.
+    _register_remember(agent)
+    text = "The remember (see docs) step keeps a fact."
+    with patch.object(agent, "_uses_native_tool_calls", return_value=False):
+        assert agent._extract_function_call_tool_syntax(text) is None
+
+
+def test_a_hosted_native_tool_caller_never_has_prose_parsed_as_a_call(agent):
+    calls = _register_remember(agent)
+    agent.model_id = "fireworks.deepseek-v4p1-flash"
+    text = 'Use remember(fact="x") to store it.'
+    with patch.object(agent, "_uses_native_tool_calls", return_value=True):
+        assert agent._extract_function_call_tool_syntax(text) is None
+    assert calls == []
+
+
+def test_claude_never_has_prose_parsed_as_a_call(agent):
+    _register_remember(agent)
+    agent._use_claude = True
+    assert agent._extract_function_call_tool_syntax('remember(fact="x")') is None
+
+
+@pytest.mark.parametrize("model_id", ["Gemma-4-E4B-it-GGUF", "Qwen3.6-35B-A3B-GGUF"])
+def test_a_local_tool_calling_model_still_runs_a_python_style_call(agent, model_id):
+    # Local tool-calling models still write remember(...) as text; it must run.
+    from gaia.llm.lemonade_client import is_tool_calling_model
+
+    assert is_tool_calling_model(model_id)
+    _register_remember(agent)
+    agent.model_id = model_id
+    parsed = agent._extract_function_call_tool_syntax('remember(fact="x")')
+    assert parsed == {"tool": "remember", "tool_args": {"fact": "x"}}
+
+
+def test_a_dotted_local_model_id_is_not_mistaken_for_hosted(agent):
+    # "Qwen3.6-..." holds a dot like "<provider>.<id>" cloud ids do.
+    _register_remember(agent)
+    agent.model_id = "user.Qwen3.8-Flash-Next-GGUF"
+    with patch.object(agent, "_uses_native_tool_calls", return_value=True):
+        parsed = agent._extract_function_call_tool_syntax('remember(fact="x")')
+    assert parsed == {"tool": "remember", "tool_args": {"fact": "x"}}
+
+
+def test_the_text_path_still_runs_a_real_python_style_call(agent):
+    _register_remember(agent)
+    with patch.object(agent, "_uses_native_tool_calls", return_value=False):
+        parsed = agent._extract_function_call_tool_syntax('remember(fact="x")')
+    assert parsed == {"tool": "remember", "tool_args": {"fact": "x"}}

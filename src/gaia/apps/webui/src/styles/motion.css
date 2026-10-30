@@ -1,0 +1,92 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* ── Motion: what moves while GAIA works (#5259) ─────────────────────
+ * Timings come from the tokens in index.css. Only live work loops; a
+ * finished or idle view is still. Selectors for the plan checklist, side
+ * rail and queue apply once those components exist. */
+
+/* One live status line: a slow brighter band sweeps the label while the model
+   works, and stops when GAIA is waiting on the user. An alpha mask, not a
+   gradient fill; the dim stop keeps the 11px label above AA contrast. */
+.thinking-indicator.is-live .thinking-indicator-text {
+    color: var(--text-primary);
+    -webkit-mask-image: linear-gradient(90deg, color-mix(in srgb, black 80%, transparent) 40%, black 50%, color-mix(in srgb, black 80%, transparent) 60%);
+    mask-image: linear-gradient(90deg, color-mix(in srgb, black 80%, transparent) 40%, black 50%, color-mix(in srgb, black 80%, transparent) 60%);
+    -webkit-mask-size: 250% 100%;
+    mask-size: 250% 100%;
+    animation: statusShimmer var(--duration-shimmer) var(--ease-in-out) infinite;
+}
+
+@keyframes statusShimmer {
+    from { -webkit-mask-position: 100% 0; mask-position: 100% 0; }
+    to { -webkit-mask-position: 0 0; mask-position: 0 0; }
+}
+
+/* Plan checklist: a step ticks over when it finishes, live turns only. */
+.agent-activity.active .flow-plan-item .plan-icon-done {
+    animation: planTick var(--duration-slow) var(--ease);
+}
+
+.flow-plan-item .flow-plan-text {
+    transition: color var(--duration) var(--ease), opacity var(--duration) var(--ease);
+}
+
+@keyframes planTick {
+    0% { opacity: 0; transform: scale(0.4); }
+    60% { opacity: 1; transform: scale(1.15); }
+    100% { opacity: 1; transform: scale(1); }
+}
+
+/* Side rail slides in from the right; the transcript eases over to make room. */
+.side-rail {
+    animation: railIn var(--duration-slow) var(--ease);
+}
+
+.task-view > .messages-scroll,
+.task-view > .input-area,
+.task-view > .doc-context-bar {
+    transition: margin-right var(--duration-slow) var(--ease);
+}
+
+@keyframes railIn {
+    from { opacity: 0; transform: translateX(24px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+/* Queued messages drop in, and their state change (queued → sending) eases. */
+.queued-message {
+    animation: queueIn var(--duration) var(--ease);
+    transition: border-color var(--duration) var(--ease), background var(--duration) var(--ease);
+}
+
+.queued-message-state {
+    transition: color var(--duration) var(--ease);
+}
+
+/* A chat's place in the GPU queue fades in; its dot eases from queued to running. */
+.sb-row-queue {
+    animation: queueIn var(--duration) var(--ease);
+}
+
+.sb-dot {
+    transition: background var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
+}
+
+@keyframes queueIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .thinking-indicator.is-live .thinking-indicator-text {
+        -webkit-mask-image: none;
+        mask-image: none;
+        color: inherit;
+    }
+
+    /* The dot wave ends on its dim frame; keep the dots readable. */
+    .thinking-dots span {
+        opacity: 0.6;
+    }
+}

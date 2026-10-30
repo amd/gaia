@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
@@ -62,6 +63,12 @@ func canAutoStart(l launcher) bool {
 func startLemonade(ctx context.Context, l launcher, probe func(context.Context) bool) error {
 	if !canAutoStart(l) {
 		return errNoAutoStart
+	}
+	if testing.Testing() && !spawnAllowedInTest {
+		// A test that gets here would leave a real server running on the
+		// developer's machine, rooted in a temp HOME that cleanup then deletes.
+		panic("a test reached a real Lemonade start (" + strings.Join(l.Argv, " ") +
+			"); stub it with preflight.StubLemonadeAutoStartForTest")
 	}
 
 	// exec.Command, NOT CommandContext: the context here bounds how long we WAIT
@@ -131,6 +138,10 @@ func waitForLemonade(ctx context.Context, probe func(context.Context) bool) bool
 // A var so a test can exercise the row's three outcomes without a Lemonade on
 // the box.
 var tryAutoStartLemonade = func(ctx context.Context) (bool, string, string) {
+	if lemonade.ExternalModeActive() {
+		// The user runs their own server; GAIA starts none.
+		return false, "", ""
+	}
 	l := resolveLemonade()
 	if !canAutoStart(l) {
 		// Only when no system server is installed: starting GAIA's own beside
@@ -162,4 +173,17 @@ var tryAutoStartLemonade = func(ctx context.Context) (bool, string, string) {
 		return false, "", "auto-start: came up, then stopped answering\n" + trace
 	}
 	return true, base, "auto-start: ran " + strings.Join(l.Argv, " ")
+}
+
+// spawnAllowedInTest lets a test that has pointed the starter at a stub binary
+// actually spawn it. Nothing outside tests sets it.
+var spawnAllowedInTest bool
+
+// StubLemonadeAutoStartForTest replaces the auto-start with fn and returns the
+// restore. Tests outside this package use it so a down-Lemonade launch reports
+// the row instead of starting the developer's real server.
+func StubLemonadeAutoStartForTest(fn func(context.Context) (bool, string, string)) (restore func()) {
+	orig := tryAutoStartLemonade
+	tryAutoStartLemonade = fn
+	return func() { tryAutoStartLemonade = orig }
 }

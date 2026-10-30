@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import stat
 import string
 from contextlib import contextmanager
@@ -21,6 +22,8 @@ from pathlib import Path
 from typing import Generator, List, Optional, Sequence, Tuple
 
 from fastapi import HTTPException
+from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
 
 from gaia.config import (
     GAIA_HOME_IS_FS_ROOT,
@@ -28,6 +31,8 @@ from gaia.config import (
     unsafe_gaia_home_reason,
 )
 from gaia.llm.lemonade_embedded import gaia_home
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
+from gaia.utils.user_folders import documents_dir
 
 from .models import (
     DocumentResponse,
@@ -58,17 +63,23 @@ logger = logging.getLogger(__name__)
 #   .xls (legacy BIFF) — openpyxl only handles .xlsx; would raise on open
 # NOTE: .pptx and .docx ARE supported — python-pptx and python-docx ship with
 # GAIA. See ``_UNSUPPORTED_CATEGORIES`` below for the user-facing rejection hint.
-# Image formats are tracked by issue #730 (VLM-based indexing).
-ALLOWED_EXTENSIONS = frozenset(
+#
+# FOLDER_INDEX_EXTENSIONS is what a folder walk indexes. Images are indexable
+# only when the user picks the file (see ``gaia.utils.image_formats``).
+FOLDER_INDEX_EXTENSIONS = frozenset(
     {
         ".pdf",
         ".pptx",
         ".docx",
         ".txt",
         ".md",
+        ".mdx",
+        ".markdown",
+        ".rst",
         ".csv",
         ".json",
         ".xlsx",
+        ".epub",
         ".html",
         ".htm",
         ".xml",
@@ -95,11 +106,16 @@ ALLOWED_EXTENSIONS = frozenset(
     }
 )
 
+ALLOWED_EXTENSIONS = FOLDER_INDEX_EXTENSIONS | IMAGE_EXTENSIONS
+
 # Text file extensions for preview endpoint
 TEXT_EXTENSIONS = frozenset(
     {
         ".txt",
         ".md",
+        ".mdx",
+        ".markdown",
+        ".rst",
         ".csv",
         ".tsv",
         ".json",
@@ -129,6 +145,23 @@ TEXT_EXTENSIONS = frozenset(
     }
 )
 
+
+def unsupported_type_message(filename: str) -> str:
+    """Why *filename* can't be indexed, in words a user can act on."""
+    suffix = Path(filename).suffix.lower()
+    if not suffix:
+        return (
+            f"File type not allowed: '{filename}' has no file extension, so GAIA "
+            "can't tell what kind of document it is. Rename it with the right "
+            "extension (for example .txt or .pdf) and index it again."
+        )
+    return (
+        f"File type not allowed: GAIA can't index {suffix} files. It indexes "
+        "PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), text, Markdown, "
+        "CSV, JSON, HTML, XML, YAML and source-code files."
+    )
+
+
 # Threshold for switching to background indexing
 LARGE_FILE_THRESHOLD = 5 * 1024 * 1024  # 5 MB
 
@@ -157,7 +190,34 @@ def session_to_response(
         # Filter semantics (#1596): null = "every connected mailbox" — must
         # reach the frontend as null so the selector shows no phantom pick.
         mail_provider=session.get("mail_provider"),
+        pinned=bool(session.get("pinned", 0)),
+        unread=bool(session.get("unread", 0)),
+        last_run_status=session.get("last_run_status"),
+        kind=session.get("kind") or "chat",
     )
+
+
+def _steps_to_response(msg: dict, step_model) -> Optional[list]:
+    """A message's persisted steps; one unreadable step never hides the rest."""
+    raw_steps = msg["agent_steps"]
+    if isinstance(raw_steps, str):
+        try:
+            raw_steps = json.loads(raw_steps)
+        except json.JSONDecodeError as e:
+            logger.error("Message %s has unreadable agent_steps: %s", msg.get("id"), e)
+            return None
+    steps = []
+    for raw in raw_steps:
+        try:
+            steps.append(step_model(**raw))
+        except (TypeError, ValueError) as e:
+            logger.error(
+                "Message %s: dropped step %r that no longer validates: %s",
+                msg.get("id"),
+                raw.get("id") if isinstance(raw, dict) else raw,
+                e,
+            )
+    return steps
 
 
 def message_to_response(msg: dict) -> MessageResponse:
@@ -171,18 +231,13 @@ def message_to_response(msg: dict) -> MessageResponse:
             if isinstance(raw_sources, str):
                 raw_sources = json.loads(raw_sources)
             sources = [SourceInfo(**s) for s in raw_sources]
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            logger.error("Message %s has unreadable rag_sources: %s", msg.get("id"), e)
             sources = None
 
     agent_steps = None
     if msg.get("agent_steps"):
-        try:
-            raw_steps = msg["agent_steps"]
-            if isinstance(raw_steps, str):
-                raw_steps = json.loads(raw_steps)
-            agent_steps = [AgentStepResponse(**s) for s in raw_steps]
-        except Exception:
-            agent_steps = None
+        agent_steps = _steps_to_response(msg, AgentStepResponse)
 
     # Map inference_stats column to stats response field
     stats = None
@@ -197,6 +252,21 @@ def message_to_response(msg: dict) -> MessageResponse:
         except Exception:
             stats = None
 
+    turn_summary = None
+    if msg.get("turn_summary"):
+        from pydantic import ValidationError
+
+        from .models import TurnSummaryResponse
+
+        try:
+            turn_summary = TurnSummaryResponse(**msg["turn_summary"])
+        except (ValidationError, TypeError) as exc:
+            logger.warning(
+                "Message %s turn summary does not match the schema: %s",
+                msg.get("id"),
+                exc,
+            )
+
     return MessageResponse(
         id=msg["id"],
         session_id=msg["session_id"],
@@ -206,6 +276,7 @@ def message_to_response(msg: dict) -> MessageResponse:
         rag_sources=sources,
         agent_steps=agent_steps,
         stats=stats,
+        turn_summary=turn_summary,
     )
 
 
@@ -222,6 +293,7 @@ def doc_to_response(doc: dict) -> DocumentResponse:
         sessions_using=doc.get("sessions_using", 0),
         indexing_status=doc.get("indexing_status", "complete"),
         last_error=doc.get("last_error"),
+        error_kind=doc.get("error_kind"),
     )
 
 
@@ -266,20 +338,9 @@ def sanitize_document_path(user_path: str) -> Path:
         # Provide categorized feedback for common unsupported types
         _UNSUPPORTED_CATEGORIES = {
             "image": (
-                {
-                    ".jpg",
-                    ".jpeg",
-                    ".png",
-                    ".gif",
-                    ".bmp",
-                    ".tiff",
-                    ".webp",
-                    ".ico",
-                    ".heic",
-                    ".heif",
-                },
-                "Image files cannot be indexed for text search. "
-                "Tip: If your images contain text, convert them to PDF first — GAIA can extract text from PDFs.",
+                {".ico", ".heic", ".heif"},
+                "This image format cannot be indexed. "
+                "Tip: Convert it to PNG or JPEG — GAIA reads the text in those images.",
             ),
             "video": (
                 {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
@@ -327,8 +388,8 @@ def sanitize_document_path(user_path: str) -> Path:
 
         detail = (
             f"{hint} "
-            f"Supported formats: PDF, PPTX, TXT, MD, CSV, JSON, XLSX, "
-            f"HTML, XML, YAML, and 30+ code file formats. "
+            f"Supported formats: PDF, DOCX, PPTX, XLSX, EPUB, TXT, MD, CSV, JSON, "
+            f"HTML, XML, YAML, images (PNG, JPG, WEBP, ...), and 30+ code file formats. "
             f"Want support for {category + ' files' if category else 'this file type'}? "
             f"Request it at https://github.com/amd/gaia/issues/new?title=[Feature]%20Support%20{ext}%20file%20indexing"
         )
@@ -450,6 +511,87 @@ def uploads_dir() -> Path:
     return _ui_gaia_home() / "chat" / "uploads"
 
 
+UPLOAD_URL_PREFIX = "/api/files/uploads/"
+
+
+class UploadStaticFiles(StaticFiles):
+    """Serve chat uploads so an uploaded page can never run as the app.
+
+    Uploads include ``.html`` and ``.svg``, and the chat links them on the
+    backend's own origin. ``sandbox`` gives the document an opaque origin with
+    scripts off; PDFs are exempt because Chromium refuses to show a sandboxed
+    PDF, and its viewer never runs on the page's origin anyway.
+    """
+
+    async def get_response(self, path: str, scope) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        if not path.lower().endswith(".pdf"):
+            response.headers["Content-Security-Policy"] = "sandbox"
+        return response
+
+
+UPLOAD_LINK_RE = re.compile(
+    r"(?P<bang>!?)\[(?P<label>[^\]\n]*)\]\("
+    + re.escape(UPLOAD_URL_PREFIX)
+    + r"(?P<name>[^)\s]+)\)"
+)
+
+
+def resolve_upload_links(message: str) -> str:
+    """Point a message's attachment links at the files on disk, for the agent.
+
+    The composer appends ``[name](/api/files/uploads/<file>)`` links, which only
+    the browser can follow. The agent reads files by path, so each link to a
+    file that exists directly inside ``uploads_dir()`` gets its absolute path
+    as the target. Anything else (traversal, a missing file) is left as is.
+    """
+    if UPLOAD_URL_PREFIX not in message:
+        return message
+    root = uploads_dir().resolve()
+
+    def _sub(match: "re.Match[str]") -> str:
+        name = match.group("name")
+        if name in (".", "..") or "/" in name or "\\" in name:
+            logger.warning("Upload link %r is not a plain file name; left as is", name)
+            return match.group(0)
+        path = (root / name).resolve()
+        if path.parent != root or not path.is_file():
+            logger.warning("Upload link %r names no file in %s; left as is", name, root)
+            return match.group(0)
+        return f"{match.group('bang')}[{match.group('label')}]({path})"
+
+    return UPLOAD_LINK_RE.sub(_sub, message)
+
+
+def attached_upload_paths(message: str) -> List[str]:
+    """The upload copies *message* links to, after :func:`resolve_upload_links`.
+
+    These are GAIA's own copies of files the user just picked, so the turn may
+    read them without asking. Only a regular file directly inside
+    ``uploads_dir()``, linked the way ``resolve_upload_links`` writes it,
+    counts — never a symlink, a subfolder, or a path that escapes the folder.
+    """
+    root = uploads_dir().resolve()
+    prefix = str(root) + os.sep
+    if prefix not in message:
+        return []
+    found = set()
+    for match in re.finditer(
+        r"\]\(" + re.escape(prefix) + r"(?P<name>[^)\s\\/]+)\)", message
+    ):
+        name = match.group("name")
+        if name in (".", ".."):
+            continue
+        path = root / name
+        if path.is_symlink() or not path.is_file():
+            continue
+        if path.resolve().parent != root:
+            continue
+        found.add(str(path))
+    return sorted(found)
+
+
 def document_roots() -> List[Path]:
     """Return the directories documents may be read from.
 
@@ -515,6 +657,23 @@ def _describe_roots(roots: Sequence[Path]) -> str:
     return ", ".join(by_real.values())
 
 
+def is_within_document_roots(path: Path) -> bool:
+    """Return whether *path* is browseable under the configured document roots.
+
+    The lexical check runs first, so a path outside every root (a UNC share,
+    say) is rejected without touching the filesystem.
+    """
+    roots = document_roots()
+    try:
+        lexical = Path(os.path.abspath(str(path)))
+        if not any(lexical.is_relative_to(root) for root in roots):
+            return False
+        resolved = path.resolve()
+    except (OSError, ValueError):
+        return False
+    return any(resolved.is_relative_to(root) for root in roots)
+
+
 def ensure_within_home(resolved: Path) -> None:
     """Raise HTTP 403 if *resolved* is not inside an allowed document root.
 
@@ -528,6 +687,36 @@ def ensure_within_home(resolved: Path) -> None:
             status_code=403,
             detail=f"Access restricted to files under: {_describe_roots(roots)}",
         )
+
+
+def ensure_document_path_allowed(raw: Path) -> str:
+    """Raise HTTP 403 unless *raw* lies inside a document root; return its realpath.
+
+    The one containment check for paths a user types into the Document library,
+    shared by the file and folder routes so a path one accepts the other does too.
+
+    1. Lexical: ``os.path.abspath`` (no symlink following) must be under a root.
+       This runs before any filesystem access, so a path outside the roots gets
+       the same 403 whether or not it exists — a 404 there would let a client
+       probe which files exist outside them.
+    2. Physical: the realpath must be under a root too, which stops an
+       intermediate symlinked directory inside a root from pointing outside.
+    """
+    roots = document_roots()
+    # Worded so it holds whether or not the path exists: see step 1.
+    denied = (
+        f"GAIA can only read documents under "
+        f"{_describe_roots(roots)}, and {raw} is outside them. Check the path "
+        f"is right. If it is, move or copy it under one of those folders, "
+        f"or add its folder to {DOCUMENT_ROOTS_ENV} and restart GAIA."
+    )
+    abs_raw = Path(os.path.abspath(str(raw)))
+    if not any(abs_raw.is_relative_to(root) for root in roots):
+        raise HTTPException(status_code=403, detail=denied)
+    real = os.path.realpath(str(raw))
+    if not any(Path(real).is_relative_to(root) for root in roots):
+        raise HTTPException(status_code=403, detail=denied)
+    return real
 
 
 # ── Filesystem Helpers ─────────────────────────────────────────────────────────
@@ -583,7 +772,8 @@ def safe_open_document(
       in ``GAIA_DOCUMENT_ROOTS``), both lexically and after resolving every
       symlinked component (403 if not)
     - Has an allowed extension (400 if not)
-    - Exists and is a regular file (404 / 400 if not)
+    - Exists (404 if not, only reachable inside a root) and is not a folder
+      (400 with ``detail.status == "is_folder"``) or other non-regular file
 
     Yields a tuple of (fd, stat_result, resolved_path).
     The fd is a raw OS file descriptor open for reading; callers must NOT
@@ -594,24 +784,9 @@ def safe_open_document(
     if "\x00" in path:
         raise HTTPException(status_code=400, detail="Invalid file path")
 
-    raw = Path(path)
-    roots = document_roots()
-    denied = f"Access denied: path must be within one of: {_describe_roots(roots)}"
-
-    # 1. Must be within an allowed root — check before lstat so that
-    # non-existent paths outside them return 403 (not 404).
-    # Use os.path.abspath (doesn't follow symlinks) for this check.
-    abs_raw = Path(os.path.abspath(str(raw)))
-    if not any(abs_raw.is_relative_to(root) for root in roots):
-        raise HTTPException(status_code=403, detail=denied)
-
-    # 2. Physical containment: the lexical check above can be defeated by an
-    # intermediate symlinked directory inside a root that points outside
-    # (O_NOFOLLOW below only guards the FINAL path component). realpath
-    # resolves every component; require the result to stay under a root.
-    real = os.path.realpath(str(raw))
-    if not any(real.startswith(str(root).rstrip(os.sep) + os.sep) for root in roots):
-        raise HTTPException(status_code=403, detail=denied)
+    raw = Path(os.path.expanduser(path))
+    # 1-2. Containment before lstat, so nothing outside the roots is probed.
+    real = ensure_document_path_allowed(raw)
 
     # 3. Reject symlinks before resolving — lstat doesn't follow symlinks
     try:
@@ -622,9 +797,24 @@ def safe_open_document(
                 detail="Symbolic link documents are not allowed for security reasons",
             )
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"File not found: {raw}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"File not found: there is no file at {raw}. Check the path "
+            "for typos.",
+        )
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f"Cannot stat file: {exc}")
+
+    # 3b. A folder gets its own answer so the caller can offer folder indexing.
+    if stat.S_ISDIR(lst.st_mode):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "status": "is_folder",
+                "message": f"{raw} is a folder, not a file. Index it as a folder "
+                "to add the documents inside it.",
+            },
+        )
 
     # 4. Open exactly the path we containment-checked (fully resolved)
     resolved = Path(real)
@@ -632,8 +822,7 @@ def safe_open_document(
     # 5. Extension must be allowed
     if resolved.suffix.lower() not in ALLOWED_EXTENSIONS:
         raise HTTPException(
-            status_code=400,
-            detail=f"File type not allowed: {resolved.suffix}. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
+            status_code=400, detail=unsupported_type_message(resolved.name)
         )
 
     # 6. Open safely — use O_NOFOLLOW on POSIX to reject symlinks at kernel level
@@ -683,12 +872,13 @@ def build_quick_links() -> list:
 
     candidates = [
         ("Desktop", home / "Desktop", "desktop"),
-        ("Documents", home / "Documents", "documents"),
+        ("Documents", documents_dir(home), "documents"),
         ("Downloads", home / "Downloads", "download"),
     ]
 
     for name, candidate_path, icon in candidates:
-        if candidate_path.is_dir():
+        # Roots first: is_dir() on a UNC path outside them can hang on SMB.
+        if is_within_document_roots(candidate_path) and candidate_path.is_dir():
             links.append(QuickLink(name=name, path=str(candidate_path), icon=icon))
 
     return links

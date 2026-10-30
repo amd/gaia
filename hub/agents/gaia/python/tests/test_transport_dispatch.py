@@ -284,3 +284,45 @@ def test_the_dispatcher_runs_as_a_module_too():
     )
     assert "usage:" in result.stdout.lower(), result.stdout + result.stderr
     assert "two transports" in result.stdout, "the transport help must lead"
+
+
+def test_the_freeze_entry_runs_a_python_file_before_building_the_agent(tmp_path):
+    """The frozen binary is the only Python a release user has (#5088).
+
+    ``run_python`` re-launches it with the runner flag. Run the freeze entry
+    the way PyInstaller does (as ``__main__``) and check the script ran as
+    ``__main__`` with its arguments, and that the agent stack was never
+    imported — a child that builds the web app per snippet would be slow, and
+    its import-time output would land in the script's.
+    """
+    import os
+    import subprocess
+    from pathlib import Path
+
+    from gaia_agent_chat.python_runner import RUN_PYTHON_FILE_FLAG
+
+    entry = Path(__file__).resolve().parents[1] / "packaging" / "server.py"
+    script = tmp_path / "snippet.py"
+    script.write_text(
+        "import sys\n"
+        "print(__name__, sys.argv[1:], 'gaia_agent.server' in sys.modules)\n"
+        "sys.exit(5)\n",
+        encoding="utf-8",
+    )
+    chat_root = Path(__import__("gaia_agent_chat").__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(chat_root), *filter(None, [env.get("PYTHONPATH")])]
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(entry), RUN_PYTHON_FILE_FLAG, str(script), "x"],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        env=env,
+        timeout=120,
+    )
+
+    assert result.returncode == 5, result.stderr
+    assert result.stdout.strip() == "__main__ ['x'] False", result.stderr

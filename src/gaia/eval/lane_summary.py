@@ -31,6 +31,11 @@ Usage::
         --artifacts-dir lane-artifacts \\
         --baseline-dir tests/fixtures/eval_baselines/gaia-flagship
 
+A targeted dispatch passes ``--matrix-json`` (the lanes job's matrix) and
+``--selection``. The report then covers only the lanes and categories that were
+asked for, under a banner saying the run was not a full sweep, so unselected
+lanes are neither reported as dead nor mistaken for measured.
+
 Exit codes:
     0 — a report was produced (whatever it says).
     1 — the inputs are unreadable, so no report could be produced at all.
@@ -45,6 +50,33 @@ import json
 import sys
 from pathlib import Path
 
+# Stdlib only: CI runs this file directly on a hosted runner with no gaia
+# install. Same fields as gaia.eval.claude_usage.USAGE_FIELDS (a test pins it).
+USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "calls",
+    "cost_usd",
+    "duration_api_ms",
+)
+
+
+def empty_usage() -> dict:
+    record: dict = {field: 0 for field in USAGE_FIELDS}
+    record["cost_usd"] = 0.0
+    return record
+
+
+def add_usage(total: dict, record) -> dict:
+    if not record:
+        return total
+    for field in USAGE_FIELDS:
+        total[field] = total.get(field, 0) + (record.get(field) or 0)
+    return total
+
+
 # A scenario counted here ran but produced no score, so it is an absence rather
 # than a result. Same list as the integrity gate's, and for the same reason:
 # `skipped` (SKIPPED_NO_DOCUMENT) keeps its scenario id, so it slips past every
@@ -56,6 +88,7 @@ NO_MEASUREMENT_COUNTERS = (
     "blocked",
     "budget_exceeded",
     "skipped",
+    "not_run",
 )
 
 
@@ -72,6 +105,12 @@ def collect_lane(lane: dict, artifacts_dir: Path, prefix: str) -> dict:
     """Read one lane's uploaded artifact into a row of the summary."""
     name = lane["lane"]
     root = artifacts_dir / f"{prefix}{name}"
+    if not root.is_dir():
+        # download-artifact unpacks a LONE artifact straight into the target
+        # directory, with no per-artifact folder: a one-lane targeted run.
+        flat = _read_json(artifacts_dir / "lane-status.json") or {}
+        if flat.get("lane") == name:
+            root = artifacts_dir
     row = {
         "lane": name,
         "categories": list(lane["categories"]),
@@ -84,6 +123,8 @@ def collect_lane(lane: dict, artifacts_dir: Path, prefix: str) -> dict:
         "failed": 0,
         "unmeasured": 0,
         "missing_categories": [],
+        "claude": empty_usage(),
+        "claude_scenarios": 0,
     }
     if not root.is_dir():
         row["missing_categories"] = list(lane["categories"])
@@ -109,6 +150,10 @@ def collect_lane(lane: dict, artifacts_dir: Path, prefix: str) -> dict:
         row["unmeasured"] += sum(
             int(summary.get(key) or 0) for key in NO_MEASUREMENT_COUNTERS
         )
+        usage = scorecard.get("claude_usage") or {}
+        if usage.get("scenarios_with_usage"):
+            add_usage(row["claude"], usage.get("total"))
+            row["claude_scenarios"] += int(usage["scenarios_with_usage"])
     return row
 
 
@@ -122,9 +167,17 @@ def _lane_state(row: dict) -> str:
     return "measured"
 
 
-def render(rows: list[dict], has_baseline: bool) -> str:
+def render(rows: list[dict], has_baseline: bool, selection: str | None = None) -> str:
     """Render the whole run as markdown for the job summary."""
     out: list[str] = ["## Scenario eval — all lanes", ""]
+
+    if selection:
+        out += [
+            f"> **{selection}.** This is not a full sweep: only the lanes, "
+            "categories and scenarios below ran. Totals cover the selection, and "
+            "nothing here says anything about the scenarios left out.",
+            "",
+        ]
 
     if not has_baseline:
         out += [
@@ -188,7 +241,44 @@ def render(rows: list[dict], has_baseline: bool) -> str:
             )
         out.append("")
 
+    out += _claude_usage_section(rows)
     return "\n".join(out) + "\n"
+
+
+def _claude_usage_section(rows: list[dict]) -> list[str]:
+    """Claude tokens per lane and for the whole run, from each scorecard."""
+    used = [r for r in rows if r.get("claude_scenarios")]
+    if not used:
+        return []
+
+    def line(label, usage, scenarios):
+        return (
+            f"| {label} | {scenarios} | {usage.get('calls', 0):,} | "
+            f"{usage.get('input_tokens', 0):,} | "
+            f"{usage.get('cache_creation_input_tokens', 0):,} | "
+            f"{usage.get('cache_read_input_tokens', 0):,} | "
+            f"{usage.get('output_tokens', 0):,} | "
+            f"${float(usage.get('cost_usd') or 0):.2f} |"
+        )
+
+    out = [
+        "### Claude usage",
+        "",
+        "Tokens `claude -p` reported, over the scenarios that recorded usage. "
+        "Cost is at list price.",
+        "",
+        "| lane | scenarios | API calls | input | cache write | cache read | output | cost |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    total = empty_usage()
+    scenarios = 0
+    for row in used:
+        out.append(line(f"`{row['lane']}`", row["claude"], row["claude_scenarios"]))
+        add_usage(total, row["claude"])
+        scenarios += row["claude_scenarios"]
+    out.append(line("**total**", total, scenarios))
+    out.append("")
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -204,6 +294,14 @@ def main(argv: list[str] | None = None) -> int:
         "--baseline-dir",
         type=Path,
         help="Committed flagship baselines. Absent or empty means no verdict.",
+    )
+    parser.add_argument(
+        "--matrix-json",
+        help="A targeted run's lane matrix; report only these lanes and categories.",
+    )
+    parser.add_argument(
+        "--selection",
+        help="One line describing a targeted run, shown as the report's banner.",
     )
     args = parser.parse_args(argv)
 
@@ -222,11 +320,25 @@ def main(argv: list[str] | None = None) -> int:
         and args.baseline_dir.is_dir()
         and any(args.baseline_dir.glob("scorecard_*.json"))
     )
+    lanes = lanes_doc["lanes"]
+    if args.matrix_json:
+        try:
+            include = json.loads(args.matrix_json)["include"]
+        except (ValueError, KeyError, TypeError) as exc:
+            print(
+                f"::error::--matrix-json is not the lanes job's matrix ({exc}), so "
+                "this targeted run's lanes are unknown and no summary can be produced.",
+                file=sys.stderr,
+            )
+            return 1
+        lanes = [
+            {"lane": entry["lane"], "categories": entry["categories"].split()}
+            for entry in include
+        ]
     rows = [
-        collect_lane(lane, args.artifacts_dir, args.artifact_prefix)
-        for lane in lanes_doc["lanes"]
+        collect_lane(lane, args.artifacts_dir, args.artifact_prefix) for lane in lanes
     ]
-    print(render(rows, has_baseline))
+    print(render(rows, has_baseline, args.selection))
 
     for row in rows:
         if not row["present"]:

@@ -39,7 +39,7 @@ const (
 	// wrong cause. It also covers the model row, which LOADS the models
 	// (gaiainit.VerifyTimeout). A deadline is a ceiling, not a cost.
 	CheckTimeout     = 120*time.Second + gaiainit.VerifyTimeout + 30*time.Second
-	startTimeout     = 60 * time.Second
+	startTimeout     = 90 * time.Second // above client.py's 60s daemon start
 	ensureTimeout    = 15 * time.Minute
 	provisionTimeout = 5 * time.Hour // the 82 GB Strix Halo default at ~5 MB/s; esc cancels
 	// defaultReadyHold is how long an all-green screen is held so the user sees
@@ -71,6 +71,9 @@ type Options struct {
 	ManualProceed bool
 	// Logf receives diagnostics. Never given a token.
 	Logf func(format string, args ...any)
+	// StepsDone carries the first-run steps an earlier gate finished this
+	// session into one the host rebuilt, so step 3 does not restart at 1.
+	StepsDone int
 }
 
 // cancelBox holds the cancel func for whatever background work the screen has
@@ -130,6 +133,10 @@ type Model struct {
 	// moved on from reads as done rather than still broken.
 	provisionDone map[string]bool
 	cancel        *cancelBox
+	// stepsDone is how many first-run steps finished this session;
+	// stepsBefore is the step total when the last setup run succeeded, read
+	// against the re-check that follows it.
+	stepsDone, stepsBefore int
 
 	// fixApplied is true once a fix has changed something on this machine —
 	// setup ran, a daemon or sidecar started, a model downloaded.
@@ -141,6 +148,18 @@ type Model struct {
 	// a fix the screen waits for enter. A launch that needed no fix is
 	// untouched — nothing happened there worth pausing over.
 	fixApplied bool
+
+	// autoTried names the rows whose AutoFix already ran this session, so a
+	// failed start is reported once and left to `f` rather than looped.
+	autoTried map[string]bool
+	// autoRow is the row as the check reported it, restored if the start fails
+	// so the user gets its remedy and `f` key back.
+	autoRow Row
+
+	// choosing is true while "where should chat run?" is on screen; choice is
+	// the option under the cursor.
+	choosing bool
+	choice   int
 }
 
 // New builds the gate for an agent the GAIA daemon supervises.
@@ -167,15 +186,17 @@ func newWith(r Runner, cfg Config, opts Options) Model {
 	s.Spinner = spinner.Dot
 
 	return Model{
-		cfg:    cfg,
-		r:      r,
-		opts:   opts,
-		rep:    Report{AgentID: cfg.AgentID, AgentName: cfg.AgentName, Rows: checkingRows(r, cfg)},
-		phase:  phaseChecking,
-		width:  80,
-		height: 24,
-		spin:   s,
-		cancel: &cancelBox{},
+		cfg:       cfg,
+		r:         r,
+		opts:      opts,
+		rep:       Report{AgentID: cfg.AgentID, AgentName: cfg.AgentName, Rows: checkingRows(r, cfg)},
+		phase:     phaseChecking,
+		width:     80,
+		height:    24,
+		spin:      s,
+		cancel:    &cancelBox{},
+		autoTried: map[string]bool{},
+		stepsDone: opts.StepsDone,
 	}
 }
 
@@ -212,8 +233,15 @@ func (m Model) FocusKey() string {
 	return m.rep.Rows[m.focus].Key
 }
 
+// StepsDone is how many first-run steps finished this session.
+func (m Model) StepsDone() int { return m.stepsDone }
+
 // AgentID is the agent this gate is guarding.
 func (m Model) AgentID() string { return m.cfg.AgentID }
+
+// LaunchModel is the chat model the gate checks this launch against; empty
+// means the agent's own default.
+func (m Model) LaunchModel() string { return m.cfg.Model }
 
 // Cancel stops any in-flight probe or fix — the first check included. The host
 // calls it when tearing the screen down so a model pull, or a `gaia init` child,
@@ -242,6 +270,12 @@ type fixDoneMsg struct {
 	key  string
 	err  error
 	note string
+	// diag explains err when the runner had something specific to say.
+	diag Diagnosis
+	// auto marks a fix the screen applied on its own (Row.AutoFix); gate is
+	// the screen that started it, so a late answer cannot land on another.
+	auto bool
+	gate *cancelBox
 }
 type provisionEvent struct {
 	progress Progress
@@ -279,8 +313,50 @@ func (m Model) quickFixCmd(key string, kind FixKind, timeout time.Duration) tea.
 	r, cfg := m.r, m.cfg
 	return func() tea.Msg {
 		res := r.Fix(ctx, cfg, kind, nil)
-		return fixDoneMsg{key: key, err: res.Err, note: res.Note}
+		return fixDoneMsg{key: key, err: res.Err, note: res.Note, diag: res.Diagnosis}
 	}
+}
+
+// autoStart applies the blocking row's AutoFix — starting a daemon or an agent
+// that is simply not running — so a launch after a reboot needs no keypress.
+// It runs at most once per row per screen; a failure restores the row with its
+// remedy and `f` key.
+func (m Model) autoStart() (Model, tea.Cmd, bool) {
+	blocker, blocked := m.rep.Blocker()
+	if !blocked || !blocker.AutoFix || m.autoTried[blocker.Key] {
+		return m, nil, false
+	}
+	var note string
+	var timeout time.Duration
+	switch blocker.Fix {
+	case FixStartDaemon:
+		note, timeout = "Starting the background service…", startTimeout
+	case FixStartSidecar:
+		note, timeout = "Starting the "+m.cfg.AgentName+" agent…", ensureTimeout
+	default:
+		return m, nil, false
+	}
+	idx := m.rowIndex(blocker.Key)
+	if idx < 0 {
+		return m, nil, false
+	}
+	m.autoTried[blocker.Key] = true
+	m.autoRow = blocker
+	shown := blocker
+	shown.State, shown.Line, shown.Detail = StateChecking, "starting…", ""
+	shown.Remedy, shown.Fix, shown.AutoFix = Remedy{}, FixNone, false
+	m.rep.Rows[idx] = shown
+	m.focus = idx
+	m.phase = phaseFixing
+	m.note = note
+	m.opts.Logf("preflight: auto-starting %s (%s)", blocker.Key, blocker.Fix.Label())
+
+	ctx := m.begin(timeout)
+	r, cfg, key, kind, gate := m.r, m.cfg, blocker.Key, blocker.Fix, m.cancel
+	return m, tea.Batch(func() tea.Msg {
+		res := r.Fix(ctx, cfg, kind, nil)
+		return fixDoneMsg{key: key, err: res.Err, note: res.Note, auto: true, gate: gate}
+	}, m.spin.Tick), true
 }
 
 func waitProvision(ch chan provisionEvent, cfg Config) tea.Cmd {
@@ -358,7 +434,7 @@ func (m Model) focusFix() FixKind {
 // it runs. `gaia init` is a local child whose pipes are read live, so that one
 // really does narrate.
 func provisionOpeningLine(kind FixKind) string {
-	if kind == FixRunSetup {
+	if runsSetup(kind) {
 		return "Starting setup"
 	}
 	return "Downloading the model — the first pull takes several minutes"
@@ -409,6 +485,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case reportMsg:
 		m.rep = msg.rep
+		if left := len(m.rep.Steps()); m.stepsBefore > 0 && left > 0 && left < m.stepsBefore {
+			m.stepsDone = m.stepsBefore - left
+		}
+		m.stepsBefore = 0
+		if len(m.rep.Steps()) > 0 {
+			m.rep.StepsDone = m.stepsDone
+		}
 		m.phase = phaseIdle
 		// The rows now say everything the "…re-checking" note did.
 		m.note = ""
@@ -416,6 +499,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focus = idx
 		} else {
 			m.focus = 0
+		}
+		if started, cmd, ok := m.autoStart(); ok {
+			return started, cmd
+		}
+		// The question is the step, so it opens on its own rather than behind
+		// an enter on a row that only names it.
+		if row, ok := m.focusedRow(); ok && row.Key == KeyChat && row.Fix == FixChooseChat {
+			m = m.openChooser()
 		}
 		// A row the user can fix with one keypress holds the screen even when it
 		// does not block: the mailbox row is exactly that, and handing off past it
@@ -452,11 +543,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.proceed()
 
 	case fixDoneMsg:
+		if msg.auto {
+			return m.autoStartDone(msg)
+		}
 		if msg.err == nil {
 			m.fixApplied = true
 		}
 		if msg.err != nil {
-			d := Ladder{AgentID: m.cfg.AgentID}.Error("apply that fix", msg.err)
+			d := msg.diag
+			if d.Cause == "" {
+				d = Ladder{AgentID: m.cfg.AgentID}.Error("apply that fix", msg.err)
+			}
 			m.note = "Fix failed. " + d.String()
 			m.phase = phaseIdle
 			return m, nil
@@ -489,6 +586,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		res := msg.event.result
 		if res.OK {
 			m.fixApplied = true
+			m.stepsBefore = m.rep.StepCount()
 			m.note = "Setup finished. Checking that everything loads…"
 			if m.focusFix() == FixPullModel {
 				m.note = "Download complete. Re-checking…"
@@ -517,7 +615,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// autoStartDone finishes an automatic start. Success re-checks WITHOUT marking
+// fixApplied: nothing was asked of the user, so nothing holds the screen for
+// enter. Failure puts the row back as the check left it, with why.
+func (m Model) autoStartDone(msg fixDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.gate != m.cancel || m.phase != phaseFixing {
+		// From a screen that was left, or a start this one already moved past.
+		return m, nil
+	}
+	if msg.err == nil {
+		m.note = msg.note + " Re-checking…"
+		m.phase = phaseChecking
+		return m, tea.Batch(m.checkCmd(), m.spin.Tick)
+	}
+	if idx := m.rowIndex(msg.key); idx >= 0 && m.autoRow.Key == msg.key {
+		m.rep.Rows[idx] = m.autoRow
+		m.focus = idx
+	}
+	what := "the background service"
+	if msg.key == KeySidecar {
+		what = "the " + m.cfg.AgentName + " agent"
+	}
+	d := Ladder{AgentID: m.cfg.AgentID}.Error("start "+what, msg.err)
+	m.note = "Could not start " + what + " automatically. " + d.String() + " — press f to try again."
+	m.phase = phaseIdle
+	m.opts.Logf("preflight: auto-start of %s failed: %v", msg.key, msg.err)
+	return m, nil
+}
+
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.choosing && msg.String() != "ctrl+c" {
+		return m.handleChooserKey(msg)
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		// Matches the hub and chat: ctrl+c leaves the app, not just the screen.
@@ -526,6 +655,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "esc", "q":
+		// The details pane is a view over the gate, so back closes it.
+		if m.details {
+			m.details = false
+			return m, nil
+		}
 		m.Cancel()
 		// Back to idle, not left in phaseProvisioning/phaseDone: Busy() would
 		// otherwise stay true forever and a re-shown gate would refuse every key.
@@ -582,6 +716,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.applyFix()
+
+	case "g":
+		row, ok := m.focusedRow()
+		if m.Busy() || !ok || row.DeclineFix == FixNone {
+			return m, nil
+		}
+		m.phase = phaseFixing
+		m.note = "Saving your choice…"
+		return m, tea.Batch(m.quickFixCmd(row.Key, row.DeclineFix, startTimeout), m.spin.Tick)
 	}
 	return m, nil
 }
@@ -604,16 +747,31 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 		m.phase = phaseFixing
 		m.note = "Restarting the " + m.cfg.AgentName + " agent in the requested mode…"
 		return m, tea.Batch(m.quickFixCmd(KeySidecar, FixRestartSidecar, ensureTimeout), m.spin.Tick)
-	case FixPullModel, FixRunSetup:
+	case FixPullModel, FixRunSetup, FixInstallServer:
 		return m.startProvision()
+	case FixUseRunningLemonade:
+		m.phase = phaseFixing
+		m.note = "Switching GAIA to your Lemonade…"
+		return m, tea.Batch(m.quickFixCmd(KeyLemonade, FixUseRunningLemonade, startTimeout), m.spin.Tick)
 	case FixConnectMailbox:
 		agentID, provider := m.cfg.AgentID, row.Provider
 		return m, func() tea.Msg {
 			return ConnectMailboxMsg{AgentID: agentID, Provider: provider}
 		}
+	case FixChooseChat:
+		return m.openChooser(), nil
+	case FixConnectProvider:
+		agentID, provider := m.cfg.AgentID, row.Provider
+		return m, func() tea.Msg {
+			return ConnectProviderMsg{AgentID: agentID, Provider: provider}
+		}
 	default:
-		if row.Remedy.Command != "" {
-			m.note = "Nothing here can be fixed safely from the TUI — run: " + row.Remedy.Command
+		if cmds := row.Remedy.Commands(); len(cmds) > 0 {
+			runs := make([]string, len(cmds))
+			for i, c := range cmds {
+				runs[i] = c.Label() + " " + c.Line
+			}
+			m.note = "Nothing here can be fixed safely from the TUI — " + strings.Join(runs, " — or ")
 		}
 		return m, nil
 	}

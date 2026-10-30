@@ -44,7 +44,12 @@ from gaia.skills.format import (
     parse_skill_file,
     reset_security_tier,
 )
-from gaia.skills.lock import SOURCE_CAPTURED, LockEntry, SkillLock
+from gaia.skills.lock import (
+    SOURCE_CAPTURED,
+    LockEntry,
+    SkillLock,
+    SkillLockBusyError,
+)
 from gaia.skills.manager import SkillManager
 from gaia.skills.naming import skill_directory, validated_skill_name
 from gaia.skills.permissions import refuse_unbridged_permissions
@@ -375,28 +380,30 @@ def capture_skill(
             previous_tier = reset_security_tier(landed)
             landed.write(target / SKILL_FILENAME)
 
-            lock = SkillLock.load(destination_root)
-            lock.record(
-                LockEntry(
-                    name=final_name,
-                    version=landed.version or UNVERSIONED,
-                    requested="*",
-                    source=SOURCE_CAPTURED,
-                    origin=origin,
-                    claimed_tier=previous_tier,
-                    installed_tier=LOWEST_TIER,
-                    permissions=list(landed.gaia.permissions),
-                    path=str(target),
-                    captured=True,
-                    code_trusted=False,
+            with SkillLock.locked(destination_root) as lock:
+                lock.record(
+                    LockEntry(
+                        name=final_name,
+                        version=landed.version or UNVERSIONED,
+                        requested="*",
+                        source=SOURCE_CAPTURED,
+                        origin=origin,
+                        claimed_tier=previous_tier,
+                        installed_tier=LOWEST_TIER,
+                        permissions=list(landed.gaia.permissions),
+                        path=str(target),
+                        captured=True,
+                        code_trusted=False,
+                    )
                 )
-            )
-            lock.save()
-        except Exception:
+                lock.save()
+        except Exception as exc:
             shutil.rmtree(target, ignore_errors=True)
-            stale = SkillLock.load(destination_root)
-            if stale.forget(final_name):
-                stale.save()
+            # A busy lock means the entry was never written; don't wait on it again.
+            if not isinstance(exc, SkillLockBusyError):
+                with SkillLock.locked(destination_root) as stale:
+                    if stale.forget(final_name):
+                        stale.save()
             raise
 
     has_scripts = (target / "scripts").is_dir()
@@ -534,29 +541,32 @@ def import_bundle(
         previous_tier = reset_security_tier(landed)
         landed.write(target / SKILL_FILENAME)
 
-        lock = SkillLock.load(destination_root)
-        lock.record(
-            LockEntry(
-                name=final_name,
-                version=landed.version or UNVERSIONED,
-                requested="*",
-                source=SOURCE_IMPORTED,
-                origin=origin,
-                claimed_tier=previous_tier,
-                installed_tier=LOWEST_TIER,
-                permissions=list(landed.gaia.permissions),
-                path=str(target),
-                captured=True,
-                code_trusted=trusted,
-                code_digest=content_digest(target) if trusted else "",
+        digest = content_digest(target) if trusted else ""
+        with SkillLock.locked(destination_root) as lock:
+            lock.record(
+                LockEntry(
+                    name=final_name,
+                    version=landed.version or UNVERSIONED,
+                    requested="*",
+                    source=SOURCE_IMPORTED,
+                    origin=origin,
+                    claimed_tier=previous_tier,
+                    installed_tier=LOWEST_TIER,
+                    permissions=list(landed.gaia.permissions),
+                    path=str(target),
+                    captured=True,
+                    code_trusted=trusted,
+                    code_digest=digest,
+                )
             )
-        )
-        lock.save()
-    except Exception:
+            lock.save()
+    except Exception as exc:
         shutil.rmtree(target, ignore_errors=True)
-        stale = SkillLock.load(destination_root)
-        if stale.forget(final_name):
-            stale.save()
+        # A busy lock means the entry was never written; don't wait on it again.
+        if not isinstance(exc, SkillLockBusyError):
+            with SkillLock.locked(destination_root) as stale:
+                if stale.forget(final_name):
+                    stale.save()
         raise
 
     resolver.reload()
@@ -682,8 +692,7 @@ def promote_skill(
             "'gaia skill list'."
         )
 
-    lock = SkillLock.load(root)
-    entry = lock.get(safe_name)
+    entry = SkillLock.load(root).get(safe_name)
     if entry is None or not entry.captured:
         raise SkillCaptureError(
             f"Skill '{safe_name}' was not captured or imported, so there is "
@@ -705,10 +714,7 @@ def promote_skill(
         )
     except SkillError:
         if entry.code_trusted:
-            entry.code_trusted = False
-            entry.code_digest = ""
-            lock.record(entry)
-            lock.save()
+            _set_code_trust(root, safe_name, trusted=False, digest="")
         raise
 
     report = audit_skill(target)
@@ -716,10 +722,7 @@ def promote_skill(
         # A failed promote REVOKES any earlier trust: a past ALLOW is not a
         # standing grant over bytes the audit now refuses.
         if entry.code_trusted:
-            entry.code_trusted = False
-            entry.code_digest = ""
-            lock.record(entry)
-            lock.save()
+            _set_code_trust(root, safe_name, trusted=False, digest="")
         return PromoteResult(
             name=safe_name,
             promoted=False,
@@ -728,14 +731,32 @@ def promote_skill(
             findings=_render_findings(report),
         )
 
-    entry.code_trusted = True
-    entry.code_digest = report.content_digest
-    lock.record(entry)
-    lock.save()
+    _set_code_trust(root, safe_name, trusted=True, digest=report.content_digest)
     log.info("Promoted captured skill '%s': code_trusted=true (audit ALLOW)", safe_name)
     return PromoteResult(
         name=safe_name, promoted=True, verdict=report.verdict, reason=report.reason
     )
+
+
+def _set_code_trust(root: Path, name: str, *, trusted: bool, digest: str) -> None:
+    """Update one entry's code trust against the current lock, under the lock.
+
+    The audit runs unlocked, so the entry is re-read here: another process may
+    have rewritten the lock in the meantime.
+    """
+    with SkillLock.locked(root) as lock:
+        entry = lock.get(name)
+        if entry is None and not trusted:
+            return  # Nothing left to revoke.
+        if entry is None:
+            raise SkillCaptureError(
+                f"Skill '{name}' left {lock.path} while it was being promoted "
+                "(removed by another process?). Re-capture it, then promote again."
+            )
+        entry.code_trusted = trusted
+        entry.code_digest = digest
+        lock.record(entry)
+        lock.save()
 
 
 __all__ = [

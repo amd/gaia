@@ -88,8 +88,11 @@ def test_other_loads_keep_their_flags(client, model, kwargs):
     assert sent.get("llamacpp_args") == kwargs.get("llamacpp_args")
 
 
-def test_a_forced_backend_load_never_saves_the_chat_flags(client):
-    with patch("gaia.llm.lemonade_client.llamacpp_backend_for", return_value="cpu"):
+def test_an_embedder_load_never_saves_the_chat_flags(client):
+    with (
+        patch("gaia.llm.lemonade_client.manages_embedder_backend", return_value=True),
+        patch.object(client, "_default_llamacpp_backend", return_value="cpu"),
+    ):
         sent = _sent_load(client, "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=8192)
     assert sent["save_options"] is True
     assert "llamacpp_args" not in sent
@@ -108,6 +111,7 @@ def test_an_unreadable_catalog_loads_without_the_chat_flags(client, caplog):
     assert sent == {
         "model_name": "Qwen3-30B-A3B-Instruct-2507-GGUF",
         "ctx_size": 65536,
+        "save_options": True,
     }
     assert "without the two-slot chat flags" in caplog.text
 
@@ -170,6 +174,22 @@ def test_memory_extraction_runs_on_the_side_slot():
     assert host._extract_via_llm("My manager is Priya.", "Noted.", []) == []
     assert host.chat.send_messages.call_args.kwargs["id_slot"] == SIDE_SLOT
     assert SIDE_SLOT != CONVERSATION_SLOT
+
+
+def test_every_background_memory_call_runs_on_the_side_slot():
+    """Consolidation, reconciliation and skill distillation share these kwargs.
+
+    Without a slot they landed on the conversation's, and the user's next turn
+    re-read the whole ~19K-token prompt.
+    """
+    from gaia.agents.base.memory import MemoryMixin
+
+    class Host(MemoryMixin):
+        pass
+
+    host = Host()
+    host.chat = MagicMock(effective_model="Gemma-4-E4B-it-GGUF")
+    assert host._side_request_kwargs()["id_slot"] == SIDE_SLOT
 
 
 def _health(entry):
@@ -351,22 +371,22 @@ def test_requests_to_different_models_do_not_wait_on_each_other():
     "message",
     ["Context size has been exceeded.", "failed to find free space in the KV cache"],
 )
-def test_an_exhausted_kv_pool_is_a_context_overflow(message):
+def test_an_exhausted_kv_pool_is_not_a_context_overflow(message):
+    """Concurrent requests outgrew the shared pool; the conversation did not."""
     from gaia.llm.lemonade_client import is_context_overflow_error
     from gaia.llm.providers.lemonade import (
-        LemonadeContextOverflowError,
+        LemonadeKVCacheSharedError,
         _classify_lemonade_response,
         classify_lemonade_exception,
     )
 
     envelope = {"error": {"code": 500, "message": message, "type": "server_error"}}
     raw = f"Error in chat completions (status 500): {json.dumps(envelope)}"
-    assert is_context_overflow_error(raw)
+    assert not is_context_overflow_error(raw)
     assert isinstance(
         classify_lemonade_exception(LemonadeClientError(raw)),
-        LemonadeContextOverflowError,
+        LemonadeKVCacheSharedError,
     )
     classified, is_error = _classify_lemonade_response(envelope)
-    assert is_error and isinstance(classified, LemonadeContextOverflowError)
-    # A pool exhausted by concurrent requests is not a model loaded too small.
-    assert not classified.retryable
+    assert is_error and isinstance(classified, LemonadeKVCacheSharedError)
+    assert classified.retryable

@@ -23,21 +23,28 @@ from typing import List, Optional
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from gaia.utils.user_folders import documents_dir
+
 from ..models import (
     BrowseResponse,
     FileEntry,
     FilePreviewResponse,
     FileSearchResponse,
     FileSearchResult,
+    FileStatusEntry,
+    FileStatusRequest,
+    FileStatusResponse,
     FileUploadResponse,
     OpenFileRequest,
 )
+from ..turn_summary import is_openable
 from ..utils import (
     ALLOWED_EXTENSIONS,
     TEXT_EXTENSIONS,
     build_quick_links,
     ensure_within_home,
     format_size,
+    is_within_document_roots,
     list_windows_drives,
     uploads_dir,
 )
@@ -48,10 +55,18 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024
 
 # Image extensions recognized for the is_image flag
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+PREVIEWABLE_IMAGE_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".svg",
+}
 
 # All extensions allowed for upload (document types + image types)
-UPLOAD_ALLOWED_EXTENSIONS = ALLOWED_EXTENSIONS | IMAGE_EXTENSIONS
+UPLOAD_ALLOWED_EXTENSIONS = ALLOWED_EXTENSIONS | PREVIEWABLE_IMAGE_EXTENSIONS
 
 # File search bounds: a search must never walk an entire home directory.
 SEARCH_MAX_ENTRIES = 20_000
@@ -136,7 +151,7 @@ async def upload_file(file: UploadFile = File(...)):
 
     # Determine content type
     content_type = file.content_type or "application/octet-stream"
-    is_image = ext in IMAGE_EXTENSIONS
+    is_image = ext in PREVIEWABLE_IMAGE_EXTENSIONS
 
     logger.info(
         "File uploaded: %s -> %s (%d bytes, type=%s, image=%s)",
@@ -170,13 +185,12 @@ async def browse_files(path: Optional[str] = None):
 
     Args:
         path: Directory to browse. Defaults to user home directory.
-              On Windows, pass an empty string or "/" to list drive
-              letters.
+              On Windows, pass "/" to list drive letters.
     """
     quick_links = build_quick_links()
 
-    # On Windows, treat None / empty / "/" as "list drive letters"
-    if platform.system() == "Windows" and (not path or path in ("/", "\\")):
+    # On Windows, "/" lists drive letters; no path opens home like everywhere else.
+    if platform.system() == "Windows" and path in ("/", "\\"):
         entries = list_windows_drives()
         return BrowseResponse(
             current_path="/",
@@ -298,6 +312,8 @@ async def open_file_or_folder(request: OpenFileRequest):
         request.path: Absolute path to the file or folder.
         request.reveal: If true, reveal the file in its parent folder
                        (default: true for files, ignored for folders).
+        request.launch: If true, open the file itself in its default app.
+                       Refused for anything but documents, data and images.
     """
     import subprocess
 
@@ -334,6 +350,9 @@ async def open_file_or_folder(request: OpenFileRequest):
     if not resolved.exists():
         raise HTTPException(status_code=404, detail="Path not found")
 
+    if request.launch:
+        return _launch_file(resolved)
+
     try:
         if platform.system() == "Windows":
             if resolved.is_file() and reveal:
@@ -360,6 +379,71 @@ async def open_file_or_folder(request: OpenFileRequest):
             status_code=500,
             detail="Failed to open file or folder. Check server logs for details.",
         )
+
+
+def _launch_file(resolved: Path) -> dict:
+    """Open *resolved* in its default app, if that cannot run code."""
+    import os
+    import subprocess
+
+    if not resolved.is_file():
+        raise HTTPException(status_code=400, detail="Only a file can be opened")
+    if not is_openable(str(resolved)):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"GAIA does not open {resolved.suffix or 'extensionless'} files "
+                "directly, because the default app could run them. Use Show in "
+                "folder instead."
+            ),
+        )
+    try:
+        if platform.system() == "Windows":
+            os.startfile(str(resolved))  # pylint: disable=no-member
+        elif platform.system() == "Darwin":
+            subprocess.Popen(["open", str(resolved)])
+        else:
+            subprocess.Popen(["xdg-open", str(resolved)])
+    except OSError as e:
+        logger.error("Failed to open file %s: %s", resolved, e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not open {resolved.name}: {e}. Try Show in folder.",
+        ) from e
+    return {"status": "ok", "path": str(resolved)}
+
+
+@router.post("/api/files/status", response_model=FileStatusResponse)
+async def file_status(request: FileStatusRequest):
+    """Whether each path still exists, and its modification time.
+
+    The side rail calls this to show files deleted or changed since the turn
+    that wrote them. Paths outside the home folder are reported unchecked.
+    """
+    home = Path.home()
+    entries = []
+    for raw in request.paths:
+        if not raw or "\x00" in raw:
+            raise HTTPException(status_code=400, detail="Invalid path")
+        resolved = Path(raw).resolve(strict=False)
+        try:
+            resolved.relative_to(home)
+        except ValueError:
+            entries.append(FileStatusEntry(path=raw))
+            continue
+        try:
+            stat = resolved.stat()
+        except FileNotFoundError:
+            entries.append(FileStatusEntry(path=raw, exists=False))
+            continue
+        except OSError as e:
+            raise HTTPException(
+                status_code=500, detail=f"Could not check {resolved.name}: {e}"
+            ) from e
+        entries.append(
+            FileStatusEntry(path=raw, exists=resolved.is_file(), mtime=stat.st_mtime)
+        )
+    return FileStatusResponse(files=entries)
 
 
 # ── File Search ──────────────────────────────────────────────────────────────
@@ -495,10 +579,14 @@ async def search_files(
 
         home = Path.home()
         priority_dirs = [
-            home / "Documents",
-            home / "Downloads",
-            home / "Desktop",
-            home / "OneDrive",
+            directory
+            for directory in (
+                documents_dir(home),
+                home / "Downloads",
+                home / "Desktop",
+                home / "OneDrive",
+            )
+            if is_within_document_roots(directory)
         ]
         for loc in priority_dirs:
             if len(matching_files) >= max_results:
@@ -707,10 +795,10 @@ async def serve_local_image(path: str):
         raise HTTPException(status_code=404, detail="Image file not found")
 
     ext = resolved.suffix.lower()
-    if ext not in IMAGE_EXTENSIONS:
+    if ext not in PREVIEWABLE_IMAGE_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Not an image file (supported: {', '.join(sorted(IMAGE_EXTENSIONS))})",
+            detail=f"Not an image file (supported: {', '.join(sorted(PREVIEWABLE_IMAGE_EXTENSIONS))})",
         )
 
     media_types = {

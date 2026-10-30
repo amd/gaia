@@ -3,14 +3,12 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
-    ChevronDown,
     ChevronRight,
     Wrench,
     ListChecks,
     AlertCircle,
     CheckCircle2,
     Loader2,
-    Zap,
     Search,
     FileText,
     Terminal,
@@ -25,11 +23,21 @@ import {
     Check,
     File,
     ShieldAlert,
+    Brain,
+    MessageCircleQuestionMark,
+    Circle,
+    Sparkles,
+    Link,
     type LucideIcon,
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
 import * as api from '../services/api';
+import { CodeBlock } from './PermissionPrompt';
 import { log } from '../utils/logger';
+import { StepResult } from './LongContent';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -63,6 +71,7 @@ const TOOL_META: Record<string, ToolMeta> = {
     semantic_search:       { label: 'Searched documents', activeLabel: 'Searching documents', icon: BookOpen },
     evaluate_retrieval:    { label: 'Evaluated retrieval', activeLabel: 'Evaluating retrieval', icon: BookOpen },
     index_document:        { label: 'Indexed document',   activeLabel: 'Indexing document',   icon: Database },
+    index_documents:       { label: 'Indexed documents',  activeLabel: 'Indexing documents',  icon: Database },
     index_directory:       { label: 'Indexed directory',  activeLabel: 'Indexing directory',   icon: Database },
     index_file:            { label: 'Indexed file',       activeLabel: 'Indexing file',       icon: Database },
     list_indexed_documents: { label: 'Listed documents',  activeLabel: 'Listing documents',   icon: Database },
@@ -72,139 +81,395 @@ const TOOL_META: Record<string, ToolMeta> = {
     add_watch_directory:   { label: 'Added watch dir',    activeLabel: 'Adding watch dir',    icon: FolderOpen },
     // Web
     web_search:            { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe },
+    search_web:            { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe },
+    fetch_page:            { label: 'Read web page',      activeLabel: 'Reading web page',    icon: Link },
+    fetch_webpage:         { label: 'Read web page',      activeLabel: 'Reading web page',    icon: Link },
     analyze_data:          { label: 'Analyzed data',      activeLabel: 'Analyzing data',      icon: BarChart3 },
+    // GAIA agent: files, memory, questions
+    find_files:            { label: 'Found files',        activeLabel: 'Finding files',       icon: Search },
+    edit_file:             { label: 'Edited file',        activeLabel: 'Editing file',        icon: FileEdit },
+    recall:                { label: 'Recalled memory',    activeLabel: 'Recalling memory',    icon: Brain },
+    remember:              { label: 'Saved to memory',    activeLabel: 'Saving to memory',    icon: Brain },
+    update_memory:         { label: 'Updated memory',     activeLabel: 'Updating memory',     icon: Brain },
+    forget:                { label: 'Deleted from memory', activeLabel: 'Deleting from memory', icon: Brain },
+    search_past_conversations: { label: 'Searched past chats', activeLabel: 'Searching past chats', icon: Brain },
+    request_user_input:    { label: 'Asked you',          activeLabel: 'Asking you',          icon: MessageCircleQuestionMark },
+    // Skills
+    load_skill:            { label: 'Used skill',         activeLabel: 'Loading skill',       icon: Sparkles },
+    unload_skill:          { label: 'Put away skill',     activeLabel: 'Putting away skill',  icon: Sparkles },
+    list_skills:           { label: 'Checked skills',     activeLabel: 'Checking skills',     icon: Sparkles },
+    search_skill_hub:      { label: 'Searched skills',    activeLabel: 'Searching skills',    icon: Sparkles },
+    install_skill:         { label: 'Installed skill',    activeLabel: 'Installing skill',    icon: Sparkles },
+    capture_skill:         { label: 'Saved skill',        activeLabel: 'Saving skill',        icon: Sparkles },
+    remove_skill:          { label: 'Removed skill',      activeLabel: 'Removing skill',      icon: Sparkles },
+    skill_status:          { label: 'Checked skill',      activeLabel: 'Checking skill',      icon: Sparkles },
 };
+
+/** Tools whose row marks the agent picking up a skill. */
+const SKILL_USE_TOOLS = new Set(['load_skill']);
+
+// Memory works in the background: its steps show only when they fail.
+const BACKGROUND_TOOLS = new Set(['remember', 'recall', 'update_memory', 'forget']);
+
+function isBackgroundStep(step: AgentStep): boolean {
+    return step.type === 'tool' && step.success !== false && BACKGROUND_TOOLS.has(step.tool ?? '');
+}
 
 const DEFAULT_TOOL_META: ToolMeta = {
     label: 'Used tool', activeLabel: 'Using tool', icon: Wrench,
 };
 
-function getToolMeta(toolName?: string): ToolMeta {
+/** Which connector an MCP call went to, as the server names it. */
+type McpIdentity = Pick<AgentStep, 'mcpServerLabel' | 'mcpTool'>;
+
+function getToolMeta(toolName?: string, mcp?: McpIdentity): ToolMeta {
     if (!toolName) return DEFAULT_TOOL_META;
     if (toolName.startsWith('mcp_')) {
+        const server = mcp?.mcpServerLabel;
+        if (server) {
+            const what = mcp?.mcpTool ? `${server}: ${mcp.mcpTool}` : server;
+            return { label: `Used ${what}`, activeLabel: `Using ${what}`, icon: Globe };
+        }
+        // Saved turns from before the server named the connector.
         return { label: 'MCP tool', activeLabel: 'Running MCP tool', icon: Globe };
     }
-    return TOOL_META[toolName] || DEFAULT_TOOL_META;
+    if (TOOL_META[toolName]) return TOOL_META[toolName];
+    // A tool with no entry still says what it was, not a bare "Used tool".
+    const words = toolName.replace(/[_-]+/g, ' ').trim();
+    return words
+        ? { ...DEFAULT_TOOL_META, label: `Used ${words}`, activeLabel: `Using ${words}` }
+        : DEFAULT_TOOL_META;
+}
+
+/** The fallback line for a tool row that arrived without a narration (older saved turns). */
+function toolFallbackLabel(step: AgentStep): string {
+    const meta = getToolMeta(step.tool, step);
+    // The done-label ("Wrote file") would claim a failed, denied or stopped call succeeded.
+    const unfinished = step.success == null && !step.result;
+    return step.active
+        ? meta.activeLabel
+        : step.success === false ? `${meta.activeLabel} failed`
+        : unfinished ? `${meta.activeLabel} didn't finish` : meta.label;
+}
+
+/** The one plain line a tool row shows by default, and the live line while it runs. */
+export function toolRowText(step: AgentStep): string {
+    // Narration can only humanize the prefixed tool id; the connector's own name says more.
+    if (step.mcpServerLabel) return toolFallbackLabel(step);
+    return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step);
+}
+
+const COMPACT_DETAIL_CHARS = 48;
+
+/** Lines of an MCP tool's output shown before "Show all". */
+const MCP_OUTPUT_PREVIEW_LINES = 5;
+
+/** Below this many call rows the list is short enough to scan without a filter. */
+const FILTER_MIN_TOOL_ROWS = 6;
+
+/**
+ * Shorten the detail of "Reading file: <long path>" to the part that differs
+ * between similar rows (a path's tail, a URL's host and page) instead of
+ * letting the row cut off at a shared prefix.
+ */
+export function compactNarration(text: string): string {
+    const split = /^([^:\n]{1,40}): (.+)$/.exec(text);
+    if (!split) return text;
+    const [, base, detail] = split;
+    if (/^https?:\/\//i.test(detail)) {
+        const bare = detail.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '');
+        const segments = bare.split('/').filter(Boolean);
+        const short = bare.length > COMPACT_DETAIL_CHARS && segments.length > 2
+            ? `${segments[0]}/…/${segments[segments.length - 1]}`
+            : bare;
+        return `${base}: ${short}`;
+    }
+    if (detail.length > COMPACT_DETAIL_CHARS && /[\\/]/.test(detail) && !/\s/.test(detail)) {
+        const sep = detail.includes('\\') ? '\\' : '/';
+        const segments = detail.split(/[\\/]/).filter(Boolean);
+        if (segments.length > 2) return `${base}: …${sep}${segments.slice(-2).join(sep)}`;
+    }
+    return text;
+}
+
+export type PlanItemStatus = 'done' | 'running' | 'failed' | 'stopped' | 'pending';
+
+/** A display row: an agent step, plus how many identical calls it stands for. */
+export interface ActivityRow extends AgentStep {
+    /** Identical tool calls merged into this row (absent for a single call). */
+    count?: number;
+    /** Per-plan-step status, parallel to planSteps (plan rows with a known current step). */
+    planStatuses?: PlanItemStatus[];
+}
+
+/** The agent's own bookkeeping lines while it walks a plan; the checklist already says this. */
+const PLAN_BOOKKEEPING_RE = /^(?:Executing step \d+ of the plan\.?|Following the plan to [\s\S]*)$/;
+
+function samePlan(a?: string[], b?: string[]): boolean {
+    return !!a && !!b && a.length === b.length && a.every((s, i) => s === b[i]);
+}
+
+function sameCall(a: AgentStep, b: AgentStep): boolean {
+    return a.tool === b.tool && (a.detail ?? '') === (b.detail ?? '') && a.mcpServer === b.mcpServer;
+}
+
+/** Status of each plan step, from the step being executed and the calls made since. */
+export function planStatuses(
+    stepCount: number,
+    current: number | undefined,
+    callsSince: AgentStep[],
+    isActive: boolean,
+): PlanItemStatus[] | undefined {
+    if (current == null || current < 0) return undefined;
+    const last = callsSince[callsSince.length - 1];
+    let currentStatus: PlanItemStatus;
+    if (last?.active) currentStatus = 'running';
+    else if (last?.success === false) currentStatus = 'failed';
+    else if (last && (last.success === true || last.result)) currentStatus = 'done';
+    else if (isActive) currentStatus = 'running';
+    // A call with no outcome after the turn ended was cut short (Stop, timeout).
+    else currentStatus = last ? 'stopped' : 'pending';
+    return Array.from({ length: stepCount }, (_, i) =>
+        i < current ? 'done' : i === current ? currentStatus : 'pending');
+}
+
+/**
+ * Fold the raw step stream into display rows: merge runs of thinking/status,
+ * keep one row per plan (the agent re-sends it before every step), and merge
+ * identical tool calls into one ×N row.
+ */
+export function consolidateSteps(steps: AgentStep[], isActive: boolean): ActivityRow[] {
+    const result: ActivityRow[] = [];
+    // Per plan row: raw index of its latest copy, and where the next different plan starts.
+    const planSpan = new Map<number, { anchor: number; end: number }>();
+    let lastPlan: ActivityRow | undefined;
+    let seenPlan = false;
+
+    steps.forEach((step, rawIdx) => {
+        if (isBackgroundStep(step)) return;
+        const prev = result[result.length - 1];
+
+        if (seenPlan && (step.type === 'thinking' || step.type === 'status')) {
+            if (PLAN_BOOKKEEPING_RE.test((step.detail || step.label || '').trim())) return;
+        }
+
+        if (step.type === 'plan') {
+            seenPlan = true;
+            // Only a re-send of the latest plan folds in; a replan gets its own checklist.
+            if (lastPlan && samePlan(lastPlan.planSteps, step.planSteps)) {
+                if (step.currentStep != null) lastPlan.currentStep = step.currentStep;
+                if (step.planNarrations) lastPlan.planNarrations = step.planNarrations;
+                planSpan.get(lastPlan.id)!.anchor = rawIdx;
+                return;
+            }
+            if (lastPlan) planSpan.get(lastPlan.id)!.end = rawIdx;
+            lastPlan = { ...step };
+            result.push(lastPlan);
+            planSpan.set(step.id, { anchor: rawIdx, end: steps.length });
+            return;
+        }
+
+        if (step.type === 'tool') {
+            // Look back past thinking/status only: a plan or error between two calls keeps them apart.
+            let j = result.length - 1;
+            while (j >= 0 && (result[j].type === 'thinking' || result[j].type === 'status')) j--;
+            const prevTool = j >= 0 ? result[j] : undefined;
+            if (prevTool && prevTool.type === 'tool' && !prevTool.active && sameCall(prevTool, step)
+                && (step.active || prevTool.success === step.success)) {
+                result[j] = { ...step, id: prevTool.id, count: (prevTool.count ?? 1) + 1 };
+                return;
+            }
+            result.push({ ...step });
+            return;
+        }
+
+        // Merge consecutive thinking steps; concatenate so accumulated text survives.
+        if (step.type === 'thinking' && prev && prev.type === 'thinking') {
+            const merged = (prev.detail || '') + (step.detail || '');
+            result[result.length - 1] = { ...step, timestamp: prev.timestamp, detail: merged || prev.detail };
+            return;
+        }
+        // Merge consecutive status steps
+        if (step.type === 'status' && prev && prev.type === 'status' && step.active !== false) {
+            result[result.length - 1] = { ...step, label: step.label || prev.label };
+            return;
+        }
+        // Absorb thinking into adjacent status — keep thinking detail
+        if (step.type === 'thinking' && prev && prev.type === 'status' && prev.active !== false) {
+            result[result.length - 1] = { ...prev, type: 'thinking', detail: step.detail || prev.detail, active: step.active };
+            return;
+        }
+        // Absorb status into adjacent thinking — preserve thinking detail
+        if (step.type === 'status' && step.success !== false && prev && prev.type === 'thinking') {
+            result[result.length - 1] = { ...prev, label: step.label || prev.label, active: step.active ?? prev.active };
+            return;
+        }
+        result.push({ ...step });
+    });
+
+    for (const row of result) {
+        const span = planSpan.get(row.id);
+        if (row.type !== 'plan' || !row.planSteps || !span) continue;
+        const callsSince = steps.slice(span.anchor + 1, span.end).filter((s) => s.type === 'tool');
+        // A plan the agent replaced is no longer running, whatever the turn is doing.
+        const running = isActive && row === lastPlan;
+        row.planStatuses = planStatuses(row.planSteps.length, row.currentStep, callsSince, running);
+    }
+    return result;
+}
+
+/** What a turn blocked on the user says, in the message header and its held tool row. */
+export const WAITING_ON_USER_LABEL = 'Waiting for you';
+
+/** `8` -> "8s", `125` -> "2m 05s". */
+export function formatElapsed(seconds: number): string {
+    const s = Math.max(0, Math.floor(seconds));
+    if (s < 60) return `${s}s`;
+    return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+}
+
+/** Wall-clock milliseconds, re-rendering once a second while `ticking`. */
+function useNow(ticking: boolean): number {
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        if (!ticking) return;
+        setNow(Date.now());
+        const timer = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(timer);
+    }, [ticking]);
+    return now;
+}
+
+/** One stretch of the turn: a note the agent wrote, or the steps between two notes. */
+export type TimelineItem =
+    | { kind: 'note'; row: ActivityRow }
+    | { kind: 'steps'; id: number; rows: ActivityRow[] };
+
+/**
+ * Split display rows at the agent's notes, so the turn reads note, steps, note, steps.
+ * A note the answer opens with is left out: text written beside a closing call leads the answer.
+ */
+export function toTimeline(rows: ActivityRow[], answer = ''): TimelineItem[] {
+    const items: TimelineItem[] = [];
+    for (const row of rows) {
+        if (row.type === 'commentary') {
+            const text = row.detail?.trim();
+            if (text && !answer.trimStart().startsWith(text)) items.push({ kind: 'note', row });
+            continue;
+        }
+        const last = items[items.length - 1];
+        if (last?.kind === 'steps') last.rows.push(row);
+        else items.push({ kind: 'steps', id: row.id, rows: [row] });
+    }
+    return items;
+}
+
+/** "Used meeting-notes skill" for a skill pickup whose narration names the skill. */
+function skillUsed(row: ActivityRow): string | undefined {
+    if (!SKILL_USE_TOOLS.has(row.tool ?? '')) return undefined;
+    const name = /:\s*(.+)$/.exec(row.narration ?? '')?.[1]?.trim();
+    return name ? `Used ${name} skill` : undefined;
+}
+
+/** Most kinds of step named in a folded run before "and N more". */
+const SUMMARY_KINDS = 3;
+
+/** The one line a folded run of steps shows: what it did, in order. */
+export function stepsSummary(rows: ActivityRow[]): string {
+    const kinds: { label: string; count: number }[] = [];
+    for (const row of rows) {
+        let label: string;
+        if (row.type === 'tool') label = skillUsed(row) ?? getToolMeta(row.tool, row).label;
+        else if (row.type === 'policy_alert') label = 'Blocked by policy';
+        else if (row.type === 'error') label = 'Hit an error';
+        else if (row.type === 'plan') label = 'Made a plan';
+        else continue;
+        const seen = kinds.find((k) => k.label === label);
+        if (seen) seen.count += row.count ?? 1;
+        else kinds.push({ label, count: row.count ?? 1 });
+    }
+    if (kinds.length === 0) return 'Thought it through';
+    const named = kinds.slice(0, SUMMARY_KINDS).map((k, i) => {
+        const text = i === 0 ? k.label : k.label.charAt(0).toLowerCase() + k.label.slice(1);
+        return k.count > 1 ? `${text} ×${k.count}` : text;
+    });
+    const rest = kinds.length - named.length;
+    return rest > 0 ? `${named.join(', ')} and ${rest} more` : named.join(', ');
+}
+
+/** A failed call the agent recovered from stays folded; a turn-level error never hides behind a click. */
+function isTurnError(row: ActivityRow): boolean {
+    return row.type === 'error' || row.type === 'policy_alert';
+}
+
+/** A warning the agent raised mid-turn ("Execution paused"); it carries no phase for the live line. */
+function isWarning(row: ActivityRow): boolean {
+    return row.type === 'status' && row.success === false;
+}
+
+/** Whether a row draws anything; the live line, not a row, says what the model is doing. */
+function shownWhenDone(row: ActivityRow): boolean {
+    return row.type !== 'status' && !(row.type === 'thinking' && !(row.detail || '').trim());
+}
+
+/**
+ * How long each stretch of reasoning ran, keyed by every piece's id: from its first
+ * piece until the next step began, or for the turn's last stretch, until the answer did.
+ */
+export function thoughtDurations(steps: AgentStep[]): Map<number, number> {
+    const out = new Map<number, number>();
+    let run: AgentStep[] = [];
+    const close = (end?: number) => {
+        const last = run[run.length - 1];
+        const span = end != null ? end - run[0].timestamp : last?.latencyMs;
+        if (span != null && span >= 0) for (const piece of run) out.set(piece.id, span);
+        run = [];
+    };
+    for (const step of steps) {
+        if (step.type === 'thinking' || (run.length > 0 && step.type === 'status')) {
+            if (step.type === 'thinking') run.push(step);
+            continue;
+        }
+        if (run.length > 0) close(step.timestamp);
+    }
+    if (run.length > 0) close();
+    return out;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────
 
 interface AgentActivityProps {
     steps: AgentStep[];
-    /** Whether the agent is currently working. */
+    /** Whether a step is running right now. */
     isActive: boolean;
-    /** Whether this is the inline version (during streaming) or the summary version (after). */
-    variant?: 'inline' | 'summary';
+    /** Whether the turn is still in flight, between steps included. */
+    running?: boolean;
+    /** The turn is blocked on the user (an approval or a question), so nothing is running. */
+    awaitingUser?: boolean;
+    /** What the model is doing between steps; drawn at the end of the timeline while no row is live. */
+    liveLine?: React.ReactNode;
+    /** The turn's answer, so a note it repeats is not shown twice. */
+    answer?: string;
 }
 
-/** Displays agent activity as a single expandable "Thinking" panel with tool calls inline. */
-export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActivityProps) {
-    // Always start collapsed — thinking text is shown via ThinkingIndicator
-    // in the message header. Users can expand to see details if they want.
-    const [expanded, setExpanded] = useState(false);
+/** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
+export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, answer }: AgentActivityProps) {
+    const [openGroups, setOpenGroups] = useState<Map<number, boolean>>(new Map());
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
-    const prevStepCountRef = useRef(0);
-    const collapseTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
-    const prevIsActiveRef = useRef(isActive);
-
-    // Track isActive transitions (used by other effects if needed)
-    useEffect(() => {
-        prevIsActiveRef.current = isActive;
-    }, [isActive]);
-
-    // Cleanup timers on unmount
-    useEffect(() => {
-        return () => {
-            collapseTimersRef.current.forEach((timer) => clearTimeout(timer));
-            collapseTimersRef.current.clear();
-        };
-    }, []);
-
-    // ── Consolidate display steps ────────────────────────────────────
-    // Merge consecutive thinking/status steps into one.
-    // IMPORTANT: Use concatenation for detail fields (not `||`) to
-    // preserve accumulated thinking text across multiple steps.
-    const displaySteps = useMemo(() => {
-        const result: AgentStep[] = [];
-        for (const step of steps) {
-            const prev = result[result.length - 1];
-            // Merge consecutive thinking steps — concatenate details
-            if (step.type === 'thinking' && prev && prev.type === 'thinking') {
-                const merged = (prev.detail || '') + (step.detail || '');
-                result[result.length - 1] = { ...step, detail: merged || prev.detail };
-                continue;
-            }
-            // Merge consecutive status steps
-            if (step.type === 'status' && prev && prev.type === 'status' && step.active !== false) {
-                result[result.length - 1] = { ...step, label: step.label || prev.label };
-                continue;
-            }
-            // Absorb thinking into adjacent status — keep thinking detail
-            if (step.type === 'thinking' && prev && prev.type === 'status' && prev.active !== false) {
-                result[result.length - 1] = { ...prev, type: 'thinking', detail: step.detail || prev.detail, active: step.active };
-                continue;
-            }
-            // Absorb status into adjacent thinking — preserve thinking detail
-            if (step.type === 'status' && prev && prev.type === 'thinking') {
-                result[result.length - 1] = { ...prev, label: step.label || prev.label, active: step.active ?? prev.active };
-                continue;
-            }
-            result.push(step);
-        }
-        return result;
-    }, [steps]);
-
-    const toolSteps = displaySteps.filter((s) => s.type === 'tool');
-    const policySteps = displaySteps.filter((s) => s.type === 'policy_alert');
-    const hasPolicyAlerts = policySteps.length > 0;
-
-    // ── Filter state (for MCP tool visualization) ───────────────────
     const [toolNameFilter, setToolNameFilter] = useState('');
     const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'error'>('all');
 
-    // filteredSteps drives rendering; toolSteps/errorSteps use unfiltered
-    // displaySteps so counters and the filter-bar threshold stay stable.
-    const filteredSteps = useMemo(() => {
-        if (!toolNameFilter && statusFilter === 'all') return displaySteps;
-        return displaySteps.filter(s => {
-            if (s.type !== 'tool') return true;
-            if (toolNameFilter && !s.tool?.toLowerCase().includes(toolNameFilter.toLowerCase())) return false;
-            if (statusFilter === 'success' && s.success !== true) return false;
-            if (statusFilter === 'error' && s.success !== false) return false;
-            return true;
-        });
-    }, [displaySteps, toolNameFilter, statusFilter]);
+    const displaySteps = useMemo(() => consolidateSteps(steps, running), [steps, running]);
+    const timeline = useMemo(() => toTimeline(displaySteps, answer), [displaySteps, answer]);
+    const durations = useMemo(() => thoughtDurations(steps), [steps]);
+    const now = useNow(running);
 
-    const errorSteps = displaySteps.filter((s) => s.type === 'error');
-    const hasErrors = errorSteps.length > 0;
-
-    useEffect(() => {
-        if (hasPolicyAlerts) setExpanded(true);
-    }, [hasPolicyAlerts]);
-
-    // Auto-expand native tools for visibility. MCP tools start collapsed
-    // by default (users expand on demand) to reduce noise in busy sessions.
-    useEffect(() => {
-        prevStepCountRef.current = displaySteps.length;
-        const toolIds = displaySteps
-            .filter((s) => s.type === 'tool' && !s.mcpServer)
-            .map((s) => s.id);
-        if (toolIds.length > 0) {
-            setExpandedTools((prev) => {
-                const next = new Set(prev);
-                toolIds.forEach((id) => next.add(id));
-                return next;
-            });
-        }
-    }, [displaySteps]);
+    // While the turn runs, the latest plan stays in view as a live checklist.
+    const livePlan = running ? [...displaySteps].reverse().find((s) => s.type === 'plan' && s.planSteps?.length) : undefined;
+    const liveRow = running && displaySteps.some((s) => s.active && s.type !== 'status');
+    const filtering = !!toolNameFilter || statusFilter !== 'all';
 
     const toggleTool = useCallback((id: number) => {
-        // Clear any pending collapse timer when user manually toggles
-        const timer = collapseTimersRef.current.get(id);
-        if (timer) {
-            clearTimeout(timer);
-            collapseTimersRef.current.delete(id);
-        }
         setExpandedTools((prev) => {
             const next = new Set(prev);
             if (next.has(id)) next.delete(id);
@@ -213,135 +478,200 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
         });
     }, []);
 
-    // Don't render until there are real steps to show
-    if (displaySteps.length === 0) return null;
+    const keep = (row: ActivityRow): boolean => {
+        if (row.type !== 'tool' || !filtering) return true;
+        const needle = toolNameFilter.toLowerCase();
+        if (needle && !row.tool?.toLowerCase().includes(needle)
+            && !toolRowText(row).toLowerCase().includes(needle)) return false;
+        if (statusFilter === 'success' && row.success !== true) return false;
+        if (statusFilter === 'error' && row.success !== false) return false;
+        return true;
+    };
 
-    // Build summary — always use stable step count so the bar doesn't
-    // visually change when transitioning from thinking to answer streaming.
-    const stepCount = displaySteps.length;
-    const summaryText = hasPolicyAlerts
-        ? `Blocked by policy \u00b7 ${policySteps.length} alert${policySteps.length !== 1 ? 's' : ''}`
-        : `${stepCount} step${stepCount !== 1 ? 's' : ''}`
-            + (toolSteps.length > 0 ? ` \u00b7 ${toolSteps.length} tool${toolSteps.length !== 1 ? 's' : ''}` : '');
+    const renderRow = (step: ActivityRow) => {
+        if (step.type === 'thinking') {
+            return <FlowThought key={step.id} step={step} live={running && !!step.active} durationMs={durations.get(step.id)} />;
+        }
+        if (step.type === 'tool') {
+            return (
+                <FlowToolCard
+                    key={step.id}
+                    step={step}
+                    isExpanded={expandedTools.has(step.id)}
+                    now={now}
+                    awaitingUser={running && awaitingUser}
+                    onToggle={() => toggleTool(step.id)}
+                />
+            );
+        }
+        if (step.type === 'plan') {
+            // While the turn runs, the live checklist below stands in for it.
+            return step === livePlan ? null : <PlanChecklist key={step.id} step={step} />;
+        }
+        if (step.type === 'status') return <FlowWarning key={step.id} step={step} />;
+        if (step.type === 'error') return <FlowError key={step.id} step={step} />;
+        if (step.type === 'policy_alert') return <FlowPolicyAlert key={step.id} step={step} />;
+        return null;
+    };
+
+    if (displaySteps.length === 0) {
+        return liveLine ? <div className="agent-activity active"><div className="flow-live-line">{liveLine}</div></div> : null;
+    }
+
+    const lastIndex = timeline.length - 1;
+    const visibleRows = (rows: ActivityRow[], live: boolean) =>
+        rows.filter((r) => (shownWhenDone(r) || (live && isWarning(r))) && !isPlanShownLive(r, livePlan));
+    // Calls in the runs that are open; folded runs and lone rows have nothing to sift.
+    const openCalls = timeline.reduce((n, item, i) => {
+        if (item.kind !== 'steps') return n;
+        const live = running && i === lastIndex;
+        const visible = visibleRows(item.rows, live);
+        if (visible.length < 2 && !live) return n;
+        const open = openGroups.get(item.id) ?? (live || visible.some(isTurnError));
+        return open ? n + visible.filter((r) => r.type === 'tool').length : n;
+    }, 0);
 
     return (
-        <div className={`agent-activity ${variant} ${isActive ? 'active' : 'done'} ${hasErrors ? 'has-errors' : ''} ${hasPolicyAlerts ? 'has-policy-alerts' : ''}`}>
-            {/* Summary bar */}
-            <button
-                className="agent-summary-bar"
-                onClick={() => setExpanded(!expanded)}
-                aria-expanded={expanded}
-                aria-label={expanded ? 'Collapse agent activity' : 'Expand agent activity'}
-            >
-                <div className="agent-summary-left">
-                    {hasErrors ? (
-                        <AlertCircle size={14} className="agent-icon-error" />
-                    ) : (
-                        <Zap size={14} className="agent-icon-done" />
-                    )}
-                    <span className="agent-summary-text">{summaryText}</span>
-                </div>
-                <div className="agent-summary-right">
-                    {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                </div>
-            </button>
-
-            {/* Flow content — thinking text + inline tool cards.
-                Uses a wrapper div that's always mounted so CSS can animate
-                the height transition on collapse/expand. */}
-            {displaySteps.length > 0 && (
-                // Inert while collapsed: invisible buttons must not be tabbable or announced.
-                <div className={`agent-flow-wrap ${expanded ? 'flow-expanded' : 'flow-collapsed'}`} inert={!expanded}>
-                    {/* Filter bar — shown when expanded and 2+ tool steps */}
-                    {expanded && toolSteps.length >= 2 && (
-                        <div className="activity-filter-bar">
-                            <input
-                                type="text"
-                                className="activity-filter-input"
-                                placeholder="Filter by tool name..."
-                                aria-label="Filter by tool name"
-                                value={toolNameFilter}
-                                onChange={(e) => setToolNameFilter(e.target.value)}
-                            />
-                            <select
-                                className="activity-filter-select"
-                                aria-label="Filter by status"
-                                value={statusFilter}
-                                onChange={(e) => setStatusFilter(e.target.value as 'all' | 'success' | 'error')}
-                            >
-                                <option value="all">All</option>
-                                <option value="success">Success</option>
-                                <option value="error">Error</option>
-                            </select>
+        <div className={`agent-activity ${running ? 'active' : 'done'}`}>
+            <div className="agent-timeline">
+                {timeline.map((item, i) => {
+                    if (item.kind === 'note') {
+                        return <FlowNote key={item.row.id} text={item.row.detail ?? ''} />;
+                    }
+                    const live = running && i === lastIndex;
+                    const visible = visibleRows(item.rows, live);
+                    if (visible.length === 0) return null;
+                    const failed = visible.some(isTurnError);
+                    // A lone row is already one line; folding it would only add a click.
+                    if (visible.length === 1 && !live) {
+                        return keep(visible[0])
+                            ? <div key={item.id} className="flow-steps single">{renderRow(visible[0])}</div>
+                            : null;
+                    }
+                    const open = openGroups.get(item.id) ?? (live || failed);
+                    const shown = visible.filter(keep);
+                    return (
+                        <div key={item.id} className={`flow-steps ${open ? 'open' : 'folded'} ${live ? 'live' : ''}`}>
+                            {!live && (
+                                <button
+                                    className="flow-steps-summary"
+                                    onClick={() => setOpenGroups((prev) => new Map(prev).set(item.id, !open))}
+                                    aria-expanded={open}
+                                >
+                                    {failed
+                                        ? <AlertCircle size={13} className="agent-icon-error" />
+                                        : <CheckCircle2 size={13} className="flow-steps-done" />}
+                                    <span className="flow-steps-text">{stepsSummary(visible)}</span>
+                                    <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
+                                </button>
+                            )}
+                            {open && <div className="flow-steps-rows">{shown.map(renderRow)}</div>}
                         </div>
-                    )}
-                    <div className="agent-flow">
-                        {filteredSteps.map((step) => {
-                            if (step.type === 'thinking') {
-                                return <FlowThought key={step.id} step={step} />;
-                            }
-                            if (step.type === 'status') {
-                                return <FlowStatus key={step.id} step={step} />;
-                            }
-                            if (step.type === 'tool') {
-                                return (
-                                    <FlowToolCard
-                                        key={step.id}
-                                        step={step}
-                                        isExpanded={expandedTools.has(step.id)}
-                                        onToggle={() => toggleTool(step.id)}
-                                    />
-                                );
-                            }
-                            if (step.type === 'plan') {
-                                return <FlowPlan key={step.id} step={step} />;
-                            }
-                            if (step.type === 'error') {
-                                return <FlowError key={step.id} step={step} />;
-                            }
-                            if (step.type === 'policy_alert') {
-                                return <FlowPolicyAlert key={step.id} step={step} />;
-                            }
-                            return null;
-                        })}
-                    </div>
+                    );
+                })}
+            </div>
+
+            {livePlan && <PlanChecklist step={livePlan} />}
+            {running && !liveRow && liveLine && <div className="flow-live-line">{liveLine}</div>}
+
+            {/* Filter: after the steps, and only once there are enough open calls to sift */}
+            {!running && openCalls >= FILTER_MIN_TOOL_ROWS && (
+                <div className="activity-filter-bar">
+                    <input
+                        type="text"
+                        className="activity-filter-input"
+                        placeholder="Filter steps…"
+                        aria-label="Filter by tool name"
+                        value={toolNameFilter}
+                        onChange={(e) => setToolNameFilter(e.target.value)}
+                    />
+                    <select
+                        className="activity-filter-select"
+                        aria-label="Filter by status"
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value as 'all' | 'success' | 'error')}
+                    >
+                        <option value="all">All</option>
+                        <option value="success">Success</option>
+                        <option value="error">Error</option>
+                    </select>
                 </div>
             )}
         </div>
     );
 }
 
-// ── Flow: Thinking text (hacker-style with red cursor) ────────────────────
+function isPlanShownLive(row: ActivityRow, livePlan?: ActivityRow): boolean {
+    return row.type === 'plan' && row === livePlan;
+}
 
-function FlowThought({ step }: { step: AgentStep }) {
-    const text = step.detail || step.label || '';
-    const containerRef = useRef<HTMLDivElement>(null);
+// ── Flow: a warning raised while the turn runs ──────────────────────────────
 
-    // Auto-scroll to keep cursor visible as text streams in
-    useEffect(() => {
-        if (step.active && containerRef.current) {
-            containerRef.current.scrollTop = containerRef.current.scrollHeight;
-        }
-    }, [text, step.active]);
-
-    if (!text) return null;
-
+function FlowWarning({ step }: { step: AgentStep }) {
     return (
-        <div ref={containerRef} className="flow-thought-hacker">
-            <span>{text}</span>
-            {step.active && <span className="flow-thought-cursor" />}
+        <div className="flow-warning" role="status">
+            <AlertCircle size={13} />
+            <span>{step.label}</span>
         </div>
     );
 }
 
-// ── Flow: Status text (no cursor, simple text) ────────────────────────────
+// ── Flow: a note the agent wrote between steps ────────────────────────────
 
-function FlowStatus({ step }: { step: AgentStep }) {
-    const text = step.detail || step.label || '';
-    if (!text) return null;
+function FlowNote({ text }: { text: string }) {
     return (
-        <div className={`flow-thought ${step.active ? 'active' : ''}`}>
-            <span className="flow-thought-text">{text}</span>
+        <div className="flow-note md-content">
+            <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
+                urlTransform={safeUrlTransform}
+            >
+                {text}
+            </ReactMarkdown>
+        </div>
+    );
+}
+
+// ── Flow: Reasoning (collapsed unless it is streaming right now) ──────────
+
+/** "Thought for 8s" once reasoning is over and its length is known. */
+export function thoughtLabel(live: boolean, durationMs?: number): string {
+    if (live) return 'Thinking';
+    if (durationMs == null || durationMs < 1000) return 'Thought';
+    return `Thought for ${formatElapsed(durationMs / 1000)}`;
+}
+
+function FlowThought({ step, live, durationMs }: { step: AgentStep; live: boolean; durationMs?: number }) {
+    const text = (step.detail || '').trim();
+    const [open, setOpen] = useState(false);
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    // Keep the newest reasoning in view as it streams.
+    useEffect(() => {
+        if (live && containerRef.current) {
+            containerRef.current.scrollTop = containerRef.current.scrollHeight;
+        }
+    }, [text, live]);
+
+    if (!text) return null;
+
+    return (
+        <div className={`flow-reasoning ${live ? 'live' : ''}`}>
+            <button
+                className="flow-reasoning-toggle"
+                onClick={() => setOpen((o) => !o)}
+                aria-expanded={open}
+            >
+                {live ? <Loader2 size={13} className="flow-tool-spinner" /> : <Brain size={13} className="flow-tool-icon" />}
+                <span>{thoughtLabel(live, durationMs)}</span>
+                <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
+            </button>
+            {(open || live) && (
+                <div ref={containerRef} className={`flow-thought-hacker ${open ? '' : 'peek'}`}>
+                    <span>{text}</span>
+                    {live && <span className="flow-thought-cursor" />}
+                </div>
+            )}
         </div>
     );
 }
@@ -353,7 +683,8 @@ export function linkifyPaths(text: string): React.ReactNode {
     // A quoted path ('C:\My Docs\a.txt') runs to its closing quote, spaces
     // included, and the quotes stay outside the link. An unquoted one
     // (C:\...\file.ext, (C:\Users\...)) stops at whitespace or punctuation.
-    const pathRe = /(['"`])([A-Z]:[\\/][^'"`\n]*?)\1|[A-Z]:[\\/](?:[^\s*?"'`<>|,;)}\]]+[\\/])*[^\s*?"'`<>|,;)}\]]*/gi;
+    // The lookbehind keeps the "s:/" in "https://" from reading as a drive.
+    const pathRe = /(['"`])([A-Z]:[\\/][^'"`\n]*?)\1|(?<![\w/\\])[A-Z]:[\\/](?:[^\s*?"'`<>|,;)}\]]+[\\/])*[^\s*?"'`<>|,;)}\]]*/gi;
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -437,54 +768,73 @@ function FileListView({ fileList }: { fileList: { files: Array<Record<string, un
 // ── Flow: Tool Card ──────────────────────────────────────────────────────
 
 interface FlowToolCardProps {
-    step: AgentStep;
+    step: ActivityRow;
     isExpanded: boolean;
     onToggle: () => void;
+    /** Wall-clock ms, for a running call's timer. */
+    now: number;
+    /** The turn is waiting on the user (an approval or a question). */
+    awaitingUser?: boolean;
 }
 
-function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
-    const meta = getToolMeta(step.tool);
-    const Icon = meta.icon;
-    const friendlyLabel = step.active ? meta.activeLabel : meta.label;
-    const hasDetail = !!(step.detail || step.result || step.commandOutput || step.fileList?.files?.length);
+function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }: FlowToolCardProps) {
+    const Icon = getToolMeta(step.tool, step).icon;
+    // A call held for the user's answer hasn't started, so it neither runs nor times.
+    const waiting = !!step.active && awaitingUser;
+    const line = waiting ? WAITING_ON_USER_LABEL : toolRowText(step);
+    const count = step.count ?? 1;
+    // A failed call's reason belongs on its row; a success's output stays one click deeper.
+    const failure = step.success === false && step.result ? step.result : '';
+    const timing = waiting
+        ? ''
+        : step.active
+        ? formatElapsed((now - step.timestamp) / 1000)
+        : step.latencyMs != null ? formatToolLatency(step.latencyMs) : '';
 
     return (
-        <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false ? 'error' : ''}`}>
+        <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false ? 'error' : ''} ${SKILL_USE_TOOLS.has(step.tool ?? '') ? 'skill' : ''}`}>
             <button
                 className="flow-tool-header"
-                onClick={hasDetail ? onToggle : undefined}
-                style={hasDetail ? undefined : { cursor: 'default' }}
+                onClick={onToggle}
+                aria-expanded={isExpanded}
+                title={
+                    waiting
+                        ? toolRowText(step)
+                        : step.narration && step.narration !== line ? step.narration : undefined
+                }
             >
                 <div className="flow-tool-left">
-                    {step.active ? (
+                    {/* What the step did, not whether it worked: only a running or failed step says otherwise. */}
+                    {step.active && !waiting ? (
                         <Loader2 size={13} className="flow-tool-spinner" />
                     ) : step.success === false ? (
                         <AlertCircle size={13} style={{ color: 'var(--danger)' }} />
-                    ) : step.success === true ? (
-                        <CheckCircle2 size={13} style={{ color: 'var(--accent-green)' }} />
                     ) : (
                         <Icon size={13} className="flow-tool-icon" />
                     )}
-                    <span className="flow-tool-label">{friendlyLabel}</span>
-                    <span className="flow-tool-badge">{step.tool}</span>
-                    {step.mcpServer && (
-                        <span className="flow-tool-mcp-server">via {step.mcpServer}</span>
+                    <span className="flow-tool-label">{line}</span>
+                    {count > 1 && (
+                        <span className="flow-tool-count" aria-label={`${count} identical calls`}>{'×'}{count}</span>
                     )}
+                    {failure && <span className="flow-tool-failure">{failure}</span>}
                 </div>
                 <div className="flow-tool-right">
-                    {step.latencyMs != null && !step.active && (
-                        <span className="flow-tool-latency">{Math.round(step.latencyMs)}ms</span>
-                    )}
-                    {hasDetail && (
-                        <span className={`flow-tool-chevron ${isExpanded ? 'expanded' : ''}`}>
-                            <ChevronRight size={12} />
-                        </span>
-                    )}
+                    {timing && <span className="flow-tool-latency">{timing}</span>}
+                    <span className={`flow-tool-chevron ${isExpanded ? 'expanded' : ''}`}>
+                        <ChevronRight size={12} />
+                    </span>
                 </div>
             </button>
 
-            {isExpanded && hasDetail && (
+            {isExpanded && (
                 <div className="flow-tool-detail">
+                    <div className="flow-tool-raw">
+                        <span className="detail-section-label">Tool</span>
+                        <code className="flow-tool-badge">{step.tool || 'unknown'}</code>
+                        {step.mcpServer && (
+                            <span className="flow-tool-mcp-server">via {step.mcpServer}</span>
+                        )}
+                    </div>
                     {/* Arguments (except for commands) */}
                     {step.detail && !step.commandOutput && (
                         <div className="step-detail-args">
@@ -500,13 +850,23 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
                         <CommandOutputView output={step.commandOutput} />
                     )}
 
+                    {step.mcpOutput && (
+                        <div className="step-detail-result result-success">
+                            <span className="detail-section-label">Output</span>
+                            <CodeBlock code={step.mcpOutput.text} previewLines={MCP_OUTPUT_PREVIEW_LINES} testId="mcp-output" />
+                            {step.mcpOutput.truncated && (
+                                <div className="cmd-truncated">Output was truncated (exceeded size limit)</div>
+                            )}
+                        </div>
+                    )}
+
                     {/* Generic result */}
-                    {step.result && !step.commandOutput && (
+                    {step.result && !step.commandOutput && !step.mcpOutput && (
                         <div className={`step-detail-result ${step.success === false ? 'result-error' : 'result-success'}`}>
                             <span className="detail-section-label">
                                 {step.success === false ? 'Error' : 'Result'}
                             </span>
-                            <div className="detail-result-content">{linkifyPaths(step.result)}</div>
+                            <StepResult text={step.result} renderShort={linkifyPaths} />
                         </div>
                     )}
                     {/* Retrieved document chunks */}
@@ -525,30 +885,49 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
 
 // ── Flow: Plan ───────────────────────────────────────────────────────────
 
-function FlowPlan({ step }: { step: AgentStep }) {
-    const [isOpen, setIsOpen] = useState(false);
-    if (!step.planSteps || step.planSteps.length === 0) return null;
+const PLAN_STATUS_LABEL: Record<PlanItemStatus, string> = {
+    done: 'Done', running: 'Running', failed: 'Failed', stopped: 'Stopped', pending: 'Not started',
+};
+
+function PlanStatusIcon({ status }: { status?: PlanItemStatus }) {
+    if (status === 'done') return <CheckCircle2 size={13} className="plan-icon-done" />;
+    if (status === 'running') return <Loader2 size={13} className="flow-tool-spinner" />;
+    if (status === 'failed') return <AlertCircle size={13} className="plan-icon-failed" />;
+    if (status === 'stopped') return <AlertCircle size={13} className="plan-icon-stopped" />;
+    return <Circle size={13} className="plan-icon-pending" />;
+}
+
+/** The plan as a checklist: each step done, running, failed or not started. */
+export function PlanChecklist({ step }: { step: ActivityRow }) {
+    const items = step.planSteps ?? [];
+    if (items.length === 0) return null;
+    const statuses = step.planStatuses;
+    const done = statuses?.filter((s) => s === 'done').length ?? 0;
 
     return (
         <div className="flow-plan">
-            <button
-                className="flow-plan-header flow-plan-toggle"
-                onClick={() => setIsOpen((o) => !o)}
-                aria-expanded={isOpen}
-                title={isOpen ? 'Collapse plan' : 'Expand plan'}
-            >
-                <ListChecks size={12} />
+            <div className="flow-plan-header">
+                <ListChecks size={13} />
                 <span>Plan</span>
-                <span className="flow-plan-count">({step.planSteps.length})</span>
-                {isOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-            </button>
-            {isOpen && (
-                <ol className="flow-plan-list">
-                    {step.planSteps.map((ps, i) => (
-                        <li key={i} className="flow-plan-item">{ps}</li>
-                    ))}
-                </ol>
-            )}
+                {statuses && <span className="flow-plan-count">{done} of {items.length} done</span>}
+            </div>
+            <ol className="flow-plan-list">
+                {items.map((raw, i) => {
+                    const status = statuses?.[i];
+                    const text = compactNarration(step.planNarrations?.[i] || raw);
+                    return (
+                        <li
+                            key={i}
+                            className={`flow-plan-item ${status ?? ''}`}
+                            title={raw}
+                            aria-label={status ? `${PLAN_STATUS_LABEL[status]}: ${text}` : undefined}
+                        >
+                            <PlanStatusIcon status={status} />
+                            <span className="flow-plan-text">{text}</span>
+                        </li>
+                    );
+                })}
+            </ol>
         </div>
     );
 }
@@ -679,7 +1058,7 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
     }, [output]);
 
     const hasOutput = !!(output.stdout || output.stderr);
-    const isError = output.returnCode !== 0;
+    const isError = output.returnCode !== 0 && !output.expectedExit;
 
     return (
         <div className={`cmd-output ${isError ? 'cmd-error' : ''}`}>
@@ -694,7 +1073,12 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
                         <span className="cmd-duration">{output.durationSeconds.toFixed(1)}s</span>
                     )}
                     {output.returnCode !== 0 && (
-                        <span className="cmd-exit-code">exit {output.returnCode}</span>
+                        <span
+                            className={`cmd-exit-code${isError ? '' : ' cmd-exit-expected'}`}
+                            title={output.expectedExit ?? undefined}
+                        >
+                            exit {output.returnCode}
+                        </span>
                     )}
                     {hasOutput && (
                         <button
@@ -724,10 +1108,29 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-function formatArgsDisplay(detail: string): React.ReactNode {
+/** `47031` -> "47.0s", `312.4` -> "312ms", `0.3` -> "<1ms". */
+export function formatToolLatency(ms: number): string {
+    if (ms < 1) return '<1ms';
+    if (ms < 1000) return `${Math.round(ms)}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
+}
+
+/** `['owner', 'task']` -> "owner, task"; anything else is returned as is. */
+export function readableListValue(value: string): string {
+    const list = /^\[(.*)\]$/s.exec(value);
+    if (!list) return value;
+    const items = list[1].split(/,\s*/).map((v) => v.trim().replace(/^(['"])(.*)\1$/s, '$2'));
+    return items.filter(Boolean).join(', ');
+}
+
+/** `key: value`, where the colon is followed by a space — so `C:\x` is never read as key `C`. */
+const ARG_ROW_RE = /^([A-Za-z_][\w.-]{0,29}):(?:\s+([\s\S]*))?$/;
+
+export function formatArgsDisplay(detail: string): React.ReactNode {
+    // Split on ", " only where a new `key: ` starts, so a list value stays on one row.
     const parts = detail.includes('\n')
         ? detail.split('\n').filter(Boolean)
-        : detail.split(', ').filter(Boolean);
+        : detail.split(/, (?=[A-Za-z_][\w.-]{0,29}:(?:\s|$))/).filter(Boolean);
 
     if (parts.length <= 1) {
         return <span className="arg-value">{detail}</span>;
@@ -736,10 +1139,10 @@ function formatArgsDisplay(detail: string): React.ReactNode {
     return (
         <div className="args-grid">
             {parts.map((part, i) => {
-                const colonIdx = part.indexOf(':');
-                if (colonIdx > 0 && colonIdx < 30) {
-                    const key = part.slice(0, colonIdx).trim();
-                    const val = part.slice(colonIdx + 1).trim();
+                const row = ARG_ROW_RE.exec(part.trim());
+                if (row) {
+                    const key = row[1];
+                    const val = readableListValue((row[2] ?? '').trim());
                     return (
                         <div key={i} className="arg-row">
                             <span className="arg-key">{key}</span>

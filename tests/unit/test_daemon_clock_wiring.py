@@ -134,6 +134,8 @@ def test_build_register_starts_refresher_then_clock_and_writes_instance(daemon_h
     lemonade_owner.ensure_in_background.side_effect = lambda: calls.append(
         "lemonade.ensure"
     )
+    lemonade_clients = mock.Mock()
+    lemonade_clients.start.side_effect = lambda: calls.append("clients.start")
 
     register = daemon_server._build_register(
         specs={},
@@ -145,10 +147,16 @@ def test_build_register_starts_refresher_then_clock_and_writes_instance(daemon_h
         refresher=refresher,
         clock=clock,
         lemonade_owner=lemonade_owner,
+        lemonade_clients=lemonade_clients,
     )
     register()
 
-    assert calls == ["refresher.start", "clock.start", "lemonade.ensure"]
+    assert calls == [
+        "refresher.start",
+        "clock.start",
+        "lemonade.ensure",
+        "clients.start",
+    ]
     inst = instance_mod.read_instance()
     assert inst is not None
     assert inst.pid == 4242
@@ -175,6 +183,7 @@ def test_build_register_rolls_back_refresher_and_instance_on_clock_start_failure
         refresher=refresher,
         clock=clock,
         lemonade_owner=mock.Mock(),
+        lemonade_clients=mock.Mock(),
     )
 
     with pytest.raises(RuntimeError, match="clock exploded"):
@@ -204,6 +213,7 @@ def test_build_register_rolls_back_instance_on_refresher_start_failure(daemon_ho
         refresher=refresher,
         clock=clock,
         lemonade_owner=mock.Mock(),
+        lemonade_clients=mock.Mock(),
     )
 
     with pytest.raises(RuntimeError, match="refresher exploded"):
@@ -235,6 +245,8 @@ def test_build_deregister_calls_in_exact_order(daemon_home):
     lemonade.shutdown.side_effect = lambda: calls.append("lemonade.shutdown")
     lemonade_owner = mock.Mock()
     lemonade_owner.stop.side_effect = lambda: calls.append("lemonade_owner.stop")
+    lemonade_clients = mock.Mock()
+    lemonade_clients.stop.side_effect = lambda: calls.append("clients.stop")
 
     deregister = daemon_server._build_deregister(
         registry=registry,
@@ -244,6 +256,7 @@ def test_build_deregister_calls_in_exact_order(daemon_home):
         clock=clock,
         lemonade=lemonade,
         lemonade_owner=lemonade_owner,
+        lemonade_clients=lemonade_clients,
     )
     deregister()
 
@@ -252,6 +265,7 @@ def test_build_deregister_calls_in_exact_order(daemon_home):
     # server out from under it turns a clean shutdown into a wave of
     # connection errors in the logs.
     assert calls == [
+        "clients.stop",
         "refresher.stop",
         "clock.stop",
         "registry.shutdown_all",
@@ -278,6 +292,7 @@ def test_build_deregister_still_deregisters_when_lemonade_will_not_stop(daemon_h
         clock=mock.Mock(),
         lemonade=mock.Mock(),
         lemonade_owner=lemonade_owner,
+        lemonade_clients=mock.Mock(),
     )
     deregister()
 

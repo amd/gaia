@@ -69,7 +69,7 @@
               "setup",
               "quickstart",
               "guides/agent-ui",
-              "guides/terminal-hub",
+              "guides/tui",
               "guides/memory",
               {
                 "group": "User Guides",
@@ -93,7 +93,8 @@
                       "guides/browser-use",
                       "guides/harness-engineering",
                       "guides/talk",
-                      "guides/transcription"
+                      "guides/transcription",
+                      "guides/audio-generation"
                     ]
                   },
                   {
@@ -116,8 +117,7 @@
                     "pages": [
                       "guides/starter-skills",
                       "guides/custom-agent",
-                      "guides/composing-skills",
-                      "guides/hub-publishing"
+                      "guides/composing-skills"
                     ]
                   },
                   {
@@ -202,7 +202,8 @@
                       "sdk/sdks/llm",
                       "sdk/sdks/vlm",
                       "sdk/sdks/audio",
-                      "sdk/sdks/governance"
+                      "sdk/sdks/governance",
+                      "sdk/sdks/skills"
                     ]
                   },
                   {
@@ -419,7 +420,6 @@
             "pages": [
               "plans/flagship-installer",
               "plans/embedded-onboarding",
-              "spec/agent-hub-restructure",
               "spec/agent-skills",
               "plans/skill-format",
               "plans/skill-synthesis",
@@ -439,7 +439,8 @@
               "plans/desktop-installer",
               "plans/tool-loader",
               "plans/nightly-benchmarks",
-              "plans/eval-hillclimbing"
+              "plans/eval-hillclimbing",
+              "plans/release-train"
             ]
           },
           {
@@ -457,6 +458,10 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.25.3",
+              "releases/v0.25.2",
+              "releases/v0.25.1",
+              "releases/v0.25.0",
               "releases/v0.24.1",
               "releases/v0.23.0",
               "releases/v0.22.0",
@@ -499,7 +504,7 @@
         },
         {
           "anchor": "Discord",
-          "href": "https://discord.com/channels/1392562559122407535/1402013282495102997",
+          "href": "https://discord.com/invite/5xXzkMu8Zk",
           "icon": "discord"
         },
         {
@@ -518,7 +523,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.24.1 \u00b7 Lemonade 2026.40.0",
+        "label": "v0.25.3 \u00b7 Lemonade 2026.44.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {
@@ -545,13 +550,21 @@
   "footer": {
     "socials": {
       "github": "https://github.com/amd/gaia",
-      "discord": "https://discord.com/channels/1392562559122407535/1402013282495102997",
+      "discord": "https://discord.com/invite/5xXzkMu8Zk",
       "twitter": "https://twitter.com/amd",
       "linkedin": "https://linkedin.com/company/amd"
     },
     "copyright": "Copyright \u00a9 2024-2026 Advanced Micro Devices, Inc."
   },
   "redirects": [
+    {
+      "source": "/guides/hub-publishing",
+      "destination": "/guides/custom-agent"
+    },
+    {
+      "source": "/guides/terminal-hub",
+      "destination": "/guides/tui"
+    },
     {
       "source": "/cpp",
       "destination": "/cpp/quickstart"

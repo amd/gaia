@@ -4,12 +4,15 @@
 import { lazy, Suspense, useEffect, useRef } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { useChatStore, type SettingsSection } from '../../stores/chatStore';
+import { useEscapeToClose } from '../../hooks/useEscapeToClose';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { GeneralSettings } from './GeneralSettings';
 import { ModelSettings } from './ModelSettings';
 import { PermissionsSettings } from './PermissionsSettings';
 import { SkillsSettings } from './SkillsSettings';
 import { MemorySettings } from './MemorySettings';
 import { PrivacySettings } from './PrivacySettings';
+import { NotificationSettings } from './NotificationSettings';
 import '../SettingsModal.css';
 import './SettingsDialog.css';
 
@@ -24,6 +27,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
     { id: 'skills', label: 'Skills' },
     { id: 'connectors', label: 'Connectors' },
     { id: 'memory', label: 'Memory' },
+    { id: 'notifications', label: 'Notifications' },
     { id: 'privacy', label: 'Privacy' },
     { id: 'advanced', label: 'Advanced' },
 ];
@@ -37,13 +41,12 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     const returnFocus = useRef<Element | null>(null);
 
     const isOpen = section !== null;
+    useEscapeToClose(isOpen, close);
+    useFocusTrap(panel, isOpen);
     useEffect(() => {
         if (!isOpen) return;
         returnFocus.current = document.activeElement;
-        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-        document.addEventListener('keydown', onKey);
         return () => {
-            document.removeEventListener('keydown', onKey);
             (returnFocus.current as HTMLElement | null)?.focus?.();
         };
     }, [isOpen, close]);
@@ -63,6 +66,7 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
             case 'skills': return <SkillsSettings onUseSkill={(name) => { close(); onUseSkill(name); }} />;
             case 'connectors': return <ConnectorsPane />;
             case 'memory': return <MemorySettings />;
+            case 'notifications': return <NotificationSettings />;
             case 'privacy': return <PrivacySettings />;
             case 'advanced': return <AdvancedPane />;
         }
@@ -80,7 +84,8 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
                             data-section={s.id}
                             className={`settings-nav-item${section === s.id ? ' is-active' : ''}`}
                             aria-current={section === s.id ? 'page' : undefined}
-                            onClick={() => open(s.id)}
+                            // The focus ring follows the selection instead of staying on the tab focused at open.
+                            onClick={(e) => { e.currentTarget.focus(); open(s.id); }}
                         >
                             {s.label}
                         </button>

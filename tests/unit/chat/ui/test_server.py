@@ -92,6 +92,18 @@ class TestSystemStatus:
         mock_httpx_cls.side_effect = httpx.ConnectError("down")
         data = client.get("/api/system/status").json()
         assert data["default_model_name"] == "user.Qwen3.8-Flash-Next-GGUF"
+        assert data["default_model_is_cloud"] is False
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_flags_a_cloud_model(self, mock_httpx_cls, client, db):
+        """Settings hides download/load/context controls for a cloud model."""
+        import httpx
+
+        db.set_setting("custom_model", "amd.DeepSeek-V4.1-Flash")
+        mock_httpx_cls.side_effect = httpx.ConnectError("down")
+        data = client.get("/api/system/status").json()
+        assert data["default_model_name"] == "amd.DeepSeek-V4.1-Flash"
+        assert data["default_model_is_cloud"] is True
 
     def test_system_status_returns_200(self, client):
         resp = client.get("/api/system/status")
@@ -101,6 +113,19 @@ class TestSystemStatus:
         assert "model_loaded" in data
         assert "disk_space_gb" in data
         assert "version" in data
+
+    def test_system_status_names_the_real_data_folder(self, tmp_path):
+        """Privacy showed a hard-coded ~/.gaia/chat/, wrong under GAIA_HOME."""
+        db_file = tmp_path / "home" / "chat" / "gaia_chat.db"
+        data = (
+            TestClient(create_app(db_path=str(db_file)))
+            .get("/api/system/status")
+            .json()
+        )
+        assert data["data_dir"] == str(db_file.parent)
+
+    def test_system_status_reports_no_folder_for_an_in_memory_database(self, client):
+        assert client.get("/api/system/status").json()["data_dir"] is None
 
     def test_system_status_lemonade_field_is_boolean(self, client):
         """lemonade_running should be a boolean regardless of server state."""
@@ -116,7 +141,7 @@ class TestSystemStatus:
         assert data["version"] == __version__
 
     def test_unreadable_config_is_reported_not_hidden(
-        self, client, tmp_path, monkeypatch
+        self, client, tmp_path, monkeypatch, gaia_owned_lemonade
     ):
         bad = tmp_path / "config.json"
         bad.write_text("{not json", encoding="utf-8")
@@ -129,6 +154,8 @@ class TestSystemStatus:
         assert "not valid JSON" in data["config_error"]
         # The config names the model, so an unreadable one leaves it unknown.
         assert data["default_model_name"] is None
+        # It names the Lemonade server too, so that is unknown as well.
+        assert data["lemonade_url"] is None
 
     def test_valid_config_reports_its_profile_and_no_error(
         self, client, tmp_path, monkeypatch
@@ -156,6 +183,19 @@ class TestSystemStatus:
         ]
         for field in expected_fields:
             assert field in data, f"Missing field: {field}"
+
+    def test_system_status_reports_a_failed_desktop_setup(
+        self, client, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        assert client.get("/api/system/status").json()["setup_error"] is None
+
+        reason = "Gemma-4-E4B-it-GGUF - Not enough free memory to load it."
+        (tmp_path / "electron-install-state.json").write_text(
+            f'{{"state": "ready", "init": "failed", "initError": "{reason}"}}',
+            encoding="utf-8",
+        )
+        assert client.get("/api/system/status").json()["setup_error"] == reason
 
     def test_system_status_disk_space_non_negative(self, client):
         resp = client.get("/api/system/status")
@@ -871,6 +911,88 @@ class TestSystemStatus:
             data["default_model_name"] == "huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated"
         )
 
+    @staticmethod
+    def _serve_health(mock_httpx_cls, health_data, catalog=None):
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            return make_response(200, {"data": catalog or []})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+    _EMBEDDER = {
+        "model_name": "nomic-embed-text-v2-moe-GGUF",
+        "type": "embedding",
+        "device": "cpu",
+        "recipe_options": {"ctx_size": 4096},
+    }
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_embedder_in_root_field_is_not_the_chat_model(
+        self, mock_httpx_cls, client
+    ):
+        """Lemonade's root model_loaded names the last load — often the
+        embedder. The chat model running beside it must be the one reported,
+        not a 'wrong model' warning."""
+        client.put("/api/settings", json={"custom_model": "amd.DeepSeek-V4.1-Flash"})
+        self._serve_health(
+            mock_httpx_cls,
+            {
+                "status": "ok",
+                "model_loaded": "nomic-embed-text-v2-moe-GGUF",
+                "version": "2026.40.0",
+                "all_models_loaded": [
+                    self._EMBEDDER,
+                    {
+                        "model_name": "amd.DeepSeek-V4.1-Flash",
+                        "type": "llm",
+                        "recipe": "cloud",
+                        "device": "none",
+                        "recipe_options": {"ctx_size": 4096},
+                    },
+                ],
+            },
+        )
+
+        data = client.get("/api/system/status").json()
+        assert data["model_loaded"] == "amd.DeepSeek-V4.1-Flash"
+        assert data["expected_model_loaded"] is True
+        assert data["embedding_model_loaded"] is True
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_only_embedder_loaded_reports_no_chat_model(
+        self, mock_httpx_cls, client
+    ):
+        """With only the embedder resident there is no chat model, so there is
+        no 'wrong model loaded' verdict to give."""
+        client.put("/api/settings", json={"custom_model": "amd.DeepSeek-V4.1-Flash"})
+        self._serve_health(
+            mock_httpx_cls,
+            {
+                "status": "ok",
+                "model_loaded": "nomic-embed-text-v2-moe-GGUF",
+                "version": "2026.40.0",
+                "all_models_loaded": [self._EMBEDDER],
+            },
+            catalog=[{"id": "amd.DeepSeek-V4.1-Flash", "downloaded": True}],
+        )
+
+        data = client.get("/api/system/status").json()
+        assert data["model_loaded"] is None
+        assert data["expected_model_loaded"] is not False
+        assert data["embedding_model_loaded"] is True
+
 
 class TestDynamicToolsSetting:
     """/api/settings round-trip + env lock for the Beta dynamic tool loader (#1798)."""
@@ -1121,6 +1243,8 @@ class TestSessionEndpoints:
                 models=[],
             )
         )
+        # Only gaia is "installed": the rescan must not pull in the dev env's wheels.
+        registry.refresh_installed = lambda: None
         with patch("gaia.ui._chat_helpers._agent_registry", registry):
             yield registry
 
@@ -1190,6 +1314,32 @@ class TestSessionEndpoints:
         resp = client.put(f"/api/sessions/{session_id}", json={"title": "Updated"})
         assert resp.status_code == 200
         assert resp.json()["title"] == "Updated"
+
+    def test_create_rejects_title_over_cap(self, client):
+        """#5257: a title above the cap is a 422, not a stored 100K-char row."""
+        from gaia.ui.models import MAX_SESSION_TITLE_CHARS
+
+        resp = client.post(
+            "/api/sessions", json={"title": "x" * (MAX_SESSION_TITLE_CHARS + 1)}
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"][0]["loc"] == ["body", "title"]
+
+    def test_create_accepts_title_at_cap(self, client):
+        from gaia.ui.models import MAX_SESSION_TITLE_CHARS
+
+        title = "x" * MAX_SESSION_TITLE_CHARS
+        resp = client.post("/api/sessions", json={"title": title})
+        assert resp.status_code == 200
+        assert resp.json()["title"] == title
+
+    def test_rename_rejects_title_over_cap(self, client):
+        """#5257: the stress test renamed a chat to 100,000 characters."""
+        sid = client.post("/api/sessions", json={"title": "Original"}).json()["id"]
+        resp = client.put(f"/api/sessions/{sid}", json={"title": "x" * 100_000})
+        assert resp.status_code == 422
+        assert resp.json()["detail"][0]["loc"] == ["body", "title"]
+        assert client.get(f"/api/sessions/{sid}").json()["title"] == "Original"
 
     def test_create_with_explicit_title_pins_it(self, client):
         """#2165: a title passed by an API caller is explicit → pinned."""
@@ -1369,7 +1519,49 @@ class TestExportEndpoint:
         resp = client.get(f"/api/sessions/{session_id}/export?format=markdown")
         content = resp.json()["content"]
         assert "*Created:" in content
-        assert "*Model:" in content
+        assert "*Model (current setting):" in content
+
+    def test_export_names_the_model_that_answers(self, client, db):
+        sid = client.post("/api/sessions", json={"model": "Stored-GGUF"}).json()["id"]
+        client.put("/api/settings", json={"custom_model": "My-Override-GGUF"})
+        db.add_message(sid, "user", "Hi")
+        db.add_message(sid, "assistant", "Hello")
+        db.add_message(
+            sid, "assistant", "Retried", inference_stats={"model": "Retry-GGUF"}
+        )
+
+        md = client.get(f"/api/sessions/{sid}/export?format=markdown").json()
+        # "Hello" has no recorded model, so the header can only name the setting.
+        assert "*Model (current setting): My-Override-GGUF*" in md["content"]
+        assert "Stored-GGUF" not in md["content"]
+        assert "**Assistant:**\n\nHello" in md["content"]
+        assert "**Assistant (Retry-GGUF):**\n\nRetried" in md["content"]
+
+        js = client.get(f"/api/sessions/{sid}/export?format=json").json()
+        assert js["session"]["model"] == "Stored-GGUF"
+        assert js["session"]["effective_model"] == "My-Override-GGUF"
+
+    def test_export_names_each_answers_own_model_after_a_switch(self, client, db):
+        sid = client.post("/api/sessions", json={"model": "Old-GGUF"}).json()["id"]
+        db.add_message(sid, "user", "Q1")
+        db.add_message(sid, "assistant", "A1", inference_stats={"model": "Old-GGUF"})
+        db.add_message(sid, "user", "Q2")
+        db.add_message(sid, "assistant", "A2", inference_stats={"model": "New-GGUF"})
+        client.put("/api/settings", json={"custom_model": "Later-GGUF"})
+
+        content = client.get(f"/api/sessions/{sid}/export").json()["content"]
+        assert "*Models: Old-GGUF, New-GGUF*" in content
+        assert "Later-GGUF" not in content
+        assert "**Assistant (Old-GGUF):**\n\nA1" in content
+        assert "**Assistant (New-GGUF):**\n\nA2" in content
+
+    def test_export_single_recorded_model_is_singular(self, client, db):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        db.add_message(sid, "user", "Q")
+        db.add_message(sid, "assistant", "A", inference_stats={"model": "Only-GGUF"})
+
+        content = client.get(f"/api/sessions/{sid}/export").json()["content"]
+        assert "*Model: Only-GGUF*" in content
 
     def test_export_json(self, client, db):
         create_resp = client.post("/api/sessions", json={"title": "JSON Export"})
@@ -1440,6 +1632,42 @@ class TestChatSendEndpoint:
         assert "content" in data
         assert data["content"] == "This is a response."
         assert "message_id" in data
+
+    @patch("gaia.ui.agent_loop.agent_loop.yield_to_user")
+    @patch("gaia.ui.routers.chat.turn_takes_the_line", return_value=True)
+    @patch("gaia.ui.server._get_chat_response")
+    def test_local_chat_request_preempts_a_goal_tick(
+        self, mock_chat, mock_takes_line, mock_yield, client
+    ):
+        mock_chat.return_value = "This is a response."
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+
+        response = client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+
+        assert response.status_code == 200
+        mock_takes_line.assert_called_once()
+        mock_yield.assert_called_once_with()
+
+    @patch("gaia.ui.agent_loop.agent_loop.yield_to_user")
+    @patch("gaia.ui.routers.chat.turn_takes_the_line", return_value=False)
+    @patch("gaia.ui.server._get_chat_response")
+    def test_cloud_chat_request_does_not_preempt_a_goal_tick(
+        self, mock_chat, mock_takes_line, mock_yield, client
+    ):
+        mock_chat.return_value = "This is a response."
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+
+        response = client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+
+        assert response.status_code == 200
+        mock_takes_line.assert_called_once()
+        mock_yield.assert_not_called()
 
     @patch("gaia.ui.server._get_chat_response")
     def test_non_streaming_saves_both_messages(self, mock_chat, client, db):
@@ -2033,6 +2261,49 @@ class TestSpaShellServing:
             or "agent ui" in r.text.lower()
             or "backend" in r.text.lower()
         )
+
+    def test_unknown_api_path_is_json_404_not_the_spa(self, tmp_path):
+        """#5257: a wrong /api path must not get index.html with a 200."""
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text('<div id="root"></div>')
+        client = TestClient(create_app(db_path=":memory:", webui_dist=str(dist)))
+
+        for method, path in [
+            ("get", "/api/no-such-endpoint"),
+            ("get", "/api/sessions/x/no-such-child"),
+            ("get", "/api"),
+            ("post", "/api/no-such-endpoint"),
+            ("delete", "/api/no-such-endpoint"),
+        ]:
+            r = client.request(method.upper(), path)
+            assert r.status_code == 404, (method, path, r.status_code)
+            assert r.headers["content-type"].startswith("application/json")
+            assert r.json() == {"detail": "Not Found"}
+
+    def test_unknown_api_path_is_404_without_a_build(self, tmp_path):
+        """The no-build fallback page must not answer /api paths either."""
+        app = create_app(db_path=":memory:", webui_dist=str(tmp_path / "none"))
+        r = TestClient(app).get("/api/no-such-endpoint")
+        assert r.status_code == 404
+        assert r.json() == {"detail": "Not Found"}
+
+    def test_wrong_method_on_real_api_path_is_405(self, client):
+        r = client.delete("/api/health")
+        assert r.status_code == 405
+        assert "GET" in r.headers["allow"]
+
+    def test_app_routes_near_api_prefix_still_get_the_spa(self, tmp_path):
+        """Only /api and /api/... are carved out; /apis or /settings are SPA routes."""
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text('<div id="root"></div>')
+        client = TestClient(create_app(db_path=":memory:", webui_dist=str(dist)))
+
+        for path in ("/settings", "/apis", "/apiary/x", "/chat/api/x"):
+            r = client.get(path)
+            assert r.status_code == 200, path
+            assert 'id="root"' in r.text
 
     def test_default_webui_dist_resolves_under_gaia_apps_webui(self):
         """The default dist/ path must resolve under the gaia.apps.webui package.

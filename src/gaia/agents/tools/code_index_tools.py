@@ -20,11 +20,14 @@ requiring cooperative ``__init__`` chaining.
 
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
-from gaia.agents.base.tools import tool
+from gaia.agents.base.tools import raise_if_cancelled, tool
+from gaia.agents.install_hints import missing_extra_hint
 from gaia.agents.tools.path_access import read_access_error
+from gaia.agents.tools.search_scope import in_env_scope
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -36,9 +39,29 @@ try:
 except ImportError:
     _CODE_INDEX_AVAILABLE = False
 
-_MISSING_DEPS_MSG = (
-    "code_index dependencies missing. Install with: pip install -e '.[rag]'"
-)
+
+#: How long a first search waits for the build before answering without it.
+_FIRST_BUILD_WAIT_SECONDS = 60
+
+_BUILD_LOCK = threading.Lock()
+
+
+#: One build per on-disk index, shared by every agent instance in the process:
+#: each chat session, and each rebuild after a model change, has its own mixin.
+_BUILDS: Dict[Any, Dict[str, Any]] = {}
+
+
+def _index_key(sdk: Any) -> Any:
+    """The key two SDKs share when they build the same on-disk index."""
+    cache_dir = getattr(sdk, "_cache_dir", None)
+    if isinstance(cache_dir, (str, os.PathLike)):
+        return ("cache_dir", os.path.normcase(os.path.abspath(cache_dir)))
+    return ("sdk", sdk)
+
+
+def _missing_deps_msg() -> str:
+    return f"code_index dependencies missing. {missing_extra_hint('rag')}"
+
 
 # Shared by every path that can trigger an index build (explicit
 # index_codebase and the lazy build on first search): the sandbox ceiling may
@@ -54,6 +77,19 @@ _HOME_DIRECTORY_REFUSAL = json.dumps(
         )
     }
 )
+
+
+def _env_scope_refusal(repo_path: str) -> str:
+    """The refusal for a repository outside ``GAIA_ALLOWED_PATHS``."""
+    return json.dumps(
+        {
+            "error": (
+                f"'{repo_path}' is outside GAIA_ALLOWED_PATHS, which confines "
+                "this session's file access. Call index_codebase with a "
+                "repository inside it."
+            )
+        }
+    )
 
 
 def _dropped_note(result: Any) -> Dict[str, Any]:
@@ -103,28 +139,45 @@ class CodeIndexToolsMixin:
     ) -> None:
         """Initialise mixin state. Safe to call multiple times.
 
-        Not idempotent in one respect: a later call replaces the sandbox
-        ceilings as well as the default repository.
+        A later call always refreshes the sandbox ceilings.  It retains the
+        current repository and SDK only while that repository remains
+        within those refreshed ceilings; otherwise it starts from ``repo_path``.
 
         Args:
             repo_path: Repository root (absolute or relative, resolved here).
             code_index_config: Optional pre-built ``CodeIndexConfig``.
             ceiling_paths: Roots a requested ``repo_path`` must sit under —
-                the consumer's declared file scope. Defaults to ``repo_path``.
+                the consumer's declared file scope. Defaults to ``repo_path``;
+                an empty list allows no ``repo_path`` at all.
         """
         # expanduser everywhere a root is stored, or a '~'-style
         # allowed_paths config produces a "<cwd>/~" root that rejects the
         # very paths it was meant to allow.
-        self._repo_path = os.path.abspath(os.path.expanduser(repo_path))
+        default_repo_path = os.path.abspath(os.path.expanduser(repo_path))
         # The sandbox ceilings: what a requested repo_path must sit under.
         # ``_repo_path`` tracks the repository currently indexed and does move —
         # conflating the two meant the first index narrowed the ceiling to that
         # repo, so a second repository could never be indexed (#3544).
-        self._code_index_ceilings = (
+        new_ceilings = (
             tuple(os.path.abspath(os.path.expanduser(p)) for p in ceiling_paths)
-            if ceiling_paths
-            else (self._repo_path,)
+            if ceiling_paths is not None
+            else (default_repo_path,)
         )
+
+        # Keep a repo selected by index_codebase across re-registration while it stays in scope.
+        existing_repo_path = getattr(self, "_repo_path", None)
+        if existing_repo_path and code_index_config is None:
+            real_repo_path = str(Path(existing_repo_path).resolve())
+            real_ceilings = [str(Path(path).resolve()) for path in new_ceilings]
+            if any(
+                real_repo_path == ceiling or real_repo_path.startswith(ceiling + os.sep)
+                for ceiling in real_ceilings
+            ):
+                self._code_index_ceilings = new_ceilings
+                return
+
+        self._repo_path = default_repo_path
+        self._code_index_ceilings = new_ceilings
         self._code_index_config = code_index_config
         self._code_index_sdk: Optional[Any] = None
 
@@ -151,6 +204,108 @@ class CodeIndexToolsMixin:
             self._code_index_sdk = CodeIndexSDK(config)
         return self._code_index_sdk
 
+    def _code_index_build_running(self, sdk: Any) -> Optional[str]:
+        """The "still building" reply if a build of *sdk*'s index is running."""
+        with _BUILD_LOCK:
+            build = _BUILDS.get(_index_key(sdk))
+        if build is None or not build["thread"].is_alive():
+            return None
+        progress = getattr(build["sdk"], "progress", None) or {}
+        total = progress.get("to_embed", 0)
+        where = (
+            f"{progress.get('embedded', 0)} of {total} code chunks embedded"
+            if total
+            else "reading the repository"
+        )
+        return json.dumps(
+            {
+                "error": (
+                    f"The code index for {self._repo_path} is still "
+                    f"being built ({where}); a large repository takes "
+                    "several minutes. Search with search_file_content "
+                    "or search_file meanwhile, and try "
+                    "search_code_index again later."
+                ),
+                "index_building": True,
+            }
+        )
+
+    def _code_index_build(self, sdk: Any, until_done: bool = False) -> tuple:
+        """``(refusal, result)`` for one build of *sdk*'s index.
+
+        A first build of a large repository outlasts any one tool call, and a
+        build cut off at the tool timeout saves nothing, so it runs on its own
+        thread, shared by every caller. A search waits for it only briefly;
+        ``until_done`` (``index_codebase``) waits for a build it started until
+        it ends or the call is abandoned, and reports one already running.
+        ``result`` is the ``IndexResult`` of a finished build; otherwise
+        ``refusal`` says how far it has got, or why it failed.
+        """
+        key = _index_key(sdk)
+        with _BUILD_LOCK:
+            build = _BUILDS.get(key)
+            started = False
+            # An explicit index_codebase refreshes; it never replays an old outcome.
+            if build is not None and until_done and not build["thread"].is_alive():
+                build = None
+            if build is None:
+                build = {"sdk": sdk, "error": None, "result": None}
+
+                def _run() -> None:
+                    try:
+                        build["result"] = sdk.index_repository()
+                    except Exception as e:  # noqa: BLE001 — reported to the caller
+                        logger.error("Code index build failed: %s", e)
+                        build["error"] = str(e)
+                        return  # kept: the next search reports the failure
+                    # The index is on disk; keeping the SDK would pin it in memory.
+                    with _BUILD_LOCK:
+                        if _BUILDS.get(key) is build:
+                            del _BUILDS[key]
+
+                build["thread"] = threading.Thread(
+                    target=_run, name="gaia-code-index-build", daemon=True
+                )
+                _BUILDS[key] = build
+                build["thread"].start()
+                started = True
+        if until_done and started:
+            while build["thread"].is_alive():
+                build["thread"].join(0.5)
+                raise_if_cancelled()
+        elif started:
+            # Only the search that starts the build waits; later ones report.
+            build["thread"].join(timeout=_FIRST_BUILD_WAIT_SECONDS)
+        running = self._code_index_build_running(sdk)
+        if running is not None:
+            return running, None
+        with _BUILD_LOCK:
+            # Finished: the next call with no index starts a fresh build.
+            if _BUILDS.get(key) is build:
+                del _BUILDS[key]
+        if build["error"] is not None:
+            return (
+                json.dumps(
+                    {
+                        "error": (
+                            f"Building the code index for {self._repo_path} "
+                            f"failed: {build['error']}. Call index_codebase "
+                            "to retry."
+                        )
+                    }
+                ),
+                None,
+            )
+        return None, build["result"]
+
+    def _drop_finished_code_index_build(self, sdk: Any) -> None:
+        """Forget a finished build once its index is on disk and in use."""
+        key = _index_key(sdk)
+        with _BUILD_LOCK:
+            build = _BUILDS.get(key)
+            if build is not None and not build["thread"].is_alive():
+                del _BUILDS[key]
+
     def register_code_index_tools(self) -> None:
         """Register code-index tools with the agent's tool registry."""
 
@@ -173,7 +328,7 @@ class CodeIndexToolsMixin:
                 JSON summary with files_indexed, chunks_created, and status.
             """
             if not _CODE_INDEX_AVAILABLE:
-                return json.dumps({"error": _MISSING_DEPS_MSG})
+                return json.dumps({"error": _missing_deps_msg()})
 
             self._ensure_code_index_state()
 
@@ -219,13 +374,17 @@ class CodeIndexToolsMixin:
 
             if _is_home_directory(self._repo_path):
                 return _HOME_DIRECTORY_REFUSAL
+            if not in_env_scope(self, self._repo_path):
+                return _env_scope_refusal(self._repo_path)
 
             sdk = self._get_code_index_sdk()
             if sdk is None:
                 return json.dumps({"error": "code_index SDK not initialised"})
-
             try:
-                result = sdk.index_repository()
+                # Reports a running build rather than embedding the repo twice.
+                refusal, result = self._code_index_build(sdk, until_done=True)
+                if refusal is not None:
+                    return refusal
                 return json.dumps(
                     {
                         "status": "ok",
@@ -238,9 +397,7 @@ class CodeIndexToolsMixin:
                 logger.error("index_codebase failed: %s", e)
                 return json.dumps({"error": str(e)})
 
-        # The first search runs the same build as index_codebase, so it gets the
-        # same window; the default cap abandoned it mid-build on a large repo.
-        @tool(timeout=900)
+        @tool
         def search_code_index(
             query: str,
             scope: str = "all",
@@ -249,8 +406,10 @@ class CodeIndexToolsMixin:
             """Semantic search over the codebase.
 
             Embeds the query and returns the most relevant code chunks from
-            the FAISS index. The first search builds the index if there is
-            none, which is slow on a large repository.
+            the FAISS index. With no index yet, the first search builds one;
+            on a large repository the build continues in the background and
+            the search returns an error saying so — use search_file_content
+            until a later search succeeds.
 
             Args:
                 query: Natural language or code snippet to search for.
@@ -262,7 +421,11 @@ class CodeIndexToolsMixin:
                 language, score, and a content snippet.
             """
             if not _CODE_INDEX_AVAILABLE:
-                return json.dumps({"error": _MISSING_DEPS_MSG})
+                return json.dumps({"error": _missing_deps_msg()})
+            self._ensure_code_index_state()
+            # An index built before the run would answer from outside the scope.
+            if not in_env_scope(self, self._repo_path):
+                return _env_scope_refusal(self._repo_path)
 
             sdk = self._get_code_index_sdk()
             if sdk is None:
@@ -277,8 +440,11 @@ class CodeIndexToolsMixin:
                     # tool first.
                     if _is_home_directory(self._repo_path):
                         return _HOME_DIRECTORY_REFUSAL
-                    # Built on first use rather than at task start.
-                    built = sdk.index_repository()
+                    refusal, built = self._code_index_build(sdk)
+                    if refusal is not None:
+                        return refusal
+                else:
+                    self._drop_finished_code_index_build(sdk)
                 results = sdk.search(query, scope=scope, top_k=top_k)
                 output = []
                 for r in results:
@@ -323,7 +489,7 @@ class CodeIndexToolsMixin:
                 embedding model, and cache path.
             """
             if not _CODE_INDEX_AVAILABLE:
-                return json.dumps({"error": _MISSING_DEPS_MSG})
+                return json.dumps({"error": _missing_deps_msg()})
 
             sdk = self._get_code_index_sdk()
             if sdk is None:
@@ -342,14 +508,20 @@ class CodeIndexToolsMixin:
                 JSON confirmation message.
             """
             if not _CODE_INDEX_AVAILABLE:
-                return json.dumps({"error": _MISSING_DEPS_MSG})
+                return json.dumps({"error": _missing_deps_msg()})
 
             sdk = self._get_code_index_sdk()
             if sdk is None:
                 return json.dumps({"error": "code_index SDK not initialised"})
 
+            # The running build would write the cleared index straight back.
+            running = self._code_index_build_running(sdk)
+            if running is not None:
+                return running
+
             try:
                 sdk.clear_index()
+                self._drop_finished_code_index_build(sdk)
                 self._code_index_sdk = None
                 return json.dumps({"status": "ok", "message": "Index cleared"})
             except Exception as e:

@@ -1,25 +1,25 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# PR + main CI for the marketing/hub website (website/, Astro). Catches the
-# website breaking BEFORE it ships — previously the only build was Railway's
-# post-merge deploy, so a broken page (type error, failed Astro build, broken
-# hub render) reached main and only failed at deploy time. This runs on every PR
-# that touches website/.
+# PR + main CI for the website (website/, Astro). Catches the website breaking
+# BEFORE it ships — previously the only build was Railway's post-merge deploy, so
+# a broken page (type error, failed Astro build) reached main and only failed at
+# deploy time. This runs on every PR that touches website/.
 #
-# The build needs a live catalog (website has NO bundled fixture fallback — see
-# website/src/data/catalog.ts), so HUB_CATALOG_URL points at the live Agent Hub
-# Worker, exactly like the Railway production build.
+# The download links are built from the newest stable GitHub release (no
+# bundled fixture fallback — see website/src/data/github.ts), exactly like the
+# Railway production build.
 
 name: Website CI
 
 # Paths outside website/ are in the filter because the gates that catch them
-# drifting live here and nowhere else: the agent manifests and their npm package
-# names (the snapshot gate below, and adding an agent under hub/agents/ touches
-# nothing in website/), the Agent UI stylesheet and the TUI theme
+# drifting live here and nowhere else: the Agent UI stylesheet and the TUI theme
 # (cross-surface.test.ts reads both to assert the shared hues match — retuning
 # one surface alone is exactly how the two ambers drifted apart), and the design
 # language spec (tokens.contrast.test.ts recomputes the ratios it quotes).
+# The installer table and the two release workflows are read by
+# release-assets.test.ts: the download buttons look for the asset names they
+# produce, and a rename there would silently drop a button.
 #
 # Both lists are asserted by cross-surface.test.ts, which scans the suite for
 # reads that leave website/ — so a new one fails here rather than going unrun.
@@ -27,21 +27,25 @@ on:
   pull_request:
     paths:
       - 'website/**'
-      - 'hub/agents/**/gaia-agent.yaml'
-      - 'hub/agents/**/package.json'
       - 'src/gaia/apps/webui/src/styles/index.css'
       - 'tui/internal/ui/theme/theme.go'
       - 'docs/spec/gaia-design-language.mdx'
+      - 'installer/tui/artifacts.py'
+      - '.github/workflows/build_tui.yml'
+      - '.github/workflows/publish.yml'
+      - '.github/workflows/release_components.yml'
       - '.github/workflows/website-ci.yml'
   push:
     branches: [main]
     paths:
       - 'website/**'
-      - 'hub/agents/**/gaia-agent.yaml'
-      - 'hub/agents/**/package.json'
       - 'src/gaia/apps/webui/src/styles/index.css'
       - 'tui/internal/ui/theme/theme.go'
       - 'docs/spec/gaia-design-language.mdx'
+      - 'installer/tui/artifacts.py'
+      - '.github/workflows/build_tui.yml'
+      - '.github/workflows/publish.yml'
+      - '.github/workflows/release_components.yml'
       - '.github/workflows/website-ci.yml'
 
 permissions:
@@ -59,13 +63,10 @@ jobs:
       run:
         working-directory: website
     env:
-      # Same source the Railway production build uses; the live catalog is the
-      # real dependency (no fixture fallback). A hub outage fails the build loudly.
-      HUB_CATALOG_URL: https://hub.amd-gaia.ai
-      # Optional — the homepage stats row (website/src/data/github.ts) fetches
-      # public GitHub data at build time. Unauthenticated works fine (60
-      # req/hr); this just raises it to 5,000/hr. Actions provides it for
-      # free, so there's no reason to omit it even though it isn't required.
+      # Optional — the download links and stats row (website/src/data/github.ts)
+      # fetch public GitHub data at build time. Unauthenticated works (60
+      # req/hr); this raises it to 5,000/hr. Actions provides it for free, so
+      # there's no reason to omit it even though it isn't required.
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
@@ -87,7 +88,7 @@ jobs:
       - name: Unit tests (vitest)
         run: npm test
 
-      - name: Build (astro build from the live catalog)
+      - name: Build (astro build)
         run: npx astro build
 
       # Production's start command was previously never exercised by CI, so a
@@ -105,8 +106,12 @@ jobs:
             curl -sf -o /dev/null "http://localhost:${PORT}/" && break
             sleep 1
           done
-          for route in / /hub /hub/email; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${PORT}${route}")
-            echo "${route} -> ${code}"
-            [ "${code}" = 200 ] || { echo "::error::${route} returned ${code} from the production start command"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${PORT}/")
+          echo "/ -> ${code}"
+          [ "${code}" = 200 ] || { echo "::error::/ returned ${code} from the production start command"; exit 1; }
+          # The retired /hub pages redirect home (public/serve.json) so old links don't 404.
+          for route in /hub /hub/email; do
+            out=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://localhost:${PORT}${route}")
+            echo "${route} -> ${out}"
+            [ "${out%% *}" = 301 ] && [[ "${out#* }" == */#install ]] || { echo "::error::${route} did not redirect to /#install (${out})"; exit 1; }
           done

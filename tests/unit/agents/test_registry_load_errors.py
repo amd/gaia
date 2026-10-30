@@ -40,6 +40,27 @@ class TestRegistryLoadErrors:
         assert err is not None
         assert len(err) > 0
 
+    def test_dot_folders_in_the_agents_root_are_not_agents(self, tmp_path, caplog):
+        """The install backup and lock-queue folders are skipped without noise."""
+        import logging
+
+        agents_dir = tmp_path / "agents"
+        (agents_dir / ".demo.install.lock.d").mkdir(parents=True)
+        backup = agents_dir / ".backup"
+        backup.mkdir()
+        (backup / "agent.py").write_text("raise RuntimeError('loaded a backup')")
+
+        registry = AgentRegistry()
+        with patch("gaia.agents.registry.gaia_agents_dir", return_value=agents_dir):
+            with patch.object(registry, "_discover_installed_agents"):
+                with patch.object(registry, "_discover_native_agents"):
+                    with caplog.at_level(logging.WARNING):
+                        registry.discover()
+
+        assert registry.get_load_error(".backup") is None
+        assert "No agent.py" not in caplog.text
+        assert ".demo.install.lock.d" not in caplog.text
+
     def test_discover_continues_after_broken_agent(self, tmp_path):
         """A broken agent must not prevent other agents from loading."""
         bad_dir = tmp_path / "broken"
@@ -75,3 +96,27 @@ class TestRegistryLoadErrors:
         # Broken recorded, good loaded (or at least broken recorded)
         bad_err = registry.get_load_error("broken")
         assert bad_err is not None
+
+
+class TestHubInstallDirs:
+    """Hub installs live beside source agents but are registered elsewhere."""
+
+    def test_a_hub_install_dir_is_skipped_without_a_warning(self, tmp_path, caplog):
+        agent_dir = tmp_path / "gaia"
+        agent_dir.mkdir()
+        (agent_dir / ".installed").write_text("{}")
+        (agent_dir / "gaia-agent.exe").write_bytes(b"")
+
+        with caplog.at_level("WARNING", logger="gaia.agents.registry"):
+            AgentRegistry()._load_from_dir(agent_dir)
+
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+    def test_a_dir_with_no_agent_still_warns(self, tmp_path, caplog):
+        agent_dir = tmp_path / "stray"
+        agent_dir.mkdir()
+
+        with caplog.at_level("WARNING", logger="gaia.agents.registry"):
+            AgentRegistry()._load_from_dir(agent_dir)
+
+        assert any("No agent.py" in r.getMessage() for r in caplog.records)

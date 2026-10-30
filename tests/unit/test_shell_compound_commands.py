@@ -49,7 +49,7 @@ class _RootValidator:
     def __init__(self, root):
         self.root = str(root)
 
-    def is_path_allowed(self, path: str) -> bool:
+    def is_path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         root = os.path.realpath(self.root)
         real = os.path.realpath(path)
         return real == root or real.startswith(root + os.sep)
@@ -196,7 +196,8 @@ def test_a_refused_segment_refuses_the_line_before_anything_runs(notes, monkeypa
     result = _run("ls && rm -rf /", notes)
 
     assert result["status"] == "error"
-    assert "not in the allowed list" in result["error"]
+    # No console here, so the confirmable `rm` fails closed, naming the line.
+    assert "`ls && rm -rf /` needs your approval" in result["error"]
     assert result["executed"] is False
     assert spawned == []
 
@@ -304,8 +305,11 @@ def test_cd_outside_the_allowed_paths_is_refused(tmp_path):
 
     result = _run("cd ../outside && ls", root, host=_Confined(root))
 
+    # Outside the allowed folders is a one-time approval naming the folder;
+    # with nobody here to give it, nothing runs.
     assert result["status"] == "error", result
-    assert "denied" in result["error"].lower()
+    assert "needs your approval" in result["error"]
+    assert str((tmp_path / "outside").resolve()) in result["error"]
     assert result["executed"] is False
 
 
@@ -522,14 +526,25 @@ def test_a_confirm_tier_segment_makes_the_whole_line_one_prompt():
     assert _needs_modal(host, line) is True
 
 
+def test_a_segment_outside_the_policy_makes_the_line_a_one_time_prompt():
+    host = _Gated("gh")
+    line = "gh issue list && gh auth token"
+
+    assert host.policy_refusal_for_call("run_shell_command", {"command": line}) is None
+    error, _ = host._validate_shell_command(line)
+    assert error["tier"] == "confirm_once"
+    assert "auth token" in error["error"]
+
+
 def test_a_refused_segment_is_refused_before_the_prompt():
     host = _Gated("gh")
     error = host.policy_refusal_for_call(
-        "run_shell_command", {"command": "gh issue list && gh auth token"}
+        "run_shell_command",
+        {"command": "gh issue list && powershell -EncodedCommand ZQBjAGgAbwA="},
     )
 
     assert error is not None
-    assert "auth token" in error["error"]
+    assert "EncodedCommand" in error["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -571,3 +586,31 @@ def test_windows_never_hands_a_compound_line_to_cmd_exe_as_one_string(
     assert all(isinstance(args, str) for args, _ in calls)
     assert not any("&&" in args for args, _ in calls)
     assert [args for args, _ in calls] == ["ls", "cat notes.txt"]
+
+
+# ---------------------------------------------------------------------------
+# ~ means the home folder, as in a shell (#5700)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / "proj").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home
+
+
+def test_cd_to_a_home_relative_folder_runs_the_line(home, notes):
+    result = _run("cd ~/proj && echo hi", notes)
+
+    assert result["status"] == "success", result
+    assert "hi" in result["stdout"]
+
+
+def test_a_home_relative_working_directory_is_found(home):
+    result = _shell(_Host())(command="echo hi", working_directory="~/proj")
+
+    assert result["status"] == "success", result
+    assert "hi" in result["stdout"]

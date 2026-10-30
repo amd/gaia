@@ -27,6 +27,8 @@ def clock(monkeypatch):
             return cls.instant
 
     monkeypatch.setattr(scheduler_module, "datetime", Clock)
+    # These cases are written in UTC wall-clock time.
+    monkeypatch.setattr(scheduler_module, "local_timezone_name", lambda: "UTC")
     return Clock
 
 

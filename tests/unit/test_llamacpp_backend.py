@@ -24,7 +24,6 @@ from gaia.llm.lemonade_client import (
     LemonadeStatus,
     ModelRequirement,
     ModelType,
-    llamacpp_backend_for,
 )
 from gaia.llm.providers.lemonade import (
     LemonadeContextOverflowError,
@@ -141,9 +140,7 @@ class TestLoadModelRequestConstruction:
             "ctx_size": 2048,
             "save_options": True,
         }
-        backend = llamacpp_backend_for("user.embeddinggemma-300m-GGUF")
-        if backend:
-            expected["llamacpp_backend"] = backend
+        # The stub's /system-info names no default backend, so none is sent.
         assert payload == expected
 
     @patch.object(LemonadeClient, "_send_request")

@@ -16,8 +16,10 @@ It does four things:
    is copied there.
 2. Builds the git workspaces a commit cannot carry (a nested ``.git``) into that
    staged copy, running the builders from this checkout.
-3. Copies the starter skills under ``hub/skills`` into ``<home>/.gaia/skills``,
-   except those the corpus contract says must start uninstalled.
+3. Copies the starter skills under ``hub/skills`` into the agent's skills
+   root, except those the corpus contract says must start uninstalled. That is
+   ``<gaia-home>/skills`` when ``--gaia-home`` names an isolated GAIA home
+   (``util/eval_gaia_home.py``), else ``<home>/.gaia/skills``.
 4. Builds and trusts the fixture hub with ``prepare_fixture_hub.py``.
 
 ``<home>/.gaia-eval-bin`` (the fake ``gh``) must go first on the backend's
@@ -134,8 +136,12 @@ def install_fake_gh(home: Path) -> Path:
     return bin_dir
 
 
-def stage(home: Path) -> Path:
+def stage(home: Path, gaia_home: Path | None = None) -> Path:
     """Stage fixtures, workspaces, starter skills and the fixture hub under ``home``.
+
+    Args:
+        home: The agent's user home; scenarios name ``~/gaia-eval`` under it.
+        gaia_home: The agent's GAIA home, when it is not ``<home>/.gaia``.
 
     Returns:
         The skills root the fixture hub was trusted into.
@@ -169,7 +175,7 @@ def stage(home: Path) -> Path:
             f"Building the {name} workspaces",
         )
 
-    skills_root = home / ".gaia" / "skills"
+    skills_root = (gaia_home if gaia_home is not None else home / ".gaia") / "skills"
     skills_root.mkdir(parents=True, exist_ok=True)
     for skill in sorted(p for p in HUB_SKILLS.iterdir() if p.is_dir()):
         if skill.name in NOT_PRE_INSTALLED:
@@ -197,8 +203,15 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="The home directory of the agent under eval (the runner's profile in CI).",
     )
+    parser.add_argument(
+        "--gaia-home",
+        type=Path,
+        help="The GAIA home of the agent under eval, when GAIA_HOME moves it "
+        "off <home>/.gaia. Skills and the fixture hub's trust land here.",
+    )
     args = parser.parse_args(argv)
-    stage(args.home.expanduser().resolve())
+    gaia_home = args.gaia_home.expanduser().resolve() if args.gaia_home else None
+    stage(args.home.expanduser().resolve(), gaia_home)
     return 0
 
 

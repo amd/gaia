@@ -65,9 +65,7 @@ def _seed(db):
 def runtime():
     db = ChatDatabase(":memory:")
     manager = RunManager()
-    state = SimpleNamespace(
-        session_locks={}, chat_semaphore=asyncio.BoundedSemaphore(1)
-    )
+    state = SimpleNamespace(session_locks={})
     request = SimpleNamespace(app=SimpleNamespace(state=state), headers={})
     server = SimpleNamespace(_stream_chat_response=helpers._stream_chat_response)
     helpers._agent_cache.clear()

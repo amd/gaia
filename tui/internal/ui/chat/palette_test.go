@@ -371,6 +371,12 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	if !known["/model"] {
 		t.Error("paletteCommands does not offer /model")
 	}
+	// /update takes a version argument and is dispatched the same way
+	// (isUpdateCommand, updatecmd.go).
+	seen["/update"] = true
+	if !known["/update"] {
+		t.Error("paletteCommands does not offer /update")
+	}
 
 	// The other direction: an entry nobody dispatches is a stale row that
 	// will mislead exactly the discoverability this feature exists for.
@@ -454,6 +460,36 @@ func containsAll(haystack []string, want ...string) bool {
 		}
 	}
 	return true
+}
+
+// With room to spare, every description shows whole and starts in one column.
+func TestPaletteShowsDescriptionsWholeAndAligned(t *testing.T) {
+	items := filterPaletteCommands("/", nil)
+	box, ok := buildPaletteBox("/", items, 0, 160, 40)
+	if !ok {
+		t.Fatal("palette did not render on a 160x40 window")
+	}
+	plain := ansi.Strip(box)
+	col := -1
+	for _, c := range items {
+		var row string
+		for _, line := range strings.Split(plain, "\n") {
+			if strings.Contains(line, c.Name+" ") {
+				row = line
+				break
+			}
+		}
+		at := strings.Index(row, c.Desc)
+		if at < 0 {
+			t.Errorf("description of %s not shown whole: %q", c.Name, row)
+			continue
+		}
+		at = ansi.StringWidth(row[:at])
+		if col >= 0 && at != col {
+			t.Errorf("description of %s starts at column %d, others at %d", c.Name, at, col)
+		}
+		col = at
+	}
 }
 
 // The borderless palette adds no rows of its own, so the full 7-command list

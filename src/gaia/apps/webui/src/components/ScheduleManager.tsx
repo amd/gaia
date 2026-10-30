@@ -1,22 +1,19 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { X, Plus, Clock, Play, Pause, Trash2, ChevronDown, ChevronUp, MessageSquare } from 'lucide-react';
+import { useEffect, useState, useCallback, useRef, useId } from 'react';
+import { X, Plus, Clock, Play, Pause, Trash2, ChevronDown, ChevronUp, MessageSquare, Zap } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useScheduleStore } from '../stores/scheduleStore';
 import { log } from '../utils/logger';
 import type { Schedule, ScheduleResult, ParsedSchedule } from '../types';
 import { parseScheduleInput } from '../services/api';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import './ScheduleManager.css';
 
-/** Format an interval in seconds to a human-readable string. */
-function formatInterval(seconds: number): string {
-    if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-    if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
-    return `${Math.round(seconds / 86400)}d`;
-}
+/** How long the Delete button waits for its "Confirm?" click. */
+export const CONFIRM_DELETE_MS = 8000;
 
 /** Format an ISO date string to a relative or short time. */
 function formatTime(iso: string | null, now?: Date): string {
@@ -42,6 +39,16 @@ function formatTime(iso: string | null, now?: Date): string {
     const hrs = Math.floor(mins / 60);
     if (hrs < 24) return `${hrs}h ago`;
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Next run as the user's local clock time, plus how far away it is. */
+export function formatNextRun(iso: string | null, now?: Date): string {
+    if (!iso) return 'never';
+    const relative = formatTime(iso, now);
+    const d = new Date(iso);
+    if (d.getTime() <= (now || new Date()).getTime()) return relative;
+    const clock = d.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+    return `${clock} (${relative})`;
 }
 
 /** Returns true if the ISO timestamp is less than 60 seconds in the future. */
@@ -76,10 +83,18 @@ function formatDays(days: number[]): string {
 }
 
 function ScheduleCard({ schedule }: { schedule: Schedule }) {
-    const { selectedSchedule, selectSchedule, updateScheduleStatus, deleteSchedule, results, resultsLoading, loadSchedules, loadResults } = useScheduleStore();
+    const { selectedSchedule, selectSchedule, updateScheduleStatus, runScheduleNow, deleteSchedule, results, resultsLoading, loadSchedules, loadResults } = useScheduleStore();
     const { setCurrentSession, setShowSchedules } = useChatStore();
     const isSelected = selectedSchedule === schedule.name;
     const [confirmDelete, setConfirmDelete] = useState(false);
+    const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const clearConfirmTimer = useCallback(() => {
+        if (confirmTimerRef.current) {
+            clearTimeout(confirmTimerRef.current);
+            confirmTimerRef.current = null;
+        }
+    }, []);
+    useEffect(() => clearConfirmTimer, [clearConfirmTimer]);
 
     // Live countdown: tick every second when next_run_at is < 60s away
     const [now, setNow] = useState(() => new Date());
@@ -126,16 +141,26 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
         updateScheduleStatus(schedule.name, newStatus);
     }, [schedule.name, schedule.status, updateScheduleStatus]);
 
+    const handleRunNow = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
+        log.ui.info(`Schedule "${schedule.name}": run now`);
+        void runScheduleNow(schedule.name);
+    }, [schedule.name, runScheduleNow]);
+
     const handleDelete = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
+        clearConfirmTimer();
         if (!confirmDelete) {
             setConfirmDelete(true);
-            setTimeout(() => setConfirmDelete(false), 3000);
+            confirmTimerRef.current = setTimeout(() => {
+                confirmTimerRef.current = null;
+                setConfirmDelete(false);
+            }, CONFIRM_DELETE_MS);
             return;
         }
         log.ui.info(`Deleting schedule "${schedule.name}"`);
         deleteSchedule(schedule.name);
-    }, [schedule.name, confirmDelete, deleteSchedule]);
+    }, [schedule.name, confirmDelete, deleteSchedule, clearConfirmTimer]);
 
     const handleOpenChat = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
@@ -157,18 +182,29 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
             </div>
             <div className="schedule-card-prompt">{schedule.prompt}</div>
             <div className="schedule-card-meta">
-                <span><Clock size={11} /> {formatInterval(schedule.interval_seconds)}</span>
+                <span title={schedule.description}><Clock size={11} /> {schedule.description}</span>
                 <span>Runs: {schedule.run_count}</span>
                 {schedule.error_count > 0 && <span>Errors: {schedule.error_count}</span>}
                 <span>Last: {formatTime(schedule.last_run_at)}</span>
-                <span>Next: {formatTime(schedule.next_run_at, now)}</span>
+                <span>Next: {formatNextRun(schedule.next_run_at, now)}</span>
             </div>
+            {schedule.last_error && (
+                <div className="schedule-card-error">Last run failed: {schedule.last_error}</div>
+            )}
             <div className="schedule-card-actions">
                 {schedule.session_id && (
                     <button className="btn-sm chat" onClick={handleOpenChat} title="Open chat session">
                         <MessageSquare size={11} /> Open Chat
                     </button>
                 )}
+                <button
+                    className="btn-sm"
+                    onClick={handleRunNow}
+                    disabled={schedule.running}
+                    title="Run it once now, to try it. Its next scheduled run stays as it is."
+                >
+                    <Zap size={11} /> {schedule.running ? 'Running…' : 'Run now'}
+                </button>
                 <button className="btn-sm" onClick={handleToggleStatus} title={schedule.status === 'active' ? 'Pause' : 'Resume'}>
                     {schedule.status === 'active' ? <><Pause size={11} /> Pause</> : <><Play size={11} /> Resume</>}
                 </button>
@@ -179,7 +215,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
 
             {isSelected && (
                 <div className="schedule-results">
-                    <h4>Execution History</h4>
+                    <h4>Execution history</h4>
                     {resultsLoading ? (
                         <p className="schedule-results-empty">Loading...</p>
                     ) : results.length === 0 ? (
@@ -206,7 +242,11 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
 
 export function ScheduleManager() {
     const { setShowSchedules } = useChatStore();
-    const { schedules, loading, error, loadSchedules, createSchedule } = useScheduleStore();
+    const { schedules, loading, error, actionError, loadSchedules, createSchedule, dismissActionError } = useScheduleStore();
+    const close = useCallback(() => setShowSchedules(false), [setShowSchedules]);
+    useEscapeToClose(true, close);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useFocusTrap(dialogRef, true);
 
     // Create form state
     const [showCreate, setShowCreate] = useState(false);
@@ -217,6 +257,12 @@ export function ScheduleManager() {
     const [parsing, setParsing] = useState(false);
     const [creating, setCreating] = useState(false);
     const [formError, setFormError] = useState<string | null>(null);
+    const fieldId = useId();
+    const scheduleFieldId = `${fieldId}-when`;
+    const scheduleErrorId = `${fieldId}-when-error`;
+    const nameFieldId = `${fieldId}-name`;
+    const promptFieldId = `${fieldId}-prompt`;
+    const scheduleRejected = !parsing && parsed !== null && !parsed.valid;
 
     // Debounced parse of NL input
     const parseTimerRef = useRef<number | null>(null);
@@ -250,8 +296,9 @@ export function ScheduleManager() {
         pollRef.current = window.setInterval(() => loadSchedules(), 5000);
         return () => {
             if (pollRef.current) clearInterval(pollRef.current);
+            dismissActionError();
         };
-    }, [loadSchedules]);
+    }, [loadSchedules, dismissActionError]);
 
     // Allow creation if all 3 fields are filled. parsed?.valid is a bonus
     // (shows preview) but not a hard gate — the backend validates on create.
@@ -280,10 +327,10 @@ export function ScheduleManager() {
     }, [canCreate, scheduleName, nlInput, schedulePrompt, createSchedule]);
 
     return (
-        <div className="modal-overlay" onClick={() => setShowSchedules(false)} role="dialog" aria-modal="true" aria-label="Schedule Manager">
+        <div ref={dialogRef} className="modal-overlay" onClick={() => setShowSchedules(false)} role="dialog" aria-modal="true" aria-label="Scheduled tasks">
             <div className="modal-panel schedule-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
-                    <h3>Scheduled Tasks</h3>
+                    <h3>Scheduled tasks</h3>
                     <button className="btn-icon" onClick={() => setShowSchedules(false)} aria-label="Close schedule manager">
                         <X size={18} />
                     </button>
@@ -294,30 +341,44 @@ export function ScheduleManager() {
                     <section className="schedule-section">
                         {!showCreate ? (
                             <button className="btn-primary" onClick={() => setShowCreate(true)}>
-                                <Plus size={14} /> New Schedule
+                                <Plus size={14} /> New schedule
                             </button>
                         ) : (
                             <div className="schedule-create-form">
                                 {/* NL input */}
-                                <textarea
-                                    className="schedule-nl-input"
-                                    placeholder={'Describe your schedule in natural language...\nExamples: "every 30m", "daily at 9pm", "every hour from 8am to 6pm on weekdays"'}
-                                    value={nlInput}
-                                    onChange={(e) => setNlInput(e.target.value)}
-                                    autoFocus
-                                    rows={2}
-                                />
+                                <div className="schedule-field">
+                                    <label className="schedule-field-label" htmlFor={scheduleFieldId}>When to run</label>
+                                    <textarea
+                                        id={scheduleFieldId}
+                                        className="schedule-nl-input"
+                                        placeholder={'Describe your schedule in natural language...\nExamples: "every 30m", "daily at 9pm", "every hour from 8am to 6pm on weekdays"'}
+                                        value={nlInput}
+                                        onChange={(e) => setNlInput(e.target.value)}
+                                        aria-invalid={scheduleRejected}
+                                        aria-describedby={scheduleRejected ? scheduleErrorId : undefined}
+                                        autoFocus
+                                        rows={2}
+                                    />
+                                </div>
 
                                 {/* Parsed preview */}
                                 {(parsed || parsing) && (
-                                    <div className={`schedule-parsed-preview ${parsed?.valid ? 'valid' : 'invalid'}`}>
+                                    <div
+                                        className={`schedule-parsed-preview ${parsed?.valid ? 'valid' : 'invalid'}`}
+                                        aria-live="polite"
+                                    >
                                         {parsing ? (
                                             <span className="schedule-parsed-loading">Parsing...</span>
                                         ) : parsed ? (
                                             <>
-                                                <div className="schedule-parsed-description">
-                                                    {parsed.valid ? parsed.description : 'Could not parse schedule'}
-                                                </div>
+                                                {parsed.valid ? (
+                                                    <div className="schedule-parsed-description">{parsed.description}</div>
+                                                ) : (
+                                                    <div id={scheduleErrorId}>
+                                                        <div className="schedule-parsed-description">GAIA didn't understand that schedule.</div>
+                                                        <div className="schedule-parsed-hint">{parsed.description}</div>
+                                                    </div>
+                                                )}
                                                 {parsed.valid && parsed.next_run_at && (
                                                     <div className="schedule-parsed-next">
                                                         Next run: {new Date(parsed.next_run_at).toLocaleString()}
@@ -348,21 +409,29 @@ export function ScheduleManager() {
                                 )}
 
                                 {/* Name and prompt fields - always shown */}
-                                <div className="schedule-form-row">
-                                    <input
-                                        type="text"
-                                        placeholder="Schedule name (e.g. daily-summary)"
-                                        value={scheduleName}
-                                        onChange={(e) => setScheduleName(e.target.value)}
-                                        className={!scheduleName.trim() && nlInput.trim() ? 'schedule-field-missing' : ''}
+                                <div className="schedule-field">
+                                    <label className="schedule-field-label" htmlFor={nameFieldId}>Name</label>
+                                    <div className="schedule-form-row">
+                                        <input
+                                            id={nameFieldId}
+                                            type="text"
+                                            placeholder="Schedule name (e.g. daily-summary)"
+                                            value={scheduleName}
+                                            onChange={(e) => setScheduleName(e.target.value)}
+                                            className={!scheduleName.trim() && nlInput.trim() ? 'schedule-field-missing' : ''}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="schedule-field">
+                                    <label className="schedule-field-label" htmlFor={promptFieldId}>Prompt</label>
+                                    <textarea
+                                        id={promptFieldId}
+                                        className={`schedule-prompt-input ${!schedulePrompt.trim() && nlInput.trim() ? 'schedule-field-missing' : ''}`}
+                                        placeholder="Prompt to execute on each run..."
+                                        value={schedulePrompt}
+                                        onChange={(e) => setSchedulePrompt(e.target.value)}
                                     />
                                 </div>
-                                <textarea
-                                    className={`schedule-prompt-input ${!schedulePrompt.trim() && nlInput.trim() ? 'schedule-field-missing' : ''}`}
-                                    placeholder="Prompt to execute on each run..."
-                                    value={schedulePrompt}
-                                    onChange={(e) => setSchedulePrompt(e.target.value)}
-                                />
 
                                 {formError && <p className="schedule-form-error">{formError}</p>}
                                 <div className="schedule-create-actions">
@@ -379,7 +448,15 @@ export function ScheduleManager() {
 
                     {/* Schedule list */}
                     <section className="schedule-section">
-                        <h4>Active Schedules</h4>
+                        <h4>Active schedules</h4>
+                        {actionError && (
+                            <div className="schedule-action-error" role="alert">
+                                <span>{actionError}</span>
+                                <button className="btn-icon" onClick={dismissActionError} aria-label="Dismiss error">
+                                    <X size={14} />
+                                </button>
+                            </div>
+                        )}
                         {loading ? (
                             <p className="schedule-empty">Loading schedules...</p>
                         ) : error ? (

@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from gaia.agents.install_hints import agent_not_installed_message
+from gaia.agents.install_hints import agent_import_error_message
 from gaia.eval.fixture_paths import resolve_repo_fixture
 from gaia.eval.judge_outage import judge_completion_text
 
@@ -747,10 +747,10 @@ def generate_briefings(
             from gaia_agent_email.briefing import run_briefing_job
         except ImportError as exc:
             raise RuntimeError(
-                agent_not_installed_message(
+                agent_import_error_message(
+                    exc,
                     "The briefing eval needs the email agent",
                     "gaia-agent-email",
-                    next_step=f"Original import error: {exc}",
                 )
             ) from exc
 

@@ -14,15 +14,19 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
+from gaia.ui import _chat_helpers
 from gaia.ui._chat_helpers import (
-    _EMPTY_ANSWER_LEMONADE_MSG,
+    _EMPTY_MODEL_ANSWER_MSG,
+    _NO_ANSWER_AFTER_TOOLS_MSG,
     _build_history_pairs,
     _canonical_agent_type,
     _compute_allowed_paths,
     _done_event,
+    _empty_answer_backend_problem,
     _empty_answer_outcome,
     _find_last_tool_step,
     _managed_documents_dir,
@@ -394,7 +398,7 @@ class TestEmptyAnswerOutcome:
         """A user Stop is persisted as a 'Cancelled.' marker, not a Lemonade
         error, and keeps the steps taken before the cancel."""
         content, sse_type, keep_steps = _empty_answer_outcome(
-            turn_cancelled=True, has_steps=True
+            turn_cancelled=True, has_steps=True, has_card=False
         )
         assert content == "Cancelled."
         assert sse_type == "done"
@@ -402,32 +406,144 @@ class TestEmptyAnswerOutcome:
 
     def test_cancel_without_steps_still_marks_cancelled(self):
         content, sse_type, keep_steps = _empty_answer_outcome(
-            turn_cancelled=True, has_steps=False
+            turn_cancelled=True, has_steps=False, has_card=False
         )
         assert content == "Cancelled."
         assert sse_type == "done"
         assert keep_steps is True
 
-    def test_empty_answer_with_steps_persists_empty_and_keeps_cards(self):
+    def test_empty_answer_with_a_card_persists_empty_and_keeps_cards(self):
         """A legitimately-empty final (e.g. an echoed render card stripped to
         empty) persists empty content but keeps the steps/cards."""
         content, sse_type, keep_steps = _empty_answer_outcome(
-            turn_cancelled=False, has_steps=True
+            turn_cancelled=False, has_steps=True, has_card=True
         )
         assert content == ""
         assert sse_type == "done"
         assert keep_steps is True
 
-    def test_no_answer_no_cancel_no_steps_uses_lemonade_copy(self):
-        """The Lemonade remediation copy appears ONLY when there is no answer,
-        no cancel, and no steps/cards."""
+    def test_tools_without_an_answer_or_card_fail_loudly(self):
+        """Tools ran but nothing answered: say so, keep the steps, and don't
+        blame Lemonade."""
         content, sse_type, keep_steps = _empty_answer_outcome(
-            turn_cancelled=False, has_steps=False
+            turn_cancelled=False, has_steps=True, has_card=False
         )
-        assert content == _EMPTY_ANSWER_LEMONADE_MSG
-        assert "Lemonade Server is running" in content
+        assert content == _NO_ANSWER_AFTER_TOOLS_MSG
+        assert "Send your message again" in content
+        assert "Lemonade" not in content
+        assert sse_type == "failed"
+        assert keep_steps is True
+
+    def test_an_error_without_a_tool_keeps_the_error_and_adds_nothing(self):
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False,
+            has_steps=False,
+            has_card=False,
+            turn_reported_error=True,
+        )
+        assert content == ""
+        assert sse_type == "failed"
+        assert keep_steps is True
+
+    def test_nothing_with_a_backend_problem_reports_it_as_an_error(self):
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False,
+            has_steps=False,
+            has_card=False,
+            backend_problem="Lemonade Server isn't responding.",
+        )
+        assert content == "Lemonade Server isn't responding."
         assert sse_type == "error"
         assert keep_steps is False
+
+    def test_nothing_with_a_healthy_backend_blames_the_model_not_lemonade(self):
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False, has_steps=False, has_card=False
+        )
+        assert content == _EMPTY_MODEL_ANSWER_MSG
+        assert "Lemonade" not in content
+        assert sse_type == "failed"
+        assert keep_steps is False
+
+
+_BASE = "http://lemonade.test:8000/api/v1"
+
+
+def _probe(model_id, handler):
+    """Run the backend probe against a fake Lemonade served by ``handler``."""
+    real_client = httpx.AsyncClient
+    with (
+        patch.object(_chat_helpers, "_eval_provider_kwargs", return_value={}),
+        patch(
+            "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+            return_value=_BASE,
+        ),
+        patch(
+            "httpx.AsyncClient",
+            lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
+        ),
+        patch(
+            "gaia.llm.lemonade_launcher.describe_start_hint",
+            return_value=MagicMock(instruction="START-HINT"),
+        ),
+    ):
+        return asyncio.run(_empty_answer_backend_problem(model_id))
+
+
+def _health(*names):
+    payload = {"all_models_loaded": [{"model_name": n, "type": "llm"} for n in names]}
+    return lambda request: httpx.Response(200, json=payload)
+
+
+class TestEmptyAnswerBackendProblem:
+    """Lemonade is named only when its own /health says it is at fault."""
+
+    def test_server_up_with_the_model_loaded_is_not_a_problem(self):
+        assert _probe("Gemma-4-E4B-it-GGUF", _health("Gemma-4-E4B-it-GGUF")) is None
+
+    def test_user_namespace_still_matches_the_loaded_model(self):
+        assert _probe("user.Qwen3.5-4B-GGUF", _health("Qwen3.5-4B-GGUF")) is None
+
+    def test_server_down_names_lemonade_and_the_start_hint(self):
+        def refuse(request):
+            raise httpx.ConnectError("connection refused", request=request)
+
+        problem = _probe("Gemma-4-E4B-it-GGUF", refuse)
+        assert _BASE in problem
+        assert "isn't responding" in problem
+        assert problem.endswith("START-HINT")
+        assert "lemonade-server serve" not in problem
+
+    def test_unhealthy_status_names_the_http_code(self):
+        problem = _probe("M-GGUF", lambda request: httpx.Response(503))
+        assert "HTTP 503" in problem
+        assert problem.endswith("START-HINT")
+
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_a_rejected_key_names_the_key_not_a_start_hint(self, status):
+        problem = _probe("M-GGUF", lambda request: httpx.Response(status))
+        assert f"HTTP {status}" in problem
+        assert "LEMONADE_API_KEY" in problem
+        assert "START-HINT" not in problem
+
+    def test_server_up_without_the_model_says_it_is_not_loaded(self):
+        problem = _probe("Gemma-4-E4B-it-GGUF", _health("Other-GGUF"))
+        assert "Lemonade Server is running" in problem
+        assert "Gemma-4-E4B-it-GGUF isn't loaded" in problem
+
+    def test_cloud_model_skips_the_loaded_check(self):
+        assert _probe("fireworks.some-model", _health()) is None
+
+    def test_eval_on_claude_never_touches_lemonade(self):
+        with (
+            patch.object(
+                _chat_helpers,
+                "_eval_provider_kwargs",
+                return_value={"use_claude": True},
+            ),
+            patch("httpx.AsyncClient", side_effect=AssertionError("contacted")),
+        ):
+            assert asyncio.run(_empty_answer_backend_problem("M-GGUF")) is None
 
 
 class TestDoneEvent:
@@ -542,9 +658,11 @@ class TestSessionAgentKwargsShape:
             "rag_documents",
             "library_documents",
             "allowed_paths",
+            "working_directory",
             "ui_session_id",
             "dynamic_tools",
             "memory_incognito",
+            "surface",
         }
 
     def test_memory_off_reaches_the_agent_at_construction(self):
@@ -976,8 +1094,7 @@ class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
 # replaced by the auto-retitler; placeholder titles ("New Task"/"New Chat"/
 # empty) must still be auto-titled on the first substantive message.
 
-# Long + zero word-overlap with any title used below → would trigger the
-# topic-shift pass if the pin didn't hold.
+# A later question unrelated to any title used below.
 _SHIFT_MSG = "please summarize quarterly revenue figures across all the divisions"
 
 
@@ -990,60 +1107,41 @@ class TestShouldRetitle:
     def test_placeholder_titles_are_retitled(self, placeholder):
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert _should_retitle(placeholder, "hi") is True
+        assert _should_retitle(placeholder) is True
 
     def test_custom_title_never_retitled(self):
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert (
-            _should_retitle("My Research Project", _SHIFT_MSG, title_is_custom=True)
-            is False
-        )
-
-    def test_custom_flag_pins_across_multiple_turns(self):
-        from gaia.ui._chat_helpers import _should_retitle
-
-        turns = [
-            _SHIFT_MSG,
-            "now write me a haiku about mountains and rivers flowing",
-            "explain the difference between tcp and udp networking protocols",
-        ]
-        for msg in turns:
-            assert (
-                _should_retitle("Weekly Standup Notes", msg, title_is_custom=True)
-                is False
-            )
+        assert _should_retitle("My Research Project", title_is_custom=True) is False
 
     def test_custom_flag_pins_even_placeholder_lookalike(self):
         """A pinned title wins even if its text happens to be a placeholder."""
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert _should_retitle("New Chat", _SHIFT_MSG, title_is_custom=True) is False
+        assert _should_retitle("New Chat", title_is_custom=True) is False
 
-    def test_auto_generated_title_still_topic_shifts(self):
-        """Non-pinned (auto-generated) titles keep the topic-shift pass."""
+    def test_auto_generated_title_is_kept_on_topic_shift(self):
+        """Once auto-named, a chat keeps its name when the topic changes."""
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert (
-            _should_retitle("Python Sorting Help", _SHIFT_MSG, title_is_custom=False)
-            is True
-        )
+        assert _should_retitle("Python Sorting Help", title_is_custom=False) is False
 
     def test_eval_titles_never_retitled(self):
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert _should_retitle("Eval: rag_quality run 3", _SHIFT_MSG) is False
+        assert _should_retitle("Eval: rag_quality run 3") is False
 
 
 class TestMaybeUpdateSessionTitleHonorsPin:
     """_maybe_update_session_title must read the session's title_is_custom
     flag and skip pinned sessions without calling the LLM or the DB."""
 
-    def _run(self, session, msg=_SHIFT_MSG):
+    def _run(self, session, msg=_SHIFT_MSG, history=()):
         from gaia.ui import _chat_helpers as ch
 
         db = MagicMock()
         db.get_session.return_value = session
+        db.get_messages.return_value = list(history)
         gen = AsyncMock(return_value="LLM Title")
         with (
             patch.object(ch, "_generate_session_title", gen),
@@ -1064,43 +1162,228 @@ class TestMaybeUpdateSessionTitleHonorsPin:
             {"id": "pin-1", "title": "My Research Project", "title_is_custom": 1}
         )
         gen.assert_not_awaited()
-        db.update_session.assert_not_called()
+        db.replace_auto_title.assert_not_called()
+
+    def test_auto_named_session_is_not_renamed_by_a_later_turn(self):
+        db, gen = self._run(
+            {"id": "auto-2", "title": "Python Sorting Help", "title_is_custom": 0}
+        )
+        gen.assert_not_awaited()
+        db.replace_auto_title.assert_not_called()
 
     def test_placeholder_session_is_retitled(self):
         db, gen = self._run({"id": "auto-1", "title": "New Task", "title_is_custom": 0})
         gen.assert_awaited_once()
-        db.update_session.assert_called_once_with("auto-1", title="LLM Title")
+        db.replace_auto_title.assert_called_once_with("auto-1", "New Task", "LLM Title")
+
+    def test_stopped_first_turn_still_names_the_chat(self):
+        """A first turn stopped before any reply still supplies the title."""
+        db, gen = self._run(
+            {"id": "auto-3", "title": "New Chat", "title_is_custom": 0},
+            history=[
+                {"role": "user", "content": "plan a trip to Lisbon"},
+                {"role": "user", "content": _SHIFT_MSG},
+                {"role": "assistant", "content": "assistant reply"},
+            ],
+        )
+        assert gen.await_args.kwargs["user_msg"] == "plan a trip to Lisbon"
+        assert gen.await_args.kwargs["assistant_msg"] == ""
+
+
+def _resident_title_client(model_id, reply):
+    """A model client with *model_id* loaded on two slots, answering *reply*."""
+    client = MagicMock()
+    client.health_check.return_value = {
+        "all_models_loaded": [{"model_name": model_id, "type": "llm"}]
+    }
+    client.slot_count.return_value = 2
+    client.chat_completions.return_value = {
+        "choices": [{"message": {"content": reply}}]
+    }
+    return client
 
 
 class TestSessionTitleRequest:
     """The 24-token title request must not be spent on a thinking model's reasoning."""
 
-    def _sent_body(self, model_id):
+    def _sent_kwargs(self, model_id):
         from gaia.ui import _chat_helpers as ch
 
-        resp = MagicMock(status_code=200)
-        resp.json.return_value = {"choices": [{"message": {"content": "Trip plan"}}]}
-        client = MagicMock()
-        client.post = AsyncMock(return_value=resp)
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=False)
-        with patch("httpx.AsyncClient", return_value=client):
+        client = _resident_title_client(model_id, "Trip plan")
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
             title = asyncio.run(
                 ch._generate_session_title(
                     "http://localhost:13305/api/v1", model_id, "plan a trip", "ok"
                 )
             )
         assert title == "Trip plan"
-        return client.post.call_args.kwargs["json"]
+        return client.chat_completions.call_args.kwargs
 
     def test_thinking_model_titles_with_thinking_off(self):
         from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
 
-        body = self._sent_body(LARGE_DEFAULT_MODEL_NAME)
-        assert body["chat_template_kwargs"] == {"enable_thinking": False}
+        sent = self._sent_kwargs(LARGE_DEFAULT_MODEL_NAME)
+        assert sent["chat_template_kwargs"] == {"enable_thinking": False}
 
-    def test_other_models_get_no_template_switch(self):
-        assert "chat_template_kwargs" not in self._sent_body("Gemma-4-E4B-it-GGUF")
+    def test_a_model_with_no_registered_switch_titles_with_thinking_off(self):
+        """Gemma 4 reasoned through all 24 tokens on "hi" (measured)."""
+        sent = self._sent_kwargs("Gemma-4-E4B-it-GGUF")
+        assert sent["chat_template_kwargs"] == {"enable_thinking": False}
+        assert sent["max_tokens"] == 24
+
+    def test_a_model_off_llama_cpp_gets_no_template_switch(self):
+        sent = self._sent_kwargs("gemma4-it-e2b-FLM")
+        assert "chat_template_kwargs" not in sent
+
+    def test_a_model_that_always_reasons_gets_room_for_it(self):
+        """gpt-oss cannot stop reasoning: at 24 tokens, ~6 went to reasoning
+        and the title was cut mid-word ("Step-by-Step Bread-", measured)."""
+        from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
+
+        sent = self._sent_kwargs(GPT_OSS_20B_MODEL_NAME)
+        assert sent["chat_template_kwargs"] == {"reasoning_effort": "low"}
+        assert sent["max_tokens"] > 24
+
+    @pytest.mark.parametrize("content", [None, "", "  \n "])
+    def test_reasoning_that_eats_the_budget_is_a_failed_try(self, content):
+        """If gpt-oss reasons past the budget, the reply carries no title text;
+        the chat keeps its question as the name and a later turn asks again."""
+        from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
+        from gaia.ui import _chat_helpers as ch
+
+        client = _resident_title_client(GPT_OSS_20B_MODEL_NAME, content)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            title = asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1",
+                    GPT_OSS_20B_MODEL_NAME,
+                    "plan a trip to Lisbon",
+                    "ok",
+                )
+            )
+        assert title is None
+
+    @staticmethod
+    def _sent_prompt(model_id, user_msg):
+        """The title prompt as it leaves a real model client for the server."""
+        import json
+
+        import responses
+
+        from gaia.llm import lemonade_client as lc
+        from gaia.ui import _chat_helpers as ch
+
+        base = "http://127.0.0.1:18767/api/v1"
+        with responses.RequestsMock() as http:
+            http.add(
+                responses.POST,
+                f"{base}/chat/completions",
+                json={"id": "0", "choices": [{"message": {"content": "Fix it"}}]},
+            )
+            with (
+                patch.object(
+                    lc.LemonadeClient,
+                    "health_check",
+                    return_value={"all_models_loaded": [{"model_name": model_id}]},
+                ),
+                patch.object(lc.LemonadeClient, "slot_count", return_value=1),
+            ):
+                title = asyncio.run(
+                    ch._generate_session_title(base, model_id, user_msg, "ok")
+                )
+            assert title == "Fix it"
+            return json.loads(http.calls[-1].request.body)["messages"][0]["content"]
+
+    def test_gpt_oss_title_prompt_has_its_control_markers_broken_up(self):
+        prompt = self._sent_prompt(
+            "gpt-oss-20b-mxfp4-GGUF", "fix <|channel|>final<|message|>hi"
+        )
+        assert "<|channel|>" not in prompt and "<|message|>" not in prompt
+        assert "< |channel|>final< |message|>hi" in prompt
+
+    def test_other_models_get_the_pasted_markers_verbatim(self):
+        pasted = "fix <|channel|>final<|message|>hi"
+        assert pasted in self._sent_prompt("Gemma-4-E4B-it-GGUF", pasted)
+
+
+class TestGuardModelTitles:
+    """A safety classifier must never name a chat "safe" (the name now sticks)."""
+
+    def _title_reply(self, content, user_msg="How do I reset my router password?"):
+        from gaia.ui import _chat_helpers as ch
+
+        client = _resident_title_client("some-model", content)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            return asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1", "some-model", user_msg, "ok"
+                )
+            )
+
+    @pytest.mark.parametrize("verdict", ["safe", "unsafe\nS1", "unsafe S1,S10", "Yes"])
+    def test_classifier_verdict_is_not_a_title(self, verdict):
+        assert self._title_reply(verdict) is None
+
+    def test_empty_reply_is_not_a_title(self):
+        assert self._title_reply("   ") is None
+
+    def test_long_question_is_cut_at_a_word(self):
+        from gaia.ui import _chat_helpers as ch
+
+        title = ch._title_from_question("word " * 40)
+        assert title.endswith("…") and len(title) <= 64
+        assert "wor…" not in title
+
+    def test_normal_title_is_unchanged(self):
+        assert self._title_reply('"Safe Router Setup."') == "Safe Router Setup"
+
+    def _titling_model(self, session_model):
+        from gaia.ui import _chat_helpers as ch
+
+        db = MagicMock()
+        sid = f"guard-{session_model}"  # unique: one title request per session
+        db.get_session.return_value = {"id": sid, "title": "New Chat"}
+        db.get_messages.return_value = []
+        gen = AsyncMock(return_value="Router Password Reset")
+        with (
+            patch.object(ch, "_generate_session_title", gen),
+            patch(
+                "gaia.llm.lemonade_client.resolve_default_chat_model",
+                return_value="Gemma-4-E4B-it-GGUF",
+            ),
+            patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+                return_value="http://localhost:13305/api/v1",
+            ),
+        ):
+            asyncio.run(
+                ch._maybe_update_session_title(
+                    db, sid, "reset my router", "ok", session_model
+                )
+            )
+        db.replace_auto_title.assert_called_once_with(
+            sid, "New Chat", "Router Password Reset"
+        )
+        return gen.await_args.kwargs["model_id"]
+
+    @pytest.mark.parametrize(
+        "guard",
+        [
+            "Llama-Guard-3-8B-GGUF",
+            "user.llama_guard_4_12b",
+            "ShieldGemma-2B-GGUF",
+            "granite-guardian-3.2-5b",
+            "Qwen3Guard-Gen-4B-GGUF",
+        ],
+    )
+    def test_guard_session_model_titles_with_the_default_model(self, guard):
+        assert self._titling_model(guard) == "Gemma-4-E4B-it-GGUF"
+
+    @pytest.mark.parametrize(
+        "model", ["Qwen3.6-35B-A3B-GGUF", "openai.gpt-5", "anthropic.claude-opus-5"]
+    )
+    def test_chat_and_cloud_models_title_themselves(self, model):
+        assert self._titling_model(model) == model
 
 
 async def test_spawn_background_keeps_the_task_alive_until_done():
@@ -1115,3 +1398,25 @@ async def test_spawn_background_keeps_the_task_alive_until_done():
     await task
     await asyncio.sleep(0)
     assert task not in ch._background_tasks
+
+
+def test_a_recoverable_error_after_a_failed_tool_is_not_saved_twice():
+    from gaia.ui._chat_helpers import _echoes_failed_tool
+
+    failed = [{"type": "tool", "success": False, "result": "boom"}]
+    assert _echoes_failed_tool({"content": "boom", "recoverable": True}, failed)
+    assert not _echoes_failed_tool({"content": "boom"}, failed)
+    assert not _echoes_failed_tool(
+        {"content": "boom", "recoverable": True}, [{"type": "tool", "success": True}]
+    )
+
+
+def test_a_recoverable_error_from_a_tool_that_raised_is_not_saved_twice():
+    from gaia.ui._chat_helpers import _echoes_failed_tool
+
+    running = [{"type": "tool", "active": True}]
+    assert _echoes_failed_tool({"content": "boom", "recoverable": True}, running)
+    after_thought = running + [{"type": "thinking", "active": True}]
+    assert not _echoes_failed_tool(
+        {"content": "boom", "recoverable": True}, after_thought
+    )

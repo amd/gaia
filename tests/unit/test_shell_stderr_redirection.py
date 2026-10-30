@@ -56,7 +56,8 @@ def workdir(tmp_path):
 def test_discarded_stderr_leaves_stdout_intact(workdir):
     result = _run("cat good.txt missing.txt 2>/dev/null", workdir)
 
-    assert result["status"] == "success", result
+    # cat still exits 1 for the missing file, so the step is a failure.
+    assert result["status"] == "error", result
     assert result["stdout"] == "hello\n"
     assert result["stderr"] == ""
 
@@ -75,7 +76,8 @@ def test_a_clean_command_still_succeeds_with_the_redirection(workdir):
 def test_merged_stderr_arrives_on_stdout(workdir):
     result = _run("cat good.txt missing.txt 2>&1", workdir)
 
-    assert result["status"] == "success", result
+    # cat still exits 1 for the missing file, so the step is a failure.
+    assert result["status"] == "error", result
     assert "hello" in result["stdout"]
     assert MISSING in result["stdout"]
     assert result["stderr"] == ""
@@ -85,7 +87,8 @@ def test_merged_stderr_arrives_on_stdout(workdir):
 def test_a_merged_segment_feeds_the_merged_stream_downstream(workdir):
     result = _run('cat good.txt missing.txt 2>&1 | grep "No such file"', workdir)
 
-    assert result["status"] == "success", result
+    # cat still exits 1 for the missing file, so the step is a failure.
+    assert result["status"] == "error", result
     assert MISSING in result["stdout"]
 
 

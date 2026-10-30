@@ -92,8 +92,9 @@ class StartHint:
 
     ``instruction`` is always safe to print verbatim and embeds ``command``
     when one exists. ``command`` is None whenever the platform has no start
-    command a user would run (Windows tray, macOS app) — call sites must not
-    invent one.
+    command a user would run (Windows tray, macOS app), or when no single
+    line runs in both Command Prompt and PowerShell — ``instruction`` then
+    names each form. Call sites must not invent one.
     """
 
     instruction: str
@@ -313,13 +314,36 @@ def _render_command(argv: List[str], env: Dict[str, str]) -> str:
     if platform.system() == "Windows":
         rendered = subprocess.list2cmdline(argv)
         if items:
-            prefix = " && ".join(f"set {k}={v}" for k, v in items)
+            # Quoted: `set K=V && cmd` would assign "V " (trailing space).
+            prefix = " && ".join(f'set "{k}={v}"' for k, v in items)
             rendered = f"{prefix} && {rendered}"
         return rendered
 
     rendered = shlex.join(argv)
     if items:
         rendered = " ".join(f"{k}={v}" for k, v in items) + f" {rendered}"
+    return rendered
+
+
+_PS_BARE_TOKEN = re.compile(r"[A-Za-z0-9_\-.:\\/=+]+")
+
+
+def _ps_quote(token: str) -> str:
+    """Quote *token* for PowerShell; single quotes keep ``$`` and backtick literal."""
+    if _PS_BARE_TOKEN.fullmatch(token):
+        return token
+    return "'" + token.replace("'", "''") + "'"
+
+
+def _render_powershell(argv: List[str], env: Dict[str, str]) -> str:
+    """Render argv+env for PowerShell, which rejects cmd.exe's ``set ... &&``."""
+    program = _ps_quote(argv[0])
+    if program != argv[0]:
+        # A quoted string is an expression in PowerShell; `&` makes it a call.
+        program = f"& {program}"
+    rendered = " ".join([program, *(_ps_quote(a) for a in argv[1:])])
+    for k, v in reversed(sorted(env.items())):
+        rendered = f"$env:{k}={_ps_quote(v)}; {rendered}"
     return rendered
 
 
@@ -404,6 +428,16 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
                 )
             )
         command = _render_command(spec.argv, spec.env)
+        if system == "Windows":
+            powershell = _render_powershell(spec.argv, spec.env)
+            if powershell != command:
+                # No one line runs in both shells, so name each one.
+                return StartHint(
+                    instruction=(
+                        f"Run in Command Prompt: {command} — or in PowerShell: "
+                        f"{powershell}"
+                    )
+                )
         if system == "Darwin":
             # The app is the normal macOS path; the daemon is the CLI way.
             instruction = f"Start the Lemonade app from Applications, or run: {command}"

@@ -39,9 +39,12 @@ however you arrive at the terminal UI, it behaves identically.
 - **Node.js 18+** (for the built-in `fetch`).
 - **[Lemonade Server](https://amd-gaia.ai/docs/reference/dev)** running locally —
   it hosts the model the agent thinks with. GAIA tells you if it isn't up.
-- The `gaia` Python CLI **0.24.1 or newer** on `PATH` for the daemon the terminal
-  UI starts. Earlier cores start a daemon that has no entry for this agent, so the
-  UI comes up with nothing behind it. Install it with
+- **On Linux x64, glibc 2.34 or newer** for the agent sidecar (Ubuntu 22.04,
+  Debian 12 and RHEL 9 or later). An older distro cannot start the agent. Check
+  with `ldd --version`.
+- The `gaia` Python CLI **0.25.3 or newer** on `PATH` for the daemon the terminal
+  UI starts. An earlier core cannot run this agent, so the UI comes up with
+  nothing behind it. Install it with
   `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
   `irm https://amd-gaia.ai/install.ps1 | iex`).
 
@@ -94,8 +97,10 @@ Common options:
 | `--component <name>`  | Fetch only `sidecar` or `tui`                                  | `fetch` |
 | `--port <n>`          | Sidecar bind port (default `8141`)                             | `serve` |
 
-A flag a command does not read is **refused**, not ignored — `gaia run --port
-9000` exits 2 rather than silently coming up on the default port.
+A flag a command does not read, or an option the launcher does not know, is
+**refused**, not ignored — `gaia run --port 9000` and `gaia --forse` exit 2
+rather than silently doing something else. Arguments intended for the terminal
+UI must come after a bare `--`, for example `gaia -- --debug`.
 
 Set `DEBUG=gaia` for download, spawn, and sidecar output on stderr. Diagnostics
 never touch stdout, which the terminal UI owns.
@@ -188,6 +193,82 @@ answers, but it forgets everything from the previous turn. An id must be 1–128
 characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a 400. See
 [`SPEC.md` §5.2](./SPEC.md#52-session_id-and-agent-retention) for the retry
 and eviction behavior.
+
+**Attaching files to a conversation? Send them in `documents`** (contract ≥
+2.16): the absolute paths, the whole set on every turn. The agent indexes any it
+has not read yet before answering, and can read those exact files and nothing
+else beside them. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Private chat, or memory off? Send `memory` every turn** (contract ≥ 2.18):
+`"private"` or `"off"` stops the turn saving anything to memory, including the
+errors and lessons the agent records on its own; omit it and memory stays as the
+agent has it. Send `allowed_paths` with the folders your UI shows the chat can
+read, so the agent works in the same scope. Send `working_directory` (contract
+≥ 2.24) with the absolute chat workspace so bare file names resolve in the same
+folder the UI shows; it is separate from the access allowlist. Binaries older
+than 2.18 reject `allowed_paths` and older than 2.24 reject `working_directory`,
+so probe `/version` first. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Internet switched off for the chat? Send `internet_off`** (contract ≥
+2.23) every turn: `true` refuses web search, page fetches, the browser,
+connector and Agent Hub tools, mailbox reads, and commands that contact another host;
+`false` allows them.
+Omit it and the agent keeps its own setting. Binaries older than 2.23 reject
+the field with `422`, so probe `/version` first, do not answer an
+internet-off turn on an older one, and cancel its running turn when the switch
+goes off. If the user flips the switch while a turn is
+running, `POST /v1/gaia/sessions/{session_id}/internet` with
+`{"internet_off": true}` so the next tool call follows it rather than the next
+turn. Post it only once `/query` has answered: before then the turn's own
+`internet_off` replaces it, so re-read the switch at that point and post it if
+it changed. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Showing what a turn changed, with undo? Send `changes_turn_id`** (contract ≥
+2.19) along with `session_id`: the agent copies each file before it writes it,
+into the snapshot store under its GAIA home, keyed by the session and that turn
+id. The copies are complete before the stream's terminal event, so you can read
+and restore them as soon as the stream ends. Omit it and nothing is copied. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Approving tool calls by policy? Match on `args`.** A `needs_confirmation`
+event's `args` are exactly the arguments the model sent for the gated call,
+each value capped at 64,000 characters; `args_truncated: true` means one was
+cut, so don't auto-approve that call. What the agent adds to its own prompt —
+the folder a shell call runs in, a risk note, the full path of a relative
+write — comes in `prompt_context`, never
+in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Serving the turn from the Agent UI? Send `surface: "agent_ui"`** (contract ≥
+2.20), and the agent points recurring requests at the **Scheduled tasks** page
+instead of saying it cannot schedule. Older binaries reject it with `422`.
+
+**Calling it headless?** From contract 2.20 a failed model request names the
+host it went through, and its advice points at the model server the GAIA host
+uses (`LEMONADE_BASE_URL`) rather than at the TUI's settings. A front-end with
+its own settings screen sends `surface` (`"tui"`, `"agent_ui"` or `"cli"`) to
+get its own wording; a headless caller omits it. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Showing the model's reasoning?** Send `reasoning: true` (contract ≥ 2.22)
+and it arrives as `reasoning` events with a `delta`, apart from `status` lines
+and the answer. Join the deltas as they come. Older binaries reject the field
+with `422`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Showing how full the model's window is?** From contract 2.21 the `final`
+event carries `context`: the window size, the tokens the next call will take,
+and what takes them (prompt, tools, documents, history). Older binaries leave
+it out. It also carries `performance`, the turn's model and tool timings and
+each model call's token counts, when the binary sends it. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Keeping a multi-turn conversation? Send `turns`, not `context`** (contract ≥
+2.25). Send `turns: []` on the first turn so its `final` carries
+`model_messages`, store that with the reply, and send them back, oldest first,
+so the agent sees the tool calls it made and what they returned.
+Text-only `context` loses them, and the agent can't explain its own last turn.
+An empty `turns` list clears a retained session's history. Older binaries
+reject `turns` with `422`.
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent, _claims_file_write
+from gaia.agents.base.agent import Agent, _claims_file_write, _with_replaced_answer
 from gaia.agents.base.completion import (
     CompletionEvidence,
     incomplete_answer,
@@ -294,12 +294,12 @@ def test_real_loop_requires_correct_file_write_and_readback(agent, tmp_path):
 
 
 @pytest.mark.parametrize("max_steps", [1, 10])
-def test_persistent_lie_is_suppressed_and_status_incomplete(agent, max_steps):
+def test_persistent_lie_is_caveated_and_status_incomplete(agent, max_steps):
     claim = {"answer": "I saved the result to `summary.md`."}
     script(agent, claim, claim)
     result = agent.process_query("Save the result to `summary.md`", max_steps=max_steps)
     assert result["status"] == "incomplete"
-    assert claim["answer"] not in result["result"]
+    assert result["result"].startswith(claim["answer"])
     assert "No successful write" in result["result"]
     assert agent.console.print_final_answer.call_args.args[0] == result["result"]
 
@@ -309,7 +309,8 @@ def test_step_exhaustion_after_write_returns_incomplete(agent, tmp_path):
     result = agent.process_query("Save to `summary.md`", max_steps=1)
     assert (tmp_path / "summary.md").read_text() == "real"
     assert result["status"] == "incomplete"
-    assert "read back" in result["result"]
+    # The framework read the whole write back and it matched; the model need not.
+    assert "read back" not in result["result"]
 
 
 def test_turn_reset_does_not_reuse_prior_save(agent):
@@ -498,6 +499,15 @@ def test_binary_save_requires_its_own_write_but_not_a_text_read(tmp_path):
     assert not gaps(ledger, "Saved to `out.png`.")
 
 
+@pytest.mark.parametrize("tool", ["generate_music", "generate_sound_effect"])
+def test_generated_audio_counts_as_binary_save_evidence(tool, tmp_path):
+    ledger = CompletionEvidence("Save the audio to `sound.wav`", str(tmp_path))
+    ledger.record(tool, {}, {"audio_path": "other.wav"}, True)
+    assert gaps(ledger, "Saved to `sound.wav`.")
+    ledger.record(tool, {}, {"audio_path": "sound.wav"}, True)
+    assert not gaps(ledger, "Saved to `sound.wav`.")
+
+
 def test_refused_mutation_does_not_invalidate_a_completed_save(ledger):
     write(ledger)
     read(ledger)
@@ -575,7 +585,8 @@ def test_subclass_cannot_reintroduce_an_unsupported_test_claim(agent):
     script(agent, {"answer": "I did not run tests."})
     result = agent.process_query("Check the code", max_steps=1)
     assert result["status"] == "incomplete"
-    assert "All tests pass." not in result["result"]
+    assert result["result"].startswith("All tests pass.")
+    assert "No tests were run this turn." in result["result"]
     assert agent.console.print_final_answer.call_args.args[0] == result["result"]
 
 
@@ -1066,7 +1077,7 @@ def test_loop_still_rejects_a_false_save_after_a_denied_write(agent, tmp_path):
     )
     result = agent.process_query(_DOCUMENTS_REQUEST, max_steps=10)
     assert result["status"] == "incomplete"
-    assert lie["answer"] not in result["result"]
+    assert result["result"].startswith(lie["answer"])
     assert "was declined, so nothing was saved" in result["result"]
     correction = sent[2][-1]["content"]
     assert "[check:completion]" in correction
@@ -1157,3 +1168,184 @@ def test_a_folder_named_by_its_variable_is_backed_by_a_write_inside_it(
     read(ledger, script)
     variable = "%GAIA_TEST_TEMP%" if sys.platform == "win32" else "$GAIA_TEST_TEMP"
     assert gaps(ledger, f"I wrote a throwaway script in `{variable}`.") == []
+
+
+_SUMMARY = (
+    "I saved the summary to `summary.md`.\n\n"
+    "## Decisions\n- Ship the parser on Friday.\n- Drop the legacy exporter.\n\n"
+    "## Owners\n- Ana: release notes.\n- Raj: migration guide."
+)
+
+
+def test_completion_correction_asks_for_the_whole_answer_again(agent):
+    sent = script(
+        agent,
+        {"answer": _SUMMARY},
+        call("write_file", file_path="summary.md", content="alpha\n"),
+        call("read_file", file_path="summary.md"),
+        {"answer": _SUMMARY},
+    )
+    agent.process_query("Summarize the notes and save to `summary.md`", max_steps=10)
+    correction = sent[1][-1]["content"]
+    assert "[check:completion]" in correction
+    assert "complete answer again" in correction
+
+
+def test_an_acknowledgement_after_the_correction_keeps_the_summary(agent):
+    """The reply to the check is not the answer to the user."""
+    script(
+        agent,
+        {"answer": _SUMMARY},
+        call("write_file", file_path="summary.md", content="alpha\nbeta\n"),
+        call("read_file", file_path="summary.md"),
+        {"answer": "All 2 lines match what was written."},
+    )
+    result = agent.process_query(
+        "Summarize the notes and save to `summary.md`", max_steps=10
+    )
+    assert result["status"] == "success", result["result"]
+    assert result["result"].startswith(_SUMMARY)
+    assert "All 2 lines match what was written." in result["result"]
+    assert agent.console.print_final_answer.call_args.args[0] == result["result"]
+
+
+def test_a_full_rewrite_after_the_correction_replaces_the_answer(agent):
+    rewrite = (
+        "I saved the summary to `summary.md` and read it back.\n\n"
+        "## Decisions\n- Ship the parser on Friday.\n- Drop the legacy exporter.\n\n"
+        "## Owners\n- Ana: release notes.\n- Raj: migration guide and FAQ."
+    )
+    script(
+        agent,
+        {"answer": _SUMMARY},
+        call("write_file", file_path="summary.md", content="alpha\n"),
+        call("read_file", file_path="summary.md"),
+        {"answer": rewrite},
+    )
+    result = agent.process_query(
+        "Summarize the notes and save to `summary.md`", max_steps=10
+    )
+    assert result["result"].startswith(rewrite)
+    assert result["result"].count("## Decisions") == 1
+
+
+def test_a_short_honest_reply_does_not_bring_back_the_false_claim(agent):
+    """Nothing was written, so the earlier "I saved" is still unbacked."""
+    script(
+        agent,
+        {"answer": _SUMMARY},
+        {"answer": "I could not save the file."},
+    )
+    result = agent.process_query(
+        "Summarize the notes and save to `summary.md`", max_steps=10
+    )
+    assert "## Decisions" not in result["result"]
+    assert result["result"].startswith("I could not save the file.")
+
+
+def test_a_short_retraction_after_the_correction_does_not_bring_back_the_answer(
+    agent,
+):
+    """A reply that corrects the earlier answer must not follow its wrong version."""
+    retraction = "Actually, Raj owns the release notes, not Ana."
+    script(
+        agent,
+        {"answer": _SUMMARY},
+        call("write_file", file_path="summary.md", content="alpha\nbeta\n"),
+        call("read_file", file_path="summary.md"),
+        {"answer": retraction},
+    )
+    result = agent.process_query(
+        "Summarize the notes and save to `summary.md`", max_steps=10
+    )
+    assert "## Decisions" not in result["result"]
+    assert retraction in result["result"]
+
+
+@pytest.mark.parametrize(
+    "reply, restored",
+    [
+        ("All 2 lines match what was written.", True),
+        ("Actually the file has three owners, not two.", False),
+        ("Correction: the parser ships Monday.", False),
+        ("Sorry, I misread the notes.", False),
+        ("On closer look, Raj owns both.", False),
+        ("I was wrong about the owners.", False),
+    ],
+)
+def test_only_an_acknowledgement_restores_the_earlier_answer(reply, restored):
+    assert (_with_replaced_answer(reply, _SUMMARY) is not None) is restored
+
+
+_SHARE = r"\\server\share\f.pdf"
+
+
+@pytest.mark.parametrize("share", [_SHARE, "//server/share/f.pdf"])
+def test_a_unc_path_in_script_args_never_touches_the_network(
+    tmp_path, monkeypatch, share
+):
+    """A share named in code crashed a turn when resolving it raised WinError 64;
+    it must be keyed by its text, never resolved."""
+    from gaia.agents.base import completion
+
+    real = completion.os.path.realpath
+
+    def _no_network(path, *a, **kw):
+        if str(path).startswith(("\\\\", "//")):
+            raise AssertionError(f"resolved a network path: {path}")
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(completion.os.path, "realpath", _no_network)
+    ledger = CompletionEvidence("Fix it.", str(tmp_path))
+    key = ledger.key(share)
+    assert "server" in key and "f.pdf" in key
+    ledger.snapshot("run_python", {"code": f"open(r'{share}')"})
+
+
+def test_an_unresolvable_local_path_is_keyed_not_raised(tmp_path, monkeypatch):
+    import os
+
+    from gaia.agents.base import completion
+
+    def _broken(path, *a, **kw):
+        raise OSError(1920, "The file cannot be accessed by the system", path)
+
+    monkeypatch.setattr(completion.os.path, "realpath", _broken)
+    ledger = CompletionEvidence("Fix it.", str(tmp_path))
+    expected = os.path.normcase(os.path.join("out", "report.md"))
+    assert ledger.key("out/report.md").endswith(expected)
+
+
+def test_a_validator_is_never_asked_about_a_network_share(tmp_path):
+    validator = MagicMock()
+    ledger = CompletionEvidence("Fix it.", str(tmp_path), validator=validator)
+    assert ledger._readable(ledger.key(_SHARE), validator) is False
+    validator.validate_read.assert_not_called()
+
+
+@pytest.mark.parametrize("share", [_SHARE, "//server/share/f.pdf"])
+def test_a_unc_path_in_a_save_claim_never_touches_the_network(
+    tmp_path, monkeypatch, share
+):
+    from gaia.agents.base import completion
+
+    def _guard(real):
+        def _no_network(path, *a, **kw):
+            if str(path).startswith(("\\\\", "//")):
+                raise AssertionError(f"touched a network path: {path}")
+            return real(path, *a, **kw)
+
+        return _no_network
+
+    for name in ("realpath", "isfile", "isdir", "exists"):
+        monkeypatch.setattr(
+            completion.os.path, name, _guard(getattr(completion.os.path, name))
+        )
+    monkeypatch.setattr(completion.os, "stat", _guard(completion.os.stat))
+    monkeypatch.setattr(completion.os, "walk", _guard(completion.os.walk))
+
+    ledger = CompletionEvidence(f"Save the report to {share}", str(tmp_path))
+    ledger.exec_windows.append((0, 1, True, 0))  # a script ran and succeeded
+    ledger.snapshot("run_python", {"code": f"open(r'{share}', 'w')"})
+    found = gaps(ledger, f"I saved the report to {share}.")
+    assert any("f.pdf" in gap for gap in found)

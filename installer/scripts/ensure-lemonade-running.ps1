@@ -160,8 +160,8 @@ foreach ($cfg in @(
 # buffering symptom -- it means the server wrote nothing there.
 #
 # GGML_VK_DISABLE_COOPMAT: the CI runner scripts (start-lemonade.ps1 and this
-# task) still set it, although GAIA's own launches no longer do -- GAIA now runs
-# the embedder on the CPU backend instead. This task was once the one runner
+# task) still set it, although GAIA's own launches no longer do -- it halves
+# every model's prompt speed on Strix Halo. This task was once the one runner
 # launch path that did not, which made the persistent server the only one
 # running the Vulkan cooperative-matrix path. On the eval runner that is the difference between the
 # job that serves the RAG embedder and the gate that cannot (#3016).

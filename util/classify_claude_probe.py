@@ -37,6 +37,8 @@ QUOTA_PATTERNS: tuple[str, ...] = (
     # Match the quantifier, not the reset date - the date changes every reset,
     # and a U+00B7 sits between "limit" and "resets" in the real text.
     "weekly limit",
+    # The subscription's short rolling window, separate from the weekly one.
+    "session limit",
     "rate limit",
     "rate_limit_error",
     "limit resets",

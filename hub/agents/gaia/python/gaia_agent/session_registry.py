@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from gaia.logger import get_logger
 
@@ -39,6 +39,11 @@ PROVIDER_CLAUDE = "claude"
 #: default can't do that since the dict's values are always None already.
 _SENTINEL = object()
 
+#: Held while an agent is built. A build fills the process-wide tool registry
+#: and then snapshots it, so two at once can leave one agent running the other's
+#: tools — e.g. the start-up warm-up racing the first session's build.
+AGENT_BUILD_LOCK = threading.Lock()
+
 
 def build_session_agent(**config_kwargs: Any):
     """Construct a live ``GaiaAgent`` for a new session.
@@ -48,7 +53,8 @@ def build_session_agent(**config_kwargs: Any):
     """
     from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
-    return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
+    with AGENT_BUILD_LOCK:
+        return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
 
 
 def _permission_state():
@@ -100,6 +106,9 @@ class _AgentSession:
         #: ``PROVIDER_CLAUDE`` — so a turn naming another one is a switch.
         self.provider = provider
         self.run_lock = threading.Lock()
+        #: The cancel flag of the turn holding ``run_lock``, so a new turn can
+        #: tell a stopped turn that is still winding down from a live one.
+        self.active_cancel: Optional[threading.Event] = None
         #: True exactly once, on the session built to replace one this
         #: registry involuntarily evicted (LRU cap or idle timeout) — never
         #: for a session_id used for the first time. The caller (server.py)
@@ -245,13 +254,31 @@ class _SessionRegistry:
             self._evicted_ids.pop(next(iter(self._evicted_ids)))
 
     def get_or_create(self, session_id: str, **config_kwargs: Any) -> _AgentSession:
+        session, _ = self._get_or_create(session_id, False, config_kwargs)
+        return session
+
+    def checkout(
+        self, session_id: str, **config_kwargs: Any
+    ) -> Tuple[_AgentSession, bool]:
+        """``get_or_create`` plus a try at the session's ``run_lock``.
+
+        Returns ``(session, took_turn)``. The lock is tried under the registry
+        lock, which eviction also holds, so nothing can evict the session
+        between finding it and taking its turn — a window that turned a live
+        conversation into a spurious "already running a turn".
+        """
+        return self._get_or_create(session_id, True, config_kwargs)
+
+    def _get_or_create(
+        self, session_id: str, take_turn: bool, config_kwargs: Dict[str, Any]
+    ) -> Tuple[_AgentSession, bool]:
         self.reap()
         evicted: Optional[_AgentSession] = None
         with self._lock:
             existing = self._sessions.get(session_id)
             if existing is not None:
                 self._last_used[session_id] = time.monotonic()
-                return existing
+                return existing, take_turn and existing.run_lock.acquire(blocking=False)
             # Racers for the SAME id share one reservation (a set), so the pair
             # costs one slot — which is what they will end up occupying.
             if len(self._sessions) + len(self._pending) >= self._max_sessions:
@@ -318,9 +345,10 @@ class _SessionRegistry:
                 session.reclaimed_after_eviction = reclaimed
                 self._sessions[session_id] = session
                 self._last_used[session_id] = time.monotonic()
+            took_turn = take_turn and session.run_lock.acquire(blocking=False)
         if lost_the_race is not None:
             close_agent(lost_the_race)
-        return session
+        return session, took_turn
 
     def _claim_lru_locked(self) -> Optional[_AgentSession]:
         """Pop the least-recently-used session whose ``run_lock`` this call

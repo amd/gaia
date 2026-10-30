@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -193,7 +194,7 @@ def test_install_disk_space_block(tmp_path, monkeypatch):
 
 def test_install_concurrency_guard(tmp_path):
     manifest = _manifest()
-    with installer._install_slot("demo"):  # noqa: SLF001 - simulate in-flight
+    with installer._install_slot("demo", tmp_path):  # noqa: SLF001 - in-flight
         with pytest.raises(InstallInProgressError):
             install(
                 "demo",
@@ -202,6 +203,129 @@ def test_install_concurrency_guard(tmp_path):
                 fetcher=_make_fetcher(manifest),
                 run_pip=lambda args: None,
                 install_root=tmp_path,
+            )
+
+
+def _hold_install_lock(root, seconds):
+    """Hold demo's install lock from another thread, as a status probe does."""
+    import threading
+
+    from gaia.utils.file_lock import file_lock
+
+    held = threading.Event()
+
+    def holder():
+        with file_lock(root / ".demo.install"):
+            held.set()
+            threading.Event().wait(seconds)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    assert held.wait(5)
+    return thread
+
+
+def test_install_slot_waits_out_a_brief_status_probe(tmp_path):
+    thread = _hold_install_lock(tmp_path, 0.1)
+    try:
+        with installer._install_slot("demo", tmp_path):  # noqa: SLF001
+            pass
+    finally:
+        thread.join()
+
+
+def test_install_slot_still_rejects_a_real_concurrent_install(tmp_path):
+    thread = _hold_install_lock(tmp_path, 2)
+    try:
+        with pytest.raises(InstallInProgressError):
+            with installer._install_slot("demo", tmp_path):  # noqa: SLF001
+                pass
+    finally:
+        thread.join()
+
+
+def _slot_is_free(agent_id, root):
+    """Whether *agent_id*'s slot can be claimed right now (and give it back)."""
+    try:
+        installer.claim_install_slot(agent_id, root).release()
+    except InstallInProgressError:
+        return False
+    return True
+
+
+def test_a_lock_queue_folder_in_the_install_root_is_not_an_agent(tmp_path, caplog):
+    import logging
+
+    from gaia.utils.file_lock import lock_path_for, queue_dir_for
+
+    queue_dir_for(lock_path_for(tmp_path / ".demo.install")).mkdir()
+    with caplog.at_level(logging.WARNING):
+        assert installer.list_installed(tmp_path) == {}
+    assert "non-agent" not in caplog.text
+
+
+def test_a_held_slot_is_refused_and_freed_on_exit(tmp_path):
+    with installer._install_slot("demo", tmp_path):  # noqa: SLF001
+        assert not _slot_is_free("demo", tmp_path)
+    assert _slot_is_free("demo", tmp_path)
+
+
+def test_another_process_holding_the_slot_names_it_not_a_status_url(tmp_path):
+    thread = _hold_install_lock(tmp_path, 2)
+    try:
+        with pytest.raises(InstallInProgressError) as exc:
+            installer.claim_install_slot("demo", tmp_path)
+    finally:
+        thread.join()
+    assert "Another GAIA process" in str(exc.value)
+    assert "install-status" not in str(exc.value)
+
+
+def test_a_claimed_slot_is_freed_by_another_thread(tmp_path):
+    import threading
+
+    slot = installer.claim_install_slot("demo", tmp_path)
+    with pytest.raises(InstallInProgressError):
+        installer.claim_install_slot("demo", tmp_path)
+    worker = threading.Thread(target=slot.release)
+    worker.start()
+    worker.join()
+    slot.release()  # a second release does nothing
+    assert _slot_is_free("demo", tmp_path)
+    with installer.claim_install_slot("demo", tmp_path):
+        pass
+
+
+def test_install_runs_under_a_slot_the_caller_claimed(tmp_path):
+    manifest = _manifest()
+    with installer.claim_install_slot("demo", tmp_path) as slot:
+        result = install(
+            "demo",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_make_fetcher(manifest),
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+            slot=slot,
+        )
+        # The caller still owns it.
+        assert slot.held
+    assert result.id == "demo"
+    assert _slot_is_free("demo", tmp_path)
+
+
+def test_install_refuses_a_slot_for_another_agent(tmp_path):
+    manifest = _manifest()
+    with installer.claim_install_slot("other", tmp_path) as slot:
+        with pytest.raises(ValueError, match="belongs to 'other'"):
+            install(
+                "demo",
+                manifest=manifest,
+                base_url=BASE,
+                fetcher=_make_fetcher(manifest),
+                run_pip=lambda args: None,
+                install_root=tmp_path,
+                slot=slot,
             )
 
 
@@ -1083,6 +1207,76 @@ def test_install_binary_locked_file_raises_actionable_error(tmp_path, monkeypatc
     assert "running" in message or "close" in message
 
 
+@pytest.fixture
+def running_exe(tmp_path):
+    """A real executable, running, so Windows holds its file open (#5723)."""
+    import shutil
+    import subprocess
+
+    target = tmp_path / "gaia-agent.exe"
+    shutil.copy(Path(os.environ["SystemRoot"]) / "System32" / "PING.EXE", target)
+    proc = subprocess.Popen(
+        [str(target), "-n", "60", "127.0.0.1"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        yield target, proc
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows locks a running executable")
+def test_a_running_binary_is_replaced_not_refused(running_exe):
+    target, proc = running_exe
+    with pytest.raises(PermissionError):  # the precondition: Windows holds it
+        target.write_bytes(b"overwrite")
+
+    installer._install_binary_artifact(b"new agent", target.name, target.parent)
+
+    assert target.read_bytes() == b"new agent"
+    assert proc.poll() is None, "the running copy keeps its image"
+    [aside] = list(target.parent.glob(f".replaced-*-{target.name}"))
+    assert aside.stat().st_size > len(b"new agent")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows locks a running executable")
+def test_the_next_install_removes_the_copy_set_aside(running_exe):
+    target, proc = running_exe
+    installer._install_binary_artifact(b"v2", target.name, target.parent)
+    proc.kill()
+    proc.wait()
+
+    installer._install_binary_artifact(b"v3", target.name, target.parent)
+
+    assert target.read_bytes() == b"v3"
+    assert list(target.parent.glob(f".replaced-*-{target.name}")) == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the move-aside path is Windows-only")
+def test_a_failed_swap_puts_the_old_binary_back(tmp_path, monkeypatch):
+    target = tmp_path / "gaia-agent.exe"
+    target.write_bytes(b"old")
+    new = tmp_path / "incoming"
+    new.write_bytes(b"new")
+    real = os.replace
+    calls = []
+
+    def flaky(src, dst):
+        calls.append((Path(src).name, Path(dst).name))
+        if len(calls) in (1, 3):  # the direct swap, then the swap after moving aside
+            raise PermissionError("in use")
+        real(src, dst)
+
+    monkeypatch.setattr(installer.os, "replace", flaky)
+    with pytest.raises(PermissionError):
+        installer._replace_binary(new, target)
+
+    assert target.read_bytes() == b"old"
+    assert list(tmp_path.glob(".replaced-*")) == []
+
+
 def test_rollback_binary_kind_raises_clean_error(tmp_path):
     manifest = _binary_manifest()
     install(
@@ -1558,19 +1752,19 @@ def test_default_run_pip_falls_back_to_python_pip_when_uv_missing(
 
     from tests.fixtures.wheel_builder import build_chat_shaped_fixture_wheel
 
-    real_run = installer.subprocess.run
+    real_popen = installer.subprocess.Popen
     uv_calls = []
     pip_calls = []
 
-    def fake_run(cmd, *args, **kwargs):
+    def fake_popen(cmd, *args, **kwargs):
         if cmd[0] == "uv" or (cmd[0] == sys.executable and cmd[1:3] == ["-m", "uv"]):
             uv_calls.append(cmd)
             raise FileNotFoundError(f"simulated missing uv: {cmd[0]}")
         if cmd[0] == sys.executable and cmd[1:3] == ["-m", "pip"]:
             pip_calls.append(cmd)
-        return real_run(cmd, *args, **kwargs)
+        return real_popen(cmd, *args, **kwargs)
 
-    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+    monkeypatch.setattr(installer.subprocess, "Popen", fake_popen)
 
     agent_id = "uvfallbacktestagent"
     module_name = f"{agent_id}_pkg"
@@ -1600,10 +1794,10 @@ def test_default_run_pip_raises_when_every_frontend_fails(monkeypatch):
     actionable InstallError naming what was tried -- never silently no-op.
     """
 
-    def fake_run(cmd, *args, **kwargs):
+    def fake_popen(cmd, *args, **kwargs):
         raise FileNotFoundError(f"simulated missing frontend: {cmd[0]}")
 
-    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+    monkeypatch.setattr(installer.subprocess, "Popen", fake_popen)
 
     with pytest.raises(InstallError, match="every pip frontend failed"):
         installer._default_run_pip(["--target", "/nonexistent", "some-package"])
@@ -1842,3 +2036,146 @@ def test_a_failed_binary_FIRST_install_is_still_cleared(tmp_path, monkeypatch):
 
     assert read_sentinel("demo", tmp_path) is None
     assert not (tmp_path / "demo").exists()
+
+
+# ---------------------------------------------------------------------------
+# A pip run that never finishes releases the install slot
+# ---------------------------------------------------------------------------
+
+
+def test_hung_pip_fails_the_install_and_frees_the_slot(tmp_path, monkeypatch):
+    """uv waits on another session's cache lock with no limit; the install must not."""
+    import sys
+
+    hang = [sys.executable, "-c", "import time; time.sleep(60)"]
+    monkeypatch.setattr(installer, "_pip_frontends", lambda: [hang])
+    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.delenv(installer.PIP_TIMEOUT_ENV, raising=False)
+    manifest = _manifest()
+
+    def attempt():
+        return install(
+            "demo",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_make_fetcher(manifest),
+            install_root=tmp_path,
+            active_env_site_packages=tmp_path / "_fake_active_env_site_packages",
+        )
+
+    with pytest.raises(InstallError, match="stuck"):
+        attempt()
+    assert not installer.is_installing("demo")
+    assert installer.get_install_status("demo")["status"] == "failed"
+    assert read_sentinel("demo", tmp_path) is None
+
+    # A retry gets the same honest error, not "already in progress".
+    with pytest.raises(InstallError, match="stuck") as retry:
+        attempt()
+    assert not isinstance(retry.value, InstallInProgressError)
+
+
+def test_a_failed_update_never_nests_the_backup_in_a_half_deleted_dir(
+    tmp_path, monkeypatch
+):
+    """A pip child that outlived its kill can hold a file, so the failed
+    install's directory survives deletion. Moving the backup onto it put the
+    previous version at demo/demo."""
+    install_dir = installer.agent_install_dir("demo", tmp_path)
+    (install_dir / "site-packages").mkdir(parents=True)
+    (install_dir / "site-packages" / "held.pyd").write_bytes(b"in use")
+    backup = installer._backup_dir("demo", tmp_path)
+    backup.mkdir(parents=True)
+    (backup / "gaia-agent.yaml").write_text("version: 1\n")
+
+    def held_rmtree(path, ignore_errors=False, **_kwargs):
+        # What a file locked by a live process does to rmtree.
+        if not ignore_errors:
+            raise PermissionError(13, "in use by another process", str(path))
+
+    monkeypatch.setattr(installer.shutil, "rmtree", held_rmtree)
+    with pytest.raises(InstallError, match="Could not remove the failed install"):
+        installer._restore_backup_if_present("demo", tmp_path)
+    assert not (install_dir / "demo").exists()
+    assert (backup / "gaia-agent.yaml").exists()
+
+
+def test_a_failed_rollback_keeps_the_reason_the_install_failed(tmp_path, monkeypatch):
+    manifest = _manifest()
+
+    def attempt(run_pip):
+        return install(
+            "demo",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_make_fetcher(manifest),
+            run_pip=run_pip,
+            install_root=tmp_path,
+            active_env_site_packages=tmp_path / "_fake_active_env_site_packages",
+        )
+
+    attempt(lambda args: None)  # a working version to update from
+
+    def lock_conflict(args):
+        raise InstallError("uv could not get the package cache: another install")
+
+    real_rmtree = installer.shutil.rmtree
+    held = installer.agent_install_dir("demo", tmp_path)
+
+    def held_rmtree(path, ignore_errors=False, **kwargs):
+        if Path(path) != held:
+            return real_rmtree(path, ignore_errors=ignore_errors, **kwargs)
+        if not ignore_errors:
+            raise PermissionError(13, "in use by another process", str(path))
+
+    monkeypatch.setattr(installer.shutil, "rmtree", held_rmtree)
+    with pytest.raises(InstallError) as excinfo:
+        attempt(lock_conflict)
+    message = str(excinfo.value)
+    assert "another install" in message
+    assert "Could not remove the failed install" in message
+    assert "could not get the package cache" in str(excinfo.value.__cause__)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the move-aside path is Windows-only")
+def test_a_failed_restore_names_where_the_old_binary_is(tmp_path, monkeypatch):
+    target = tmp_path / "gaia-agent.exe"
+    target.write_bytes(b"old")
+    new = tmp_path / "incoming"
+    new.write_bytes(b"new")
+    real = os.replace
+    calls = []
+
+    def flaky(src, dst):
+        calls.append(1)
+        if len(calls) != 2:  # only the move aside succeeds
+            raise PermissionError("in use")
+        real(src, dst)
+
+    monkeypatch.setattr(installer.os, "replace", flaky)
+    with pytest.raises(InstallError) as exc:
+        installer._replace_binary(new, target)
+
+    [aside] = list(tmp_path.glob(".replaced-*"))
+    assert str(aside) in str(exc.value)
+    assert "rename it to gaia-agent.exe" in str(exc.value)
+
+
+def test_a_leftover_that_cannot_be_deleted_does_not_stop_the_install(
+    tmp_path, monkeypatch
+):
+    """Any OSError on a stale leftover is logged, never raised (#5747 review)."""
+    target = tmp_path / "gaia-agent.exe"
+    (tmp_path / f".replaced-abc12345-{target.name}").write_bytes(b"old")
+    real_unlink = Path.unlink
+
+    def broken(self, *args, **kwargs):
+        if self.name.startswith(".replaced-"):
+            raise OSError("device busy")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", broken)
+
+    installer._install_binary_artifact(b"new", target.name, tmp_path)
+
+    assert target.read_bytes() == b"new"

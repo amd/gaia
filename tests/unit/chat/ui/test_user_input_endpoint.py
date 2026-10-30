@@ -108,3 +108,28 @@ async def test_sidecar_rejection_surfaces_as_409_not_swallowed():
             )
     assert exc_info.value.status_code == 409
     assert "question no longer pending" in exc_info.value.detail
+
+
+async def test_late_answer_after_the_turn_ended_says_so_plainly():
+    """A click on a question whose turn ended must not read "No active chat session"."""
+    with patch.object(helpers, "_active_sse_handlers", {}):
+        with pytest.raises(HTTPException) as exc_info:
+            await user_input(
+                UserInputRequest(session_id="session-1", request_id="r", value="x")
+            )
+    detail = exc_info.value.detail
+    assert exc_info.value.status_code == 404
+    assert "session ID" not in detail
+    assert "no longer waiting" in detail
+    assert "new message" in detail
+
+
+async def test_late_answer_to_a_timed_out_question_says_so_plainly():
+    handler = _FakeHandler(user_input_delivered=False, relay_delivered=False)
+    with patch.object(helpers, "_active_sse_handlers", {"session-1": handler}):
+        with pytest.raises(HTTPException) as exc_info:
+            await user_input(
+                UserInputRequest(session_id="session-1", request_id="old", value="x")
+            )
+    assert "no longer waiting" in exc_info.value.detail
+    assert "wait ran out" in exc_info.value.detail

@@ -96,10 +96,10 @@ Pass/fail decision (apply in order):
 
 ## STEP 5 — RECORD PERFORMANCE DATA
 
-After scoring, capture inference performance stats from the `send_message()` response.
+After scoring, capture inference performance stats from the turn's last assistant message in `get_messages()`.
 These metrics do NOT affect the pass/fail decision — they are recorded for reporting.
 
-Check the `send_message()` return value for a `stats` key containing:
+Check that message for a `stats` key containing:
 - `tokens_per_second`, `time_to_first_token`, `input_tokens`, `output_tokens`
 
 If stats are present, include them in the output. If missing, set `performance` to `null`.

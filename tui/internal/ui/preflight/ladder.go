@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
 )
 
@@ -21,13 +22,15 @@ type Diagnosis struct {
 	Remedy string
 	// Command is the exact command that fixes it, or "" when there is none.
 	Command string
+	// PowerShell is Command for PowerShell, set only when the two differ.
+	PowerShell string
 	// Where names the log, file, or page to read next.
 	Where string
 }
 
 // AsRemedy converts a diagnosis into a row remedy.
 func (d Diagnosis) AsRemedy() Remedy {
-	return Remedy{Action: d.Remedy, Command: d.Command, Where: d.Where}
+	return Remedy{Action: d.Remedy, Command: d.Command, PowerShell: d.PowerShell, Where: d.Where}
 }
 
 // withRemedy is the inverse: a cause plus an already-built Remedy. It exists so
@@ -35,7 +38,10 @@ func (d Diagnosis) AsRemedy() Remedy {
 // what is installed) is built in one place and reused by both the ladder and the
 // rows, instead of each spelling out a command of its own.
 func withRemedy(cause string, r Remedy) Diagnosis {
-	return Diagnosis{Cause: cause, Remedy: r.Action, Command: r.Command, Where: r.Where}
+	return Diagnosis{
+		Cause: cause, Remedy: r.Action, Command: r.Command,
+		PowerShell: r.PowerShell, Where: r.Where,
+	}
 }
 
 // String is the one-line form, for logs and for chat's mid-run error line.
@@ -44,8 +50,8 @@ func (d Diagnosis) String() string {
 	if d.Remedy != "" {
 		parts = append(parts, d.Remedy)
 	}
-	if d.Command != "" {
-		parts = append(parts, "run: "+d.Command)
+	for _, c := range shellCommands(d.Command, d.PowerShell) {
+		parts = append(parts, c.Label()+" "+c.Line)
 	}
 	if d.Where != "" {
 		parts = append(parts, "look: "+d.Where)
@@ -79,6 +85,18 @@ func (l Ladder) agentCommand(verb, fallback string) string {
 		return fallback
 	}
 	return verb + " " + l.AgentID
+}
+
+// unregisteredAgentRemedy answers a background service that has no agent by
+// this id. It reads its agent list from the installed GAIA once, when it
+// starts, so an install made outside it is invisible until it restarts.
+func unregisteredAgentRemedy(agentID string) Remedy {
+	return Remedy{
+		Action: fmt.Sprintf("Install it with `%s` if you have not, then restart the background "+
+			"service — it reads its agent list only when it starts.", catalog.InstallCommand(agentID)),
+		Command: "gaia daemon restart",
+		Where:   daemonLog(),
+	}
 }
 
 // daemonLog is the daemon's own log path, resolved for embedding in a remedy.
@@ -121,6 +139,17 @@ func (l Ladder) Error(op string, err error) Diagnosis {
 			// the same one; saying so stops the user looping on it.
 			Remedy: "Upgrade the installed GAIA core so it matches this app, or re-run " +
 				"the installer from https://amd-gaia.ai. A restart brings the same version back.",
+			Command: "pip install --upgrade amd-gaia",
+			Where:   daemonLog(),
+		}
+	}
+	// Without this an absent route read as "<op> failed: <the whole skew
+	// paragraph>" with a "check the service" remedy that cannot fix it.
+	var missing *daemon.RouteMissingError
+	if errors.As(err, &missing) {
+		return Diagnosis{
+			Cause:   "GAIA's background service is out of date.",
+			Remedy:  "Upgrade the installed GAIA core, then press r. A restart brings the same version back.",
 			Command: "pip install --upgrade amd-gaia",
 			Where:   daemonLog(),
 		}
@@ -227,13 +256,18 @@ func (l Ladder) Status(op string, status int, body string) Diagnosis {
 			Where:   daemonLog(),
 		}
 	case http.StatusNotFound:
-		return Diagnosis{
-			Cause: fmt.Sprintf("The background service does not know the agent %q.", l.agent()),
-			Remedy: "Install it, then check it is registered. " +
-				detailSuffix(trimmed),
-			Command: l.agentCommand("gaia hub install", "gaia daemon agents"),
-			Where:   daemonLog(),
+		cause := fmt.Sprintf("The background service does not know the agent %q.", l.agent())
+		if l.AgentID == "" {
+			return Diagnosis{
+				Cause:   cause,
+				Remedy:  "Check which agents it has registered. " + detailSuffix(trimmed),
+				Command: "gaia daemon agents",
+				Where:   daemonLog(),
+			}
 		}
+		d := withRemedy(cause, unregisteredAgentRemedy(l.AgentID))
+		d.Remedy = strings.TrimSpace(d.Remedy + " " + detailSuffix(trimmed))
+		return d
 	case http.StatusServiceUnavailable:
 		// The sidecar's own not-ready answer. Its hint is the best remedy there
 		// is, so run the text ladder over it rather than inventing wording.

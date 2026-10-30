@@ -288,11 +288,36 @@ def test_safe_snapshot_rejects_nonregular_file_without_waiting(tmp_path, monkeyp
         # Windows has no mkfifo; exercise the same descriptor rejection
         # without requiring an OS-specific named-pipe service or a skipped test.
         path.write_text("placeholder")
+        # Fake only this file's open descriptor; Windows reuses closed fd numbers.
+        real_open, real_close, real_fstat = os.open, os.close, os.fstat
+        opened = set()
+
+        def fake_open(target, *args, **kwargs):
+            fd = real_open(target, *args, **kwargs)
+            if os.path.realpath(target) == os.path.realpath(path):
+                opened.add(fd)
+            return fd
+
+        def fake_close(fd):
+            opened.discard(fd)
+            real_close(fd)
+
+        monkeypatch.setattr(os, "open", fake_open)
+        monkeypatch.setattr(os, "close", fake_close)
         monkeypatch.setattr(
-            os, "fstat", lambda fd: SimpleNamespace(st_mode=stat.S_IFIFO)
+            os,
+            "fstat",
+            lambda fd: (
+                SimpleNamespace(st_mode=stat.S_IFIFO)
+                if fd in opened
+                else real_fstat(fd)
+            ),
         )
     with pytest.raises(ValueError, match="regular text file"):
         read_snapshot(str(path), PathValidator(allowed_paths=[str(tmp_path)]))
+    # A later file that reuses the rejected descriptor's number gets real stats.
+    with open(__file__, "rb") as other:
+        assert os.fstat(other.fileno()).st_size > 0
 
 
 def test_active_skill_enables_extraction_but_general_knowledge_does_not(tmp_path):
@@ -1198,7 +1223,7 @@ def test_running_out_of_steps_keeps_the_extracted_inventory(agent, tmp_path):
 
 
 def test_the_closing_answer_at_the_step_limit_is_checked_too(agent, tmp_path):
-    """The last-step summary is an answer, not an exemption from the gate."""
+    """The last-step summary is kept, but the gate still lists what it lacks."""
     (tmp_path / "source.txt").write_text("Exercise ALPHA\nExercise BETA")
     script(
         agent,
@@ -1210,8 +1235,12 @@ def test_the_closing_answer_at_the_step_limit_is_checked_too(agent, tmp_path):
     )
     assert result["status"] == "incomplete"
     assert result["completion_gaps"]
-    assert "Saved every exercise to report.txt." not in result["result"]
-    assert "Exercise ALPHA" in result["result"] and "Exercise BETA" in result["result"]
+    text = result["result"]
+    assert text.index("Saved every exercise to report.txt.") < text.index(
+        "I can't confirm this is done"
+    )
+    assert "No successful write to `report.txt`" in text
+    assert "Exercise ALPHA" in text and "Exercise BETA" in text
 
 
 def test_a_finished_extraction_survives_the_step_limit(agent, tmp_path):
@@ -1563,3 +1592,106 @@ def test_a_working_folder_in_the_prompt_is_not_a_source(tmp_path):
     )
     assert not state.enabled
     assert state.gaps() == []
+
+
+@pytest.fixture
+def askable(monkeypatch):
+    # pytest's tmp dirs sit under the OS temp folder, which is never offered.
+    monkeypatch.setattr(PathValidator, "_unaskable_reason", lambda self, path: None)
+
+
+def test_snapshot_asks_for_an_out_of_scope_source_only_when_told_to(tmp_path, askable):
+    source = tmp_path / "outside" / "notes.txt"
+    source.parent.mkdir()
+    source.write_text("alpha")
+    asked = []
+    validator = PathValidator(allowed_paths=[str(tmp_path / "scope")])
+    validator.set_access_prompt(lambda path: asked.append(path) or True)
+
+    with pytest.raises(ValueError, match="Access denied"):
+        read_snapshot(str(source), validator)
+    assert not asked
+
+    assert read_snapshot(str(source), validator, prompt_user=True) == "alpha"
+    assert len(asked) == 1
+    # Approved for the session: a later re-read needs no second prompt.
+    assert read_snapshot(str(source), validator) == "alpha"
+    assert len(asked) == 1
+
+
+def test_snapshot_refuses_when_the_user_declines(tmp_path, askable):
+    source = tmp_path / "outside.txt"
+    source.write_text("alpha")
+    validator = PathValidator(allowed_paths=[str(tmp_path / "scope")])
+    validator.set_access_prompt(lambda path: False)
+    with pytest.raises(ValueError, match="Access denied"):
+        read_snapshot(str(source), validator, prompt_user=True)
+    assert str(source.resolve()) not in {str(p) for p in validator.allowed_paths}
+
+
+def test_snapshot_never_offers_a_secret_file(tmp_path, askable):
+    secret = tmp_path / ".env"
+    secret.write_text("TOKEN=1")
+    asked = []
+    validator = PathValidator(allowed_paths=[str(tmp_path)])
+    validator.set_access_prompt(lambda path: asked.append(path) or True)
+    with pytest.raises(ValueError):
+        read_snapshot(str(secret), validator, prompt_user=True)
+    assert not asked
+
+
+def _outside_source(tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    source = outside / "minutes.txt"
+    source.write_text("alpha")
+    return source
+
+
+@pytest.mark.parametrize("approve", [True, False])
+def test_extraction_tool_asks_before_reading_an_out_of_scope_file(
+    agent, tmp_path, askable, approve
+):
+    source = _outside_source(tmp_path)
+    asked = []
+    agent.path_validator.set_access_prompt(lambda path: asked.append(path) or approve)
+    agent._extraction_ledger = ExtractionLedger(
+        f"List every item in {source}", str(tmp_path)
+    )
+    agent._tool_reported_usage = []
+    agent._register_extraction_tool()
+    agent.chat.send_messages.side_effect = lambda **kw: MagicMock(
+        text=reply("alpha"), usage={"total_tokens": 10}, stats={}
+    )
+
+    result = agent._tools_registry["extract_document_items"]["function"](str(source))
+
+    assert [Path(p).name for p in asked] == ["minutes.txt"]
+    if approve:
+        assert result.get("status") != "error", result
+        # The end-of-turn source check re-reads it without asking again.
+        agent._check_extraction_sources()
+        assert len(asked) == 1
+        assert not agent._extraction_ledger.errors
+    else:
+        assert result["status"] == "error"
+        assert "Access denied" in result["error"]
+
+
+def test_extraction_tool_reports_a_missing_source_without_asking(
+    agent, tmp_path, askable
+):
+    missing = tmp_path.parent / f"{tmp_path.name}-outside" / "minutes.txt"
+    asked = []
+    agent.path_validator.set_access_prompt(lambda path: asked.append(path) or True)
+    agent._extraction_ledger = ExtractionLedger(
+        f"List every item in {missing}", str(tmp_path)
+    )
+    agent._tool_reported_usage = []
+    agent._register_extraction_tool()
+
+    result = agent._tools_registry["extract_document_items"]["function"](str(missing))
+
+    assert result["status"] == "error"
+    assert "not found" in result["error"].lower(), result
+    assert asked == []

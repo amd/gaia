@@ -62,7 +62,7 @@ one of:
 | `view` | What it is |
 |--------|------------|
 | `splash` | The mascot, for one render while the readiness gate starts. Takes no input |
-| `preflight` | The readiness gate. `blocker` names the row refusing the launch — `binary`, `lemonade`, `model` for the flagship; `daemon`, `sidecar`, `mailbox` for a daemon-backed agent. Keys: `d` details, `r` re-check, `f` fix, `enter` start a first-run step or proceed, `esc` quit |
+| `preflight` | The readiness gate. `blocker` names the row refusing the launch — `binary`, `lemonade`, `model` for the flagship; `daemon`, `sidecar`, `mailbox` for a daemon-backed agent. A daemon or agent that is simply stopped is started by the gate itself, and `blocker` is empty while it starts. Keys: `d` details, `r` re-check, `f` fix, `enter` start a first-run step or proceed, `esc` quit |
 | `chat` | The conversation. `esc` clears the composer, `ctrl+c` quits |
 
 <Note>
@@ -78,7 +78,7 @@ one of:
   They drove the hub browser, which no longer exists. Launching **is** running
   `gaia tui`; switching agents inside a live session is chat's `/agents`, driven
   through `tui_send_text`/`tui_send_keys` like any other command; and installing
-  a hub agent is `gaia hub install <id>` in the Python CLI.
+  an extra agent such as email is `gaia hub install email` in the Python CLI.
 </Warning>
 
 <Note>

@@ -7,7 +7,7 @@ task and then re-ran the same check used to have its answer replaced by "I
 can't confirm the task is finished". When the guard's correction doesn't land
 and the turn ends, it now asks the model once more, with the same tools but
 ``tool_choice="none"``, and that reply is the answer. Repeats that errored or
-were refused keep their own message: there the failure IS the evidence.
+were refused get the same call, and their failure message follows the reply.
 """
 
 import json
@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gaia.agents.base import agent as agent_module
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.verification import VERIFICATION_NOTE_OPENER
@@ -316,8 +317,14 @@ def test_a_failed_repeat_summary_is_printed_as_well(agent):
 
 
 # ---------------------------------------------------------------------------
-# Repeats that failed: today's message, and no closing call
+# Repeats that failed: the work done survives, the failure follows it
 # ---------------------------------------------------------------------------
+
+_RESEARCH = "The loader reads config.yaml before the env vars; that is the bug."
+
+
+def _closing_prompt(agent, chat) -> str:
+    return _model_calls(agent, chat)[-1].kwargs["messages"][-1]["content"]
 
 
 @pytest.mark.parametrize(
@@ -339,36 +346,42 @@ def test_a_failed_repeat_summary_is_printed_as_well(agent):
     ],
     ids=["rate-limit-error", "connection-failure", "not-permitted", "generic-error"],
 )
-def test_failed_repeats_keep_their_message(agent, tool_result, expected):
+def test_failed_repeats_keep_the_research_and_add_the_failure(
+    agent, tool_result, expected
+):
     agent.tool_result = tool_result
-    chat = _stub_chat(agent, *_repeat_then())
+    chat = _stub_chat(agent, *_repeat_then(_RESEARCH))
 
     result = agent.process_query("fix the loader and run the tests")
 
-    assert expected in result["result"]
-    assert _CANNED not in result["result"]
-    # No closing call: the failure the user needs to hear already happened.
-    assert len(_model_calls(agent, chat)) == _CALLS
-    assert result["steps_taken"] == _CALLS
+    text = result["result"]
+    assert text.startswith(_RESEARCH)
+    assert text.index(_RESEARCH) < text.index(expected)
+    assert _CANNED not in text
+    assert len(_model_calls(agent, chat)) == _CALLS + 1
+    assert "failed" in _closing_prompt(agent, chat)
+    assert result["steps_taken"] == _CALLS + 1
 
 
 @pytest.mark.usefixtures("clean_registry")
-def test_failed_repeats_on_the_legacy_path_keep_their_message():
+def test_failed_repeats_on_the_legacy_path_keep_the_research():
     """The results must come from ``previous_outputs``, not ``step_results``.
 
     Error recovery clears ``step_results`` before every retry, so reading it
-    here makes a loop of failures look like a clean run — and spends a closing
-    call telling the user what went well.
+    here makes a loop of failures look like a clean run — and asks the closing
+    call what went well instead of what the failure kept it from doing.
     """
     agent = _make_agent(streaming=False, model_id=None)
     agent.tool_result = {"status": "error", "error": "boom"}
-    chat = _stub_chat(agent, *([_json_call()] * _CALLS))
+    chat = _stub_chat(agent, *([_json_call()] * _CALLS), _answer(_RESEARCH))
 
     result = agent.process_query("fix the loader and run the tests")
 
+    assert result["result"].startswith(_RESEARCH)
     assert "kept failing: boom" in result["result"]
     assert _CANNED not in result["result"]
-    assert chat.send_messages.call_count == _CALLS
+    assert chat.send_messages.call_count == _CALLS + 1
+    assert "failed" in _closing_prompt(agent, chat)
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +406,9 @@ def test_failed_repeats_on_the_legacy_path_keep_their_message():
     ids=["call-raises", "empty-reply", "asks-for-a-tool", "calls-a-tool-anyway"],
 )
 def test_failed_closing_call_returns_the_notice_and_why(agent, caplog, reply, reason):
-    _stub_chat(agent, *_repeat_then(reply))
+    # A reply that is not an answer is asked for once more, without tools.
+    retry = () if isinstance(reply, BaseException) else (reply,)
+    _stub_chat(agent, *_repeat_then(reply, *retry))
 
     with caplog.at_level(logging.WARNING, logger="gaia.agents.base.agent"):
         result = agent.process_query("fix the loader and run the tests")
@@ -408,6 +423,30 @@ def test_failed_closing_call_returns_the_notice_and_why(agent, caplog, reply, re
         r.levelno == logging.WARNING and reason in r.getMessage()
         for r in caplog.records
     )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        json.dumps({"thought": "again", "tool": _TOOL, "tool_args": {"path": "."}}),
+        _native_call(_CALLS + 1),
+        "",
+    ],
+    ids=["asks-for-a-tool", "calls-a-tool-anyway", "empty-reply"],
+)
+def test_a_closing_tool_call_is_retried_without_tools(agent, reply):
+    """``tool_choice="none"`` is a request some local servers ignore."""
+    chat = _stub_chat(agent, *_repeat_then(reply, _answer(_ANSWER)))
+
+    result = agent.process_query("fix the loader and run the tests")
+
+    assert result["result"].startswith(_ANSWER)
+    assert "couldn't be written" not in result["result"]
+    calls = _model_calls(agent, chat)
+    assert len(calls) == _CALLS + 2
+    retry = calls[-1].kwargs
+    assert retry["tools"] is None and "tool_choice" not in retry
+    assert "no longer available" in retry["messages"][-1]["content"]
 
 
 # ---------------------------------------------------------------------------
@@ -477,3 +516,38 @@ def test_the_loop_break_answer_is_finalized_exactly_once(agent, tool_result):
 
     assert len(seen) == 1
     assert result["result"].count("[finalized]") == 1
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_stop_during_the_closing_retry_reports_the_cancel():
+    """A Stop pressed between the two closing tries is not a tool-call failure."""
+    agent = _make_agent(streaming=False)
+    agent._cancel_event = threading.Event()
+    tries = []
+
+    def _once(*_args, **kwargs):
+        tries.append(kwargs.get("offer_tools", True))
+        if len(tries) == 1:
+            agent._cancel_event.set()
+            raise agent_module._NotAnAnswer("the model asked to run x")
+        raise RuntimeError("the request was cancelled")
+
+    with patch.object(agent, "_closing_answer_once", side_effect=_once):
+        with pytest.raises(RuntimeError, match="cancelled"):
+            agent._closing_answer([], [], "answer now", 1)
+    assert tries == [True, False]
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_a_failed_closing_retry_reports_the_first_reason():
+    agent = _make_agent(streaming=False)
+    first = agent_module._NotAnAnswer("the model asked to run x instead of answering")
+
+    with patch.object(
+        agent,
+        "_closing_answer_once",
+        side_effect=[first, ConnectionError("server went away")],
+    ):
+        with pytest.raises(agent_module._NotAnAnswer) as raised:
+            agent._closing_answer([], [], "answer now", 1)
+    assert raised.value is first

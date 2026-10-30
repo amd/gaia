@@ -1,0 +1,89 @@
+{
+  "_comment": "GAIA_AGENT_TOOL_TIMEOUT -> relay idle-read budget, as src/gaia/daemon/timeouts.py computes it. tests/unit/test_agent_read_timeout_table.py checks this table against Python; tui/internal/client checks the Go reader against it.",
+  "cases": [
+    {
+      "value": "",
+      "seconds": 300.0
+    },
+    {
+      "value": "600",
+      "seconds": 660.0
+    },
+    {
+      "value": " 600 ",
+      "seconds": 660.0
+    },
+    {
+      "value": "\t600\n",
+      "seconds": 660.0
+    },
+    {
+      "value": "100",
+      "seconds": 300.0
+    },
+    {
+      "value": "+600",
+      "seconds": 660.0
+    },
+    {
+      "value": "1_000",
+      "seconds": 1060.0
+    },
+    {
+      "value": "1e3",
+      "seconds": 1060.0
+    },
+    {
+      "value": ".5",
+      "seconds": 300.0
+    },
+    {
+      "value": "inf",
+      "seconds": "inf"
+    },
+    {
+      "value": "INF",
+      "seconds": "inf"
+    },
+    {
+      "value": "Infinity",
+      "seconds": "inf"
+    },
+    {
+      "value": "nan",
+      "seconds": 300.0
+    },
+    {
+      "value": "NaN",
+      "seconds": 300.0
+    },
+    {
+      "value": "1e10",
+      "seconds": 10000000060.0
+    },
+    {
+      "value": "0",
+      "error": true
+    },
+    {
+      "value": "-5",
+      "error": true
+    },
+    {
+      "value": "abc",
+      "error": true
+    },
+    {
+      "value": "0x1p8",
+      "error": true
+    },
+    {
+      "value": "600s",
+      "error": true
+    },
+    {
+      "value": "1,000",
+      "error": true
+    }
+  ]
+}

@@ -307,7 +307,7 @@ func TestQwenFlashNeedsANewEnoughLemonade(t *testing.T) {
 	for version, want := range map[string]bool{"2026.39.1": true, "2026.40.0~3.abc": true, "11.9.0": false, "": false} {
 		halo.ServerVersion = version
 		for _, e := range BuildEntries("local", nil, halo, nil) {
-			if e.Recommended == nil || e.Recommended.RegisterAs == "" {
+			if e.Recommended == nil || e.Recommended.RegisterAs == "" || e.Recommended.MinLemonade == "" {
 				continue
 			}
 			if e.Selectable() != want || e.NeedsUpgrade == want {
@@ -323,6 +323,25 @@ func TestTooSmallBeatsTooOldInTheReason(t *testing.T) {
 	for _, e := range BuildEntries("local", nil, mac, nil) {
 		if e.Recommended != nil && e.Recommended.RegisterAs != "" && (e.NeedsUpgrade || !strings.Contains(e.Reason, "memory")) {
 			t.Fatalf("a PC too small was told to upgrade Lemonade: %+v", e)
+		}
+	}
+}
+
+// The gateway picker opens on its first row, so the default is whatever leads.
+func TestGatewayPickerLeadsWithDeepSeekV41Flash(t *testing.T) {
+	models := []Model{
+		{ID: "amd.Claude-Haiku-4.5", Recipe: "cloud"},
+		{ID: "amd.DeepSeek-V4-Flash", Recipe: "cloud"},
+		{ID: "amd.DeepSeek-V4.1-Flash", Recipe: "cloud"},
+	}
+	entries := BuildEntries("amd", models, Capacity{}, nil)
+	if len(entries) != 3 || entries[0].Model.ID != "amd.DeepSeek-V4.1-Flash" ||
+		entries[0].Recommended == nil || !entries[0].Selectable() {
+		t.Fatalf("first gateway row = %+v, want a selectable recommended DeepSeek-V4.1-Flash", entries[0])
+	}
+	for _, e := range entries[1:] {
+		if e.Recommended != nil {
+			t.Errorf("%s must not be recommended", e.Model.ID)
 		}
 	}
 }

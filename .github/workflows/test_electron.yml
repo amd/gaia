@@ -13,6 +13,9 @@ on:
       - 'src/gaia/apps/webui/**'
       - 'tests/electron/**'
       - '.github/workflows/test_electron.yml'
+      # `npm ci` at the repo root installs the electron/apps workspaces.
+      - 'package.json'
+      - 'package-lock.json'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -22,6 +25,9 @@ on:
       - 'src/gaia/apps/webui/**'
       - 'tests/electron/**'
       - '.github/workflows/test_electron.yml'
+      # `npm ci` at the repo root installs the electron/apps workspaces.
+      - 'package.json'
+      - 'package-lock.json'
   merge_group:
   workflow_dispatch:
 
@@ -42,9 +48,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -127,9 +130,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
-
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -173,9 +173,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
-
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -215,9 +212,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -384,9 +378,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
-
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -426,9 +417,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v7

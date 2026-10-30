@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,11 +10,13 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/gaiaslack"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
 )
@@ -185,9 +188,27 @@ func stubSetupCheck(t *testing.T, code int) {
 		path = filepath.Join(dir, "gaia-stub.sh")
 		writeStub(t, path, fmt.Sprintf("#!/bin/sh\nexit %d\n", code))
 	}
-	orig := gaiainit.Binary
-	gaiainit.Binary = func() (string, error) { return path, nil }
-	t.Cleanup(func() { gaiainit.Binary = orig })
+	setupCheckPath.Store(&path)
+	t.Cleanup(func() { setupCheckPath.Store(nil) })
+}
+
+// setupCheckPath is what the setup-check hook runs.
+var setupCheckPath atomic.Pointer[string]
+
+// Both hooks are installed once, before any test: a check or probe started by
+// an earlier test's UI can still be reading them. The Slack probe must not run
+// the real `gaia` CLI either: that interpreter outlives a short test and, on
+// Windows, holds the isolated home's gaia.log open while t.TempDir removes it.
+func init() {
+	gaiainit.Binary = func() (string, error) {
+		if p := setupCheckPath.Load(); p != nil {
+			return *p, nil
+		}
+		return "", errors.New("gaia CLI stubbed out by the test harness")
+	}
+	gaiaslack.Binary = func() (string, error) {
+		return "", errors.New("gaia CLI stubbed out by the test harness")
+	}
 }
 
 func writeStub(t *testing.T, path, body string) {

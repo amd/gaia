@@ -25,6 +25,7 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
+from gaia.connectors._refresh_lock import held_sync, locked_write
 from gaia.connectors.activation_watcher import note_local_write
 from gaia.connectors.activations import (
     activate_agent,
@@ -37,6 +38,7 @@ from gaia.connectors.context import agent_runtime_active, current_agent_id
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectorsError,
     NoDeclaredScopesError,
     ScopeMismatchError,
@@ -58,41 +60,39 @@ from gaia.connectors.grants import (
     load_grants,
     revoke_agent_grant,
 )
-from gaia.connectors.providers import get as get_provider
 from gaia.connectors.store import (
     DEFAULT_ACCOUNT,
     delete_connection,
 )
 from gaia.connectors.store import list_connections as _store_list
 from gaia.connectors.store import (
-    load_connection,
     peek_connection,
 )
-from gaia.connectors.tokens import get_or_refresh
+from gaia.connectors.tokens import get_or_refresh, load_current_connection
 
 logger = logging.getLogger(__name__)
 
 
-# Per-provider minimum scopes a forwarded grant must cover when the caller
-# passes no explicit ``required_scopes``. Authoritative validation is the
-# caller's job (the UI router resolves the union from the granted agents'
-# ``REQUIRED_CONNECTORS``); this map is a defense-in-depth default so a
-# None-path forward never demands one provider's scopes of another. Unknown
-# providers default to no requirement — the use-time gate in
-# ``get_access_token`` still enforces per-agent scope coverage at the point an
-# agent actually requests a token.
-_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
-    # Built-in Email Triage Agent (#962) mailbox union — MUST equal
-    # gaia_agent_email/scopes.py's REQUIRED_SCOPES (mail only). Calendar is
-    # DELIBERATELY absent (#2730 D1): this gates whether a forwarded
-    # connection (Path A, #1292) is usable at import time, and calendar is
-    # requested but never required, mirroring the same enforcement the
-    # daemon's forward-out mint applies. Requiring it here would reject a
-    # mail-only forwarded connection outright — the exact all-or-nothing
-    # failure this issue removes, just relocated to the import boundary.
+# What a forwarded mailbox connection must carry when the caller passes no
+# explicit ``required_scopes``: at least ONE of these mail read scopes,
+# narrowest first. Authoritative validation is the caller's job (the UI router
+# resolves the union from the granted agents' ``REQUIRED_CONNECTORS``); this
+# is a defense-in-depth default. It is any-of, not all-of, because the
+# read-only flagship holds ``gmail.readonly`` while the email agent holds
+# ``gmail.modify`` — demanding modify + send rejected every forwarded flagship
+# connection. Unknown providers default to no requirement; the use-time gate
+# in ``get_access_token`` still enforces per-agent coverage.
+#
+# Mirrors ``gaia.agents.tools._email.scopes.READ_CAPABLE_SCOPES`` — duplicated
+# because this module never imports ``gaia.agents``; a drift test pins them.
+_DEFAULT_READ_SCOPES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
     "google": (
-        "https://www.googleapis.com/auth/gmail.modify",  # from gaia_agent_email/scopes.py
-        "https://www.googleapis.com/auth/gmail.send",  # from gaia_agent_email/scopes.py
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.modify",
+    ),
+    "microsoft": (
+        "https://graph.microsoft.com/Mail.Read",
+        "https://graph.microsoft.com/Mail.ReadWrite",
     ),
 }
 
@@ -224,14 +224,7 @@ def _authorize_access(
     # Eager check for OAuth scope coverage — once we know the agent is
     # granted, look at what the underlying OAuth connection actually
     # carries. The store load also fires the client_id_hash tripwire.
-    prov = get_provider(provider)
-
-    stored = load_connection(
-        provider,
-        current_client_id_hash=prov.client_id_hash,
-        current_tenant=getattr(prov, "tenant", None),
-        account_email=account_email,
-    )
+    _, stored = load_current_connection(provider, account_email=account_email)
     if stored is None:
         raise AuthRequiredError(
             AuthRequiredError.Reason.NOT_CONNECTED, provider=provider
@@ -281,7 +274,7 @@ async def get_access_token(
 
     Two layers of authorization gate the call:
       a. Per-agent grant — the user must have explicitly granted this
-         agent the required scopes via Settings → Connections, or
+         agent the required scopes via Settings → Connectors, or
          ``gaia connectors grants grant``.
       b. OAuth scopes — the stored connection's actual scopes must
          cover the requested ones; otherwise reconnect with the
@@ -426,11 +419,17 @@ def list_connections() -> List[Dict[str, Any]]:
     derive it at connect time (Microsoft, from the id_token ``tid`` claim,
     #2466), and ``None`` otherwise — including for every Google connection,
     which has no equivalent notion.
+
+    A row with ``"error": "busy"`` is a connection another GAIA operation is
+    writing right now: it is kept, because it is not known to be gone, with
+    its display metadata as last read and ``scopes`` empty, because scopes
+    that may be about to change can't be trusted for a decision. Asking
+    again shortly gives its real state.
     """
     out: List[Dict[str, Any]] = []
     for provider in _store_list():
         try:
-            prov = get_provider(provider)
+            _, blob = load_current_connection(provider)
         except ConfigurationError:
             # Provider configured to point at this store but the env
             # var isn't set right now. Surface the row with a
@@ -445,12 +444,19 @@ def list_connections() -> List[Dict[str, Any]]:
                 }
             )
             continue
-        try:
-            blob = load_connection(
-                provider,
-                current_client_id_hash=prov.client_id_hash,
-                current_tenant=getattr(prov, "tenant", None),
+        except ConnectionBusyError as e:
+            out.append(
+                {
+                    "provider": provider,
+                    "account_email": "",
+                    "scopes": [],
+                    "connected_at": None,
+                    "account_type": None,
+                    **(e.connection or {}),
+                    "error": "busy",
+                }
             )
+            continue
         except AuthRequiredError:
             # Tripwire fired (hash OR tenant) — the entry has been cleared. Skip.
             continue
@@ -469,7 +475,11 @@ def list_connections() -> List[Dict[str, Any]]:
 
 
 def get_connection(provider: str) -> Optional[Dict[str, Any]]:
-    """Return one connection's metadata, or None if missing."""
+    """Return one connection's metadata, or None if missing.
+
+    A connection another GAIA operation is writing comes back as its busy row (see
+    :func:`list_connections`), never as None.
+    """
     for entry in list_connections():
         if entry["provider"] == provider:
             return entry
@@ -492,7 +502,7 @@ async def revoke_connection_async(provider: str) -> Dict[str, Any]:
     from gaia.connectors.flow import revoke_provider_token
 
     result = await revoke_provider_token(provider)
-    delete_connection(provider)
+    await locked_write(provider, delete_connection, provider)
     logger.info(
         "api: revoked connection provider=%s revoke_supported=%s "
         "revoked_remotely=%s",
@@ -561,20 +571,27 @@ def import_forwarded_connection(
       - a forwarded scope outside the connector's catalog ceiling, when
         ``grant_agents`` is set → ``ScopeNotAllowedError``;
       - forwarded scopes don't cover ``required_scopes`` → ``ScopeMismatchError``.
-        ``required_scopes is None`` falls back to the per-provider default
-        (``_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER``, empty for unknown providers);
-        an explicit ``[]`` means "require nothing" at import time. GAIA cannot
+        ``required_scopes is None`` falls back to the per-provider default: a
+        mailbox connection must carry at least one mail read scope
+        (``_DEFAULT_READ_SCOPES_BY_PROVIDER``; no requirement for other
+        providers). An explicit ``[]`` means "require nothing" at import time. GAIA cannot
         widen scope at refresh time, so a shortfall is unrecoverable without
-        re-consent by the host app.
+        re-consent by the host app;
+      - a keyring write that fails partway → the previous client config and
+        connection are put back before the error propagates (and a failed
+        put-back raises a ``ConnectorsError`` naming both failures).
 
     Returns a metadata-only summary — NEVER the refresh token or client secret.
     """
     # Local imports keep the module-level dependency graph (and the lazy
     # keyring import contract in connectors/__init__.py) unchanged.
     from gaia.connectors.providers import _registry as _provider_registry
+    from gaia.connectors.providers import reload as reload_provider
     from gaia.connectors.store import (
+        restore_connection_slots,
         save_connection,
         save_provider_credentials,
+        snapshot_connection_slots,
         verify_keyring_backend,
     )
     from gaia.connectors.tokens import _cache as _token_cache
@@ -600,16 +617,30 @@ def import_forwarded_connection(
     # 3. Scope coverage (AC3). Forwarded scopes must be a superset of what the
     #    agent needs — GAIA cannot add scope at refresh time. ``is not None`` so
     #    an explicit ``[]`` means "require nothing", not "use the default".
+    granted = set(scopes)
     if required_scopes is not None:
         required = list(required_scopes)
+        missing = [s for s in required if s not in granted]
+        if missing:
+            raise ScopeMismatchError(
+                required=required, granted=list(scopes), provider=provider
+            )
     else:
-        required = list(_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER.get(provider, ()))
-    granted = set(scopes)
-    missing = [s for s in required if s not in granted]
-    if missing:
-        raise ScopeMismatchError(
-            required=required, granted=list(scopes), provider=provider
-        )
+        read_scopes = _DEFAULT_READ_SCOPES_BY_PROVIDER.get(provider, ())
+        if read_scopes and not granted & set(read_scopes):
+            raise ScopeMismatchError(
+                # The narrowest one, so the remedy never asks for more.
+                required=[read_scopes[0]],
+                granted=list(scopes),
+                provider=provider,
+                message=(
+                    f"The forwarded {provider} connection carries no mail read "
+                    f"scope; it needs one of: {', '.join(read_scopes)}. GAIA "
+                    "cannot add a scope at refresh time, so the host app must "
+                    "re-consent the user with one of them, then forward again. "
+                    "See docs/sdk/infrastructure/connectors.mdx."
+                ),
+            )
 
     # 3b. Grant ceiling (#915). Step 8 hands these scopes to ``grant_agent``,
     #     which refuses any the connector never advertised — check it here so a
@@ -624,37 +655,66 @@ def import_forwarded_connection(
 
     account = account_email or DEFAULT_ACCOUNT
 
-    # 4. Persist the forwarded OAuth client → ``provider:<provider>`` slot.
-    save_provider_credentials(
-        provider, client_id=client_id, client_secret=client_secret
-    )
+    # Steps 4-6 share one lock hold, so a refresh in another process never
+    # sees the new client next to the old connection and clears it. A write
+    # that fails partway is undone before the lock is released, for the same
+    # reason.
+    with held_sync(provider):
+        previous = snapshot_connection_slots(provider)
+        try:
+            # 4. Persist the forwarded OAuth client → ``provider:<provider>`` slot.
+            save_provider_credentials(
+                provider, client_id=client_id, client_secret=client_secret
+            )
 
-    # 5. Evict the cached provider instance so the next ``get_provider`` reads
-    #    the forwarded client and recomputes ``client_id_hash`` from it.
-    _provider_registry.pop(provider, None)
-    prov = get_provider(provider)
+            # 5. Rebuild the cached provider from the forwarded client so
+            #    ``client_id_hash`` is recomputed from it.
+            prov = reload_provider(provider)
 
-    # 6. Persist the connection (refresh_token + metadata) → ``<provider>:default``
-    #    keyed by the forwarded client's hash so the tripwire passes coherently.
-    #    ``save_connection`` rewrites the whole blob, so the account kind must be
-    #    threaded through explicitly or a forwarded grant silently downgrades an
-    #    already-classified mailbox to unknown (#2466). A caller that knows the
-    #    kind passes it; otherwise the stored value carries over.
-    resolved_account_type = account_type or (
-        (peek_connection(provider) or {}).get("account_type")
-    )
-    save_connection(
-        provider=provider,
-        account_email=account,
-        refresh_token=refresh_token,
-        scopes=list(scopes),
-        client_id_hash=prov.client_id_hash,
-        connected_at=connected_at,
-        account_type=resolved_account_type,
-        # #2591 review: mark it so a later disconnect never revokes the
-        # host app's own OAuth grant — see save_connection's docstring.
-        forwarded=True,
-    )
+            # 6. Persist the connection (refresh_token + metadata) →
+            #    ``<provider>:default`` keyed by the forwarded client's hash so the
+            #    tripwire passes coherently. ``save_connection`` rewrites the whole
+            #    blob, so the account kind must be threaded through explicitly or a
+            #    forwarded grant silently downgrades an already-classified mailbox
+            #    to unknown (#2466). A caller that knows the kind passes it;
+            #    otherwise the stored value carries over.
+            resolved_account_type = account_type or (
+                (peek_connection(provider) or {}).get("account_type")
+            )
+            save_connection(
+                provider=provider,
+                account_email=account,
+                refresh_token=refresh_token,
+                scopes=list(scopes),
+                client_id_hash=prov.client_id_hash,
+                connected_at=connected_at,
+                account_type=resolved_account_type,
+                # #2591 review: mark it so a later disconnect never revokes the
+                # host app's own OAuth grant — see save_connection's docstring.
+                forwarded=True,
+            )
+        except BaseException as e:
+            _provider_registry.pop(provider, None)
+            try:
+                restore_connection_slots(previous)
+            except Exception as restore_err:
+                if not isinstance(e, Exception):
+                    # Ctrl+C or shutdown: say what was left behind, don't mask it.
+                    logger.error(
+                        "api: forward of %s interrupted and its undo failed (%s); "
+                        "the stored client and connection may not match",
+                        provider,
+                        restore_err,
+                    )
+                    raise e from restore_err
+                raise ConnectorsError(
+                    f"Forwarding the {provider} connection failed ({e}), and "
+                    "putting back the previous client config and connection also "
+                    f"failed ({restore_err}). They may no longer match: reconnect "
+                    f"from Settings → Connectors, or run `gaia connectors connect "
+                    f"{provider}`, or forward the connection again."
+                ) from restore_err
+            raise
 
     # 7. Evict any stale access-token cache entry so the next get_or_refresh
     #    refreshes against the forwarded client. The v1 store is single-slot
@@ -817,15 +877,15 @@ def tripwire_check() -> None:
     """
     for provider_id in _store_list():
         try:
-            prov = get_provider(provider_id)
+            load_current_connection(provider_id)
         except ConfigurationError as e:
             logger.warning("tripwire: provider %s misconfigured: %s", provider_id, e)
             continue
-        try:
-            load_connection(
+        except ConnectionBusyError:
+            logger.info(
+                "tripwire: provider %s is being saved by another GAIA operation; "
+                "left in place",
                 provider_id,
-                current_client_id_hash=prov.client_id_hash,
-                current_tenant=getattr(prov, "tenant", None),
             )
         except AuthRequiredError:
             # Tripwire fired (hash OR tenant) — load_connection already

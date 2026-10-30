@@ -9,16 +9,16 @@
     "FileSubType": "00"
   },
   "StringFileInfo": {
-    "Comments": "Terminal-native hub for browsing, launching, and chatting with GAIA agents.",
+    "Comments": "The GAIA agent in your terminal.",
     "CompanyName": "Advanced Micro Devices, Inc.",
-    "FileDescription": "GAIA Terminal Agent Hub",
+    "FileDescription": "GAIA Terminal UI",
     "FileVersion": "0.0.0.0",
     "InternalName": "gaia-tui",
     "LegalCopyright": "Copyright (C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.",
     "LegalTrademarks": "",
     "OriginalFilename": "gaia-tui.exe",
     "PrivateBuild": "",
-    "ProductName": "GAIA Terminal Agent Hub",
+    "ProductName": "GAIA Terminal UI",
     "ProductVersion": "0.0.0.0",
     "SpecialBuild": ""
   },

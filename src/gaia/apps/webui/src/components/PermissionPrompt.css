@@ -50,8 +50,9 @@
 .perm-card-timer {
     flex-shrink: 0;
     color: var(--text-muted);
-    font-family: var(--font-mono);
-    font-size: 12px;
+    font-family: var(--font-sans);
+    font-size: var(--fs-label);
+    font-variant-numeric: tabular-nums;
 }
 
 .perm-card-args-toggle {
@@ -82,6 +83,29 @@
     font-size: 12px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+}
+
+/* The exact line a one-time approval runs: never clipped, never collapsed. */
+.perm-card-exact {
+    max-height: none;
+}
+
+/* Collapsed code is already capped by line count; expanded, it scrolls. */
+.perm-card-code {
+    max-height: none;
+    white-space: pre;
+    overflow-wrap: normal;
+}
+
+.perm-card-code.is-expanded {
+    max-height: 50vh;
+}
+
+.perm-card-risk {
+    margin-top: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
 }
 
 .perm-card-actions {
@@ -115,6 +139,17 @@
 
 .perm-btn.is-primary:hover:not(:disabled) {
     background: var(--accent-fill-hover);
+}
+
+.perm-btn.is-suggested {
+    border-color: var(--accent-solid);
+    color: var(--text-primary);
+}
+
+.perm-card-hint {
+    color: var(--text-secondary);
+    font-size: 13px;
+    overflow-wrap: anywhere;
 }
 
 .perm-btn:disabled {

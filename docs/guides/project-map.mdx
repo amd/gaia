@@ -36,9 +36,9 @@ Directories (second level listed for only a few):
 
 Entry points: Makefile, src/cli.py, npm run build
 
-NOT installed, do not invoke: cargo, gradle, java, mvn, rustc
+Not on the agent's PATH, do not invoke (they may still be installed; say they are not reachable from the agent's shell, never that the user lacks them): cargo, gradle, java, mvn, rustc
 Read-only commands for run_shell_command: cat, date, diff, find, git, grep, head, ls, …
-Also installed; run_shell_command runs them once the user approves: cmake, curl,
+Also on the PATH; run_shell_command runs them once the user approves: cmake, curl,
 docker, go, node, npm, pip, python, uv
 
 Code index: not built — call index_codebase to enable semantic code search
@@ -59,8 +59,8 @@ Code index: not built — call index_codebase to enable semantic code search
 (`NPU_CTX_SIZE`) and 0.9% of the GPU profile's 65,536. It is sized against the
 smaller window on purpose — a budget that only holds on 64K is not a budget.
 
-Measured with GAIA's shared estimator (`count_tokens` — cl100k, or a character
-ratio when tiktoken is absent), so it bounds the map to within that estimator's
+Measured with GAIA's shared estimator (`count_tokens` — cl100k, or an estimate
+that leans high when tiktoken is absent), so it bounds the map to within that estimator's
 error of the model's own count rather than to the exact token.
 
 `render_project_map()` enforces it on every render. Sections are emitted in
@@ -147,7 +147,7 @@ walk.
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Code Index" icon="magnifying-glass-code" href="/guides/code-index">
+  <Card title="Code Index" icon="folder-magnifying-glass" href="/guides/code-index">
     The semantic index the map triggers.
   </Card>
   <Card title="Memory" icon="brain" href="/guides/memory">

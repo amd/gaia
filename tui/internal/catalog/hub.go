@@ -273,7 +273,7 @@ func (h *HubClient) Catalog(ctx context.Context, start, installedOnly, refresh b
 	code, detail, err := h.call(ctx, start, daemon.Request{
 		Method: http.MethodGet,
 		Path:   path,
-		Op:     "read the Agent Hub catalog",
+		Op:     "read the agent catalog",
 	}, &out)
 	if err != nil {
 		// This one call has a way through that needs no daemon at all.
@@ -285,7 +285,7 @@ func (h *HubClient) Catalog(ctx context.Context, start, installedOnly, refresh b
 		return nil, err
 	}
 	if code != http.StatusOK {
-		return nil, &HubError{Op: "read the Agent Hub catalog", Status: code, Detail: detail}
+		return nil, &HubError{Op: "read the agent catalog", Status: code, Detail: detail}
 	}
 	return &out, nil
 }

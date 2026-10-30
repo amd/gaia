@@ -31,6 +31,16 @@ def _no_installed_supervisor():
     install_supervisor(None)
 
 
+@pytest.fixture(autouse=True)
+def _no_gaia_lemonade_installed(tmp_path, monkeypatch):
+    """A system Lemonade's machine: GAIA's own server is not installed here.
+
+    test_lemonade_restart_keeps_port.py covers the machine where it is.
+    """
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+
+
 class FakeClient:
     def __init__(self, up=False):
         self.base_url = "http://localhost:13305/api/v1"

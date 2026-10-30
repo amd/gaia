@@ -27,7 +27,12 @@ SERVICE_ID = "gaia-daemon"
 # healthy 1.2 daemon over it would be a worse outcome than the thing it fixes.
 # They read its 404 as "this core is too old to start Lemonade for you" and say
 # exactly that.
-DAEMON_API_VERSION = "1.3"
+# MINOR 4 added /daemon/v1/lemonade/clients (front ends register while they use
+# GAIA's Lemonade, so it can unload when the last app closes and stop when idle).
+# MINOR 5 added POST /daemon/v1/lemonade/reconfigure and GET .../lemonade/target
+# (the saved "use my Lemonade" choice). Clients that need it restart an older
+# daemon rather than leave it on the old server.
+DAEMON_API_VERSION = "1.5"
 
 # Client-token auth: header name and scheme.
 AUTH_SCHEME = "Bearer"
@@ -55,6 +60,9 @@ BROKER_TOKEN_ENV_VAR = "GAIA_MODEL_BROKER_TOKEN"
 BROKER_TOKEN_FILE_ENV_VAR = "GAIA_MODEL_BROKER_TOKEN_FILE"
 # Optional per-caller default lease priority ("interactive"|"background").
 BROKER_PRIORITY_ENV_VAR = "GAIA_MODEL_LEASE_PRIORITY"
+# Optional cap, in seconds, on how long a model-slot request waits in the queue.
+# Unset: it waits for as long as the request ahead of it is alive.
+LEASE_WAIT_LIMIT_ENV_VAR = "GAIA_MODEL_LEASE_WAIT_S"
 
 # Supervision handshake (V2-15, #2156). The daemon sets this in a sidecar's
 # environment at spawn so the sidecar knows the daemon owns the clock and gates

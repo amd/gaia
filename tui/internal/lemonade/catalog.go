@@ -94,7 +94,8 @@ func isChatModel(m Model) bool {
 // not — with the recommendations first and each local model judged against
 // capacity. When capErr is set the machine could not be read, so no local
 // download is allowed: a model that cannot be shown to fit must not be pulled.
-func (c *Client) Catalog(ctx context.Context, provider string, capacity Capacity, capErr error) ([]Entry, error) {
+// added are the models the user added from a link (ReadCustomModels).
+func (c *Client) Catalog(ctx context.Context, provider string, capacity Capacity, capErr error, added ...Recommended) ([]Entry, error) {
 	var reply struct {
 		Data []Model `json:"data"`
 	}
@@ -112,12 +113,13 @@ func (c *Client) Catalog(ctx context.Context, provider string, capacity Capacity
 			models = append(models, m)
 		}
 	}
-	return BuildEntries(provider, models, capacity, capErr), nil
+	return BuildEntries(provider, models, capacity, capErr, added...), nil
 }
 
 // BuildEntries orders and judges a provider's catalog: recommendations first
-// (including ones the catalog lacks), then the rest, selectable before not.
-func BuildEntries(provider string, models []Model, capacity Capacity, capErr error) []Entry {
+// (including ones the catalog lacks), then the models the user added, then
+// the rest, selectable before not.
+func BuildEntries(provider string, models []Model, capacity Capacity, capErr error, added ...Recommended) []Entry {
 	judge := func(e *Entry) {
 		if e.Model.Cloud() || e.Model.Downloaded {
 			e.Fits = true
@@ -149,7 +151,11 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 
 	used := make([]bool, len(models))
 	var head []Entry
-	for _, rec := range RecommendedFor(provider) {
+	heads := RecommendedFor(provider)
+	if provider == "local" {
+		heads = append(heads, added...)
+	}
+	for _, rec := range heads {
 		rec := rec
 		matched := false
 		for i, m := range models {
@@ -239,19 +245,24 @@ func (c *Client) Pull(ctx context.Context, e Entry, progress func(PullProgress))
 	if !e.Fits {
 		return fmt.Errorf("%s will not fit this PC: %s", e.Model.ID, e.Reason)
 	}
-	if err := validateURL(c.BaseURL, true); err != nil {
+	base := c.current()
+	if err := validateURL(base, true); err != nil {
 		return err
 	}
 	b, err := json.Marshal(PullRequest(e))
 	if err != nil {
 		return fmt.Errorf("could not encode the download request")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/pull", bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/pull", bytes.NewReader(b))
 	if err != nil {
 		return fmt.Errorf("invalid Lemonade address")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := APIKeyFor(c.BaseURL); key != "" {
+	key, err := APIKeyFor(ctx, base)
+	if err != nil {
+		return err
+	}
+	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	// A download runs for as long as it takes; ctx is the only bound.

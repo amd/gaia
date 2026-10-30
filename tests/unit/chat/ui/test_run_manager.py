@@ -37,6 +37,10 @@ async def _drain(q: asyncio.Queue) -> list:
     return out
 
 
+def _data_lines(frames: list) -> list:
+    return [frame.split("\n", 1)[0] for frame in frames]
+
+
 async def test_run_completes_and_deregisters():
     mgr = RunManager()
 
@@ -106,7 +110,8 @@ async def test_late_subscriber_gets_full_replay():
     release.set()
     events = await _drain(q)
 
-    assert events == ["data: 1\n\n", "data: 2\n\n", "data: 3\n\n"]
+    # Replayed frames come back padded so the browser flushes them at once.
+    assert _data_lines(events) == ["data: 1", "data: 2", "data: 3"]
     await run.task
 
 
@@ -121,7 +126,7 @@ async def test_subscribe_after_done_terminates_immediately():
 
     q = run.subscribe()
     events = await _drain(q)
-    assert events == ["data: only\n\n"]
+    assert _data_lines(events) == ["data: only"]
     # No lingering registration for a finished run.
     assert run.subscribers == []
 

@@ -46,6 +46,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
 )
 from gaia.connectors.providers.base import ConnectorRequirement
@@ -259,7 +260,7 @@ class ConnectionForwarder:
                 f"{scope_command}"
                 f"(`gaia connectors connect {provider}` prints the full OAuth-client "
                 f"setup if the connector isn't configured yet.) In the Agent UI you "
-                f"can instead use Settings -> Connections."
+                f"can instead use Settings -> Connectors."
             )
 
         required = list(requirement.required_scopes) if requirement else granted
@@ -289,12 +290,19 @@ class ConnectionForwarder:
                 )
             raise
         except Exception as e:
-            # An unclassified failure must not turn a short-lived network blip
-            # into a mailbox outage by withdrawing a still-valid forward. The
-            # refresh loop will retry on its next tick.
+            # An unclassified failure — a network blip, or a connection another
+            # GAIA operation is mid-save on (ConnectionBusyError) — must not
+            # turn into a mailbox outage by withdrawing a still-valid forward.
+            # The refresh loop will retry on its next tick.
+            kind = (
+                "busy connection"
+                if isinstance(e, ConnectionBusyError)
+                else "unclassified mint failure"
+            )
             logger.warning(
-                "forward-out: unclassified mint failure for '%s' on agent '%s' "
-                "(%s); retaining any existing forward for the next refresh",
+                "forward-out: %s for '%s' on agent '%s' (%s); retaining any "
+                "existing forward for the next refresh",
+                kind,
                 provider,
                 agent_id,
                 e,
@@ -308,6 +316,15 @@ class ConnectionForwarder:
             # actually declare a requirement, so specs that don't stay on
             # today's exact (ledger-only) behavior.
             connection = self._get_connection(provider)
+            if connection and connection.get("error") == "busy":
+                # Its scopes are unknown mid-save; keep the existing forward.
+                logger.warning(
+                    "forward-out: '%s' for agent '%s' became busy after the "
+                    "mint; retaining any existing forward for the next refresh",
+                    provider,
+                    agent_id,
+                )
+                raise ConnectionBusyError(provider)
             connection_scopes = connection.get("scopes", []) if connection else []
             forwarded_scopes = [s for s in connection_scopes if s in granted]
         else:
@@ -341,11 +358,16 @@ class ConnectionForwarder:
         raises loudly at use time if a needed token never arrived.
         """
         spec = self._spec(agent_id)
+        result = {"agent_id": agent_id, "forwarded": [], "skipped": [], "errors": []}
+        # An agent that takes no forwarded connectors (the flagship) has nothing
+        # to push; refusing it raised a traceback on every refresh tick.
+        if not spec.forward_providers:
+            return result
         grant_agent_id = self._grant_agent_id(spec)
         connected = set(self._connected_providers())
-        forwarded: List[dict] = []
-        skipped: List[dict] = []
-        errors: List[dict] = []
+        forwarded: List[dict] = result["forwarded"]
+        skipped: List[dict] = result["skipped"]
+        errors: List[dict] = result["errors"]
         for provider in spec.forward_providers:
             granted = self._granted_scopes(provider, grant_agent_id)
             if granted is None:
@@ -368,12 +390,7 @@ class ConnectionForwarder:
                     e,
                 )
                 errors.append({"provider": provider, "error": str(e)})
-        return {
-            "agent_id": agent_id,
-            "forwarded": forwarded,
-            "skipped": skipped,
-            "errors": errors,
-        }
+        return result
 
     def withdraw(
         self, agent_id: str, provider: str, *, base_url: str, bearer: str

@@ -17,7 +17,7 @@ import (
 // what a monochrome terminal shows — colour must never be the only signal.
 func renderAt(t *testing.T, f *fakeTransport, w, h int) (Model, []string) {
 	t.Helper()
-	m := New(f, EmailConfig(), Options{ManualProceed: true})
+	m := autoStartSpent(New(f, EmailConfig(), Options{ManualProceed: true}))
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	m = updated.(Model)
 	updated, _ = m.Update(reportMsg{rep: Check(context.Background(), f, EmailConfig())})

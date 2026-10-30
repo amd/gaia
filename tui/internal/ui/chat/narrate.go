@@ -113,7 +113,7 @@ var toolPhrases = map[string]toolPhrase{
 	"search_messages": {With: "Searching your mail for %s", Without: "Searching your mail", Arg: "query"},
 
 	// Not a tool: the agent asking to reach a path outside the session.
-	"allow_path_access": {With: "Asking to open %s", Without: "Asking to open a file", Arg: "path"},
+	"allow_path_access": {With: "Asking for access to %s", Without: "Asking for access to a location", Arg: "path"},
 }
 
 // verbForms turns a tool name's leading token into a present-participle phrase,

@@ -7,7 +7,9 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from gaia.agents.base.file_snapshots import SnapshotError, before_change
 from gaia.agents.tools.path_access import read_access_error, write_access_error
+from gaia.agents.tools.workspace_paths import _workspace_target
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -219,8 +221,9 @@ def _write_timings(destination: Path, transcript, speaker_spans=None) -> None:
         ],
     }
     try:
+        before_change(timings_path_for(destination), "transcribe")
         timings_path_for(destination).write_text(json.dumps(payload), encoding="utf-8")
-    except OSError as e:
+    except (OSError, SnapshotError) as e:
         # The transcript is the artifact; losing timings costs turn quality,
         # not the run.
         logger.warning("Could not write timings for %s: %s", destination, e)
@@ -444,7 +447,7 @@ class AudioToolsMixin:
         from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL, LemonadeASRClient
         from gaia.audio.media import ensure_ffmpeg, probe_duration, to_wav16k_mono
 
-        source = Path(file_path).expanduser()
+        source = _workspace_target(self, file_path)
         denied = self._transcript_access_error(source, write=False)
         if denied:
             return denied
@@ -602,9 +605,9 @@ class AudioToolsMixin:
 
         from gaia.agents.base.tools import ToolCancelled, raise_if_cancelled
 
-        source = Path(transcript_path).expanduser()
+        source = _workspace_target(self, transcript_path)
         destination = (
-            Path(output_path).expanduser()
+            _workspace_target(self, output_path)
             if output_path
             else source.with_suffix(".transcript.md")
         )
@@ -706,6 +709,7 @@ class AudioToolsMixin:
 
         blocks = [f"{name}: {text}" for name, text in _merge_adjacent(named)]
         speakers = list(dict.fromkeys(name for name, _ in named))
+        before_change(destination, "refine_transcript")
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(
             _render_refined(
@@ -1007,7 +1011,7 @@ class AudioToolsMixin:
     def _transcript_destination(self, source, output_path):
         """Where this recording's transcript lives."""
         if output_path:
-            return Path(output_path).expanduser()
+            return _workspace_target(self, output_path)
         return TRANSCRIPT_DIR / f"{source.stem}.txt"
 
     def _diarize_if_possible(self, wav_path):
@@ -1047,6 +1051,7 @@ class AudioToolsMixin:
     def _write_transcript(self, transcript, source: Path, output_path: Optional[str]):
         """Persist the transcript before any later stage can fail."""
         destination = self._transcript_destination(source, output_path)
+        before_change(destination, "transcribe")
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(transcript.text, encoding="utf-8")
         return destination

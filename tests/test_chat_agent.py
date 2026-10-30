@@ -151,7 +151,7 @@ class TestChatAgent:
             agent.rebuild_system_prompt()
 
             assert (
-                "[Indexed documents: test_document_for_prompt.txt]"
+                f"[Indexed documents: test_document_for_prompt.txt ({test_file})]"
                 in agent.get_memory_dynamic_context()
             )
             assert agent.system_prompt == prompt_before
@@ -254,7 +254,7 @@ class TestChatAgent:
 
             # Both reach the next turn; the system prompt names neither.
             line = agent.get_memory_dynamic_context()
-            assert "[Indexed documents: doc1.txt, doc2.txt]" in line
+            assert f"[Indexed documents: doc1.txt ({test_file1}), doc2.txt" in line
             assert "doc1.txt" not in agent.system_prompt
             assert len(agent.rag.indexed_files) == 2
         finally:

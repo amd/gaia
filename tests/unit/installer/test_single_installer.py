@@ -85,6 +85,34 @@ def test_build_script_accepts_exactly_electron_builders_windows_artifact_name():
     assert re.match(pattern.group(1), produced)
 
 
+def test_build_script_accepts_a_release_candidates_desktop_app_setup():
+    pattern = re.search(r"=~ (\^gaia-agent-ui-\S+\$) \]\]", BUILD_SETUP.read_text())
+    m = re.match(pattern.group(1), fetch.setup_name("0.25.0-rc.2"))
+    assert m and m.group(1) == "0.25.0-rc.2"
+
+
+def _setup_version_pattern() -> str:
+    m = re.search(r'"\$\{VERSION\}" =~ (\^\S+\$) \]\]', BUILD_SETUP.read_text())
+    assert m, "build-setup.sh no longer validates --version"
+    return m.group(1)
+
+
+@pytest.mark.parametrize(
+    "version,quad",
+    [("0.25.0", "0.25.0.0"), ("0.25.0-rc.2", "0.25.0.0"), ("1.2.3-rc.12", "1.2.3.0")],
+)
+def test_setup_version_keeps_a_numeric_windows_form(version, quad):
+    m = re.match(_setup_version_pattern(), version)
+    assert m and f"{m.group(1)}.0" == quad
+    assert '"-DVERSION_QUAD=${VERSION_QUAD}"' in BUILD_SETUP.read_text()
+    assert 'VIProductVersion "${VERSION_QUAD}"' in _nsi()
+
+
+@pytest.mark.parametrize("version", ["v0.25.0", "0.25.0-rc2", "0.25.0-beta.1", "0.25"])
+def test_setup_version_refuses_anything_without_a_numeric_form(version):
+    assert not re.match(_setup_version_pattern(), version)
+
+
 def test_the_desktop_app_installs_per_user_like_electron_builder_yml_asks():
     assert _electron("perMachine") == "false"
     assert "/S /currentuser" in _nsi()
@@ -119,6 +147,17 @@ def test_terminal_profile_runs_only_with_the_terminal():
     assert "${SecMain}" in sync.group(1)
 
 
+def test_smoke_test_reports_locks_after_an_unexpected_both_components_rerun():
+    smoke = SMOKE.read_text(encoding="utf-8")
+    assert "function Write-LockDiagnostics([string[]]$Paths)" in smoke
+    assert "Wait-Writable $path -Seconds 5" in smoke
+    assert "no GAIA processes were running after the failed setup" in smoke
+    step = re.search(r"# ── 5\..*?(?=# ── 6\.)", smoke, re.M | re.S)
+    assert step, "smoke-test.ps1 no longer covers rerunning both components"
+    assert "$bothExecutables = @(" in step.group(0)
+    assert "Write-LockDiagnostics $bothExecutables" in step.group(0)
+
+
 def test_exit_codes_are_distinct_and_the_smoke_test_checks_them():
     codes = {
         name: int(value)
@@ -130,6 +169,20 @@ def test_exit_codes_are_distinct_and_the_smoke_test_checks_them():
     smoke = SMOKE.read_text(encoding="utf-8")
     for name in ("EXIT_RUNNING", "EXIT_USAGE", "EXIT_CONFLICT"):
         assert f"-ne {codes[name]})" in smoke, f"smoke-test.ps1 never expects {name}"
+
+
+def test_running_app_refusal_retries_for_a_bounded_time_before_failing():
+    body = re.search(
+        r"^Function AbortIfRunning\n(.*?)^FunctionEnd", _nsi(), re.M | re.S
+    )
+    assert body, "gaia-setup.nsi no longer checks a running app before install"
+    code = body.group(1)
+    assert "StrCpy $R6 20" in code
+    assert "IntOp $R6 $R6 - 1" in code
+    assert "Sleep 500" in code
+    assert "Goto wait_for_file" in code
+    assert 'DetailPrint "Waiting for $R8 to be released..."' in code
+    assert "SetErrorLevel ${EXIT_RUNNING}" in code
 
 
 def test_every_section_is_ordered_ahead_of_the_code_that_names_it():
@@ -193,9 +246,25 @@ def test_verify_refuses_the_wrong_version_a_non_pe_or_a_truncated_file(
         fetch.verify(path, "0.25.0")
 
 
-def test_release_source_refuses_a_tag_that_is_not_a_version(tmp_path):
+@pytest.mark.parametrize("tag", ["latest", "v0.15.4.1", "v0.25.0-rc.2"])
+def test_release_source_refuses_a_tag_that_is_not_a_version(tmp_path, tag):
     with pytest.raises(SystemExit, match="vX.Y.Z"):
-        fetch.from_release("amd/gaia", "latest", tmp_path)
+        fetch.from_release("amd/gaia", tag, tmp_path)
+
+
+def test_release_source_takes_a_release_candidates_setup_by_its_npm_version(
+    tmp_path, monkeypatch
+):
+    name = fetch.setup_name("0.25.0-rc.2")
+
+    def gh(args):
+        assert args[:3] == ["release", "download", "v0.25.0-rc2"]
+        assert args[args.index("--pattern") + 1] == name
+        (tmp_path / name).write_bytes(_setup_bytes())
+        return b""
+
+    monkeypatch.setattr(fetch, "_gh", gh)
+    assert fetch.from_release("amd/gaia", "v0.25.0-rc2", tmp_path) == tmp_path / name
 
 
 class _FakeGitHub:
@@ -294,6 +363,28 @@ def test_publish_run_source_ignores_another_tags_run_on_the_same_commit(
         _fetch(tmp_path, wait_minutes=0)
 
 
+def test_publish_run_source_finds_a_release_candidates_own_run(tmp_path, monkeypatch):
+    # The RC's publish.yml run passes its own SHA: its tag is v0.25.0-rc2, its
+    # desktop app setup is named for 0.25.0-rc.2, and the final's run on the same
+    # commit must not be taken instead.
+    name = fetch.setup_name("0.25.0-rc.2")
+    final = dict(RUN, id=8, run_number=12)
+    rc = dict(RUN, id=6, run_number=9, head_branch="v0.25.0-rc2")
+    fake = _FakeGitHub(
+        [{"runs": [final, rc], "gate": PASSED, "artifacts": ARTIFACT}],
+        archive=_zip(name, _setup_bytes()),
+    )
+    _install(monkeypatch, fake)
+    path = fetch.from_publish_run("amd/gaia", "abc", "0.25.0-rc.2", tmp_path, 5)
+    assert path == tmp_path / name
+
+
+@pytest.mark.parametrize("version", ["0.25.0-rc2", "v0.25.0", "0.15.4.1"])
+def test_publish_run_source_refuses_a_version_that_names_no_release(tmp_path, version):
+    with pytest.raises(SystemExit, match="vX.Y.Z or vX.Y.Z-rcN"):
+        fetch.from_publish_run("amd/gaia", "abc", version, tmp_path, 0)
+
+
 def test_publish_run_source_fails_loudly_when_the_run_ended_before_its_checks(
     tmp_path, monkeypatch
 ):
@@ -346,14 +437,85 @@ def test_main_requires_exactly_one_source(tmp_path):
         fetch.main(["--publish-run-sha", "abc", "--out", str(tmp_path)])
 
 
-def test_workflow_publishes_the_windows_setup_after_the_raw_binaries():
-    # The Worker fills a version's `artifact` field from the FIRST publish, and
-    # hub installs download that field expecting the raw binary.
+def test_workflow_attaches_the_windows_setup_to_the_release_not_r2():
+    # Users get the setup from the GitHub release; an R2 copy has no reader.
     wf = (REPO_ROOT / ".github" / "workflows" / "release_components.yml").read_text(
         encoding="utf-8"
     )
-    job = re.search(r"^  publish-windows-setup:\n(.*?)(?=^  \S)", wf, re.M | re.S)
-    assert job, "release_components.yml has no publish-windows-setup job"
-    needs = re.search(r"needs: \[([^\]]+)\]", job.group(1)).group(1)
-    assert "terminal-hub" in needs
+    assert "publish-windows-setup:" not in wf
+    job = re.search(
+        r"^  github-release-installers:\n(.*?)(?=^  \S|\Z)", wf, re.M | re.S
+    )
+    assert job, "release_components.yml has no github-release-installers job"
+    assert "name: windows-setup" in job.group(1)
     assert "--platform win-x64" in job.group(1)
+    hub = re.search(r"^  terminal-hub:\n(.*?)(?=^  \S)", wf, re.M | re.S)
+    assert hub, "release_components.yml has no terminal-hub job"
+    assert "windows-setup" not in hub.group(1)
+    assert "artifacts.py" not in hub.group(1)
+
+
+def _function(name: str) -> str:
+    m = re.search(rf"^Function {name}\r?\n(.*?)^FunctionEnd", _nsi(), re.M | re.S)
+    assert m, f"gaia-setup.nsi has no Function {name}"
+    return m.group(1)
+
+
+def test_finish_page_offers_each_app_its_own_checkbox():
+    nsi = _nsi()
+    assert "!define MUI_FINISHPAGE_RUN_FUNCTION LaunchDesktopApp" in nsi
+    assert '!define MUI_FINISHPAGE_RUN_TEXT "Open GAIA Agent UI"' in nsi
+    assert "!define MUI_FINISHPAGE_SHOWREADME_FUNCTION LaunchTerminal" in nsi
+    assert '!define MUI_FINISHPAGE_SHOWREADME_TEXT "Open GAIA Terminal UI"' in nsi
+    # Both checked by default: the user chose to install both.
+    assert "SHOWREADME_NOTCHECKED" not in nsi
+    assert "RUN_NOTCHECKED" not in nsi
+    assert "Start ${SETUP_NAME}" not in nsi
+
+
+def test_each_checkbox_opens_only_its_own_app():
+    desktop = _function("LaunchDesktopApp")
+    terminal = _function("LaunchTerminal")
+    assert "${UI_EXE}" in desktop and "$LaunchExe" not in desktop
+    assert "$LaunchExe" in terminal and "${UI_EXE}" not in terminal
+
+
+def test_finish_page_hides_and_unchecks_apps_that_were_not_installed():
+    # MUI runs a checked box's function even when it is hidden, so hiding
+    # alone would still launch an app that isn't there.
+    show = _function("FinishShow")
+    for var, box in (
+        ("$UiDir", "$mui.FinishPage.Run"),
+        ("$LaunchExe", "$mui.FinishPage.ShowReadme"),
+    ):
+        block = re.search(
+            rf'\$\{{If\}} {re.escape(var)} == ""\r?\n(.*?)\$\{{EndIf\}}', show, re.S
+        )
+        assert block, f"FinishShow does not handle a missing {var}"
+        assert f"SendMessage {box} ${{BM_SETCHECK}} ${{BST_UNCHECKED}}" in block.group(
+            1
+        )
+        assert f"ShowWindow {box} ${{SW_HIDE}}" in block.group(1)
+    # The hook must sit right before the finish page, or it attaches to another page.
+    nsi = _nsi()
+    hook = nsi.index("!define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishShow")
+    between = nsi[hook : nsi.index("!insertmacro MUI_PAGE_FINISH")]
+    assert "!insertmacro" not in between
+
+
+def test_documentation_links_open_the_docs_not_the_home_page():
+    # The site root is the marketing page; the docs live under /docs/.
+    nsi = _nsi()
+    assert _define("DOCS_URL") == "https://amd-gaia.ai/docs"
+    assert _define("INSTALL_DOCS_URL").startswith("https://amd-gaia.ai/docs/")
+    assert '!define MUI_FINISHPAGE_LINK_LOCATION "${DOCS_URL}"' in nsi
+    assert "Details: ${INSTALL_DOCS_URL}" in nsi
+    assert "Details: ${PRODUCT_URL}" not in nsi
+
+
+def test_docs_urls_point_at_existing_pages():
+    # A renamed guide would otherwise leave Setup linking to a 404.
+    install = _define("INSTALL_DOCS_URL").removeprefix("https://amd-gaia.ai/docs/")
+    assert (REPO_ROOT / "docs" / f"{install}.mdx").is_file()
+    nav = (REPO_ROOT / "docs" / "docs.json").read_text(encoding="utf-8")
+    assert f'"{install}"' in nav

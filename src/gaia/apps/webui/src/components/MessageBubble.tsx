@@ -1,17 +1,26 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import React, { useCallback, useRef, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useCallback, useContext, useId, useRef, useState, useEffect, useMemo } from 'react';
+import type { Components } from 'react-markdown';
 import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
-import { AgentActivity } from './AgentActivity';
+import remarkWindowsPaths from '../utils/remarkWindowsPaths';
+import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
+import { AgentActivity, WAITING_ON_USER_LABEL } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { AnswerStats, type TurnEnding } from './AnswerStats';
+import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
+import { LOCAL_MODEL_WAIT_HINT, MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
+import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
+import { TurnChanges } from './TurnChanges';
+import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -29,10 +38,14 @@ interface MessageBubbleProps {
     onDelete?: (messageId: number) => void;
     /** Called when user clicks the resend button (user messages only). */
     onResend?: (message: Message) => void;
+    /** More message actions, before Copy (e.g. Retry with…). */
+    extraActions?: React.ReactNode;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
     liveStatus?: string | null;
+    /** The run is blocked on the user's approval or answer; the indicator says so instead of timing the model. */
+    awaitingUser?: boolean;
 }
 
 
@@ -42,10 +55,11 @@ interface MessageBubbleProps {
  * "Reasoning — 38 words so far"), or "Thinking..." until the first one arrives.
  * Types out on first show, swaps text in place after that, erases when done.
  */
-function ThinkingIndicator({ active, label }: { active: boolean; label?: string | null }) {
-    const text = label || 'Thinking...';
+function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
+    const text = awaitingUser ? WAITING_ON_USER_LABEL : (label || 'Thinking...');
+    const [reduceMotion] = useState(prefersReducedMotion);
     const [chars, setChars] = useState(0);
-    const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>('typing');
+    const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>(reduceMotion ? 'idle' : 'typing');
     const wasActiveRef = useRef(active);
     const textLengthRef = useRef(text.length);
     textLengthRef.current = text.length;
@@ -53,19 +67,19 @@ function ThinkingIndicator({ active, label }: { active: boolean; label?: string 
     // Type out characters
     useEffect(() => {
         if (phase !== 'typing') return;
-        if (chars >= text.length) { setPhase('idle'); return; }
+        if (reduceMotion || chars >= text.length) { setPhase('idle'); return; }
         const timer = setTimeout(() => setChars(c => c + 1), 30);
         return () => clearTimeout(timer);
-    }, [phase, chars, text.length]);
+    }, [phase, chars, text.length, reduceMotion]);
 
     // Detect active → false: start erasing
     useEffect(() => {
         if (wasActiveRef.current && !active) {
             setChars(textLengthRef.current);
-            setPhase('erasing');
+            setPhase(reduceMotion ? 'done' : 'erasing');
         }
         wasActiveRef.current = active;
-    }, [active]);
+    }, [active, reduceMotion]);
 
     // Erase characters
     useEffect(() => {
@@ -83,18 +97,49 @@ function ThinkingIndicator({ active, label }: { active: boolean; label?: string 
         }
     }, [active, phase]);
 
+    const elapsed = useElapsedSeconds(active, text);
+    // One clock for the whole silent wait: a repeated or retried phase must not restart it.
+    const waitingOnModel = active && !awaitingUser && isModelWaitLabel(label);
+    const modelWaitElapsed = useElapsedSeconds(waitingOnModel);
+    const place = useInferencePlace();
+
     if (phase === 'done') return null;
 
+    const showModelWaitHint = waitingOnModel && modelWaitElapsed >= MODEL_WAIT_HINT_S;
+
     return (
-        <span className="thinking-indicator">
+        <span className={`thinking-indicator${active && !awaitingUser ? ' is-live' : ''}`}>
             <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
+            {active && !awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
+                <span className="thinking-indicator-elapsed"> · {elapsed}s</span>
+            )}
             {active && <span className="cursor" />}
+            {showModelWaitHint && (
+                <span className="thinking-indicator-hint" role="status">{place?.remote === false ? LOCAL_MODEL_WAIT_HINT : MODEL_WAIT_HINT}</span>
+            )}
         </span>
     );
 }
 
+
+/** A phase shorter than this needs no clock; past it, the count shows GAIA is still working. */
+const PHASE_ELAPSED_MIN_S = 3;
+
+/** Whole seconds `active` has held; resets when it drops or `key` changes. */
+function useElapsedSeconds(active: boolean, key?: string): number {
+    const [elapsed, setElapsed] = useState(0);
+    useEffect(() => {
+        setElapsed(0);
+        if (!active) return;
+        const started = Date.now();
+        const t = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+        return () => clearInterval(t);
+    }, [active, key]);
+    return elapsed;
+}
+
 /** Detect if message content looks like an error. */
-function isErrorContent(content: string): boolean {
+export function isErrorContent(content: string): boolean {
     if (!content) return false;
     const lower = content.toLowerCase();
     return (
@@ -106,6 +151,20 @@ function isErrorContent(content: string): boolean {
         lower.includes('connection refused') ||
         lower.includes('failed to fetch')
     );
+}
+
+const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * Drop an error step the answer is, word for word. A run that fails before
+ * answering saves its error as the whole answer; it is shown once, there, with
+ * its links. An answer that only quotes a tool's error keeps the step.
+ */
+export function dropErrorsEchoedInAnswer(steps: AgentStep[], content: string): { steps: AgentStep[]; echoed: boolean } {
+    const answer = squash(content);
+    if (!answer) return { steps, echoed: false };
+    const kept = steps.filter((s) => !(s.type === 'error' && s.detail && squash(s.detail) === answer));
+    return { steps: kept, echoed: kept.length < steps.length };
 }
 
 /**
@@ -340,7 +399,21 @@ function cleanToolCallContent(content: string, streaming = false): string {
     // fences with unknown/fake language tags; preserves real code blocks.
     cleaned = stripBogusCodeFences(cleaned).trim();
 
-    return cleaned;
+    return escapeBareNumberLines(cleaned);
+}
+
+/**
+ * A line that is only a number and a period ("391.") parses as an empty ordered
+ * list item, which shows the marker and hides the number. Escaping the period
+ * keeps it as text; fenced code is left alone.
+ */
+export function escapeBareNumberLines(text: string): string {
+    let inFence = false;
+    return text.split('\n').map((line) => {
+        if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+        if (inFence) return line;
+        return line.replace(/^(\s*\d+)\.(\s*)$/, '$1\\.$2');
+    }).join('\n');
 }
 
 /** Format a full absolute timestamp for the stats tooltip. */
@@ -352,17 +425,32 @@ function formatFullTimestamp(iso: string): string {
     });
 }
 
-/** Format latency in ms to a human-readable string. */
-function formatLatency(ms: number): string {
-    if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(1)}s`;
-}
-
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, liveStatus }: MessageBubbleProps) {
-    const isError = message.role === 'assistant' && isErrorContent(message.content);
+/** The notices that close a turn cut off before its answer (gaia/ui/restart_recovery.py). */
+const CUT_OFF_NOTICES = [
+    'This answer was interrupted when GAIA closed. Send again to retry.',
+    'This answer was interrupted before it finished. Send again to retry.',
+    'This answer ended before GAIA could save a reply. Send again to retry.',
+];
+
+/** How an assistant turn ended short of an answer, or undefined when it answered. */
+export function turnEnding(content: string, stopState: Message['stopState']): TurnEnding | undefined {
+    if (stopState) return 'stopped';
+    const text = content.trim();
+    return CUT_OFF_NOTICES.some((notice) => text.endsWith(notice)) ? 'interrupted' : undefined;
+}
+
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+    useModelNames();
+    const echo = useMemo(
+        () => (message.role === 'assistant' && !isStreaming && agentSteps
+            ? dropErrorsEchoedInAnswer(agentSteps, message.content)
+            : { steps: agentSteps, echoed: false }),
+        [agentSteps, message.content, message.role, isStreaming],
+    );
+    const isError = message.role === 'assistant' && (echo.echoed || isErrorContent(message.content));
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
         : undefined;
@@ -376,6 +464,21 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     );
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
+    const collapsibleUser = message.role === 'user' && isLongUserMessage(message.content);
+    const [userExpanded, setUserExpanded] = useState(false);
+    const userBodyId = useId();
+    const userBodyRef = useRef<HTMLDivElement>(null);
+    const scrollAfterCollapseRef = useRef(false);
+    const toggleUserExpanded = useCallback(() => {
+        if (userExpanded) scrollAfterCollapseRef.current = true;
+        setUserExpanded(!userExpanded);
+    }, [userExpanded]);
+    useEffect(() => {
+        // Collapsing from far down the page would leave the reader past the message.
+        if (userExpanded || !scrollAfterCollapseRef.current) return;
+        scrollAfterCollapseRef.current = false;
+        userBodyRef.current?.scrollIntoView?.({ block: 'nearest' });
+    }, [userExpanded]);
     const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -438,11 +541,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         >
             <div className="msg-inner">
                 <div className="msg-header">
-                    <div className="msg-header-left">
-                        {message.role === 'assistant' && isStreaming && (
-                            <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} />
-                        )}
-                    </div>
+                    <div className="msg-header-left" />
                     {!isStreaming && (
                         <div className="msg-actions">
                             {/* Resend button - user messages only */}
@@ -456,6 +555,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                     <RefreshCw size={12} />
                                 </button>
                             )}
+                            {extraActions}
                             <button
                                 className={`msg-copy ${copied ? 'copied' : ''}`}
                                 onClick={handleCopy}
@@ -479,12 +579,17 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     )}
                 </div>
                 <div className="msg-body">
-                    {/* Agent activity inside the message bubble */}
-                    {agentSteps && agentSteps.length > 0 && (
+                    {/* The turn as a timeline; the live line sits where the next step will appear */}
+                    {message.role === 'assistant' && ((echo.steps && echo.steps.length > 0) || isStreaming) && (
                         <AgentActivity
-                            steps={agentSteps}
+                            steps={echo.steps ?? []}
                             isActive={agentStepsActive ?? false}
-                            variant={agentStepsActive ? 'inline' : 'summary'}
+                            running={!!isStreaming}
+                            awaitingUser={awaitingUser}
+                            answer={isStreaming ? undefined : cleanedContent}
+                            liveLine={isStreaming && (
+                                <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
+                            )}
                         />
                     )}
                     {isError && (
@@ -501,8 +606,26 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     ))}
                     {/* The cursor is a streaming indicator, not decoration — it never
                         outlives the write. See docs/spec/gaia-design-language.mdx. */}
-                    {!(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
-                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} />
+                    {collapsibleUser ? (
+                        <>
+                            <div
+                                ref={userBodyRef}
+                                id={userBodyId}
+                                className={`msg-collapsible${userExpanded ? '' : ' is-collapsed'}`}
+                            >
+                                <RenderedContent content={cleanedContent} />
+                            </div>
+                            <ExpandToggle
+                                expanded={userExpanded}
+                                onToggle={toggleUserExpanded}
+                                controls={userBodyId}
+                                collapsedLabel={`Show all (${sizeLabel(message.content)})`}
+                                expandedLabel="Show less"
+                                className="msg-expand-toggle"
+                            />
+                        </>
+                    ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
+                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} />
                     )}
                     {stopState && (
                         <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">
@@ -522,27 +645,20 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <EmailConnectCta content={cleanedContent} />
                     )}
                     {message.role === 'assistant' && !isStreaming && (message.stats || latencyMs != null || message.created_at) && (
-                        <div className="msg-stats" aria-label="Message performance stats">
+                        <div className="msg-stats" aria-label="About this answer">
                             {message.created_at && (
                                 <span className="msg-stats-ts" title="Message timestamp">
                                     {formatFullTimestamp(message.created_at)}
                                 </span>
                             )}
-                            {latencyMs != null && latencyMs > 0 && (
-                                <span title="Total response time">{formatLatency(latencyMs)}</span>
+                            {message.stats?.retried && message.stats.model && (
+                                <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
-                            {message.stats?.tokens_per_second != null && message.stats.tokens_per_second > 0 && (
-                                <span title="Tokens per second">{message.stats.tokens_per_second} tok/s</span>
-                            )}
-                            {message.stats?.time_to_first_token != null && message.stats.time_to_first_token > 0 && (
-                                <span title="Time to first token">{(message.stats.time_to_first_token * 1000).toFixed(0)}ms TTFT</span>
-                            )}
-                            {message.stats?.output_tokens != null && message.stats.output_tokens > 0 && (
-                                <span title="Input → output tokens">
-                                    {(message.stats.input_tokens ?? 0).toLocaleString()} → {message.stats.output_tokens.toLocaleString()} tokens
-                                </span>
-                            )}
+                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState)} />
                         </div>
+                    )}
+                    {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
+                        <TurnChanges sessionId={message.session_id} messageId={message.id} />
                     )}
                 </div>
             </div>
@@ -550,9 +666,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     );
 }
 
-/** Custom code block with copy button. */
+/** Whether the markdown being rendered is still streaming in. */
+const StreamingContext = createContext(false);
+
+/** Custom code block with copy button; a long one opens collapsed to a preview. */
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
     const [copied, setCopied] = useState(false);
+    const [expanded, setExpanded] = useState(false);
+    const streaming = useContext(StreamingContext);
+    const bodyId = useId();
+    const lines = countLines(code);
+    // While streaming, cap as soon as the preview fills so the block never grows and then shrinks.
+    const collapsible = lines > (streaming ? CODE_PREVIEW_LINES : CODE_COLLAPSE_LINES);
+    const collapsed = collapsible && !expanded;
     const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
@@ -581,7 +707,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     }, [code]);
 
     return (
-        <div className="code-block">
+        <div className={`code-block${collapsed ? ' is-collapsed' : ''}`}>
             <div className="code-header">
                 <span className="code-lang">{lang || 'code'}</span>
                 <button
@@ -594,7 +720,17 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
                     <span>{copied ? 'Copied' : 'Copy'}</span>
                 </button>
             </div>
-            <pre><code>{code}</code></pre>
+            <pre id={bodyId}><code>{code}</code></pre>
+            {collapsible && (
+                <ExpandToggle
+                    expanded={expanded}
+                    onToggle={() => setExpanded((v) => !v)}
+                    controls={bodyId}
+                    collapsedLabel={`Expand (${lines.toLocaleString('en-US')} lines)`}
+                    expandedLabel="Collapse"
+                    className="code-expand-toggle"
+                />
+            )}
         </div>
     );
 }
@@ -606,9 +742,19 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 // Path separators are excluded from the segment class so each `(segment sep)`
 // repetition has exactly one parse — the ambiguity CodeQL flagged as
 // exponential-backtracking ReDoS (js/redos) on adversarial non-matching input.
-const WIN_PATH_RE = /[A-Z]:[\\/](?:[^\s*?"<>|,;)}\]\\/]+[\\/])*[^\s*?"<>|,;)}\]\\/]*\.\w{1,5}/gi;
-/** Regex to detect Windows directory paths like C:\Users\...\folder\ */
-const WIN_DIR_RE = /[A-Z]:[\\/](?:[^\s*?"<>|,;)}\]\\/]+[\\/])+/gi;
+// Exactly one separator between segments, so a last segment without an
+// extension (`C:\Users\me\notes`) is kept as well as `...\a.txt` or `...\dir\`.
+const WIN_PATH_RE = /\b[A-Z]:[\\/][^\s*?"<>|,;)}\]\\/]+(?:[\\/][^\s*?"<>|,;)}\]\\/]+)*[\\/]?/gi;
+/** Sentence punctuation the path regex swallows: "see C:\a\b." ends at `b`. */
+const PATH_TRAILING_PUNCT_RE = /[.:!']+$/;
+/** An inline-code span that is one absolute path and nothing else, e.g. "Saved to `C:\out\answer.md`". */
+const WIN_PATH_ONLY_RE = new RegExp(`^(?:${WIN_PATH_RE.source})$`, 'i');
+
+function inlineCodePath(children: React.ReactNode): string | null {
+    if (typeof children !== 'string') return null;
+    const text = children.trim();
+    return WIN_PATH_ONLY_RE.test(text) ? text : null;
+}
 
 function FilePathLink({ path }: { path: string }) {
     const handleClick = (e: React.MouseEvent) => {
@@ -635,7 +781,7 @@ function FilePathLink({ path }: { path: string }) {
 /** Split text into segments, replacing file paths with clickable links. */
 function linkifyFilePaths(text: string): React.ReactNode {
     // Combine both regexes: match files first, then directories
-    const combined = new RegExp(`(${WIN_PATH_RE.source}|${WIN_DIR_RE.source})`, 'gi');
+    const combined = new RegExp(WIN_PATH_RE.source, 'gi');
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -645,8 +791,9 @@ function linkifyFilePaths(text: string): React.ReactNode {
         if (match.index > lastIndex) {
             parts.push(text.slice(lastIndex, match.index));
         }
-        parts.push(<FilePathLink key={match.index} path={match[0]} />);
-        lastIndex = combined.lastIndex;
+        const path = match[0].replace(PATH_TRAILING_PUNCT_RE, '');
+        parts.push(<FilePathLink key={match.index} path={path} />);
+        lastIndex = match.index + path.length;
     }
 
     // No paths found — return original text
@@ -670,121 +817,130 @@ function linkifyChildren(children: React.ReactNode): React.ReactNode {
     );
 }
 
-function RenderedContent({ content, showCursor }: { content: string; showCursor?: boolean }) {
+// Module-level so each element type is stable: an inline object remounts every
+// CodeBlock on each render, which would reset its expand state mid-stream.
+const MARKDOWN_COMPONENTS: Components = {
+    // Code block vs inline code detection.
+    // react-markdown calls `code` for both inline `code` and
+    // fenced ```code``` blocks. Fenced blocks are wrapped in
+    // <pre><code>, inline in just <code>. We use our `pre`
+    // override to render fenced blocks as CodeBlock, so the
+    // `code` component only handles inline code.
+    // `node` is the markdown AST; spread onto <code> it renders as node="[object Object]".
+    code({ className, children, node: _node, ...props }) {
+        // If we get here, it's inline code (fenced blocks are
+        // handled by the `pre` override below).
+        const path = inlineCodePath(children);
+        if (path) return <FilePathLink path={path} />;
+        return (
+            <code className="inline-code" {...props}>
+                {children}
+            </code>
+        );
+    },
+    // Fenced code blocks: react-markdown wraps them in <pre><code>.
+    // Extract the language and code text, render as CodeBlock.
+    // (The fence→card mount for email_pre_scan was retired at the
+    // #2109 cutover — cards arrive via tool_result.render now;
+    // pre-cutover history renders those fences as code blocks.)
+    pre({ children }) {
+        // children is <code className="language-xxx">...</code>
+        const codeChild = React.Children.toArray(children)[0];
+        if (React.isValidElement(codeChild) && (codeChild.type === 'code' || (codeChild.props as any)?.className !== undefined || typeof (codeChild.props as any)?.children === 'string')) {
+            const codeProps = codeChild.props as any;
+            const className = codeProps?.className || '';
+            const match = /language-([\w-]+)/.exec(className);
+            const codeString = String(codeProps?.children || '').replace(/\n$/, '');
+            const lang = match?.[1] || '';
+            return (
+                <CodeBlock
+                    lang={lang}
+                    code={codeString}
+                />
+            );
+        }
+        // Fallback: render as-is
+        return <pre>{children}</pre>;
+    },
+    // Custom table styling
+    table({ children }) {
+        return (
+            <div className="md-table-wrap">
+                <table className="md-table">{children}</table>
+            </div>
+        );
+    },
+    // Links open in new tab
+    a({ href, children }) {
+        return (
+            <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="md-link"
+            >
+                {children}
+            </a>
+        );
+    },
+    // Paragraphs — linkify file paths in text children
+    p({ children }) {
+        return <p className="md-p">{linkifyChildren(children)}</p>;
+    },
+    // Headers
+    h1({ children }) {
+        return <h2 className="md-h2">{linkifyChildren(children)}</h2>;
+    },
+    h2({ children }) {
+        return <h3 className="md-h3">{linkifyChildren(children)}</h3>;
+    },
+    h3({ children }) {
+        return <h4 className="md-h4">{linkifyChildren(children)}</h4>;
+    },
+    // Lists
+    ul({ children }) {
+        return <ul className="md-ul">{children}</ul>;
+    },
+    ol({ children, start }) {
+        return <ol className="md-ol" start={start}>{children}</ol>;
+    },
+    li({ children }) {
+        return <li className="md-li">{linkifyChildren(children)}</li>;
+    },
+    // Blockquote
+    blockquote({ children }) {
+        return <blockquote className="md-blockquote">{linkifyChildren(children)}</blockquote>;
+    },
+    // Horizontal rule
+    hr() {
+        return <hr className="md-hr" />;
+    },
+    // Table cells
+    td({ children }) {
+        return <td>{linkifyChildren(children)}</td>;
+    },
+    th({ children }) {
+        return <th>{linkifyChildren(children)}</th>;
+    },
+};
+
+export function RenderedContent({ content, showCursor, isStreaming = false }: { content: string; showCursor?: boolean; isStreaming?: boolean }) {
     if (!content && !showCursor) return null;
     if (!content && showCursor) return <span className="cursor" />;
 
     return (
+        <StreamingContext.Provider value={isStreaming}>
         <div className="md-content">
             <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkSoftBreaks]}
                 disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
                 urlTransform={safeUrlTransform}
-                components={{
-                    // Code block vs inline code detection.
-                    // react-markdown calls `code` for both inline `code` and
-                    // fenced ```code``` blocks. Fenced blocks are wrapped in
-                    // <pre><code>, inline in just <code>. We use our `pre`
-                    // override to render fenced blocks as CodeBlock, so the
-                    // `code` component only handles inline code.
-                    code({ className, children, ...props }) {
-                        // If we get here, it's inline code (fenced blocks are
-                        // handled by the `pre` override below).
-                        return (
-                            <code className="inline-code" {...props}>
-                                {children}
-                            </code>
-                        );
-                    },
-                    // Fenced code blocks: react-markdown wraps them in <pre><code>.
-                    // Extract the language and code text, render as CodeBlock.
-                    // (The fence→card mount for email_pre_scan was retired at the
-                    // #2109 cutover — cards arrive via tool_result.render now;
-                    // pre-cutover history renders those fences as code blocks.)
-                    pre({ children }) {
-                        // children is <code className="language-xxx">...</code>
-                        const codeChild = React.Children.toArray(children)[0];
-                        if (React.isValidElement(codeChild) && (codeChild.type === 'code' || (codeChild.props as any)?.className !== undefined || typeof (codeChild.props as any)?.children === 'string')) {
-                            const codeProps = codeChild.props as any;
-                            const className = codeProps?.className || '';
-                            const match = /language-([\w-]+)/.exec(className);
-                            const codeString = String(codeProps?.children || '').replace(/\n$/, '');
-                            const lang = match?.[1] || '';
-                            return (
-                                <CodeBlock
-                                    lang={lang}
-                                    code={codeString}
-                                />
-                            );
-                        }
-                        // Fallback: render as-is
-                        return <pre>{children}</pre>;
-                    },
-                    // Custom table styling
-                    table({ children }) {
-                        return (
-                            <div className="md-table-wrap">
-                                <table className="md-table">{children}</table>
-                            </div>
-                        );
-                    },
-                    // Links open in new tab
-                    a({ href, children }) {
-                        return (
-                            <a
-                                href={href}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="md-link"
-                            >
-                                {children}
-                            </a>
-                        );
-                    },
-                    // Paragraphs — linkify file paths in text children
-                    p({ children }) {
-                        return <p className="md-p">{linkifyChildren(children)}</p>;
-                    },
-                    // Headers
-                    h1({ children }) {
-                        return <h2 className="md-h2">{linkifyChildren(children)}</h2>;
-                    },
-                    h2({ children }) {
-                        return <h3 className="md-h3">{linkifyChildren(children)}</h3>;
-                    },
-                    h3({ children }) {
-                        return <h4 className="md-h4">{linkifyChildren(children)}</h4>;
-                    },
-                    // Lists
-                    ul({ children }) {
-                        return <ul className="md-ul">{children}</ul>;
-                    },
-                    ol({ children }) {
-                        return <ol className="md-ol">{children}</ol>;
-                    },
-                    li({ children }) {
-                        return <li className="md-li">{linkifyChildren(children)}</li>;
-                    },
-                    // Blockquote
-                    blockquote({ children }) {
-                        return <blockquote className="md-blockquote">{linkifyChildren(children)}</blockquote>;
-                    },
-                    // Horizontal rule
-                    hr() {
-                        return <hr className="md-hr" />;
-                    },
-                    // Table cells
-                    td({ children }) {
-                        return <td>{linkifyChildren(children)}</td>;
-                    },
-                    th({ children }) {
-                        return <th>{linkifyChildren(children)}</th>;
-                    },
-                }}
+                components={MARKDOWN_COMPONENTS}
             >
                 {content}
             </ReactMarkdown>
             {showCursor && <span className="cursor" />}
         </div>
+        </StreamingContext.Provider>
     );
 }

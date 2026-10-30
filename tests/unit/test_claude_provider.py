@@ -173,7 +173,18 @@ def test_system_hoisted_out_of_messages(fake_anthropic):
     call = provider._client.messages.create.call_args.kwargs
     assert call["system"][0]["text"] == "You are GAIA."
     assert all(m["role"] != "system" for m in call["messages"])
-    assert call["messages"] == [{"role": "user", "content": "hello"}]
+    assert call["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "hello",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
 
 
 def test_tools_translated_to_anthropic_shape(fake_anthropic):
@@ -318,6 +329,7 @@ def test_tool_history_translated_to_anthropic_blocks(fake_anthropic):
                     "type": "tool_result",
                     "tool_use_id": "toolu_b",
                     "content": "beta",
+                    "cache_control": {"type": "ephemeral"},
                 },
             ],
         },
@@ -377,7 +389,13 @@ def test_unmatched_tool_result_remains_plain_user_text(fake_anthropic):
     call = provider._client.messages.create.call_args.kwargs
     assert call["messages"][-1] == {
         "role": "user",
-        "content": "[Tool result: plan_step] complete",
+        "content": [
+            {
+                "type": "text",
+                "text": "[Tool result: plan_step] complete",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
     }
 
 
@@ -499,7 +517,16 @@ def test_no_call_request_keeps_tool_history_and_tools(fake_anthropic, stream):
                 {"type": "tool_result", "tool_use_id": "toolu_1", "content": "alpha"}
             ],
         },
-        {"role": "user", "content": "Give the user your final answer now."},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Give the user your final answer now.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
     ]
 
 
@@ -629,12 +656,363 @@ def test_breakpoint_never_mutates_the_caller_tool_list(fake_anthropic):
     assert tools == OPENAI_TOOLS, "the agent reuses this list on every call"
 
 
-def test_no_breakpoint_when_there_is_nothing_stable_to_cache(fake_anthropic):
+def test_no_prefill_breakpoint_without_system_or_tools(fake_anthropic):
     provider = _provider(fake_anthropic)
     provider._client.messages.create.return_value = _response([_text_block("ok")])
     provider.chat([{"role": "user", "content": "hi"}])
     call = provider._client.messages.create.call_args.kwargs
     assert "system" not in call and "tools" not in call
+
+
+# ── rolling history breakpoint ──────────────────────────────────────────
+#
+# Without a marker on the conversation itself, every call of an agent loop
+# re-bills the whole growing history as fresh input. The rolling marker on the
+# last message lets call N+1 read what call N wrote.
+
+_EPHEMERAL = {"type": "ephemeral"}
+
+
+def _breakpoints(call: dict) -> int:
+    """Every ``cache_control`` in the outgoing request, wherever it sits."""
+
+    def count(node) -> int:
+        if isinstance(node, dict):
+            return ("cache_control" in node) + sum(count(v) for v in node.values())
+        if isinstance(node, list):
+            return sum(count(v) for v in node)
+        return 0
+
+    return (
+        count(call.get("tools")) + count(call.get("system")) + count(call["messages"])
+    )
+
+
+def _run(provider, messages, stream, **kwargs):
+    provider._client.messages.create.return_value = (
+        iter([]) if stream else _response([_text_block("ok")])
+    )
+    result = provider.chat(messages, stream=stream, **kwargs)
+    if stream:
+        list(result)
+    return provider._client.messages.create.call_args.kwargs
+
+
+_MULTI_TURN = [
+    {"role": "system", "content": "You are GAIA."},
+    {"role": "user", "content": "first question"},
+    {"role": "assistant", "content": "first answer"},
+    {"role": "user", "content": "second question"},
+]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_last_message_carries_the_rolling_breakpoint(fake_anthropic, stream):
+    provider = _provider(fake_anthropic)
+    call = _run(provider, _MULTI_TURN, stream, tools=OPENAI_TOOLS)
+
+    assert call["messages"][-1] == {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "second question", "cache_control": _EPHEMERAL}
+        ],
+    }
+    # Only the newest message is marked; older ones stay plain so the marker
+    # rolls forward instead of piling up.
+    assert call["messages"][:-1] == [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+    ]
+    # tools + system + last message.
+    assert _breakpoints(call) == 3
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_rolling_breakpoint_marks_the_last_block_of_list_content(
+    fake_anthropic, stream
+):
+    provider = _provider(fake_anthropic)
+    image = {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"},
+    }
+    call = _run(
+        provider,
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {
+                "role": "user",
+                "content": [image, {"type": "text", "text": "what is this?"}],
+            },
+        ],
+        stream,
+    )
+    last = call["messages"][-1]["content"]
+    assert last[0] == image
+    assert last[1] == {
+        "type": "text",
+        "text": "what is this?",
+        "cache_control": _EPHEMERAL,
+    }
+    assert _breakpoints(call) == 1
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_rolling_breakpoint_lands_on_a_trailing_tool_result(fake_anthropic, stream):
+    """The agent loop's usual shape: the newest message is a tool result.
+    Anthropic accepts ``cache_control`` on ``tool_result`` blocks."""
+    provider = _provider(fake_anthropic)
+    call = _run(
+        provider,
+        [
+            {"role": "system", "content": "You are GAIA."},
+            {"role": "user", "content": "compare a and b"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": tid,
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": json.dumps({"path": path}),
+                        },
+                    }
+                    for tid, path in (("toolu_a", "a.txt"), ("toolu_b", "b.txt"))
+                ],
+            },
+            {"role": "tool", "tool_call_id": "toolu_a", "content": "alpha"},
+            {"role": "tool", "tool_call_id": "toolu_b", "content": "beta"},
+        ],
+        stream,
+        tools=OPENAI_TOOLS,
+    )
+    results = call["messages"][-1]["content"]
+    assert results == [
+        {"type": "tool_result", "tool_use_id": "toolu_a", "content": "alpha"},
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_b",
+            "content": "beta",
+            "cache_control": _EPHEMERAL,
+        },
+    ]
+    assert not any("cache_control" in str(m) for m in call["messages"][:-1])
+    assert _breakpoints(call) == 3
+
+
+@pytest.mark.parametrize(
+    "trailing",
+    [
+        {"type": "thinking", "thinking": "hmm", "signature": "sig"},
+        {"type": "redacted_thinking", "data": "opaque"},
+        {"type": "text", "text": ""},
+    ],
+    ids=["thinking", "redacted_thinking", "empty_text"],
+)
+def test_rolling_breakpoint_skips_blocks_that_cannot_carry_it(fake_anthropic, trailing):
+    provider = _provider(fake_anthropic)
+    call = _run(
+        provider,
+        [
+            {"role": "user", "content": "go on"},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Partial answer"}, trailing],
+            },
+        ],
+        stream=False,
+    )
+    last = call["messages"][-1]["content"]
+    assert last[0] == {
+        "type": "text",
+        "text": "Partial answer",
+        "cache_control": _EPHEMERAL,
+    }
+    assert last[1] == trailing
+    assert _breakpoints(call) == 1
+
+
+def test_no_rolling_breakpoint_when_no_block_can_carry_it(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    call = _run(
+        provider,
+        [
+            {"role": "user", "content": "go on"},
+            {
+                "role": "assistant",
+                "content": [{"type": "redacted_thinking", "data": "opaque"}],
+            },
+        ],
+        stream=False,
+    )
+    assert _breakpoints(call) == 0
+
+
+def test_no_rolling_breakpoint_on_empty_list_content(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    call = _run(
+        provider,
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": []},
+        ],
+        stream=False,
+    )
+    assert call["messages"][-1] == {"role": "assistant", "content": []}
+    assert _breakpoints(call) == 0
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_rolling_breakpoint_never_mutates_the_caller_messages(fake_anthropic, stream):
+    """The agent appends to and resends this list every call; a marker left in
+    it would pile up a new breakpoint per turn."""
+    provider = _provider(fake_anthropic)
+    messages = [
+        {"role": "system", "content": "You are GAIA."},
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "answer"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look"},
+                {"type": "text", "text": "here"},
+            ],
+        },
+    ]
+    snapshot = json.loads(json.dumps(messages))
+    call = _run(provider, messages, stream, tools=OPENAI_TOOLS)
+    assert call["messages"][-1]["content"][-1]["cache_control"] == _EPHEMERAL
+    assert messages == snapshot
+
+
+def test_breakpoints_over_the_api_limit_fail_loudly(fake_anthropic):
+    """Anthropic rejects more than 4 breakpoints. Caller-supplied markers on
+    older messages plus GAIA's three would exceed it."""
+    provider = _provider(fake_anthropic)
+    marked = [
+        {
+            "role": role,
+            "content": [{"type": "text", "text": text, "cache_control": _EPHEMERAL}],
+        }
+        for role, text in (("user", "q1"), ("assistant", "a1"))
+    ]
+    with pytest.raises(ValueError, match="at most 4"):
+        provider.chat(
+            [{"role": "system", "content": "You are GAIA."}]
+            + marked
+            + [{"role": "user", "content": "q2"}],
+            tools=OPENAI_TOOLS,
+        )
+    provider._client.messages.create.assert_not_called()
+
+
+def _tool_round(call_id, arguments, result_content):
+    return [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": json.dumps(arguments),
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": call_id, "content": result_content},
+    ]
+
+
+def test_tool_argument_named_cache_control_is_not_a_breakpoint(fake_anthropic):
+    """Tool inputs are arbitrary JSON; a key that happens to be called
+    ``cache_control`` is data, not a marker, and must not trip the limit."""
+    provider = _provider(fake_anthropic)
+    messages = (
+        [
+            {"role": "system", "content": "You are GAIA."},
+            {"role": "user", "content": "read both configs"},
+        ]
+        + _tool_round("toolu_a", {"path": "a.yml", "cache_control": "off"}, "x: 1")
+        + _tool_round("toolu_b", {"path": "b.yml", "cache_control": "on"}, "y: 2")
+    )
+    call = _run(provider, messages, stream=False, tools=OPENAI_TOOLS)
+    assert _breakpoints(call) == 5  # 3 markers + 2 look-alike argument keys
+    assert call["messages"][-1]["content"][-1]["cache_control"] == _EPHEMERAL
+
+
+def test_markers_nested_in_tool_results_count_toward_the_limit(fake_anthropic):
+    """Anthropic counts a marker inside a tool_result's own content blocks."""
+    provider = _provider(fake_anthropic)
+    nested = [{"type": "text", "text": "cached output", "cache_control": _EPHEMERAL}]
+    messages = (
+        [
+            {"role": "system", "content": "You are GAIA."},
+            {"role": "user", "content": "read both files"},
+        ]
+        + _tool_round("toolu_a", {"path": "a.txt"}, nested)
+        + _tool_round("toolu_b", {"path": "b.txt"}, nested)
+        + [{"role": "user", "content": "now summarise"}]
+    )
+    with pytest.raises(ValueError, match="at most 4"):
+        provider.chat(messages, tools=OPENAI_TOOLS)
+    provider._client.messages.create.assert_not_called()
+
+
+class _MarkingClient:
+    """A client wrapper that adds its own marker on the newest message's last
+    block and an effort setting, then forwards — copying or editing in place."""
+
+    def __init__(self, inner, copy_request):
+        self._inner = inner
+        self._copy = copy_request
+        self.sent = []
+        self.messages = SimpleNamespace(create=self._create)
+
+    def _create(self, **kwargs):
+        request = json.loads(json.dumps(kwargs)) if self._copy else kwargs
+        last = request["messages"][-1]
+        if isinstance(last["content"], str):
+            last["content"] = [{"type": "text", "text": last["content"]}]
+        last["content"][-1]["cache_control"] = {"type": "ephemeral"}
+        request["output_config"] = {"effort": "high"}
+        self.sent.append(json.loads(json.dumps(request)))
+        return self._inner.messages.create(**request)
+
+
+@pytest.mark.parametrize("copy_request", [True, False], ids=["copies", "in_place"])
+def test_a_client_wrapper_that_marks_the_last_block_stays_within_the_limit(
+    fake_anthropic, copy_request
+):
+    """The wrapper re-marks the block GAIA already marked, so the count stays at
+    3; and GAIA never writes a marker into the caller's history, so a wrapper
+    editing in place can't pile markers up across calls."""
+    provider = _provider(fake_anthropic)
+    wrapper = _MarkingClient(provider._client, copy_request)
+    provider._client = wrapper
+    history = [{"role": "system", "content": "You are GAIA."}]
+    for step in range(4):
+        # Caller-owned block list as the newest message: the one place a
+        # marker written in place could leak into history.
+        history.append(
+            {"role": "user", "content": [{"type": "text", "text": f"Part {step}."}]}
+        )
+        wrapper._inner.messages.create.return_value = _response(
+            [_text_block(f"Done with part {step}.")]
+        )
+        reply = provider.chat(history, tools=OPENAI_TOOLS)
+        history.append({"role": "assistant", "content": reply})
+
+    assert len(wrapper.sent) == 4
+    for request in wrapper.sent:
+        assert _breakpoints(request) == 3
+        assert request["output_config"] == {"effort": "high"}
+    assert "cache_control" not in json.dumps(history)
 
 
 def test_usage_reads_both_cache_counters(fake_anthropic):
@@ -1210,3 +1588,660 @@ def test_a_new_call_clears_the_previous_finish_reason(fake_anthropic):
     provider.chat([{"role": "user", "content": "q"}])
 
     assert provider.get_last_finish_reason() == "stop"
+
+
+# ---------------------------------------------------------------------------
+# Thinking blocks round-trip with their tool turn
+# ---------------------------------------------------------------------------
+#
+# A tool loop with thinking enabled re-derives its plan on every call when the
+# thinking blocks are dropped from the replayed assistant turn. The agent's
+# history is OpenAI-shaped and carries no thinking, so the provider keeps the
+# original blocks and re-emits them — but only while the turn and everything
+# sent before it are unchanged, or the API rejects the stale signature.
+
+_SYSTEM = {"role": "system", "content": "You are GAIA."}
+_ASK = {"role": "user", "content": "Summarise notes.txt for me."}
+_PLAN = SimpleNamespace(
+    type="thinking",
+    thinking="The user wants a summary, so I should read notes.txt first.",
+    signature="EqQBCgIYAhIM-sig-plan",
+)
+_REDACTED = SimpleNamespace(type="redacted_thinking", data="EmwKAhgBEgy-redacted")
+_NOTES = "Meeting moved to Thursday. Budget approved."
+
+
+def _thinking_dict(block):
+    if block.type == "redacted_thinking":
+        return {"type": "redacted_thinking", "data": block.data}
+    return {
+        "type": "thinking",
+        "thinking": block.thinking,
+        "signature": block.signature,
+    }
+
+
+def _as_agent_turn(envelope_text):
+    """The assistant message the agent appends: OpenAI shape, no thinking."""
+    envelope = json.loads(envelope_text)
+    return {
+        "role": "assistant",
+        "content": envelope["content"],
+        "tool_calls": [
+            {
+                "id": call["id"],
+                "type": "function",
+                "function": {
+                    "name": call["function"]["name"],
+                    "arguments": json.dumps(
+                        json.loads(call["function"]["arguments"]), ensure_ascii=False
+                    ),
+                },
+            }
+            for call in envelope[_NATIVE_TC_KEY]
+        ],
+    }
+
+
+def _tool_turn_response(*thinking, call_id="toolu_r1", path="notes.txt"):
+    return _response(
+        [
+            *thinking,
+            _text_block("Reading the file."),
+            _tool_use_block(call_id, "read_file", {"path": path}),
+        ],
+        stop_reason="tool_use",
+    )
+
+
+def _thinking_stream(call_id="toolu_s1"):
+    """A thinking + tool_use turn as stream events, signature_delta included."""
+    return iter(
+        [
+            SimpleNamespace(
+                type="message_start",
+                message=SimpleNamespace(usage=SimpleNamespace(input_tokens=50)),
+            ),
+            SimpleNamespace(
+                type="content_block_start",
+                index=0,
+                content_block=SimpleNamespace(
+                    type="thinking", thinking="", signature=""
+                ),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="thinking_delta", thinking="I should read "),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=SimpleNamespace(
+                    type="thinking_delta", thinking="notes.txt first."
+                ),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="signature_delta", signature="EqQB-sig-s"),
+            ),
+            SimpleNamespace(
+                type="content_block_start",
+                index=1,
+                content_block=SimpleNamespace(type="text", text=""),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=1,
+                delta=SimpleNamespace(type="text_delta", text="Reading the file."),
+            ),
+            SimpleNamespace(
+                type="content_block_start",
+                index=2,
+                content_block=SimpleNamespace(
+                    type="tool_use", id=call_id, name="read_file", input={}
+                ),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=2,
+                delta=SimpleNamespace(
+                    type="input_json_delta", partial_json='{"path": "notes.txt"}'
+                ),
+            ),
+            SimpleNamespace(
+                type="message_delta",
+                delta=SimpleNamespace(stop_reason="tool_use"),
+                usage=SimpleNamespace(output_tokens=40),
+            ),
+        ]
+    )
+
+
+def _first_call(provider, response, stream, messages=None, tools=OPENAI_TOOLS):
+    """Run call 1 and return the history the agent would send on call 2."""
+    messages = messages or [_SYSTEM, _ASK]
+    provider._client.messages.create.return_value = response
+    result = provider.chat(messages, tools=tools, stream=stream)
+    text = list(result)[-1] if stream else result
+    turn = _as_agent_turn(text)
+    result_msg = {
+        "role": "tool",
+        "tool_call_id": turn["tool_calls"][0]["id"],
+        "content": _NOTES,
+    }
+    return messages + [turn, result_msg]
+
+
+def _second_call(provider, history, stream=False, tools=OPENAI_TOOLS):
+    provider._client.messages.create.return_value = (
+        iter([]) if stream else _response([_text_block("Summary.")])
+    )
+    result = provider.chat(history, tools=tools, stream=stream)
+    if stream:
+        list(result)
+    return provider._client.messages.create.call_args.kwargs
+
+
+def _assistant_turns(call):
+    return [m for m in call["messages"] if m["role"] == "assistant"]
+
+
+@pytest.mark.parametrize("send_stream", [False, True])
+def test_create_path_thinking_returns_on_its_tool_turn(fake_anthropic, send_stream):
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(_PLAN), stream=False)
+
+    call = _second_call(provider, history, stream=send_stream)
+
+    (turn,) = _assistant_turns(call)
+    assert turn["content"] == [
+        _thinking_dict(_PLAN),
+        {"type": "text", "text": "Reading the file."},
+        {
+            "type": "tool_use",
+            "id": "toolu_r1",
+            "name": "read_file",
+            "input": {"path": "notes.txt"},
+        },
+    ]
+
+
+@pytest.mark.parametrize("send_stream", [False, True])
+def test_stream_path_rebuilds_thinking_with_its_signature(fake_anthropic, send_stream):
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _thinking_stream(), stream=True)
+
+    call = _second_call(provider, history, stream=send_stream)
+
+    (turn,) = _assistant_turns(call)
+    assert turn["content"][0] == {
+        "type": "thinking",
+        "thinking": "I should read notes.txt first.",
+        "signature": "EqQB-sig-s",
+    }
+    assert [b["type"] for b in turn["content"]] == ["thinking", "text", "tool_use"]
+    assert turn["content"][2]["input"] == {"path": "notes.txt"}
+
+
+def test_redacted_thinking_round_trips_unchanged(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(_REDACTED, _PLAN), stream=False)
+
+    call = _second_call(provider, history)
+
+    (turn,) = _assistant_turns(call)
+    assert turn["content"][:2] == [_thinking_dict(_REDACTED), _thinking_dict(_PLAN)]
+
+
+def test_interleaved_thinking_keeps_its_original_order(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    between = SimpleNamespace(
+        type="thinking", thinking="Now the second file.", signature="EqQB-sig-2"
+    )
+    response = _response(
+        [
+            _PLAN,
+            _tool_use_block("toolu_i1", "read_file", {"path": "a.txt"}),
+            between,
+            _tool_use_block("toolu_i2", "read_file", {"path": "b.txt"}),
+        ],
+        stop_reason="tool_use",
+    )
+    provider._client.messages.create.return_value = response
+    turn = _as_agent_turn(provider.chat([_SYSTEM, _ASK], tools=OPENAI_TOOLS))
+    history = [
+        _SYSTEM,
+        _ASK,
+        turn,
+        {"role": "tool", "tool_call_id": "toolu_i1", "content": "alpha"},
+        {"role": "tool", "tool_call_id": "toolu_i2", "content": "beta"},
+    ]
+
+    call = _second_call(provider, history)
+
+    (sent,) = _assistant_turns(call)
+    assert [b.get("signature", b.get("id")) for b in sent["content"]] == [
+        "EqQBCgIYAhIM-sig-plan",
+        "toolu_i1",
+        "EqQB-sig-2",
+        "toolu_i2",
+    ]
+
+
+def test_a_turn_without_thinking_is_sent_as_before(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(), stream=False)
+
+    call = _second_call(provider, history)
+
+    (turn,) = _assistant_turns(call)
+    assert [b["type"] for b in turn["content"]] == ["text", "tool_use"]
+
+
+def test_a_streamed_thinking_block_without_a_signature_is_not_replayed(
+    fake_anthropic,
+):
+    """A cut-off stream can end before signature_delta; an unsigned block is
+    rejected by the API, so the turn goes back without it."""
+    provider = _provider(fake_anthropic)
+    events = [
+        e
+        for e in _thinking_stream()
+        if e.type != "content_block_delta" or e.delta.type != "signature_delta"
+    ]
+    history = _first_call(provider, iter(events), stream=True)
+
+    call = _second_call(provider, history)
+
+    (turn,) = _assistant_turns(call)
+    assert [b["type"] for b in turn["content"]] == ["text", "tool_use"]
+
+
+def _edit_text(history):
+    history[2] = {**history[2], "content": "Reading notes.txt now."}
+
+
+def _edit_args(history):
+    call = history[2]["tool_calls"][0]
+    edited = {**call, "function": {**call["function"], "arguments": '{"path": "x"}'}}
+    history[2] = {**history[2], "tool_calls": [edited]}
+
+
+def _edit_earlier_message(history):
+    history[1] = {"role": "user", "content": "Summarise notes.txt, briefly."}
+
+
+def _edit_system(history):
+    history[0] = {"role": "system", "content": "You are GAIA. Today is Friday."}
+
+
+def _trim_history(history):
+    del history[0:2]
+    history.insert(0, {"role": "user", "content": "(earlier turns trimmed)"})
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [_edit_text, _edit_args, _edit_earlier_message, _edit_system, _trim_history],
+    ids=["text", "arguments", "earlier_message", "system_prompt", "trimmed"],
+)
+def test_an_edited_history_does_not_send_stale_thinking(fake_anthropic, edit, caplog):
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(_PLAN), stream=False)
+    edit(history)
+
+    with caplog.at_level("DEBUG", logger="gaia.llm.providers.claude"):
+        call = _second_call(provider, history)
+
+    (turn,) = _assistant_turns(call)
+    assert not any(b["type"] == "thinking" for b in turn["content"])
+    assert "thinking" in caplog.text
+
+
+def test_a_changed_tool_set_does_not_send_stale_thinking(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(_PLAN), stream=False)
+    more_tools = OPENAI_TOOLS + [
+        {
+            "type": "function",
+            "function": {"name": "list_dir", "description": "List", "parameters": {}},
+        }
+    ]
+
+    call = _second_call(provider, history, tools=more_tools)
+
+    (turn,) = _assistant_turns(call)
+    assert not any(b["type"] == "thinking" for b in turn["content"])
+
+
+def test_a_switched_model_does_not_send_another_models_thinking(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(_PLAN), stream=False)
+    first_model = provider._client.messages.create.call_args.kwargs["model"]
+    other = "claude-haiku-5-5" if first_model != "claude-haiku-5-5" else "claude-opus-5"
+
+    provider._client.messages.create.return_value = _response([_text_block("Summary.")])
+    provider.chat(history, tools=OPENAI_TOOLS, model=other)
+    call = provider._client.messages.create.call_args.kwargs
+
+    assert call["model"] == other
+    (turn,) = _assistant_turns(call)
+    assert not any(b["type"] == "thinking" for b in turn["content"])
+
+
+@pytest.mark.parametrize("same", ["explicit", "ignored_non_claude"])
+def test_the_same_resolved_model_still_sends_thinking(fake_anthropic, same):
+    """Naming the model, or passing a non-Claude id that resolves to it, is
+    not a model switch."""
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(_PLAN), stream=False)
+    first_model = provider._client.messages.create.call_args.kwargs["model"]
+    model = first_model if same == "explicit" else "Gemma-4-E4B-it-GGUF"
+
+    provider._client.messages.create.return_value = _response([_text_block("Summary.")])
+    provider.chat(history, tools=OPENAI_TOOLS, model=model)
+    call = provider._client.messages.create.call_args.kwargs
+
+    assert call["model"] == first_model
+    (turn,) = _assistant_turns(call)
+    assert turn["content"][0] == _thinking_dict(_PLAN)
+
+
+def test_thinking_survives_a_multi_step_loop(fake_anthropic):
+    """Each turn's prefix includes the earlier turns' re-sent thinking; a
+    consistent record keeps all of them valid on call 3."""
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(_PLAN), stream=False)
+
+    second_plan = SimpleNamespace(
+        type="thinking", thinking="Now the archive.", signature="EqQB-sig-two"
+    )
+    provider._client.messages.create.return_value = _tool_turn_response(
+        second_plan, call_id="toolu_r2", path="archive.txt"
+    )
+    turn2 = _as_agent_turn(provider.chat(history, tools=OPENAI_TOOLS))
+    history += [turn2, {"role": "tool", "tool_call_id": "toolu_r2", "content": "old"}]
+
+    call = _second_call(provider, history)
+
+    first, second = _assistant_turns(call)
+    assert first["content"][0] == _thinking_dict(_PLAN)
+    assert second["content"][0] == _thinking_dict(second_plan)
+
+
+def test_an_edit_invalidates_every_later_turns_thinking(fake_anthropic):
+    """The API voids a block and every block after it once the prefix
+    changes, so an edit to turn 1 must strip turn 2's thinking too."""
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(_PLAN), stream=False)
+    second_plan = SimpleNamespace(
+        type="thinking", thinking="Now the archive.", signature="EqQB-sig-two"
+    )
+    provider._client.messages.create.return_value = _tool_turn_response(
+        second_plan, call_id="toolu_r2", path="archive.txt"
+    )
+    turn2 = _as_agent_turn(provider.chat(history, tools=OPENAI_TOOLS))
+    history += [turn2, {"role": "tool", "tool_call_id": "toolu_r2", "content": "old"}]
+    _edit_text(history)
+
+    call = _second_call(provider, history)
+
+    for turn in _assistant_turns(call):
+        assert not any(b["type"] == "thinking" for b in turn["content"])
+
+
+def test_dropping_the_oldest_turns_thinking_keeps_later_turns_valid(
+    fake_anthropic, monkeypatch
+):
+    """Thinking blocks chain to the one before them rather than binding it as
+    prefix, so the API accepts a leading run removed oldest-first. A full
+    replay store sheds its oldest turn without voiding the rest."""
+    monkeypatch.setattr("gaia.llm.providers.claude._MAX_REPLAY_TURNS", 1)
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(_PLAN), stream=False)
+    second_plan = SimpleNamespace(
+        type="thinking", thinking="Now the archive.", signature="EqQB-sig-two"
+    )
+    provider._client.messages.create.return_value = _tool_turn_response(
+        second_plan, call_id="toolu_r2", path="archive.txt"
+    )
+    turn2 = _as_agent_turn(provider.chat(history, tools=OPENAI_TOOLS))
+    history += [turn2, {"role": "tool", "tool_call_id": "toolu_r2", "content": "old"}]
+
+    call = _second_call(provider, history)
+
+    first, second = _assistant_turns(call)
+    assert not any(b["type"] == "thinking" for b in first["content"])
+    assert second["content"][0] == _thinking_dict(second_plan)
+
+
+@pytest.mark.parametrize("copy_request", [True, False], ids=["copies", "in_place"])
+def test_a_client_wrapper_that_marks_the_last_block_keeps_thinking_valid(
+    fake_anthropic, copy_request
+):
+    """The replay check ignores markers, so a wrapper's extra marker and effort
+    setting never stop a tool turn's thinking from going back."""
+    provider = _provider(fake_anthropic)
+    wrapper = _MarkingClient(provider._client, copy_request)
+    provider._client = wrapper
+    history = [_SYSTEM, _ASK]
+    plans = []
+    for step in range(4):
+        plan = SimpleNamespace(
+            type="thinking", thinking=f"Step {step}.", signature=f"EqQB-sig-{step}"
+        )
+        plans.append(plan)
+        wrapper._inner.messages.create.return_value = _tool_turn_response(
+            plan, call_id=f"toolu_w{step}", path=f"part{step}.txt"
+        )
+        turn = _as_agent_turn(provider.chat(history, tools=OPENAI_TOOLS))
+        history += [
+            turn,
+            {"role": "tool", "tool_call_id": f"toolu_w{step}", "content": "ok"},
+            # Caller-owned block list as the newest message: the one place a
+            # marker written in place could leak into history and pile up.
+            {"role": "user", "content": [{"type": "text", "text": "Next part."}]},
+        ]
+
+    assert len(wrapper.sent) == 4
+    for request in wrapper.sent:
+        assert _breakpoints(request) == 3
+        assert request["output_config"] == {"effort": "high"}
+    assert "cache_control" not in json.dumps(history)
+    final = _assistant_turns(wrapper.sent[-1])
+    assert [turn["content"][0] for turn in final] == [
+        _thinking_dict(p) for p in plans[:-1]
+    ]
+
+
+def test_replaying_thinking_never_mutates_the_caller_messages(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(_PLAN), stream=False)
+    snapshot = json.loads(json.dumps(history))
+
+    _second_call(provider, history)
+
+    assert history == snapshot
+
+
+def test_rolling_breakpoint_stays_valid_with_replayed_thinking(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(_PLAN), stream=False)
+
+    call = _second_call(provider, history)
+
+    (turn,) = _assistant_turns(call)
+    assert turn["content"][0]["type"] == "thinking"
+    assert not any("cache_control" in b for b in turn["content"])
+    assert call["messages"][-1]["content"][-1]["cache_control"] == _EPHEMERAL
+    assert _breakpoints(call) == 3
+
+
+# The kept thinking blocks must be an unbroken run of the original sequence:
+# dropping from the front is accepted, a gap in the middle is a 400 on models
+# that check the chain. Only the newest unbroken run of assistant turns that
+# all have stored thinking goes back.
+
+
+def _plan(tag):
+    return SimpleNamespace(
+        type="thinking", thinking=f"Plan {tag}.", signature=f"EqQB-sig-{tag}"
+    )
+
+
+def _tool_step(provider, history, response, call_id, stream=False):
+    provider._client.messages.create.return_value = response
+    result = provider.chat(history, tools=OPENAI_TOOLS, stream=stream)
+    text = list(result)[-1] if stream else result
+    return history + [
+        _as_agent_turn(text),
+        {"role": "tool", "tool_call_id": call_id, "content": "ok"},
+    ]
+
+
+def _answer_step(provider, history, *thinking):
+    """A final-answer turn: its thinking is never stored for replay."""
+    provider._client.messages.create.return_value = _response(
+        [*thinking, _text_block("Here is the summary.")]
+    )
+    answer = provider.chat(history, tools=OPENAI_TOOLS)
+    return history + [{"role": "assistant", "content": answer}]
+
+
+def _thinking_of(call):
+    return [
+        (
+            [b.get("signature") for b in turn["content"] if b["type"] == "thinking"]
+            if isinstance(turn["content"], list)
+            else []
+        )
+        for turn in _assistant_turns(call)
+    ]
+
+
+def test_a_gap_in_the_middle_drops_every_older_turns_thinking(fake_anthropic):
+    """ask -> T1(tool) -> answer -> ask -> T2(tool): T1 must not go back, or
+    the request carries thinking [T1], [], [T2] and the API rejects the gap."""
+    provider = _provider(fake_anthropic)
+    history = _tool_step(
+        provider, [_SYSTEM, _ASK], _tool_turn_response(_plan(1)), "toolu_r1"
+    )
+    history = _answer_step(provider, history, _plan("answer"))
+    history.append({"role": "user", "content": "Now the archive, please."})
+    history = _tool_step(
+        provider,
+        history,
+        _tool_turn_response(_plan(2), call_id="toolu_r2", path="archive.txt"),
+        "toolu_r2",
+    )
+
+    call = _second_call(provider, history)
+
+    assert _thinking_of(call) == [[], [], ["EqQB-sig-2"]]
+    first = _assistant_turns(call)[0]
+    assert first["content"] == [
+        {"type": "text", "text": "Reading the file."},
+        {
+            "type": "tool_use",
+            "id": "toolu_r1",
+            "name": "read_file",
+            "input": {"path": "notes.txt"},
+        },
+    ]
+
+
+def test_a_dropped_turn_is_never_put_back(fake_anthropic):
+    """Re-adding a removed block voids the blocks produced while it was gone,
+    so T1 stays out once a later turn broke the run."""
+    provider = _provider(fake_anthropic)
+    history = _tool_step(
+        provider, [_SYSTEM, _ASK], _tool_turn_response(_plan(1)), "toolu_r1"
+    )
+    history = _answer_step(provider, history, _plan("answer"))
+    history.append({"role": "user", "content": "Now the archive, please."})
+    for step in (2, 3):
+        history = _tool_step(
+            provider,
+            history,
+            _tool_turn_response(_plan(step), call_id=f"toolu_r{step}"),
+            f"toolu_r{step}",
+        )
+
+    call = _second_call(provider, history)
+
+    assert _thinking_of(call) == [[], [], ["EqQB-sig-2"], ["EqQB-sig-3"]]
+
+
+def test_a_cut_off_turn_breaks_the_run(fake_anthropic):
+    """A streamed turn that ended before its signature can't be replayed, so
+    the stored turn before it must go back without thinking as well."""
+    provider = _provider(fake_anthropic)
+    history = _tool_step(
+        provider, [_SYSTEM, _ASK], _tool_turn_response(_plan(1)), "toolu_r1"
+    )
+    unsigned = iter(
+        e
+        for e in _thinking_stream(call_id="toolu_s1")
+        if e.type != "content_block_delta" or e.delta.type != "signature_delta"
+    )
+    history = _tool_step(provider, history, unsigned, "toolu_s1", stream=True)
+
+    call = _second_call(provider, history)
+    assert _thinking_of(call) == [[], []]
+
+    history = _tool_step(
+        provider,
+        history,
+        _tool_turn_response(_plan(3), call_id="toolu_r3"),
+        "toolu_r3",
+    )
+    call = _second_call(provider, history)
+    assert _thinking_of(call) == [[], [], ["EqQB-sig-3"]]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_an_all_tool_turn_loop_sends_every_turns_thinking(fake_anthropic, stream):
+    provider = _provider(fake_anthropic)
+    history = [_SYSTEM, _ASK]
+    for step in range(3):
+        history = _tool_step(
+            provider,
+            history,
+            _tool_turn_response(_plan(step), call_id=f"toolu_l{step}"),
+            f"toolu_l{step}",
+        )
+
+    call = _second_call(provider, history, stream=stream)
+
+    assert _thinking_of(call) == [[f"EqQB-sig-{step}"] for step in range(3)]
+    for turn in _assistant_turns(call):
+        assert [b["type"] for b in turn["content"]] == ["thinking", "text", "tool_use"]
+        assert turn["content"][0]["signature"]
+        assert not any("cache_control" in b for b in turn["content"])
+    assert call["messages"][-1]["content"][-1]["cache_control"] == _EPHEMERAL
+    assert _breakpoints(call) == 3
+
+
+def test_thinking_off_sends_the_same_request_as_without_replay(fake_anthropic):
+    """With no thinking in any response nothing is stored, so every turn goes
+    out exactly as a provider with no replay store would send it."""
+    provider = _provider(fake_anthropic)
+    history = _tool_step(provider, [_SYSTEM, _ASK], _tool_turn_response(), "toolu_r1")
+    history = _answer_step(provider, history)
+    history.append({"role": "user", "content": "Now the archive, please."})
+    history = _tool_step(
+        provider,
+        history,
+        _tool_turn_response(call_id="toolu_r2", path="archive.txt"),
+        "toolu_r2",
+    )
+
+    call = _second_call(provider, history)
+    fresh = _provider(fake_anthropic)
+    baseline = _second_call(fresh, history)
+
+    assert provider._replay_turns == {}
+    assert call["messages"] == baseline["messages"]
+    assert _thinking_of(call) == [[], [], []]

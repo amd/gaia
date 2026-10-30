@@ -33,7 +33,7 @@ linters:
   #   errcheck    33  mostly `defer x.Close()`; needs an exclusion list first
   #   staticcheck 10  7 style (QF/ST); 3 real: SA1019 deprecated viewport API x2,
   #                   SA4006 a value assigned and never read in a test
-  #   unused       6  real dead code (see tui/internal/ui/hub/styles.go)
+  #   unused       6  real dead code; re-measure, since tui/internal/ui/hub/ is gone
   #   noctx        8  HTTP requests built without a context
   #   errorlint    4  %v on errors instead of %w
   #   bodyclose    3  all three in daemon_test.go, none in production code

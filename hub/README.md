@@ -14,7 +14,7 @@ hub/
 │   │   ├── npm/        # JS/TS client (when the agent ships one)
 │   │   └── cpp/        # C++ agent (compiled binary, when present)
 │   └── README.md
-├── components/        # Front ends that drive agents (Agent UI, terminal hub)
+├── components/        # Front ends that drive agents (Agent UI, Terminal UI)
 │   └── <id>/gaia-agent.yaml
 ├── skills/            # Skills — a capability any agent composes
 │   ├── <name>/SKILL.md
@@ -26,18 +26,12 @@ Agents and components declare a `gaia-agent.yaml`; skills do not — a skill's
 `SKILL.md` front matter *is* its manifest. See
 [skills/README.md](skills/README.md).
 
-## New here? Start with the examples
+## New here?
 
-Minimal, heavily-commented reference agents live under
-[`agents/`](agents/) and are built to be copy-pasted as the
-starting point for your own agent:
-
-- [`hello-world/`](agents/hello-world/python/) — the smallest possible agent (no tools)
-- [`word-count/`](agents/word-count/python/) — registering a tool with `@tool`
-- [`doc-search/`](agents/doc-search/python/) — composing the framework `RAGToolsMixin`
-
-See [agents/README.md](agents/README.md) for the package format and a
-guided reading order.
+`gaia agent init` scaffolds a working agent package. The smallest complete
+reference package is
+[`tests/fixtures/agents/hello-world/`](../tests/fixtures/agents/hello-world/);
+see [agents/README.md](agents/README.md) for the package format.
 
 ## Creating a new agent
 

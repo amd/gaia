@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: MIT
 """ScreenshotToolsMixin — cross-platform screenshot capture for GAIA agents."""
 
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
+from gaia.agents.base.file_snapshots import before_change
+from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools.path_access import write_access_error
+from gaia.agents.tools.workspace_paths import _workspace_target
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -51,12 +53,13 @@ class ScreenshotToolsMixin:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_path = str(screenshots_dir / f"screenshot_{ts}.png")
         else:
-            output_path = os.path.expanduser(output_path)
+            output_path = str(_workspace_target(self, output_path))
             denied = write_access_error(self, output_path)
             if denied:
                 return denied
 
         out = Path(output_path)
+        before_change(out, "take_screenshot")
         out.parent.mkdir(parents=True, exist_ok=True)
 
         missing = []
@@ -112,8 +115,8 @@ class ScreenshotToolsMixin:
                 )
         else:
             hint = (
-                "Install mss (pip install mss), or Pillow for PIL.ImageGrab "
-                "on Windows/macOS."
+                "No capture backend: mss, or Pillow's PIL.ImageGrab on "
+                f"Windows/macOS. {missing_package_hint('mss')}"
             )
         return {
             "status": "error",

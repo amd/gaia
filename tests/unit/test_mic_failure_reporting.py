@@ -92,7 +92,10 @@ class TestACaptureFailureStopsRecording:
 
 class TestTheMessageIsActionable:
     def test_it_names_the_device(self, recorder):
-        message = recorder.device_error_message("open", OSError("nope"))
+        with patch.object(
+            sd, "query_devices", return_value={"index": 0, "name": "Fake Mic"}
+        ):
+            message = recorder.device_error_message("open", OSError("nope"))
         assert "Fake Mic" in message
         assert "[0]" in message
 

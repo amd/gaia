@@ -35,6 +35,50 @@
         "title": "BypassResponse",
         "type": "object"
       },
+      "GrantView": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "description": "The grant's handle, for revoking it.",
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "description": "What it allows, as the prompt worded it.",
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "GrantView",
+        "type": "object"
+      },
+      "GrantsResponse": {
+        "additionalProperties": false,
+        "description": "A session's \"always\" answers (contract >= 2.26).",
+        "properties": {
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/GrantView"
+            },
+            "title": "Grants",
+            "type": "array"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "grants"
+        ],
+        "title": "GrantsResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -46,6 +90,40 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InternetRequest": {
+        "additionalProperties": false,
+        "description": "Body of ``POST /v1/gaia/sessions/{session_id}/internet``.",
+        "properties": {
+          "internet_off": {
+            "title": "Internet Off",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "internet_off"
+        ],
+        "title": "InternetRequest",
+        "type": "object"
+      },
+      "InternetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "internet_off": {
+            "title": "Internet Off",
+            "type": "boolean"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "internet_off"
+        ],
+        "title": "InternetResponse",
         "type": "object"
       },
       "QueryCancelResponse": {
@@ -126,6 +204,21 @@
         "additionalProperties": false,
         "description": "``POST /v1/gaia/query`` body (frozen #2015 contract, spec §2.2).",
         "properties": {
+          "allowed_paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The conversation's file scope as the caller computed it (contract >= 2.18), so the agent works where the caller's UI says it does. Absolute paths. Builds a new session with exactly this scope; a retained session gains any entry it lacks and keeps what the user granted. GAIA_ALLOWED_PATHS still narrows it. This is an access allowlist, not a relative-path working directory. Omit for the agent's default scope.",
+            "title": "Allowed Paths"
+          },
           "can_answer_questions": {
             "anyOf": [
               {
@@ -138,6 +231,19 @@
             "description": "Whether the caller can answer a mid-run question (contract >= 2.6). False for a one-shot run: the agent must not park on needs_input with nobody there to answer, which reads as a hang.",
             "title": "Can Answer Questions"
           },
+          "changes_turn_id": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{14}-[0-9a-f]{8}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Record this turn's file changes for undo, under this turn of the session (contract >= 2.19). Needs session_id. A copy of each file the agent writes is saved first, in the snapshot store of the agent's GAIA home, keyed by session_id and this id, and the recording is complete before the terminal event is sent. Use file_snapshots.new_turn_id() to make one. Omit it to record nothing.",
+            "title": "Changes Turn Id"
+          },
           "context": {
             "description": "Transcript slice, pushed in the body. May be empty, never absent.",
             "items": {
@@ -145,6 +251,33 @@
             },
             "title": "Context",
             "type": "array"
+          },
+          "documents": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absolute paths of the files the user attached to this conversation (contract >= 2.16). Each is granted as that exact file, never its folder, and indexed before the turn runs. Send the full set every turn: files already indexed in a retained session are skipped, so one attached mid-conversation is picked up on the next turn.",
+            "title": "Documents"
+          },
+          "internet_off": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether this turn may reach the internet (contract >= 2.23). True refuses web search, page fetches, the browser, connector, mailbox and Agent Hub tools and commands that contact another host, with a plain message the model relays; false allows them. Send it every turn: a retained session keeps the last value. Omit it to leave the agent as it is.",
+            "title": "Internet Off"
           },
           "max_steps": {
             "anyOf": [
@@ -158,6 +291,23 @@
             ],
             "description": "Cap on agent-loop steps for this turn. Omit for the agent's default.",
             "title": "Max Steps"
+          },
+          "memory": {
+            "anyOf": [
+              {
+                "enum": [
+                  "on",
+                  "private",
+                  "off"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether this turn may save to memory (contract >= 2.18): 'on', 'private' (a private chat) or 'off' (memory turned off in the caller's settings). With 'private' or 'off' nothing is written, including the errors and lessons the agent saves on its own. Send it every turn: a retained session keeps the last value. Omit it to leave memory as the agent has it.",
+            "title": "Memory"
           },
           "model": {
             "anyOf": [
@@ -189,6 +339,12 @@
             "title": "Query",
             "type": "string"
           },
+          "reasoning": {
+            "default": false,
+            "description": "Stream the model's reasoning as `reasoning` events with a `delta` (contract >= 2.22), for a client that shows it apart from status lines. Without it, reasoning folds into `status` lines as before.",
+            "title": "Reasoning",
+            "type": "boolean"
+          },
           "run_id": {
             "description": "Host-minted UUIDv4 run handle. Cancellation (POST /v1/gaia/query/{run_id}/cancel) keys off it, so the client must mint it before the request rather than learn it from the stream.",
             "title": "Run Id",
@@ -205,6 +361,54 @@
             ],
             "description": "Conversation handle (contract >= 2.12). Threaded to the agent as its UI session so indexed documents survive across turns — without it a document agent forgets what it just indexed.",
             "title": "Session Id"
+          },
+          "surface": {
+            "anyOf": [
+              {
+                "enum": [
+                  "agent_ui",
+                  "tui",
+                  "cli"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The front-end this turn comes from (contract >= 2.20). 'agent_ui' tells the agent that features like Scheduled tasks are in the caller's sidebar, and each front-end gets model-provider errors worded for its own settings. Fixed when a session is built; omit it for a headless caller, whose provider advice then points at the model server this GAIA host uses.",
+            "title": "Surface"
+          },
+          "turns": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Earlier turns as the model saw them, oldest first (contract >= 2.25): each is that turn's `final.model_messages`, tool calls and results included, or a user/assistant text pair for a turn that recorded none. Replaces `context` when sent, and `[]` means no earlier turns and clears a retained session's history; the agent keeps the newest whole turns that fit its context window. Sent, even as `[]`, it makes `final` carry `model_messages`.",
+            "title": "Turns"
+          },
+          "working_directory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absolute chat workspace used to resolve relative file paths on this turn (contract >= 2.24). It is separate from allowed_paths: an allowlist grants access but does not choose which folder a bare file name belongs in.",
+            "title": "Working Directory"
           }
         },
         "required": [
@@ -225,13 +429,32 @@
             "type": "string"
           },
           "response": {
-            "title": "Response",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Deprecated spelling of 'value'. Send exactly one of the two.",
+            "title": "Response"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The answer: an option's 'value' (or its 'label'), or free text when the question set allow_free_text. The spec §5.1 name, shared with the email agent, the Agent UI and the TUI.",
+            "title": "Value"
           }
         },
         "required": [
-          "request_id",
-          "response"
+          "request_id"
         ],
         "title": "QueryRespondRequest",
         "type": "object"
@@ -363,7 +586,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.15"
+    "version": "2.26"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -467,11 +690,14 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/event-stream": {
+                "schema": {
+                  "example": "data: {\"type\": \"needs_confirmation\", \"run_id\": \"…\", \"action\": \"run_shell_command\", \"summary\": \"git push\", \"confirm_id\": \"…\", \"risk\": \"execute\", \"args\": {\"command\": \"git push\"}}\n\n",
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`: status {message, phase?, queue?} | token {delta} | tool_call {tool, args} | tool_result {tool, data, render?} | needs_confirmation {run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?} | needs_input {run_id, request_id, question, options, allow_free_text, sensitive, respond_url, timeout_seconds?} | final {answer, usage?, failed?, model_messages?} | error {detail, status}. A needs_confirmation's `args` are exactly the arguments the model sent for the gated call, each value capped at 64,000 characters (`args_truncated: true` when one was cut); what the agent adds to its prompt is in `prompt_context` {working_directory?, risk_note?, file_path?}, never in `args`. The stream ends with exactly one `final` or `error`. `:`-prefixed heartbeat comments carry no payload."
           },
           "422": {
             "content": {
@@ -776,6 +1002,207 @@
           {}
         ],
         "summary": "Set Bypass",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/sessions/{session_id}/grants": {
+      "delete": {
+        "description": "Revoke one \"always\" answer (``?key=``), or all of them.\n\nApplies from the very next gated call, including one in a running turn.\nAn unknown key is a 404 rather than a quiet success: a caller that thinks\nit revoked something must not be left believing it.",
+        "operationId": "revoke_grants_v1_gaia_sessions__session_id__grants_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Revoke Grants",
+        "tags": [
+          "gaia-query"
+        ]
+      },
+      "get": {
+        "description": "The calls the user answered \"always\" to in this session, so far.\n\nIncludes answers given in a turn still running, which is where a caller\nshows the user what it may now do without asking.",
+        "operationId": "list_grants_v1_gaia_sessions__session_id__grants_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "List Grants",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/sessions/{session_id}/internet": {
+      "post": {
+        "description": "Turn a session's internet on or off from its agent's next tool call.\n\n``/query``'s ``internet_off`` covers the turns that start after a change;\nthis reaches a turn already running, so a switch flipped mid-turn stops the\nnext web search rather than the one after the turn ends. An unknown session\nis a 404, as for bypass.",
+        "operationId": "set_internet_v1_gaia_sessions__session_id__internet_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InternetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Set Internet",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/skills": {
+      "get": {
+        "description": "The skills this agent can load, for the Agent UI's Skills settings.\n\nThe bundled skills live inside the frozen binary, so a UI that does not\nhave the agent package installed beside it can only list them from here.",
+        "operationId": "skills_v1_gaia_skills_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Skills V1 Gaia Skills Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Skills",
         "tags": [
           "gaia-query"
         ]

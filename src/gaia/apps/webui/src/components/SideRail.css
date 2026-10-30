@@ -1,0 +1,181 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* "This answer": the session panel's first section (#5222). */
+
+.side-rail-body {
+    padding: 0 0 4px;
+}
+
+.side-rail-section + .side-rail-section {
+    border-top: 1px solid var(--border-light);
+}
+
+.side-rail-section-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 10px 4px 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-align: left;
+}
+
+.side-rail-chevron {
+    color: var(--text-muted);
+    transition: transform var(--duration-fast) var(--ease);
+}
+
+.side-rail-chevron.open { transform: rotate(90deg); }
+
+.side-rail-section-body { padding: 0 4px 10px; }
+
+.side-rail-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.side-rail-item {
+    display: flex;
+    gap: 8px;
+    min-width: 0;
+}
+
+.side-rail-item-icon {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--text-muted);
+}
+
+.side-rail-item-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.side-rail-link,
+.side-rail-name {
+    font-size: 12.5px;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.side-rail-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+    text-decoration: none;
+}
+
+/* A flex item's bare text never gets an ellipsis, so the title needs its own box. */
+.side-rail-link-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.side-rail-link-icon { flex-shrink: 0; }
+
+.side-rail-link:hover { color: var(--accent); text-decoration: underline; }
+
+.side-rail-meta {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.side-rail-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+.side-rail-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    background: var(--bg-secondary);
+}
+
+.side-rail-action:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+.side-rail-item-gone .side-rail-name {
+    color: var(--text-muted);
+    text-decoration: line-through;
+}
+
+.side-rail-pending {
+    margin: 4px 4px 0;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+}
+
+.side-rail-error {
+    margin: 8px 0 0;
+    font-size: 11.5px;
+    color: var(--danger);
+}
+
+.side-rail-facts {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 12px;
+    margin: 0;
+    font-size: 12.5px;
+}
+
+.side-rail-facts dt { color: var(--text-muted); }
+
+.side-rail-facts dd {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    color: var(--text-primary);
+}
+
+.side-rail-where {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-weight: 500;
+}
+
+.side-rail-where.remote { color: var(--accent-yellow); }
+
+.side-rail-warn {
+    display: flex;
+    gap: 8px;
+    margin: 4px 0 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: var(--text-primary);
+    background: var(--accent-yellow-dim);
+    border-radius: var(--radius-md);
+}
+
+.side-rail-warn svg { flex-shrink: 0; margin-top: 1px; color: var(--accent-yellow); }
+
+.side-rail-warn div { display: flex; flex-direction: column; gap: 2px; }
+
+.side-rail-warn span { color: var(--text-secondary); }

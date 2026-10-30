@@ -1,0 +1,264 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Freeze the flagship agent's `gaia-agent` sidecar into a one-file native binary
+# per platform, smoke-test the frozen binary, and upload each as a
+# `gaia-agent-<platform>` artifact with a SHA-256 + size meta.
+#
+# Callers:
+#   release_agent_gaia.yml  a flagship release, which publishes these to the hub
+#   publish.yml             a core release candidate, which attaches them to its
+#                           GitHub pre-release so the RC runs a flagship built
+#                           from its own commit (the hub has no pre-release
+#                           channel)
+#
+# One definition, so the binary an RC tester runs is built exactly the way the
+# released one will be. Dispatch it on its own to check that main still
+# freezes before tagging; that run publishes nothing.
+#
+# The Linux binary runs on the glibc it was built against or newer, so it is
+# built in a Rocky Linux 9 container (glibc 2.34) rather than on the runner's
+# own Ubuntu: that reaches RHEL/Rocky 9, Ubuntu 22.04 and Debian 12, which a
+# 24.04 build locked out with `GLIBC_2.38 not found` (#5526). Its Python is the
+# distro's python3.12, a shared libpython built for that same floor, which
+# PyInstaller needs (the manylinux images' interpreters are static).
+# check_glibc.py fails the build if anything packed in the binary asks for
+# more, and `distro-smoke` runs the smoke test on each of those distros.
+
+name: Build flagship sidecar
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PACKAGING: hub/agents/gaia/python/packaging
+  FREEZE_DIST: hub/agents/gaia/python/packaging/dist
+
+jobs:
+  freeze:
+    name: Freeze sidecar (${{ matrix.key }})
+    runs-on: ${{ matrix.os }}
+    # Empty for every row but linux-x64, which builds on the glibc floor.
+    container: ${{ matrix.container }}
+    # darwin-x64 (Intel) is BEST-EFFORT, built on macos-26-intel (the latest
+    # Intel image; macos-13 retired Dec 2025, Intel images supported through
+    # Aug 2027). TRADE-OFF: building on the newest macOS can raise the frozen
+    # binary's minimum-OS, so Intel-Mac users on older macOS may not be able to
+    # run it; switch to macos-15-intel if broad backward-compat matters more
+    # than a current toolchain. PyInstaller can't cross-compile, so an Intel
+    # binary needs an Intel host. The leg may fail without failing the release
+    # (continue-on-error + required:false); `publish` gates only on the 3
+    # REQUIRED platforms. A miss is announced LOUDLY (::warning:: + job summary)
+    # and Intel users still fail loudly at install — never silent.
+    continue-on-error: ${{ !matrix.required }}
+    timeout-minutes: ${{ matrix.required && 40 || 60 }}
+    strategy:
+      # Never let one slow/stuck leg cancel the others — each platform freezes
+      # independently and `publish` reconciles whatever arrived.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win32-x64
+            key: win32-x64
+            artifact: gaia-agent-win32-x64.exe
+            frozen: gaia-agent.exe
+            required: true
+          - os: macos-14
+            platform: darwin-arm64
+            key: darwin-arm64
+            artifact: gaia-agent-darwin-arm64
+            frozen: gaia-agent
+            required: true
+          - os: ubuntu-latest
+            platform: linux-x64
+            key: linux-x64
+            artifact: gaia-agent-linux-x64
+            frozen: gaia-agent
+            required: true
+            # The glibc floor -- see the header. glibc_floor must match the
+            # image's glibc: check_glibc.py holds the binary to it.
+            container: rockylinux/rockylinux:9
+            glibc_floor: '2.34'
+          # darwin-x64 (Intel) BEST-EFFORT — see the job-level comment above.
+          - os: macos-26-intel
+            platform: darwin-x64
+            key: darwin-x64
+            artifact: gaia-agent-darwin-x64
+            frozen: gaia-agent
+            required: false
+    steps:
+      # Before checkout, which needs git to clone. setup-python's interpreters
+      # are built for Ubuntu, so the container uses the distro's python3.12
+      # (and only it: UV_PYTHON_PREFERENCE). binutils is for PyInstaller and
+      # check_glibc.py; the compilers are for any dependency without a wheel.
+      - name: Prepare the glibc-floor container
+        if: matrix.container
+        shell: bash
+        run: |
+          set -euo pipefail
+          dnf install -y --setopt=install_weak_deps=False \
+            python3.12 python3.12-devel git binutils gcc gcc-c++ tar gzip findutils
+          ln -sf /usr/bin/python3.12 /usr/local/bin/python
+          echo "UV_PYTHON_PREFERENCE=only-system" >> "$GITHUB_ENV"
+          # The image declares no PATH, so once setup-uv adds to GITHUB_PATH the
+          # runner's PATH would hold only uv's directory and lose bash.
+          echo "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" >> "$GITHUB_PATH"
+          ldd --version | sed -n 1p
+
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        if: ${{ !matrix.container }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install deps + PyInstaller (frozen-binary env)
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv venv .venv-freeze --python 3.12
+          # gaia-agent-gaia is a hard dependency of gaia-agent-chat (GaiaAgent
+          # subclasses ChatAgent), so chat is installed from the same checkout
+          # rather than resolved from PyPI — the frozen binary must contain the
+          # ChatAgent this commit was developed against, not whatever is
+          # published.
+          #
+          # `rag` is required, not optional, in THIS lane: the agent's own
+          # pyproject leaves it out because a wheel gets it from `gaia init`
+          # into the active interpreter (#2358), and a frozen binary has no
+          # interpreter to install into. Without it faiss/pypdf are absent, the
+          # RAG tools still register, and document Q&A fails on every call.
+          #
+          # `anthropic` backs `--use-claude` and `/model`, which the TUI passes
+          # to this binary. Its import is guarded, so leaving it out still
+          # builds a binary that boots and then fails every Claude launch.
+          #
+          # pandas and matplotlib are for run_python scripts: the binary is the
+          # only Python a release user has (#5088). freeze.py refuses to build
+          # without them (SCRIPT_LIBRARIES).
+          #
+          # tiktoken is named rather than left to arrive through tavily-python:
+          # freeze.py bundles its cl100k_base data and fails the build without it.
+          uv pip install --python .venv-freeze \
+            -e ".[api,rag,diarize,browser]" \
+            -e hub/agents/chat/python \
+            -e hub/agents/gaia/python \
+            anthropic \
+            pandas \
+            matplotlib \
+            tiktoken \
+            pyinstaller
+
+      - name: Freeze one-file binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" "${PACKAGING}/freeze.py" --onefile
+
+      - name: Check the binary runs on glibc ${{ matrix.glibc_floor }}
+        if: matrix.glibc_floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv-freeze/bin/python "${PACKAGING}/check_glibc.py" \
+            "${FREEZE_DIST}/${{ matrix.frozen }}" --max "${{ matrix.glibc_floor }}"
+
+      # The gate that matters: the FROZEN binary must actually boot and serve.
+      # An import that only resolves in the dev venv (a hidden import PyInstaller
+      # missed, a package-data file that didn't get collected) fails here rather
+      # than on a user's machine after the tag is immutable.
+      - name: Smoke-test the frozen binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" "${PACKAGING}/smoke_test.py" "${FREEZE_DIST}/${{ matrix.frozen }}"
+
+      - name: Stage artifact + compute SHA-256 / size
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          cp "${FREEZE_DIST}/${{ matrix.frozen }}" "staging/${{ matrix.artifact }}"
+          python - "staging/${{ matrix.artifact }}" "${{ matrix.platform }}" "${{ matrix.artifact }}" "${{ matrix.frozen }}" <<'PY'
+          import hashlib, json, sys
+          path, platform, filename, frozen = sys.argv[1:5]
+          data = open(path, "rb").read()
+          meta = {
+              "component": "sidecar",
+              "platform": platform,
+              "filename": filename,
+              "executable": "gaia-agent.exe" if frozen.endswith(".exe") else "gaia-agent",
+              "sha256": hashlib.sha256(data).hexdigest(),
+              "size": len(data),
+          }
+          with open(f"staging/sidecar-{platform}.meta.json", "w") as fh:
+              fh.write(json.dumps([meta], indent=2))
+          print(json.dumps(meta, indent=2))
+          PY
+
+      - name: Upload platform artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: gaia-agent-${{ matrix.key }}
+          path: |
+            staging/${{ matrix.artifact }}
+            staging/sidecar-${{ matrix.platform }}.meta.json
+          if-no-files-found: error
+
+  # The Linux binary on the distros it has to run on, oldest glibc first, plus
+  # the newest LTS for regression. Containers are bare, so each installs the
+  # harness's Python and the CA store a desktop already has.
+  distro-smoke:
+    name: Smoke-test linux-x64 on ${{ matrix.name }}
+    needs: freeze
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: RHEL 9 (Rocky 9), image: 'rockylinux/rockylinux:9', pkg: dnf}
+          - {name: Ubuntu 22.04, image: 'ubuntu:22.04', pkg: apt}
+          - {name: Debian 12, image: 'debian:12', pkg: apt}
+          - {name: Ubuntu 24.04, image: 'ubuntu:24.04', pkg: apt}
+    steps:
+      - name: Install the harness's Python
+        shell: sh
+        run: |
+          set -eu
+          if [ "${{ matrix.pkg }}" = apt ]; then
+            apt-get -o Acquire::Retries=5 update
+            DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y \
+              --no-install-recommends python3 ca-certificates git
+          else
+            dnf install -y --setopt=install_weak_deps=False python3 ca-certificates git
+          fi
+          ldd --version | sed -n 1p
+
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: ${{ env.PACKAGING }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: gaia-agent-linux-x64
+          path: agent
+
+      - name: Smoke-test the frozen binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x agent/gaia-agent-linux-x64
+          python3 "${PACKAGING}/smoke_test.py" agent/gaia-agent-linux-x64

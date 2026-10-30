@@ -68,7 +68,7 @@
         },
         "latest_version": {
           "type": "string",
-          "description": "Highest published SemVer for this package."
+          "description": "The stable channel: the highest SemVer published to it. A release candidate never appears here; see channels.next."
         },
         "icon": { "type": "string" },
         "language": {
@@ -96,6 +96,21 @@
         "min_gaia_version": {
           "type": "string",
           "description": "Minimum GAIA version (SemVer); empty string when the manifest omits it."
+        },
+        "channels": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stable", "next"],
+          "description": "The version each release channel resolves to. Agent-lane entries only; absent on skill entries.",
+          "properties": {
+            "stable": { "type": "string", "description": "Always equal to latest_version, and never a pre-release." },
+            "next": { "type": "string", "description": "The newest version on either channel: a release candidate, or stable when it is newer." }
+          }
+        },
+        "min_gaia_versions": {
+          "type": "object",
+          "description": "Every published version mapped to the oldest GAIA core it runs on (SemVer), or an empty string when that version never recorded one. Clients offer the newest version their core satisfies. Absent on skill entries.",
+          "additionalProperties": { "type": "string" }
         },
         "permissions": {
           "type": "array",

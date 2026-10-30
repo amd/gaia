@@ -14,6 +14,7 @@ type conversationClearedMsg struct {
 }
 
 func (m ChatModel) clearConversation() (tea.Model, tea.Cmd) {
+	m.clearSelection()
 	if resetter, ok := m.client.(client.ConversationResetter); ok && resetter.SupportsConversationReset() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		m.cancelFn = cancel
@@ -25,6 +26,7 @@ func (m ChatModel) clearConversation() (tea.Model, tea.Cmd) {
 		m.phase = modelPhase{}
 		m.followTail = true
 		m.queryStart = time.Now()
+		m.userWait, m.userWaitStart = 0, time.Time{}
 		// Same per-turn reset as startTurn: a stale step count or a card
 		// already drawn would be attributed to the cleared turn.
 		m.totalSteps = 0
@@ -57,6 +59,7 @@ func (m ChatModel) handleConversationCleared(msg conversationClearedMsg) (tea.Mo
 		m.messages = append(m.messages, Message{Role: RoleError, Content: "Could not clear conversation: " + msg.err.Error()})
 	} else {
 		m.messages = nil
+		m.clearSelection()
 	}
 	m.updateViewport()
 	return m, nil

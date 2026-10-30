@@ -57,7 +57,7 @@ from gaia_agent.engineering_tools import (
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 from gaia_agent_chat.profiles import get_profile_spec
 
-from gaia.agents.base.agent import parse_skill_manifest
+from gaia.agents.base.agent import default_max_steps, parse_skill_manifest
 from gaia.agents.base.project_map import ProjectMapMixin, is_code_repository
 from gaia.agents.base.skill_catalog import catalog_env_override
 from gaia.agents.base.skill_loader import (
@@ -80,21 +80,34 @@ logger = get_logger(__name__)
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
+#: This file's parent folders in a source checkout, nearest first.
+_CHECKOUT_LAYOUT = ("gaia_agent", "python", "gaia", "agents", "hub")
+
+
+def _checkout_skills_dir(agent_file: Path) -> Optional[Path]:
+    """``hub/skills`` when *agent_file* sits at hub/agents/gaia/python/gaia_agent/.
+
+    A bundled root's code runs without ``gaia skill promote``, and an installed
+    package sits at no fixed depth, so a bare ``parents[4]`` would trust
+    whatever ``skills/`` folder lies beside the environment.
+    """
+    parents = list(agent_file.parents)[: len(_CHECKOUT_LAYOUT)]
+    if tuple(p.name for p in parents) != _CHECKOUT_LAYOUT:
+        return None
+    return parents[-1] / "skills"
+
+
 #: The starter pack's canonical home, for a source checkout only.
 #:
 #: Packaging stages the pack into ``_SKILLS_DIR``; in a checkout that directory
 #: holds just a ``.gitkeep``, so without this the agent discovers NO skills and
 #: "load the github-triage skill" fails on a tree that visibly contains it.
-#: hub/agents/gaia/python/gaia_agent/agent.py -> parents[4] is hub/.
-#:
-#: Frozen builds skip this: PyInstaller's extraction dir has no fixed depth
-#: (Linux's is shallow enough that parents[4] raises IndexError at import
-#: time -- verified on the v0.2.0 linux-x64 freeze), and _SKILLS_DIR alone is
-#: correct there since the freeze already bundles the pack as --add-data.
-_HUB_SKILLS_DIR = (
+#: ``None`` outside a checkout. Frozen builds use _SKILLS_DIR alone, since the
+#: freeze already bundles the pack there as --add-data.
+_HUB_SKILLS_DIR: Optional[Path] = (
     _SKILLS_DIR
     if getattr(sys, "frozen", False)
-    else Path(__file__).resolve().parents[4] / "skills"
+    else _checkout_skills_dir(Path(__file__).resolve())
 )
 
 
@@ -115,6 +128,8 @@ def _bundled_skill_roots() -> List[str]:
     """
     roots: List[str] = []
     for directory in (_SKILLS_DIR, _HUB_SKILLS_DIR):
+        if directory is None:
+            continue
         path = str(directory)
         if directory.is_dir() and path not in roots:
             roots.append(path)
@@ -150,6 +165,18 @@ def fast_env_override() -> Optional[bool]:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+#: The flagship's step limit when nothing overrides it. Desktop tasks (read nine
+#: datasheets, price a BOM, write two files) need ~60-70 steps, so the fleet's
+#: 50 ended them mid-research with nothing written. ``GAIA_AGENT_MAX_STEPS``
+#: and an explicit ``max_steps`` still win.
+FLAGSHIP_MAX_STEPS = 150
+
+
+def flagship_max_steps() -> int:
+    """``GAIA_AGENT_MAX_STEPS`` if set, else :data:`FLAGSHIP_MAX_STEPS`."""
+    return default_max_steps(FLAGSHIP_MAX_STEPS)
+
+
 def _locate_agent_manifest() -> Optional[str]:
     """Absolute path to this package's ``gaia-agent.yaml``, or ``None``.
 
@@ -180,6 +207,9 @@ class GaiaAgentConfig(ChatAgentConfig):
     # "full" is the only spec whose tool_groups are the union this agent needs:
     # doc_rag + file_fs + data_scratch + web_browse + full_screenshot.
     prompt_profile: str = "full"
+
+    # None (the CLI's "not given") also resolves to the flagship limit.
+    max_steps: Optional[int] = field(default_factory=flagship_max_steps)
 
     # Kept explicit even though "full" already implies them: these gate mixin
     # *construction* (indexes, DB handles, HTTP session) in __init__, separately
@@ -238,6 +268,7 @@ class GaiaAgentConfig(ChatAgentConfig):
     # here means "draw me a picture" has no answer at all. The image-gen skill
     # carries the eviction cost into the procedure.
     enable_sd_tools: bool = True
+    enable_audio_generation_tools: bool = True
 
     rag_documents: List[str] = field(default_factory=list)
 
@@ -249,7 +280,7 @@ class GaiaAgentConfig(ChatAgentConfig):
     # The user's home is the honest scope for a personal document agent — it is
     # what "ask questions about my files" means — and it stays a real boundary
     # (system directories, other users, and program files are still refused).
-    # Override with ``allowed_paths=[...]`` to narrow it.
+    # Override with ``allowed_paths=[...]``, or set GAIA_ALLOWED_PATHS, to narrow it.
     allowed_paths: Optional[List[str]] = field(
         default_factory=lambda: [str(Path.home())]
     )
@@ -288,7 +319,8 @@ def _code_search_start(allowed: List[str]) -> str:
     """
     folders = [p for p in allowed if Path(p).is_dir()]
     repos = [p for p in folders if is_code_repository(p)]
-    return (repos or folders or allowed)[0]
+    # Empty only when GAIA_ALLOWED_PATHS left nothing in scope; ceilings refuse all.
+    return (repos or folders or allowed or [os.getcwd()])[0]
 
 
 def _apply_fast_mode(config: GaiaAgentConfig) -> None:
@@ -317,6 +349,7 @@ def _apply_fast_mode(config: GaiaAgentConfig) -> None:
     config.enable_scratchpad = False
     config.enable_browser = False
     config.enable_sd_tools = False
+    config.enable_audio_generation_tools = False
     config.dynamic_tools = False
     config.dynamic_skills = False
     config.skill_discovery = False
@@ -367,6 +400,8 @@ class GaiaAgent(
                 "Set them on the config object, or drop the config= argument."
             )
         resolved = config or GaiaAgentConfig(**kwargs)
+        if resolved.max_steps is None:
+            resolved.max_steps = flagship_max_steps()
         # ``GAIA_FAST`` wins in both directions, so a launcher that hard-codes
         # fast=True is still overridable from the shell. Written back to the
         # field so ``config.fast`` never disagrees with how the agent was built.
@@ -461,7 +496,9 @@ class GaiaAgent(
             # back to allowed_paths for the same reason that field rejects cwd: the
             # daemon launches this sidecar with cwd = the package directory, so cwd
             # would sandbox code search to the agent's own source tree.
-            allowed = getattr(self.config, "allowed_paths", None) or [str(Path.home())]
+            allowed = getattr(self.config, "allowed_paths", None)
+            if allowed is None:
+                allowed = [str(Path.home())]
             # Through the mixin, so both read the one cached resolution and can
             # never end up describing two different trees.
             index_root = self._project_map_root() or _code_search_start(allowed)

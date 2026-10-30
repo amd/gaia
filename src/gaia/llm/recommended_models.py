@@ -27,14 +27,14 @@ class Recommendation:
 
 RECOMMENDED_MODELS: Tuple[Recommendation, ...] = (
     Recommendation(
-        "fireworks.glm-5p3-flash",
-        "best overall, cheapest",
-        "14/14 tasks · quality 4.89/5 · $0.09 per 14-task run",
+        "fireworks.deepseek-v4p1-flash",
+        "best overall, fastest",
+        "14/14 tasks · quality 4.92/5 · $0.10 per 14-task run",
     ),
     Recommendation(
-        "fireworks.deepseek-v4p1-flash",
-        "fastest",
-        "14/14 tasks · quality 4.92/5 · $0.10 per 14-task run",
+        "fireworks.glm-5p3-flash",
+        "cheapest",
+        "14/14 tasks · quality 4.89/5 · $0.09 per 14-task run",
     ),
     Recommendation("fireworks.deepseek-v4-pro-0813", "most truthful"),
 )

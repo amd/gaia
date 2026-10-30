@@ -133,27 +133,15 @@ def test_native_agent_launch_is_trimmed(monkeypatch, tmp_path, extra):
 # ---------------------------------------------------------------------------
 
 
-def test_ffmpeg_decode_is_trimmed(monkeypatch):
-    from gaia.audio import media
-
-    run = Recorder(result=_completed())
-    monkeypatch.setattr(media.subprocess, "run", run)
-
-    media._run_ffmpeg(["ffmpeg", "-i", "in.mp3"], Path("in.mp3"))
-
-    assert_trimmed(run.env)
-
-
-def test_ffmpeg_decode_with_progress_is_trimmed(monkeypatch):
+@pytest.mark.parametrize("callback", [None, lambda _f: None], ids=["plain", "progress"])
+def test_ffmpeg_decode_is_trimmed(monkeypatch, callback):
     from gaia.audio import media
 
     popen = Recorder(raises=OSError("stop here"))
     monkeypatch.setattr(media.subprocess, "Popen", popen)
 
     with pytest.raises(media.MediaError):
-        media._run_ffmpeg_with_progress(
-            ["ffmpeg", "-i", "in.mp3"], Path("in.mp3"), 1.0, lambda _f: None
-        )
+        media._run_ffmpeg(["ffmpeg", "-i", "in.mp3"], Path("in.mp3"), 1.0, callback)
 
     assert_trimmed(popen.env)
 

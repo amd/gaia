@@ -15,16 +15,26 @@
 import { parse as parseYaml } from "yaml";
 
 import { assertAuthorAllowed, authenticate } from "./auth";
-import { makeVersionEntry, rebuildIndex, upsertVersion } from "./catalog";
+import {
+  channelOfVersion,
+  channelsOf,
+  isPrerelease,
+  makeVersionEntry,
+  readResolvedAgentManifest,
+  rebuildIndex,
+  upsertVersion,
+} from "./catalog";
 import { HttpError, json } from "./http";
 import { parseManifest } from "./manifest";
 import {
   ARTIFACT_FILENAME_RE,
   maxBytes,
+  maxReferencedBytes,
   optionalTextPart,
   sha256Hex,
 } from "./multipart";
 import {
+  aliasOf,
   artifactKey,
   capabilityMatrixKey,
   changelogKey,
@@ -39,7 +49,7 @@ import {
   specKey,
   writeAgentManifest,
 } from "./storage";
-import type { ArtifactInfo, Env } from "./types";
+import { CHANNELS, type ArtifactInfo, type Channel, type Env } from "./types";
 
 /** JSON with object keys sorted at every depth, so equal YAML documents compare equal. */
 function canonicalJson(value: unknown): string {
@@ -167,6 +177,24 @@ function selectArtifactSource(
   return { artifactFile: file, filename: file.name };
 }
 
+/**
+ * Read the optional `channel` part. Absent means `stable`, which is how every
+ * publish behaved before channels existed.
+ */
+async function parseChannel(form: FormData): Promise<Channel> {
+  const text = (await optionalTextPart(form, "channel", "channel name"))?.trim();
+  if (text == null) return "stable";
+  if (!(CHANNELS as readonly string[]).includes(text)) {
+    throw new HttpError(
+      400,
+      "invalid_channel",
+      `Channel ${JSON.stringify(text)} is not one of ${CHANNELS.join(", ")}. Send ` +
+        `'next' for a release candidate, or omit the part to publish to stable.`
+    );
+  }
+  return text as Channel;
+}
+
 /** Hex-encode an ArrayBuffer (R2 returns checksums as raw bytes). */
 function hex(buf: ArrayBuffer): string {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -235,11 +263,9 @@ async function verifyUploadedArtifact(
     );
   }
 
-  // The inline lane enforces this before storing; the by-reference lane must
-  // too, or MAX_ARTIFACT_BYTES silently stops being the artifact size cap the
-  // README says it is. The 250 MiB default clears the 135 MiB installers, so
-  // this costs nothing today and keeps one ceiling rather than two.
-  const limit = maxBytes(env);
+  // Its own ceiling, not MAX_ARTIFACT_BYTES: these bytes never pass through the
+  // Worker, so the inline cap would only block the largest installers.
+  const limit = maxReferencedBytes(env);
   if (head.size > limit) {
     throw new HttpError(
       413,
@@ -356,9 +382,21 @@ export async function handlePublish(
   // list). The zip itself rides in as a normal `artifact`; this is just the
   // manifest of what's inside it.
   const packageFilesText = await optionalPackageFiles(form);
+  const channel = await parseChannel(form);
 
   const manifest = parseManifest(manifestText);
   assertAuthorAllowed(publisher, manifest.author);
+
+  // `latest_version` is the stable channel and every existing client reads it,
+  // so a pre-release on stable would hand an RC to everyone.
+  if (channel === "stable" && isPrerelease(manifest.version)) {
+    throw new HttpError(
+      400,
+      "prerelease_on_stable",
+      `${manifest.id}@${manifest.version} is a pre-release and cannot be published to ` +
+        `the stable channel. Send channel=next, or publish a final version.`
+    );
+  }
 
   if (!ARTIFACT_FILENAME_RE.test(filename)) {
     throw new HttpError(
@@ -387,15 +425,38 @@ export async function handlePublish(
   // same manifest can join an existing version, but no published filename can
   // ever be overwritten.
   const existing = await readAgentManifest(env.BUCKET, manifest.id);
-  if (existing && existing.author !== manifest.author) {
+  // An alias pair is one package: its other id's owner owns this one too, and
+  // a version may live under only one of the two.
+  const aliasId = aliasOf(manifest.id);
+  const aliasManifest = aliasId ? await readAgentManifest(env.BUCKET, aliasId) : null;
+  const owner = existing ?? aliasManifest;
+  if (owner && owner.author !== manifest.author) {
     throw new HttpError(
       403,
       "forbidden_scope",
-      `Agent '${manifest.id}' is owned by author '${existing.author}'. A publish ` +
-        `with author '${manifest.author}' cannot update it.`
+      `Agent '${owner.id}' is owned by author '${owner.author}'. A publish ` +
+        `with author '${manifest.author}' cannot update '${manifest.id}'.`
     );
   }
-  const versionExists = Boolean(existing?.versions[manifest.version]);
+  if (aliasManifest && channelOfVersion(aliasManifest, manifest.version)) {
+    throw new HttpError(
+      409,
+      "version_exists",
+      `${manifest.version} is already published under '${aliasId}', which '${manifest.id}' ` +
+        `aliases. Publish a new version.`
+    );
+  }
+  const heldBy = channelOfVersion(existing, manifest.version);
+  if (heldBy && heldBy !== channel) {
+    throw new HttpError(
+      409,
+      "channel_mismatch",
+      `${manifest.id}@${manifest.version} is already published to the ${heldBy} channel, ` +
+        `and a version's channel is fixed by its first publish. Send channel=${heldBy} ` +
+        `to add an artifact to it, or publish a new version.`
+    );
+  }
+  const versionExists = heldBy !== null;
   // Before the per-filename 409, so a changed manifest can't pass as the
   // publisher's "already published" success signal.
   if (versionExists) {
@@ -414,8 +475,9 @@ export async function handlePublish(
   // calling this, so the object always exists and heading it would 409 every
   // time — the record is the AGENT MANIFEST, which only lists artifacts this
   // endpoint accepted.
+  const channelVersions = channel === "stable" ? existing?.versions : existing?.next_versions;
   const alreadyPublished = byReference
-    ? Boolean(existing?.versions[manifest.version]?.artifacts?.some((a) => a.filename === filename))
+    ? Boolean(channelVersions?.[manifest.version]?.artifacts?.some((a) => a.filename === filename))
     : Boolean(await env.BUCKET.head(key));
   if (alreadyPublished) {
     throw new HttpError(
@@ -523,11 +585,13 @@ export async function handlePublish(
   }
 
   const versionEntry = makeVersionEntry(manifest, artifact, publisher.publisher, now.toISOString());
-  const updated = upsertVersion(existing, manifest, versionEntry);
+  const updated = upsertVersion(existing, manifest, versionEntry, channel);
   await writeAgentManifest(env.BUCKET, updated);
 
   const baseUrl = new URL(request.url).origin;
   const index = await rebuildIndex(env.BUCKET, now, baseUrl);
+  // Report the package as readers see it, which for an alias pair spans both ids.
+  const resolved = (await readResolvedAgentManifest(env.BUCKET, manifest.id)) ?? updated;
 
   return json(
     {
@@ -535,9 +599,13 @@ export async function handlePublish(
         id: manifest.id,
         version: manifest.version,
         artifact,
+        channel,
         // How many artifacts (platforms) now exist under this version.
-        version_artifacts: updated.versions[manifest.version].artifacts.length,
-        latest_version: updated.latest_version,
+        version_artifacts: (channel === "stable" ? updated.versions : updated.next_versions!)[
+          manifest.version
+        ].artifacts.length,
+        latest_version: resolved.latest_version,
+        channels: channelsOf(resolved),
       },
       catalog_agents: index.agents.length,
     },

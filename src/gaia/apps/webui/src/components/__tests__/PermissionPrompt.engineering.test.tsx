@@ -22,7 +22,7 @@ it.each(['share_engineering_context', 'append_engineering_context', 'approve_eng
         expect(screen.getByText('Share with configured provider')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Details' }));
         expect(screen.getByText(/private sample/)).toBeInTheDocument();
-        fireEvent.click(screen.getByRole('button', { name: 'Allow once' }));
+        fireEvent.click(screen.getByRole('button', { name: tool === 'allow_path_access' ? 'Allow for this chat' : 'Allow once' }));
         await waitFor(() => expect(respond).toHaveBeenCalledWith('decision', 'allow'));
     }
 );

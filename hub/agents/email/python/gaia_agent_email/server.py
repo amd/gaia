@@ -314,6 +314,18 @@ def _add_serve_args(parser: argparse.ArgumentParser) -> None:
 
 
 def main(argv=None) -> int:
+    try:
+        from gaia.tls import use_os_trust_store
+    except ImportError:  # amd-gaia older than the trust-store switch; the pin allows it
+        print(
+            "WARNING: this amd-gaia cannot use the system certificate store, so "
+            "Gmail and Outlook requests fail behind a TLS-inspecting proxy. "
+            "Fix: pip install --upgrade amd-gaia",
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        use_os_trust_store()
     argv = list(sys.argv[1:] if argv is None else argv)
     # `serve` is the only (and default) subcommand: `gaia-agent-email --reload`
     # and `gaia-agent-email serve --reload` behave identically. Inject `serve`

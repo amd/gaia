@@ -30,7 +30,7 @@ func TestLemonadeAPIKey(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		body, _ := json.Marshal(map[string]any{"pid": 1, "port": 63207, "api_key": key})
+		body, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "port": 63207, "api_key": key})
 		if err := os.WriteFile(filepath.Join(dir, "state.json"), body, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -39,7 +39,7 @@ func TestLemonadeAPIKey(t *testing.T) {
 	t.Run("reads the embedded server's key", func(t *testing.T) {
 		t.Setenv("LEMONADE_API_KEY", "")
 		writeState(t, "from-state-file")
-		if got := lemonadeAPIKey(); got != "from-state-file" {
+		if got, _ := lemonadeAPIKey(); got != "from-state-file" {
 			t.Fatalf("got %q, want the key from state.json", got)
 		}
 	})
@@ -47,7 +47,7 @@ func TestLemonadeAPIKey(t *testing.T) {
 	t.Run("an explicit env var wins", func(t *testing.T) {
 		writeState(t, "from-state-file")
 		t.Setenv("LEMONADE_API_KEY", "from-env")
-		if got := lemonadeAPIKey(); got != "from-env" {
+		if got, _ := lemonadeAPIKey(); got != "from-env" {
 			t.Fatalf("got %q, want the explicitly configured credential", got)
 		}
 	})
@@ -57,7 +57,7 @@ func TestLemonadeAPIKey(t *testing.T) {
 		t.Setenv("HOME", home)
 		t.Setenv("USERPROFILE", home)
 		t.Setenv("LEMONADE_API_KEY", "")
-		if got := lemonadeAPIKey(); got != "" {
+		if got, _ := lemonadeAPIKey(); got != "" {
 			t.Fatalf("got %q, want empty for an unauthenticated server", got)
 		}
 	})
@@ -70,7 +70,7 @@ func TestLemonadeAPIKey(t *testing.T) {
 		dir := filepath.Join(home, ".gaia", "lemonade")
 		_ = os.MkdirAll(dir, 0o755)
 		_ = os.WriteFile(filepath.Join(dir, "state.json"), []byte("{not json"), 0o600)
-		if got := lemonadeAPIKey(); got != "" {
+		if got, _ := lemonadeAPIKey(); got != "" {
 			t.Fatalf("got %q, want empty rather than a panic", got)
 		}
 	})
@@ -88,7 +88,7 @@ func TestReadEmbeddedLemonade(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(map[string]any{"pid": 9, "port": 63207, "api_key": "k"})
+	body, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "port": 63207, "api_key": "k"})
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), body, 0o600); err != nil {
 		t.Fatal(err)
 	}

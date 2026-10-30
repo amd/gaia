@@ -22,21 +22,34 @@ secret could occupy.
 
 import json
 import os
+import socket
 import sys
+import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlparse
 
 import requests
 
 from gaia.config import GAIA_CONFIG_DIR
+from gaia.daemon.paths import _replace_file
 from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     LemonadeClient,
+    LemonadeClientError,
+    catalog_context_window,
     lemonade_auth_headers,
     resolve_lemonade_api_key,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
+from gaia.llm.local_only import (
+    CloudDisabledError,
+    cloud_blocked,
+    local_only_key_message,
+)
+from gaia.llm.retry import http_body_text
 from gaia.logger import get_logger
 from gaia.version import LEMONADE_GATEWAY_MIN_VERSION
 
@@ -71,15 +84,16 @@ DEFAULT_AUTH_HEADER_PREFIX = ""
 # Ordered preference for the picker, best first. The first match is what GAIA
 # selects automatically when a gateway is connected with nothing chosen yet.
 #
-# `Gemma-4-31B` leads deliberately: it is currently the ONLY gateway model that
-# streams. The others return zero tokens on a streaming request while
-# non-streaming works, and GAIA's agent path streams by default — so any other
-# default hands a new user an agent that produces nothing. It is also on-prem,
-# so it carries no per-token cost.
+# `DeepSeek-V4.1-Flash` leads: it streams on the gateway (checked live) and is
+# the fastest model in the agent benchmark. A default must stream — GAIA's agent
+# path streams, and a model that returns zero tokens on a stream hands a new user
+# an agent that produces nothing. `Gemma-4-31B` is the fallback: on-prem, no
+# per-token cost. `deepseek-v4.1-flash` does not match `DeepSeek-V4-Flash`.
 #
 # Matching is lowercase-substring: the gateway mixes casing across its
 # catalogue (`Claude-Opus-5` sits next to `claude-opus-4.8`).
 PREFERRED_MODEL_HINTS = (
+    "deepseek-v4.1-flash",
     "gemma-4-31b",
     "claude-opus-5",
     "claude-sonnet-5",
@@ -115,11 +129,44 @@ _DISCOVERY_TIMEOUT = 60
 _PROBE_TIMEOUT = 12
 
 
+# One reachability check: long enough for a slow link, short enough that an
+# offline network answers before the user gives up on the list.
+REACH_TIMEOUT = 4.0
+
+
+class GatewayUnreachable(Exception):
+    """The gateway's host does not resolve or does not answer. No key was sent."""
+
+    def __init__(self, host: str, reason: str):
+        self.host = host
+        self.reason = reason
+        super().__init__(f"Can't reach {host}. It needs AMD's network or VPN")
+
+
+def check_reachable(base_url: Optional[str] = None) -> None:
+    """Raise :class:`GatewayUnreachable` unless ``base_url``'s host answers.
+
+    ``None`` checks :data:`DEFAULT_GATEWAY_BASE_URL`.
+    """
+    url = urlparse(base_url or DEFAULT_GATEWAY_BASE_URL)
+    if not url.hostname:
+        raise ValueError(f"gateway URL {base_url!r} has no host to check")
+    port = url.port or (80 if url.scheme == "http" else 443)
+    try:
+        socket.create_connection((url.hostname, port), timeout=REACH_TIMEOUT).close()
+    except OSError as e:
+        raise GatewayUnreachable(url.hostname, str(e)) from e
+
+
 class GatewayError(Exception):
     """Raised when a gateway operation fails.
 
     Messages name what failed, what to do about it, and where to look.
     """
+
+
+class GatewayBlockedError(GatewayError, CloudDisabledError):
+    """Local only is on, so no gateway token is handed to Lemonade."""
 
 
 @dataclass
@@ -177,6 +224,27 @@ class GatewayState:
     # tokens. Nothing advertises it, so it is learned by trying; remembering it
     # means the empty stream is paid once ever rather than once per launch.
     non_streaming_models: List[str] = field(default_factory=list)
+    # Native tool calling, learned by one probe per model when the catalog's
+    # labels don't say: the AMD gateway labels no model ``tool-calling``, yet
+    # most take ``tools=``. Running a capable model on the in-text JSON format
+    # costs it accuracy on every tool call.
+    tool_calling_models: List[str] = field(default_factory=list)
+    no_tool_calling_models: List[str] = field(default_factory=list)
+    # When a model's tool-calling probe last failed, ``{model_id: "<UTC ISO>"}``,
+    # so a down gateway is not re-probed at every start.
+    tool_calling_probe_failures: Dict[str, str] = field(default_factory=dict)
+    # Models whose last call came back "not found" (HTTP 404) from the cloud
+    # provider, keyed by id: ``{"status": 404, "at": "<UTC ISO time>"}``. A
+    # later successful call clears the entry. Nothing switches models on it —
+    # it exists so the user is told before the next turn fails the same way.
+    unavailable_models: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    def unavailable(self, model_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """The recorded failure for *model_id*, or None when none is recorded."""
+        if not model_id:
+            return None
+        entry = self.unavailable_models.get(model_id)
+        return dict(entry) if entry else None
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "GatewayState":
@@ -195,6 +263,17 @@ class GatewayState:
             enabled_models=list(raw.get("enabled_models") or []),
             active_model=raw.get("active_model"),
             non_streaming_models=list(raw.get("non_streaming_models") or []),
+            tool_calling_models=list(raw.get("tool_calling_models") or []),
+            no_tool_calling_models=list(raw.get("no_tool_calling_models") or []),
+            tool_calling_probe_failures={
+                str(k): str(v)
+                for k, v in (raw.get("tool_calling_probe_failures") or {}).items()
+            },
+            unavailable_models={
+                str(k): dict(v)
+                for k, v in (raw.get("unavailable_models") or {}).items()
+                if isinstance(v, dict)
+            },
         )
 
     def save(self, path: Optional[Path] = None) -> None:
@@ -205,14 +284,33 @@ class GatewayState:
             "enabled_models": self.enabled_models,
             "active_model": self.active_model,
             "non_streaming_models": sorted(self.non_streaming_models),
+            "tool_calling_models": sorted(self.tool_calling_models),
+            "no_tool_calling_models": sorted(self.no_tool_calling_models),
+            "tool_calling_probe_failures": dict(
+                sorted(self.tool_calling_probe_failures.items())
+            ),
+            "unavailable_models": dict(sorted(self.unavailable_models.items())),
         }
-        target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        # Preferences, not secrets — but this sits next to config.json in a
-        # user-private directory, so match its posture.
+        # Another GAIA process reading mid-write must never see half a file.
+        fd, tmp = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+        )
         try:
-            os.chmod(target, 0o600)
-        except OSError as e:
-            log.debug(f"Could not tighten permissions on {target}: {e}")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps(payload, indent=2) + "\n")
+            # Preferences, not secrets, but this sits next to config.json in a
+            # user-private directory, so match its posture.
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError as e:
+                log.debug(f"Could not tighten permissions on {tmp}: {e}")
+            _replace_file(Path(tmp), target)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError as e:
+                log.debug(f"Could not remove {tmp}: {e}")
+            raise
 
 
 def clear_default_model_if(model_id: Optional[str]) -> bool:
@@ -243,6 +341,41 @@ def clear_default_model_if(model_id: Optional[str]) -> bool:
             f"Removed the gateway model but could not clear GAIA's default "
             f"model ({e}). Run `gaia config set default_model <id>` to fix it."
         ) from e
+
+
+def mark_model_unavailable(model_id: str, status: int = 404) -> None:
+    """Record that the cloud provider answered *status* for *model_id*."""
+    if not model_id:
+        return
+    state = GatewayState.load()
+    state.unavailable_models[model_id] = {
+        "status": status,
+        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    state.save()
+
+
+def clear_model_unavailable(model_id: Optional[str]) -> bool:
+    """Drop a recorded failure for *model_id*. True when one was recorded."""
+    if not model_id:
+        return False
+    state = GatewayState.load()
+    if state.unavailable_models.pop(model_id, None) is None:
+        return False
+    state.save()
+    return True
+
+
+def describe_unavailable(model_id: str, entry: Dict[str, Any]) -> str:
+    """One plain line saying *model_id* last failed, and what to do about it."""
+    when = str(entry.get("at") or "").replace("T", " ").rstrip("Z")
+    when = f" on {when} UTC" if when else ""
+    return (
+        f"{model_id} answered HTTP {entry.get('status', 404)}{when} — it is not "
+        f"deployed, was renamed, or your account lost access. Pick another with "
+        f"`gaia gateway models` then `gaia gateway use <id>`, or recheck it with "
+        f"`gaia gateway test --model {model_id}`."
+    )
 
 
 # Slot name in the OS credential store. Namespaced by provider so a second
@@ -376,13 +509,22 @@ class GatewayManager:
 
     @property
     def base_url(self) -> str:
-        """Lemonade's own base URL (already ends in ``/api/v1``)."""
-        return self.client.base_url
+        """Lemonade's own base URL (already ends in ``/api/v1``).
 
-    def _headers(self) -> Dict[str, str]:
+        Raises:
+            GatewayError: GAIA's Lemonade is restarting, or the client points
+                at a server that is not GAIA's; a token must not go there.
+        """
+        try:
+            return self.client.credential_base_url()
+        except LemonadeClientError as e:
+            raise GatewayError(str(e)) from e
+
+    @staticmethod
+    def _headers(base_url: str) -> Dict[str, str]:
         return {
             "Content-Type": "application/json",
-            **lemonade_auth_headers(resolve_lemonade_api_key()),
+            **lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url)),
         }
 
     def _request(
@@ -394,15 +536,25 @@ class GatewayManager:
         timeout: int = _REQUEST_TIMEOUT,
         redact: bool = False,
     ) -> Dict[str, Any]:
-        url = f"{self.base_url}/{path.lstrip('/')}"
+        from gaia.llm.lemonade_choice import setup_change_refusal
+
+        base_url = self.base_url
+        url = f"{base_url}/{path.lstrip('/')}"
+        refusal = setup_change_refusal(url, method, payload)
+        if refusal:
+            raise GatewayError(refusal)
         self.log.debug(f"{method} {url}" + ("" if redact else f" {payload or ''}"))
         try:
             response = requests.request(
-                method, url, json=payload, headers=self._headers(), timeout=timeout
+                method,
+                url,
+                json=payload,
+                headers=self._headers(base_url),
+                timeout=timeout,
             )
         except requests.exceptions.RequestException as e:
             raise GatewayError(
-                f"Lemonade Server is not reachable at {self.base_url}: {e}. "
+                f"Lemonade Server is not reachable at {base_url}: {e}. "
                 f"{describe_start_hint().instruction} "
                 f"Or point LEMONADE_BASE_URL at a server already running."
             ) from e
@@ -425,11 +577,17 @@ class GatewayManager:
         detail = ""
         error_type = ""
         try:
-            body = response.json().get("error", {})
-            detail = body.get("message", "")
-            error_type = body.get("type", "")
+            parsed = response.json()
         except ValueError:
-            detail = response.text.strip()[:400]
+            parsed = None
+            detail = http_body_text(response).strip()[:400]
+        # Lemonade's 401 says {"error": "<text>"}; its other errors nest an object.
+        body = parsed.get("error", {}) if isinstance(parsed, dict) else parsed
+        if isinstance(body, dict):
+            detail = str(body.get("message", ""))
+            error_type = str(body.get("type", ""))
+        elif isinstance(body, str):
+            detail = body.strip()[:400]
 
         if response.status_code == 409 and error_type == "auth_conflict":
             return GatewayError(
@@ -556,6 +714,8 @@ class GatewayManager:
         if allow_insecure_http:
             payload["allow_insecure_http"] = True
         if api_key:
+            if cloud_blocked():
+                raise GatewayBlockedError(local_only_key_message("AMD LLM Gateway"))
             payload["api_key"] = api_key
 
         result = self._request(
@@ -623,6 +783,8 @@ class GatewayManager:
         is not it: callers use ``remember_token`` for the OS credential store,
         or ``LEMONADE_AMD_API_KEY`` in Lemonade's own environment.
         """
+        if cloud_blocked():
+            raise GatewayBlockedError(local_only_key_message("AMD LLM Gateway"))
         if not api_key or not api_key.strip():
             raise GatewayError(
                 "No token supplied. Pass one to `gaia gateway auth`, or set "
@@ -649,7 +811,9 @@ class GatewayManager:
         """Drop the session token. Does not affect the env var."""
         return self._request("DELETE", f"cloud/auth/{GATEWAY_PROVIDER}")
 
-    def ensure_authenticated(self) -> bool:
+    def ensure_authenticated(
+        self, recall: Optional[Callable[[], Optional[str]]] = None
+    ) -> bool:
         """Give Lemonade the remembered token if it has none.
 
         Lemonade forgets its token on restart, so without this every restart
@@ -659,8 +823,27 @@ class GatewayManager:
         key: it stores one without validating it, so a revoked token reports
         authenticated and discovers nothing. Reporting that as success sends the
         caller looking for a missing model instead of an expired key.
+
+        *recall* replaces :func:`recall_token`, so a caller that must not block
+        on the credential store can bound the read.
+
+        Raises:
+            GatewayError: GAIA uses the user's own server and its gateway
+                provider isn't working; GAIA hands that server no token.
         """
+        from gaia.llm.lemonade_choice import is_users_server
+
+        if cloud_blocked():
+            raise GatewayBlockedError(local_only_key_message("AMD LLM Gateway"))
         status = self.status()
+        if is_users_server(self.base_url) and not (
+            status.authenticated and status.models_discovered
+        ):
+            from gaia.llm.cloud_keys import users_server_provider_message
+
+            raise GatewayError(
+                users_server_provider_message(self.base_url, GATEWAY_PROVIDER)
+            )
         if not status.installed:
             return False
         if status.authenticated:
@@ -672,7 +855,7 @@ class GatewayManager:
                 f"auth`, or unset {GATEWAY_ENV_VAR} if it is stale."
             )
             return False
-        token = recall_token()
+        token = (recall or recall_token)()
         if not token:
             return False
         try:
@@ -720,7 +903,7 @@ class GatewayManager:
             GatewayModel(
                 id=entry["id"],
                 labels=list(entry.get("labels") or []),
-                ctx_size=entry.get("context_length"),
+                ctx_size=catalog_context_window(entry),
             )
             for entry in payload.get("data", [])
             if isinstance(entry, dict)

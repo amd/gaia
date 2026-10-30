@@ -165,6 +165,42 @@ def test_list_shows_catalog_with_installed_marker(monkeypatch, capsys):
     assert "gaia agent install <id>" in out
 
 
+def test_list_shows_installed_version_not_catalog_latest(monkeypatch, capsys):
+    _patch_list(
+        monkeypatch,
+        agents=[{"id": "gaia", "latest_version": "0.3.0"}],
+        installed={"gaia": _Installed("0.3.1+v0.25.1-rc5")},
+    )
+    cli.handle_agent_list(Namespace(agent_action="list"))
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if "gaia " in ln)
+    assert "0.3.1+v0.25.1-rc5" in line
+    assert "[installed; catalog latest 0.3.0]" in line
+
+
+def test_list_same_release_ignores_build_metadata(monkeypatch, capsys):
+    _patch_list(
+        monkeypatch,
+        agents=[{"id": "gaia", "latest_version": "0.3.1"}],
+        installed={"gaia": _Installed("0.3.1+v0.25.1-rc5")},
+    )
+    cli.handle_agent_list(Namespace(agent_action="list"))
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if "gaia " in ln)
+    assert "0.3.1+v0.25.1-rc5  [installed]" in line
+    assert "catalog latest" not in line
+
+
+def test_list_without_a_catalog_version_says_installed_only(monkeypatch, capsys):
+    _patch_list(
+        monkeypatch,
+        agents=[{"id": "gaia"}],
+        installed={"gaia": _Installed("0.3.1")},
+    )
+    cli.handle_agent_list(Namespace(agent_action="list"))
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if "gaia " in ln)
+    assert "0.3.1  [installed]" in line
+    assert "catalog latest" not in line
+
+
 def test_list_degrades_loudly_when_hub_unreachable(monkeypatch, capsys):
     from gaia.hub import catalog
 
@@ -177,10 +213,10 @@ def test_list_degrades_loudly_when_hub_unreachable(monkeypatch, capsys):
     cli.handle_agent_list(Namespace(agent_action="list"))
     captured = capsys.readouterr()
     # Loud note on stderr, not a silent empty result.
-    assert "Could not reach the Agent Hub catalog" in captured.err
+    assert "Could not reach the agent catalog" in captured.err
     # Still lists what IS installed.
     assert "email" in captured.out
-    assert "Installed (not in the hub catalog)" in captured.out
+    assert "Installed (not in the catalog)" in captured.out
 
 
 def test_list_empty_state_is_actionable(monkeypatch, capsys):

@@ -26,6 +26,23 @@ FRAMEWORK_PATHS: Set[str] = {
 }
 
 
+def exit_error(what: str, code: int, stderr: Any = "") -> str:
+    """The ``error`` for a process that exited non-zero: what, which code, why.
+
+    *why* is the last non-blank line of *stderr*, where a CLI puts its verdict.
+    """
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    message = f"'{what}' exited with code {code}"
+    for line in reversed(str(stderr or "").splitlines()):
+        line = line.strip()
+        if line:
+            if len(line) > 300:
+                line = line[:299] + "…"
+            return f"{message}: {line}"
+    return message
+
+
 class MissingHostAttributeError(RuntimeError):
     """A tool mixin's host object never bound an attribute the mixin requires."""
 

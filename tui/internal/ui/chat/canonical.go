@@ -78,6 +78,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			m.modelDisplay = e.ModelDisplay
 			m.modelBackend = e.ModelBackend
 			m.modelRemote = e.ModelRemote
+			// Replaced, not merged: a respawned agent may be another build.
+			m.agentVersion = reportedVersion(e.AgentVersion)
+			m.gaiaVersion = reportedVersion(e.GaiaVersion)
 			if e.LemonadeReachable != nil {
 				m.lemonadeKnown = true
 				m.lemonadeUp = *e.LemonadeReachable
@@ -89,6 +92,15 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			// Keep the legacy flag in sync — renderClaudeChip is still the
 			// pre-first-event fallback (see renderModelChip).
 			m.claudeMode = e.ModelBackend == "claude"
+			break
+		}
+
+		// Kept in the transcript, not the live line: it explains later answers.
+		if e.HistoryCut != nil {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: truncateRunes(clean(e.Message), narrationMax),
+			})
 			break
 		}
 
@@ -128,7 +140,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			// --dev is where harness internals belong: suppressing them for
 			// everyone would make a wire-level bug invisible to whoever has to
 			// fix it.
-			m.setLiveStatus(truncateRunes("[harness] "+clean(e.Message), narrationMax))
+			m.setLiveStatus(truncateRunes(clean(e.Message), narrationMax))
 		}
 
 	case event.CanonicalTokenEvent:
@@ -144,9 +156,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.stashNarration()
 		m.phase = modelPhase{}
 		item := ActivityItem{
-			Kind:    "tool",
-			Tool:    e.Tool,
-			Content: toolNarration(e.Tool, e.Args, e.Narration),
+			Kind:     "tool",
+			Tool:     e.Tool,
+			Content:  toolNarration(e.Tool, e.Args, e.Narration),
+			RetryKey: retryKey(e.Tool, e.Args),
 		}
 		if m.dev {
 			// The narration says what the call MEANS; this says what was
@@ -267,42 +280,64 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		content = StripVerificationScope(content)
 		m.buffer = ""
+		m.confirmRelayedSwitch()
 		if m.awaitingModelSwitch && m.switchTarget != "" && m.switchedTo.model == m.switchTarget {
 			m.rememberModel(m.switchedTo)
 			if m.startup.inFlight && m.switchTarget == m.startup.model {
 				m.startup.confirmed = true
 				m.startup.warmNext = true
 				if m.startup.kind == StartupRestore {
-					content = "Restored your last model.\n\n" + content
+					if rest, ok := strings.CutPrefix(content, "Switched to "); ok {
+						content = "Restored your last model: " + rest
+					} else {
+						content = "Restored your last model.\n\n" + content
+					}
 				}
+			}
+		}
+		active := m.turnElapsed(time.Now())
+		duration := active
+		durationLabel := ""
+		if m.startup.warmNext {
+			if m.dev {
+				// A bare time under the model notice reads as noise.
+				durationLabel = "model switched in "
+			} else {
+				// The opening switch's time belongs to the ready line, not its own.
+				duration = 0
 			}
 		}
 		// The turn is over, so a confirmation still up is dead — resolved here,
 		// before the work is committed, so its step carries the outcome.
 		m.resolveConfirmationOnTurnEnd()
-		m.commitWork()
+		if content != "" {
+			m.commitAnsweredWork()
+		} else {
+			m.commitWork()
+		}
 		// A turn stopped before it said anything ends with an empty final; the
 		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
 		if content != "" || !m.cancelPending {
 			m.messages = append(m.messages, Message{
-				Role:         RoleAssistant,
-				Content:      content,
-				Rendered:     components.RenderMarkdown(content),
-				Duration:     time.Since(m.queryStart),
-				TTFT:         ttft,
-				TokPerS:      usage.TokPerS,
-				InputTokens:  usage.InputTokens,
-				CachedTokens: usage.CachedTokens,
-				Steps:        usage.Steps,
-				ToolsUsed:    usage.ToolsUsed,
-				Tokens:       usage.Tokens,
-				Metrics:      usage.Metrics,
+				Role:          RoleAssistant,
+				Content:       content,
+				Rendered:      components.RenderMarkdown(content),
+				Duration:      duration,
+				DurationLabel: durationLabel,
+				TTFT:          ttft,
+				TokPerS:       usage.TokPerS,
+				InputTokens:   usage.InputTokens,
+				CachedTokens:  usage.CachedTokens,
+				Steps:         usage.Steps,
+				ToolsUsed:     usage.ToolsUsed,
+				Tokens:        usage.Tokens,
+				Metrics:       usage.Metrics,
 			})
 		}
 		// One ledger entry per turn, from what the backend reported. A turn
 		// with no token counts still counts as a turn — see sessionCost.
 		m.cost.add(turnCost{
-			duration:  time.Since(m.queryStart),
+			duration:  active,
 			steps:     usage.Steps,
 			tools:     usage.ToolsUsed,
 			inTok:     usage.InputTokens,
@@ -668,11 +703,13 @@ func toolResultSucceeded(data json.RawMessage) bool {
 		return true
 	}
 	var probe struct {
-		OK            *bool `json:"ok"`
-		Success       *bool `json:"success"`
-		ReturnCode    *int  `json:"return_code"`
+		OK            *bool  `json:"ok"`
+		Success       *bool  `json:"success"`
+		ReturnCode    *int   `json:"return_code"`
+		ExpectedExit  string `json:"expected_exit"`
 		CommandOutput *struct {
-			ReturnCode *int `json:"return_code"`
+			ReturnCode   *int   `json:"return_code"`
+			ExpectedExit string `json:"expected_exit"`
 		} `json:"command_output"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
@@ -681,13 +718,12 @@ func toolResultSucceeded(data json.RawMessage) bool {
 	if probe.OK != nil && !*probe.OK || probe.Success != nil && !*probe.Success {
 		return false
 	}
-	// A shell tool reports success when the command RAN, whatever it
-	// returned — so pytest exiting 2 drew as a passed step. The exit code is
-	// the command's own verdict.
-	if rc := probe.ReturnCode; rc != nil && *rc != 0 {
+	// The exit code is the command's own verdict, so pytest exiting 2 is a
+	// failed step — unless the tool named it an answer (grep's 1: no match).
+	if rc := probe.ReturnCode; rc != nil && *rc != 0 && probe.ExpectedExit == "" {
 		return false
 	}
-	if co := probe.CommandOutput; co != nil && co.ReturnCode != nil && *co.ReturnCode != 0 {
+	if co := probe.CommandOutput; co != nil && co.ReturnCode != nil && *co.ReturnCode != 0 && co.ExpectedExit == "" {
 		return false
 	}
 	return true
@@ -724,7 +760,10 @@ func userFacingStatus(raw string) string {
 //     how to answer" once per agent-loop step; unfiltered, one turn spent three
 //     of its six log lines saying it.
 //   - A new stage with no completed work since the last one: replaces it. Two
-//     stages back to back are one stage changing, not two things done.
+//     stages back to back are one stage changing, not two things done — unless
+//     it returns to the stage standing before that work, in which case the
+//     passing line is dropped. A plan run re-announces "Following the plan to
+//     …" after each step's own status; replacing printed it once per tool call.
 //   - A new stage after a tool ran: its own line. The tool is evidence of work,
 //     and this is genuinely the next thing.
 func (m *ChatModel) setLiveStatus(msg string) {
@@ -737,13 +776,27 @@ func (m *ChatModel) setLiveStatus(msg string) {
 			if m.activity[i].Content == msg {
 				return
 			}
-			if !sawWork {
-				m.activity[i].Content = msg
+			if sawWork {
+				m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})
 				return
 			}
-			m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})
+			if m.standingStageBefore(i) == msg {
+				m.activity = append(m.activity[:i], m.activity[i+1:]...)
+				return
+			}
+			m.activity[i].Content = msg
 			return
 		}
 	}
 	m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})
+}
+
+// standingStageBefore is the last stage line before index i, or "" when none.
+func (m *ChatModel) standingStageBefore(i int) string {
+	for j := i - 1; j >= 0; j-- {
+		if m.activity[j].Kind == "status" {
+			return m.activity[j].Content
+		}
+	}
+	return ""
 }

@@ -8,10 +8,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
+	gaiaLemonade "github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
@@ -40,6 +43,9 @@ type Config struct {
 	AgentName string
 	// Extras run after the generic checks, in order.
 	Extras []ExtraCheck
+	// Model is the chat model this launch starts on. A cloud id means the
+	// agent's default local chat model is not needed.
+	Model string
 }
 
 func (c Config) withDefaults() Config {
@@ -191,6 +197,7 @@ func checkDaemon(ctx context.Context, t Transport, cfg Config, rep *Report) Stat
 		// resolving a version skew is not, and must stay the user's call.
 		if startable(err) {
 			row.Fix = FixStartDaemon
+			row.AutoFix = simplyNotRunning(err) && !lemonadeElsewhere()
 			row.Line = "not running"
 		} else {
 			row.Line = "unusable"
@@ -198,6 +205,7 @@ func checkDaemon(ctx context.Context, t Transport, cfg Config, rep *Report) Stat
 		return row.commit(rep)
 	}
 
+	rep.CoreVersion = inf.GaiaVersion
 	row.State = StateOK
 	row.Line = fmt.Sprintf("running (pid %d) · host API v%s", inf.PID, inf.APIVersion)
 	return row.commit(rep)
@@ -215,6 +223,25 @@ func startable(err error) bool {
 		return stale.Kind != daemon.StaleUnresponsive
 	}
 	return false
+}
+
+// simplyNotRunning reports whether the daemon is absent rather than foreign: no
+// record, or one whose process is gone. A port answering as something else
+// keeps the `f` key — reclaiming it is the user's call.
+func simplyNotRunning(err error) bool {
+	var notRunning *daemon.NotRunningError
+	if errors.As(err, &notRunning) {
+		return true
+	}
+	var stale *daemon.StaleError
+	return errors.As(err, &stale) && (stale.Kind == daemon.StalePIDDead || stale.Kind == daemon.StaleCorrupt)
+}
+
+// lemonadeElsewhere reports whether LEMONADE_BASE_URL points at another
+// machine. That setup is the user's own, so the gate starts nothing for it.
+func lemonadeElsewhere() bool {
+	base := strings.TrimSpace(os.Getenv(lemonadeBaseURLEnv))
+	return base != "" && !isLoopback(base)
 }
 
 func (r Row) commit(rep *Report) State {
@@ -304,6 +331,7 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 		row.Line = "installed, not started"
 		row.Detail = fmt.Sprintf("The %s agent is registered but its state is %q.", cfg.AgentName, a.State)
 		row.Fix = FixStartSidecar
+		row.AutoFix = !lemonadeElsewhere()
 		row.Remedy = Remedy{
 			Action:  "Start it — the background service supervises it from then on.",
 			Command: "gaia daemon start-agent " + cfg.AgentID,
@@ -316,11 +344,7 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 	row.Disposition = status.DispositionHalt
 	row.Line = "not installed"
 	row.Detail = fmt.Sprintf("The background service has no agent registered as %q.", cfg.AgentID)
-	row.Remedy = Remedy{
-		Action:  "Install it from the hub, then re-check.",
-		Command: "gaia hub install " + cfg.AgentID,
-		Where:   daemonLog(),
-	}
+	row.Remedy = unregisteredAgentRemedy(cfg.AgentID)
 	return row.commit(rep)
 }
 
@@ -470,9 +494,9 @@ func restartSidecarRemedy(agentID string) Remedy {
 	}
 }
 
-// timedOut reports whether a call was given up on rather than refused. The
-// daemon client reports a deadline as text on its own error type rather than
-// wrapping context.DeadlineExceeded, so both forms are checked.
+// timedOut reports whether a call was given up on rather than refused. A
+// transport timeout (net/http's header wait, a dial timeout) is not
+// context.DeadlineExceeded, so its text is checked as well.
 func timedOut(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
@@ -650,6 +674,19 @@ func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State
 		// automatically before the user ever sees it, and once that has failed
 		// pressing f would only repeat it.
 		lemonade.Fix = FixNone
+		if gaiaLemonade.ExternalModeActive() {
+			// The user's own server: GAIA asks no one to start anything for it.
+			down := gaiaLemonade.ProbeResult{URL: body.Lemonade.BaseURL, Status: gaiaLemonade.ProbeUnreachable}
+			lemonade.Line = "your server at " + body.Lemonade.BaseURL + " is not answering"
+			lemonade.Detail = down.Message()
+			if err := gaiaLemonade.ChoiceError(); err != nil {
+				lemonade.Line = "GAIA's Lemonade setting is unusable"
+				lemonade.Detail = err.Error() + "."
+			}
+			lemonade.Remedy = Remedy{Action: "Then press r to re-check.", Where: lemonadeDocs}
+			setRow(rep, lemonade)
+			return StateFailed, false
+		}
 		if !isLoopback(body.Lemonade.BaseURL) {
 			// The agent is pointed at another machine, so a server started here
 			// is one nothing would talk to. Not startable — by us or the daemon.
@@ -699,6 +736,14 @@ func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State
 			Command: "gaia init",
 			Where:   "https://lemonade-server.ai",
 		}
+		if gaiaLemonade.ExternalModeActive() {
+			old := gaiaLemonade.ProbeResult{
+				URL: body.Lemonade.BaseURL, Status: gaiaLemonade.ProbeTooOld,
+				Version: versionOr(body.Lemonade.Version, "?"), Minimum: body.Lemonade.MinVersion,
+			}
+			lemonade.Detail = old.Message()
+			lemonade.Remedy = Remedy{Action: "Then press r to re-check.", Where: "https://lemonade-server.ai"}
+		}
 		setRow(rep, lemonade)
 		return StateFailed, false
 
@@ -729,6 +774,32 @@ func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State
 	setRow(rep, lemonade)
 
 	// --- AI model -----------------------------------------------------------
+	// The sidecar reports on GAIA's default chat model, which a cloud launch never
+	// loads, so ask whether the cloud model can answer. A cloud default_model
+	// arrives as the sidecar's model, not cfg.Model.
+	chat := cfg.Model
+	if chat == "" && gaiaLemonade.IsCloudID(body.Model.ID) {
+		chat = body.Model.ID
+	}
+	if gaiaLemonade.IsCloudID(chat) {
+		row, listed := checkCloudModel(ctx, chat, model)
+		if listed {
+			row.State = StateOK
+			row.Line = "chat uses " + chat
+		}
+		setRow(rep, row)
+		return row.State, false
+	}
+
+	// A cloud default_model arrives as the sidecar's model; a launch on a picked
+	// local model never uses it, so check the picked one instead. No window check:
+	// the sidecar's ctx describes the default, not the pick.
+	if cfg.Model != "" && gaiaLemonade.IsCloudID(body.Model.ID) {
+		row := checkLocalModelDownloaded(ctx, cfg.Model, model)
+		setRow(rep, row)
+		return row.State, false
+	}
+
 	// KeyModel is not agent-repairable either — a missing model blocks the
 	// same way a down daemon does.
 	if !body.Model.Present {
@@ -899,6 +970,9 @@ type connectorEntry struct {
 	AccountEmail *string  `json:"account_email"`
 	Scopes       []string `json:"scopes"`
 	CanSend      bool     `json:"can_send"`
+	// Busy: another GAIA operation is saving the connection, so its scopes and
+	// can_send are unknown for the moment, not false.
+	Busy bool `json:"busy"`
 }
 
 type connectorsBody struct {
@@ -1059,7 +1133,7 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 	// Prefer a mailbox whose metadata says it should work; fall back to reporting
 	// the connected-but-not-granted one, which is a distinct failure with a
 	// distinct remedy.
-	var sendable, connected *connectorEntry
+	var sendable, connected, busy *connectorEntry
 	connectedCount := 0
 	for i := range body.Providers {
 		p := &body.Providers[i]
@@ -1069,6 +1143,9 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 		connectedCount++
 		if p.CanSend && sendable == nil {
 			sendable = p
+		}
+		if p.Busy && busy == nil {
+			busy = p
 		}
 		if connected == nil {
 			connected = p
@@ -1080,6 +1157,8 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 		// Metadata says linked + granted. That is exactly the state that used to
 		// go green on a mailbox nothing had ever read, so PROVE it.
 		return finishMailboxRow(row, probeMailbox(ctx, t, cfg, connectedCount), sendable, cfg)
+	case busy != nil:
+		return busyMailboxRow(row, busy)
 	case connected != nil:
 		return notGrantedRow(row, connected, cfg)
 	}
@@ -1096,6 +1175,23 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 	row.Remedy = Remedy{
 		Action:  "Connect Gmail, Outlook, or Microsoft 365 — press f to choose. For Outlook swap `google` for `microsoft` below, or `microsoft_work` for a work account.",
 		Command: connectCommand("google"),
+		Where:   "https://amd-gaia.ai/docs/guides/email",
+	}
+	return row
+}
+
+// busyMailboxRow reports a mailbox another GAIA operation is saving right now.
+// Its scopes are unknown, not missing, so this is never a sign-in remedy.
+func busyMailboxRow(row Row, p *connectorEntry) Row {
+	row.State = StateUnknown
+	row.Disposition = status.DispositionNotify
+	row.Line = fmt.Sprintf("%s · being saved, not verified",
+		accountOr(p.AccountEmail, providerName(p.Provider)))
+	row.Detail = "Another GAIA operation is saving this mailbox connection right now, " +
+		"so whether it can read and send can't be checked yet."
+	row.Remedy = Remedy{
+		Action:  "Press r — this clears on its own in a moment.",
+		Command: "gaia connectors list",
 		Where:   "https://amd-gaia.ai/docs/guides/email",
 	}
 	return row
@@ -1251,6 +1347,20 @@ func probeMailbox(ctx context.Context, t Transport, cfg Config, connectedCount i
 	case resp.Status == http.StatusOK:
 		return probeResult{verdict: probeUsable, trace: trace(outcome)}
 
+	// Another GAIA operation held the connection mid-save; it clears in a moment.
+	case connectionBeingSaved(detail):
+		return probeResult{
+			verdict: probeInconclusive,
+			cause: "Another GAIA operation was saving the mailbox connection at that moment, " +
+				"so the mailbox could not be verified. " + detailSuffix(firstSentence(detail)),
+			remedy: Remedy{
+				Action:  "Press r — this clears on its own in a moment.",
+				Command: "gaia connectors list",
+				Where:   "https://amd-gaia.ai/docs/guides/email",
+			},
+			trace: trace(outcome),
+		}
+
 	// The sidecar told us its forwarded token lapsed and the daemon has not
 	// re-sent one YET (forwarded_credentials: "Retry in a moment"). Blocking a
 	// launch on that would send the user through a browser sign-in for something
@@ -1301,7 +1411,7 @@ func probeMailbox(ctx context.Context, t Transport, cfg Config, connectedCount i
 				cfg.AgentName, detailSuffix(detail)),
 			remedy: Remedy{
 				Action:  "Update the agent if you want this verified before launch.",
-				Command: "gaia hub install " + cfg.AgentID,
+				Command: catalog.UpdateCommand(cfg.AgentID),
 				Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
 			},
 			trace: trace(outcome),
@@ -1386,6 +1496,13 @@ func relayGaveUp(detail string) bool {
 	return strings.Contains(d, "sidecar for agent") ||
 		strings.Contains(d, "no running sidecar") ||
 		strings.Contains(d, "is alive but did not answer")
+}
+
+// connectionBeingSaved reports whether gaia.connectors refused because another
+// GAIA operation held the connection mid-save (ConnectionBusyError), which clears
+// itself in a moment.
+func connectionBeingSaved(detail string) bool {
+	return strings.Contains(strings.ToLower(detail), "being saved by another gaia operation")
 }
 
 // transientCredentialGap reports whether the sidecar said the forwarded token

@@ -257,3 +257,142 @@ class TestProducerCancellation:
 
         assert not thread.is_alive(), "producer thread outlived the request"
         assert agent.chat.send_messages.call_count == 1
+
+
+# ──────────────────── a call's own requested run time ────────────────────────
+
+
+class TestRequestedTimeout:
+    """A tool that takes a ``timeout`` argument is not abandoned before it."""
+
+    @pytest.fixture
+    def small_grace(self, monkeypatch):
+        monkeypatch.setattr("gaia.agents.base.agent.REQUESTED_TIMEOUT_GRACE", 0.5)
+
+    def test_a_call_outlives_the_default_when_it_asks_to(
+        self, monkeypatch, small_grace
+    ):
+        @tool(timeout_arg="timeout")
+        def long_job(timeout: int = 1) -> dict:
+            """Works for most of the time it was given."""
+            time.sleep(1.0)
+            return {"status": "success"}
+
+        monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "0.3")
+        agent = _make_agent()
+
+        result = agent._execute_tool("long_job", {"timeout": 2})
+
+        assert result == {"status": "success"}
+
+    def test_the_signature_default_counts_when_the_argument_is_omitted(
+        self, monkeypatch, small_grace
+    ):
+        @tool(timeout_arg="timeout")
+        def long_job(timeout: int = 2) -> dict:
+            """Relies on its default run time."""
+            time.sleep(1.0)
+            return {"status": "success"}
+
+        monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "0.3")
+        agent = _make_agent()
+
+        assert agent._execute_tool("long_job", {}) == {"status": "success"}
+
+    def test_a_short_request_never_lowers_the_default(self, monkeypatch):
+        @tool(timeout_arg="timeout")
+        def quick_job(timeout: int = 1) -> dict:
+            """Finishes well inside the default."""
+            return {"status": "success"}
+
+        monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "45")
+        agent = _make_agent()
+
+        assert agent._bounded_tool_timeout("quick_job", {"timeout": 1}) == 45.0
+        assert agent._bounded_tool_timeout("quick_job", {"timeout": 900}) == 930.0
+
+    def test_a_malformed_request_keeps_the_default(self, monkeypatch):
+        @tool(timeout_arg="timeout")
+        def job(timeout: int = 1) -> dict:
+            """Its body refuses a bad timeout itself."""
+            return {}
+
+        monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "45")
+        agent = _make_agent()
+
+        for bad in ("soon", -5, 0):
+            assert agent._bounded_tool_timeout("job", {"timeout": bad}) == 45.0
+
+    def test_the_request_is_capped(self, monkeypatch, small_grace):
+        monkeypatch.setattr("gaia.agents.base.agent.MAX_REQUESTED_TOOL_TIMEOUT", 0.2)
+        release = threading.Event()
+
+        @tool(timeout_arg="timeout")
+        def runaway(timeout: int = 1) -> dict:
+            """Asks for far more than the ceiling allows."""
+            release.wait(timeout=30)
+            return {"status": "success"}
+
+        monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "0.1")
+        agent = _make_agent()
+        try:
+            t0 = time.monotonic()
+            result = agent._execute_tool("runaway", {"timeout": 100000})
+            elapsed = time.monotonic() - t0
+        finally:
+            release.set()
+
+        assert result.get("timeout") is True
+        # Abandoned at cap + grace (0.7s), not at the requested 100000s.
+        assert elapsed < 5.0
+        assert "did not return within 0.7s" in result["error"]
+
+    def test_the_message_points_at_the_argument_not_a_hung_service(
+        self, monkeypatch, small_grace
+    ):
+        release = threading.Event()
+
+        @tool(timeout_arg="timeout")
+        def stuck_job(timeout: float = 1) -> dict:
+            """Ignores its own timeout."""
+            release.wait(timeout=30)
+            return {"status": "success"}
+
+        monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "0.1")
+        agent = _make_agent()
+        try:
+            result = agent._execute_tool("stuck_job", {"timeout": 0.2})
+        finally:
+            release.set()
+
+        assert "did not return within 0.7s" in result["error"]
+        assert "larger `timeout` argument" in result["error"]
+        assert "GAIA_AGENT_TOOL_TIMEOUT" not in result["error"]
+        assert "connection" not in result["error"]
+
+    def test_a_tool_without_one_keeps_the_service_hint(self, monkeypatch):
+        release = threading.Event()
+
+        @tool
+        def hangs() -> dict:
+            """Blocks like a stuck connector."""
+            release.wait(timeout=30)
+            return {}
+
+        monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "0.2")
+        agent = _make_agent()
+        try:
+            result = agent._execute_tool("hangs", {})
+        finally:
+            release.set()
+
+        assert "GAIA_AGENT_TOOL_TIMEOUT" in result["error"]
+        assert "does not respond" in result["error"]
+
+    def test_timeout_arg_must_name_a_parameter(self):
+        with pytest.raises(TypeError, match="names no parameter"):
+
+            @tool(timeout_arg="timeout")
+            def no_such_param(seconds: int = 1) -> dict:
+                """Declares the wrong parameter name."""
+                return {}

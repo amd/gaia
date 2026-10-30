@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.logger import get_logger
 from gaia.mcp.client.config import MCPConfig
-from gaia.mcp.client.mcp_client import MCPClient
+from gaia.mcp.client.mcp_client import MCPClient, mcp_tool_error
 from gaia.mcp.client.mcp_client_manager import MCPClientManager
 
 logger = get_logger(__name__)
@@ -56,7 +56,7 @@ class MCPClientMixin:
 
         Args:
             auto_load_config: When True, automatically load servers from the
-                stacked config files (``~/.gaia/mcp_servers.json`` + local
+                stacked config files (``<gaia_home>/mcp_servers.json`` + local
                 ``mcp_servers.json``).  Ignored when ``config_file`` is
                 provided — loading always occurs in that case.
             debug: Enable debug logging for MCP client connections.
@@ -247,7 +247,7 @@ class MCPClientMixin:
         """Load and register MCP servers from configuration file.
 
         This is a convenience method that:
-        1. Loads servers from ~/.gaia/mcp_servers.json via the manager
+        1. Loads servers from <gaia_home>/mcp_servers.json via the manager
         2. Registers all tools from loaded servers
 
         Returns:
@@ -353,27 +353,21 @@ class MCPClientMixin:
             def create_enhanced_wrapper(base_wrapper=base_wrapper, tool_name=tool_name):
                 def enhanced_wrapper(**kwargs):
                     result = base_wrapper(**kwargs)
-
-                    # Wrap successful dict responses in GAIA-style format
-                    if isinstance(result, dict) and "error" not in result:
-                        return {
-                            "status": "success",
-                            "message": f"Tool '{tool_name}' returned data",
-                            "data": result,
-                            "instruction": (
-                                "Parse this JSON data and provide a human-readable summary. "
-                                "Your answer must be a plain text string, not a JSON object."
-                            ),
-                        }
-                    # Wrap error responses with error status
-                    elif isinstance(result, dict) and "error" in result:
-                        return {
-                            "status": "error",
-                            "error": result.get("error", "Unknown error"),
-                            "data": result,
-                        }
-                    # Pass through non-dict responses (strings, etc.) unchanged
-                    return result
+                    if not isinstance(result, dict):
+                        # Strings and other non-dict responses pass through.
+                        return result
+                    error = mcp_tool_error(result)
+                    if error is not None:
+                        return {"status": "error", "error": error, "data": result}
+                    return {
+                        "status": "success",
+                        "message": f"Tool '{tool_name}' returned data",
+                        "data": result,
+                        "instruction": (
+                            "Parse this JSON data and provide a human-readable summary. "
+                            "Your answer must be a plain text string, not a JSON object."
+                        ),
+                    }
 
                 return enhanced_wrapper
 

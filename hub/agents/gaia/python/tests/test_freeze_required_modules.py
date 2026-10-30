@@ -13,6 +13,9 @@ cover every such module, and the release workflow has to install them.
 from __future__ import annotations
 
 import importlib.util
+import os
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -27,7 +30,7 @@ RELEASE_WORKFLOW = (
     Path(__file__).resolve().parents[5]
     / ".github"
     / "workflows"
-    / "release_agent_gaia.yml"
+    / "build_flagship_sidecar.yml"
 )
 
 
@@ -66,3 +69,150 @@ def test_release_freeze_env_installs_required_import(module):
         f"{module} is in freeze.REQUIRED_IMPORTS but the release workflow's "
         "freeze step does not install it, so the release build would refuse to run."
     )
+
+
+# ---------------------------------------------------------------------------
+# run_python scripts (#5088): the binary is the only Python a release user has
+# ---------------------------------------------------------------------------
+
+#: Installed by the `rag` extra the freeze step already installs.
+#: xlsxwriter comes with python-pptx.
+_FROM_RAG_EXTRA = {
+    "openpyxl",
+    "xlsxwriter",
+    "docx",
+    "pptx",
+    "reportlab",
+    "pypdf",
+    "pymupdf",
+    "numpy",
+    "PIL",
+}
+
+
+@pytest.mark.parametrize(
+    "module", ["openpyxl", "docx", "pptx", "matplotlib", "pandas", "numpy"]
+)
+def test_office_and_data_libraries_are_bundled_for_scripts(module):
+    assert module in freeze.SCRIPT_LIBRARIES
+    assert module not in freeze.EXCLUDES
+
+
+@pytest.mark.parametrize("module", freeze.SCRIPT_LIBRARIES)
+def test_preflight_refuses_when_a_script_library_is_missing(module, monkeypatch):
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *a, **kw: (
+            None if name == module else real_find_spec(name, *a, **kw)
+        ),
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        freeze._verify_collect_targets()
+    assert module in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "module", sorted(set(freeze.SCRIPT_LIBRARIES) - _FROM_RAG_EXTRA)
+)
+def test_release_freeze_env_installs_script_library(module):
+    step = _freeze_install_step()
+    assert any(line.strip().split(" ")[0] == module for line in step.splitlines()), (
+        f"{module} is in freeze.SCRIPT_LIBRARIES but the release workflow's "
+        "freeze step does not install it, so the release build would refuse to run."
+    )
+
+
+@pytest.mark.parametrize(
+    "name,wanted",
+    [
+        ("matplotlib.pyplot", True),
+        ("matplotlib.backends.backend_agg", True),
+        ("matplotlib.backends.backend_pdf", True),
+        ("matplotlib.backends.backend_tkagg", False),
+        ("matplotlib.backends.backend_qtagg", False),
+        ("pandas.tests.frame", False),
+        ("numpy.linalg.tests", False),
+        ("pandas.testing", True),
+        ("xml.etree.ElementTree", True),
+    ],
+)
+def test_script_submodule_filter(name, wanted):
+    assert freeze._wanted_submodule(name) is wanted
+
+
+def test_stdlib_is_offered_without_gui_or_test_suite():
+    stdlib = freeze._stdlib_top_level()
+    for module in ("statistics", "sqlite3", "csv", "zipfile", "xml", "decimal"):
+        assert module in stdlib
+    for module in ("tkinter", "test", "idlelib", "turtle"):
+        assert module not in stdlib
+    assert "tkinter" in freeze.EXCLUDES
+
+
+def test_every_library_the_tools_advertise_is_bundled():
+    """The run_python description names them; the binary must have them."""
+    pytest.importorskip("gaia_agent_chat")
+    from gaia_agent_chat.python_runner import BUNDLED_LIBRARIES
+
+    missing = set(BUNDLED_LIBRARIES.values()) - set(freeze.SCRIPT_LIBRARIES)
+    assert not missing, f"advertised to the model but not bundled: {missing}"
+
+
+def test_smoke_test_uses_the_runner_flag():
+    pytest.importorskip("gaia_agent_chat")
+    from gaia_agent_chat.python_runner import RUN_PYTHON_FILE_FLAG
+
+    spec = importlib.util.spec_from_file_location(
+        "gaia_smoke", PACKAGING / "smoke_test.py"
+    )
+    smoke = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(smoke)
+    assert smoke.RUN_PYTHON_FILE_FLAG == RUN_PYTHON_FILE_FLAG
+
+
+# ---------------------------------------------------------------------------
+# tiktoken (#5066): the binary counted tokens by estimate
+# ---------------------------------------------------------------------------
+
+
+def test_build_bundles_the_tokenizer_plugin_and_data(tmp_path, monkeypatch):
+    """The plugin is a hidden import and the staged cache is bundle data."""
+    tiktoken_bundle = freeze.tiktoken_bundle
+
+    captured = []
+    pyinstaller = types.ModuleType("PyInstaller")
+    pyinstaller_main = types.ModuleType("PyInstaller.__main__")
+    pyinstaller_main.run = captured.extend
+    pyinstaller.__main__ = pyinstaller_main
+    monkeypatch.setitem(sys.modules, "PyInstaller", pyinstaller)
+    monkeypatch.setitem(sys.modules, "PyInstaller.__main__", pyinstaller_main)
+    monkeypatch.setattr(freeze, "HERE", tmp_path)
+    monkeypatch.setattr(freeze, "_verify_collect_targets", lambda: None)
+    monkeypatch.setattr(freeze, "script_hidden_imports", lambda: [])
+
+    def fake_stage(dest):
+        dest.mkdir(parents=True)
+        return dest
+
+    monkeypatch.setattr(freeze.tiktoken_bundle, "stage_cache", fake_stage)
+
+    freeze.build(onefile=True)
+
+    pairs = list(zip(captured, captured[1:]))
+    assert ("--hidden-import", tiktoken_bundle.PLUGIN_MODULE) in pairs
+    staged = tmp_path / "build" / tiktoken_bundle.BUNDLE_DIR
+    assert (
+        "--add-data",
+        f"{staged}{os.pathsep}{tiktoken_bundle.BUNDLE_DIR}",
+    ) in pairs
+
+
+def test_smoke_test_checks_the_tokenizer_offline():
+    spec = importlib.util.spec_from_file_location(
+        "gaia_smoke_tokenizer", PACKAGING / "smoke_test.py"
+    )
+    smoke = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(smoke)
+    assert '"tiktoken:cl100k_base"' in smoke.TOKENIZER_SCRIPT

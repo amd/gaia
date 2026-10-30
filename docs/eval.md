@@ -37,5 +37,5 @@ The updated evaluation documentation includes:
 
 If you have questions or need help, please:
 - Visit our [FAQ](https://amd-gaia.ai/docs/reference/faq)
-- Join our [Discord community](https://discord.com/channels/1392562559122407535/1402013282495102997)
+- Join our [Discord community](https://discord.com/invite/5xXzkMu8Zk)
 - Open an [issue on GitHub](https://github.com/amd/gaia/issues)

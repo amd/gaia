@@ -17,15 +17,19 @@ from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     DEFAULT_CONTEXT_SIZE,
     DEFAULT_MODEL_NAME,
+    PROBE_TIMEOUT,
+    InsufficientMemoryError,
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
     cloud_model_provider,
+    fit_ctx_to_free_memory,
     is_llm_model_entry,
     resolve_ctx_size,
     resolve_default_chat_model,
     resolve_effective_ctx_size,
     resolve_lemonade_base_url,
+    running_embedded_lemonade_url,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
 from gaia.logger import get_logger
@@ -46,6 +50,9 @@ def _is_cloud_entry(entry: dict) -> bool:
     """
     return entry.get("recipe") == CLOUD_RECIPE or "cloud" in (entry.get("labels") or [])
 
+
+#: Seconds between "still waiting" log lines while another preload runs.
+_PRELOAD_NOTICE_INTERVAL = 15.0
 
 # Device capability priority (high -> low)
 _DEVICE_PRIORITY = ["amd_npu", "amd_igpu", "amd_dgpu", "cpu"]
@@ -281,6 +288,7 @@ class LemonadeManager:
 
     _initialized = False
     _base_url: Optional[str] = None
+    _follows_gaia_lemonade = False
     _context_size: int = 0
     # The loaded model's trained-context ceiling (``max_context_window``),
     # once discovered (#2992). Lets the recheck fast-path recognize
@@ -299,6 +307,8 @@ class LemonadeManager:
     # Server confirmed up for a cloud-model caller. Kept apart from
     # ``_initialized`` so a later local-model caller still gets the idle preload.
     _ready_for_cloud = False
+    # Models whose skipped tool-calling probe was already reported.
+    _probe_skip_reported: set = set()
     _log = get_logger(__name__)
 
     # Rate-limit the per-turn context re-check that fires when context_size==0.
@@ -349,6 +359,25 @@ class LemonadeManager:
             "GAIA's Lemonade Server is stopped; asking the daemon to start it"
         )
         return bool(ensure_lemonade().get("started"))
+
+    @classmethod
+    def _wait_for_gaia_lemonade(cls, quiet: bool) -> bool:
+        """Wait, bounded, for GAIA's server that is running but not answering yet.
+
+        Returns:
+            True once it answers; False after printing why it did not.
+        """
+        client = LemonadeClient(keep_alive=True, verbose=not quiet)
+        on_status = None if quiet else (lambda msg: print(msg, file=sys.stderr))
+        try:
+            # False means "not GAIA's server" too; callers check gaia_runs_lemonade first.
+            client.wait_for_gaia_lemonade(on_status=on_status)
+        except LemonadeClientError as e:
+            cls._log.error("%s", e)
+            if not quiet:
+                print(f"❌ {e}", file=sys.stderr)
+            return False
+        return True
 
     @classmethod
     def print_server_error(cls, min_context_size: int = DEFAULT_CONTEXT_SIZE):
@@ -497,6 +526,40 @@ class LemonadeManager:
             print("", file=sys.stderr)
 
     @classmethod
+    def report_busy(cls, base_url: str, quiet: bool = True) -> None:
+        """Say that the server is up but busy, so a caller treats it as waiting.
+
+        Args:
+            base_url: Server URL to name in the message.
+            quiet: Log only; skip the stderr message.
+        """
+        message = (
+            f"Lemonade Server at {base_url} is busy: it accepted the connection "
+            f"but did not answer a status check within {PROBE_TIMEOUT[1]:g}s, "
+            "usually because it is loading a model for another app. Continuing; "
+            "the first request waits until it is free. If it never answers, "
+            "check the Lemonade server log."
+        )
+        cls._log.warning(message)
+        if not quiet:
+            print(f"⏳ {message}", file=sys.stderr, flush=True)
+
+    @classmethod
+    def _wait_for_preload(cls, preload_done: threading.Event) -> None:
+        """Wait for another caller's preload, saying so while it runs.
+
+        Bounded by that preload's own load timeout: it sets *preload_done*
+        when its load returns or raises.
+        """
+        started = time.monotonic()
+        while not preload_done.wait(_PRELOAD_NOTICE_INTERVAL):
+            cls._log.info(
+                "Waiting for a model load another caller in this process "
+                "started (%.0fs so far)",
+                time.monotonic() - started,
+            )
+
+    @classmethod
     def _validate_device_requirement(cls, client, required_min_device, device):
         """Raise ``HardwareRequirementError`` if *required_min_device* isn't met.
 
@@ -624,6 +687,7 @@ class LemonadeManager:
         required_min_device: Optional[str] = None,
         device: Optional[str] = None,
         model: Optional[str] = None,
+        preload: bool = True,
     ) -> bool:
         """Ensure Lemonade server is running with sufficient context size.
 
@@ -654,6 +718,9 @@ class LemonadeManager:
                 machine's default (``resolve_default_chat_model``). An idle
                 server is seeded with it. A cloud model is never preloaded and
                 skips the context check — it has no local window to size.
+            preload: False makes an idle server a reachability check only:
+                nothing is loaded or downloaded, and the manager stays
+                uninitialised so the next caller seeds the model itself.
 
         Returns:
             True if Lemonade server is ready, False otherwise.
@@ -667,10 +734,15 @@ class LemonadeManager:
         # Callers thread config values through verbatim — an unset (None)
         # floor means the default, never a TypeError at the ctx comparison.
         requested_ctx = min_context_size
-        if min_context_size is None:
-            min_context_size = resolve_ctx_size(device=device)
         chat_model = model or resolve_default_chat_model()
         is_cloud = cloud_model_provider(chat_model) is not None
+        if min_context_size is None:
+            min_context_size = resolve_ctx_size(device=device)
+            if not is_cloud:
+                # The window the chat model's own load gets when memory is short.
+                min_context_size = fit_ctx_to_free_memory(
+                    chat_model, min_context_size, base_url
+                )
         # Map high-level device selector to required_min_device when the
         # caller didn't pass an explicit required_min_device.
         if device and not required_min_device:
@@ -691,7 +763,7 @@ class LemonadeManager:
                 preload_done = cls._preload_in_flight
                 cls._lock.release()
                 try:
-                    preload_done.wait()
+                    cls._wait_for_preload(preload_done)
                 finally:
                     cls._lock.acquire()
 
@@ -703,6 +775,20 @@ class LemonadeManager:
             cls._maybe_validate_device(
                 required_min_device, device, base_url, host, port, quiet
             )
+
+            # The cached server is gone: initialize again, which has the
+            # daemon start GAIA's server on its new port.
+            if (
+                (cls._initialized or cls._ready_for_cloud)
+                and cls._follows_gaia_lemonade
+                and running_embedded_lemonade_url() is None
+            ):
+                cls._log.warning(
+                    "GAIA's Lemonade Server at %s has stopped; starting it again",
+                    cls._base_url,
+                )
+                cls._initialized = False
+                cls._ready_for_cloud = False
 
             if is_cloud and (cls._initialized or cls._ready_for_cloud):
                 return True
@@ -767,6 +853,10 @@ class LemonadeManager:
                                 verbose=not quiet,
                             )
                         status = client.get_status()
+                        if status.busy:
+                            # Says nothing about what is loaded; keep the cache.
+                            cls.report_busy(client.base_url, quiet)
+                            return True
                         # Defensive normalisation: some Lemonade versions can
                         # return `loaded_models: null`, which would crash the
                         # `any(...)` and `_find_loaded_llm_id` calls below.
@@ -849,8 +939,12 @@ class LemonadeManager:
                                     min_context_size,
                                     MessageType.WARNING,
                                 )
+                    except LemonadeClientError:
+                        # Auth and other client errors say the server is not
+                        # usable; propagate like the first-init path below.
+                        raise
                     except Exception as e:
-                        cls._log.debug(f"Failed to re-check status: {e}")
+                        cls._log.warning(f"Failed to re-check Lemonade status: {e}")
                     return True
 
             cls._log.debug(f"Initializing Lemonade (min context: {min_context_size})")
@@ -875,10 +969,16 @@ class LemonadeManager:
 
                 pinned = base_url is not None or host is not None or port is not None
                 if gaia_runs_lemonade(client.base_url if pinned else None):
-                    from gaia.daemon.errors import DaemonError
+                    from gaia.daemon.errors import (
+                        DaemonError,
+                        LemonadeNotAnsweringError,
+                    )
 
                     try:
                         cls.start_embedded_if_stopped()
+                    except LemonadeNotAnsweringError:
+                        if not cls._wait_for_gaia_lemonade(quiet):
+                            return False
                     except DaemonError as e:
                         cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
                         if not quiet:
@@ -890,9 +990,17 @@ class LemonadeManager:
                     # Its port is chosen at start, so re-resolve instead of
                     # keeping the stopped-state default the caller passed.
                     client = LemonadeClient(keep_alive=True, verbose=not quiet)
+                    # Stopped again since: wait on the daemon, not the default port.
+                    client.current_base_url()
 
                 # Just check server status - no agent profile required
                 status = client.get_status()
+
+                if status.busy:
+                    # Up but not answering: not something to start, and not
+                    # ready to cache. The next caller checks again.
+                    cls.report_busy(client.base_url, quiet)
+                    return True
 
                 if not status.running:
                     # GAIA manages Lemonade — a stopped server is something to
@@ -909,8 +1017,12 @@ class LemonadeManager:
                         return False
 
                 if is_cloud:
+                    # Lemonade holds cloud keys in memory only; a fresh start has none.
+                    if client._replay_cloud_key(chat_model):
+                        # After the key replay: without a key it can only fail.
+                        cls.learn_tool_calling(client, chat_model, key_replayed=True)
                     cls._ready_for_cloud = True
-                    cls._base_url = client.base_url
+                    cls._remember_server(client)
                     cls._log.debug(
                         "Lemonade ready at %s; not preloading a local chat "
                         "model because the chat model %r is a cloud model",
@@ -946,6 +1058,16 @@ class LemonadeManager:
                     for model in status.loaded_models
                 )
 
+                if not preload and context_size_value == 0 and not llm_models_loaded:
+                    cls._remember_server(client)
+                    cls._log.info(
+                        "Lemonade reachable at %s with no chat model loaded; "
+                        "not loading %s (preload disabled by the caller)",
+                        client.base_url,
+                        chat_model,
+                    )
+                    return True
+
                 # Idle server (no model loaded, no ctx reported): proactively
                 # load the default model with the required ctx_size.  Without
                 # this, the user would land on a server with a too-small
@@ -979,7 +1101,7 @@ class LemonadeManager:
                 # preload does NOT poison the singleton: ensure_ready will
                 # re-enter this block on the next call.
                 cls._initialized = True
-                cls._base_url = client.base_url
+                cls._remember_server(client)
                 cls._context_size = context_size_value
 
                 cls._log.debug(
@@ -1070,24 +1192,11 @@ class LemonadeManager:
 
     @staticmethod
     def _find_loaded_llm_id(status: "LemonadeStatus") -> Optional[str]:
-        """The model id of the LLM currently loaded, or None.
-
-        ``type=="llm"`` is the precise check on health-format entries; the
-        label fallback covers legacy code paths that populate
-        ``loaded_models`` from the catalog (which lacks ``type``). Embedding
-        and image models are excluded — reloading/clamping them with an LLM
-        ctx_size makes no sense and (pre-#1030 follow-up) used to pick the
-        wrong model entirely because the embedder can sort before ``Gemma-…``.
-        """
+        """The model id of the first loaded local LLM, or None."""
         llm_models = [
             m
             for m in status.loaded_models
-            if m.get("type") == "llm"
-            or (
-                m.get("type") is None
-                and "image" not in m.get("labels", [])
-                and "embeddings" not in m.get("labels", [])
-            )
+            if is_llm_model_entry(m) and not _is_cloud_entry(m)
         ]
         if not llm_models:
             return None
@@ -1151,6 +1260,79 @@ class LemonadeManager:
         )
         if not quiet and not already_announced:
             cls.print_ceiling_message(cls._context_size, min_context_size)
+
+    @classmethod
+    def learn_tool_calling(
+        cls, client: "LemonadeClient", model: str, key_replayed: bool = False
+    ) -> None:
+        """Probe a cloud model's native tool calling once, when nothing says.
+
+        A failed or inconclusive probe is logged and remembered for
+        ``PROBE_RETRY_AFTER_S``, so a down gateway is not probed again at every
+        start; until a probe succeeds the model runs on the in-text tool format.
+        """
+        from gaia.llm.lemonade_client import (
+            PROBE_RETRY_AFTER_S,
+            ToolCallingProbeStopped,
+            cloud_model_info,
+            learned_tool_calling,
+            probe_cloud_tool_calling,
+            probe_recently_failed,
+            record_probe_failure,
+        )
+
+        info = cloud_model_info(model)
+        if (
+            info is None
+            or info.get("tool_calling")
+            or learned_tool_calling(model) is not None
+        ):
+            return
+        retry_in = f"{PROBE_RETRY_AFTER_S // 60} minutes"
+        if probe_recently_failed(model):
+            if model not in cls._probe_skip_reported:
+                cls._probe_skip_reported.add(model)
+                cls._log.warning(
+                    "The native tool-calling probe for %s failed within the last "
+                    "%s; it runs on the in-text tool format until the next try. "
+                    "Remove it from tool_calling_probe_failures in "
+                    "~/.gaia/gateway.json to probe it now.",
+                    model,
+                    retry_in,
+                )
+            return
+        # A restarted server has no key until it is replayed, and a keyless
+        # probe can only fail; that is not the model's answer.
+        if not key_replayed and not client._replay_cloud_key(model):
+            cls._log.warning(
+                "Skipped the native tool-calling probe for %s: its cloud provider "
+                "has no usable key on this server yet.",
+                model,
+            )
+            return
+        try:
+            supported = probe_cloud_tool_calling(client, model)
+        except ToolCallingProbeStopped as e:
+            cls._log.info("%s; it is probed again at the next start.", e)
+            return
+        except LemonadeClientError as e:
+            record_probe_failure(model)
+            cls._log.warning(
+                "Could not probe native tool calling for %s (%s); it runs on the "
+                "in-text tool format, and the probe is retried in %s.",
+                model,
+                e,
+                retry_in,
+            )
+            return
+        if supported is None:
+            record_probe_failure(model)
+            cls._log.warning(
+                "The native tool-calling probe for %s was inconclusive; it runs "
+                "on the in-text tool format, and the probe is retried in %s.",
+                model,
+                retry_in,
+            )
 
     @classmethod
     def _autostart(
@@ -1303,6 +1485,9 @@ class LemonadeManager:
                 prompt=False,
                 auto_download=True,
             )
+        except InsufficientMemoryError:
+            # Already says how much memory is needed; a restart would not help.
+            raise
         except Exception as e:
             raise LemonadeClientError(
                 f"Failed to preload Lemonade model {model!r} with "
@@ -1493,8 +1678,26 @@ class LemonadeManager:
         return cls._initialized
 
     @classmethod
+    def _remember_server(cls, client: LemonadeClient) -> None:
+        cls._base_url = client.base_url
+        cls._follows_gaia_lemonade = client.follows_gaia_lemonade is True
+
+    @classmethod
     def get_base_url(cls) -> Optional[str]:
-        """Get the base URL if initialized."""
+        """Get the base URL if initialized.
+
+        GAIA's own server is followed to the port the daemon last restarted it
+        on; a URL the caller configured is returned as recorded.
+        """
+        if cls._follows_gaia_lemonade:
+            current = running_embedded_lemonade_url()
+            if current is not None and current != cls._base_url:
+                cls._log.info(
+                    "GAIA's Lemonade Server moved from %s to %s; following it",
+                    cls._base_url,
+                    current,
+                )
+                cls._base_url = current
         return cls._base_url
 
     @classmethod
@@ -1512,6 +1715,7 @@ class LemonadeManager:
             cls._initialized = False
             cls._ready_for_cloud = False
             cls._base_url = None
+            cls._follows_gaia_lemonade = False
             cls._context_size = 0
             cls._context_ceiling = None
             cls._context_ceiling_model = None

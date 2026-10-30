@@ -24,8 +24,8 @@ export function resolveTheme(pref: ThemePreference): Theme {
  * token in both themes.
  */
 const CANVAS: Record<Theme, string> = {
-    light: '#FFFFFF',
-    dark: '#17161C',
+    light: '#FAF9F7',
+    dark: '#1A1917',
 };
 
 /** Single writer for the theme, so the frame can never disagree with the app. */
@@ -43,4 +43,33 @@ export function applyTheme(theme: Theme): void {
         return;
     }
     meta.setAttribute('content', CANVAS[theme]);
+}
+
+/**
+ * On Windows and macOS the desktop app has no system title bar, so the top rows
+ * stand in for it. Linux keeps the system frame and gets none of that CSS.
+ */
+export function markTitleBar(): void {
+    const kind = window.gaiaWindow?.titleBar;
+    if (kind && kind !== 'native') document.documentElement.dataset.titlebar = kind;
+}
+
+/**
+ * Paint the desktop app's window controls and the browser frame from the live
+ * canvas and text tokens, so a palette reaches them too. applyPalette calls it,
+ * and every theme change is followed by applyPalette, so the colors go once.
+ */
+export function syncTitleBar(): void {
+    const root = document.documentElement;
+    const tokens = getComputedStyle(root);
+    const color = tokens.getPropertyValue('--bg-primary').trim();
+    const symbolColor = tokens.getPropertyValue('--text-primary').trim();
+    if (window.gaiaWindow?.titleBar === 'overlay' && color && symbolColor) {
+        window.gaiaWindow.setColors({ color, symbolColor }).catch((err: unknown) => {
+            console.error('syncTitleBar: the desktop window controls did not take the colors', err);
+        });
+    }
+    if (root.dataset.palette && color) {
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', color);
+    }
 }

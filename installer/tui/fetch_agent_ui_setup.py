@@ -9,12 +9,14 @@ build-installers.yml produced, because that file is also what electron-updater
 re-runs. This finds that file from one of two named sources -- never a guessed
 "latest":
 
-``--release vX.Y.Z``
+``--release vX.Y.Z`` (or ``vX.Y.Z-rcN``)
     The asset on a published GitHub release. For manual runs and the PR gate.
 
-``--publish-run-sha SHA --version X.Y.Z``
-    The ``windows-installer`` artifact of publish.yml's run for tag vX.Y.Z at
-    that commit, taken only once the run's ``Build complete`` job has passed.
+``--publish-run-sha SHA --version X.Y.Z`` (or ``X.Y.Z-rc.N``)
+    The ``windows-installer`` artifact of publish.yml's run for that version's
+    tag at that commit (``0.25.0-rc.2`` is tag ``v0.25.0-rc2``, per
+    util/release_tag.py), taken only once the run's ``Build complete`` job has
+    passed.
     Those jobs run before publish.yml's approval gate, so a release does not
     wait on a human to build the Windows setup. Polled up to ``--wait-minutes``.
 
@@ -38,13 +40,16 @@ import time
 import zipfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "util"))
+from release_tag import ReleaseTag, parse_npm_version, parse_tag  # noqa: E402
+
 PUBLISH_WORKFLOW = "publish.yml"
 RUN_ARTIFACT = "windows-installer"
 # build-installers.yml uploads the artifact mid-build, before its validation and
 # smoke jobs; this last job passing is what says the setup is good to ship.
 GATE_JOB = "Build complete"
 MIN_BYTES = 50 * 1024 * 1024
-VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+BASE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 def setup_name(version: str) -> str:
@@ -79,10 +84,22 @@ def verify(path: Path, version: str) -> Path:
     return path
 
 
+def _release(parse, value: str) -> ReleaseTag:
+    """The release `value` names; a four-part hotfix never gets a desktop app setup."""
+    try:
+        rel = parse(value)
+    except ValueError as e:
+        raise SystemExit(
+            f"'{value}' does not name a vX.Y.Z or vX.Y.Z-rcN release"
+        ) from e
+    if not BASE_VERSION_RE.match(rel.base_version):
+        raise SystemExit(f"'{value}' does not name a vX.Y.Z or vX.Y.Z-rcN release")
+    return rel
+
+
 def from_release(repo: str, tag: str, out: Path) -> Path:
-    version = tag[1:] if tag.startswith("v") else tag
-    if not VERSION_RE.match(version):
-        raise SystemExit(f"--release '{tag}' is not a vX.Y.Z tag")
+    # electron-builder names an RC's setup for its npm version, 0.25.0-rc.2.
+    version = _release(parse_tag, tag).npm_version
     out.mkdir(parents=True, exist_ok=True)
     _gh(
         [
@@ -135,9 +152,7 @@ def from_publish_run(
     wait_minutes: int,
     poll_seconds: int = 60,
 ) -> Path:
-    if not VERSION_RE.match(version):
-        raise SystemExit(f"--version '{version}' is not X.Y.Z")
-    tag = f"v{version}"
+    tag = _release(parse_npm_version, version).tag
     deadline = time.monotonic() + wait_minutes * 60
     while True:
         run = _publish_run(repo, sha, tag)
@@ -200,14 +215,17 @@ def from_publish_run(
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--release", metavar="TAG", help="a published vX.Y.Z release")
+    src.add_argument(
+        "--release", metavar="TAG", help="a published vX.Y.Z or vX.Y.Z-rcN release"
+    )
     src.add_argument(
         "--publish-run-sha",
         metavar="SHA",
         help="publish.yml's push run for this commit",
     )
     ap.add_argument(
-        "--version", help="expected X.Y.Z (required with --publish-run-sha)"
+        "--version",
+        help="expected X.Y.Z or X.Y.Z-rc.N (required with --publish-run-sha)",
     )
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "amd/gaia"))

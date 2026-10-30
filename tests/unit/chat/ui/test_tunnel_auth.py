@@ -441,3 +441,25 @@ class TestForwardedHeaderSpoofRejected:
             headers={"X-Forwarded-Proto": "https"},
         )
         assert resp.status_code == 401
+
+
+class TestConnectedDevice:
+    """Phone access in the session panel names the device that connected."""
+
+    def test_authenticated_remote_request_names_the_device(self, app, client):
+        token = _activate_tunnel(app)
+        resp = client.get(
+            "/api/sessions",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+            },
+        )
+        assert resp.status_code == 200
+        device = app.state.tunnel.get_status()["device"]
+        assert device["name"] == "iPhone" and device["lastSeen"]
+
+    def test_rejected_request_records_nothing(self, app, client):
+        _activate_tunnel(app)
+        client.get("/api/sessions", headers={"Authorization": "Bearer wrong"})
+        assert app.state.tunnel.get_status()["device"] is None

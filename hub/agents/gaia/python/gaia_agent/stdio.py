@@ -67,11 +67,13 @@ import json
 import logging
 import os
 import queue
+import sqlite3
 import sys
 import threading
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from gaia_agent import __version__ as agent_version
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
 
 from gaia.agents.base.readiness import (
@@ -84,12 +86,17 @@ from gaia.llm.inference_location import resolve_inference_location
 from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
+    _model_ids_match,
     cloud_model_provider,
+    resolve_default_chat_model,
     resolve_lemonade_base_url,
+    running_embedded_lemonade_url,
 )
 from gaia.llm.lemonade_launcher import describe_client_hint
+from gaia.log_rotation import SharedRotatingFileHandler
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
+from gaia.version import version as gaia_version
 
 logger = get_logger(__name__)
 
@@ -173,6 +180,10 @@ DECISION_ALWAYS = "always"
 DECISION_TIMEOUT = "timeout"
 
 
+#: Why the stdin pump cancels a turn: the host has gone.
+STDIN_CLOSED = "stdin closed mid-turn"
+
+
 class PermissionState:
     """Permission state that outlives any single turn.
 
@@ -202,6 +213,8 @@ class PermissionState:
         self._edit_roots = tuple(edit_roots) if edit_roots else (os.getcwd(),)
         self._lifts_shell_gates = lifts_shell_gates
         self._grants: set = set()
+        #: What each "always" granted, so it can be listed and revoked whole.
+        self._scopes: Dict[str, Any] = {}
         self._handler: Any = None
         if full_access:
             # Starting unattended is the same security event as toggling it on
@@ -230,10 +243,13 @@ class PermissionState:
         operator block, the read-only binary policy and the rate limit (#3373,
         #3374). An unattended harness that only pre-approves prompts sets the
         first and must not inherit the second, which is what
-        ``lifts_shell_gates=False`` buys the HTTP transport.
+        ``lifts_shell_gates=False`` buys the HTTP transport. ``grants_paths``
+        lets an out-of-scope path through without a prompt, but only on a run
+        a person is watching (``answers_confirmations``).
         """
         handler.auto_approve_gated_tools = enabled
         handler.full_access = enabled and self._lifts_shell_gates
+        handler.grants_paths = enabled
         handler.accept_edits = self._accept_edits
         handler.edit_roots = self._edit_roots
 
@@ -271,6 +287,7 @@ class PermissionState:
         with self._lock:
             self._apply(handler, self._full_access)
             handler.session_grants().update(self._grants)
+            handler.session_grant_scopes().update(self._scopes)
             # A human is on the other end of this pipe with a modal on screen,
             # so the wait is theirs to end — see confirm_tool_execution. The
             # TUI answers its own prompt long before this fires (its bound is
@@ -284,8 +301,58 @@ class PermissionState:
         """Take the turn's grants back into the session and drop the handler."""
         with self._lock:
             self._grants.update(handler.session_grants())
+            self._scopes.update(handler.session_grant_scopes())
             if self._handler is handler:
                 self._handler = None
+
+    def grants(self) -> List[Dict[str, str]]:
+        """Every "always" answer in this session, including the running turn's."""
+        with self._lock:
+            return [
+                {"key": key, "label": scope.label}
+                for key, scope in self._live_scopes().items()
+            ]
+
+    def revoke(self, key: Optional[str] = None) -> int:
+        """Revoke one "always" answer, or all of them when *key* is None.
+
+        Takes effect on the very next gated call, including one in a turn
+        already running. A family another remaining answer also granted stays
+        granted. Returns how many answers were revoked.
+        """
+        with self._lock:
+            scopes = self._live_scopes()
+            targets = list(scopes) if key is None else [key]
+            removed = [scopes.pop(k) for k in targets if k in scopes]
+            if not removed:
+                return 0
+            kept = {family for scope in scopes.values() for family in scope.keys}
+            dropped = {f for scope in removed for f in scope.keys} - kept
+            holders = [(self._grants, self._scopes)]
+            if self._handler is not None:
+                holders.append(
+                    (
+                        self._handler.session_grants(),
+                        self._handler.session_grant_scopes(),
+                    )
+                )
+            for families, by_key in holders:
+                families.difference_update(dropped)
+                for scope in removed:
+                    by_key.pop(scope.key, None)
+        audit.warning(
+            "Revoked %d always-allow grant(s): %s",
+            len(removed),
+            ", ".join(scope.label for scope in removed),
+        )
+        return len(removed)
+
+    def _live_scopes(self) -> Dict[str, Any]:
+        """The session's answers plus the running turn's. Caller holds the lock."""
+        scopes = dict(self._scopes)
+        if self._handler is not None:
+            scopes.update(self._handler.session_grant_scopes())
+        return scopes
 
     def resolve(self, decision: str, confirm_id: Optional[str]) -> None:
         """Answer the confirmation the agent thread is parked on.
@@ -309,7 +376,7 @@ class PermissionState:
                 timed_out=decision == DECISION_TIMEOUT,
             )
 
-    def cancel_active(self, reason: str = "stdin closed mid-turn") -> bool:
+    def cancel_active(self, reason: str = STDIN_CLOSED) -> bool:
         """Cancel the turn currently running, if any. True if one was cancelled.
 
         Two callers. The host's ``cancel`` verb stops a turn while keeping the
@@ -320,15 +387,25 @@ class PermissionState:
         already-exited host pay.
 
         Either way, cancelling unblocks the wait, which lets the turn finish
-        through its normal path and emit its one terminal event.
+        through its normal path and emit its one terminal event. A turn stdin's
+        closing cancels is marked as cut short (``closed_by_host``), so it is
+        saved as interrupted; one that had already ended is not.
         """
         with self._lock:
             handler = self._handler
             if handler is None:
                 return False
+            if reason == STDIN_CLOSED and not handler.cancelled.is_set():
+                handler.closed_by_host = True
             handler.cancelled.set()
         audit.warning("%s — cancelled the in-flight turn", reason)
         return True
+
+    def end_turn(self, handler: Any) -> None:
+        """Mark *handler*'s turn as over, so a close after this point does not
+        count as cutting it short."""
+        with self._lock:
+            handler.cancelled.set()
 
 
 def parse_control(line: str) -> Optional[Dict[str, Any]]:
@@ -466,11 +543,32 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
         "model_display": _model_display_name(model_id, is_claude),
         "model_backend": "claude" if is_claude else cloud_provider or "lemonade",
         "model_remote": is_claude or bool(cloud_provider),
+        # The header shows these, not an install record that may name another build.
+        "agent_version": agent_version,
+        "gaia_version": gaia_version,
     }
     # Reported even on the Claude path: embeddings (RAG, memory) still run on
     # Lemonade, so "chat is remote" does not mean Lemonade being down is fine.
-    event.update(_lemonade_health(getattr(chat.config, "base_url", None)))
+    event.update(_lemonade_health(_status_lemonade_url(agent)))
     return event
+
+
+def _status_lemonade_url(agent: Any) -> Optional[str]:
+    """The Lemonade URL a status ping reports: where the live client talks now.
+
+    The started-with address goes stale once GAIA's server restarts on a new
+    port, and the TUI builds its provider picker from this field. A ping never
+    starts a server, so with none running the configured address is reported
+    and the probe says it is down.
+    """
+    configured = getattr(agent.chat.config, "base_url", None)
+    if running_embedded_lemonade_url() is None:
+        return configured
+    try:
+        return _lemonade_url(agent)
+    except RuntimeError as exc:
+        logger.warning("[lemonade] could not follow GAIA's server for status: %s", exc)
+        return configured
 
 
 def _lemonade_health(base_url: Optional[str]) -> Dict[str, Any]:
@@ -701,12 +799,77 @@ def _replayed_cloud_key(base_url: Optional[str], target: str) -> bool:
         return False
 
 
-def _apply_local_switch(agent: Any, target: str) -> str:
+def _lemonade_url(agent: Any) -> Optional[str]:
+    """The Lemonade URL the live client talks to now.
+
+    ``chat.config.base_url`` keeps the address the agent started with, which is
+    dead once the daemon restarts GAIA's Lemonade on a new port; the live
+    client follows it there. A Claude client has no such URL.
+    """
+    chat = agent.chat
+    current = getattr(getattr(chat, "llm_client", None), "current_base_url", None)
+    if not callable(current):
+        return chat.config.base_url
+    try:
+        return current()
+    except LemonadeClientError as exc:
+        raise RuntimeError(f"{str(exc).rstrip('.')}. {start_advice()}") from exc
+
+
+def _wait_for_gaia_lemonade(
+    agent: Any, target: str, on_status: Optional[Callable[[str], None]]
+) -> Optional[str]:
+    """Wait, bounded, for GAIA's own server to answer again; return its URL.
+
+    None when the server is not GAIA's own (the user's, or a remote
+    ``LEMONADE_BASE_URL``): the caller's own error then stands. Goes through
+    the live Lemonade client when there is one, so it follows the restarted
+    server too. A server already back by now -- it came up while the failed
+    request was still retrying -- returns its URL at once.
+    """
+    chat = agent.chat
+    client = getattr(chat, "llm_client", None)
+    if not callable(getattr(client, "current_base_url", None)):
+        client = LemonadeClient(base_url=chat.config.base_url, verbose=False)
+    wait = getattr(client, "wait_for_gaia_lemonade", None)
+    if not callable(wait) or not getattr(client, "follows_gaia_lemonade", False):
+        return None
+    try:
+        wait(target, on_status=on_status)
+        return client.current_base_url()
+    except LemonadeClientError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def _reachable_lemonade_models(
+    agent: Any, target: str, on_status: Optional[Callable[[str], None]]
+) -> Tuple[Optional[str], List[str]]:
+    """``(base_url, models)`` from the server the live client talks to.
+
+    GAIA's own server is briefly unreachable while the daemon restarts it, so
+    that is waited out instead of refusing the switch.
+    """
+    try:
+        base_url = _lemonade_url(agent)
+        return base_url, _lemonade_models(base_url)
+    except RuntimeError:
+        base_url = _wait_for_gaia_lemonade(agent, target, on_status)
+        if base_url is None:
+            raise
+    return base_url, _lemonade_models(base_url)
+
+
+def _apply_local_switch(
+    agent: Any, target: str, on_status: Optional[Callable[[str], None]] = None
+) -> str:
     """Swap the live client to a local or cloud Lemonade model."""
     chat = agent.chat
-    available = _lemonade_models(chat.config.base_url)  # raises if unreachable
-    if target not in available and _replayed_cloud_key(chat.config.base_url, target):
-        available = _lemonade_models(chat.config.base_url)
+    # Raises if unreachable, after waiting out a restart of GAIA's own server.
+    base_url, available = _reachable_lemonade_models(agent, target, on_status)
+    # Lemonade lists a registered user.X model as X; switch to the listed name.
+    target = next((m for m in available if _model_ids_match(m, target)), target)
+    if target not in available and _replayed_cloud_key(base_url, target):
+        available = _lemonade_models(base_url)
     if target not in available:
         raise RuntimeError(
             f"Unknown Lemonade model '{target}'. Downloaded local or discovered cloud "
@@ -722,7 +885,7 @@ def _apply_local_switch(agent: Any, target: str) -> str:
         new_client = create_client(
             use_claude=False,
             model=target,
-            base_url=chat.config.base_url,
+            base_url=base_url,
             system_prompt=chat.config.system_prompt,
         )
         # Warm the catalog metadata now, before this client answers anything.
@@ -755,7 +918,9 @@ def is_claude_model(model_id: str) -> bool:
     return model_id.startswith("claude-")
 
 
-def switch_model(agent: Any, target: str) -> str:
+def switch_model(
+    agent: Any, target: str, on_status: Optional[Callable[[str], None]] = None
+) -> str:
     """Swap the agent's live LLM client to *target*.
 
     Returns the friendly display name on success; raises RuntimeError with an
@@ -770,10 +935,21 @@ def switch_model(agent: Any, target: str) -> str:
     lives here rather than in a module of its own because this is where the
     machinery it depends on already is — moving 200 working lines to improve a
     filename is not worth the risk.
+
+    *on_status* receives a plain-language line while the switch waits for
+    GAIA's model server to come back after a restart.
     """
+    from gaia.llm.lemonade_client import cloud_model_provider
+    from gaia.llm.local_only import SETTINGS_HINT, cloud_blocked
+
+    if cloud_blocked() and (is_claude_model(target) or cloud_model_provider(target)):
+        raise RuntimeError(
+            f"Local only is on, so GAIA won't switch to the cloud model {target}. "
+            f"{SETTINGS_HINT}"
+        )
     if is_claude_model(target):
         return _apply_claude_switch(agent, target)
-    return _apply_local_switch(agent, target)
+    return _apply_local_switch(agent, target, on_status)
 
 
 #: Pre-rename alias. ``run_model_command`` and this module's tests reach it by
@@ -785,22 +961,28 @@ def _format_model_list(agent: Any) -> str:
     """The ``/model`` (no-arg) answer: every switchable id, current one marked."""
     chat = agent.chat
     current = chat.effective_model
-    lines = ["**Claude (remote — sent to Anthropic):**"]
+    default = resolve_default_chat_model()
+
+    def marker(model_id: str) -> str:
+        return (" (default)" if model_id == default else "") + (
+            " ← current" if model_id == current else ""
+        )
+
+    lines = ["**Claude (cloud — sent to Anthropic):**"]
     for model_id, label in CLAUDE_MODELS.items():
-        marker = " ← current" if model_id == current else ""
-        lines.append(f"- `{model_id}` — {label}{marker}")
+        lines.append(f"- `{model_id}` — {label}{marker(model_id)}")
 
     lines.append("")
     try:
-        models = _lemonade_models(chat.config.base_url)
+        models = _lemonade_models(_lemonade_url(agent))
     except RuntimeError as exc:
-        lines.append("**Local (Lemonade — downloaded, chat-capable models):**")
+        lines.append("**On this machine (downloaded, chat-capable models):**")
         lines.append(f"- {exc}")
     else:
         for provider, heading in (
-            (None, "Local (Lemonade — downloaded, chat-capable models)"),
-            ("fireworks", "Fireworks AI (remote — via Lemonade)"),
-            ("amd", "AMD LLM Gateway (remote — via Lemonade)"),
+            (None, "On this machine (downloaded, chat-capable models)"),
+            ("fireworks", "Fireworks AI (cloud)"),
+            ("amd", "AMD LLM Gateway (cloud)"),
         ):
             lines.append(f"**{heading}:**")
             group = [m for m in models if cloud_model_provider(m) == provider]
@@ -808,11 +990,10 @@ def _format_model_list(agent: Any) -> str:
                 lines.append(
                     "- (none downloaded — run `gaia init`)"
                     if provider is None
-                    else "- (connect this provider in the TUI provider settings)"
+                    else "- (not connected — run `/provider` to connect it)"
                 )
             for model_id in group:
-                marker = " ← current" if model_id == current else ""
-                lines.append(f"- `{model_id}`{marker}")
+                lines.append(f"- `{model_id}`{marker(model_id)}")
             lines.append("")
 
     lines.append("")
@@ -834,8 +1015,19 @@ def run_model_command(agent: Any, query: str, out) -> None:
         _write({"type": "final", "answer": _format_model_list(agent)}, out)
         return
 
+    def _status(message: str) -> None:
+        _write(
+            {
+                "type": "status",
+                "status": "working",
+                "message": message,
+                "phase": "reconnecting",
+            },
+            out,
+        )
+
     try:
-        display = _switch_model(agent, arg)
+        display = _switch_model(agent, arg, on_status=_status)
     except RuntimeError as exc:
         logger.warning("model switch to %r refused: %s", arg, exc)
         _write({"type": "error", "detail": str(exc)}, out)
@@ -854,10 +1046,11 @@ def run_model_command(agent: Any, query: str, out) -> None:
         use_claude=bool(agent._use_claude),
         cloud_provider_lookup=lookup if callable(lookup) else None,
     )
+    name = display if location.provider == "claude" else location.model_name
     _write(
         {
             "type": "final",
-            "answer": f"Switched to **{display}**. {location.describe()}",
+            "answer": f"Switched to **{name}** {location.placement()}",
         },
         out,
     )
@@ -922,12 +1115,28 @@ def _write_if_wire_alive(event: Dict[str, Any], out) -> bool:
         return False
 
 
+def _drain_memory(agent) -> None:
+    """Let the last turns' memory extraction finish before ``os._exit`` drops it.
+
+    Bounded by ``EXTRACTION_EXIT_WAIT_S``, which the TUI's exit grace is sized
+    to cover; a drain that runs out logs how many jobs it dropped.
+    """
+    from gaia.agents.base import memory
+
+    pending = getattr(agent, "pending_memory_extractions", None)
+    count = pending() if callable(pending) else 0
+    if count:
+        logger.info("Saving memories before exit (%d pending)", count)
+    memory.drain_memory_extraction(agent, memory.EXTRACTION_EXIT_WAIT_S)
+
+
 def _exit_cleanly(out) -> None:
     """Leave without waiting on the agent's non-daemon threads.
 
     The agent leaves memory extraction and the filesystem watcher behind, so a
     plain return hangs the interpreter at shutdown — a one-shot `run --query`
-    sat for 400s until its caller killed it. Nothing here owns unflushed state:
+    sat for 400s until its caller killed it. Memory is drained by the caller
+    first (``_drain_memory``); otherwise nothing here owns unflushed state:
     events are flushed per line and the DBs commit per write. Both flushes are
     guarded because the usual way of arriving here is the parent — which owns
     both pipes — having already gone.
@@ -956,8 +1165,28 @@ def _write(event: Dict[str, Any], out) -> None:
 LOG_PATH_ENV = "GAIA_AGENT_LOG"
 
 
-def _record_turn(agent: Any, query: str, answer: str, result=None) -> None:
-    """Save the completed worker's full tool trail before admitting the next turn."""
+#: How a turn that never finished reads in the session transcript.
+INTERRUPTED_NOTE = "This answer was interrupted when GAIA closed."
+
+
+def _with_note(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """*messages* ending with :data:`INTERRUPTED_NOTE`, in the last reply when
+    there is one, so roles still alternate."""
+    last = messages[-1] if messages else None
+    if last and last.get("role") == "assistant" and isinstance(last.get("content"), str):
+        text = last["content"].strip()
+        noted = f"{text}\n\n{INTERRUPTED_NOTE}" if text else INTERRUPTED_NOTE
+        return [*messages[:-1], {**last, "content": noted}]
+    return [*messages, {"role": "assistant", "content": INTERRUPTED_NOTE}]
+
+
+def _record_turn(
+    agent: Any, query: str, answer: str, result=None, interrupted: bool = False
+) -> None:
+    """Save the completed worker's full tool trail before admitting the next turn.
+
+    *interrupted* marks a turn that the host's closing cut short.
+    """
     from gaia.agents.base.history import SessionHistory
 
     if not query or not str(query).strip():
@@ -977,8 +1206,46 @@ def _record_turn(agent: Any, query: str, answer: str, result=None) -> None:
             {"role": "user", "content": str(query)},
             {"role": "assistant", "content": str(answer or "")},
         ]
-    history.record(messages)
+    history.record(_with_note(messages) if interrupted else messages)
     history.prepare(agent, "")
+
+
+def _begin_turn_record(agent: Any, query: str) -> None:
+    """Put the turn in the transcript now, as interrupted until it ends.
+
+    If this process is killed mid-turn (the TUI closes and its grace runs
+    out), that stand-in is what the transcript keeps. A turn that ends is
+    recorded over it.
+    """
+    from gaia.agents.base.history import SessionHistory
+
+    history = getattr(agent, "conversation_history", None)
+    if isinstance(history, SessionHistory) and str(query).strip():
+        history.begin(_with_note([{"role": "user", "content": str(query)}]))
+
+
+def _settle_turn_record(agent: Any, host_gone: bool) -> None:
+    """A turn that ended unrecorded keeps its stand-in only if the host left.
+
+    A failed turn leaves no trace, as before. Runs in ``run_turn``'s cleanup,
+    so a database error is logged rather than raised into a second terminal
+    event.
+    """
+    from gaia.agents.base.history import SessionHistory
+
+    history = getattr(agent, "conversation_history", None)
+    if not isinstance(history, SessionHistory):
+        return
+    if host_gone:
+        history.keep_pending()
+        return
+    try:
+        history.discard_pending()
+    except sqlite3.Error:
+        logger.exception(
+            "Could not drop the unfinished turn's placeholder from the session "
+            "history; it will read as interrupted"
+        )
 
 
 def log_path() -> "Path":
@@ -1038,7 +1305,8 @@ def _configure_logging(real_stdout, *, dev: bool) -> "Path":
         lg.propagate = True
 
     level = logging.DEBUG if dev else logging.ERROR
-    file_handler = logging.FileHandler(path, encoding="utf-8")
+    # Bounded like gaia.log; one user's unbounded log reached 1.7 GB (#4668).
+    file_handler = SharedRotatingFileHandler(path)
     file_handler.setLevel(level)
     # The pid is not decoration: agents share the default log file, and without
     # it two interleaved sessions are indistinguishable after the fact.
@@ -1062,7 +1330,7 @@ def _configure_logging(real_stdout, *, dev: bool) -> "Path":
     # Not merged into the shared handler at an INFO floor: gaia loggers built
     # after this call default to INFO, so that would put the whole tree back
     # into the user-mode log.
-    audit_handler = logging.FileHandler(path, encoding="utf-8")
+    audit_handler = SharedRotatingFileHandler(path)
     audit_handler.setLevel(AUDIT_LEVEL)
     audit_handler.setFormatter(
         logging.Formatter(
@@ -1127,6 +1395,31 @@ def _memory_dump_event(agent: Any) -> Dict[str, Any]:
     return {"type": "final", "answer": json.dumps(payload)}
 
 
+def _usage_from_result(value: Any) -> Dict[str, Any]:
+    """Token counts for a turn that ended without printing its answer.
+
+    Error exits (and a step limit whose summary could not be written) return
+    the answer instead of printing it, so no ``answer`` event carried the usage
+    and the TUI cost meter read the turn as unmeasured. Same omit-don't-fake
+    rule as the printed path: a count that is absent or zero is left out.
+    """
+    if not isinstance(value, dict):
+        return {}
+    usage: Dict[str, Any] = {}
+    for src, dst in (
+        ("steps_taken", "steps"),
+        ("input_tokens", "input_tokens"),
+        ("output_tokens", "tokens"),
+    ):
+        count = value.get(src)
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+            usage[dst] = count
+    cached = value.get("cached_tokens")
+    if "input_tokens" in usage and isinstance(cached, int) and cached >= 0:
+        usage["cached_tokens"] = cached
+    return usage
+
+
 def run_turn(
     agent: Any,
     query: str,
@@ -1153,8 +1446,17 @@ def run_turn(
     from gaia.agents.base.history import SessionHistory
     from gaia.ui.sse_handler import SSEOutputHandler
 
-    if isinstance(getattr(agent, "conversation_history", None), SessionHistory):
-        agent.conversation_history.prepare(agent, query)
+    try:
+        if isinstance(getattr(agent, "conversation_history", None), SessionHistory):
+            agent.conversation_history.prepare(
+                agent, query, on_cut=lambda cut: _write(_history_cut_event(cut), out)
+            )
+        _begin_turn_record(agent, query)
+    except Exception as exc:  # the turn never started; it still needs its end
+        logger.exception("Could not open the turn in the session history")
+        _write(_terminal_error(exc), out)
+        return
+    host_gone = False
 
     handler = SSEOutputHandler()
     # stdin carries tool decisions, not answers to free-form questions.
@@ -1220,7 +1522,7 @@ def run_turn(
                     # confirmation nobody can ever see would otherwise wait
                     # forever and this drain — which must outlive the worker
                     # — would never return, wedging the whole process.
-                    handler.cancelled.set()
+                    _end_turn(handler, state)
 
         if not terminated:
             for canonical in translator.flush():
@@ -1234,6 +1536,8 @@ def run_turn(
                     terminated = True
 
         worker.join(timeout=5.0)
+        # Over: a close from here on did not cut this turn short.
+        _end_turn(handler, state)
 
         if terminated:
             # Commit before the terminal frame: persistence errors must not leak
@@ -1244,7 +1548,13 @@ def run_turn(
             )
             if streamed_answer is not None or has_trace:
                 try:
-                    _record_turn(agent, query, streamed_answer or "", value)
+                    _record_turn(
+                        agent,
+                        query,
+                        streamed_answer or "",
+                        value,
+                        interrupted=_closed_by_host(handler),
+                    )
                 except Exception as exc:
                     logger.exception("Failed to preserve turn history")
                     _write(_terminal_error(exc), out)
@@ -1270,12 +1580,26 @@ def run_turn(
         # Recorded even when empty — same reasoning as the streamed branch:
         # the question half of the pair must survive.
         try:
-            _record_turn(agent, query, answer, result.get("value"))
+            _record_turn(
+                agent,
+                query,
+                answer,
+                result.get("value"),
+                interrupted=_closed_by_host(handler),
+            )
         except Exception as exc:
             logger.exception("Failed to preserve turn history")
             _write(_terminal_error(exc), out)
             return
-        _write({"type": "final", "answer": answer}, out)
+        final: Dict[str, Any] = {"type": "final", "answer": answer}
+        usage = _usage_from_result(value)
+        if usage:
+            final["usage"] = usage
+        _write(final, out)
+    except OSError:
+        # The wire broke: the host left mid-turn, as when the TUI closes.
+        host_gone = True
+        raise
     finally:
         # Every exit path, including the early returns above: leaving a dead
         # turn's handler attached would send the next decision to a thread that
@@ -1286,6 +1610,18 @@ def run_turn(
         # timed-out worker running), so a handler left attached between turns
         # accumulates events on a queue nobody drains.
         agent.console = previous_console
+        _settle_turn_record(agent, host_gone or _closed_by_host(handler))
+
+
+def _closed_by_host(handler: Any) -> bool:
+    return bool(getattr(handler, "closed_by_host", False))
+
+
+def _end_turn(handler: Any, state: Optional[PermissionState]) -> None:
+    if state is not None:
+        state.end_turn(handler)
+    else:
+        handler.cancelled.set()
 
 
 CLEAR_CONVERSATION_QUERY = "\x00gaia:clear_conversation\x00"
@@ -1297,6 +1633,15 @@ CLEAR_CONVERSATION_QUERY = "\x00gaia:clear_conversation\x00"
 WARM_UP_QUERY = "\x00gaia:warm_up\x00"
 WARMED_UP = "warmed_up"
 WARM_UP_SKIPPED = "warm_up_skipped"
+
+
+def _history_cut_event(cut: Any) -> Dict[str, Any]:
+    """A transcript line saying older turns left the model's view."""
+    return {
+        "type": "status",
+        "message": cut.notice,
+        "history_cut": {"turns": cut.turns, "tokens": cut.tokens},
+    }
 
 
 def run_warm_up(agent: Any, out) -> None:
@@ -1562,6 +1907,7 @@ def main(argv: Optional[list] = None) -> int:
                 break
 
     # stdin closed: the parent is done with us.
+    _drain_memory(agent)
     _exit_cleanly(out)
 
 

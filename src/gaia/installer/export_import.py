@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
+from gaia.config import gaia_agents_dir
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, ArchiveSizeError, safe_extract
 from gaia.version import __version__
@@ -88,8 +89,8 @@ class ImportResult:
 
 
 def _agents_root() -> Path:
-    """Return the resolved ``~/.gaia/agents`` path."""
-    return (Path.home() / ".gaia" / "agents").resolve()
+    """Return the resolved ``<gaia_home>/agents`` path."""
+    return gaia_agents_dir().resolve()
 
 
 def _is_custom_agent_dir(path: Path) -> bool:

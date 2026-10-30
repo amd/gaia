@@ -9,7 +9,9 @@ import { parse as parseYaml } from "yaml";
 
 import { compareSemver } from "./manifest";
 import {
+  aliasOf,
   evalScorecardKey,
+  ID_ALIASES,
   listAgentIds,
   listSkillNames,
   readAgentManifest,
@@ -30,6 +32,8 @@ import type {
   AgentManifest,
   ArtifactInfo,
   CatalogIndex,
+  Channel,
+  Channels,
   IndexEntry,
   PackageType,
   ParsedManifest,
@@ -44,37 +48,102 @@ export function latestVersion(versions: string[]): string {
   return versions.reduce((best, v) => (compareSemver(v, best) > 0 ? v : best));
 }
 
+/** True for a SemVer pre-release such as `0.26.0-rc.1` (build metadata ignored). */
+export function isPrerelease(version: string): boolean {
+  return version.split("+")[0].includes("-");
+}
+
 /**
- * Produce an updated per-agent manifest with `newVersion` added.
+ * Resolve both channels from a manifest's version maps. `stable` is the highest
+ * stable version ("" when there is none); `next` is the highest version on
+ * either channel, so a stable release newer than every RC moves `next` too.
+ */
+export function computeChannels(
+  versions: Record<string, VersionEntry>,
+  nextVersions: Record<string, VersionEntry> = {}
+): Channels {
+  const stableKeys = Object.keys(versions);
+  const stable = stableKeys.length ? latestVersion(stableKeys) : "";
+  const all = [...stableKeys, ...Object.keys(nextVersions)];
+  return { stable, next: all.length ? latestVersion(all) : "" };
+}
+
+/** The channels of a stored manifest, derived so manifests written before channels existed work too. */
+export function channelsOf(agent: AgentManifest): Channels {
+  return computeChannels(agent.versions, agent.next_versions);
+}
+
+/** Which channel already holds `version`, if any. */
+export function channelOfVersion(agent: AgentManifest | null, version: string): Channel | null {
+  if (agent?.versions[version]) return "stable";
+  if (agent?.next_versions?.[version]) return "next";
+  return null;
+}
+
+/** Add `version`'s artifacts to an existing entry, or take it as-is when new. */
+function mergeVersionEntry(prior: VersionEntry | undefined, version: VersionEntry): VersionEntry {
+  if (!prior) return version;
+  // Back-compat: a manifest written before `artifacts[]` existed has only the
+  // singular `artifact`. Treat that as the starting set so appending never
+  // dereferences an undefined array.
+  const priorArtifacts = prior.artifacts ?? [prior.artifact];
+  return {
+    ...prior,
+    ...(prior.min_gaia_version === undefined && version.min_gaia_version !== undefined
+      ? { min_gaia_version: version.min_gaia_version }
+      : {}),
+    artifacts: [...priorArtifacts, ...version.artifacts],
+  };
+}
+
+/**
+ * The existing versions, with the current latest stamped with the top-level
+ * `min_gaia_version` when it predates per-version records. The top-level value
+ * is the latest version's own (see {@link upsertVersion}), so this records it
+ * before a newer publish overwrites it.
+ */
+function withRecordedMinGaia(existing: AgentManifest | null): Record<string, VersionEntry> {
+  const versions = { ...(existing?.versions ?? {}) };
+  const latest = existing?.latest_version;
+  const min = existing?.min_gaia_version;
+  if (latest && min && versions[latest] && versions[latest].min_gaia_version === undefined) {
+    versions[latest] = { ...versions[latest], min_gaia_version: min };
+  }
+  return versions;
+}
+
+/**
+ * Produce an updated per-agent manifest with `newVersion` added to `channel`.
  *
  * A version's artifact set is append-only per distinct filename: if the version
  * already exists, the new artifact(s) are appended (the caller has already
  * rejected duplicate filenames). The aggregate metadata (name/description/...)
  * is refreshed from the manifest of whatever version becomes `latest_version`,
- * so the catalog reflects the newest release's display fields.
+ * so the catalog reflects the newest stable release's display fields.
+ *
+ * Only a `stable` publish can move `latest_version`; a `next` publish lands in
+ * `next_versions` and leaves every field an existing client reads untouched.
+ * The caller has already refused a pre-release on `stable` and a version that
+ * is on the other channel.
  */
 export function upsertVersion(
   existing: AgentManifest | null,
   manifest: ParsedManifest,
-  version: VersionEntry
+  version: VersionEntry,
+  channel: Channel = "stable"
 ): AgentManifest {
-  // If the version already exists, this publish adds another platform binary to
-  // it: append the new artifact(s), keep the original published_at/publisher and
-  // the primary artifact. The caller has already rejected duplicate filenames.
-  const prior = existing?.versions?.[version.version];
-  // Back-compat: a manifest written before `artifacts[]` existed has only the
-  // singular `artifact`. Treat that as the starting set so appending never
-  // dereferences an undefined array.
-  const priorArtifacts = prior ? (prior.artifacts ?? [prior.artifact]) : [];
-  const merged: VersionEntry = prior
-    ? { ...prior, artifacts: [...priorArtifacts, ...version.artifacts] }
-    : version;
-
-  const versions: Record<string, VersionEntry> = {
-    ...(existing?.versions ?? {}),
-    [version.version]: merged,
-  };
-  const latest = latestVersion(Object.keys(versions));
+  let versions = withRecordedMinGaia(existing);
+  let nextVersions = { ...(existing?.next_versions ?? {}) };
+  if (channel === "stable") {
+    versions = { ...versions, [version.version]: mergeVersionEntry(versions[version.version], version) };
+  } else {
+    nextVersions = {
+      ...nextVersions,
+      [version.version]: mergeVersionEntry(nextVersions[version.version], version),
+    };
+  }
+  const channels = computeChannels(versions, nextVersions);
+  const latest = channels.stable;
 
   // Display metadata tracks the latest version. If the just-published version
   // is the new latest, use its (freshly parsed) fields; otherwise keep what the
@@ -96,21 +165,61 @@ export function upsertVersion(
     tags: base?.tags ?? existing?.tags ?? manifest.tags,
     icon: base?.icon ?? existing?.icon ?? manifest.icon,
     security_tier: base?.security_tier ?? existing?.security_tier ?? manifest.security_tier,
-    min_gaia_version: base?.min_gaia_version ?? existing?.min_gaia_version,
+    // Exactly the latest version's own floor: clients read it as that
+    // version's, so an older version's must not carry over.
+    min_gaia_version: useNew ? manifest.min_gaia_version : existing?.min_gaia_version,
     models: base?.models ?? existing?.models ?? manifest.models,
     tools_count: base?.tools_count ?? existing?.tools_count ?? manifest.tools_count,
     permissions: base?.permissions ?? existing?.permissions ?? manifest.permissions,
     requirements: base?.requirements ?? existing?.requirements ?? manifest.requirements,
     interfaces: base?.interfaces ?? existing?.interfaces ?? manifest.interfaces,
     latest_version: latest,
-    deprecated: versions[latest].deprecated,
+    // An agent with only `next` versions is not deprecated by any stable release.
+    deprecated: latest ? versions[latest].deprecated : false,
     // Tracks the latest version exactly: if the new latest drops the message
     // (e.g. un-deprecated), a stale message must not survive.
     deprecation_message: useNew ? manifest.deprecation_message : existing?.deprecation_message,
     npm_package: useNew ? manifest.npm_package : existing?.npm_package,
     playground_url: useNew ? manifest.playground_url : existing?.playground_url,
+    channels,
     versions,
+    ...(Object.keys(nextVersions).length ? { next_versions: nextVersions } : {}),
   };
+}
+
+/**
+ * One manifest for an alias pair (see `ID_ALIASES`): the union of both version
+ * maps, with display metadata and `id` from the side that holds the stable
+ * latest. Old versions keep their `path` under the id they were published to.
+ */
+export function mergeAliasPair(
+  canonical: AgentManifest | null,
+  legacy: AgentManifest | null
+): AgentManifest | null {
+  if (!canonical || !legacy) return canonical ?? legacy;
+  const versions = { ...withRecordedMinGaia(legacy), ...withRecordedMinGaia(canonical) };
+  const nextVersions = { ...(legacy.next_versions ?? {}), ...(canonical.next_versions ?? {}) };
+  const channels = computeChannels(versions, nextVersions);
+  const owner = !channels.stable || canonical.versions[channels.stable] ? canonical : legacy;
+  return {
+    ...owner,
+    latest_version: channels.stable,
+    channels,
+    versions,
+    ...(Object.keys(nextVersions).length ? { next_versions: nextVersions } : {}),
+  };
+}
+
+/** Read an agent's manifest, merged with its alias's when the id has one. */
+export async function readResolvedAgentManifest(
+  bucket: R2Bucket,
+  id: string
+): Promise<AgentManifest | null> {
+  const alias = aliasOf(id);
+  const own = await readAgentManifest(bucket, id);
+  if (!alias) return own;
+  const other = await readAgentManifest(bucket, alias);
+  return ID_ALIASES.has(id) ? mergeAliasPair(other, own) : mergeAliasPair(own, other);
 }
 
 /**
@@ -198,6 +307,14 @@ export interface ToIndexEntryOptions {
   baseUrl?: string;
 }
 
+/** Each published version's oldest supported core; "" when it was never recorded. */
+function minGaiaVersions(agent: AgentManifest): Record<string, string> {
+  const versions = withRecordedMinGaia(agent);
+  return Object.fromEntries(
+    Object.entries(versions).map(([v, entry]) => [v, entry.min_gaia_version ?? ""])
+  );
+}
+
 /**
  * Build the catalog entry for one agent manifest. `readme`/`changelog` are the
  * latest version's markdown ("" if none was published); `packageFiles` is the
@@ -248,6 +365,8 @@ export function toIndexEntry(
     tools_count: agent.tools_count,
     models: agent.models,
     min_gaia_version: agent.min_gaia_version ?? "",
+    min_gaia_versions: minGaiaVersions(agent),
+    channels: channelsOf(agent),
     permissions: agent.permissions,
     deprecated: agent.deprecated,
     // undefined serializes to "key absent" — only present when set.
@@ -414,16 +533,22 @@ export async function rebuildIndex(
   const ids = await listAgentIds(bucket);
   const entries: IndexEntry[] = [];
   for (const id of ids) {
-    const agent = await readAgentManifest(bucket, id);
-    if (!agent) continue;
-    const readme = await readReadme(bucket, id, agent.latest_version);
-    const changelog = await readChangelog(bucket, id, agent.latest_version);
-    const packageFiles = await readPackageFiles(bucket, id, agent.latest_version);
-    const spec = await readSpec(bucket, id, agent.latest_version);
-    const skill = await readSkill(bucket, id, agent.latest_version);
-    const evaluation = await readEvaluation(bucket, id, agent.latest_version);
-    const capabilityMatrix = await readCapabilityMatrix(bucket, id, agent.latest_version);
-    const evalScorecard = await readEvalScorecard(bucket, id, agent.latest_version);
+    // An alias pair is one entry, built when its canonical id comes round.
+    const canonical = ID_ALIASES.get(id);
+    if (canonical && ids.includes(canonical)) continue;
+    const agent = await readResolvedAgentManifest(bucket, id);
+    // `latest_version` is required by every client; a next-only agent has none yet.
+    if (!agent || !agent.latest_version) continue;
+    // Docs live under the id that published the latest version (an alias pair
+    // can span both).
+    const readme = await readReadme(bucket, agent.id, agent.latest_version);
+    const changelog = await readChangelog(bucket, agent.id, agent.latest_version);
+    const packageFiles = await readPackageFiles(bucket, agent.id, agent.latest_version);
+    const spec = await readSpec(bucket, agent.id, agent.latest_version);
+    const skill = await readSkill(bucket, agent.id, agent.latest_version);
+    const evaluation = await readEvaluation(bucket, agent.id, agent.latest_version);
+    const capabilityMatrix = await readCapabilityMatrix(bucket, agent.id, agent.latest_version);
+    const evalScorecard = await readEvalScorecard(bucket, agent.id, agent.latest_version);
     entries.push(
       toIndexEntry(agent, readme, changelog, packageFiles, {
         spec,
@@ -470,6 +595,9 @@ export function makeVersionEntry(
     published_at: publishedAt,
     publisher,
     deprecated: manifest.deprecated,
+    ...(manifest.min_gaia_version !== undefined
+      ? { min_gaia_version: manifest.min_gaia_version }
+      : {}),
     artifact,
     artifacts: [artifact],
   };

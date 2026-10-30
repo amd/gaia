@@ -52,6 +52,58 @@ def _real_answer_event(**print_final_answer_kwargs) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _real_events(drive) -> list:
+    """Run *drive* against the REAL ``SSEOutputHandler`` and return what it emits."""
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    handler = SSEOutputHandler()
+    drive(handler)
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get_nowait())
+    return events
+
+
+def test_a_note_before_a_tool_call_is_never_an_unmapped_status():
+    def drive(handler):
+        handler.print_streaming_text("Let me check your inbox ")
+        handler.print_streaming_text("first.", end_of_stream=True)
+        handler.print_tool_usage("list_messages")
+
+    source = _real_events(drive)
+    assert "commentary" in _types(source)
+
+    tr = _tr()
+    out = [e for ev in source for e in tr.translate(ev)]
+    assert not any("unmapped" in str(e.get("message", "")) for e in out), out
+    assert "status" not in _types(out)
+    tokens = "".join(e["delta"] for e in out if e["type"] == "token")
+    assert tokens.count("Let me check your inbox first.") == 1
+
+
+def test_commentary_alone_emits_nothing():
+    assert _tr().translate({"type": "commentary", "content": "Checking."}) == []
+    assert _tr().translate({"type": "commentary"}) == []
+
+
+def test_every_type_the_real_handler_emits_is_mapped():
+    from gaia.ui.sse_handler import SSEOutputHandler  # noqa: F401
+
+    def drive(handler):
+        handler.print_thought("Plan")
+        handler.print_streaming_text("Note.", end_of_stream=True)
+        handler.print_tool_usage("list_messages")
+        handler.print_tool_complete()
+        handler.print_final_answer("Done.")
+
+    unmapped = {
+        ev["type"]
+        for ev in _real_events(drive)
+        if ev["type"] != "tool_args" and ev["type"] not in CanonicalTranslator._DISPATCH
+    }
+    assert not unmapped
+
+
 def test_chunk_maps_to_token():
     out = _tr().translate({"type": "chunk", "content": "hello"})
     assert out == [{"type": "token", "delta": "hello"}]
@@ -123,6 +175,13 @@ def test_answer_omits_tok_per_s_when_the_backend_reported_none():
 def test_answer_is_terminal():
     out = _tr().translate({"type": "answer", "content": "Done."})
     assert out[0]["type"] in TERMINAL_TYPES
+
+
+def test_a_streamed_answer_is_text_not_the_final():
+    """An answer pulled out of the stream mid-turn must not end it: the route
+    would cancel the run and the real final, with its usage, never goes out."""
+    out = _tr().translate({"type": "answer", "content": "Done.", "streamed": True})
+    assert out == [{"type": "token", "delta": "Done."}]
 
 
 def test_permission_request_maps_to_needs_confirmation_without_confirm_url():

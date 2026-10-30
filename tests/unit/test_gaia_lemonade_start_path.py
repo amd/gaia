@@ -21,6 +21,7 @@ import subprocess
 
 import pytest
 
+from gaia.daemon.lemonade import EmbeddedLemonadeOwner, EnsuredLemonade
 from gaia.llm import lemonade_client as lc
 from gaia.llm import lemonade_launcher, lemonade_supervisor
 from gaia.llm.lemonade_embedded import EmbeddedLemonade
@@ -266,24 +267,42 @@ class TestClientAutoStart:
         assert machine.spawned == []
 
 
-class FakeOwner:
-    """The daemon's EmbeddedLemonadeOwner, at its ``ensure`` boundary."""
+class FakeOwner(EmbeddedLemonadeOwner):
+    """The daemon's EmbeddedLemonadeOwner, with only ``ensure`` replaced.
+
+    A subclass, so the supervisor sees the real interface: an attribute the
+    real owner lacks raises here as it does in the daemon. Test bookkeeping
+    is underscored; ``test_the_fake_owner_has_only_the_real_interface``
+    holds it to that.
+    """
 
     def __init__(self, error=None):
-        self.error = error
-        self.calls = 0
-        self.started_pid = None
+        super().__init__(factory=lambda: None, owner_pid=4241)
+        self._fake_error = error
+        self._fake_calls = 0
 
     def ensure(self):
-        from gaia.daemon.lemonade import EnsuredLemonade
-
-        self.calls += 1
-        if self.error is not None:
-            raise self.error
-        self.started_pid = 4242
+        self._fake_calls += 1
+        if self._fake_error is not None:
+            raise self._fake_error
         return EnsuredLemonade(
-            base_url=EMBEDDED_URL, port=EMBEDDED_PORT, version="v", started=True
+            base_url=EMBEDDED_URL,
+            port=EMBEDDED_PORT,
+            version="v",
+            started=True,
+            pid=4242,
         )
+
+
+def _public_names(obj) -> set:
+    return {name for name in dir(obj) if not name.startswith("_")}
+
+
+def test_the_fake_owner_has_only_the_real_interface():
+    real = EmbeddedLemonadeOwner(factory=lambda: None, owner_pid=4241)
+    extra = _public_names(FakeOwner()) - _public_names(real)
+    assert not extra, f"FakeOwner exposes what the real owner lacks: {extra}"
+    assert "started_pid" not in _public_names(real)
 
 
 class TestDaemonSupervisor:
@@ -295,7 +314,7 @@ class TestDaemonSupervisor:
             ctx_size=65536
         )
 
-        assert owner.calls == 1
+        assert owner._fake_calls == 1
         assert state.base_url == EMBEDDED_URL
         assert state.started is True and state.owned is True and state.pid == 4242
         assert machine.system_launcher_lookups == 0

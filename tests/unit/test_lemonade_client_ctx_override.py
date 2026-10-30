@@ -32,7 +32,7 @@ exactly the override, ``_ensure_model_loaded`` must:
 2. Poll ``get_status()`` until the model entry is ABSENT (deadline
    ``PIN_UNLOAD_SETTLE_DEADLINE_S`` = 120.0; interval
    ``PIN_SETTLE_POLL_INTERVAL_S`` = 2.0).
-3. ``load_model(model, auto_download=True, prompt=False, ctx_size=<override>)``
+3. ``load_model(model, auto_download=True, prompt=False, ctx_size=<override>, save_options=False)``
    exactly once.
 4. Poll ``get_status()`` until the model entry is PRESENT (deadline
    ``PIN_LOAD_SETTLE_DEADLINE_S`` = 300.0).
@@ -172,6 +172,7 @@ class TestEnsureModelLoadedExactPin:
             auto_download=True,
             prompt=False,
             ctx_size=4096,
+            save_options=False,
         )
 
     @patch("gaia.llm.lemonade_client.PIN_SETTLE_POLL_INTERVAL_S", 0)
@@ -219,6 +220,7 @@ class TestEnsureModelLoadedExactPin:
             auto_download=True,
             prompt=False,
             ctx_size=16384,
+            save_options=False,
         )
 
 
@@ -251,6 +253,7 @@ class TestExactPinAsyncSettling:
             auto_download=True,
             prompt=False,
             ctx_size=16384,
+            save_options=False,
         )
 
     @patch("gaia.llm.lemonade_client.PIN_SETTLE_POLL_INTERVAL_S", 0)
@@ -459,7 +462,7 @@ class TestLoadFailureIsLoud:
         model = "Gemma-4-E4B-it-GGUF"
         client = LemonadeClient(host="localhost", port=13305)
 
-        mock_status.side_effect = RuntimeError("transient /health hiccup")
+        mock_status.side_effect = LemonadeClientError("transient /health hiccup")
         mock_list.return_value = {"data": [{"id": model, "downloaded": True}]}
         mock_load.return_value = {"status": "success"}
 

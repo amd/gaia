@@ -3,7 +3,7 @@
 
 // Pure helpers tested directly; getRepoStats/getReleaseStats/getNpmDownloadStats
 // hit the network so only their pagination/error-shape behavior is covered
-// here, with fetch stubbed — same depth as catalog.test.ts.
+// here, with fetch stubbed.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,6 +13,8 @@ import {
   isMainReleaseTag,
   isReleaseCandidateTag,
   pickReleaseCandidate,
+  pickStableRelease,
+  streamReleases,
   sumAssetDownloads,
   type GithubRelease,
 } from './github';
@@ -168,6 +170,7 @@ describe('pickReleaseCandidate', () => {
   const RC1 = release('v0.25.0-rc1', true, {
     assets: [
       asset('gaia-agent-ui-0.25.0-rc.1-x64-setup.exe'),
+      asset('gaia-0.25.0-rc.1-win-x64-setup.exe'),
       asset('gaia-agent-ui-0.25.0-rc.1-arm64.dmg'),
       asset('gaia-agent-ui-0.25.0-rc.1-arm64.dmg.blockmap'),
       asset('gaia-agent-ui-0.25.0-rc.1-x86_64.AppImage'),
@@ -195,11 +198,66 @@ describe('pickReleaseCandidate', () => {
     expect(rc!.htmlUrl).toBe('https://github.com/amd/gaia/releases/tag/v0.25.0-rc1');
     // Installers in a fixed order; the blockmap, wheel and raw binary are left
     // to the release page.
+    // The one Windows setup leads even though it is listed after the desktop
+    // app's own setup on the release.
     expect(rc!.downloads.map((d) => d.url.split('/').at(-1))).toEqual([
+      'gaia-0.25.0-rc.1-win-x64-setup.exe',
       'gaia-agent-ui-0.25.0-rc.1-x64-setup.exe',
       'gaia-agent-ui-0.25.0-rc.1-arm64.dmg',
       'gaia-agent-ui-0.25.0-rc.1-x86_64.AppImage',
       'gaia-agent-ui-0.25.0-rc.1-amd64.deb',
+    ]);
+  });
+
+  // Every asset on the real v0.25.1-rc5 release, in GitHub's order.
+  const RC5_ASSETS = [
+    'amd_gaia-0.25.1rc5-py3-none-any.whl',
+    'amd_gaia-0.25.1rc5-py3-none-any.whl.sigstore.json',
+    'amd_gaia-0.25.1rc5.tar.gz',
+    'amd_gaia-0.25.1rc5.tar.gz.sigstore.json',
+    'gaia-0.25.1-rc.5-darwin-arm64.pkg',
+    'gaia-0.25.1-rc.5-darwin-x64.pkg',
+    'gaia-0.25.1-rc.5-win-x64-setup.exe',
+    'gaia-0.25.1-rc.5.x86_64.rpm',
+    'gaia-agent-darwin-arm64',
+    'gaia-agent-darwin-x64',
+    'gaia-agent-linux-x64',
+    'gaia-agent-release.json',
+    'gaia-agent-ui-0.25.1-rc.5-amd64.deb',
+    'gaia-agent-ui-0.25.1-rc.5-arm64.dmg',
+    'gaia-agent-ui-0.25.1-rc.5-arm64.dmg.blockmap',
+    'gaia-agent-ui-0.25.1-rc.5-x64-setup.exe',
+    'gaia-agent-ui-0.25.1-rc.5-x64-setup.exe.blockmap',
+    'gaia-agent-ui-0.25.1-rc.5-x86_64.AppImage',
+    'gaia-agent-win32-x64.exe',
+    'gaia-agent.yaml',
+    'gaia-darwin-amd64',
+    'gaia-darwin-arm64',
+    'gaia-installers-SHA256SUMS.txt',
+    'gaia-linux-amd64',
+    'gaia-linux-arm64',
+    'gaia-tui-SHA256SUMS.txt',
+    'gaia-windows-amd64.exe',
+    'gaia-windows-arm64.exe',
+    'gaia_0.25.1-rc.5_amd64.deb',
+    'latest-linux.yml',
+    'latest-mac.yml',
+    'latest.yml',
+  ];
+
+  it('offers the terminal installers as well as the desktop app, as the stable downloads do', () => {
+    const rc5 = release('v0.25.1-rc5', true, { assets: RC5_ASSETS.map(asset) });
+    const rc = pickReleaseCandidate([rc5, release('v0.25.0', false)]);
+    expect(rc!.downloads.map((d) => [d.label, d.url.split('/').at(-1)])).toEqual([
+      ['Windows — desktop app, terminal, or both (.exe)', 'gaia-0.25.1-rc.5-win-x64-setup.exe'],
+      ['Windows — desktop app only (.exe)', 'gaia-agent-ui-0.25.1-rc.5-x64-setup.exe'],
+      ['macOS (Apple Silicon) — desktop app (.dmg)', 'gaia-agent-ui-0.25.1-rc.5-arm64.dmg'],
+      ['macOS (Apple Silicon) — terminal app (.pkg)', 'gaia-0.25.1-rc.5-darwin-arm64.pkg'],
+      ['macOS (Intel) — terminal app (.pkg)', 'gaia-0.25.1-rc.5-darwin-x64.pkg'],
+      ['Linux — desktop app (.AppImage)', 'gaia-agent-ui-0.25.1-rc.5-x86_64.AppImage'],
+      ['Debian / Ubuntu — desktop app (.deb)', 'gaia-agent-ui-0.25.1-rc.5-amd64.deb'],
+      ['Debian / Ubuntu — terminal app (.deb)', 'gaia_0.25.1-rc.5_amd64.deb'],
+      ['Fedora / RHEL / SUSE — terminal app (.rpm)', 'gaia-0.25.1-rc.5.x86_64.rpm'],
     ]);
   });
 
@@ -232,5 +290,155 @@ describe('pickReleaseCandidate', () => {
     const rc = pickReleaseCandidate([bare, STABLE]);
     expect(rc!.downloads).toEqual([]);
     expect(rc!.htmlUrl).toContain('v0.25.0-rc1');
+  });
+});
+
+describe('streamReleases', () => {
+  function release(tag: string, prerelease: boolean, publishedAt: string, draft = false): GithubRelease {
+    return {
+      tag_name: tag,
+      draft,
+      prerelease,
+      published_at: publishedAt,
+      html_url: `https://github.com/amd/gaia/releases/tag/${tag}`,
+      assets: [],
+    };
+  }
+
+  const V0241 = release('v0.24.1', false, '2026-09-16T08:00:00Z');
+  const V0230 = release('v0.23.0', false, '2026-08-13T08:00:00Z');
+  const RC2 = release('v0.25.0-rc2', true, '2026-10-10T08:00:00Z');
+  const RC12 = release('v0.25.0-rc12', true, '2026-10-13T08:00:00Z');
+
+  it('puts the newest open release candidate in the stream, marked as an RC', () => {
+    expect(streamReleases([V0230, RC2, V0241, RC12]).map((r) => [r.tag, r.kind])).toEqual([
+      ['v0.25.0-rc12', 'rc'],
+      ['v0.24.1', 'stable'],
+      ['v0.23.0', 'stable'],
+    ]);
+  });
+
+  // Newest by version, not by list order or date: rc10 sorts after rc9.
+  it('keeps one candidate per upcoming version, chosen by rc number', () => {
+    const rc9 = release('v0.25.0-rc9', true, '2026-10-12T08:00:00Z');
+    const rc10 = release('v0.25.0-rc10', true, '2026-10-12T09:00:00Z');
+    const next = release('v0.26.0-rc1', true, '2026-10-14T08:00:00Z');
+    expect(streamReleases([rc10, next, rc9, V0241]).map((r) => r.tag)).toEqual([
+      'v0.26.0-rc1',
+      'v0.25.0-rc10',
+      'v0.24.1',
+    ]);
+  });
+
+  // Once v0.25.0 ships its candidates are history; twelve of them would bury
+  // the releases the stream exists to show.
+  it('drops candidates for a version that has since shipped', () => {
+    const shipped = release('v0.25.0', false, '2026-10-20T08:00:00Z');
+    expect(streamReleases([shipped, RC12, RC2, V0241]).map((r) => r.tag)).toEqual([
+      'v0.25.0',
+      'v0.24.1',
+    ]);
+  });
+
+  it('leaves out drafts, sub-package releases and RC-named releases not marked pre-release', () => {
+    const tags = streamReleases([
+      V0241,
+      release('v0.25.0-rc13', true, '2026-10-14T08:00:00Z', true),
+      release('agent-pkg-email-v0.5.0', true, '2026-07-19T00:00:00Z'),
+      release('v0.25.0-rc3', false, '2026-10-11T08:00:00Z'),
+    ]).map((r) => r.tag);
+    expect(tags).toEqual(['v0.24.1']);
+  });
+});
+
+describe('pickStableRelease', () => {
+  const asset = (tag: string, name: string) => ({
+    name,
+    browser_download_url: `https://github.com/amd/gaia/releases/download/${tag}/${name}`,
+    size: 1234,
+    download_count: 0,
+  });
+
+  function release(tag: string, opts: Partial<GithubRelease> = {}): GithubRelease {
+    return {
+      tag_name: tag,
+      draft: false,
+      prerelease: false,
+      published_at: '2026-10-01T00:00:00Z',
+      html_url: `https://github.com/amd/gaia/releases/tag/${tag}`,
+      assets: [asset(tag, `gaia-agent-ui-${tag.slice(1)}-x64-setup.exe`)],
+      ...opts,
+    };
+  }
+
+  it('takes the newest stable release, with its assets as published', () => {
+    const picked = pickStableRelease([release('v0.24.1'), release('v0.25.0')]);
+    expect(picked).toEqual({
+      tag: 'v0.25.0',
+      version: '0.25.0',
+      assets: [
+        {
+          name: 'gaia-agent-ui-0.25.0-x64-setup.exe',
+          url: 'https://github.com/amd/gaia/releases/download/v0.25.0/gaia-agent-ui-0.25.0-x64-setup.exe',
+          sizeBytes: 1234,
+        },
+      ],
+    });
+  });
+
+  // The candidate has its own section; the main buttons stay on the release
+  // that shipped, however new the candidate is.
+  it('skips pre-releases and drafts, however new', () => {
+    const picked = pickStableRelease([
+      release('v0.25.1-rc2', { prerelease: true }),
+      release('v0.26.0', { draft: true }),
+      release('v0.25.0'),
+    ]);
+    expect(picked?.tag).toBe('v0.25.0');
+  });
+
+  it('skips sub-package releases and anything not marked pre-release but RC-named', () => {
+    const picked = pickStableRelease([
+      release('agent-pkg-email-v9.0.0'),
+      release('v0.25.1-rc3'),
+      release('v0.25.0'),
+    ]);
+    expect(picked?.tag).toBe('v0.25.0');
+  });
+
+  // A hotfix to an older line published later must not take over the buttons.
+  it('orders by version, not by list position or publish date', () => {
+    const picked = pickStableRelease([
+      release('v0.24.2', { published_at: '2026-10-20T00:00:00Z' }),
+      release('v0.25.0', { published_at: '2026-10-18T00:00:00Z' }),
+      release('v0.25.0.1', { published_at: '2026-10-19T00:00:00Z' }),
+    ]);
+    expect(picked?.tag).toBe('v0.25.0.1');
+  });
+
+  it('is null when nothing stable has shipped', () => {
+    expect(pickStableRelease([release('v0.25.0-rc1', { prerelease: true })])).toBeNull();
+    expect(pickStableRelease([])).toBeNull();
+  });
+});
+
+describe('getStableRelease', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it('fails loudly, naming the fix, when the GitHub API is rate limited', async () => {
+    vi.resetModules();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
+    const mod = await import('./github');
+    await expect(mod.getStableRelease()).rejects.toThrow(/HTTP 403.*set GITHUB_TOKEN/s);
+  });
+
+  it('fails loudly when the repo has no stable release', async () => {
+    vi.resetModules();
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json([])));
+    const mod = await import('./github');
+    await expect(mod.getStableRelease()).rejects.toThrow(/no published stable release/);
   });
 });

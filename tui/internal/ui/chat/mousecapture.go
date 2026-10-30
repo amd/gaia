@@ -12,8 +12,8 @@ import (
 //
 // There are two independent reasons the app wants the mouse:
 //
-//  1. The user asked for it with Ctrl+T (APP MOUSE, selectmode.go) to click
-//     links and double-click to copy.
+//  1. The user asked for it with Ctrl+T (APP MOUSE, selectmode.go) to select
+//     past the screen's edge, click links and double-click to copy.
 //  2. An interactive overlay is open (the "/" palette, a mid-run question)
 //     and needs clicks — see overlayOpen. This one is never a user choice: it
 //     is scoped to exactly the frames the overlay is on screen, since an

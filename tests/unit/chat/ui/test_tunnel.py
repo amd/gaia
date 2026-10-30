@@ -81,6 +81,38 @@ class TestTunnelManager:
             or "ngrok.com/download" in status["error"].lower()
         )
 
+    def test_install_hint_names_only_this_os(self, monkeypatch):
+        """A Windows user is not shown brew, snap or apt commands."""
+        from gaia.ui import tunnel as tunnel_mod
+
+        monkeypatch.setattr(tunnel_mod.platform, "system", lambda: "Windows")
+        manager = TunnelManager(port=4200)
+        manager._find_ngrok = lambda: None
+
+        error = asyncio.run(manager.start())["error"]
+
+        assert "choco install ngrok" in error
+        assert "https://ngrok.com/download" in error
+        for other in ("brew", "snap", "apt"):
+            assert other not in error
+
+    def test_install_hint_keeps_both_linux_routes(self):
+        from gaia.ui.tunnel import _ngrok_install_hint
+
+        hint = _ngrok_install_hint("Linux")
+
+        assert "one of:" in hint
+        assert "sudo snap install ngrok" in hint
+        assert "sudo apt install ngrok" in hint
+        assert "brew" not in hint and "choco" not in hint
+
+    def test_install_hint_on_an_unlisted_os_points_at_the_download_page(self):
+        from gaia.ui.tunnel import _ngrok_install_hint
+
+        assert _ngrok_install_hint("FreeBSD") == (
+            "ngrok is not installed. Install it from https://ngrok.com/download."
+        )
+
     def test_failed_start_preserves_error_in_status(self, monkeypatch):
         """After a failed start, get_status() must still return the diagnostic.
 

@@ -142,8 +142,12 @@ def test_startup_switch_and_embedder_eviction_use_same_http_load(monkeypatch, wi
         if call.request.method == "POST"
     ]
     assert loads == [
-        {"model_name": "Gemma-4-E4B-it-GGUF", "ctx_size": window},
-        {"model_name": "user.another-local-model", "ctx_size": window},
+        {"model_name": "Gemma-4-E4B-it-GGUF", "ctx_size": window, "save_options": True},
+        {
+            "model_name": "user.another-local-model",
+            "ctx_size": window,
+            "save_options": True,
+        },
     ]
 
 
@@ -213,7 +217,9 @@ def test_agent_constructor_resolves_override_before_manager(
 
 
 @pytest.mark.parametrize("window", [16384, 131072])
-def test_installer_saved_recipe_uses_same_override(monkeypatch, window):
+def test_installer_saved_recipe_uses_same_override(
+    monkeypatch, window, gaia_owned_lemonade
+):
     from unittest.mock import MagicMock
 
     from gaia.installer.init_command import InitCommand

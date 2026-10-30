@@ -172,9 +172,9 @@ Each turn is scored across 7 dimensions. The overall score is a weighted sum:
 | `PASS` | All criteria met |
 | `FAIL` | Score too low or critical failure (hallucination, wrong answer) |
 | `BLOCKED_BY_ARCHITECTURE` | Agent UI architecture prevents success (e.g., history window too small) |
-| `TIMEOUT` | Scenario exceeded time limit |
+| `TIMEOUT` | Scenario exceeded time limit. The runner stops the scenario's running turn before the next scenario starts, and records the turns that finished (unjudged) in `turns` |
 | `BUDGET_EXCEEDED` | Claude API budget cap hit |
-| `INFRA_ERROR` | Agent UI backend unreachable or MCP failure |
+| `INFRA_ERROR` | Agent UI backend unreachable, MCP failure, or a permission prompt the runner could not answer |
 | `SETUP_ERROR` | Document indexing failed (0 chunks) |
 | `SKIPPED_NO_DOCUMENT` | Corpus file not present on disk |
 | `SKIPPED_NO_MODEL` | A model a `requires_asr` / `requires_vlm` tag names is not downloaded (or ffmpeg is missing for ASR) |
@@ -290,9 +290,11 @@ This reads the session from the Agent UI database, extracts turns and indexed do
 Run only scenarios with specific tags:
 
 ```bash
-# Run scenarios tagged with "healthcare" OR "critical"
-gaia eval agent --tag healthcare --tag critical
+# Run scenarios tagged with "security" OR "t4_adversarial"
+gaia eval agent --tag security --tag t4_adversarial
 ```
+
+A scenario matches when its `tags:` field contains at least one of the given tags. The shipped scenarios use the difficulty tiers `t1_basic`, `t2_compound`, `t3_stress` and `t4_adversarial`, plus `security`, `usability` and `tui`; scenarios you author can carry any tags you like. `--exclude-tag` drops scenarios carrying a tag, after the include filters are applied.
 
 ### Output Formats
 

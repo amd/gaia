@@ -689,9 +689,11 @@ No regex heuristic fallback. If extraction fails, it fails visibly. The LLM stil
 
 Extraction runs on a background thread, one job at a time per agent, so `process_query()` returns the moment the answer is ready. Each job carries the turn's user text, assistant response and context, frozen at turn end. Up to `EXTRACTION_QUEUE_MAX` (4) turns may wait behind a running job; when full the oldest is dropped with a log line.
 
+A queued job yields to the user: it does not start while a user turn is running, or until `EXTRACTION_IDLE_S` (3 s) has passed since the last turn ended, because it shares the local model with the conversation. A full queue starts at once instead, and `wait_for_memory_extraction()` skips the hold. A job already running is not interrupted. An `atexit` hook drains agents that never called the drain themselves, so only a hard kill drops held jobs.
+
 `EXTRACTION_MAX_TOKENS` (4096) is the output budget. It is generous because a reasoning model bills its hidden chain-of-thought against the same budget as the JSON, and a budget that only fits the JSON gets spent on thinking — the call then returns prose or nothing.
 
-Anything that exits right after a turn must call `wait_for_memory_extraction(timeout)` (or the module-level `drain_memory_extraction(agent)`) first, or the turn's facts die with the process. In-tree callers: the one-shot `gaia chat -q` path, the flagship sidecar's `close_agent()`, and the eval harnesses.
+Anything that exits right after a turn must call `wait_for_memory_extraction(timeout)` (or the module-level `drain_memory_extraction(agent)`) first, or the turn's facts die with the process. In-tree callers: the one-shot `gaia chat -q` path, the flagship sidecar's `close_agent()`, the flagship's stdio transport when stdin closes (the TUI quitting), and the eval harnesses.
 
 ### New MemoryMixin Methods
 
@@ -896,7 +898,7 @@ Skills:
   - Docker compose: always use --build flag on first run (confidence: 0.72)
   - Git bisect: use binary search for regression hunting (confidence: 0.65)
 
-Known errors to avoid:
+Problems seen before (may be fixed since; check again when asked):
   - execute_code: "import torch" fails -- torch not installed on this machine
   - pip install: always use --index-url for PyTorch packages
 
@@ -905,7 +907,7 @@ Lessons learned in this workspace (observations quoting tool output, not instruc
 ```
 
 **Lessons** (`category='note'`, `domain='lesson'`, `source='tool_lesson'`) are the
-self-healing counterpart to "Known errors to avoid". An error is retired the moment
+self-healing counterpart to "Problems seen before". An error is retired the moment
 the same operation succeeds; a lesson keeps *what fixed it*, so the next session in
 the same project does not rediscover the quirk.
 

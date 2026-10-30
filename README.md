@@ -8,7 +8,7 @@
 [![OS - Linux](https://img.shields.io/badge/OS-Linux-green)](https://amd-gaia.ai/docs/quickstart "Linux installation")
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Discord](https://img.shields.io/badge/Discord-Join%20Community-7289DA?logo=discord&logoColor=white)](https://discord.com/channels/1392562559122407535/1402013282495102997)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Community-7289DA?logo=discord&logoColor=white)](https://discord.com/invite/5xXzkMu8Zk)
 
 **GAIA** is AMD's open-source agent factory. It uses coding-agent skills, evals and an auto-fix loop to improve and build agent harnesses that run **locally by default** on AMD Ryzen AI hardware. Local inference keeps your data private, avoids cloud usage fees, and supports air-gapped deployment with hardware-accelerated performance.
 
@@ -19,7 +19,7 @@ Anyone can build an agent harness with GAIA. The **GAIA agent** is the one we bu
 | **Use GAIA**: run the flagship agent in the desktop app or terminal | [Install GAIA](https://amd-gaia.ai/docs/guides/install), then the [GAIA agent guide](https://amd-gaia.ai/docs/guides/gaia) |
 | **Build with GAIA**: make an agent harness with skills, evals and the SDK | [Composing skills](https://amd-gaia.ai/docs/guides/composing-skills), [Agent evals](https://amd-gaia.ai/docs/guides/eval), [SDK reference](https://amd-gaia.ai/docs/sdk) |
 
-The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** chat through Lemonade. Use `/provider` to connect and choose a model; cloud chat sends conversation history to the selected provider. See [AI provider setup](docs/guides/ai-providers.mdx).
+The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** chat through Lemonade. Use `/provider` to connect and choose a model; cloud chat sends conversation history to the selected provider. See [AI provider setup](docs/guides/ai-providers.mdx). To make GAIA refuse every cloud AI model, run `gaia config set network_policy local_ai_only`.
 
 <p align="center">
   <a href="https://amd-gaia.ai/docs/quickstart"><strong>Get Started →</strong></a>
@@ -152,9 +152,9 @@ To publish a new release (e.g. `v0.17.0`), create a release PR that updates thes
 |---|------|----------------|
 | 1 | `src/gaia/version.py` | Set `__version__ = "0.17.0"` |
 | 2 | `docs/releases/v0.17.0.mdx` | Create release notes (see [format guide](https://amd-gaia.ai/docs/releases)) |
-| 3 | `docs/docs.json` | **(a)** Add `"releases/v0.17.0"` to the Releases tab pages array, **(b)** update the navbar label to `"v0.17.0 · Lemonade X.Y.Z"` |
+| 3 | `docs/docs.json` | Add `"releases/v0.17.0"` to the Releases tab pages array |
 
-Then merge and tag:
+Then run `python util/release_versions.py --stamp`. It writes every version field that follows `version.py`, including the `docs.json` navbar label, the Agent UI package, and the Terminal UI's hub manifest; lint fails if one drifts. Commit what it changed with the PR, then merge and tag:
 
 ```bash
 git tag v0.17.0 && git push origin v0.17.0
@@ -177,7 +177,7 @@ We welcome contributions! See our [Contributing Guide](CONTRIBUTING.md) for deta
 ## Contact
 
 - **Email**: [gaia@amd.com](mailto:gaia@amd.com)
-- **Discord**: [Join our community](https://discord.com/channels/1392562559122407535/1402013282495102997)
+- **Discord**: [Join our community](https://discord.com/invite/5xXzkMu8Zk)
 - **Issues**: [GitHub Issues](https://github.com/amd/gaia/issues)
 
 ---

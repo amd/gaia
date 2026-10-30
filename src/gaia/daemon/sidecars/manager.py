@@ -60,6 +60,10 @@ from gaia.daemon.sidecars.errors import (
 )
 from gaia.daemon.sidecars.spec import AgentSidecarSpec
 from gaia.logger import get_logger
+from gaia.utils.terminal import (
+    background_popen_kwargs,
+    windows_hidden_popen_kwargs,
+)
 
 logger = get_logger(__name__)
 
@@ -90,16 +94,19 @@ def find_free_port(host: str = _HOST) -> int:
 
 
 def _version_tuple(version: str) -> tuple:
-    """Parse a dotted version into a comparable int tuple; loud on garbage."""
-    parts = str(version).strip().lstrip("v").split(".")
+    """Parse a dotted version into a comparable int tuple; loud on garbage.
+
+    SemVer build metadata is dropped: a release candidate's flagship installs
+    as ``0.3.0+v0.25.0-rc3`` and has the precedence of ``0.3.0``.
+    """
+    parts = str(version).strip().lstrip("v").partition("+")[0].split(".")
     try:
         return tuple(int(p) for p in parts)
     except ValueError as e:
         raise SidecarSpawnError(
             f"cannot parse sidecar binary version '{version}' for secret-delivery "
             "negotiation. Expected a dotted numeric version (e.g. '0.6.0') — "
-            "reinstall the agent from the Agent Hub if its install metadata is "
-            "corrupt."
+            "reinstall the agent if its install metadata is corrupt."
         ) from e
 
 
@@ -379,9 +386,9 @@ class AgentSidecarManager:
                     f"Cannot start the {self.spec.display_name} agent: no verified "
                     f"sidecar binary is available in user mode. {e}\n"
                     "Fix it one of these ways:\n"
-                    f"  * Install '{self.spec.agent_id}' from the Agent Hub — run "
-                    f"`gaia agent install {self.spec.agent_id}` (or click Install "
-                    "in the Agent UI). It downloads and verifies the binary and "
+                    f"  * Install '{self.spec.agent_id}' — run "
+                    f"`{fetch.install_command(self.spec.agent_id)}` (or click "
+                    "Install in the Agent UI). It downloads and verifies the binary and "
                     "records the install this resolver reads.\n"
                     f"  * Or, from a GAIA source checkout, set "
                     f"{self.spec.mode_env_var}=dev to run the agent from source.\n"
@@ -507,12 +514,8 @@ class AgentSidecarManager:
         return data[-limit:].decode("utf-8", "replace")
 
     def _spawn_process(self, argv, popen_kwargs, port: int) -> None:
-        creationflags = 0
-        start_new_session = False
-        if os.name == "nt":
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
-        else:
-            start_new_session = True  # own process group for tree-kill
+        # Own process group for tree-kill; on Windows also a hidden console.
+        group_kwargs = background_popen_kwargs()
         # Hand the sidecar its per-session caller-auth token (#1706). Merge over
         # the inherited env / any cwd already in popen_kwargs — never clobber
         # them. Delivery leg (0600 file vs deprecated bare env) is negotiated
@@ -554,9 +557,8 @@ class AgentSidecarManager:
                 argv,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
-                start_new_session=start_new_session,
-                creationflags=creationflags,
                 env=spawn_env,
+                **group_kwargs,
                 **popen_kwargs,
             )
         except OSError as e:
@@ -598,7 +600,7 @@ class AgentSidecarManager:
                 "sidecar: the installed binary's version is unknown (no version "
                 "in the hub install sentinel or binaries.lock.json). Refusing to "
                 "guess which leg the binary understands — reinstall the agent "
-                "from the Agent Hub so its install metadata records a version."
+                "so its install metadata records a version."
             )
         if _version_tuple(version) >= _version_tuple(spec.secret_file_min_version):
             return (
@@ -966,6 +968,7 @@ class AgentSidecarManager:
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                         check=False,
+                        **windows_hidden_popen_kwargs(),
                     )
             else:
                 os.killpg(proc.pid, sig)

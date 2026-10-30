@@ -4,7 +4,6 @@
 """Unit tests for the GAIA Scheduler (M5: Scheduled Autonomy).
 
 Tests cover:
-- Interval string parsing
 - Task creation, pause, resume, cancel, delete
 - Timer loop execution
 - Database persistence
@@ -16,12 +15,12 @@ import asyncio
 import pytest
 import pytest_asyncio
 
+from gaia.ui import scheduler as scheduler_module
 from gaia.ui.database import ChatDatabase
 from gaia.ui.scheduler import (
     ScheduleConfig,
     ScheduledTask,
     Scheduler,
-    parse_interval,
     parse_schedule_input,
 )
 
@@ -48,55 +47,10 @@ async def scheduler(fake_db):
     await sched.shutdown()
 
 
-# ── parse_interval tests ─────────────────────────────────────────────────────
-
-
-class TestParseInterval:
-    """Test the interval string parser."""
-
-    def test_every_minutes(self):
-        assert parse_interval("every 30m") == 1800
-
-    def test_every_hours(self):
-        assert parse_interval("every 6h") == 21600
-
-    def test_every_seconds(self):
-        assert parse_interval("every 30s") == 30
-
-    def test_every_days(self):
-        assert parse_interval("every 2d") == 172800
-
-    def test_every_minutes_long(self):
-        assert parse_interval("every 5 minutes") == 300
-
-    def test_every_hours_long(self):
-        assert parse_interval("every 2 hours") == 7200
-
-    def test_daily_alias(self):
-        assert parse_interval("daily") == 86400
-
-    def test_hourly_alias(self):
-        assert parse_interval("hourly") == 3600
-
-    def test_bare_shorthand(self):
-        assert parse_interval("30m") == 1800
-
-    def test_bare_hours(self):
-        assert parse_interval("6h") == 21600
-
-    def test_case_insensitive(self):
-        assert parse_interval("Every 30M") == 1800
-
-    def test_invalid_interval(self):
-        with pytest.raises(ValueError, match="Cannot parse interval"):
-            parse_interval("next tuesday")
-
-    def test_empty_string(self):
-        with pytest.raises(ValueError):
-            parse_interval("")
-
-    def test_every_24h(self):
-        assert parse_interval("every 24h") == 86400
+@pytest.fixture
+def one_second_floor(monkeypatch):
+    """Let timer tests use 1-second schedules instead of waiting a minute."""
+    monkeypatch.setattr(scheduler_module, "MIN_INTERVAL_SECONDS", 1)
 
 
 # ── ScheduledTask tests ──────────────────────────────────────────────────────
@@ -149,14 +103,14 @@ class TestSchedulerCreate:
 
     @pytest.mark.asyncio
     async def test_create_invalid_interval(self, scheduler):
-        with pytest.raises(ValueError, match="Cannot parse interval"):
+        with pytest.raises(ValueError, match="couldn't read 'whenever'"):
             await scheduler.create_task("bad", "whenever", "Prompt")
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("interval", ["every 0m", "0s"])
     async def test_create_zero_interval_rejected(self, scheduler, interval):
         """A zero interval would run the prompt back to back forever."""
-        with pytest.raises(ValueError, match="at least 1 second"):
+        with pytest.raises(ValueError, match="at most once a minute"):
             await scheduler.create_task("zero", interval, "Prompt")
         assert scheduler.get_task("zero") is None
 
@@ -269,6 +223,7 @@ class TestSchedulerLifecycle:
 # ── Scheduler execution tests ────────────────────────────────────────────────
 
 
+@pytest.mark.usefixtures("one_second_floor")
 class TestSchedulerExecution:
     """Test the timer execution loop."""
 
@@ -444,47 +399,6 @@ class TestSchedulerPersistence:
         await sched2.shutdown()
 
 
-# ── Extended parse_interval tests ───────────────────────────────────────────
-
-
-class TestParseIntervalExtended:
-    """Test newly added interval formats: weekly alias, day names, and week units."""
-
-    def test_weekly_alias(self):
-        """'weekly' alias should map to 7 days (604800 seconds)."""
-        assert parse_interval("weekly") == 604800
-
-    def test_every_monday(self):
-        """'every monday' should be treated as weekly (604800 seconds)."""
-        assert parse_interval("every monday") == 604800
-
-    def test_every_friday(self):
-        """'every friday' should be treated as weekly (604800 seconds)."""
-        assert parse_interval("every friday") == 604800
-
-    def test_every_2_weeks(self):
-        """'every 2 weeks' should be 2 * 604800 = 1209600 seconds."""
-        assert parse_interval("every 2 weeks") == 1209600
-
-    def test_every_2w(self):
-        """'every 2w' shorthand should be 1209600 seconds."""
-        assert parse_interval("every 2w") == 1209600
-
-    def test_bare_1w(self):
-        """Bare '1w' shorthand should be 604800 seconds."""
-        assert parse_interval("1w") == 604800
-
-    def test_invalid_day_name(self):
-        """'every someday' is not a valid day name and should raise ValueError."""
-        with pytest.raises(ValueError, match="Cannot parse interval"):
-            parse_interval("every someday")
-
-    def test_invalid_format(self):
-        """'every minute' (no number, not a day name) should raise ValueError."""
-        with pytest.raises(ValueError, match="Cannot parse interval"):
-            parse_interval("every minute")
-
-
 # ── ReDoS hardening tests (input bounds + unambiguous regexes) ──────────────
 
 
@@ -492,14 +406,11 @@ class TestScheduleInputBounds:
     """Hostile/oversized schedule strings must be rejected up front, and the
     window regex must stay linear on whitespace-heavy input."""
 
-    def test_parse_interval_rejects_oversized_input(self):
-        with pytest.raises(ValueError, match="too long"):
-            parse_interval("every " + "0" * 10_000 + "m")
-
-    def test_parse_interval_rejects_absurd_digit_runs(self):
-        # Bounded quantifier: >9-digit values no longer parse.
-        with pytest.raises(ValueError, match="Cannot parse interval"):
-            parse_interval("1234567890s")
+    def test_parse_schedule_input_rejects_absurd_digit_runs(self):
+        # Bounded quantifier: >9-digit values don't parse.
+        config = parse_schedule_input("every 1234567890s")
+        assert config.interval_seconds == 0
+        assert "couldn't read" in config.description
 
     def test_parse_schedule_input_rejects_oversized_input(self):
         config = parse_schedule_input("from 9" + "\t" * 10_000 + "to 5")
@@ -512,11 +423,16 @@ class TestScheduleInputBounds:
         assert config.start_hour == 8
         assert config.end_hour == 18
 
-    def test_window_with_minutes_and_spaces(self):
-        config = parse_schedule_input("every 30m from 9:30 am to 5 pm")
+    def test_window_with_spaces(self):
+        config = parse_schedule_input("every 30m from 9:00 am to 5 pm")
         assert config.interval_seconds == 1800
         assert config.start_hour == 9
         assert config.end_hour == 17
+
+    def test_window_off_the_hour_is_rejected_not_rounded(self):
+        config = parse_schedule_input("every 30m from 9:30 am to 5 pm")
+        assert config.interval_seconds == 0
+        assert "on the hour" in config.description
 
     def test_time_of_day_parsing_still_works(self):
         config = parse_schedule_input("daily at 9 pm")
@@ -546,3 +462,82 @@ class TestScheduleConfigFromJson:
     def test_from_json_unknown_key_raises(self):
         with pytest.raises(ValueError, match="Invalid schedule_config"):
             ScheduleConfig.from_json('{"bogus_key": 1}')
+
+
+class TestRunNow:
+    """Run now runs a task once without moving its schedule (#5718)."""
+
+    async def test_runs_once_and_keeps_the_next_scheduled_time(self, scheduler):
+        await scheduler.create_task("ping", "every 1h", "Say PING")
+        before = scheduler.get_task("ping")["next_run_at"]
+
+        started = await scheduler.run_task_now("ping")
+        assert started["running"] is True
+        await asyncio.gather(*scheduler._manual_runs)
+
+        after = scheduler.get_task("ping")
+        assert after["running"] is False
+        assert after["run_count"] == 1
+        assert after["last_result"] == "ran: Say PING"
+        assert after["next_run_at"] == before
+        messages = scheduler._db.get_messages(after["session_id"])
+        assert messages[-1]["content"] == "ran: Say PING"
+
+    async def test_refuses_a_second_run_while_one_is_in_flight(self, fake_db):
+        release = asyncio.Event()
+
+        async def slow(prompt):
+            await release.wait()
+            return "done"
+
+        sched = Scheduler(db=fake_db, executor=slow)
+        await sched.start()
+        try:
+            await sched.create_task("slow", "every 1h", "P")
+            await sched.run_task_now("slow")
+            with pytest.raises(ValueError, match="already running"):
+                await sched.run_task_now("slow")
+
+            # A timed run landing meanwhile is skipped, not run twice.
+            await asyncio.sleep(0)
+            task = sched._tasks["slow"]
+            await sched._execute_task(task)
+            assert task.run_count == 1
+
+            release.set()
+            await asyncio.gather(*sched._manual_runs)
+            assert sched.get_task("slow")["running"] is False
+        finally:
+            await sched.shutdown()
+
+    async def test_unknown_task(self, scheduler):
+        with pytest.raises(KeyError):
+            await scheduler.run_task_now("nope")
+
+
+class TestRunNowStops:
+    """Deleting a schedule or stopping GAIA stops its Run now, like its timer."""
+
+    async def _start_slow(self, fake_db):
+        async def slow(prompt):
+            await asyncio.Event().wait()
+
+        sched = Scheduler(db=fake_db, executor=slow)
+        await sched.start()
+        await sched.create_task("slow", "every 1h", "P")
+        await sched.run_task_now("slow")
+        await asyncio.sleep(0)
+        return sched, next(iter(sched._manual_runs))
+
+    async def test_delete_cancels_it(self, fake_db):
+        sched, run = await self._start_slow(fake_db)
+        try:
+            await sched.delete_task("slow")
+            assert run.cancelled()
+        finally:
+            await sched.shutdown()
+
+    async def test_shutdown_cancels_it(self, fake_db):
+        sched, run = await self._start_slow(fake_db)
+        await sched.shutdown()
+        assert run.cancelled()

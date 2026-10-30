@@ -42,6 +42,7 @@ def _response(status_code=200, body=None):
 def manager():
     client = MagicMock()
     client.base_url = "http://localhost:13305/api/v1"
+    client.credential_base_url.return_value = client.base_url
     return GatewayManager(client=client)
 
 
@@ -219,6 +220,10 @@ class TestAuth:
             "enabled_models",
             "active_model",
             "non_streaming_models",
+            "tool_calling_models",
+            "no_tool_calling_models",
+            "tool_calling_probe_failures",
+            "unavailable_models",
         }
 
     def test_empty_token_is_refused_before_any_request(self, manager):
@@ -278,6 +283,27 @@ class TestErrors:
         # that no longer exists on a modern install.
         assert "lemonade-server serve" not in message
         assert "Lemonade" in message
+
+    @pytest.mark.parametrize(
+        "body, shown",
+        [
+            ({"error": "Unauthorized: invalid API key"}, "invalid API key"),
+            ({"error": {"message": "bad provider", "type": "x"}}, "bad provider"),
+            ("plain text", "plain text"),
+            ([], ""),
+        ],
+    )
+    def test_any_error_body_becomes_a_gateway_error(self, manager, body, shown):
+        """Lemonade's 401 (a restarted server holds a new key) says
+        {"error": "<text>"}, not an object; reading it once crashed every cloud
+        turn's key replay with AttributeError."""
+        with patch(
+            "gaia.llm.gateway.requests.request",
+            return_value=_response(status_code=401, body=body),
+        ):
+            with pytest.raises(GatewayError, match="HTTP 401") as excinfo:
+                manager.status()
+        assert shown in str(excinfo.value)
 
     def test_404_on_a_cloud_route_points_at_the_version_requirement(self, manager):
         with patch(
@@ -356,6 +382,19 @@ class TestListModels:
                 "labels": ["tool-calling"],
                 "context_length": 131072,
             },
+            {
+                "id": "amd.DeepSeek-V4.1-Flash",
+                "recipe": "cloud",
+                "labels": ["tool-calling"],
+                "context_length": 131072,
+            },
+            # The older flash is a different model: it must not win the default.
+            {
+                "id": "amd.DeepSeek-V4-Flash",
+                "recipe": "cloud",
+                "labels": ["tool-calling"],
+                "context_length": 131072,
+            },
             # Another provider's cloud model must not leak into the AMD list.
             {"id": "fireworks.kimi", "recipe": "cloud", "labels": []},
         ]
@@ -368,13 +407,17 @@ class TestListModels:
             "amd.Claude-Opus-5",
             "amd.zephyr-small",
             "amd.gemma-4-31b-it",
+            "amd.DeepSeek-V4.1-Flash",
+            "amd.DeepSeek-V4-Flash",
         }
 
     def test_recommended_models_sort_first(self, manager):
         manager.client.list_models.return_value = self.CATALOG
         ids = [m.id for m in manager.list_models()]
-        # Claude-Opus-5 and gemma-4-31b are recommended; zephyr is not.
+        # DeepSeek-V4.1-Flash, gemma-4-31b and Claude-Opus-5 are recommended;
+        # zephyr and the older DeepSeek-V4-Flash are not.
         assert ids[-1] == "amd.zephyr-small"
+        assert ids.index("amd.DeepSeek-V4-Flash") > ids.index("amd.Claude-Opus-5")
 
     def test_capabilities_come_from_the_gateway(self, manager):
         manager.client.list_models.return_value = self.CATALOG
@@ -393,26 +436,39 @@ class TestListModels:
         the two models this feature exists to reach, so the hints deliberately
         match only the current flagship and the on-prem model.
         """
-        for model_id in ("amd.Claude-Opus-5", "amd.Claude-Sonnet-5", "amd.Gemma-4-31B"):
+        for model_id in (
+            "amd.Claude-Opus-5",
+            "amd.Claude-Sonnet-5",
+            "amd.Gemma-4-31B",
+            "amd.DeepSeek-V4.1-Flash",
+        ):
             assert GatewayModel(id=model_id).recommended, model_id
 
         for model_id in (
             "amd.claude-opus-4.8",  # superseded — still selectable, just not surfaced
             "amd.claude-haiku-4.5",
             "amd.gpt-oss-20b",
+            "amd.DeepSeek-V4-Flash",  # the older flash, not V4.1
         ):
             assert not GatewayModel(id=model_id).recommended, model_id
 
-    def test_gemma_is_the_default_because_it_is_the_only_one_that_streams(
-        self, manager
-    ):
-        """Alphabetical order put Claude-Opus-5 first, which cannot stream.
+    def test_deepseek_v4_1_flash_is_the_default(self, manager):
+        """The default must stream, and DeepSeek-V4.1-Flash does.
 
-        GAIA's agent path streams by default, so that default handed a new
-        user an agent that produced nothing.
+        Alphabetical order once put Claude-Opus-5 first; the explicit hint list
+        is what keeps the default deterministic.
         """
         manager.client.list_models.return_value = self.CATALOG
-        assert manager.list_models()[0].id == "amd.gemma-4-31b-it"
+        assert manager.list_models()[0].id == "amd.DeepSeek-V4.1-Flash"
+        assert manager.default_model() == "amd.DeepSeek-V4.1-Flash"
+
+    def test_gemma_is_the_default_when_deepseek_is_not_on_the_gateway(self, manager):
+        catalog = {
+            "data": [
+                m for m in self.CATALOG["data"] if "deepseek" not in m["id"].lower()
+            ]
+        }
+        manager.client.list_models.return_value = catalog
         assert manager.default_model() == "amd.gemma-4-31b-it"
 
     def test_ensure_active_model_does_not_override_a_choice(self, manager):
@@ -422,7 +478,7 @@ class TestListModels:
 
     def test_ensure_active_model_picks_the_preferred_one_when_unset(self, manager):
         manager.client.list_models.return_value = self.CATALOG
-        assert manager.ensure_active_model() == "amd.gemma-4-31b-it"
+        assert manager.ensure_active_model() == "amd.DeepSeek-V4.1-Flash"
 
     def test_recommendation_is_case_insensitive(self):
         """The gateway mixes casing across ids (`Claude-Opus-5` vs
@@ -513,16 +569,18 @@ class TestSelection:
     def test_uninstall_clears_the_global_default_model(self, manager, monkeypatch):
         """`use` writes the choice to two places; removing it cleaned only one,
         leaving `gaia chat` resolving a gateway id that no longer exists."""
+        from gaia.config import GaiaConfig
+
         cleared = {}
 
-        class FakeCfg:
+        class FakeCfg(GaiaConfig):
             def get(self, k):
                 return "amd.Claude-Opus-5"
 
             def set(self, k, v):
                 cleared[k] = v
 
-            def save(self):
+            def save(self, path=None):
                 cleared["saved"] = True
 
         monkeypatch.setattr(
@@ -848,3 +906,390 @@ class TestPreCloudOffloadServerIsRejected:
             assert (
                 manager.install("https://gw.example.com/v1")["models_discovered"] == 0
             )
+
+
+# ── check_reachable (#5604) ────────────────────────────────────────────────
+
+
+def test_check_reachable_dials_the_gateway_host_on_443(monkeypatch):
+    import socket
+
+    from gaia.llm import gateway
+
+    dialed = []
+
+    class _Conn:
+        def close(self):
+            pass
+
+    def fake_connect(addr, timeout):
+        dialed.append((addr, timeout))
+        return _Conn()
+
+    monkeypatch.setattr(socket, "create_connection", fake_connect)
+    gateway.check_reachable("https://llm-api.amd.com/Unified/v1")
+    gateway.check_reachable("http://gw.example.test:8080/v1")
+    assert [a for a, _ in dialed] == [
+        ("llm-api.amd.com", 443),
+        ("gw.example.test", 8080),
+    ]
+    assert all(t == gateway.REACH_TIMEOUT for _, t in dialed)
+
+
+def test_check_reachable_names_the_vpn_for_an_unresolvable_host(monkeypatch):
+    import socket
+
+    from gaia.llm import gateway
+
+    def fail(addr, timeout):
+        raise socket.gaierror(8, "nodename nor servname provided, or not known")
+
+    monkeypatch.setattr(socket, "create_connection", fail)
+    with pytest.raises(gateway.GatewayUnreachable) as exc:
+        gateway.check_reachable(None)
+    assert exc.value.host == "llm-api.amd.com"
+    assert (
+        str(exc.value) == "Can't reach llm-api.amd.com. It needs AMD's network or VPN"
+    )
+    assert "key" not in str(exc.value).lower()
+
+
+def test_check_reachable_refuses_a_url_with_no_host():
+    from gaia.llm import gateway
+
+    with pytest.raises(ValueError):
+        gateway.check_reachable("not a url")
+
+
+def test_gateway_install_restores_a_remembered_token_before_reporting_none(
+    monkeypatch, capsys
+):
+    """A saved token must be handed to Lemonade during a fresh registration."""
+    from types import SimpleNamespace
+
+    import gaia.cli as cli
+    from gaia.llm import gateway as gateway_module
+
+    state = SimpleNamespace(
+        base_url="https://gateway.example/v1", enabled_models=[], active_model=None
+    )
+    calls = []
+
+    class FakeStatus:
+        env_var_set = False
+        runtime_key_set = True
+        authenticated = True
+        models_discovered = 3
+
+    class FakeManager:
+        def install(self, *args, **kwargs):
+            return {
+                "models_discovered": 0,
+                "auth_state": {"env_var_set": False, "runtime_key_set": False},
+            }
+
+        def ensure_authenticated(self, recall=None):
+            calls.append(recall())
+            return True
+
+        def status(self):
+            return FakeStatus()
+
+    monkeypatch.setattr(
+        gateway_module, "GatewayState", SimpleNamespace(load=lambda: state)
+    )
+    monkeypatch.setattr(gateway_module, "GatewayManager", FakeManager)
+    monkeypatch.setattr(gateway_module, "recall_token", lambda: "remembered-token")
+
+    args = SimpleNamespace(
+        gateway_action="install",
+        base_url="https://gateway.example/v1",
+        skip_probe=True,
+        auth_header_name="Authorization",
+        auth_header_prefix="Bearer ",
+        allow_insecure_http=False,
+    )
+    cli.handle_gateway_command(args)
+
+    output = capsys.readouterr().out
+    assert calls == ["remembered-token"]
+    assert "Models discovered: 3" in output
+    assert "Restored the remembered gateway token" in output
+    assert "No token yet" not in output
+
+
+def test_gateway_install_keeps_no_token_hint_without_a_remembered_token(
+    monkeypatch, capsys
+):
+    """A fresh install without saved credentials keeps the existing guidance."""
+    from types import SimpleNamespace
+
+    import gaia.cli as cli
+    from gaia.llm import gateway as gateway_module
+
+    state = SimpleNamespace(
+        base_url="https://gateway.example/v1", enabled_models=[], active_model=None
+    )
+
+    class FakeManager:
+        def install(self, *args, **kwargs):
+            return {
+                "models_discovered": 0,
+                "auth_state": {"env_var_set": False, "runtime_key_set": False},
+            }
+
+        def ensure_authenticated(self, recall=None):
+            raise AssertionError("must not restore when no token is remembered")
+
+    monkeypatch.setattr(
+        gateway_module, "GatewayState", SimpleNamespace(load=lambda: state)
+    )
+    monkeypatch.setattr(gateway_module, "GatewayManager", FakeManager)
+    monkeypatch.setattr(gateway_module, "recall_token", lambda: None)
+
+    args = SimpleNamespace(
+        gateway_action="install",
+        base_url="https://gateway.example/v1",
+        skip_probe=True,
+        auth_header_name="Authorization",
+        auth_header_prefix="Bearer ",
+        allow_insecure_http=False,
+    )
+    cli.handle_gateway_command(args)
+
+    output = capsys.readouterr().out
+    assert "No token yet" in output
+    assert "remembered gateway token was not accepted" not in output
+    assert "Restored the remembered gateway token" not in output
+
+
+def test_gateway_install_reports_when_the_remembered_token_is_rejected(
+    monkeypatch, capsys
+):
+    """A remembered but rejected token must not be described as absent."""
+    from types import SimpleNamespace
+
+    import gaia.cli as cli
+    from gaia.llm import gateway as gateway_module
+
+    state = SimpleNamespace(
+        base_url="https://gateway.example/v1", enabled_models=[], active_model=None
+    )
+    calls = []
+
+    class FakeManager:
+        def install(self, *args, **kwargs):
+            return {
+                "models_discovered": 0,
+                "auth_state": {"env_var_set": False, "runtime_key_set": False},
+            }
+
+        def ensure_authenticated(self, recall=None):
+            calls.append(recall())
+            return False
+
+    monkeypatch.setattr(
+        gateway_module, "GatewayState", SimpleNamespace(load=lambda: state)
+    )
+    monkeypatch.setattr(gateway_module, "GatewayManager", FakeManager)
+    monkeypatch.setattr(gateway_module, "recall_token", lambda: "remembered-token")
+
+    args = SimpleNamespace(
+        gateway_action="install",
+        base_url="https://gateway.example/v1",
+        skip_probe=True,
+        auth_header_name="Authorization",
+        auth_header_prefix="Bearer ",
+        allow_insecure_http=False,
+    )
+    cli.handle_gateway_command(args)
+
+    output = capsys.readouterr().out
+    assert calls == ["remembered-token"]
+    assert "The remembered gateway token was not accepted" in output
+    assert "No token yet" not in output
+    assert "Restored the remembered gateway token" not in output
+
+
+def _run_gateway_install(monkeypatch, *, saved_url, install_url, manager_cls, token):
+    from types import SimpleNamespace
+
+    import gaia.cli as cli
+    from gaia.llm import gateway as gateway_module
+
+    state = SimpleNamespace(base_url=saved_url, enabled_models=[], active_model=None)
+    monkeypatch.setattr(
+        gateway_module, "GatewayState", SimpleNamespace(load=lambda: state)
+    )
+    monkeypatch.setattr(gateway_module, "GatewayManager", manager_cls)
+    store = {"token": token} if token else {}
+    monkeypatch.setattr(gateway_module, "recall_token", lambda: store.get("token"))
+    monkeypatch.setattr(
+        gateway_module, "forget_token", lambda: store.pop("token", None) is not None
+    )
+    cli.handle_gateway_command(
+        SimpleNamespace(
+            gateway_action="install",
+            base_url=install_url,
+            skip_probe=True,
+            auth_header_name="Authorization",
+            auth_header_prefix="Bearer ",
+            allow_insecure_http=False,
+        )
+    )
+    return store
+
+
+class _NoRestoreManager:
+    def install(self, *args, **kwargs):
+        return {
+            "models_discovered": 0,
+            "auth_state": {"env_var_set": False, "runtime_key_set": False},
+        }
+
+    def ensure_authenticated(self, recall=None):
+        raise AssertionError("a token must never be handed to a different gateway")
+
+
+@pytest.mark.parametrize(
+    "install_url",
+    [
+        "https://evil.example/v1",
+        "https://gateway.example/v2",
+        "http://gateway.example/v1",
+        "https://gateway.example.evil/v1",
+    ],
+)
+def test_gateway_install_never_sends_the_remembered_token_to_a_new_url(
+    monkeypatch, capsys, install_url
+):
+    secret = "sk-remembered-secret-123"
+    store = _run_gateway_install(
+        monkeypatch,
+        saved_url="https://gateway.example/v1",
+        install_url=install_url,
+        manager_cls=_NoRestoreManager,
+        token=secret,
+    )
+    output = capsys.readouterr().out
+    assert "The gateway URL changed, so GAIA forgot the token" in output
+    assert "Restored the remembered" not in output
+    assert secret not in output
+    # Dropped, not merely skipped: a later run against the new URL has nothing
+    # to replay, so runtime ensure_authenticated() cannot leak it either.
+    assert store == {}
+
+
+def test_a_second_install_at_the_new_url_cannot_restore_the_old_token(
+    monkeypatch, capsys
+):
+    secret = "sk-remembered-secret-123"
+    store = _run_gateway_install(
+        monkeypatch,
+        saved_url="https://gateway.example/v1",
+        install_url="https://evil.example/v1",
+        manager_cls=_NoRestoreManager,
+        token=secret,
+    )
+    assert store == {}
+    capsys.readouterr()
+    _run_gateway_install(
+        monkeypatch,
+        saved_url="https://evil.example/v1",
+        install_url=None,
+        manager_cls=_NoRestoreManager,
+        token=store.get("token"),
+    )
+    output = capsys.readouterr().out
+    assert "No token yet" in output
+    assert secret not in output
+
+
+def test_a_new_url_with_no_remembered_token_keeps_the_plain_hint(monkeypatch, capsys):
+    _run_gateway_install(
+        monkeypatch,
+        saved_url="https://gateway.example/v1",
+        install_url="https://other.example/v1",
+        manager_cls=_NoRestoreManager,
+        token=None,
+    )
+    output = capsys.readouterr().out
+    assert "No token yet" in output
+    assert "forgot" not in output
+
+
+@pytest.mark.parametrize(
+    "install_url", ["https://gateway.example/v1/", "HTTPS://Gateway.Example/v1"]
+)
+def test_gateway_install_restores_despite_trailing_slash_or_case(
+    monkeypatch, capsys, install_url
+):
+    secret = "sk-remembered-secret-123"
+    sent = []
+
+    class Status:
+        env_var_set = False
+        runtime_key_set = True
+        models_discovered = 2
+
+    class Manager(_NoRestoreManager):
+        def ensure_authenticated(self, recall=None):
+            sent.append(recall())
+            return True
+
+        def status(self):
+            return Status()
+
+    _run_gateway_install(
+        monkeypatch,
+        saved_url="https://gateway.example/v1",
+        install_url=install_url,
+        manager_cls=Manager,
+        token=secret,
+    )
+    output = capsys.readouterr().out
+    assert sent == [secret]
+    assert "Restored the remembered gateway token" in output
+    assert secret not in output
+
+
+def test_gateway_install_with_env_token_does_not_touch_the_credential_store(
+    monkeypatch, capsys
+):
+    class Manager(_NoRestoreManager):
+        def install(self, *args, **kwargs):
+            return {
+                "models_discovered": 4,
+                "auth_state": {"env_var_set": True, "runtime_key_set": False},
+            }
+
+    def boom():
+        raise AssertionError("credential store must not be read")
+
+    from gaia.llm import gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "recall_token", boom)
+    from types import SimpleNamespace
+
+    import gaia.cli as cli
+
+    state = SimpleNamespace(
+        base_url="https://gateway.example/v1", enabled_models=[], active_model=None
+    )
+    monkeypatch.setattr(
+        gateway_module, "GatewayState", SimpleNamespace(load=lambda: state)
+    )
+    monkeypatch.setattr(gateway_module, "GatewayManager", Manager)
+    cli.handle_gateway_command(
+        SimpleNamespace(
+            gateway_action="install",
+            base_url=None,
+            skip_probe=True,
+            auth_header_name="Authorization",
+            auth_header_prefix="Bearer ",
+            allow_insecure_http=False,
+        )
+    )
+    output = capsys.readouterr().out
+    assert "Models discovered: 4" in output
+    assert "No token yet" not in output

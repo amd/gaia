@@ -21,7 +21,7 @@ Design notes:
 - Startup gate: no ticks until ~/.gaia/chat/initialized exists.
 - Tunnel gate: no background ticks when ngrok tunnel is active.
 - Rate limiting: hourly call count + per-tick step budget.
-- All private sessions are unconditionally skipped.
+- Ticks run in their own "Background goals" chat, never a user's (so never a private one).
 """
 
 import asyncio
@@ -32,8 +32,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.install_hints import agent_not_installed_message
+from gaia.agents.install_hints import agent_import_error_message
+from gaia.ui.agent_threads import run_in_own_thread, wait_until_off_the_model
 from gaia.ui.run_manager import run_manager
+from gaia.ui.session_environment import apply_environment
+from gaia.ui.turn_queue import turn_queue
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +57,19 @@ _OBSERVE_MODEL = os.environ.get("GAIA_AUTO_OBSERVE_MODEL", "Qwen3-4B-GGUF")
 # Timeout (seconds) for a single autonomous tick execution
 _TICK_TIMEOUT = int(os.environ.get("GAIA_AGENT_TICK_TIMEOUT", "300"))
 
-# How long a user-message followup waits for the triggering turn to release the session
+# How long a user-message followup waits for the triggering turn to release the model
 _FOLLOWUP_GRACE_SECONDS = 10.0
+
+# The background chat goal ticks run in, listed with the other background runs.
+GOALS_SESSION_TITLE = "Background goals"
+GOALS_SESSION_SETTING = "agent_loop_session_id"
+
+SIDECAR_TICKS_UNSUPPORTED = (
+    "Background goals can't run with this install's GAIA agent yet: it runs as "
+    "a separate program, and goal runs only work with the agent installed into "
+    "GAIA's Python, as in a source checkout. Track "
+    "https://github.com/amd/gaia/issues/5840."
+)
 
 # Default agent mode. "autonomous" (observe → infer goals → execute, spec
 # docs/spec/autonomous-agent-mode.md §6.7) is not implemented yet (#2005), so
@@ -133,8 +147,16 @@ class AgentLoop:
         # Rate limiting
         self._hour_start: float = time.time()
         self._calls_this_hour: int = 0
+        # A timed-out tick's agent thread that ignored the stop, per session.
+        self._lingering_ticks: Dict[str, asyncio.Future] = {}
         # Track in-flight tick (prevents overlapping runs)
         self._running_lock: Optional[asyncio.Lock] = None
+        # Goal id -> the cooperative stop handles for the tick working on it.
+        # A user can cancel a goal or begin a foreground turn while it runs.
+        self._active_goal_ticks: Dict[
+            str, tuple[threading.Event, Any, threading.Event]
+        ] = {}
+        self._active_goal_ticks_lock = threading.Lock()
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -180,6 +202,44 @@ class AgentLoop:
             )
         except asyncio.QueueFull as exc:
             logger.error("Agent trigger queue unexpectedly full: %s", exc)
+
+    def cancel_goal(self, goal_id: str) -> bool:
+        """Tell the in-flight background tick for *goal_id* to stop.
+
+        The GoalStore records cancellation separately; this only reaches the
+        live agent so a cancelled goal stops holding the shared model slot. A
+        tick can work on several goals; stopping one pauses the shared tick and
+        leaves its other goals queued for the next run.
+        """
+        with self._active_goal_ticks_lock:
+            active = self._active_goal_ticks.get(goal_id)
+        if active is None:
+            return False
+        self._stop_active_tick(active)
+        return True
+
+    def yield_to_user(self) -> bool:
+        """Stop a background tick so a newly submitted foreground turn can run."""
+        with self._active_goal_ticks_lock:
+            active_ticks = list(self._active_goal_ticks.values())
+        seen = set()
+        for active in active_ticks:
+            if id(active) in seen:
+                continue
+            seen.add(id(active))
+            self._stop_active_tick(active)
+        return bool(active_ticks)
+
+    @staticmethod
+    def _stop_active_tick(
+        active: tuple[threading.Event, Any, threading.Event],
+    ) -> None:
+        cancel_event, handler, stopped_for_foreground = active
+        stopped_for_foreground.set()
+        cancel_event.set()
+        handler.cancelled.set()
+        # A relayed run can be blocked in a socket read, so wake it as Stop does.
+        handler.close_active_relay_response()
 
     # ── Internal: trigger consumer ────────────────────────────────────────────
 
@@ -289,16 +349,6 @@ class AgentLoop:
             )
             return LoopDirective("idle", reason="hourly rate limit")
 
-        # ── Session selection ────────────────────────────────────────────
-        session_id = trigger.session_id or await self._get_active_session()
-        if session_id is None:
-            return LoopDirective("idle")
-
-        # Double-check: never run on a private session
-        session = self._db.get_session(session_id)
-        if session is None or session.get("private"):
-            return LoopDirective("idle")
-
         # ── Goal check ───────────────────────────────────────────────────
         # goal_driven only executes existing approved goals. The planned
         # "autonomous" mode would run an observation cycle here instead of
@@ -307,14 +357,27 @@ class AgentLoop:
         if not goals:
             return LoopDirective("idle")
 
+        # A private chat's turn never sets off autonomous work (spec §11).
+        if trigger.session_id:
+            source = self._db.get_session(trigger.session_id)
+            if source is None or source.get("private"):
+                return LoopDirective("idle")
+
+        # ── Session selection ────────────────────────────────────────────
+        # Goals run in their own background chat, never one the user is in:
+        # a tick holds its chat's lock, and a long one would refuse their messages.
+        session_id = self._goals_session_id()
+        session = self._db.get_session(session_id)
+        if session is None:
+            return LoopDirective("idle")
+
         # ── Session gate ─────────────────────────────────────────────────
         # The tick drives the session's cached agent, so it takes the same
-        # session lock + chat semaphore a user turn does. Poll, never queue on
+        # session lock + turn-queue slot a user turn does. Poll, never queue on
         # the lock: a queued waiter would stall the user's next message.
         session_lock = self._app_state.session_locks.setdefault(
             session_id, asyncio.Lock()
         )
-        chat_semaphore = self._app_state.chat_semaphore
         # A followup is enqueued while its own turn still holds the session.
         grace = (
             _FOLLOWUP_GRACE_SECONDS if trigger.source == "user_message_followup" else 0
@@ -323,7 +386,7 @@ class AgentLoop:
         while (
             session_lock.locked()
             or run_manager.is_running(session_id)
-            or chat_semaphore.locked()
+            or turn_queue.locked()
         ):
             if time.monotonic() >= deadline:
                 logger.debug(
@@ -333,26 +396,42 @@ class AgentLoop:
             await asyncio.sleep(0.1)
         # No await between the busy check and these acquires, so neither blocks.
         await session_lock.acquire()
-        await chat_semaphore.acquire()
+        await turn_queue.acquire(f"agent-loop:{session_id}")
         try:
             # Only a tick that reaches here spends hourly budget.
             self._calls_this_hour += 1
             return await self._execute_tick(session_id, session, goals)
         finally:
-            chat_semaphore.release()
-            session_lock.release()
+            turn_queue.release()
+            stuck = self._lingering_ticks.pop(session_id, None)
+            if stuck is not None and not stuck.done():
+                # Its thread still drives the session's agent.
+                stuck.add_done_callback(lambda _done: session_lock.release())
+            else:
+                session_lock.release()
 
-    async def _get_active_session(self) -> Optional[str]:
-        """Return the most recently updated non-private session, or None."""
-        try:
-            sessions = self._db.list_sessions(limit=20)
-            # Skip private sessions unconditionally (spec §11)
-            for s in sessions:
-                if not s.get("private"):
-                    return s["id"]
-        except Exception as exc:
-            logger.debug("AgentLoop: session lookup failed: %s", exc)
-        return None
+    def _goals_session_id(self) -> str:
+        """The background chat goal ticks run in, created on first use."""
+        session_id = self._db.get_setting(GOALS_SESSION_SETTING)
+        if session_id and self._db.get_session(session_id):
+            return session_id
+        session = self._db.create_session(title=GOALS_SESSION_TITLE, kind="scheduled")
+        self._db.set_setting(GOALS_SESSION_SETTING, session["id"])
+        return session["id"]
+
+    @staticmethod
+    def _fail_goals(goals: List[Any], error: str) -> None:
+        """Mark *goals* failed with *error*, so the Goals page says why."""
+        if not goals:
+            return
+        from gaia.agents.base.goal_store import GoalStore
+
+        store = GoalStore()
+        for goal in goals:
+            note = f"The background run failed: {error}"
+            if goal.progress_notes:
+                note = f"{goal.progress_notes}\n{note}"
+            store.update_goal_status(goal.id, "failed", progress_notes=note)
 
     def _get_actionable_goals(self) -> List[Any]:
         """Return approved, queued goals from GoalStore."""
@@ -399,6 +478,12 @@ class AgentLoop:
         result_holder: Dict[str, Any] = {"error": None}
         # Set on timeout so the agent loop stops at its next step boundary.
         cancel_event = threading.Event()
+        stopped_for_foreground = threading.Event()
+        active_tick = (cancel_event, sse_handler, stopped_for_foreground)
+        active_goal_ids = [goal.id for goal in goals if getattr(goal, "id", None)]
+        with self._active_goal_ticks_lock:
+            for goal_id in active_goal_ids:
+                self._active_goal_ticks[goal_id] = active_tick
         db = self._db
 
         def _run_agent() -> None:
@@ -414,6 +499,9 @@ class AgentLoop:
                 # lookup evicts the user's cached agent.
                 agent_type = session.get("agent_type") or "chat"
                 registry = _helpers._agent_registry
+                flagship = registry.get("gaia") if registry is not None else None
+                if flagship is not None and flagship.is_sidecar:
+                    raise RuntimeError(SIDECAR_TICKS_UNSUPPORTED)
                 model_id = session.get("model")
                 custom_model = db.get_setting("custom_model")
                 if custom_model:
@@ -432,14 +520,16 @@ class AgentLoop:
                     # A prior streaming turn leaves its fired cancel event behind.
                     agent._cancel_event = None
                     agent.console = sse_handler
-                    agent._register_tools()
+                    with _helpers.writing_tool_registry():
+                        agent._register_tools()
                 else:
                     # Run the heavier sync work inline (we're in a thread).
                     try:
                         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
                     except ImportError as e:
                         raise RuntimeError(
-                            agent_not_installed_message(
+                            agent_import_error_message(
+                                e,
                                 "The GAIA agent is not installed",
                                 "gaia-agent-gaia",
                                 next_step="Then restart the server.",
@@ -467,8 +557,10 @@ class AgentLoop:
                         ui_session_id=session_id,
                         dynamic_tools=dynamic_tools,
                         memory_incognito=_helpers._memory_off(session, db),
+                        surface="agent_ui",
                     )
-                    agent = GaiaAgent(config)
+                    with _helpers.writing_tool_registry():
+                        agent = GaiaAgent(config)
                     _helpers._register_agent_memory_ops(agent)
                     agent.console = sse_handler
 
@@ -476,6 +568,7 @@ class AgentLoop:
 
                 # A private chat stays private; a tick must not switch memory on.
                 _helpers._apply_memory_state(agent, session, db)
+                apply_environment(agent, session_id, db)
 
                 # Also replaces a prior streaming turn's fired cancel event.
                 agent._cancel_event = cancel_event
@@ -487,18 +580,51 @@ class AgentLoop:
             finally:
                 sse_handler.signal_done()
 
-        # Run synchronous agent in a thread pool so we don't block the event loop
-        worker = asyncio.get_running_loop().run_in_executor(None, _run_agent)
+        worker = run_in_own_thread(_run_agent, name=f"gaia-tick-{session_id[:8]}")
+
+        def _clear_active_goals(_worker) -> None:
+            with self._active_goal_ticks_lock:
+                for goal_id in active_goal_ids:
+                    if self._active_goal_ticks.get(goal_id) is active_tick:
+                        self._active_goal_ticks.pop(goal_id, None)
+
+        worker.add_done_callback(_clear_active_goals)
         try:
-            done, _ = await asyncio.wait({worker}, timeout=_TICK_TIMEOUT)
+            deadline = time.monotonic() + _TICK_TIMEOUT
+            done = set()
+            # Poll so a cancel or foreground turn is seen mid-tool, not at the timeout.
+            while not done and not stopped_for_foreground.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                done, _ = await asyncio.wait({worker}, timeout=min(0.5, remaining))
             if not done:
-                logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
-        finally:
-            if not worker.done():
+                if stopped_for_foreground.is_set():
+                    reason = "tick stopped for user"
+                    logger.info("AgentLoop: tick stopped for a user request")
+                else:
+                    reason = "tick timed out"
+                    logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
                 cancel_event.set()
                 sse_handler.cancelled.set()
-                # The session lock held by _run_step must outlive the worker thread.
-                await asyncio.wait({worker})
+                finished = await wait_until_off_the_model(
+                    worker, sse_handler, what=f"Tick for session {session_id[:8]}"
+                )
+                if not finished:
+                    logger.error(
+                        "AgentLoop: tick for session %s is still running after "
+                        "it was stopped; freeing the model and holding the "
+                        "session until its thread exits",
+                        session_id[:8],
+                    )
+                    self._lingering_ticks[session_id] = worker
+                    return LoopDirective("idle", reason=reason)
+        except asyncio.CancelledError:
+            cancel_event.set()
+            sse_handler.cancelled.set()
+            # The session stays held until the thread has stopped.
+            self._lingering_ticks[session_id] = worker
+            raise
 
         # Save the autonomous tick as a message in the session DB
         # (stored as role="autonomous" — hidden from the UI by default)
@@ -511,6 +637,16 @@ class AgentLoop:
             )
         except Exception as exc:
             logger.error("Could not persist autonomous turn: %s", exc, exc_info=True)
+
+        if stopped_for_foreground.is_set():
+            # A cancel or foreground chat paused this shared tick: its error is
+            # the stop itself, and sibling goals stay queued for the next tick.
+            return LoopDirective("idle", reason="tick stopped for user")
+        if result_holder["error"]:
+            # The goals are still actionable, so continuing would rerun the
+            # failure at once until the hourly budget is gone.
+            self._fail_goals(goals[:3], result_holder["error"])
+            return LoopDirective("idle", reason="tick failed")
 
         # Read directive from SSE handler (set by set_loop_state tool)
         if sse_handler.loop_state_directive:

@@ -2,7 +2,7 @@
 name: summarize
 description: Summarize a document, meeting transcript, or email — pick a style that matches what the content actually is, and fold long input forward in sections instead of losing the back half. Use when the user pastes or points at a transcript, email, PDF, or long document and asks for a summary, action items, or key decisions.
 license: MIT
-version: 1.0.0
+version: 1.0.3
 metadata:
   gaia:
     security_tier: community
@@ -12,6 +12,8 @@ metadata:
       - list_indexed_documents
       - dump_document
       - read_file
+    pairs_with:
+      - office-docs
     provenance:
       source: starter-pack
 ---
@@ -37,8 +39,9 @@ material when the input is too long to read in one pass.
 2. **Get the full text.** For an indexed document, `index_document` it first
    if it isn't already (`list_indexed_documents` to check), then either call
    `summarize_document(file_path, summary_type)` or `dump_document` first if
-   you need the raw extracted text. For pasted text or a plain text file,
-   `read_file` is enough.
+   you need the raw extracted text. For pasted text, a plain text file, or a
+   Word, PDF or Excel file of a few pages, `read_file` is enough — it returns
+   the extracted text in parts; follow `next_offset` until it is null.
 
    `summary_type` accepts **only** `brief`, `detailed`, or `bullets` — anything
    else comes back as an error, not a summary. The named styles below are how
@@ -80,6 +83,12 @@ rest name a shape you write yourself.
 | `detailed` | 250+ words. Extract every number, percentage, dollar amount, date, and metric. Name competitors, partners, customers, technologies. Full paragraphs, no bullets. |
 | `bullets` | At most 3 bullets total, each under 20 words, one idea per bullet. |
 | executive | At most 5 sentences. Priority order: (1) quantitative metrics, (2) financial data, (3) strategic outcomes, (4) competitive differentiators. Always keep the specific numbers. Board-ready tone, no bullets. |
+
+The limits hold whenever a style is asked for, including when the user turns an
+earlier answer into it ("the same report as bullets", "shorter", "now for the
+board"). `bullets` means at most 3 bullets even when the earlier answer covered
+more; drop the weakest points rather than adding a fourth. Only a number the
+user names overrides a limit ("give me 5 bullets").
 
 The rule underneath the table: for business documents, a metric always
 outranks the marketing language around it. "Revenue grew 40% YoY to $12M" is

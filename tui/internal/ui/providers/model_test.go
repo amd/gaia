@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func key(m Model, k tea.KeyType) Model { next, _ := m.Update(tea.KeyMsg{Type: k}); return next.(Model) }
@@ -42,6 +43,15 @@ func TestMaskedPasteNeverReachesViewAndClearsOnCancel(t *testing.T) {
 	m = key(m, tea.KeyEsc)
 	if m.fields != nil || m.stage != "providers" {
 		t.Fatal("cancel retained key")
+	}
+}
+func TestThePanelOpensOnTheCurrentProvider(t *testing.T) {
+	for provider, want := range map[string]string{
+		"amd": "amd", "fireworks": "fireworks", "local": "local", "claude": "local", "": "local",
+	} {
+		if got := New("", 100, 30).WithCurrent(provider).chosen(); got != want {
+			t.Fatalf("WithCurrent(%q) chose %q, want %q", provider, got, want)
+		}
 	}
 }
 func TestProviderScreenOffersAllDestinations(t *testing.T) {
@@ -555,6 +565,113 @@ func TestModelListHintIsNeverCutMidWord(t *testing.T) {
 		lines := strings.Split(ansi.Strip(next.(Model).View()), "\n")
 		if hint := lines[len(lines)-2]; strings.Contains(hint, "…") {
 			t.Fatalf("hint truncated at width %d: %q", width, hint)
+		}
+	}
+}
+
+func amdSetup(providers ...lemonade.Provider) Model {
+	m := New("", 100, 30)
+	m.selected = 2
+	m.providers = providers
+	return m.setup()
+}
+
+func TestAMDGatewayFormStartsWithTheHeaderTheGatewayAccepts(t *testing.T) {
+	m := amdSetup()
+	if m.fields[0].Value() != lemonade.AMDGatewayURL ||
+		m.fields[1].Value() != lemonade.AMDGatewayAuthHeader || m.fields[2].Value() != "" {
+		t.Fatalf("form = %q %q %q, want AMD's URL and subscription-key header",
+			m.fields[0].Value(), m.fields[1].Value(), m.fields[2].Value())
+	}
+	if m.focus != 3 {
+		t.Errorf("focus = %d, want the key field once the URL is known", m.focus)
+	}
+}
+
+func TestAStoredBearerHeaderOnAMDsGatewayIsCorrected(t *testing.T) {
+	m := amdSetup(lemonade.Provider{Name: "amd", BaseURL: lemonade.AMDGatewayURL,
+		Header: "Authorization", Prefix: "Bearer "})
+	if m.fields[1].Value() != lemonade.AMDGatewayAuthHeader || m.fields[2].Value() != "" {
+		t.Fatalf("header = %q prefix = %q, want the stored bearer header replaced",
+			m.fields[1].Value(), m.fields[2].Value())
+	}
+}
+
+func TestAnotherOrganizationsGatewayKeepsItsOwnHeader(t *testing.T) {
+	m := amdSetup(lemonade.Provider{Name: "amd", BaseURL: "https://gateway.example/v1",
+		Header: "api-key"})
+	if m.fields[0].Value() != "https://gateway.example/v1" || m.fields[1].Value() != "api-key" {
+		t.Fatalf("form = %q %q, want the stored endpoint and header kept",
+			m.fields[0].Value(), m.fields[1].Value())
+	}
+}
+
+// A key Lemonade holds but that discovered nothing (the gateway rejected it)
+// must not read as configured on the list when the drill-in says otherwise.
+func TestAKeyThatFoundNoModelsIsNotShownAsConfigured(t *testing.T) {
+	none, some := 0, 12
+	m := readProviders(New("", 100, 30),
+		lemonade.Provider{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true, ModelsDiscovered: &none},
+		lemonade.Provider{Name: "fireworks", RuntimeKey: true, ModelsDiscovered: &some},
+	)
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "key set, but it found no models") {
+		t.Fatalf("the AMD row hides that its key found no models:\n%s", view)
+	}
+	if strings.Count(view, "key configured") != 1 {
+		t.Fatalf("only the working Fireworks key may read as configured:\n%s", view)
+	}
+
+	m.selected = 2
+	m = m.setup()
+	setup := ansi.Strip(m.View())
+	if strings.Contains(setup, "already configured for") {
+		t.Fatalf("the drill-in vouches for a key that found no models:\n%s", setup)
+	}
+	if !strings.Contains(setup, "found no models") {
+		t.Fatalf("the drill-in does not say the key found no models:\n%s", setup)
+	}
+}
+
+// An older Lemonade that does not report a count keeps the plain status.
+func TestAnUnreportedModelCountKeepsKeyConfigured(t *testing.T) {
+	m := readProviders(New("", 100, 30),
+		lemonade.Provider{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true})
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "key configured") {
+		t.Fatalf("a key with no reported count lost its status:\n%s", view)
+	}
+}
+
+// readProviders lands a provider read the way Lemonade's answer does, so the
+// list renders what it shows after a real read rather than before one.
+func readProviders(m Model, providers ...lemonade.Provider) Model {
+	next, _ := m.Update(loadedMsg{source: m.client, providers: providers})
+	return next.(Model)
+}
+
+// A connect that discovers nothing re-reads provider state, so the list
+// reflects the key Lemonade now holds instead of the state before it.
+func TestAnEmptyConnectRereadsProviderState(t *testing.T) {
+	m := New("", 100, 30)
+	m.selected = 2
+	m = m.setup()
+	if _, cmd := m.Update(modelsMsg{}); cmd == nil {
+		t.Fatal("an empty connect left the provider list stale")
+	}
+}
+func TestLocalRowNamesTheModelServerAndBackend(t *testing.T) {
+	m := New("", 100, 30)
+	next, _ := m.Update(loadedMsg{source: m.client, started: time.Now(),
+		server: "Lemonade 2026.41.1 (GAIA's own) at localhost:51234 · Qwen3.6-35B-A3B-GGUF on ROCm, 64K ctx"})
+	view := next.(Model).View()
+	if !strings.Contains(view, "at localhost:51234") || !strings.Contains(view, "on ROCm") {
+		t.Fatalf("local row lacks the model server line:\n%s", view)
+	}
+	narrow, _ := New("", 40, 30).Update(loadedMsg{started: time.Now(),
+		server: "Lemonade (yours) at localhost:13305 · " + strings.Repeat("x", 200) + " on Vulkan"})
+	for _, line := range strings.Split(narrow.(Model).View(), "\n") {
+		if ansi.StringWidth(line) > 40 {
+			t.Fatalf("line wider than the panel: %q", line)
 		}
 	}
 }

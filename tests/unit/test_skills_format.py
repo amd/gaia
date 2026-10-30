@@ -61,6 +61,8 @@ metadata:
         atomic: true
     tools_required:
       - remember
+    pairs_with:
+      - research-report
   hermes:
     category: research
 ---
@@ -163,6 +165,7 @@ def test_gaia_fields_parse_into_typed_metadata():
     assert skill.gaia.requirements.env_vars == ["BRAVE_API_KEY"]
     assert skill.gaia.requirements.hardware == {"npu": "optional"}
     assert skill.gaia.tools_required == ["remember"]
+    assert skill.gaia.pairs_with == ["research-report"]
 
     (declared,) = skill.gaia.tools
     assert declared.name == "search_web"
@@ -268,6 +271,7 @@ def test_missing_skill_file_fails_loudly(tmp_path):
         ("permissions: network:read", "must be a list"),
         ("tools: 3", "must be a list"),
         ("tools_required: query_documents", "must be a list"),
+        ("pairs_with: office-docs", "must be a list"),
         ("requirements: []", "must be a mapping"),
     ],
 )

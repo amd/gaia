@@ -1,0 +1,23 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// The site background (see src/scripts/starfield.ts). Mounted once in
+// Layout.astro so every page shares one canvas, fixed behind the content.
+---
+
+<canvas
+  id="gaia-sky"
+  aria-hidden="true"
+  class="pointer-events-none fixed inset-0 z-0 h-full w-full"
+></canvas>
+
+<script>
+  import { mountStarField } from '../scripts/starfield';
+
+  const canvas = document.getElementById('gaia-sky');
+  if (!(canvas instanceof HTMLCanvasElement)) {
+    throw new Error('[starfield] #gaia-sky is missing from the layout.');
+  }
+  mountStarField(canvas);
+</script>

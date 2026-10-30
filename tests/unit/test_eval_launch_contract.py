@@ -29,8 +29,8 @@ def test_eval_launch_preserves_auth_and_mcp_contract(
             monkeypatch.setenv(name, value)
     mocker.patch.object(runner.shutil, "which", return_value="/test/claude")
     run = mocker.patch.object(
-        runner.subprocess,
-        "run",
+        runner,
+        "_run_driver",
         return_value=SimpleNamespace(
             returncode=0,
             stdout=json.dumps(

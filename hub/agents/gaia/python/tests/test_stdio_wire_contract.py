@@ -312,3 +312,14 @@ def test_status_extension_fields_match_the_model_state_ping(monkeypatch):
     assert set(ping) - {"type"} == set(EVENTS["status"]["fields"]) | set(
         EVENTS["status"]["stdio_extension"]
     )
+
+
+def test_history_cut_status_matches_the_fixture():
+    from gaia.agents.base.history import HistoryCut
+
+    event = stdio._history_cut_event(HistoryCut(turns=6, tokens=60))
+
+    assert event["type"] == "status"
+    assert set(event) - {"type"} == set(EVENTS["status"]["fields"]) | set(
+        EVENTS["status"]["history_cut_extension"]
+    )

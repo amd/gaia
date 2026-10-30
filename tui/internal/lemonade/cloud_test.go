@@ -55,6 +55,25 @@ func TestConfigureKeepsKeyOutOfInstallAndDiscoversModels(t *testing.T) {
 		t.Fatal(calls)
 	}
 }
+
+// A cloud model Lemonade has "loaded" lists context_length 4096; a local
+// model's context_length is the window it is configured at.
+func TestWindowIsTheProvidersForCloudAndConfiguredForLocal(t *testing.T) {
+	cases := []struct {
+		model Model
+		want  int
+	}{
+		{Model{ID: "fireworks.deepseek-v4p1-flash", Recipe: "cloud", ContextLength: 4096, MaxContextWindow: 1048576}, 1048576},
+		{Model{ID: "fireworks.older", Recipe: "cloud", ContextLength: 262144}, 262144},
+		{Model{ID: "Gemma-4-E4B-it-GGUF", Recipe: "llamacpp", ContextLength: 65536, MaxContextWindow: 131072}, 65536},
+	}
+	for _, c := range cases {
+		if got := c.model.Window(); got != c.want {
+			t.Errorf("%s: Window() = %d, want %d", c.model.ID, got, c.want)
+		}
+	}
+}
+
 func TestRecommendedModelsAreRankedAndLookedUpByID(t *testing.T) {
 	if len(RecommendedModels) < 2 || TopRecommendation() != RecommendedModels[0] {
 		t.Fatal("top recommendation must be the first ranked entry")
@@ -181,6 +200,22 @@ func TestAMDGatewayCustomHeaderAndRuntimeKey(t *testing.T) {
 	}
 }
 
+func TestSameCloudModel(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"fireworks.glm-5p3-flash", "fireworks.accounts/fireworks/models/glm-5p3-flash", true},
+		{"amd.DeepSeek-V4.1-Flash", "amd.deepseek-v4.1-flash", true},
+		{"amd.DeepSeek-V4.1-Flash", "amd.DeepSeek-V4-Flash", false},
+		{"amd.glm-5p3-flash", "fireworks.glm-5p3-flash", false},
+	} {
+		if got := SameCloudModel(c.a, c.b); got != c.want {
+			t.Errorf("SameCloudModel(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
 func TestEvidenceFollowsTheRankedEntryInEitherIDForm(t *testing.T) {
 	for _, r := range RecommendedModels {
 		long := "fireworks.accounts/fireworks/models/" + strings.TrimPrefix(r.ID, "fireworks.")
@@ -229,6 +264,35 @@ func TestFireworksRecommendationsMatchTheRanking(t *testing.T) {
 	for i, r := range RecommendedModels {
 		if listed[i].ID != r.ID {
 			t.Fatalf("Fireworks entry %d is %s in recommended_models.json but %s in the ranking", i, listed[i].ID, r.ID)
+		}
+	}
+}
+
+// AMD's gateway 401s a bearer token; registering one left users with an
+// authenticated-looking provider that discovered zero models.
+func TestConfigureRefusesABearerHeaderForAMDsGateway(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("nothing may reach Lemonade, got %s %s", r.Method, r.URL.Path)
+	}))
+	defer s.Close()
+	c := New(s.URL)
+	bearer := Provider{Name: "amd", BaseURL: AMDGatewayURL, Header: "Authorization", Prefix: "Bearer "}
+	if err := c.Configure(context.Background(), bearer, "test-key"); err == nil ||
+		!strings.Contains(err.Error(), AMDGatewayAuthHeader) {
+		t.Fatalf("err = %v, want a refusal naming %s", err, AMDGatewayAuthHeader)
+	}
+}
+
+func TestIsAMDGateway(t *testing.T) {
+	for base, want := range map[string]bool{
+		AMDGatewayURL:                        true,
+		"https://LLM-API.amd.com/other/v1":   true,
+		"https://gateway.example/v1":         false,
+		"https://llm-api.amd.com.evil.io/v1": false,
+		"":                                   false,
+	} {
+		if got := IsAMDGateway(base); got != want {
+			t.Errorf("IsAMDGateway(%q) = %v, want %v", base, got, want)
 		}
 	}
 }

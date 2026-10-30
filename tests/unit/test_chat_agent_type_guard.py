@@ -19,11 +19,31 @@ from gaia.ui._chat_helpers import _SIDECAR_AGENT_TYPES, _agent_type_unknown
 class _Registry:
     """Registry double: knows only the agent ids it is given."""
 
-    def __init__(self, known=()):
+    def __init__(self, known=(), installed_later=()):
         self._known = set(known)
+        self._installed_later = set(installed_later)
+        self.refreshes = 0
 
     def get(self, agent_id):
         return object() if agent_id in self._known else None
+
+    def refresh_installed(self):
+        self.refreshes += 1
+        self._known |= self._installed_later
+
+
+def test_agent_installed_after_startup_is_found_without_restart():
+    # `gaia init` from the setup wizard hub-installs the flagship after the
+    # registry was built; the first chat must not need a server restart.
+    registry = _Registry(known=(), installed_later={"gaia"})
+    assert _agent_type_unknown("gaia", registry) is False
+    assert registry.refreshes == 1
+
+
+def test_known_agent_does_not_rescan():
+    registry = _Registry(known={"gaia"})
+    assert _agent_type_unknown("gaia", registry) is False
+    assert registry.refreshes == 0
 
 
 def test_email_allowed_without_registry_entry():

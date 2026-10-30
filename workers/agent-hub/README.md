@@ -14,10 +14,10 @@ depend on any `src/gaia` code.
 
 | Route | Auth | Purpose |
 |-------|------|---------|
-| `POST /publish` | Bearer | Publish a new agent version (validate → scope-check → immutability-check → checksum → store → rebuild index). Form parts: `manifest` (gaia-agent.yaml text), `artifact` (wheel/binary/zip file), optional `readme` + `changelog` + `spec` + `skill` + `evaluation` + `capability_matrix` + `eval_scorecard` (markdown, rendered as the Hub page's doc tabs), and optional `package_files` (JSON `{files:[{name,size_bytes}]}` listing the contents of a whole-package `.zip` artifact — surfaced as the catalog's `package`) |
+| `POST /publish` | Bearer | Publish a new agent version (validate → scope-check → immutability-check → checksum → store → rebuild index). Form parts: `manifest` (gaia-agent.yaml text), `artifact` (wheel/binary/zip file), optional `readme` + `changelog` + `spec` + `skill` + `evaluation` + `capability_matrix` + `eval_scorecard` (markdown, rendered as the Hub page's doc tabs), optional `package_files` (JSON `{files:[{name,size_bytes}]}` listing the contents of a whole-package `.zip` artifact — surfaced as the catalog's `package`), and optional `channel` (`stable`, the default, or `next` — see *Release channels*) |
 | `POST /publish/skill` | Bearer | Publish a new **skill** version (#2467). Form parts: `skill` (the full `SKILL.md` — front matter + body), `artifact` (the packaged skill directory), optional `changelog`, optional `audit` (the security-audit report JSON, #2468) |
 | `GET /index.json` | none | Catalog of every published package (latest version only), including the latest README + CHANGELOG + SPEC + SKILL + EVALUATION + CAPABILITY_MATRIX + scorecard markdown |
-| `GET /agents/<id>/manifest.json` | none | Per-agent aggregate manifest (all versions) |
+| `GET /agents/<id>/manifest.json` | none | Per-agent aggregate manifest (all versions, both channels) |
 | `GET /agents/<id>/<version>/<file>` | none | Download an artifact, the raw `gaia-agent.yaml`, `README.md`, `CHANGELOG.md`, `SPEC.md`, `SKILL.md`, `EVALUATION.md`, `CAPABILITY_MATRIX.md`, or `SCORECARD.md` |
 | `GET /skills/<name>/manifest.json` | none | Per-skill aggregate manifest (all versions) |
 | `GET /skills/<name>/<version>/<file>` | none | Download a skill bundle, its raw `SKILL.md`, `CHANGELOG.md`, or `audit.json` |
@@ -35,6 +35,45 @@ skills install through `gaia skill install`, not the agent install path.
 
 Ids are one namespace across lanes: a skill may not shadow an agent id, and vice
 versa (`409 id_conflict`).
+
+### Release channels
+
+Every agent-lane package has two channels. `stable` is what every client already
+installs; `next` adds release candidates for testers.
+
+- **`latest_version` is the stable channel and never names a pre-release.** Older
+  clients read only `latest_version` and `versions`, so both hold stable versions
+  only. RC versions live in the manifest's separate `next_versions` map.
+- **`channels: { stable, next }`** is on every agent-lane catalog entry and
+  per-agent manifest. `stable` always equals `latest_version`; `next` is the newest
+  version on either channel, so a final newer than every RC moves both.
+- **Publish to a channel** with the `channel` form part. Omitting it means
+  `stable`, which is how every publish behaved before channels existed. A
+  pre-release (`0.26.0-rc.1`) sent to `stable` is refused with
+  `400 prerelease_on_stable`, and an unknown channel with `400 invalid_channel`.
+- **A version's channel is fixed by its first publish.** Adding an artifact to it
+  under the other channel is refused with `409 channel_mismatch`.
+- **A package with only `next` versions is left out of `index.json`** until its
+  first stable publish, because every client needs a `latest_version`. Its
+  manifest is still served, with `latest_version: ""`.
+
+### The `tui` alias
+
+`tui` is the terminal UI's neutral id; `terminal-hub` is its old one. For one
+release cycle the two are a single package:
+
+- A read under either `agents/tui/` or `agents/terminal-hub/` serves the requested
+  object, or the same path under the other id when it does not exist, so URLs
+  pinned to `agents/terminal-hub/<version>/` keep working after the publisher
+  moves to `tui`.
+- `manifest.json` under either id is the two manifests merged. Its `id` and display
+  fields come from whichever id holds the stable latest.
+- `index.json` lists the pair once, under the id that holds the stable latest.
+- The owner of one id owns the other, and a version may exist under only one of
+  them (`409 version_exists`).
+
+The pair is `ID_ALIASES` in [`src/storage.ts`](./src/storage.ts); remove it after
+the cycle.
 
 ### Publish guarantees
 
@@ -102,7 +141,7 @@ versa (`409 id_conflict`).
 
 ```
 index.json                                     # lightweight catalog (all lanes)
-agents/<id>/manifest.json                       # per-agent aggregate (all versions)
+agents/<id>/manifest.json                       # per-agent aggregate (all versions, both channels)
 agents/<id>/<version>/gaia-agent.yaml           # exact manifest uploaded for this version
 agents/<id>/<version>/README.md                 # README markdown for this version (if published)
 agents/<id>/<version>/CHANGELOG.md              # CHANGELOG markdown for this version (if published)
@@ -148,9 +187,12 @@ catalog is consumable by the same code that reads source manifests. Formal
 schemas live in [`schemas/`](./schemas):
 
 - [`schemas/index.schema.json`](./schemas/index.schema.json) — `GET /index.json`.
-  Each entry: `id`, `name`, `description`, `category`, `latest_version`, `icon`,
+  Each entry: `id`, `name`, `description`, `category`, `latest_version` (the
+  stable channel), `channels` (`{ stable, next }`; agent entries only), `icon`,
   `language`, `author`, `security_tier`, `download_size_bytes`, `tags`,
-  `tools_count`, `models`, `min_gaia_version`, `permissions`, `deprecated`,
+  `tools_count`, `models`, `min_gaia_version`, `min_gaia_versions` (every
+  published version mapped to the oldest core it runs on, `""` when never
+  recorded; agent entries only), `permissions`, `deprecated`,
   `deprecation_message` (only when set), full `requirements` (`min_memory_gb`,
   `min_disk_gb`, `min_context_size`, `platforms`, `npu` as
   `"required"`/`"optional"`, `gpu_vram_gb`), `readme` (latest version's README
@@ -176,8 +218,12 @@ schemas live in [`schemas/`](./schemas):
   carries the **SKILL.md body** (front matter stripped), which is a skill's
   primary doc.
 - [`schemas/manifest.schema.json`](./schemas/manifest.schema.json) —
-  `GET /agents/<id>/manifest.json`. Full display metadata plus a `versions` map;
-  each version carries `published_at`, `publisher`, `deprecated`, an `artifact`
+  `GET /agents/<id>/manifest.json`. Full display metadata, `channels`, a
+  `versions` map of stable versions, and a `next_versions` map of versions
+  published to `next` only (absent until the first one). Each version carries `published_at`, `publisher`, `deprecated`,
+  `min_gaia_version` (the oldest GAIA core that version runs on; a GAIA client
+  installs the newest version its core satisfies; absent on versions published
+  before it was recorded), an `artifact`
   block (the primary — `filename`, `path`, `size_bytes`, `sha256`,
   `content_type`), and an `artifacts[]` array of every per-platform artifact in
   that version. `GET /skills/<name>/manifest.json` uses the same `versions` shape
@@ -303,8 +349,10 @@ checked into the repo:
 5. **(Optional) Bind the route** by uncommenting the `routes` line in
    `wrangler.toml` to serve the API under `hub.amd-gaia.ai/*`.
 
-`MAX_ARTIFACT_BYTES` (a plain var, default 250 MiB) caps artifact size and can be
-overridden per environment without a secret.
+`MAX_ARTIFACT_BYTES` (a plain var, default 250 MiB) caps the size of an artifact
+sent through the Worker, and `MAX_REFERENCED_ARTIFACT_BYTES` (default 5 GiB, R2's
+single-part upload limit) caps one published by reference (see below). Both can
+be overridden per environment without a secret.
 
 ### Publishing origins (one Worker, two doors)
 
@@ -336,7 +384,7 @@ release.
 
 A Worker request body is capped by the Cloudflare **account plan** — 100 MB on
 Free and Pro, 200 MB Business, 500 MB Enterprise. `POST /publish` therefore
-cannot carry the Agent UI installers (106-135 MiB); they are rejected with a
+cannot carry the flagship agent's sidecar builds (150-215 MiB); they are rejected with a
 `413` by Cloudflare's edge before the Worker executes, so `MAX_ARTIFACT_BYTES`
 is not involved and raising it changes nothing.
 
@@ -392,8 +440,8 @@ workers/agent-hub/
 │   ├── manifest.ts        # gaia-agent.yaml validation + semver
 │   ├── skill-manifest.ts  # SKILL.md front-matter validation (skill-format grammar)
 │   ├── audit.ts           # security-audit gate + report binding for skill publishes (#2468)
-│   ├── catalog.ts         # per-agent/per-skill manifest + index.json rebuild
-│   ├── storage.ts         # R2 key layout + read/write helpers
+│   ├── catalog.ts         # per-agent/per-skill manifest, channels, index.json rebuild
+│   ├── storage.ts         # R2 key layout, the tui alias, read/write helpers
 │   ├── http.ts            # HttpError + JSON response helpers
 │   └── types.ts           # shared types (mirror gaia-agent.yaml / SKILL.md)
 ├── schemas/          # index.schema.json, manifest.schema.json

@@ -1,76 +1,76 @@
 {
   "schemaVersion": "3.0",
-  "agentVersion": "0.2.0",
+  "agentVersion": "0.3.3",
   "components": {
     "sidecar": {
-      "componentVersion": "0.2.0",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.2.0",
+      "componentVersion": "0.3.3",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.3.3",
       "platforms": {
         "win32-x64": {
           "filename": "gaia-agent-win32-x64.exe",
           "executable": "gaia-agent.exe",
-          "sha256": "5d2ea1a5fd40e2399ba2bf50aec80b44d89c7e7bfdbad846c050f683fc8bf842",
-          "size": 103531825
+          "sha256": "44892b0c48b6f41d25372045b9136dc259edd644196acc59592a8fc5d16ee7a4",
+          "size": 173039470
         },
         "darwin-arm64": {
           "filename": "gaia-agent-darwin-arm64",
           "executable": "gaia-agent",
-          "sha256": "fbe526e7eb044a2ce633fbd487a1ae75001683eff190d8359eabf9ccc7196069",
-          "size": 88311472
+          "sha256": "66f086d888ba8d42a18a38cc2a4f532200aa03ec36e22b8ca253e21698bbd01d",
+          "size": 162600800
         },
         "darwin-x64": {
           "filename": "gaia-agent-darwin-x64",
           "executable": "gaia-agent",
-          "sha256": "b02731c786d79d7f5e644662238a64d1761eb6a23d421821df46e6a8282b585d",
-          "size": 94294544
+          "sha256": "864155bcee93886d22f48f04c160329baf74c7900e6cb11693a1879eb2b5f18a",
+          "size": 173141904
         },
         "linux-x64": {
           "filename": "gaia-agent-linux-x64",
           "executable": "gaia-agent",
-          "sha256": "6c68a22c25954ea3c8d2a0a541bc04eba2401281d2a2b6448007983acd050a00",
-          "size": 140015368
+          "sha256": "a35a9db438e4de0abd289283eaab7ac44abf2bc529d66deb5d2eada01c423e3d",
+          "size": 212086912
         }
       }
     },
     "tui": {
-      "componentVersion": "0.24.1",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.24.1",
+      "componentVersion": "0.25.0",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.25.0",
       "platforms": {
         "win32-x64": {
           "filename": "gaia-win-x64.exe",
           "executable": "gaia-tui.exe",
-          "sha256": "ce07269674de6773fd304d67eef3ff19cd578f447fc90a13f0309a61ae5ef504",
-          "size": 19213824
+          "sha256": "9b1c467b04b267f172a6024589f1ba0ddc882729337913d8afa7dcd43a7a7967",
+          "size": 20604416
         },
         "win32-arm64": {
           "filename": "gaia-win-arm64.exe",
           "executable": "gaia-tui.exe",
-          "sha256": "41f2a25b2bf15bea6f70626bb519496aeb822cc2629dd3529e325319b7abb3ca",
-          "size": 17744384
+          "sha256": "332068c5588e5639213225d63e4a1827d9258928e4053b7d6602668dc7eda60c",
+          "size": 19030016
         },
         "darwin-arm64": {
           "filename": "gaia-darwin-arm64",
           "executable": "gaia-tui",
-          "sha256": "dc334e89cebefaa2cc5117942ccbc4dc391034c3013ebf02d2bebf87f5e99a5a",
-          "size": 17499282
+          "sha256": "bb5ae28ae99ad25c095b3f57c4abf4e2ff67fa560122dc0a99036aedf9184802",
+          "size": 18801330
         },
         "darwin-x64": {
           "filename": "gaia-darwin-x64",
           "executable": "gaia-tui",
-          "sha256": "9af8c1fefeff4814bae6bbe9698ffaac3b59f248a422525e9f9b50812f5435da",
-          "size": 18629664
+          "sha256": "5259c82dc195297130e16377586ed6e0e668c5ec7f8b27a76ee029d67d776b52",
+          "size": 20015840
         },
         "linux-x64": {
           "filename": "gaia-linux-x64",
           "executable": "gaia-tui",
-          "sha256": "ef80198f3c4f6c2a4e92993fe19257c67cf009e29632398642549274ef8c2ffa",
-          "size": 18292898
+          "sha256": "07f1cc448f8056b5915eff2869f9f3eec3a5d04485d93e448ccad00d186d23c5",
+          "size": 19669154
         },
         "linux-arm64": {
           "filename": "gaia-linux-arm64",
           "executable": "gaia-tui",
-          "sha256": "31d9e1fee15e4a21e677ca7abb707fcf08257d5e7f50f1baa71bc7159335c170",
-          "size": 17105058
+          "sha256": "c324100d2de989823e816a6aae7eb4e1224019096b9a46ef1a6983ca6b98598f",
+          "size": 18350242
         }
       }
     }

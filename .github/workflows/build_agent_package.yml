@@ -5,7 +5,7 @@
 # Reuses the discover-matrix (util/list_agent_packages.py) and the build
 # composite action so there is no second build recipe.
 # Namespaced tag prefix "agent-pkg-*" (not "v*") intentionally avoids firing
-# publish_agents.yml / publish.yml — PyPI path (#1179) remains untouched.
+# publish.yml.
 
 name: Share Agent Package (GitHub Release)
 
