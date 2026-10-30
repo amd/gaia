@@ -57,7 +57,7 @@ export function PrivacySettings() {
             )}
             <UndoHistorySettings />
             <div className="danger-divider" />
-            <p className="danger-warning">Deletes every chat and its messages. Documents and memory are kept.</p>
+            <p className="danger-warning">Deletes every chat and its messages, in Memory's conversation history too. Documents and what GAIA learned about you are kept.</p>
             <button type="button" className="btn-danger" onClick={() => void clearAll()} disabled={sessions.length === 0}>
                 {confirm ? 'Click again to delete all chats' : 'Delete all chats'}
             </button>

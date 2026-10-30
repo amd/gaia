@@ -10,6 +10,7 @@ and session-document attachments.
 import asyncio
 import json
 import logging
+import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -50,6 +51,7 @@ from ..models import (
 from ..run_manager import run_manager
 from ..security import flagship_only
 from ..utils import message_to_response, session_to_response
+from .memory import _get_store as get_memory_store
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +448,19 @@ async def delete_session(
     session_locks = http_request.app.state.session_locks
     # Every turn and goal tick holds this lock for its whole run.
     async with session_locks.setdefault(session_id, asyncio.Lock()):
+        # First, so a failure leaves the chat in place to delete again.
+        try:
+            await asyncio.to_thread(get_memory_store().delete_session, session_id)
+        except sqlite3.Error as e:
+            logger.error("Could not delete the memory of %s: %s", session_id, e)
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"The chat was not deleted: its conversation in Memory "
+                    f"could not be removed ({e}). Try again; the GAIA log has "
+                    f"the details."
+                ),
+            ) from e
         if not db.delete_session(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         session_locks.pop(session_id, None)

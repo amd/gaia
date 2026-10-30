@@ -637,6 +637,7 @@ class ChatAgent(
         self.init_memory(
             embedding_model=effective_embedding_model,
             incognito=config.memory_incognito,
+            session_id=config.ui_session_id,
         )
 
         # Store base URL for use in _register_tools() (VLM, etc.). Unset stays
