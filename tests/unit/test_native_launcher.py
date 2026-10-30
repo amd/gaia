@@ -14,6 +14,7 @@ import platform
 import stat
 import sys
 import textwrap
+from types import SimpleNamespace
 
 import pytest
 
@@ -211,6 +212,49 @@ def test_start_immediate_crash(launcher, fake_agent):
     # crash stderr rather than registering a dead agent.
     with pytest.raises(NativeAgentError, match="simulated startup crash"):
         _start(launcher, fake_agent, mode="crash")
+
+
+def test_dead_process_error_waits_for_crashed_stderr_reader(launcher):
+    # Reproduce the timing gap deterministically: the background reader has
+    # crash output, but only publishes it once join() has completed.
+    stderr_lines = []
+    join_timeouts = []
+
+    class DeferredStderrReader:
+        def join(self, timeout):
+            join_timeouts.append(timeout)
+            stderr_lines.append("boom: simulated startup crash")
+
+    state = SimpleNamespace(
+        proc=SimpleNamespace(pid=1234, returncode=3, poll=lambda: 3),
+        _stderr_reader=DeferredStderrReader(),
+        recent_stderr=lambda: "\n".join(stderr_lines),
+    )
+
+    error = launcher._dead_process_error(state)
+
+    assert "process died (exit code 3" in str(error)
+    assert "boom: simulated startup crash" in str(error)
+    assert len(join_timeouts) == 1
+    assert 0 < join_timeouts[0] <= 1
+
+
+def test_dead_process_error_does_not_wait_for_live_stderr_reader(launcher):
+    # A native agent may close stdout while leaving the process/stderr open:
+    # reporting the protocol failure must not wait for a live reader's EOF.
+    class ActiveStderrReader:
+        def join(self, timeout):
+            pytest.fail("must not wait for stderr of a live process")
+
+    state = SimpleNamespace(
+        proc=SimpleNamespace(pid=5678, returncode=None, poll=lambda: None),
+        _stderr_reader=ActiveStderrReader(),
+        recent_stderr=lambda: "",
+    )
+
+    error = launcher._dead_process_error(state)
+
+    assert "process died (exit code" in str(error)
 
 
 def test_start_bad_handshake_is_fatal(launcher, fake_agent):

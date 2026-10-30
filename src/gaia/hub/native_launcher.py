@@ -75,6 +75,8 @@ _DEFAULT_STARTUP_TIMEOUT = 10.0
 _CRASH_DETECT_DELAY = 0.1
 # Cap on retained stderr lines for crash diagnostics.
 _STDERR_RING = 200
+# Bound how long a terminated agent's stderr reader may take to reach EOF.
+_STDERR_DRAIN_JOIN_TIMEOUT = 0.5
 
 
 class NativeAgentError(RuntimeError):
@@ -719,6 +721,12 @@ class NativeAgentLauncher:
             self._states.pop(pid, None)
 
     def _dead_process_error(self, state: _ProcState) -> NativeAgentError:
+        # The stdout reader may notice a crash before the independent stderr
+        # reader has drained the pipe. Once the process has exited, briefly
+        # join that reader so the original crash diagnostics are retained.
+        # Keep this bounded: descendants could still hold stderr open.
+        if state.proc.poll() is not None:
+            state._stderr_reader.join(timeout=_STDERR_DRAIN_JOIN_TIMEOUT)
         code = self._format_exit_code(state.proc.returncode)
         stderr = state.recent_stderr()
         msg = f"Native agent process died (exit code {code}, pid={state.proc.pid})"
