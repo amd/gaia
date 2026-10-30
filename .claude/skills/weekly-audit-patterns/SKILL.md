@@ -23,6 +23,13 @@ invariants a future editor will otherwise break.
 > `claude-account-switch.yml` watches the audits by **display name** (`workflow_run`), so
 > renaming one without updating its list silently unhooks the account switch; a contract
 > test checks it.
+>
+> An earlier version of this note justified the label by claiming a rename "would re-file
+> every open finding." That is **false**, and worth correcting because it is the reasoning
+> a future editor inherits: GitHub renames a label in place and every issue keeps it, and
+> dedup never matched on the label text — it reads the `audit-key` / `audit-cluster`
+> markers in issue bodies. The label only scopes which issues get scanned for those
+> markers (`--label` in `scripts/audit/prepare_synthesis.py`, one default to update).
 
 ## One audit a night — the rotation is the only scheduler
 
@@ -68,13 +75,6 @@ state across processes, dishonest status, cold start, Windows, model output, rel
 ordering, doc drift, security) and a "Don't report" list from what got closed as noise.
 `python scripts/audit/miss_analysis.py` refreshes its evidence table; edit the checklists
 when a class climbs. Run it monthly.
->
-> An earlier version of this note justified the label by claiming a rename "would re-file
-> every open finding." That is **false**, and worth correcting because it is the reasoning
-> a future editor inherits: GitHub renames a label in place and every issue keeps it, and
-> dedup never matched on the label text — it reads the `audit-key` / `audit-cluster`
-> markers in issue bodies. The label only scopes which issues get scanned for those
-> markers (`--label` in `scripts/audit/prepare_synthesis.py`, one default to update).
 
 ## The four code-audit dimensions are mutually exclusive
 

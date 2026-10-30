@@ -125,6 +125,26 @@ def test_every_scheduled_claude_step_allows_the_bots_that_actor_it(path: Path):
         )
 
 
+def test_the_quota_probe_runs_the_same_claude_code_action_as_the_lenses():
+    """A probe on an older action pin proves a different CLI than the lenses run.
+
+    The pinned action bundles the CLI that resolves `--model`; a probe on another
+    pin can pass while every lens fails on the model, or refuse a model the lenses
+    accept, and the gate stops the night for the wrong reason.
+    """
+    pins = {}
+    for path in (*PROACTIVE_WORKFLOWS, ACCOUNT_SWITCH):
+        for step in _claude_steps(_load(path)):
+            ref = str(step["uses"]).split("@", 1)[1]
+            pins.setdefault(ref, []).append(
+                f"{path.name}:{step.get('id') or step.get('name')}"
+            )
+    assert len(pins) == 1, (
+        f"{CLAUDE_ACTION} is pinned to {len(pins)} versions across the audits: "
+        f"{pins}. Bump every step together."
+    )
+
+
 # ----------------------------------------------------------------------
 # A partial sweep must never read as a clean bill of health (#3058, #3060)
 # ----------------------------------------------------------------------
