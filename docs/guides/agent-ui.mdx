@@ -152,6 +152,25 @@ says where the documents you add go: the open chat, or your next new chat. A
 new chat lists the library's documents and offers to attach them; picking
 **Ask about your documents** attaches them all.
 
+### Make Music and Sound Effects
+
+Ask for a track or a sound and GAIA composes it locally, with ACE-Step for
+music and ThinkSound for sound effects, once those models are downloaded in
+Lemonade.
+
+> *"Make 30 seconds of calm lo-fi piano for my menu screen"*
+>
+> *"Generate a 3 second sound of a heavy wooden door slamming"*
+
+While it works, the step reads "Composing 30 s of music" or "Generating a 3 s
+sound effect" with a running timer, since a long track can take minutes. When
+it finishes, a player appears above the answer: play and pause, the length,
+the model, the prompt GAIA used, and **Open** and **Show in folder**. Saved
+chats keep the player. If the file was moved or deleted, the player says so
+and offers **Open its folder**. Ask GAIA to save into your project folder
+and it writes the WAV there instead of its own cache. See
+[Music and Sound Effects](/guides/audio-generation).
+
 ---
 
 ## Install
@@ -623,8 +642,9 @@ reads nothing.
 - **Context & performance** is the breakdown described in
   [See how full the context is](#see-how-full-the-context-is).
 - **Outputs** lists everything the chat produced, newest first: files created
-  or changed, exports (PDF, Word, Excel, CSV and similar), images, documents
-  indexed, scheduled tasks and memories saved. Each shows when it was made and
+  or changed, exports (PDF, Word, Excel, CSV and similar), images, generated
+  music and sound effects, documents indexed, scheduled tasks and memories
+  saved. Each shows when it was made and
   **Go to turn** scrolls to the answer that made it. Files have **Open** and
   **Show in folder**, with the same rule as above for scripts and web pages.
   Items an undo removed show as **Undone**.

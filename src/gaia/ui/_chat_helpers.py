@@ -4562,6 +4562,21 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                 "files": result_data.get("files", []),
                                 "total": result_data.get("total", 0),
                             }
+                        audio = event.get("generated_audio")
+                        # A relayed payload is untrusted; a pathless one would
+                        # fail the saved step's model and drop it on reload.
+                        if isinstance(audio, dict) and isinstance(
+                            audio.get("path"), str
+                        ):
+                            tool_step["generatedAudio"] = {
+                                "path": audio.get("path"),
+                                "model": audio.get("model"),
+                                "kind": audio.get("kind"),
+                                "format": audio.get("format"),
+                                "durationSeconds": audio.get("duration_seconds"),
+                                "durationRequested": audio.get("duration_requested"),
+                                "prompt": audio.get("prompt"),
+                            }
                         # Persist a render-map card ONLY when the event
                         # carries a render kind (#2109) — cards need reload
                         # fidelity; render-less results keep today's

@@ -7,6 +7,7 @@ import { MessageBubble, isErrorContent } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
+import { toGeneratedAudio } from '../utils/generatedAudio';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -902,6 +903,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         };
                     }
                     if (event.mcp_output?.text) updates.mcpOutput = event.mcp_output;
+                    if (event.generated_audio?.path) updates.generatedAudio = toGeneratedAudio(event.generated_audio);
                     // Pass through retrieval chunks if available
                     if (event.result_data?.chunks && event.result_data.chunks.length > 0) {
                         updates.retrievalChunks = event.result_data.chunks.map((c) => ({

@@ -38,6 +38,7 @@ Design commitments
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Mapping, Optional
 
@@ -245,6 +246,36 @@ def _is_shell_tool(tool: str) -> bool:
     return any(marker in lowered for marker in _SHELL_TOOL_MARKERS)
 
 
+def _seconds_phrase(value: Any) -> Optional[str]:
+    """``12`` -> "12 s", ``2.5`` -> "2.5 s"; None for a missing or bogus duration."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or value <= 0 or value > 24 * 3600:
+        return None
+    return f"{value:g} s" if float(value).is_integer() else f"{value:.1f} s"
+
+
+def _audio_narration(tool: str, args: Mapping[str, Any]) -> Optional[str]:
+    """Music/SFX generation reads as what is being made and how long."""
+    if tool == "list_audio_generation_models":
+        return "Checking which audio models are downloaded"
+    if tool not in ("generate_music", "generate_sound_effect"):
+        return None
+    seconds = _seconds_phrase(args.get("duration"))
+    if tool == "generate_music":
+        base = f"Composing {seconds} of music" if seconds else "Composing music"
+    else:
+        base = (
+            f"Generating a {seconds} sound effect"
+            if seconds
+            else "Generating a sound effect"
+        )
+    prompt = args.get("prompt")
+    if isinstance(prompt, str) and _collapse(prompt):
+        return f"{base}: {_clip(_collapse(prompt), _ARG_MAX_CHARS)}"
+    return base
+
+
 def derive_narration(tool: str, args: Optional[Mapping[str, Any]] = None) -> str:
     """Return the present-tense phrase for a ``tool_call``.
 
@@ -262,6 +293,10 @@ def derive_narration(tool: str, args: Optional[Mapping[str, Any]] = None) -> str
         return "Running a tool"
     if not isinstance(args, Mapping):
         args = {}
+
+    audio = _audio_narration(name, args)
+    if audio is not None:
+        return audio
 
     detail = _salient_arg(args)
 

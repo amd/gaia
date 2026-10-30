@@ -313,6 +313,8 @@ def _dispatch_one(
         }
         if isinstance(data, dict) and isinstance(data.get("mcp_output"), dict):
             out["mcp_output"] = data["mcp_output"]
+        if isinstance(data, dict) and isinstance(data.get("generated_audio"), dict):
+            out["generated_audio"] = data["generated_audio"]
         render = event.get("render")
         if render:
             out["render"] = render

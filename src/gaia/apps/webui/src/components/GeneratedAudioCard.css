@@ -1,0 +1,119 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* Generated music / sound effects. Every selector is prefixed `gen-audio`. */
+
+.gen-audio-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 8px 0;
+}
+
+.gen-audio {
+    margin: 0;
+    padding: 10px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    max-width: 560px;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.gen-audio__row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.gen-audio__play {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.gen-audio__play:hover { background: var(--bg-hover); }
+.gen-audio__play:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.gen-audio__icon {
+    flex: none;
+    color: var(--text-secondary);
+}
+
+.gen-audio__text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+}
+
+.gen-audio__name {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gen-audio__meta,
+.gen-audio__time {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.gen-audio__time {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+}
+
+.gen-audio__seek {
+    width: 100%;
+    margin: 8px 0 0;
+    accent-color: var(--accent);
+}
+
+.gen-audio__prompt {
+    margin: 6px 0 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.gen-audio__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.gen-audio__action {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    background: var(--bg-secondary);
+    cursor: pointer;
+}
+
+.gen-audio__action:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+.gen-audio__error {
+    margin: 6px 0 0;
+    color: var(--danger);
+    font-size: 12px;
+}

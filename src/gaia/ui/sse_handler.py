@@ -62,7 +62,10 @@ _MCP_OUTPUT_CHAR_CAP = 16_000
 
 #: Result keys naming a file the tool wrote; kept on the summary view a
 #: relayed result is reduced to.
-RESULT_PATH_KEYS = ("file_path", "image_path")
+RESULT_PATH_KEYS = ("file_path", "image_path", "audio_path")
+
+#: Tools whose success result is a generated WAV the chat can play.
+AUDIO_GENERATION_TOOLS = frozenset({"generate_music", "generate_sound_effect"})
 
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = FAILED_STATUSES
@@ -71,6 +74,33 @@ FAILED_TOOL_STATUSES = FAILED_STATUSES
 def tool_result_failed(data: Any) -> bool:
     """Whether a tool result reports a failure, refusals included."""
     return _tool_result_failed(data, FAILED_TOOL_STATUSES)
+
+
+def _finite_seconds(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) and value > 0 else None
+
+
+def _generated_audio(tool: Optional[str], data: Any, success: bool) -> Optional[Dict]:
+    """The playable-audio card payload for a successful music/SFX result."""
+    if tool not in AUDIO_GENERATION_TOOLS or not success or not isinstance(data, dict):
+        return None
+    path = data.get("audio_path")
+    if not isinstance(path, str) or not path.lower().endswith(".wav"):
+        return None
+    if not os.path.isabs(path):
+        return None
+    prompt = data.get("prompt")
+    return {
+        "path": path,
+        "model": str(data.get("model") or ""),
+        "kind": "music" if tool == "generate_music" else "sfx",
+        "format": "wav",
+        "duration_seconds": _finite_seconds(data.get("duration_seconds")),
+        "duration_requested": _finite_seconds(data.get("duration_requested")),
+        "prompt": prompt if isinstance(prompt, str) else "",
+    }
 
 
 #: Seconds the agent thread waits for a tool-confirm response before denying.
@@ -977,6 +1007,12 @@ class SSEOutputHandler(OutputHandler):
                     "source_files": data.get("source_files", []),
                     "chunks": structured_chunks,
                 }
+
+        # Its own key, not result_data: a relayed turn keeps only the
+        # summary view, and SUMMARY_VIEW_KEYS carries this key across.
+        generated = _generated_audio(self._last_tool_name, data, success)
+        if generated is not None:
+            event["generated_audio"] = generated
 
         # The render-map card (if any) is authoritative for a registered tool —
         # set last so it always wins over the generic result_data shapes above.
@@ -2559,6 +2595,12 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
                 preview += f"\n... ({len(lines)} lines total)"
             return preview
         return "Command completed (no output)"
+
+    # Generated music / sound effect
+    if data.get("status") == "success" and isinstance(data.get("audio_path"), str):
+        name = Path(data["audio_path"]).name
+        seconds = _finite_seconds(data.get("duration_seconds"))
+        return f"Saved {name}" + (f" ({seconds:.1f} s)" if seconds else "")
 
     # File search results
     if "files" in data or "file_list" in data:

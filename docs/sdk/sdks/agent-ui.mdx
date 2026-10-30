@@ -1018,7 +1018,7 @@ Deleting a chat deletes its copies.
     | `tool_start` | `tool` (string), `detail` (string), `narration` (string) | Tool invocation started. `tool` is the tool function name (e.g., `"query_documents"`, `"search_file"`). `detail` is a human-readable description of the operation. `narration` is what the call does in plain words (`"Searching your documents"`). An MCP tool adds `mcp_server` (its `mcp_servers.json` key), `mcp_server_label` (the connector's name, e.g. `"Git"`) and `mcp_tool` (the server's own tool name, e.g. `"git_log"`). |
     | `tool_args` | `tool` (string), `args` (object), `detail` (string), `narration` (string) | Tool arguments. Every call the agent loop makes sends one after its `tool_start` and before the tool runs; a `tool_start` from outside the loop, such as document indexing or a shell command's progress line, may come without one. `args` is the raw arguments dict passed to the tool, `{}` for a tool called with no arguments. `detail` is a formatted human-readable summary of the arguments, one `key: value` per line when there are more than two or a value holds a list; for a call with no arguments it repeats the `tool_start` `detail`. `narration` repeats the call's plain line with its main argument (`"Searching your documents: database init"`). |
     | `tool_end` | `success` (boolean) | Tool invocation completed. |
-    | `tool_result` | `title` (string or null), `summary` (string), `success` (boolean), `status` (string, optional), `result_data` (object or null), `command_output` (object or null), `file_path` / `image_path` (string, optional) | Tool result with structured data. `summary` is a human-readable result. `status` is the tool's own outcome word when its result had one (`"skipped"` when a private chat saved nothing to memory). `result_data` contains typed results (see below). `command_output` contains shell command output (see below). `file_path` and `image_path` are the resolved path a tool wrote, when its result names one. An MCP tool that returned text adds `mcp_output` (`{text, truncated}`, the text capped at 16,000 characters), and `summary` is then its first line. |
+    | `tool_result` | `title` (string or null), `summary` (string), `success` (boolean), `status` (string, optional), `result_data` (object or null), `command_output` (object or null), `file_path` / `image_path` / `audio_path` (string, optional), `generated_audio` (object, optional) | Tool result with structured data. `summary` is a human-readable result. `status` is the tool's own outcome word when its result had one (`"skipped"` when a private chat saved nothing to memory). `result_data` contains typed results (see below). `command_output` contains shell command output (see below). `file_path`, `image_path` and `audio_path` are the resolved path a tool wrote, when its result names one. A successful `generate_music` or `generate_sound_effect` adds `generated_audio` (`{path, model, kind, format, duration_seconds, duration_requested, prompt}`, `kind` is `music` or `sfx`), which the chat renders as an inline player; it is carried across a relayed (sidecar) turn and saved on the step as `generatedAudio`. An MCP tool that returned text adds `mcp_output` (`{text, truncated}`, the text capped at 16,000 characters), and `summary` is then its first line. |
     | `policy_alert` | `tool` (string), `decision` (`"BLOCK"`), `reason` (string), `rule_ids` (string[]), `policy_version` (string), `receipt_id` (string, optional) | Governance policy blocked a tool before execution. No user action is required; use this to show a visible policy refusal instead of treating the denial as a generic tool failure. |
 
     `result_data` variants in `tool_result`:
@@ -1374,6 +1374,13 @@ Deleting a chat deletes its copies.
 
   <Accordion title="GET /api/files/image">
     Stream an image file from the filesystem for display in the UI.
+  </Accordion>
+
+  <Accordion title="GET /api/files/audio">
+    Stream a generated WAV (`?path=<absolute path>`) for the chat's audio
+    player. Same checks as `/api/files/image`: only files inside the allowed
+    roots (home plus `GAIA_DOCUMENT_ROOTS`, else 403), no symlinks (400), only
+    `.wav` (400), 404 when the file is gone.
   </Accordion>
 </AccordionGroup>
 

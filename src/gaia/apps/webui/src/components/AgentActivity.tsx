@@ -28,6 +28,8 @@ import {
     Circle,
     Sparkles,
     Link,
+    Music,
+    AudioLines,
     type LucideIcon,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -94,6 +96,10 @@ const TOOL_META: Record<string, ToolMeta> = {
     forget:                { label: 'Deleted from memory', activeLabel: 'Deleting from memory', icon: Brain },
     search_past_conversations: { label: 'Searched past chats', activeLabel: 'Searching past chats', icon: Brain },
     request_user_input:    { label: 'Asked you',          activeLabel: 'Asking you',          icon: MessageCircleQuestionMark },
+    // Music & sound effects
+    generate_music:        { label: 'Composed music',     activeLabel: 'Composing music',     icon: Music },
+    generate_sound_effect: { label: 'Generated sound effect', activeLabel: 'Generating sound effect', icon: AudioLines },
+    list_audio_generation_models: { label: 'Checked audio models', activeLabel: 'Checking audio models', icon: Music },
     // Skills
     load_skill:            { label: 'Used skill',         activeLabel: 'Loading skill',       icon: Sparkles },
     unload_skill:          { label: 'Put away skill',     activeLabel: 'Putting away skill',  icon: Sparkles },
