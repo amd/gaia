@@ -1,10 +1,10 @@
 {
   "schemaVersion": "3.0",
-  "agentVersion": "0.3.2",
+  "agentVersion": "0.3.3",
   "components": {
     "sidecar": {
-      "componentVersion": "0.3.2",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.3.2",
+      "componentVersion": "0.3.3",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.3.3",
       "platforms": {
         "win32-x64": {
           "filename": "gaia-agent-win32-x64.exe",
