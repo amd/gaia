@@ -1913,12 +1913,13 @@ def _relayed_documents(rag_file_paths: list, attached: list) -> list:
     Images are left out: the sidecar indexes what it is sent, and an image is
     read by vision, not indexed.
     """
-    from .routers.files import IMAGE_EXTENSIONS
+    from .routers.files import PREVIEWABLE_IMAGE_EXTENSIONS
 
     extra = [
         p
         for p in attached
-        if p not in rag_file_paths and Path(p).suffix.lower() not in IMAGE_EXTENSIONS
+        if p not in rag_file_paths
+        and Path(p).suffix.lower() not in PREVIEWABLE_IMAGE_EXTENSIONS
     ]
     return list(rag_file_paths) + extra
 
