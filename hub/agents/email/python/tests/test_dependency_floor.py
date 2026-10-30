@@ -7,7 +7,7 @@ The email agent imports ``get_embedding_model_for_device`` from
 walkthrough also imports ``gaia.connectors.setup_routes``, first released in
 core v0.23.0. Its runtime imports ``gaia.agents.base.history.fit_pushed_history``,
 first released in core v0.25.1. The email state database also uses
-``gaia.utils.sqlite_wal.enable_wal``, first released in core v0.25.2. A
+``gaia.utils.sqlite_wal.enable_wal``, first released in core v0.25.3. A
 published package must declare that latter floor so a fresh resolver cannot
 install a core that fails at import time.
 """
@@ -20,7 +20,7 @@ from pathlib import Path
 EMAIL_ROOT = Path(__file__).resolve().parents[1]
 
 # First core release covering the email agent module-level imports.
-REQUIRED_FLOOR = (0, 25, 2)
+REQUIRED_FLOOR = (0, 25, 3)
 
 
 def _floor_tuple(version: str) -> tuple[int, ...]:
@@ -43,7 +43,7 @@ def test_pyproject_floor_covers_email_runtime_imports():
     assert match, "pyproject.toml must declare an amd-gaia[api]>=X.Y.Z floor"
     assert _floor_tuple(match.group(1)) >= REQUIRED_FLOOR, (
         f"amd-gaia floor {match.group(1)} predates "
-        "the email agent runtime imports and WAL retry helper (covered by 0.25.2); "
+        "the email agent runtime imports and WAL retry helper (covered by 0.25.3); "
         "a fresh resolver may select a core that ImportErrors when the email "
         "agent starts (#4430, #6041)"
     )

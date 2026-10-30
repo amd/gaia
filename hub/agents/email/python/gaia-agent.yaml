@@ -26,16 +26,16 @@ icon: mail
 tools_count: 67
 
 language: python
-# 0.25.2 is the first core release containing the WAL retry helper used
+# 0.25.3 is the first core release containing the WAL retry helper used
 # while another email agent is opening state.db.
-min_gaia_version: "0.25.2"
+min_gaia_version: "0.25.3"
 models: [Gemma-4-E4B-it-GGUF]
 
 python:
   entry_module: gaia_agent_email
   entry_class: EmailTriageAgent
   dependencies:
-    - "amd-gaia>=0.25.2"
+    - "amd-gaia>=0.25.3"
 
 requirements:
   min_memory_gb: 8
