@@ -526,7 +526,14 @@ FULL_BUNDLES = [
         members=frozenset(
             {"generate_image", "list_sd_models", "get_generation_history"}
         ),
-        description="Generate images from a text prompt (Stable Diffusion).",
+        description="Generate images from a text prompt (Lemonade).",
+    ),
+    ToolBundle(
+        name="audio_generation",
+        members=frozenset(
+            {"generate_music", "generate_sound_effect", "list_audio_generation_models"}
+        ),
+        description="Generate local music and sound effects using Lemonade.",
     ),
     ToolBundle(
         name="memory",
@@ -563,6 +570,18 @@ FULL_BUNDLES = [
             }
         ),
         description="Read a connected mailbox: list, search, and read messages.",
+    ),
+    # Split from "email" to stay under the per-bundle cap. Its own menu line
+    # names the questions only these answer, so the loader can pick it alone.
+    ToolBundle(
+        name="email_threads",
+        members=frozenset(
+            {"get_thread", "list_waiting_on_you", "list_connected_mailboxes"}
+        ),
+        description=(
+            "Read a whole email conversation, find mail waiting on the user's "
+            "reply, and say which mailbox account is connected."
+        ),
     ),
     # The description carries the file extensions deliberately: a real turn
     # says "summarize this meeting: <path>.mp4" and never says "transcribe",
@@ -665,9 +684,15 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "search_email",
         "read_email",
         "list_mail_folders",
+        "get_thread",
+        "list_connected_mailboxes",
+        "list_waiting_on_you",
         "generate_image",
         "list_sd_models",
         "get_generation_history",
+        "generate_music",
+        "generate_sound_effect",
+        "list_audio_generation_models",
     }
 )
 
