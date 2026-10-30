@@ -141,16 +141,17 @@ def test_interactive_non_yes_answer_refuses(tmp_path, monkeypatch, answer):
 # ---------------------------------------------------------------------------
 
 
-def test_interactive_prompt_eof_cancels_cleanly(tmp_path, monkeypatch):
-    """Ctrl+D / Ctrl+Z at the prompt cancels instead of crashing (#3450)."""
+@pytest.mark.parametrize("interrupt", [EOFError, KeyboardInterrupt])
+def test_interactive_prompt_eof_cancels_cleanly(tmp_path, monkeypatch, interrupt):
+    """Ctrl+D / Ctrl+Z / Ctrl+C at the prompt cancels instead of crashing (#3450)."""
     bundle = _make_bundle(tmp_path)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("gaia.utils.terminal.is_windows_console", lambda stream: True)
 
-    def _eof(*args, **kwargs):
-        raise EOFError
+    def _interrupt(*args, **kwargs):
+        raise interrupt
 
-    monkeypatch.setattr("builtins.input", _eof)
+    monkeypatch.setattr("builtins.input", _interrupt)
     calls = []
     _patch_import_agent_bundle(monkeypatch, calls)
 
