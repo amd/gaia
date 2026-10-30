@@ -47,7 +47,7 @@ def staged_starter_skills() -> Iterator[tuple[Path, ...]]:
         yield tuple(copied)
     finally:
         for destination in reversed(copied):
-            shutil.rmtree(destination, ignore_errors=True)
+            shutil.rmtree(destination)
 
 
 def build_with_starter_skills(outdir: Path) -> None:

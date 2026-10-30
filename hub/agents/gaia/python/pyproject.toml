@@ -53,6 +53,9 @@ test = ["pytest"]
 [tool.setuptools.packages.find]
 include = ["gaia_agent*"]
 
+[tool.setuptools.cmdclass]
+build_py = "gaia_agent.build.build_py"
+
 [tool.setuptools.package-data]
 # The manifest and bundled skills must land inside the package so they survive
 # both the wheel and the frozen sidecar (SKILL_DIRS / SKILL_MANIFEST resolve
