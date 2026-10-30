@@ -2382,7 +2382,21 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     }
                 except Exception as e:  # tool boundary -> structured error
                     logger.warning("fetch_webpage failed for %s: %s", url, e)
-                    return {"status": "error", "url": url, "error": str(e)}
+                    failed = {"status": "error", "url": url, "error": str(e)}
+                    # raise_for_status keeps only the status line; a rate limit's wait is a header.
+                    response = getattr(e, "response", None)
+                    retry_after = (
+                        response.headers.get("Retry-After")
+                        if response is not None
+                        else None
+                    )
+                    if retry_after:
+                        failed["retry_after"] = retry_after
+                        failed["hint"] = (
+                            "The server is rate-limiting. Don't fetch this URL again "
+                            "until Retry-After has passed; tell the user when it resets."
+                        )
+                    return failed
 
         @tool
         def get_system_info() -> dict:

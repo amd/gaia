@@ -658,6 +658,23 @@ def _retry_after_seconds(response: requests.Response) -> Optional[float]:
     return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
 
 
+def fetch_error_text(exc: Exception) -> str:
+    """A failed fetch's error, with how long a rate-limited server asked to wait.
+
+    ``raise_for_status`` keeps only the status line, so a 429 or 503 lost its
+    ``Retry-After`` and the agent retried at once instead of telling the user.
+    """
+    response = getattr(exc, "response", None)
+    wait = _retry_after_seconds(response) if response is not None else None
+    if wait is None:
+        return str(exc)
+    minutes = f" (about {round(wait / 60)} min)" if wait >= 120 else ""
+    return (
+        f"{exc}. The server asked to wait {round(wait)} s{minutes} before trying "
+        "again (Retry-After); don't fetch this URL again before then."
+    )
+
+
 def _ddg_block_reason(response: requests.Response) -> Optional[str]:
     """Why DDG refused to answer, or ``None`` when the page holds real results."""
     if response.status_code in SEARCH_BLOCK_STATUSES:

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `fetch_webpage` on a rate-limited page (HTTP 429 or 503 with
+  `Retry-After`) now returns the wait as `retry_after` with a hint not to
+  fetch again before then. It returned only the status line, so the agent
+  re-fetched at once and could not tell the user when the limit resets.
 - `gaia chat --index <file>` indexes the named file from any working
   directory. A file outside the folder `gaia chat` ran in was refused as "not
   in allowed paths", the error was only logged, and the agent answered without
