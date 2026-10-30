@@ -9033,7 +9033,10 @@ def handle_agent_import(args):
             print("Agents in bundle:")
             for aid in bundle_agent_ids:
                 print(f"  - {aid}")
-        answer = input("[y/N] Continue? ").strip().lower()
+        try:
+            answer = input("[y/N] Continue? ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
         if answer not in ("y", "yes"):
             print("Import cancelled.")
             sys.exit(0)

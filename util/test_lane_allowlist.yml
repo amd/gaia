@@ -124,6 +124,7 @@ module_skips:
       - tests/unit/test_flagship_code_index_scope.py
       - tests/unit/test_stdio_permission_control.py
       - tests/unit/test_tool_loader_token_budget.py
+      - tests/unit/eval/test_harness_flagship_target.py
 
   - reason: Needs the [mcp] extra, which test_unit.yml does not install.
     runs_in: test_agent_mcp_server.yml
@@ -136,3 +137,4 @@ module_skips:
     runs_in: test_unit.yml
     paths:
       - tests/unit/eval/test_pdf_document_generator.py
+

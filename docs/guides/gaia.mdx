@@ -90,7 +90,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **95 tools** — the 66 of the Chat agent's `full` profile, plus 8 skill-library tools, 8 live-browser tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
+The default construction registers **101 tools** — the 66 of the Chat agent's `full` profile, plus 8 skill-library tools, 8 live-browser tools, 8 read-only email tools, 4 code-search tools, 3 image-generation tools, 3 audio-generation tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -100,7 +100,7 @@ The default construction registers **95 tools** — the 66 of the Chat agent's `
 | Web | `search_web`, `fetch_page`, `fetch_webpage`, `open_url`, `download_file`, `bookmark`, `search_documentation` |
 | Live browser | `browser_open`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_login`, `browser_sessions`, `browser_back`, `browser_find` |
 | Memory | `remember`, `recall`, `forget`, `update_memory`, `search_past_conversations` |
-| Email | `check_mailbox_access`, `list_inbox`, `search_email`, `read_email`, `list_mail_folders` |
+| Email | `check_mailbox_access`, `list_inbox`, `search_email`, `read_email`, `list_mail_folders`, `get_thread`, `list_waiting_on_you`, `list_connected_mailboxes` |
 | Images | `analyze_image`, `answer_question_about_image`, `generate_image`, `list_sd_models`, `get_generation_history` |
 | Audio | `transcribe_media`, `refine_transcript` |
 | Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command`, `get_shell_state`, `reset_shell_session`, `wait_for_condition` |
@@ -200,7 +200,7 @@ In the Agent UI, a Hub-installed GAIA asks with **Allow once** or **Deny** above
 
 The agent's file, document, and data tools are confined to a set of allowed paths. **By default that set is your home directory.**
 
-That's the honest scope for a personal document agent — "ask questions about my files" means your files — and it is still a real boundary: system directories, program files, and other users' home directories fall outside it and are refused. The check runs against the *resolved* path, so a symlink pointing out of the allowed set doesn't get around it; you get an explicit `Access denied to path:` error naming both the requested and the resolved path.
+That's the honest scope for a personal document agent — "ask questions about my files" means your files — and it is still a real boundary: system directories, program files, and other users' home directories fall outside it and are refused. The check runs against the *resolved* path, so a symlink pointing out of the allowed set doesn't get around it; you get an explicit `Access denied: <path> is not in allowed paths.` error naming the path you asked for.
 
 **The allowed set is not the whole story, and shouldn't be treated as one.** Two denylists apply *inside* it, because "in scope" and "safe" are different questions:
 
@@ -289,7 +289,7 @@ Only **`query`**, **`run_id`**, and **`context`** are required; everything else 
 - **`context` is pushed in the body**, never pulled, and must be present even when empty (`[]`) — omitting it is itself a 422. Pass `session_id` too — the agent persists its indexed-document set per session, and without it the agent forgets a document between the turn that indexed it and the next question.
 - **Set `can_answer_questions: false` for one-shot runs.** With nobody there to answer, the agent resolves ambiguity itself instead of parking on a question that reads as a hang.
 - **A failed model request names the endpoint it went through** (contract >= 2.20), and its advice points at the model server the GAIA host uses (`LEMONADE_BASE_URL`). A front-end with its own settings screen sends `surface` (`"tui"`, `"agent_ui"` or `"cli"`) to get its own wording; a headless caller omits it.
-- **`internet_off` takes a chat offline** (contract >= 2.23): `true` refuses web search, page fetches, the browser, connector, mailbox and Agent Hub tools and commands that contact another host, and the refusal tells the model the internet is off for this chat. Send it every turn, because a retained session keeps the last value. To change it during a running turn, `POST /v1/gaia/sessions/{session_id}/internet` with `{"internet_off": true}` (or `false`); the next tool call follows it. Post it only once `/query` has answered, because the turn's own `internet_off` replaces a switch sent earlier; re-read the switch then and post it if it changed.
+- **`internet_off` takes a chat offline** (contract >= 2.23): `true` refuses web search, page fetches, the browser, connector and Agent Hub tools, mailbox reads, and commands that contact another host, and the refusal tells the model the internet is off for this chat. Send it every turn, because a retained session keeps the last value. To change it during a running turn, `POST /v1/gaia/sessions/{session_id}/internet` with `{"internet_off": true}` (or `false`); the next tool call follows it. Post it only once `/query` has answered, because the turn's own `internet_off` replaces a switch sent earlier; re-read the switch then and post it if it changed.
 - **`final` reports how full the model's window is** (contract >= 2.21): its `context` field gives the window size, the tokens the next call will take and what takes them. A stopped or failed turn leaves it out.
 - **The model's reasoning can stream on its own** (contract >= 2.22): send `reasoning: true` and it arrives as `reasoning` events with a `delta`, apart from `status` lines and the answer. Without the field it folds into `status` lines.
 - **A bare file name lands in the chat's folder** (contract >= 2.24): send `working_directory`, an absolute path, and a relative path in a read, write or edit resolves under it, as does the path the approval prompt names. It sets where a file goes, not what the agent may reach; that is still `allowed_paths`.
@@ -328,7 +328,7 @@ gaia init
 
 The hint `GET /v1/gaia/init` returns also names the pull command for whichever Lemonade client this machine has, if you'd rather pull just that one model. Then re-run the readiness check.
 
-### "Access denied to path"
+### "Access denied: … is not in allowed paths"
 
 The file resolves outside the allowed paths — by default, outside your home directory — and either you denied the approval prompt or the path is one that is never granted (see [File access scope](#file-access-scope)). Ask again and approve the prompt when it appears (an unanswered prompt is denied after 10 minutes), or attach the file to the chat. An agent you construct in code can instead take an `allowed_paths` list that covers it.
 

@@ -1353,9 +1353,8 @@ class EmailTriageAgent(
         return result
 
     def _register_tools(self) -> None:
-        # Mirror ConnectorsDemoAgent: clear the
-        # module-level registry before registering this agent's tools so
-        # we don't carry tools over from a prior agent in the same
+        # Clear the module-level registry before registering this agent's
+        # tools so we don't carry tools over from a prior agent in the same
         # process.
         _TOOL_REGISTRY.clear()
         self._reset_organize_counter()

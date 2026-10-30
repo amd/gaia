@@ -15,6 +15,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 POSTRM = Path(__file__).resolve().parents[3] / "installer/debian/postrm"
+POSTINST = Path(__file__).resolve().parents[3] / "installer/debian/postinst"
 
 
 @pytest.mark.parametrize("action", ["purge", "remove", "upgrade"])
@@ -50,3 +51,104 @@ def test_removal_preserves_user_data(tmp_path, action, sudo_user):
     if action == "purge":
         assert "Per-user data remains in ~/.gaia" in result.stdout
         assert "gaia uninstall --purge" in result.stdout
+
+
+def _run_script(script, action, tmp_path, *, target=None, regular_file=False):
+    """Run a maintainer script with fake absolute paths redirected by sh."""
+    home = tmp_path / "home"
+    home.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    # These commands are only used by the scripts' optional cache refreshes.
+    for name in ("update-desktop-database", "gtk-update-icon-cache"):
+        command = fake_bin / name
+        command.write_text("#!/bin/sh\nexit 0\n")
+        command.chmod(0o755)
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
+    }
+    # The test runs on POSIX CI. Pass a temporary root by substituting the
+    # command path in a copy, so no real /usr/bin entry is touched.
+    text = script.read_text()
+    root = tmp_path / "root"
+    (root / "usr/bin").mkdir(parents=True)
+    text = text.replace("/usr/bin/gaia-desktop", str(root / "usr/bin/gaia-desktop"))
+    script_copy = tmp_path / script.name
+    script_copy.write_text(text)
+    if target is not None:
+        link = root / "usr/bin/gaia-desktop"
+        link.symlink_to(target)
+    if regular_file:
+        (root / "usr/bin/gaia-desktop").write_text("admin's own launcher\n")
+    return (
+        subprocess.run(
+            ["/bin/sh", str(script_copy), action],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ),
+        root / "usr/bin/gaia-desktop",
+    )
+
+
+def test_postinst_creates_documented_desktop_command(tmp_path):
+    result, link = _run_script(POSTINST, "configure", tmp_path)
+    assert result.returncode == 0
+    assert link.is_symlink()
+    assert os.readlink(link) == "/opt/GAIA/gaia-desktop"
+
+
+@pytest.mark.parametrize("action", ["remove", "purge"])
+def test_postrm_removes_only_gaia_desktop_link(tmp_path, action):
+    result, link = _run_script(
+        POSTRM, action, tmp_path, target="/opt/GAIA/gaia-desktop"
+    )
+    assert result.returncode == 0
+    assert not link.exists()
+    assert not link.is_symlink()
+
+
+def test_postrm_preserves_replacement_link(tmp_path):
+    result, link = _run_script(
+        POSTRM, "remove", tmp_path, target="/usr/local/bin/custom-desktop"
+    )
+    assert result.returncode == 0
+    assert link.is_symlink()
+    assert os.readlink(link) == "/usr/local/bin/custom-desktop"
+
+
+def test_postinst_reconfigure_keeps_our_link(tmp_path):
+    result, link = _run_script(
+        POSTINST, "configure", tmp_path, target="/opt/GAIA/gaia-desktop"
+    )
+    assert result.returncode == 0
+    assert os.readlink(link) == "/opt/GAIA/gaia-desktop"
+
+
+def test_postinst_preserves_replacement_link(tmp_path):
+    result, link = _run_script(
+        POSTINST, "configure", tmp_path, target="/usr/local/bin/custom-desktop"
+    )
+    assert result.returncode == 0
+    assert os.readlink(link) == "/usr/local/bin/custom-desktop"
+
+
+def test_postinst_preserves_dangling_replacement_link(tmp_path):
+    # A broken link fails `-e` but is still someone else's; it must survive.
+    result, link = _run_script(
+        POSTINST, "configure", tmp_path, target=str(tmp_path / "missing")
+    )
+    assert result.returncode == 0
+    assert os.readlink(link) == str(tmp_path / "missing")
+
+
+@pytest.mark.parametrize("script,action", [(POSTINST, "configure"), (POSTRM, "purge")])
+def test_scripts_preserve_regular_file(tmp_path, script, action):
+    result, link = _run_script(script, action, tmp_path, regular_file=True)
+    assert result.returncode == 0
+    assert not link.is_symlink()
+    assert link.read_text() == "admin's own launcher\n"
