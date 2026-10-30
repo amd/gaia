@@ -2514,6 +2514,10 @@ def _posix_pipe_positions(text: str) -> list:
     return positions
 
 
+#: The only characters a cmd.exe line may hold and still be classified read-only.
+_CMD_PLAIN_LINE = re.compile(r"[A-Za-z0-9 ._\\/:-]*")
+
+
 def _pipe_dialect() -> str:
     """Whose pipe rules a step follows: cmd.exe's on Windows, sh's elsewhere."""
     return "cmd" if os.name == "nt" else "posix"
@@ -3372,8 +3376,9 @@ class ShellToolsMixin:
         # sh does it off Windows, Git's GNU tools do it to their own argv on it.
         if any(char in command for char in "{*?["):
             return False
-        # cmd.exe rewrites ^ escapes and %VAR% / !VAR! expansions the same way.
-        if _pipe_dialect() == "cmd" and any(char in command for char in "^%!"):
+        # cmd.exe strips quotes and rewrites ^, %VAR% and !VAR! before the
+        # program runs, so only a line of plain characters can be judged read-only.
+        if _pipe_dialect() == "cmd" and not _CMD_PLAIN_LINE.fullmatch(command):
             return False
         # A PowerShell body can run any cmdlet inside a subexpression; never a read.
         if "powershell" in command.lower() or "pwsh" in command.lower():
@@ -3388,6 +3393,7 @@ class ShellToolsMixin:
             for segment in step.segments:
                 if (
                     not segment
+                    or _interpreter_name(segment[0]) == "powershell"
                     or self._validate_command(
                         segment[0].lower(),
                         segment,

@@ -1613,13 +1613,59 @@ class TestBlanketApproval:
         assert _Host(full_access=True)._line_is_read_only(command) is False
 
     @pytest.mark.parametrize(
-        "command", ['echo "$(rm -rf sub)"', 'cat "`touch made.txt`"', 'echo "$HOME"']
+        "command",
+        [
+            "dir",
+            "dir src\\sub",
+            "ls -la src",
+            "git status",
+            "cat a.txt",
+            "cat C:\\work\\a.txt",
+            "git log -n 5",
+        ],
     )
-    def test_cmd_exe_does_not_substitute_so_windows_is_unchanged(
-        self, command, monkeypatch
-    ):
+    def test_cmd_exe_plain_reads_stay_read_only(self, command, monkeypatch):
         monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
         assert _Host(full_access=True)._line_is_read_only(command) is True
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'power"shell" -c "Get-Content -Path (ri f)"',
+            '"power"shell -c "Get-Content -Path (ri f)"',
+            'pow"ers"hell.exe -c "Get-Content -Path (ri f)"',
+            'cat "a.txt"',
+            "cat 'a.txt'",
+            "dir src,sub",
+            "ls src=sub",
+            "dir @src",
+            "ls src\tsub",
+            "cat caf\u00e9.txt",
+            "cat a\uff0etxt",
+            'echo "$(rm -rf sub)"',
+            "cat (a)",
+            "git status (x)",
+        ],
+    )
+    def test_cmd_exe_line_with_any_metacharacter_may_write(self, command, monkeypatch):
+        # cmd.exe strips quotes and rewrites escapes before the program runs.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'power"shell" -c Get-ChildItem',
+            "pow'er'shell -c Get-ChildItem",
+            '"pow"er"sh"ell -c Get-ChildItem',
+        ],
+    )
+    @pytest.mark.parametrize("dialect", ["posix", "cmd"])
+    def test_a_quote_split_powershell_name_is_never_read_only(
+        self, command, dialect, monkeypatch
+    ):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
+        assert _Host(full_access=True)._line_is_read_only(command) is False
 
     @pytest.mark.parametrize(
         "command",
