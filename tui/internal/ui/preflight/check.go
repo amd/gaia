@@ -205,6 +205,7 @@ func checkDaemon(ctx context.Context, t Transport, cfg Config, rep *Report) Stat
 		return row.commit(rep)
 	}
 
+	rep.CoreVersion = inf.GaiaVersion
 	row.State = StateOK
 	row.Line = fmt.Sprintf("running (pid %d) · host API v%s", inf.PID, inf.APIVersion)
 	return row.commit(rep)
