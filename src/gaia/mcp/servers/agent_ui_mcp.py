@@ -1115,6 +1115,9 @@ def run_http(
 
 
 def main():
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(description="GAIA Agent UI MCP Server")
     parser.add_argument(
         "--port",
