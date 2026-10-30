@@ -163,20 +163,17 @@ class TestGemmaE2BCatalogEntry:
             req.model_type == ModelType.LLM
         ), f"Expected model_type=ModelType.LLM, got {req.model_type!r}"
 
-    def test_e2b_tool_calling_disabled_for_flm_build(self):
-        """The FLM/NPU build does NOT serve native OpenAI tool calls.
+    def test_e2b_takes_native_tool_calls(self):
+        """The FLM/NPU build serves native OpenAI tool calls (FLM v1.0.7).
 
-        Verified on Strix Halo hardware: passing an OpenAI ``tools`` payload to
-        the FLM server 500-errors ("type must be string, but is object"). So
-        this entry must declare ``tool_calling=False`` — the agent then uses the
-        embedded-JSON tool path. Email triage itself parses a JSON object from a
-        plain completion, so it is unaffected either way.
+        Declared ``tool_calling=False``, the flagship fell back to tools in
+        JSON text, and E2B's fenced JSON reply reached the user as a bare
+        "```json" (#6008).
         """
         req = MODELS[self.E2B_KEY]
-        assert req.tool_calling is False, (
-            "gemma-4-e2b is the FLM/NPU build, which 500-errors on a native "
-            "tools payload — it must declare tool_calling=False so the agent "
-            "uses the embedded-JSON tool path."
+        assert req.tool_calling is True, (
+            "gemma-4-e2b serves native tool calls on FLM v1.0.7; declaring "
+            "tool_calling=False sends the flagship down the JSON-in-text path."
         )
 
     def test_e2b_min_ctx_size_matches_npu_window(self):

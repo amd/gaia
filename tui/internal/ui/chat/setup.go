@@ -187,7 +187,7 @@ func (m ChatModel) startSetupRun(firstBoot bool) (tea.Model, tea.Cmd) {
 		return m, m.releaseAfterSetupGate()
 	}
 
-	intro := "Setting up " + m.agentName + " -- running `gaia init --profile " + gaiainit.Profile + "`"
+	intro := "Setting up " + m.agentName + " -- running `gaia init --profile " + gaiainit.ConfiguredProfile() + "`"
 	if m.claudeMode {
 		intro += " (skipping the local chat model: this session runs on Claude)"
 	}

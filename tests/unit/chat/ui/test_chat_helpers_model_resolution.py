@@ -442,9 +442,9 @@ class TestDeviceModelOverride:
             _call_non_streaming(session, db)
 
         kwargs = captured["kwargs"]
-        assert kwargs.get("model_id") == "gemma4-it-e2b-FLM"
+        assert kwargs.get("model_id") == "gemma4-it-e4b-FLM"
         assert kwargs.get("device") == "npu"
-        assert kwargs.get("min_context_size") == 32768
+        assert kwargs.get("min_context_size") == 65536
 
     def test_explicit_npu_overrides_session_pinned_model(self):
         """A non-GPU device wins even over a session-pinned model (it can't run there)."""
@@ -459,7 +459,7 @@ class TestDeviceModelOverride:
         ):
             _call_non_streaming(session, db)
 
-        assert captured["kwargs"].get("model_id") == "gemma4-it-e2b-FLM"
+        assert captured["kwargs"].get("model_id") == "gemma4-it-e4b-FLM"
 
     def test_gpu_device_does_not_clobber_pinned_model(self):
         """On the default GPU device, an agent's own model preference is kept."""

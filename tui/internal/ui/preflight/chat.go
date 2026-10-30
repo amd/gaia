@@ -178,6 +178,13 @@ func (l localRunner) localFit(ctx context.Context, rep Report, models []gaiainit
 }
 
 func fitLine(c lemonade.Capacity, chat gaiainit.Model, known bool) string {
+	if strings.HasSuffix(strings.ToLower(chat.ID), "-flm") {
+		npu, ok := c.NPU()
+		if !ok {
+			return chat.ID + " will not fit: it runs on a Ryzen AI NPU, and Lemonade reports none on this PC."
+		}
+		c = npu
+	}
 	have := fmt.Sprintf("this PC has %.0f GB for models (%s)", c.MemoryGB, c.MemorySource)
 	if !known || chat.SizeGB == nil {
 		return "Setup picks the model that fits; " + have + "."

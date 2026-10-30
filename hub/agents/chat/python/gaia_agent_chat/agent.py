@@ -58,6 +58,7 @@ from gaia.agents.base.context_eviction import (
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import before_change, note_untracked
 from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.model_features import features_for_model
 from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 
 # dynamic_tools_env_override is re-exported so callers importing it from
@@ -507,6 +508,7 @@ class ChatAgent(
 
         # Store model for display
         self.model_display_name = effective_model_id
+        self.model_features = features_for_model(effective_model_id)
 
         # Store max_chunks for adaptive retrieval
         self.base_max_chunks = config.max_chunks
@@ -577,6 +579,7 @@ class ChatAgent(
 
         # Initialize scratchpad service (optional)
         self._scratchpad = None
+        # Built whatever the model: a switch to a larger one offers it.
         if config.enable_scratchpad:
             try:
                 from gaia.scratchpad.service import ScratchpadService
@@ -1355,8 +1358,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 """
 
         scratchpad_section = ""
-        if "scratchpad" in spec.capabilities or getattr(
-            self.config, "enable_scratchpad", False
+        if self.model_features.scratchpad and (
+            "scratchpad" in spec.capabilities
+            or getattr(self.config, "enable_scratchpad", False)
         ):
             scratchpad_section = """
 **DATA ANALYSIS WORKFLOW (Scratchpad):** find_files → create_table → read_file + insert_data per doc → query_data (SQL: SUM/AVG/GROUP BY) → drop_table → final answer built from the query results.
@@ -1429,7 +1433,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 **UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`. Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process.
 """
         # A rule about a tool the session lacks made the model offer images.
-        if getattr(self.config, "enable_sd_tools", False):
+        if self._offers_image_generation():
             data_file_rules += """
 **IMAGE GENERATION:** Always CALL `generate_image` first. Don't pre-announce availability. If it errors, say so and give its error in 1-2 sentences; don't apologize or describe what you would have done.
 """
@@ -2256,6 +2260,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         # SD tools — generate_image, list_sd_models, get_generation_history
         # Only registered when explicitly enabled via config.enable_sd_tools=True.
         # Off by default to prevent image generation being called for document Q&A.
+        # Not gated on the model, so a switch to a larger one can offer them.
         if getattr(self.config, "enable_sd_tools", False):
             from gaia.config import GAIA_CONFIG_DIR
 
@@ -2846,6 +2851,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             }
             for _name in _chat_exclude:
                 self._instance_tools.pop(_name, None)
+        self._offer_features(self.model_features)
+
+    def _offers_image_generation(self) -> bool:
+        """Image generation is on in the config and the model is offered it."""
+        return bool(getattr(self.config, "enable_sd_tools", False)) and (
+            self.model_features.image_generation
+        )
 
     def _register_loop_control_tools(self) -> None:
         """Register set_loop_state and request_user_input tools for autonomous mode.

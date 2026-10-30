@@ -13,6 +13,15 @@ pytest.importorskip("gaia_agent_chat")
 
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
+from gaia.agents.base.model_features import TIER_ENV  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _full_feature_tier(monkeypatch):
+    """These tests cover every tool group; the compact tier has its own tests."""
+    monkeypatch.setenv(TIER_ENV, "full")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

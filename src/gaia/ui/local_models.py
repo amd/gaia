@@ -84,11 +84,16 @@ def _size_gb(model: Dict[str, Any]) -> Optional[float]:
 
 def _fit(model: Dict[str, Any], size_gb: Optional[float], capacity) -> Optional[str]:
     """Why the model does not fit this PC's memory, '' when it does, None if unknown."""
-    from gaia.llm.lemonade_client import find_model_requirement
-    from gaia.llm.model_fit import check_fit, kv_cache_gb
+    from gaia.llm.lemonade_client import find_model_requirement, runs_on_npu
+    from gaia.llm.model_fit import check_fit, kv_cache_gb, npu_capacity
 
     if capacity is None or size_gb is None:
         return None
+    if runs_on_npu(model["id"]) or model.get("recipe") == "flm":
+        # FLM models load into the NPU's system RAM, not the GPU's memory.
+        capacity = npu_capacity(capacity)
+        if capacity is None:
+            return "runs on a Ryzen AI NPU, and Lemonade reports none on this PC"
     req = find_model_requirement(model["id"])
     kv = kv_cache_gb(req.kv_bytes_per_token, req.min_ctx_size) if req else 0.0
     # A downloaded model's disk is already spent.

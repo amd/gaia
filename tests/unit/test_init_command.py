@@ -27,6 +27,15 @@ SMALL_MACHINE = {
     "devices": {"metal": {"available": True, "vram_gb": 11.8}},
     "model_storage": {"free_bytes": 200e9},
 }
+# A 16 GB Ryzen AI laptop: small GPU carve-out, an XDNA2 NPU.
+NPU_LAPTOP = {
+    "Physical Memory": "16 GB",
+    "devices": {
+        "amd_gpu": [{"available": True, "integrated": True, "vram_gb": 0.5}],
+        "amd_npu": {"available": True},
+    },
+    "model_storage": {"free_bytes": 200e9},
+}
 
 
 class TestLemonadeInfo(unittest.TestCase):
@@ -849,7 +858,7 @@ class TestDownloadModels(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
-            mock_client.get_system_info.return_value = SMALL_MACHINE
+            mock_client.get_system_info.return_value = NPU_LAPTOP
             mock_client.ensure_model_downloaded.return_value = True
             mock_client_class.return_value = mock_client
 
@@ -858,7 +867,7 @@ class TestDownloadModels(unittest.TestCase):
             pulled = {
                 c.args[0] for c in mock_client.ensure_model_downloaded.call_args_list
             }
-            self.assertEqual(pulled, {"gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"})
+            self.assertEqual(pulled, {"gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"})
             # Regression guard: no recipe-bearing pull_model call.
             mock_client.pull_model.assert_not_called()
 
@@ -2200,7 +2209,7 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
         self.assertIn("gaia", HUB_INSTALL_AGENTS)
         # The NPU profile keeps its own FLM models and device keys.
         npu = INIT_PROFILES["npu"]
-        self.assertEqual(npu["models"], ["gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"])
+        self.assertEqual(npu["models"], ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"])
         self.assertEqual(npu["backend"], "flm:npu")
         # The flagship runs in the daemon / Agent UI, which [ui] installs.
         self.assertEqual(npu["pip_extras"], INIT_PROFILES["gaia"]["pip_extras"])

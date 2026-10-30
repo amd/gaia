@@ -18,8 +18,6 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
-PROFILE = "gaia"
-
 
 class SetupPlanError(Exception):
     """The plan could not be worked out, with what to do next."""
@@ -134,7 +132,8 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
 
 
 def build_plan() -> Dict[str, Any]:
-    """The Lemonade, chat model and downloads ``gaia init --profile gaia`` will use.
+    """The Lemonade, chat model and downloads ``gaia init`` will use, for the
+    profile this PC is set up with (``configured_setup_profile``).
 
     Until the server setup will use answers, the hardware cannot be read, so the
     chat model is the one setup starts from and ``decided_after_server`` says
@@ -143,6 +142,7 @@ def build_plan() -> Dict[str, Any]:
     from gaia.config import GaiaConfigError
     from gaia.installer.init_command import (
         INIT_PROFILES,
+        configured_setup_profile,
         is_embedding_model_id,
         pending_download_sizes,
         resolve_init_chat_model,
@@ -151,27 +151,35 @@ def build_plan() -> Dict[str, Any]:
     from gaia.llm.lemonade_client import (
         LemonadeClientError,
         recommend_default_chat_model,
+        recommend_npu_chat_model,
     )
 
     lemonade = _lemonade()
     client = _client(lemonade["url"])
     lemonade["reachable"] = client is not None
     try:
+        profile = configured_setup_profile()
         # With no server this still answers: the user's model, else the floor.
         choice = resolve_init_chat_model(
             client or _NoServer(),
             reset_corrupt=False,
             enforce_fit=False,
+            profile=profile,
         )
         chat = {"id": choice.model_id, "user_set": choice.user_set}
         model_ids = with_chat_model(
-            PROFILE, INIT_PROFILES[PROFILE]["models"], lambda: choice
+            profile, INIT_PROFILES[profile]["models"], lambda: choice
         )
         if client is None:
             recommended, capacity = None, None
             sizes = {m: _registry_size(m) for m in model_ids}
         else:
-            recommended, _, capacity = recommend_default_chat_model(client)
+            recommend = (
+                recommend_npu_chat_model
+                if profile == "npu"
+                else recommend_default_chat_model
+            )
+            recommended, _, capacity = recommend(client)
             sizes = pending_download_sizes(client, model_ids)
     except GaiaConfigError as e:
         raise SetupPlanError(str(e)) from e

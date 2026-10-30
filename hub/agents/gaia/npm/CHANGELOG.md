@@ -8,6 +8,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.25.3+ on `PATH`.
 
+- **On Gemma 4 E4B the agent stops offering features that model fails.** The
+  SQL scratchpad, email, image generation, and finding or installing skills
+  failed GAIA's agent evals on Gemma, and their 16 tool descriptions were read
+  on every step. On Gemma, on the GPU or the NPU, they are now left out, along
+  with the skills built on them; larger models keep everything.
+  `GAIA_FEATURE_TIER=full` or `compact` forces one set for any model.
+- **Gemma 4 E2B on the NPU answers instead of showing an empty `json` block.**
+  The agent sent it tools as JSON in text, and its reply, wrapped in a code
+  fence, reached the chat as a bare "```json" (#6008). It now gets them as
+  native tool calls, which FastFlowLM 1.0.7 serves.
+
 ### For integrators: contract 2.25
 
 - **The agent remembers its own tool calls across turns** (contract **2.25**,
