@@ -277,6 +277,7 @@ _CHAT_SCHEMA_COLUMNS = {
     "scheduled_tasks": {"last_error"},
     "sessions": {
         "agent_type",
+        "device",
         "kind",
         "mail_provider",
         "pinned",
