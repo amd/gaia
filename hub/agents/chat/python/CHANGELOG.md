@@ -12,6 +12,11 @@
   `gaia-lite`, to the flagship `gaia` agent for API, MCP and scheduled
   callers. Agent UI chats saved under a retired agent stay read-only.
   MCP settings saved under `installed:chat` no longer apply.
+- With Local only on (`gaia config set network_policy local_ai_only`), the
+  Perplexity-backed `search_web` tool is not registered, because it answers
+  through Perplexity's cloud AI. A cached agent that still has it refuses with
+  the same reason. The DuckDuckGo `search_web` from the browser tools still
+  registers: it runs no AI model.
 - Resolves the user's real Documents folder for the session guidance, including
   Windows Known Folder Move/OneDrive and Linux `XDG_DOCUMENTS_DIR`, instead of
   assuming it is always `~/Documents` (#5885). File search and the Agent UI's

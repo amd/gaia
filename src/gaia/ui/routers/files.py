@@ -55,10 +55,18 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024
 
 # Image extensions recognized for the is_image flag
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+PREVIEWABLE_IMAGE_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".svg",
+}
 
 # All extensions allowed for upload (document types + image types)
-UPLOAD_ALLOWED_EXTENSIONS = ALLOWED_EXTENSIONS | IMAGE_EXTENSIONS
+UPLOAD_ALLOWED_EXTENSIONS = ALLOWED_EXTENSIONS | PREVIEWABLE_IMAGE_EXTENSIONS
 
 # File search bounds: a search must never walk an entire home directory.
 SEARCH_MAX_ENTRIES = 20_000
@@ -143,7 +151,7 @@ async def upload_file(file: UploadFile = File(...)):
 
     # Determine content type
     content_type = file.content_type or "application/octet-stream"
-    is_image = ext in IMAGE_EXTENSIONS
+    is_image = ext in PREVIEWABLE_IMAGE_EXTENSIONS
 
     logger.info(
         "File uploaded: %s -> %s (%d bytes, type=%s, image=%s)",
@@ -787,10 +795,10 @@ async def serve_local_image(path: str):
         raise HTTPException(status_code=404, detail="Image file not found")
 
     ext = resolved.suffix.lower()
-    if ext not in IMAGE_EXTENSIONS:
+    if ext not in PREVIEWABLE_IMAGE_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Not an image file (supported: {', '.join(sorted(IMAGE_EXTENSIONS))})",
+            detail=f"Not an image file (supported: {', '.join(sorted(PREVIEWABLE_IMAGE_EXTENSIONS))})",
         )
 
     media_types = {

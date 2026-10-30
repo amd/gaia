@@ -15,6 +15,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `chat`, `doc` or `file` agents get this agent instead; Agent UI chats saved
   under them stay read-only. MCP settings saved for `installed:chat` no
   longer apply (#6099).
+### For integrators: contract 2.26
+
+- **"Always" answers can be listed and revoked** (contract **2.26**).
+  `GET /v1/gaia/sessions/{session_id}/grants` lists what a session's user
+  answered "always" to, as `{ key, label }`, including answers given in a turn
+  still running; `DELETE` on the same path revokes one (`?key=`) or all, from
+  the very next gated call. The Agent UI uses it to offer **Always allow** on
+  the flagship's prompts and to list and revoke those grants with the chat's
+  own. An unknown session or key is a `404`.
+- **`needs_confirmation` carries `always_label`** beside `always_scope`: the
+  same grant in plain words (`editing notes.md`), when there is one.
 
 ### Fixed
 

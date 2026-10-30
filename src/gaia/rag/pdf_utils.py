@@ -15,6 +15,95 @@ from typing import List, Tuple
 logger = logging.getLogger(__name__)
 
 
+def prepare_image_for_vlm(image_bytes: bytes) -> dict:
+    """Downscale and re-encode an image as the PNG the VLM is sent.
+
+    Returns a dict with ``image_bytes``, ``width``, ``height``, ``format`` and
+    ``size_kb``. Raises ``PIL.UnidentifiedImageError`` (an ``OSError``) when
+    Pillow cannot decode the bytes.
+    """
+    from PIL import Image
+
+    return prepare_pil_image_for_vlm(Image.open(io.BytesIO(image_bytes)))
+
+
+def prepare_pil_image_for_vlm(img) -> dict:
+    """:func:`prepare_image_for_vlm` for an already-decoded ``PIL.Image``."""
+    from PIL import Image
+
+    # Get dimensions
+    width, height = img.size
+
+    # A plain convert("RGB") clips 16-bit samples to 255: the image turns white.
+    if img.mode.startswith("I;16"):
+        img = img.convert("I").point(lambda v: v * (1 / 257)).convert("L")
+
+    # Convert to RGB if needed
+    if img.mode not in ["RGB", "RGBA"]:
+        logger.debug(f"Converting {img.mode} to RGB")
+        img = img.convert("RGB")
+
+    # Resize if too large
+    MAX_DIMENSION = 1600
+    if width > MAX_DIMENSION or height > MAX_DIMENSION:
+        scale = min(MAX_DIMENSION / width, MAX_DIMENSION / height)
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+
+        logger.info(f"   Resizing: {width}x{height} → {new_width}x{new_height}")
+        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+    # Save as optimized PNG
+    png_buffer = io.BytesIO()
+    img.save(png_buffer, format="PNG", optimize=True, compress_level=6)
+    png_bytes = png_buffer.getvalue()
+    size_kb = len(png_bytes) / 1024
+
+    # Iteratively compress until target size is reached
+    MAX_SIZE_KB = 300
+    compression_iterations = 0
+    MAX_ITERATIONS = 5
+
+    while size_kb > MAX_SIZE_KB and compression_iterations < MAX_ITERATIONS:
+        compression_iterations += 1
+        logger.info(
+            f"   Compressing (iteration {compression_iterations}): {size_kb:.0f}KB → <{MAX_SIZE_KB}KB"
+        )
+
+        # Reduce size by 50% each iteration
+        img = img.resize(
+            (img.width // 2, img.height // 2),
+            Image.Resampling.LANCZOS,
+        )
+
+        png_buffer = io.BytesIO()
+        img.save(
+            png_buffer,
+            format="PNG",
+            optimize=True,
+            compress_level=9,
+        )
+        png_bytes = png_buffer.getvalue()
+        size_kb = len(png_bytes) / 1024
+
+    if size_kb <= MAX_SIZE_KB:
+        logger.info(
+            f"   ✅ Compressed to {size_kb:.0f}KB ({img.width}x{img.height}) in {compression_iterations} iteration(s)"
+        )
+    else:
+        logger.warning(
+            f"   ⚠️  Could not compress below {MAX_SIZE_KB}KB after {MAX_ITERATIONS} iterations (final: {size_kb:.0f}KB)"
+        )
+
+    return {
+        "image_bytes": png_bytes,
+        "width": img.width,
+        "height": img.height,
+        "format": "png",
+        "size_kb": size_kb,
+    }
+
+
 def extract_images_from_page_pymupdf(pdf_path: str, page_num: int) -> List[dict]:
     """
     Extract images using PyMuPDF (more reliable than pypdf for images).
@@ -30,7 +119,6 @@ def extract_images_from_page_pymupdf(pdf_path: str, page_num: int) -> List[dict]
 
     try:
         import fitz  # PyMuPDF
-        from PIL import Image
 
         doc = fitz.open(pdf_path)
         try:
@@ -44,92 +132,12 @@ def extract_images_from_page_pymupdf(pdf_path: str, page_num: int) -> List[dict]
 
                     # Extract image bytes (PyMuPDF handles decoding)
                     base_image = doc.extract_image(xref)
-                    image_bytes = base_image["image"]
-                    _img_ext = base_image["ext"]  # jpg, png, etc.
-
-                    # Open with PIL for processing
-                    img = Image.open(io.BytesIO(image_bytes))
-
-                    # Get dimensions
-                    width, height = img.size
-                    size_kb = len(image_bytes) / 1024
-
-                    # Convert to RGB if needed
-                    if img.mode not in ["RGB", "RGBA"]:
-                        logger.debug(f"Converting {img.mode} to RGB")
-                        img = img.convert("RGB")
-
-                    # Resize if too large
-                    MAX_DIMENSION = 1600
-                    if width > MAX_DIMENSION or height > MAX_DIMENSION:
-                        scale = min(MAX_DIMENSION / width, MAX_DIMENSION / height)
-                        new_width = int(width * scale)
-                        new_height = int(height * scale)
-
-                        logger.info(
-                            f"   Resizing: {width}x{height} → {new_width}x{new_height}"
-                        )
-                        img = img.resize(
-                            (new_width, new_height), Image.Resampling.LANCZOS
-                        )
-
-                    # Save as optimized PNG
-                    png_buffer = io.BytesIO()
-                    img.save(png_buffer, format="PNG", optimize=True, compress_level=6)
-                    png_bytes = png_buffer.getvalue()
-                    size_kb = len(png_bytes) / 1024
-
-                    # Iteratively compress until target size is reached
-                    MAX_SIZE_KB = 300
-                    compression_iterations = 0
-                    MAX_ITERATIONS = 5
-
-                    while (
-                        size_kb > MAX_SIZE_KB
-                        and compression_iterations < MAX_ITERATIONS
-                    ):
-                        compression_iterations += 1
-                        logger.info(
-                            f"   Compressing (iteration {compression_iterations}): {size_kb:.0f}KB → <{MAX_SIZE_KB}KB"
-                        )
-
-                        # Reduce size by 50% each iteration
-                        img = img.resize(
-                            (img.width // 2, img.height // 2),
-                            Image.Resampling.LANCZOS,
-                        )
-
-                        png_buffer = io.BytesIO()
-                        img.save(
-                            png_buffer,
-                            format="PNG",
-                            optimize=True,
-                            compress_level=9,
-                        )
-                        png_bytes = png_buffer.getvalue()
-                        size_kb = len(png_bytes) / 1024
-
-                    if size_kb <= MAX_SIZE_KB:
-                        logger.info(
-                            f"   ✅ Compressed to {size_kb:.0f}KB ({img.width}x{img.height}) in {compression_iterations} iteration(s)"
-                        )
-                    else:
-                        logger.warning(
-                            f"   ⚠️  Could not compress below {MAX_SIZE_KB}KB after {MAX_ITERATIONS} iterations (final: {size_kb:.0f}KB)"
-                        )
-
-                    images.append(
-                        {
-                            "image_bytes": png_bytes,
-                            "width": img.width,
-                            "height": img.height,
-                            "format": "png",
-                            "size_kb": size_kb,
-                        }
-                    )
+                    image = prepare_image_for_vlm(base_image["image"])
+                    images.append(image)
 
                     logger.debug(
-                        f"Extracted image {img_index + 1}: {img.width}x{img.height}, {size_kb:.1f}KB"
+                        f"Extracted image {img_index + 1}: "
+                        f"{image['width']}x{image['height']}, {image['size_kb']:.1f}KB"
                     )
 
                 except Exception as e:
