@@ -87,6 +87,8 @@ from gaia_agent_email.tools.voice_tools import VoiceToolsMixin
 from gaia_agent_email.tools.waiting_on_you_tools import WaitingOnYouToolsMixin
 from gaia_agent_email.voice_profile import render_style_guidance
 
+from gaia.utils.sqlite_wal import enable_wal
+
 if TYPE_CHECKING:  # import-cheap: only for annotations, never at runtime
     from gaia.agents.base.goal_store import Proposal
 
@@ -925,7 +927,7 @@ class EmailTriageAgent(
         # WAL lets a reader proceed during a write. Scoped to the email agent's
         # connection — not a core-mixin change.
         self._db.execute("PRAGMA busy_timeout = 5000")
-        self._db.execute("PRAGMA journal_mode = WAL")
+        enable_wal(self._db)
         action_store.init_schema(self)
         schedule_store.init_schema(self)
         task_store.init_schema(self)
@@ -1353,9 +1355,8 @@ class EmailTriageAgent(
         return result
 
     def _register_tools(self) -> None:
-        # Mirror ConnectorsDemoAgent: clear the
-        # module-level registry before registering this agent's tools so
-        # we don't carry tools over from a prior agent in the same
+        # Clear the module-level registry before registering this agent's
+        # tools so we don't carry tools over from a prior agent in the same
         # process.
         _TOOL_REGISTRY.clear()
         self._reset_organize_counter()

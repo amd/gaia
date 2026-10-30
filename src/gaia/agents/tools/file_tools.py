@@ -62,8 +62,16 @@ from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_defaul
 from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.logger import get_logger
 from gaia.security import BackupError
+from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
+
+#: Root-level operating-system trees a deep search walks last, so they cannot
+#: spend the budget before user folders. Applied only at a filesystem root,
+#: never to a named folder such as ``~/Library``.
+_DEEP_SYSTEM_DIRS = frozenset(
+    {"System", "Library", "private", "usr", "opt", "proc", "sys", "dev", "run", "snap"}
+)
 
 #: Version-control and dependency folders content search does not descend into
 #: (thousands of files, none the user wrote); searching one directly still works.
@@ -641,7 +649,12 @@ class FileSearchToolsMixin:
                 walked = set()
                 guard = ProtectedFolders(self)
 
-                def search_location(location: Path, max_depth: int = 999):
+                def search_location(
+                    location: Path,
+                    max_depth: int = 999,
+                    defer_root_dirs=frozenset(),
+                    deferred=None,
+                ):
                     """Search a specific location up to max_depth."""
                     if guard.blocks(location) or not location.exists():
                         return
@@ -685,6 +698,14 @@ class FileSearchToolsMixin:
                                 if item.name.startswith(
                                     (".", "$", "Windows", "Program Files")
                                 ):
+                                    continue
+                                if (
+                                    deferred is not None
+                                    and current_path == location
+                                    and item.name in defer_root_dirs
+                                    and item.is_dir()
+                                ):
+                                    deferred.append(item)
                                     continue
                                 # Skip build/package directories
                                 if item.is_dir() and item.name in _SKIP_DIRS:
@@ -783,7 +804,7 @@ class FileSearchToolsMixin:
                     common_locations = confine_roots(
                         self,
                         [
-                            home / "Documents",
+                            documents_dir(home),
                             home / "Downloads",
                             home / "Desktop",
                             home / "OneDrive",
@@ -888,6 +909,15 @@ class FileSearchToolsMixin:
 
                 logger.debug("Phase 2: Deep search across drive(s)...")
 
+                # Search the user's home first. A root-first walk can spend its
+                # entire budget in /System, /Library, or /usr before reaching
+                # the files the user actually means by "my computer".
+                for home_root in confine_roots(self, [home]):
+                    logger.debug("Searching home first: %s", home_root)
+                    search_location(home_root, max_depth=999)
+                    if len(matching_files) >= 10:
+                        break
+
                 if platform.system() == "Windows":
                     import string
 
@@ -898,11 +928,36 @@ class FileSearchToolsMixin:
                     ]
                 else:
                     drives = [Path("/")]
-                for drive in confine_roots(self, drives):
-                    logger.debug("Searching %s...", drive)
-                    search_location(drive, max_depth=999)
-                    if len(matching_files) >= 10:
-                        break
+                if len(matching_files) < 10:
+                    for drive in confine_roots(self, drives):
+                        drive = Path(drive)
+                        # GAIA_ALLOWED_PATHS can confine "/" and home to the
+                        # same folder; walking it twice would list each hit twice.
+                        if any(drive.is_relative_to(done) for done in walked):
+                            continue
+                        logger.debug("Searching %s...", drive)
+                        # A sandbox may confine ``/`` to a user-selected child
+                        # directory. Only the actual filesystem root has OS
+                        # trees to defer; a selected folder named Library is data.
+                        deferred: List[Path] = []
+                        search_location(
+                            drive,
+                            max_depth=999,
+                            defer_root_dirs=(
+                                _DEEP_SYSTEM_DIRS
+                                if drive == Path(drive.anchor)
+                                else frozenset()
+                            ),
+                            deferred=deferred,
+                        )
+                        # Walked last, not skipped: one the budget never reaches
+                        # is reported in unfinished_paths, not counted as searched.
+                        for os_tree in deferred:
+                            if len(matching_files) >= 10:
+                                break
+                            search_location(os_tree, max_depth=999)
+                        if len(matching_files) >= 10:
+                            break
 
                 # Stop progress indicator
                 if hasattr(self, "console") and hasattr(self.console, "stop_progress"):
@@ -3156,11 +3211,11 @@ class FileSearchToolsMixin:
 
                 # Determine directories to scan
                 location_map = {
-                    "documents": [home / "Documents"],
+                    "documents": [documents_dir(home)],
                     "downloads": [home / "Downloads"],
                     "desktop": [home / "Desktop"],
                     "all": [
-                        home / "Documents",
+                        documents_dir(home),
                         home / "Downloads",
                         home / "Desktop",
                         home / "OneDrive",
