@@ -6020,6 +6020,7 @@ class LemonadeClient:
         finally:
             self.model = active_model
 
+    @guard_inference()
     def rerank(
         self,
         query: str,
