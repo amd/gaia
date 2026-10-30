@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.install_hints import CHAT_WHEEL_AGENT_IDS
+from gaia.agents.install_hints import LEGACY_FLAGSHIP_AGENT_IDS
 from gaia.ui._chat_helpers import _agent_unavailable_message
 
 
@@ -65,18 +65,18 @@ class TestRetiredChatIdsGetTheInstallHint:
             "gaia.ui._chat_helpers.importlib.util.find_spec", return_value=None
         )
 
-    @pytest.mark.parametrize("agent_id", sorted(CHAT_WHEEL_AGENT_IDS))
+    @pytest.mark.parametrize("agent_id", sorted(LEGACY_FLAGSHIP_AGENT_IDS))
     def test_names_the_package_and_the_install_command(self, agent_id):
         registry = MagicMock()
         registry.get_load_error.return_value = None
         with self._without_the_wheel():
             msg = _agent_unavailable_message(agent_id, registry)
 
-        assert "gaia-agent-chat" in msg
+        assert "gaia-agent-gaia" in msg
         assert "pip install" in msg
         assert agent_id in msg
 
-    @pytest.mark.parametrize("agent_id", sorted(CHAT_WHEEL_AGENT_IDS))
+    @pytest.mark.parametrize("agent_id", sorted(LEGACY_FLAGSHIP_AGENT_IDS))
     def test_does_not_send_the_user_to_a_selector_it_is_absent_from(self, agent_id):
         with self._without_the_wheel():
             msg = _agent_unavailable_message(agent_id, None)
@@ -98,5 +98,5 @@ class TestRetiredChatIdsGetTheInstallHint:
     def test_an_unrelated_agent_still_gets_the_generic_message(self):
         with self._without_the_wheel():
             msg = _agent_unavailable_message("some-third-party-agent", None)
-        assert "gaia-agent-chat" not in msg
+        assert "gaia-agent-gaia" not in msg
         assert "selector" in msg.lower()

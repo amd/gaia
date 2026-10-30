@@ -13,10 +13,10 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
-from gaia_agent_chat.python_jobs import (  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent.python_jobs import (  # noqa: E402
     describe_code,
     may_write_files,
 )
@@ -321,8 +321,8 @@ def tools(project):
         mp.delenv(PROJECT_ROOT_ENV, raising=False)
         mp.chdir(project)
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             ChatAgent(ChatAgentConfig(silent_mode=True, allowed_paths=[str(project)]))
         try:
@@ -374,16 +374,14 @@ def test_a_write_the_check_misses_is_caught_by_the_folder_scan(
     target = project / "sneaky.txt"
     code = f"open(r'{target}', 'w').write('x')"
     # Stands in for a write no static check could see.
-    with patch("gaia_agent_chat.agent.may_write_files", return_value=False):
+    with patch("gaia_agent.chat_agent.may_write_files", return_value=False):
         (turn,) = _run(tools, tmp_path, "run_python", code=code)
     assert turn["incomplete"] is True
     assert str(target) in turn["untracked"][0]["paths"]
 
 
 def test_a_scan_cut_short_counts_as_a_possible_write(tools, tmp_path):
-    with patch(
-        "gaia_agent_chat.python_jobs.files_written_since", return_value=([], False)
-    ):
+    with patch("gaia_agent.python_jobs.files_written_since", return_value=([], False)):
         (turn,) = _run(tools, tmp_path, "run_python", code="print(1)")
     assert turn["incomplete"] is True
     assert turn["untracked"][0]["may_write"] is True
@@ -392,7 +390,7 @@ def test_a_scan_cut_short_counts_as_a_possible_write(tools, tmp_path):
 def test_a_run_that_fails_part_way_counts_as_a_possible_write(tools, tmp_path):
     with (
         patch(
-            "gaia_agent_chat.agent.run_python_job",
+            "gaia_agent.chat_agent.run_python_job",
             side_effect=RuntimeError("interrupted"),
         ),
         fs.recording_turn(SID, root=tmp_path),

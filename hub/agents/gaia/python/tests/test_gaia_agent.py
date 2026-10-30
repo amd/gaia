@@ -388,7 +388,7 @@ def test_flagship_step_limit_env_and_explicit_values_win(monkeypatch):
 
 def test_an_unset_step_limit_resolves_to_the_flagship_default(monkeypatch):
     """The CLI passes ``max_steps=None`` when --max-steps is not given."""
-    from gaia_agent_chat.agent import ChatAgent
+    from gaia_agent.chat_agent import ChatAgent
 
     seen = {}
 

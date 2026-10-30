@@ -20,15 +20,15 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-import gaia_agent_chat.agent as agent_module  # noqa: E402
-from gaia_agent_chat.agent import ChatAgent  # noqa: E402
+import gaia_agent.chat_agent as agent_module  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent  # noqa: E402
 
 from gaia.utils import file_lock  # noqa: E402
 from gaia.utils.file_watcher import FileChangeHandler  # noqa: E402
 
-AGENT_LOGGER = "gaia_agent_chat.agent"
+AGENT_LOGGER = "gaia_agent.chat_agent"
 LOCKED = {
     "success": False,
     "error": "Could not read report.txt: another program may have it open.",
