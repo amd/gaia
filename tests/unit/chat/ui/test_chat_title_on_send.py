@@ -959,12 +959,118 @@ def test_a_new_turn_cancels_the_chats_pending_title(
         await _turn("And one about coffee?")
         # The new turn queued its own after-turn title in place of the old one.
         assert sid in ch._AUTO_TITLE_PENDING
-        ch._cancel_pending_title(sid)
+        await ch._cancel_pending_title(sid)
         await asyncio.gather(*list(ch._background_tasks), return_exceptions=True)
 
     asyncio.run(_drive())
 
     assert cancelled_when_agent_ran == [0, 1]
+
+
+def _turns_with_a_slow_title_cancel(monkeypatch, cleanup):
+    """Run turns whose pending title takes *cleanup* to stop once cancelled.
+
+    Returns ``(turn, finish, seen)``: each turn's agent appends to *seen* whether
+    an earlier title was still running when the agent started.
+    """
+    import threading
+
+    started, stopped = [], []
+    agent_ran = threading.Event()
+
+    async def _waiting_title(*_args, **_kwargs):
+        started.append(True)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await cleanup(agent_ran)
+            raise
+        finally:
+            stopped.append(True)
+
+    monkeypatch.setattr(ch, "_title_when_model_free", _waiting_title)
+    monkeypatch.setattr(ch, "_AUTO_TITLE_MAX_ATTEMPTS", 1000)
+    seen = []
+    db = ChatDatabase(":memory:")
+    db.set_setting("custom_model", LOCAL_MODEL)
+    session = db.create_session(title="New Task", agent_type="gaia")
+    sid = session["id"]
+
+    def _fake_dispatch(sse_handler, request, history_pairs, model_id, agent, **kw):
+        seen.append(
+            {
+                "title_running": len(started) != len(stopped),
+                "slot_held": sid in ch._AUTO_TITLE_RUNNING,
+            }
+        )
+        agent_ran.set()
+        sse_handler._emit({"type": "answer", "content": "Tea began in China."})
+
+    monkeypatch.setattr(ch, "_dispatch_sidecar_query", _fake_dispatch)
+
+    async def _turn(question):
+        agent_ran.clear()
+        db.begin_turn(sid, question)
+        ch._set_provisional_title(db, sid, question)
+        request = ChatRequest(
+            session_id=sid, message=question, stream=True, agent_type="gaia"
+        )
+        async for _ in ch._stream_chat_impl(
+            SimpleNamespace(handler=None), db, session, request
+        ):
+            pass
+        for _ in range(1000):
+            if len(started) > len(stopped):
+                break
+            await asyncio.sleep(0)
+        db.add_message(sid, "assistant", "Tea began in China.", ends_turn=True)
+
+    async def _finish():
+        await ch._cancel_pending_title(sid)
+        await asyncio.gather(*list(ch._background_tasks), return_exceptions=True)
+
+    return _turn, _finish, seen
+
+
+def test_a_title_slow_to_stop_is_stopped_before_the_agent_runs(
+    monkeypatch, local_lemonade, sidecar_flagship
+):
+    """The cancelled title's cleanup only ends once the agent has started,
+    unless the turn waits for it: the agent must never see it running."""
+
+    async def _until_the_agent_runs(agent_ran):
+        await asyncio.to_thread(agent_ran.wait, 0.5)
+
+    turn, finish, seen = _turns_with_a_slow_title_cancel(
+        monkeypatch, _until_the_agent_runs
+    )
+
+    async def _drive():
+        await turn(ESSAY)
+        await turn("And one about coffee?")
+        await finish()
+
+    asyncio.run(_drive())
+
+    assert seen == [{"title_running": False, "slot_held": False}] * 2
+
+
+def test_turns_in_a_tight_loop_never_overlap_the_last_title(
+    monkeypatch, local_lemonade, sidecar_flagship
+):
+    async def _a_short_cleanup(_agent_ran):
+        await asyncio.sleep(0.01)
+
+    turn, finish, seen = _turns_with_a_slow_title_cancel(monkeypatch, _a_short_cleanup)
+
+    async def _drive():
+        for i in range(8):
+            await turn(f"Question {i} about the history of tea?")
+        await finish()
+
+    asyncio.run(_drive())
+
+    assert seen == [{"title_running": False, "slot_held": False}] * 8
 
 
 def test_a_turn_cancels_only_its_own_chats_title():
@@ -974,12 +1080,12 @@ def test_a_turn_cancels_only_its_own_chats_title():
         theirs = ch._spawn_after_turn_title(never.wait(), "chat-b")
         await asyncio.sleep(0)
 
-        ch._cancel_pending_title("chat-a")
-        await asyncio.gather(mine, return_exceptions=True)
+        await ch._cancel_pending_title("chat-a")
 
+        # Awaiting the cancel is enough: the task has already stopped.
         assert mine.cancelled() and not theirs.done()
         assert "chat-a" not in ch._AUTO_TITLE_PENDING
-        ch._cancel_pending_title("chat-b")
+        await ch._cancel_pending_title("chat-b")
         await asyncio.gather(theirs, return_exceptions=True)
         assert theirs.cancelled()
 
@@ -996,7 +1102,7 @@ def test_a_finished_title_is_forgotten_and_never_cancelled():
         await asyncio.sleep(0)
 
         assert "chat-c" not in ch._AUTO_TITLE_PENDING
-        ch._cancel_pending_title("chat-c")  # nothing pending: a no-op
+        await ch._cancel_pending_title("chat-c")  # nothing pending: a no-op
         assert not done.cancelled()
 
     asyncio.run(_drive())

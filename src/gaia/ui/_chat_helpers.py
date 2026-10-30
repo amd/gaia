@@ -928,11 +928,16 @@ def _first_exchange(
     return user_msg, assistant_msg
 
 
-def _cancel_pending_title(session_id: str) -> None:
-    """Cancel *session_id*'s after-turn title, if one is still waiting or running."""
+async def _cancel_pending_title(session_id: str) -> None:
+    """Cancel *session_id*'s after-turn title and wait until it has stopped.
+
+    ``task.cancel()`` only schedules the cancel; awaiting the task means its
+    cleanup (releasing the chat's title slot) is done before the turn goes on.
+    """
     task = _AUTO_TITLE_PENDING.pop(session_id, None)
     if task is not None and not task.done():
         task.cancel()
+        await asyncio.wait({task})
         logger.info(
             "Auto-title: a new turn in session %s cancelled its pending title",
             session_id[:8],
@@ -4134,7 +4139,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             yield f"data: {json.dumps({'type': 'answer', 'content': refusal})}\n\n"
             yield f"data: {json.dumps(_done_event(msg_id, refusal, False))}\n\n"
             return
-        _cancel_pending_title(session_id)
+        await _cancel_pending_title(session_id)
         _spawn_background(
             _maybe_update_session_title(
                 db=db,
