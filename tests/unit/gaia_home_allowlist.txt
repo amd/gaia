@@ -2,7 +2,7 @@
 # Format: <file>:<rule> <count>. Counts may only go DOWN — build new paths from
 # gaia.config.gaia_home(). Enforced by tests/unit/test_gaia_home_ratchet.py.
 
-hub/agents/chat/python/gaia_agent_chat/agent.py:home_join 1
+hub/agents/gaia/python/gaia_agent/chat_agent.py:home_join 1
 hub/agents/email/python/gaia_agent_email/briefing.py:home_join 1
 hub/agents/email/python/gaia_agent_email/config.py:home_join 2
 hub/agents/email/python/gaia_agent_email/spec_html.py:home_join 1

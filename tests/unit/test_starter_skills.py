@@ -231,11 +231,11 @@ def _chat_agent_inline_tools() -> frozenset[str]:
     every non-``chat`` profile runs, so a skill that has to ask the user a
     question before acting can legitimately declare it.
     """
-    # Ships with the standalone gaia-agent-chat wheel, which the core-only test
+    # Ships with the flagship gaia-agent-gaia wheel, which the core-only test
     # job does not install; skip rather than judge the list against nothing.
-    gaia_agent_chat = pytest.importorskip("gaia_agent_chat")
+    gaia_agent = pytest.importorskip("gaia_agent")
 
-    source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
+    source = (Path(gaia_agent.__file__).parent / "chat_agent.py").read_text(
         encoding="utf-8"
     )
     inline = {"execute_python_file", "run_python", "list_files", "request_user_input"}
@@ -680,13 +680,13 @@ def test_daily_brief_and_guide_do_not_underclaim_tts_or_scheduling():
     """#4252: daily-brief and the guide once said TTS doesn't exist — it does.
 
     ``text_to_speech`` is a real, always-registered ChatAgent tool
-    (``gaia_agent_chat/agent.py``), so a doc listing it as a missing capability
+    (``gaia_agent/chat_agent.py``), so a doc listing it as a missing capability
     tells the model to under-promise. Skill-aware scheduling genuinely is still
     missing (``gaia schedule add --skill`` is rejected, #1019), so that claim
     must stay.
     """
-    gaia_agent_chat = pytest.importorskip("gaia_agent_chat")
-    source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
+    gaia_agent = pytest.importorskip("gaia_agent")
+    source = (Path(gaia_agent.__file__).parent / "chat_agent.py").read_text(
         encoding="utf-8"
     )
     assert "def text_to_speech(" in source
@@ -723,7 +723,7 @@ def test_the_guides_run_a_skill_snippet_still_type_checks():
     followed by ``process_query``. Renaming any of those would leave the guide
     quietly wrong, which is worse than no guide at all.
     """
-    chat_agent = pytest.importorskip("gaia_agent_chat.agent")
+    chat_agent = pytest.importorskip("gaia_agent.chat_agent")
 
     assert hasattr(chat_agent.ChatAgent, "load_skill")
     assert hasattr(chat_agent.ChatAgent, "unload_skill")
