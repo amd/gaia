@@ -110,6 +110,21 @@ class TestStageCache:
         with pytest.raises(SystemExit):
             tiktoken_bundle.stage_cache(tmp_path / "cache")
 
+    def test_a_hung_download_fails_the_build_instead_of_hanging(
+        self, tmp_path, monkeypatch
+    ):
+        def hang(cmd, **kwargs):
+            assert kwargs["timeout"] == 300
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+        monkeypatch.setattr(tiktoken_bundle.subprocess, "run", hang)
+
+        with pytest.raises(SystemExit) as excinfo:
+            tiktoken_bundle.stage_cache(tmp_path / "cache")
+
+        assert "within 300s" in str(excinfo.value)
+        assert "openaipublic.blob.core.windows.net" in str(excinfo.value)
+
 
 def test_the_tokenizer_switches_to_the_bundle_before_loading(
     tmp_path, monkeypatch, no_cache_env
