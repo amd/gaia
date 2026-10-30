@@ -48,3 +48,24 @@ func TestTerminalUpdateNoticeRunsOnce(t *testing.T) {
 		t.Errorf("notice changed on second check: %q", m.launchNotice)
 	}
 }
+
+func TestTerminalUpdateNoticeAcceptsAPaddedVPrefixedCoreVersion(t *testing.T) {
+	m := FlagshipModel{terminalVersion: "v0.25.1"}.noteTerminalUpdate("  v0.25.2\n")
+	if !strings.Contains(m.launchNotice, "Terminal UI v0.25.1 is older than installed GAIA v0.25.2") {
+		t.Fatalf("notice = %q", m.launchNotice)
+	}
+}
+
+func TestTerminalUpdateNoticeKeepsAnEarlierLaunchNotice(t *testing.T) {
+	m := FlagshipModel{terminalVersion: "0.25.1", launchNotice: "full access is on"}.noteTerminalUpdate("0.25.2")
+	if !strings.HasPrefix(m.launchNotice, "full access is on\n") || !strings.Contains(m.launchNotice, "GAIA v0.25.2") {
+		t.Fatalf("notice = %q, want both notices", m.launchNotice)
+	}
+}
+
+func TestTerminalUpdateNoticeIgnoresAnRCOfTheSameRelease(t *testing.T) {
+	m := FlagshipModel{terminalVersion: "0.25.2"}.noteTerminalUpdate("0.25.2-rc.4")
+	if m.launchNotice != "" {
+		t.Fatalf("notice = %q, an RC core is older than the final TUI", m.launchNotice)
+	}
+}
