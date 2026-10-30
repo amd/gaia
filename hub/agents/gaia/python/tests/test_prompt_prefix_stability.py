@@ -168,6 +168,9 @@ def flagship(monkeypatch, tmp_path):
             def _retrieve_chunks_from_file(self, query, file_path):
                 return [], []
 
+            def document_scripts(self, _file_path):
+                return ["Latin"]
+
         agent.rag = _FakeRag()
 
         procedure = DistilledProcedure(

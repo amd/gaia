@@ -2443,8 +2443,6 @@ These positions indicate where to split the text."""
                 a decodable image, it has more than MAX_IMAGE_PAGES pages, or the
                 VLM found no text in it.
         """
-        import io  # pylint: disable=import-outside-toplevel
-
         from PIL import Image  # pylint: disable=import-outside-toplevel
 
         from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
