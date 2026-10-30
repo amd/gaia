@@ -75,6 +75,7 @@ def get_git_hash(hash_length: int = 8) -> str:
             ["git", "rev-parse", "--short", "HEAD"],
             stderr=subprocess.DEVNULL,
             text=True,
+            timeout=10,
         ).strip()
         return git_hash[:hash_length]
     except Exception:
