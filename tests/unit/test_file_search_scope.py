@@ -532,6 +532,44 @@ class TestFullAccessSearchesTheWorkspace:
 
         assert root_depths == {_FS_ROOT: SHALLOW_ROOT_DEPTH}
 
+    def test_deep_search_checks_home_before_root_system_trees(
+        self, tmp_path, monkeypatch, registry
+    ):
+        """An undirected search reaches user files before a broad-root budget is spent."""
+        import gaia.agents.tools.file_tools as file_tools_module
+        from gaia.agents.tools import search_scope
+
+        home = (tmp_path / "home").resolve()
+        project = (tmp_path / "project").resolve()
+        fake_drive = (tmp_path / "drive").resolve()
+        home.mkdir()
+        project.mkdir()
+        (fake_drive / "System").mkdir(parents=True)
+        user_hit = home / "invoice_user.txt"
+        system_hit = fake_drive / "System" / "invoice_system.txt"
+        user_hit.write_text("user file")
+        system_hit.write_text("system file")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        monkeypatch.chdir(project)
+        monkeypatch.setattr(file_tools_module.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 2)
+        monkeypatch.setattr(
+            file_tools_module,
+            "search_roots",
+            lambda *_args, **_kwargs: [project],
+        )
+
+        def confined(_host, roots):
+            return [home] if Path(roots[0]) == home else [fake_drive]
+
+        monkeypatch.setattr(file_tools_module, "confine_roots", confined)
+        search_file = _register_search_file(_Sandbox(home, project, fake_drive))
+
+        result = search_file("invoice", deep_search=True)
+
+        assert result["files"] == [str(user_hit)]
+        assert str(system_hit) not in result["files"]
+
     def test_deep_search_still_sweeps_the_drive_when_asked(
         self, full_access_project, listed_dirs, monkeypatch
     ):
@@ -974,3 +1012,175 @@ class TestANamedExtensionOutranksTheDefaultAllowlist:
         result = search_file("*.md")
 
         assert "notes.md" in [Path(f).name for f in result["files"]]
+
+
+def _deep_search_setup(tmp_path, monkeypatch, confined):
+    """Home + an empty project; *confined* replaces confine_roots."""
+    import gaia.agents.tools.file_tools as file_tools_module
+
+    home = (tmp_path / "home").resolve()
+    project = (tmp_path / "project").resolve()
+    home.mkdir()
+    project.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.chdir(project)
+    monkeypatch.setattr(file_tools_module.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(file_tools_module, "search_roots", lambda *_a, **_k: [project])
+    monkeypatch.setattr(file_tools_module, "confine_roots", confined)
+    return file_tools_module, home, project
+
+
+def test_home_first_and_root_confined_to_one_folder_lists_each_hit_once(
+    tmp_path, monkeypatch, registry
+):
+    """GAIA_ALLOWED_PATHS can map both home and / to one folder: walk it once."""
+    allowed = tmp_path / "home" / "Work"
+
+    def confined(_host, roots):
+        # Phase 1's common-locations sweep finds nothing; phase 2 maps to one folder.
+        return [] if Path(roots[0]).name == "Documents" else [allowed]
+
+    _, home, project = _deep_search_setup(tmp_path, monkeypatch, confined)
+    allowed.mkdir()
+    for i in range(3):
+        (allowed / f"invoice_{i}.txt").write_text("x")
+
+    search_file = _register_search_file(_Sandbox(allowed, project))
+    result = search_file("invoice", deep_search=True)
+
+    assert sorted(result["files"]) == sorted(
+        str((allowed / f"invoice_{i}.txt").resolve()) for i in range(3)
+    )
+    assert len(result["files"]) == len(set(result["files"]))
+
+
+def test_home_first_never_widens_past_the_allowed_paths(
+    tmp_path, monkeypatch, registry
+):
+    """When the allowlist excludes home, the home-first walk searches nothing there."""
+    outside = tmp_path / "data"
+
+    def confined(_host, roots):
+        return [outside] if Path(roots[0]) != Path.home() else []
+
+    _, home, project = _deep_search_setup(tmp_path, monkeypatch, confined)
+    outside.mkdir()
+    (home / "invoice_private.txt").write_text("x")
+    (outside / "invoice_ok.txt").write_text("x")
+
+    search_file = _register_search_file(_Sandbox(outside, project))
+    result = search_file("invoice", deep_search=True)
+
+    assert result["files"] == [str((outside / "invoice_ok.txt").resolve())]
+    assert str(home) not in result.get("searched_paths", [])
+
+
+def test_home_first_still_skips_protected_folders(tmp_path, monkeypatch, registry):
+    """The home walk asks the protected-folder guard like every other walk."""
+    import gaia.agents.tools.file_tools as file_tools_module
+
+    def confined(_host, roots):
+        return [Path.home()] if Path(roots[0]) == Path.home() else []
+
+    _, home, project = _deep_search_setup(tmp_path, monkeypatch, confined)
+    (home / "Photos").mkdir()
+    (home / "Photos" / "invoice_guarded.txt").write_text("x")
+    (home / "invoice_open.txt").write_text("x")
+    blocked = []
+
+    class Guard:
+        skipped = []
+
+        def __init__(self, *_a, **_k):
+            pass
+
+        def blocks(self, path):
+            if Path(path).name == "Photos":
+                blocked.append(Path(path))
+                return True
+            return False
+
+        def note(self):
+            return ""
+
+    monkeypatch.setattr(file_tools_module, "ProtectedFolders", Guard)
+    search_file = _register_search_file(_Sandbox(home, project))
+    result = search_file("invoice", deep_search=True)
+
+    assert result["files"] == [str((home / "invoice_open.txt").resolve())]
+    assert blocked, "the guard was never consulted for the protected folder"
+
+
+def test_a_user_folder_named_like_an_os_tree_is_still_searched(
+    tmp_path, monkeypatch, registry
+):
+    """The OS-tree skip applies at the filesystem root only, never inside home."""
+
+    def confined(_host, roots):
+        return [Path.home()] if Path(roots[0]) == Path.home() else []
+
+    _, home, project = _deep_search_setup(tmp_path, monkeypatch, confined)
+    for name in ("Library", "System", "usr", "opt"):
+        (home / name).mkdir()
+        (home / name / f"invoice_{name}.txt").write_text("x")
+
+    search_file = _register_search_file(_Sandbox(home, project))
+    result = search_file("invoice", deep_search=True)
+
+    assert len(result["files"]) == 4, result
+
+
+def _root_with_os_tree(tmp_path, monkeypatch):
+    """A fake filesystem root holding an OS tree and a user folder, home empty."""
+    import gaia.agents.tools.file_tools as file_tools_module
+
+    drive = (tmp_path / "drive").resolve()
+    (drive / "usr" / "share").mkdir(parents=True)
+    (drive / "data").mkdir()
+    os_hit = drive / "usr" / "share" / "invoice_os.txt"
+    data_hit = drive / "data" / "invoice_data.txt"
+    os_hit.write_text("x")
+    data_hit.write_text("x")
+
+    def confined(_host, roots):
+        if Path(roots[0]) == Path.home():
+            return [Path.home()]
+        return [drive] if Path(roots[0]) == Path("/") else []
+
+    _, home, project = _deep_search_setup(tmp_path, monkeypatch, confined)
+    # Treat the fake drive as a filesystem root so its OS trees are deferred.
+    real_anchor = Path.anchor
+    monkeypatch.setattr(
+        Path,
+        "anchor",
+        property(lambda p: str(p) if p == drive else real_anchor.fget(p)),
+    )
+    search_file = _register_search_file(_Sandbox(home, project, drive))
+    return file_tools_module, search_file, drive, os_hit, data_hit
+
+
+def test_os_trees_are_searched_last_not_skipped(tmp_path, monkeypatch, registry):
+    """With budget left, a file under /usr is still found — after user folders."""
+    _, search_file, _drive, os_hit, data_hit = _root_with_os_tree(tmp_path, monkeypatch)
+
+    result = search_file("invoice", deep_search=True)
+
+    assert result["files"] == [str(data_hit.resolve()), str(os_hit.resolve())]
+    assert not result.get("truncated")
+
+
+def test_an_os_tree_the_budget_never_reached_is_reported_unfinished(
+    tmp_path, monkeypatch, registry
+):
+    """Running out of budget before an OS tree must not read as a full search."""
+    from gaia.agents.tools import search_scope
+
+    _, search_file, drive, os_hit, data_hit = _root_with_os_tree(tmp_path, monkeypatch)
+    # Enough for the root listing and the user folder, not all of the deferred /usr.
+    monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 4)
+
+    result = search_file("invoice", deep_search=True)
+
+    assert str(os_hit.resolve()) not in result["files"]
+    assert result.get("truncated") is True
+    assert str(drive / "usr") in result["unfinished_paths"]
