@@ -86,6 +86,7 @@ from gaia.llm.inference_location import resolve_inference_location
 from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
+    _model_ids_match,
     cloud_model_provider,
     resolve_default_chat_model,
     resolve_lemonade_base_url,
@@ -812,6 +813,8 @@ def _apply_local_switch(
     chat = agent.chat
     # Raises if unreachable, after waiting out a restart of GAIA's own server.
     base_url, available = _reachable_lemonade_models(agent, target, on_status)
+    # Lemonade lists a registered user.X model as X; switch to the listed name.
+    target = next((m for m in available if _model_ids_match(m, target)), target)
     if target not in available and _replayed_cloud_key(base_url, target):
         available = _lemonade_models(base_url)
     if target not in available:

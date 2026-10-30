@@ -27,6 +27,7 @@ only thing that can move these counts is a real config change.
 from __future__ import annotations
 
 import contextlib
+import shutil
 from pathlib import Path
 
 import pytest
@@ -100,6 +101,11 @@ CAPABILITIES = {
     "scratchpad (data-explore)": ("create_table", "list_tables"),
     "browser (research-report)": ("fetch_page", "fetch_webpage"),
     "file io (research-report)": ("read_file", "write_file"),
+    "audio generation (music-gen)": (
+        "list_audio_generation_models",
+        "generate_music",
+        "generate_sound_effect",
+    ),
 }
 
 
@@ -156,10 +162,16 @@ def test_manifest_tools_count_matches_real_registry(manifest, registered_tools):
     headline feature and it is on by default. ``core_tools`` (5 fewer) is the
     degraded-embedder floor, not what the hub page should advertise.
     """
-    assert manifest["tools_count"] == len(registered_tools), (
+    # The Context7 tool is only registered when npx is installed. Pin the
+    # advertised full-capability count rather than the machine's PATH.
+    has_npx = shutil.which("npx") is not None
+    assert ("search_documentation" in registered_tools) == has_npx
+    full_count = len(registered_tools) + int(not has_npx)
+    assert manifest["tools_count"] == full_count, (
         f"gaia-agent.yaml tools_count={manifest['tools_count']} but the real "
-        f"registry has {len(registered_tools)}. Hand-typed drift — the hub page "
-        f"would over- or under-claim what this agent can do."
+        f"registry has {len(registered_tools)} tools "
+        f"(npx available: {has_npx}). Hand-typed drift — the hub page "
+        "would over- or under-claim what this agent can do."
     )
 
 

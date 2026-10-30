@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Requires the `gaia` Python CLI 0.25.3+ on `PATH`.
+
 - **A slide request gets a slide file, not a picture.** Asked for a slide or
   deck, the agent ran Stable Diffusion and handed back a blurry image of one.
   It now asks whether you want PowerPoint (.pptx) or HTML when you didn't say,

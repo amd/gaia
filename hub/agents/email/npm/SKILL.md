@@ -178,7 +178,7 @@ The v2 keystone (#2016): NL request in, the agent reasons and chains its tools, 
 exactly one `final` or `error`. This is the one loop every v2 front-door relays to. The **host
 mints `run_id`** and **pushes** the transcript slice in `context`, so the sidecar
 stays stateless. A slice too big for the model's window beside the agent's prompt
-keeps only its newest whole turns, announced in a `status` event. A single turn too large for the whole budget is retained with its longest messages truncated and a note saying how much, so its answer stays in view. The typed client wraps it (#2097): `query()` returns an async
+keeps only its newest whole turns, announced in a `status` event (`{ message, phase?, queue? }`; `phase: "model_queue"` reports the queue position and holder while the model is busy). A single turn too large for the whole budget is retained with its longest messages truncated and a note saying how much, so its answer stays in view. The typed client wraps it (#2097): `query()` returns an async
 iterator of typed `QueryEvent`s; `cancelQuery(runId)` stops the run between steps:
 
 ```ts
