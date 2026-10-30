@@ -162,7 +162,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with documents — includi
 </Tabs>
 
 <Note>
-  **Document Indexing Requirements:** Processing PDFs and PPTX files with images requires a Vision Language Model (VLM). GAIA uses `Qwen3-VL-4B-Instruct-GGUF` by default for extracting text from images in documents.
+  **Document Indexing Requirements:** Processing PDFs and PPTX files with images uses the installed multimodal default model (`Gemma-4-E4B-it-GGUF`) as the VLM. GAIA also supports `Qwen3-VL-4B-Instruct-GGUF` when you configure it explicitly; the default `gaia init` profiles do not download that alternate model.
 
   To download all models needed for chat (including VLM):
   ```bash

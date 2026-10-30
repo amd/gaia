@@ -382,7 +382,7 @@ class RAGConfig:
         False  # Enable LLM-based intelligent chunking (requires LLM client)
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
-    vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
+    vlm_model: str = DEFAULT_MODEL_NAME
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
     # Security settings
