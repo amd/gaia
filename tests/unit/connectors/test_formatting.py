@@ -4,8 +4,8 @@
 Tests for ``gaia.connectors.formatting.format_connector_error``.
 
 Guards the public formatter against silent re-inlining (e.g. someone
-copy-pasting the body back into ``connectors_demo/agent.py`` without
-realising the email agent now imports from this module).
+copy-pasting the body into an agent without realising the email agent
+imports from this module).
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def test_format_connector_error_public_api():
     not_granted = AuthRequiredError(
         AuthRequiredError.Reason.AGENT_NOT_GRANTED,
         provider="google",
-        agent_id="installed:connectors-demo",
+        agent_id="installed:my-agent",
         missing_scopes=["scope-a"],
     )
     assert "AGENT_NOT_GRANTED" in format_connector_error(not_granted)
