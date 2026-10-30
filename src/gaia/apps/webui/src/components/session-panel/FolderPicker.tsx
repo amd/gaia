@@ -8,12 +8,14 @@ import { expectShape } from '../../utils/responseShape';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import type { BrowseResponse } from '../../types';
+import { useT } from '../../i18n/useT';
 import './SessionPanel.css';
 
 const isHiddenName = (name: string) => name.startsWith('.');
 
 /** Pick a folder on this PC to give the chat, by browsing or by pasting its path. */
 export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => void; onClose: () => void }) {
+    const t = useT();
     const [listing, setListing] = useState<BrowseResponse | null>(null);
     const [typed, setTyped] = useState('');
     const [error, setError] = useState<string | null>(null);
@@ -47,17 +49,17 @@ export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => vo
                 className="modal-panel sp-picker"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Add a folder to this chat"
+                aria-label={t('pick.label')}
                 onClick={(e) => e.stopPropagation()}
             >
                 <div className="modal-header">
-                    <h3>Add a folder</h3>
-                    <button type="button" className="btn-icon" onClick={onClose} aria-label="Close">
+                    <h3>{t('pick.title')}</h3>
+                    <button type="button" className="btn-icon" onClick={onClose} aria-label={t('sp.closeShort')}>
                         <X size={18} />
                     </button>
                 </div>
                 <div className="modal-body sp-picker-body">
-                    <p className="sp-meta">GAIA will be able to read and write everything in the folder you pick, in this chat only.</p>
+                    <p className="sp-meta">{t('pick.note')}</p>
                     <form
                         className="sp-picker-path"
                         onSubmit={(e) => { e.preventDefault(); if (typed.trim()) open(typed.trim()); }}
@@ -65,10 +67,11 @@ export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => vo
                         <input
                             value={typed}
                             onChange={(e) => setTyped(e.target.value)}
-                            aria-label="Folder path"
+                            aria-label={t('pick.path')}
                             spellCheck={false}
+                            dir="ltr"
                         />
-                        <button type="submit" className="sp-action">Go</button>
+                        <button type="submit" className="sp-action">{t('pick.go')}</button>
                     </form>
                     {listing && (
                         <div className="sp-picker-quick">
@@ -77,7 +80,7 @@ export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => vo
                             ))}
                             <label className="sp-picker-hidden">
                                 <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
-                                Show hidden
+                                {t('pick.showHidden')}
                             </label>
                         </div>
                     )}
@@ -85,7 +88,7 @@ export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => vo
                         {listing?.parent_path && (
                             <li>
                                 <button type="button" onClick={() => open(listing.parent_path ?? undefined)}>
-                                    <ArrowUp size={13} aria-hidden="true" /> Up one level
+                                    <ArrowUp size={13} aria-hidden="true" /> {t('pick.up')}
                                 </button>
                             </li>
                         )}
@@ -98,24 +101,22 @@ export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => vo
                         ))}
                         {listing && folders.length === 0 && (
                             <li className="sp-meta">
-                                {allFolders.length > 0
-                                    ? 'Only hidden folders here. Turn on Show hidden to see them.'
-                                    : 'No folders inside.'}
+                                {t(allFolders.length > 0 ? 'pick.onlyHidden' : 'pick.none')}
                             </li>
                         )}
-                        {loading && <li className="sp-meta"><Loader2 size={12} className="spin" aria-hidden="true" /> Loading…</li>}
+                        {loading && <li className="sp-meta"><Loader2 size={12} className="spin" aria-hidden="true" /> {t('pick.loading')}</li>}
                     </ul>
                     {error && <p className="sp-error" role="alert">{error}</p>}
                 </div>
                 <div className="sp-picker-actions">
-                    <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+                    <button type="button" className="btn-secondary" onClick={onClose}>{t('sp.cancel')}</button>
                     <button
                         type="button"
                         className="btn-primary"
                         disabled={!listing}
                         onClick={() => listing && onPick(listing.current_path)}
                     >
-                        Use this folder
+                        {t('pick.use')}
                     </button>
                 </div>
             </div>
