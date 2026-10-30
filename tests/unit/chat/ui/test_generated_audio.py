@@ -8,6 +8,7 @@ a successful music/SFX result with an absolute .wav path must not become one.
 """
 
 import asyncio
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -25,7 +26,10 @@ from gaia.ui.sse_translation import CanonicalTranslator
 from gaia.ui.turn_summary import is_openable
 from gaia.ui.utils import message_to_response
 
-WAV = "C:/Users/me/.gaia/cache/audio/generations/music_1.wav"
+# Absolute on the host running the tests: the handler checks with os.path.isabs.
+WAV = os.path.join(
+    os.path.abspath(os.sep), "Users", "me", ".gaia", "audio", "music_1.wav"
+)
 SUCCESS = {
     "status": "success",
     "audio_path": WAV,
