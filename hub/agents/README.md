@@ -8,30 +8,18 @@ contributors follow the exact same pattern AMD uses for its own agents.
 
 ## What ships here
 
-Three packages are products: [`gaia/`](gaia/python/) (the flagship),
+Three packages ship: [`gaia/`](gaia/python/) (the flagship),
 [`chat/`](chat/python/) (the base class it composes), and [`email/`](email/python/).
-Everything else in this directory is a teaching example, not a catalog agent —
-per-task agents were collapsed into skills the flagship loads on demand, so a new
+Per-task agents were collapsed into skills the flagship loads on demand, so a new
 capability is a `SKILL.md` in [`hub/skills/`](../skills/), not a new package.
 
-## New here? Start with the examples
-
-These reference agents are intentionally minimal, heavily commented, and built
-to be **copy-pasted** as the starting point for your own agent. Read them in
-order — each adds one concept:
-
-| Example | Teaches | Tools |
-|---------|---------|-------|
-| [`hello-world/`](hello-world/python/) | The smallest possible agent: subclass `Agent`, set a system prompt. | 0 |
-| [`word-count/`](word-count/python/) | Registering a tool with the `@tool` decorator. | 1 |
-| [`connectors-demo/`](connectors-demo/python/) | Reaching an external service through a connector grant. | 4 |
-
-Each example's `README.md` explains the pattern; its `tests/` suite mocks the
-LLM so it runs with no Lemonade server.
+Custom agents are still supported — scaffold one with `gaia agent init` (below). The
+smallest complete reference package, the shape `gaia agent init` produces, is
+[`tests/fixtures/agents/hello-world/`](../../tests/fixtures/agents/hello-world/).
 
 ## Package layout
 
-Every Python agent package has the same shape (see any example above):
+Every Python agent package has the same shape:
 
 ```
 <id>/python/
@@ -61,7 +49,6 @@ The GAIA registry discovers installed agents automatically through the
 gaia agent init my-agent --language python -o . --layout hub
 ```
 
-That lands the package at `my-agent/python/`, matching every other agent here.
-…or copy `hello-world/python/`, rename the package + class, and edit the prompt. See
+That lands the package at `my-agent/python/`, matching every other agent here. See
 [docs/guides/custom-agent.mdx](../../docs/guides/custom-agent.mdx) and the
 [Agent Hub restructure spec](../../docs/spec/agent-hub-restructure.mdx).

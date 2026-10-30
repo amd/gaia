@@ -1,9 +1,9 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""GAIA Hello World agent — standalone hub package (reference example).
+"""GAIA Hello World agent — the SDK's reference agent package.
 
-The smallest possible GAIA agent: a system prompt and nothing else. Use it as
-a copy-paste starting point for a new conversational agent.
+The smallest possible GAIA agent: a system prompt and nothing else. It is the
+layout ``gaia agent init`` scaffolds and the fixture the SDK tests run against.
 
 Installing this package registers the ``hello-world`` agent in the GAIA
 registry via the ``gaia.agent`` entry-point group (see ``pyproject.toml``).

@@ -17,8 +17,8 @@ Anatomy of a GAIA agent
 4. Implement :meth:`_get_system_prompt` to give the agent its personality.
 5. Implement :meth:`_register_tools` — empty for a no-tool agent.
 
-To make your own conversational agent, copy this file, rename the class, and
-edit ``_SYSTEM_PROMPT``.
+To start your own agent, run ``gaia agent init <name>`` — it scaffolds this
+same package layout under your own id.
 """
 
 from typing import Optional
