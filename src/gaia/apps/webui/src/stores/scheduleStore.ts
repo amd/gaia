@@ -48,7 +48,10 @@ function notifyNewFailures(seen: Record<string, number>, list: Schedule[]): void
 interface ScheduleState {
     schedules: Schedule[];
     loading: boolean;
+    /** Why the last load failed. Owned by loadSchedules; replaces the list. */
     error: string | null;
+    /** Why the last pause, resume, run now or delete failed. Shown above the list until dismissed, the next action succeeds, or the dialog closes. */
+    actionError: string | null;
 
     /** Currently selected schedule (for viewing results). */
     selectedSchedule: string | null;
@@ -64,12 +67,14 @@ interface ScheduleState {
     deleteSchedule: (name: string) => Promise<void>;
     selectSchedule: (name: string | null) => void;
     loadResults: (name: string) => Promise<void>;
+    dismissActionError: () => void;
 }
 
 export const useScheduleStore = create<ScheduleState>((set, get) => ({
     schedules: [],
     loading: false,
     error: null,
+    actionError: null,
     selectedSchedule: null,
     results: [],
     resultsLoading: false,
@@ -100,11 +105,10 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
     createSchedule: async (name, interval, prompt) => {
         try {
             const schedule = await api.createSchedule(name, interval, prompt);
-            set((state) => ({ schedules: [...state.schedules, schedule], error: null }));
+            set((state) => ({ schedules: [...state.schedules, schedule], actionError: null }));
         } catch (err) {
-            const msg = parseApiError(err, 'Failed to create schedule');
+            // The create form shows this error itself, so don't repeat it above the list.
             log.api.error('Failed to create schedule', err);
-            set({ error: msg });
             throw err;
         }
     },
@@ -114,11 +118,11 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
             const updated = await api.updateSchedule(name, status);
             set((state) => ({
                 schedules: state.schedules.map((s) => (s.name === name ? updated : s)),
-                error: null,
+                actionError: null,
             }));
         } catch (err) {
             log.api.error(`Failed to update schedule "${name}"`, err);
-            set({ error: parseApiError(err, 'Failed to update schedule') });
+            set({ actionError: parseApiError(err, 'Failed to update schedule') });
         }
     },
 
@@ -127,11 +131,11 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
             const updated = await api.runScheduleNow(name);
             set((state) => ({
                 schedules: state.schedules.map((s) => (s.name === name ? updated : s)),
-                error: null,
+                actionError: null,
             }));
         } catch (err) {
             log.api.error(`Failed to run schedule "${name}" now`, err);
-            set({ error: parseApiError(err, 'Could not run the schedule now') });
+            set({ actionError: parseApiError(err, 'Could not run the schedule now') });
         }
     },
 
@@ -141,16 +145,16 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
             set((state) => ({
                 schedules: state.schedules.filter((s) => s.name !== name),
                 selectedSchedule: state.selectedSchedule === name ? null : state.selectedSchedule,
-                error: null,
+                actionError: null,
             }));
         } catch (err) {
             log.api.error(`Failed to delete schedule "${name}"`, err);
-            set({ error: parseApiError(err, 'Failed to delete schedule') });
+            set({ actionError: parseApiError(err, 'Failed to delete schedule') });
         }
     },
 
     selectSchedule: (name) => {
-        set({ selectedSchedule: name, results: [] });
+        set({ selectedSchedule: name, results: [], resultsLoading: false });
         if (name) get().loadResults(name);
     },
 
@@ -158,10 +162,15 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
         set({ resultsLoading: true });
         try {
             const data = await api.getScheduleResults(name);
+            // A late response for a schedule that is no longer selected must not land.
+            if (get().selectedSchedule !== name) return;
             set({ results: data.results || [], resultsLoading: false });
         } catch (err) {
             log.api.error(`Failed to load results for "${name}"`, err);
+            if (get().selectedSchedule !== name) return;
             set({ results: [], resultsLoading: false });
         }
     },
+
+    dismissActionError: () => set({ actionError: null }),
 }));

@@ -253,6 +253,7 @@ class GaiaAgentConfig(ChatAgentConfig):
     # here means "draw me a picture" has no answer at all. The image-gen skill
     # carries the eviction cost into the procedure.
     enable_sd_tools: bool = True
+    enable_audio_generation_tools: bool = True
 
     rag_documents: List[str] = field(default_factory=list)
 
@@ -333,6 +334,7 @@ def _apply_fast_mode(config: GaiaAgentConfig) -> None:
     config.enable_scratchpad = False
     config.enable_browser = False
     config.enable_sd_tools = False
+    config.enable_audio_generation_tools = False
     config.dynamic_tools = False
     config.dynamic_skills = False
     config.skill_discovery = False
