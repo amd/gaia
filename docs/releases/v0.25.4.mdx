@@ -20,6 +20,8 @@ description: "Arabic interface and bilingual document Q&A, a local-only mode, im
 
 - **A chat you start is no longer stuck on "Waiting for the GPU"** behind a background task GAIA proposed for itself. (PR [#6096](https://github.com/amd/gaia/pull/6096))
 - **"Save it to my Documents folder" writes to your Documents folder**, not GAIA's hidden one, and shell, code search, watched folders and saved audio, screenshot and download paths use the chat's folder. (PRs [#6074](https://github.com/amd/gaia/pull/6074), [#6069](https://github.com/amd/gaia/pull/6069))
+- **Adding a document again after moving it updates its location**, instead of leaving chats pointing at the old, missing file. (PR [#6177](https://github.com/amd/gaia/pull/6177))
+- **One chat indexing large documents no longer blocks other chats from starting.** (PR [#6171](https://github.com/amd/gaia/pull/6171))
 - **A repo picked with `index_codebase` is remembered on the next turn.** (PR [#6056](https://github.com/amd/gaia/pull/6056))
 - **A context window you set deliberately small is kept**, and a GPU that reports an implausible amount of VRAM no longer picks an unsafe one. (PRs [#6152](https://github.com/amd/gaia/pull/6152), [#6150](https://github.com/amd/gaia/pull/6150))
 - **Chats get a topic title while their first answer runs** on a cloud model, and a failed title is retried on later turns. (PRs [#5972](https://github.com/amd/gaia/pull/5972), [#6174](https://github.com/amd/gaia/pull/6174))
@@ -56,8 +58,11 @@ Thanks to the community members who contributed to this release:
 
 ## Full Changelog
 
-**56 commits** since v0.25.3:
+**59 commits** since v0.25.3:
 
+- `f699d20fa` — ci(release): build the macOS arm64 sidecars on macos-15 (#6182)
+- `2f14be235` — fix(ui): stop one chat's indexing from blocking other chats (#6171)
+- `19a18ad42` — fix(ui): follow a moved document when it is added again (#6177)
 - `4479732b8` — fix(release): redeploy the website when a final release publishes (#6162)
 - `156c21ba6` — fix(tools): let analyze_data_file read every sheet of a workbook (#6130)
 - `5fb8835b2` — fix(cli): refuse an empty gaia -p prompt instead of hanging (#6168)
