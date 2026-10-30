@@ -1746,7 +1746,9 @@ class TestMemorySettingsFile:
         assert data["mcp_memory_enabled"] is False
         assert data["system_discovery_consent"] is False
 
-    def test_consent_withdrawal_writes_file_then_db(self, client, tmp_path, monkeypatch):
+    def test_consent_withdrawal_writes_file_then_db(
+        self, client, tmp_path, monkeypatch
+    ):
         from gaia.agents.base import memory as memory_module
 
         settings_path = tmp_path / "memory_settings.json"
