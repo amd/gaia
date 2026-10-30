@@ -5,6 +5,7 @@
 
 import asyncio
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -57,7 +58,7 @@ class _Registry:
         self.agent = None
 
     def get(self, _agent_type):
-        return object()
+        return SimpleNamespace(is_sidecar=False)
 
     def canonical_id(self, agent_type):
         return agent_type
