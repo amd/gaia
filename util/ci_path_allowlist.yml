@@ -24,6 +24,13 @@ dependencies:
       tests/unit/test_flagship_ci.py names it as the docs page that must NOT
       trigger this lane; it is a probe string, not a file the test reads.
 
+  test_unit.yml:
+    docs/guides/email.mdx: >-
+      tests/unit/test_audit_synthesis_prep.py uses it as a finding's path in a
+      synthetic audit backlog; it is fixture text, not a file the test reads.
+    docs/guides/index.mdx: >-
+      Same file, same reason: a path inside synthetic audit-key markers.
+
   test_email_agent_unit.yml:
     hub/agents/chat/python/gaia_agent_chat/agent.py: >-
       Only tests/unit/eval/test_harness_flagship_target.py imports it, and that
