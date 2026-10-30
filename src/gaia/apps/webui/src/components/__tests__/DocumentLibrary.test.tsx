@@ -403,17 +403,17 @@ describe('DocumentLibrary path box', () => {
     it('asks the server about an unsupported typed path, then names the file type', async () => {
         mockedApi.listDocuments.mockResolvedValue(emptyList);
         mockedApi.uploadDocumentByPath.mockRejectedValue(
-            Object.assign(new Error("File type not allowed: GAIA can't index .png files."), {
+            Object.assign(new Error("File type not allowed: GAIA can't index .heic files."), {
                 httpStatus: 400, reason: null,
             }),
         );
         render(<DocumentLibrary />);
 
-        submitPath('C:\\Users\\me\\photo.png');
+        submitPath('C:\\Users\\me\\photo.heic');
 
         const toast = await screen.findByRole('alert');
-        expect(toast.textContent).toContain('Image files cannot be indexed for text search.');
-        expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith('C:\\Users\\me\\photo.png');
+        expect(toast.textContent).toContain('This image format cannot be indexed.');
+        expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith('C:\\Users\\me\\photo.heic');
         expect(mockedApi.indexFolder).not.toHaveBeenCalled();
     });
 });

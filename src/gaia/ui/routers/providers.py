@@ -27,11 +27,16 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from gaia.llm.local_only import (
+    SETTINGS_HINT,
+    cloud_blocked,
+    local_only_key_message,
+)
 from gaia.logger import get_logger
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
-from ..security import require_ui_header
+from ..security import require_ui_header, via_tunnel
 
 logger = get_logger(__name__)
 
@@ -570,6 +575,8 @@ def _check_model_available(model_id: str) -> Optional[str]:
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
 
     provider = provider_of(model_id)
+    if provider != LOCAL and cloud_blocked():
+        return "Local only is on, so cloud models can't run"
     try:
         if provider != LOCAL:
             _require_loopback(_base_url())
@@ -670,13 +677,6 @@ def _known(provider: str) -> None:
         )
 
 
-def _via_tunnel(request: Request) -> bool:
-    return any(
-        h in request.headers
-        for h in ("x-forwarded-for", "x-forwarded-host", "x-forwarded-proto")
-    )
-
-
 # Re-sends a stored key to Lemonade, so a cross-site GET must not reach it.
 @router.get("/api/providers", dependencies=[Depends(require_ui_header)])
 def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
@@ -768,8 +768,12 @@ def connect_provider(
     _known(provider)
     if provider == LOCAL:
         raise HTTPException(status_code=422, detail="Local models need no connection.")
+    if cloud_blocked():
+        raise HTTPException(
+            status_code=409, detail=local_only_key_message(_NAMES[provider])
+        )
     key = (body.api_key or "").strip()
-    if key and _via_tunnel(request):
+    if key and via_tunnel(request):
         raise HTTPException(
             status_code=403,
             detail="Enter provider keys on the PC running GAIA, not over mobile access.",
@@ -996,6 +1000,14 @@ def select_model(
     model_id = body.model.strip()
     if not model_id:
         raise HTTPException(status_code=422, detail="No model given.")
+    if provider_of(model_id) != LOCAL and cloud_blocked():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Can't switch to {model_label(model_id)}: Local only is on. "
+                f"{SETTINGS_HINT}"
+            ),
+        )
     from gaia.connectors.credential_wait import CredentialStoreWaiting
 
     try:

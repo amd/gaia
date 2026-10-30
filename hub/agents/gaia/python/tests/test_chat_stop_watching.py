@@ -14,9 +14,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import ChatAgent  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent  # noqa: E402
 
 from gaia.utils.file_watcher import FileChangeHandler  # noqa: E402
 

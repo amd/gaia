@@ -12,10 +12,10 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat import agent as chat_agent  # noqa: E402
-from gaia_agent_chat.agent import ChatAgent  # noqa: E402
+from gaia_agent import chat_agent  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent  # noqa: E402
 
 from gaia.llm.inference_location import InferenceLocation  # noqa: E402
 
