@@ -24,6 +24,7 @@ from gaia.agents.tools.path_access import (
     readable_entry,
     write_access_error,
 )
+from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
 from gaia.rag.sdk import EmbeddingUnavailableError
@@ -938,7 +939,9 @@ class RAGToolsMixin:
                     if len(matching_files) == 0:
                         # Auto-index the file if it exists on disk instead of failing.
                         # This avoids the slow fail → plan → index → re-query cycle.
-                        disk_path = os.path.expanduser(file_path)
+                        disk_path = str(
+                            _resolve_target(file_path, None, _workspace_default(self))
+                        )
                         denied = read_access_error(self, disk_path)
                         if denied:
                             return denied
@@ -1565,7 +1568,7 @@ class RAGToolsMixin:
         )
         def index_document(file_path: str) -> Dict[str, Any]:
             """Index a document with path validation and detailed statistics."""
-            file_path = os.path.expanduser(file_path)
+            file_path = str(_resolve_target(file_path, None, _workspace_default(self)))
             try:
                 if not self.rag:
                     return {
@@ -2253,7 +2256,9 @@ references from the section summaries.
                         "error": _rag_not_available(),
                     }
 
-                dir_path = Path(directory_path).expanduser().resolve()
+                dir_path = _resolve_target(
+                    directory_path, None, _workspace_default(self)
+                )
 
                 # Before the existence probe, as in read_file.
                 denied = read_access_error(self, dir_path)

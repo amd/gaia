@@ -238,7 +238,7 @@ def session_workspace(host: Any) -> Optional[Path]:
     return None if is_broad_root(workspace) else workspace
 
 
-def search_roots(host: Any) -> List[Path]:
+def search_roots(host: Any, preferred_workspace: Optional[Path] = None) -> List[Path]:
     """Allowed paths, **most specific first**, then a working-directory fallback.
 
     Most specific first is load-bearing: it decides which root a relative
@@ -264,11 +264,29 @@ def search_roots(host: Any) -> List[Path]:
         if isinstance(getattr(validator, "env_scope", None), list):
             return []
         return [Path.cwd().resolve()]
+    roots = [root.resolve() for root in roots]
     roots = sorted(roots, key=lambda p: (-len(p.parts), str(p)))
+
+    # A configured chat workspace is a search preference only when it is
+    # already inside the declared read scope.  Never add it to the roots just
+    # because it is the session's working directory: that would bypass the
+    # filesystem sandbox when the two differ.
+    if preferred_workspace is not None:
+        workspace = Path(preferred_workspace).expanduser().resolve()
+        holders = [
+            root for root in roots if root == workspace or root in workspace.parents
+        ]
+        # Preserve an explicitly approved subproject as the most-specific root.
+        # Otherwise an allowed chat workspace is the natural first search root.
+        has_more_specific_root = any(workspace in root.parents for root in roots)
+        if holders and not has_more_specific_root:
+            return [workspace, *[root for root in roots if root != workspace]]
+        return roots
+
     workspace = session_workspace(host)
     if workspace is None or workspace in roots:
         return roots
-    holders = [r for r in roots if r.resolve() in workspace.parents]
+    holders = [r for r in roots if r in workspace.parents]
     if holders and all(is_broad_root(r) for r in holders):
         return [workspace, *roots]
     return roots

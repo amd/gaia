@@ -11,6 +11,7 @@ and asserts the ``/load`` body Lemonade receives.
 # pylint: disable=protected-access
 
 import json
+from unittest import mock
 
 import pytest
 import responses
@@ -325,8 +326,22 @@ def test_a_model_without_a_window_range_offers_only_its_floor():
 
 def test_an_unknown_model_cannot_be_sized():
     assert context_range("Mystery-GGUF", _cap(64)) is None
-    with pytest.raises(ContextChoiceError, match="does not know"):
+    with pytest.raises(ContextChoiceError, match="knows neither"):
         save_context_size("Mystery-GGUF", 65536, _cap(64))
+
+
+def test_an_unregistered_model_is_offered_32k_up_to_its_trained_window():
+    span = context_range("Mystery-GGUF", _cap(64), trained_max=262144)
+    assert span["options"] == [32768, 65536, 131072, 262144]
+    assert span["automatic"] == 65536 and span["fit_checked"] is False
+    # Too small to offer the 32K floor: only automatic remains.
+    assert context_range("Mystery-GGUF", _cap(64), trained_max=8192) is None
+
+
+def test_a_saved_size_below_32k_is_refused_for_an_unregistered_model():
+    check_saved_size("Mystery-GGUF", 131072, _cap(64))
+    with pytest.raises(ContextChoiceError, match="32K minimum"):
+        check_saved_size("Mystery-GGUF", 16384, _cap(64))
 
 
 def test_chosen_size_persists_and_automatic_clears_it():
@@ -452,7 +467,11 @@ def test_chosen_size_reaches_lemonades_load_request(halo_lemonade):
         LARGE_DEFAULT_MODEL_NAME
     )
     assert _load_bodies() == [
-        {"model_name": LARGE_DEFAULT_MODEL_NAME, "ctx_size": 131072}
+        {
+            "model_name": LARGE_DEFAULT_MODEL_NAME,
+            "ctx_size": 131072,
+            "save_options": True,
+        }
     ]
 
 
@@ -489,6 +508,39 @@ def test_a_saved_size_is_not_loaded_unchecked_when_memory_is_unreadable(monkeypa
     finally:
         lc._CAPACITY_CACHE.clear()
         lc._SYSTEM_INFO_CACHE.clear()
+
+
+@responses.activate
+def test_an_unregistered_models_saved_size_loads_without_reading_memory(monkeypatch):
+    """No memory figures exist for it, so unreadable memory must not block it."""
+    monkeypatch.delenv("GAIA_CTX_SIZE", raising=False)
+    lc._CAPACITY_CACHE.clear()
+    lc._SYSTEM_INFO_CACHE.clear()
+    responses.get(BASE + "/system-info", json={"devices": {}})
+    config_mod.GAIA_CONFIG_FILE.write_text(
+        json.dumps({"context_sizes": {"Unlisted-Dense-30B-GGUF": 131072}}),
+        encoding="utf-8",
+    )
+    try:
+        assert resolve_ctx_size("Unlisted-Dense-30B-GGUF", base_url=BASE) == 131072
+    finally:
+        lc._CAPACITY_CACHE.clear()
+        lc._SYSTEM_INFO_CACHE.clear()
+
+
+def test_an_eval_pin_is_not_saved_as_the_reload_window():
+    client = LemonadeClient(base_url=BASE, ctx_size_override=8192)
+    loaded = {"recipe_options": {"ctx_size": 8192}}
+    with (
+        mock.patch.object(client, "get_status"),
+        mock.patch.object(client, "_find_loaded_entry", return_value=None),
+        mock.patch.object(client, "unload_model"),
+        mock.patch.object(client, "_wait_model_state", side_effect=[{}, loaded]),
+        mock.patch.object(client, "load_model") as load,
+    ):
+        client._ensure_pinned_load("Unlisted-Dense-30B-GGUF")
+    assert load.call_args.kwargs["ctx_size"] == 8192
+    assert load.call_args.kwargs["save_options"] is False
 
 
 @responses.activate

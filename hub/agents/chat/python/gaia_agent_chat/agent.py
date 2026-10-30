@@ -48,11 +48,7 @@ from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia_agent_chat.tool_requests import requested_tools
 
 from gaia.agents.base.agent import Agent, default_max_steps
-from gaia.agents.base.checks import (
-    attach_check,
-    check_from_python_run,
-    snippet_target,
-)
+from gaia.agents.base.checks import attach_check, check_from_python_run, snippet_target
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_KEEP_STEPS,
@@ -75,6 +71,7 @@ from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
+    AudioGenerationToolsMixin,
     AudioToolsMixin,
     BrowserToolsMixin,
     BrowserUseToolsMixin,
@@ -90,11 +87,9 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import documents_still_indexing
+from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.env import child_env
-from gaia.llm.inference_location import (
-    InferenceLocation,
-    resolve_inference_location,
-)
+from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
 from gaia.llm.lemonade_client import (
     _endpoint_label,
     configured_lemonade_url,
@@ -364,7 +359,8 @@ class ChatAgentConfig:
     memory_incognito: bool = False
 
     # Optional capability flags (disabled by default to keep document Q&A focused)
-    enable_sd_tools: bool = False  # Stable Diffusion image generation
+    enable_sd_tools: bool = False  # Lemonade image generation
+    enable_audio_generation_tools: bool = False  # Lemonade music and sound effects
 
     # MCP settings.
     # 50 default is the validated middle ground: covers the 49-tool MCP
@@ -422,6 +418,7 @@ class ChatAgent(
     ScreenshotToolsMixin,
     SDToolsMixin,
     AudioToolsMixin,
+    AudioGenerationToolsMixin,
     WaitToolsMixin,
     ReasoningEffortToolsMixin,
     MCPClientMixin,
@@ -1875,7 +1872,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 Returns:
                     Dictionary with files, directories, and total count
                 """
-                path = os.path.expanduser(path)
+                path = str(_resolve_target(path, None, _workspace_default(self)))
                 denied = read_access_error(self, path)
                 if denied:
                     return denied
@@ -1937,7 +1934,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except ValueError as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
-                file_path = os.path.expanduser(file_path)
+                file_path = str(_resolve_target(file_path, None, _workspace_default(self)))
                 if not self.path_validator.is_path_allowed(file_path):
                     return {
                         "status": "error",
@@ -2284,6 +2281,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     sd_output_dir,
                     _sd_err,
                     exc_info=True,
+                )
+
+        # Music and SFX: flag-gated like image generation; no downloads at init.
+        if getattr(self.config, "enable_audio_generation_tools", False):
+            from gaia.config import GAIA_CONFIG_DIR
+
+            audio_dir = GAIA_CONFIG_DIR / "cache" / "audio" / "generations"
+            try:
+                self.init_audio_generation(output_dir=str(audio_dir))
+            except OSError as err:
+                logger.warning(
+                    "Audio generation unavailable: cannot write %s: %s", audio_dir, err
                 )
 
         # ── Phase 3: Web & System tools ──────────────────────────────────────────
@@ -3022,6 +3031,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         for doc in documents:
             try:
                 if os.path.exists(doc):
+                    # Naming a file to index is the grant to read it; a folder is never granted.
+                    if os.path.isfile(doc):
+                        self.path_validator.add_allowed_path(doc)
                     logger.info(f"Indexing document: {doc}")
                     result = self.rag.index_document(doc)
 
