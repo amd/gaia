@@ -6,6 +6,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.3]
+
+Released with GAIA 0.25.3, and requires the `gaia` Python CLI 0.25.3+ on `PATH`.
+Integrators: the sidecar contract is now **2.25**; clients built for 2.18
+keep working, and older binaries refuse the new `turns` field with `422`,
+so probe `/version` before sending it.
+
+- **AMD LLM Gateway models run their tool calls.** The agent asks each cloud
+  model once whether it calls tools natively, and runs tool calls written as
+  text instead of dropping them, so a turn no longer ends without the work.
+- **Music and sound effects can be generated locally** with Lemonade's
+  audio-generation models (three new tools, 98 in total).
+- **The first code search on a large repo no longer hangs the turn.** The
+  index builds in the background and search reports its progress meanwhile.
+- **A bare file name means a file in the chat's folder** for reading,
+  listing, browsing, finding, searching and running, as it already did for
+  writing.
+- **`.epub` books are indexed chapter by chapter**, and a file the agent
+  can't read is refused instead of being indexed as binary text.
+- **Two agents starting together on a new database no longer fail** with
+  `database is locked`.
+
 ### For integrators: contract 2.25
 
 - **The agent remembers its own tool calls across turns** (contract **2.25**,
@@ -106,17 +128,6 @@ Python CLI 0.25.2+ on `PATH`. Integrators: the sidecar contract is now
   for a GAIA web search, because a `search_web` `tool_result` carried only a
   300-character summary. Its `data` now also carries `sources`, a list of
   `{ title, url }` for each hit. Older binaries never send it.
-
-- **Code search no longer hangs on a large repository.** The first
-  `search_code_index` built the whole index inside one call; on a repository
-  the size of GAIA's (about 115,000 chunks, some 20 minutes) the call hit its
-  15-minute limit, saved nothing, and ended the turn with an empty answer —
-  every time. The build now runs in the background and each search reports its
-  progress until it is done, so the agent falls back to text search meanwhile.
-  `index_codebase` and the task-start auto-index report that build instead
-  of embedding the repository a second time alongside it. The build is shared
-  by every chat on the same repository, so a second chat's search reports it
-  too and its clear is refused until the build is done.
 
 - **An old failure in memory no longer stops a request you make now.** A note
   like "this page returned 503, don't waste tool calls on it" was obeyed as a
