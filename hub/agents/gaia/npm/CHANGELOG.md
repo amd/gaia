@@ -15,8 +15,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Tip and loan calculators.** `show_tip_calculator` and
   `show_loan_calculator` send only the starting numbers as a `calculator`
   card; the card does the math and recomputes as the person edits it, so a
-  small model's arithmetic never reaches the answer. The registered tool count
-  is now 102.
+  small model's arithmetic never reaches the answer. Registered tool count
+  goes 98 → 105.
 
 ### For integrators
 
