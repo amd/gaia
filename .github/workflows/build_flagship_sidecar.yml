@@ -68,7 +68,7 @@ jobs:
             artifact: gaia-agent-win32-x64.exe
             frozen: gaia-agent.exe
             required: true
-          - os: macos-14
+          - os: macos-15
             platform: darwin-arm64
             key: darwin-arm64
             artifact: gaia-agent-darwin-arm64
