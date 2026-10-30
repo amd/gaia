@@ -20,6 +20,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   asks for, without naming the required scopes, was refused because GAIA
   defaulted to the email agent's `gmail.modify` + `gmail.send`. Any one mail
   read scope now satisfies the default, for Gmail and Outlook.
+Requires the `gaia` Python CLI 0.25.3+ on `PATH`.
 
 ### For integrators: contract 2.25
 

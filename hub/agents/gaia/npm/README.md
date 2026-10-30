@@ -42,7 +42,7 @@ however you arrive at the terminal UI, it behaves identically.
 - **On Linux x64, glibc 2.34 or newer** for the agent sidecar (Ubuntu 22.04,
   Debian 12 and RHEL 9 or later). An older distro cannot start the agent. Check
   with `ldd --version`.
-- The `gaia` Python CLI **0.25.2 or newer** on `PATH` for the daemon the terminal
+- The `gaia` Python CLI **0.25.3 or newer** on `PATH` for the daemon the terminal
   UI starts. An earlier core cannot run this agent, so the UI comes up with
   nothing behind it. Install it with
   `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
