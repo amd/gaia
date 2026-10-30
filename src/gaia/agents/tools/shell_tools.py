@@ -3356,6 +3356,35 @@ class ShellToolsMixin:
         )
         return session.cwd
 
+    def _line_is_read_only(self, command: str) -> bool:
+        """Return whether *command* is read-only under the ordinary policy.
+
+        Full access changes whether a command may run, not whether it can write.
+        Reparse under the normal policy so redirections and other shell-only
+        constructs still count as untracked changes.
+        """
+        steps, parse_error = _parse_line(command, bypass_gates=False)
+        if parse_error is not None or not steps:
+            return False
+        granted = skill_granted_binaries(self)
+        for step in steps:
+            if step.is_cd:
+                return False
+            for segment in step.segments:
+                if (
+                    not segment
+                    or self._validate_command(
+                        segment[0].lower(),
+                        segment,
+                        shlex.join(segment),
+                        granted_binaries=granted,
+                        bypass_gates=False,
+                    )
+                    is not None
+                ):
+                    return False
+        return True
+
     def _line_verdict(self, command: str, working_directory: Any = None) -> tuple:
         """``(error, steps)`` for this call, path scope included.
 
@@ -4716,8 +4745,12 @@ class ShellToolsMixin:
                 error, steps = self._line_verdict(command, working_directory)
                 if error and not _reaches_the_prompt(error):
                     return error
-                # Only the read-only tier is known not to write files.
-                may_write = bool(error) or bypass
+                # Full access permits writes; it does not make a known read
+                # untrackable. Classify the line with the ordinary policy so
+                # writes still get snapshots and the Undo warning.
+                may_write = bool(error) or (
+                    bypass and not self._line_is_read_only(command)
+                )
                 if error and unconfirmed:
                     return self._blanket_approval_refusal(error, command)
                 if error and error.get("tier") == TIER_CONFIRM_ONCE:

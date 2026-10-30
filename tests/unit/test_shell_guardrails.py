@@ -1506,3 +1506,49 @@ class TestBlanketApproval:
         result = run_tool(_Host(full_access=True), "cp src.txt made.txt", tmp_path)
         assert result["status"] == "success", result
         assert (tmp_path / "made.txt").exists()
+
+    def test_full_access_read_does_not_warn_that_undo_cannot_restore_it(
+        self, env_pre_approves, monkeypatch, tmp_path
+    ):
+        notes = []
+        monkeypatch.setattr(
+            shell_tools,
+            "note_untracked",
+            lambda kind, command: notes.append((kind, command)),
+        )
+
+        result = run_tool(_Host(full_access=True), "ls", tmp_path)
+
+        assert result["status"] == "success", result
+        assert notes == []
+
+    def test_full_access_write_still_warns_undo_cannot_restore_it(
+        self, env_pre_approves, monkeypatch, tmp_path
+    ):
+        notes = []
+        monkeypatch.setattr(
+            shell_tools,
+            "note_untracked",
+            lambda kind, command: notes.append((kind, command)),
+        )
+        (tmp_path / "src.txt").write_text("x")
+
+        result = run_tool(_Host(full_access=True), "cp src.txt made.txt", tmp_path)
+
+        assert result["status"] == "success", result
+        assert notes == [("shell", "cp src.txt made.txt")]
+
+    def test_full_access_redirect_still_warns_undo_cannot_restore_it(
+        self, env_pre_approves, monkeypatch, tmp_path
+    ):
+        notes = []
+        monkeypatch.setattr(
+            shell_tools,
+            "note_untracked",
+            lambda kind, command: notes.append((kind, command)),
+        )
+
+        result = run_tool(_Host(full_access=True), "echo x > made.txt", tmp_path)
+
+        assert result["status"] == "success", result
+        assert notes == [("shell", "echo x > made.txt")]
