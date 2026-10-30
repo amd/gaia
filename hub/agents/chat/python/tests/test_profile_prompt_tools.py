@@ -70,6 +70,38 @@ def test_doc_profile_discovery_rules_use_search_file(prompts_and_tools):
     assert _FS_DISCOVERY_RULES.replace("find_files", "search_file") in prompt
 
 
+@pytest.mark.parametrize(
+    "groups, tool",
+    [
+        (("doc_rag",), "search_file"),
+        (("doc_rag", "file_fs"), "find_files"),
+        (("file_fs", "doc_rag"), "find_files"),
+        # Near-miss group names must not switch the doc wording to find_files.
+        (("doc_rag", "file_fs_extra"), "search_file"),
+        (("doc_rag", "file"), "search_file"),
+    ],
+)
+def test_discovery_tool_follows_file_fs_group(groups, tool):
+    import dataclasses
+
+    import gaia_agent_chat.agent as agent_mod
+
+    spec = dataclasses.replace(PROFILE_SPECS["doc"], tool_groups=groups)
+    other = "find_files" if tool == "search_file" else "search_file"
+    with (
+        patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
+        patch("gaia_agent_chat.agent.RAGSDK"),
+        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+        patch("gaia.llm.lemonade_client.LemonadeClient"),
+    ):
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, prompt_profile="doc"))
+        with patch.object(agent_mod, "get_profile_spec", return_value=spec):
+            prompt = agent._get_system_prompt()
+    assert _FS_DISCOVERY_RULES.replace("find_files", tool) in prompt
+    assert f"`{other}` / `browse_directory`" not in prompt
+
+
 def test_data_profile_does_not_advertise_web_or_media(prompts_and_tools):
     prompt, _ = prompts_and_tools["data"]
     assert "Web browsing IS supported" not in prompt
