@@ -160,6 +160,7 @@ def test_interactive_prompt_eof_cancels_cleanly(tmp_path, monkeypatch):
     assert excinfo.value.code == 0  # cancelled, same as answering "n"
     assert calls == []  # nothing was installed
 
+
 def test_yes_flag_bypasses_prompt(tmp_path, monkeypatch):
     bundle = _make_bundle(tmp_path)
 
