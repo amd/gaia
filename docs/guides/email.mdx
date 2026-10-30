@@ -27,7 +27,7 @@ These eight tools are the whole surface.
 
 `list_waiting_on_you` is narrow on purpose: newsletters, cold outreach, and automated senders never qualify, and neither does a sender you told to stop writing. A first message from someone you have never replied to won't appear either — the full triage pass still catches those. It scans the 50 most recent inbox messages by default (up to 100 on Gmail, 200 on Outlook), and says when older mail was not checked.
 
-Reading bodies is bounded **per turn**, not just per message: once a turn has read enough mail to fill its share of the context window, `read_email` and `get_thread` refuse with `turn_budget_exhausted` and say so, instead of quietly overflowing the conversation.
+Reading bodies is bounded **per turn**, not just per message: once a turn has read enough mail to fill its share of the context window, `read_email` and `get_thread` refuse with `turn_budget_exhausted` and say so, instead of quietly overflowing the conversation. `get_thread` also refuses up front when the thread has too many messages to fit in what is left of the turn, and names the thread's size and the remaining budget — read the messages that matter one at a time instead.
 
 ## Setup
 

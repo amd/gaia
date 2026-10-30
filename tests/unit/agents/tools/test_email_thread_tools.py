@@ -320,12 +320,61 @@ def test_get_thread_tool_refusal_happens_before_any_request():
     assert api.requests == []
 
 
+def test_a_thread_too_big_for_the_remaining_budget_is_refused_whole():
+    """NPU-sized budget: 75 messages at the 400-char floor need 30,000+ chars,
+    so reading it would overflow. Refused before anything is charged."""
+    mails = [
+        Mail(f"m{i}", "t1", sender="a@x.com", body="word " * 500, age_days=99 - i)
+        for i in range(76)
+    ]
+    h = _harness(FakeGmailApi(mails).backend())
+    h._email_turn_budget_chars = lambda: 30_000
+    out = json.loads(h.tool("get_thread")(thread_id="t1"))
+    assert out["success"] is False
+    assert out["turn_budget_exhausted"] is True
+    assert out["thread_message_count"] == 76
+    assert out["budget_remaining_chars"] == 30_000
+    assert "76 messages" in out["error"] and "read_email" in out["error"]
+    assert "messages" not in out
+    assert h._email_turn_body_chars == 0
+
+
+def test_a_short_thread_after_earlier_reads_is_refused_not_overflowed():
+    """Earlier read_email calls left less than 3 x 400 chars; the 3-message
+    thread must not be read past the budget."""
+    h = _harness(FakeGmailApi(_conversation()).backend())
+    h._email_turn_budget_chars = lambda: 30_000
+    h._email_turn_reset_if_stale()
+    h._email_turn_body_chars = 29_000
+    out = json.loads(h.tool("get_thread")(thread_id="t1"))
+    assert out["turn_budget_exhausted"] is True
+    assert out["budget_remaining_chars"] == 1_000
+    assert h._email_turn_body_chars == 29_000
+
+
+def test_a_thread_that_just_fits_never_exceeds_the_budget():
+    """At exactly n x floor the read succeeds and spends no more than is left."""
+    mails = [
+        Mail(f"m{i}", "t1", sender="a@x.com", body="word " * 500, age_days=9 - i)
+        for i in range(5)
+    ]
+    h = _harness(FakeGmailApi(mails).backend())
+    h._email_turn_budget_chars = lambda: 3_000
+    h._email_turn_reset_if_stale()
+    h._email_turn_body_chars = 1_000
+    out = json.loads(h.tool("get_thread")(thread_id="t1"))
+    assert out["success"] is True
+    assert out["count"] == 5
+    assert h._email_turn_body_chars <= 3_000
+
+
 def test_get_thread_tool_says_when_the_thread_is_incomplete():
     mails = [
         Mail(f"m{i}", "conv", sender="a@x.com", body="x", age_days=200 - i)
         for i in range(101)
     ]
     h = _harness(FakeGraphApi(mails).backend(), provider="microsoft")
+    h._email_turn_budget_chars = lambda: 100_000  # room for 100 x 400
     out = json.loads(h.tool("get_thread")(thread_id="conv"))
     assert out["thread_incomplete"] is True
     assert "longer" in out["note"]

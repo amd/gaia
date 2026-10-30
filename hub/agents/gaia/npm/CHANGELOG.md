@@ -11,7 +11,8 @@ Requires the `gaia` Python CLI 0.25.3+ on `PATH`.
 - **Mail: whole conversations, what's waiting on you, and which account.**
   Three read-only tools join the mail set, for Gmail and Outlook alike.
   `get_thread` reads a whole conversation, oldest first, clipping long bodies
-  so no message is dropped. `list_waiting_on_you` finds the inbox threads where
+  so no message is dropped, and refuses a thread too long for what is left of
+  the turn's reading budget rather than overflow the context window. `list_waiting_on_you` finds the inbox threads where
   someone asked you directly for a reply and you were already in that
   conversation. Newsletters, cold outreach and automated mail never qualify.
   `list_connected_mailboxes` says which mailboxes are connected and which one

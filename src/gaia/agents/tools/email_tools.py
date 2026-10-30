@@ -811,10 +811,28 @@ class EmailToolsMixin:
                         f"Thread {thread_id!r} came back with no messages. Use "
                         "a thread_id from a listing or search result."
                     )
-                share = max(
-                    _THREAD_MIN_BODY_CHARS,
-                    min(_MAX_BODY_CHARS, (budget - used) // len(raw)),
-                )
+                remaining = budget - used
+                needed = len(raw) * _THREAD_MIN_BODY_CHARS
+                if needed > remaining:
+                    # Every message keeps a floor, so a read that cannot give
+                    # each one its floor would overflow the context window.
+                    return _fail(
+                        f"Thread {thread_id!r} has {len(raw)} messages, which "
+                        f"need at least {needed} chars to read whole, but only "
+                        f"{remaining} of this turn's {budget}-char mail-reading "
+                        "budget is left — reading it would overflow the "
+                        "context window. Read the messages that matter one at "
+                        "a time with read_email, or continue in a new turn. "
+                        f"See {_EMAIL_DOCS_URL}",
+                        "get_thread",
+                        refusal=True,
+                        turn_budget_exhausted=True,
+                        thread_message_count=len(raw),
+                        chars_needed=needed,
+                        budget_chars=budget,
+                        budget_remaining_chars=remaining,
+                    )
+                share = min(_MAX_BODY_CHARS, remaining // len(raw))
                 messages = []
                 for position, message in enumerate(raw, start=1):
                     bounded = _bound_body(_public(message), limit=share)
