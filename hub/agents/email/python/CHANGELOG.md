@@ -9,6 +9,10 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Unread Outlook listings no longer fail at Microsoft Graph.** The core and
+  email-agent backends now put a broad `receivedDateTime` predicate before
+  `isRead` whenever they sort unread mail newest-first. That meets Graph's
+  `$filter` / `$orderby` rule instead of returning `InefficientFilter` (#4806).
 - **The email package no longer installs beside an incompatible GAIA core.**
   Its declared core floor is now 0.25.1, the first release covering the
   email agent module-level imports, including its guided Outlook setup route.
