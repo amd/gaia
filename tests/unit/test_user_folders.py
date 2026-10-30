@@ -373,9 +373,7 @@ def _inherited_xdg_config(monkeypatch, tmp_path):
     return sandbox
 
 
-def test_a_sandboxed_home_ignores_the_inherited_xdg_config_home(
-    monkeypatch, tmp_path
-):
+def test_a_sandboxed_home_ignores_the_inherited_xdg_config_home(monkeypatch, tmp_path):
     """Swapping HOME must not hand back the real account's Documents."""
     sandbox = _inherited_xdg_config(monkeypatch, tmp_path)
 
@@ -400,9 +398,7 @@ def test_account_home_comes_from_the_password_database(monkeypatch, tmp_path):
     assert str(user_folders._account_home()) == expected
 
 
-def test_the_xdg_documents_path_is_never_touched_while_resolving(
-    monkeypatch, tmp_path
-):
+def test_the_xdg_documents_path_is_never_touched_while_resolving(monkeypatch, tmp_path):
     """A Documents folder on a dead network mount must not stall the lookup."""
     home = tmp_path / "home"
     dead = tmp_path / "dead-share" / "Docs"

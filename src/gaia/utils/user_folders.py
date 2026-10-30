@@ -76,9 +76,7 @@ def _same_folder(a: Path, b: Path) -> bool:
 
 def _same_path(a: Path, b: Path) -> bool:
     """Compare two paths without touching the filesystem."""
-    return os.path.normpath(os.path.abspath(a)) == os.path.normpath(
-        os.path.abspath(b)
-    )
+    return os.path.normpath(os.path.abspath(a)) == os.path.normpath(os.path.abspath(b))
 
 
 def _account_home() -> Path | None:
