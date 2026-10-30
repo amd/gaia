@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools.workspace_paths import _workspace_target
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,7 +36,7 @@ class FileToolsMixin:
         def add_watch_directory(directory: str) -> Dict[str, Any]:
             """Add directory to watch list with path validation and auto-indexing."""
             try:
-                directory = os.path.expanduser(directory)
+                directory = str(_workspace_target(self, directory))
                 is_allowed, reason = self.path_validator.validate_read(directory)
                 if not is_allowed:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}

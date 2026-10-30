@@ -3686,6 +3686,11 @@ Examples:
 
     skills_cli.add_subparser(subparsers)
 
+    # Local GGUF models added from a Hugging Face link (shared with the Agent UI and TUI).
+    from gaia.llm import custom_models_cli
+
+    custom_models_cli.add_subparser(subparsers)
+
     # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
     # users don't have to pass --model on every chat/llm/prompt (issue #98).
     config_parser = subparsers.add_parser(
@@ -5995,6 +6000,11 @@ Let me know your answer!
         handle_hub_command(args)
         return
 
+    if args.action == "model":
+        from gaia.llm import custom_models_cli  # pylint: disable=reimported
+
+        sys.exit(custom_models_cli.handle(args))
+
     # Handle Config command
     if args.action == "config":
         handle_config_command(args)
@@ -7171,11 +7181,45 @@ def handle_gateway_command(args):
                 auth_header_prefix=args.auth_header_prefix,
                 allow_insecure_http=args.allow_insecure_http,
             )
+            auth = result.get("auth_state") or {}
+            restored = False
+            remembered = None
+            # The stored token was issued for the previously registered URL and
+            # is not bound to it, so a new URL must drop it: every later
+            # ensure_authenticated() would otherwise hand it to the new gateway.
+            url_changed = base_url.rstrip("/").lower() != (
+                (state.base_url or "").rstrip("/").lower()
+            )
+            dropped = url_changed and recall_token() is not None and forget_token()
+            needs_token = not (auth.get("env_var_set") or auth.get("runtime_key_set"))
+            if needs_token and not url_changed:
+                remembered = recall_token()
+                if remembered:
+                    # A fresh install must also restore a token saved by `gateway auth`.
+                    restored = manager.ensure_authenticated(recall=lambda: remembered)
+                    if restored:
+                        status = manager.status()
+                        needs_token = not (status.env_var_set or status.runtime_key_set)
+                        result["models_discovered"] = status.models_discovered
             print(
                 f"✅ Registered. Models discovered: {result.get('models_discovered', 0)}"
             )
-            auth = result.get("auth_state") or {}
-            if not (auth.get("env_var_set") or auth.get("runtime_key_set")):
+            if restored:
+                print(
+                    "   Restored the remembered gateway token from the OS credential store."
+                )
+            elif remembered:
+                print(
+                    "\n  The remembered gateway token was not accepted — run "
+                    "`gaia gateway auth` with a current one."
+                )
+            elif dropped:
+                print(
+                    "\n  The gateway URL changed, so GAIA forgot the token remembered "
+                    "for the old one — run `gaia gateway auth` with a token for "
+                    "this gateway."
+                )
+            elif needs_token:
                 print(
                     "\n  No token yet — run `gaia gateway auth` so Lemonade can "
                     "discover models."
@@ -7726,7 +7770,11 @@ def _offer_first_boot_onboarding() -> None:
 
     if answer in ("n", "no"):
         # Declining is an answer — record it so the intro is not re-offered.
-        _mark_onboarding_completed()
+        try:
+            _mark_onboarding_completed()
+        except RuntimeError as e:
+            # A persistence failure must not cost the user their chat session.
+            print(f"Could not record your choice: {e}")
         return
 
     # Onboarding is optional; chat is not. A failure to store must not cost
@@ -8989,7 +9037,10 @@ def handle_agent_import(args):
             print("Agents in bundle:")
             for aid in bundle_agent_ids:
                 print(f"  - {aid}")
-        answer = input("[y/N] Continue? ").strip().lower()
+        try:
+            answer = input("[y/N] Continue? ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
         if answer not in ("y", "yes"):
             print("Import cancelled.")
             sys.exit(0)

@@ -40,6 +40,7 @@ from gaia.agents.tools.workspace_paths import (
     _project_target_for,
     _resolve_target,
     _workspace_default,
+    _workspace_target,
 )
 from gaia.logger import get_logger
 from gaia.security import BackupError
@@ -105,10 +106,6 @@ def _python_syntax_error(path: Path, content: str) -> Optional[str]:
         # a successful write into a reported failure.
         return f"{e} — the file was saved but will not run. Fix it before answering."
     return None
-
-
-def _gaia_md_target(args: Dict[str, Any]) -> str:
-    return os.path.join(args.get("project_root", "."), "GAIA.md")
 
 
 def _directory_path_error(file_path: str) -> Dict[str, Any]:
@@ -928,7 +925,7 @@ class FileIOToolsMixin:
                 Dictionary with search results
             """
             path_validator = _require_path_validator(self)
-            directory = os.path.expanduser(directory)
+            directory = str(_workspace_target(self, directory))
             try:
                 is_allowed, reason = path_validator.validate_read(directory)
                 if not is_allowed:
@@ -1453,7 +1450,14 @@ class FileIOToolsMixin:
                     path_validator.audit_write("edit", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _gaia_md_target, "overwriting"))
+        def _workspace_gaia_md_target(args: Dict[str, Any]) -> Path:
+            return _workspace_target(self, args.get("project_root", ".")) / "GAIA.md"
+
+        @tool(
+            preflight=read_first_preflight(
+                self, _workspace_gaia_md_target, "overwriting"
+            )
+        )
         def update_gaia_md(
             project_root: str = ".",
             project_name: str = None,
@@ -1479,7 +1483,7 @@ class FileIOToolsMixin:
             try:
                 from datetime import datetime
 
-                gaia_path = os.path.join(os.path.expanduser(project_root), "GAIA.md")
+                gaia_path = str(_workspace_target(self, project_root) / "GAIA.md")
 
                 is_blocked, reason = path_validator.is_write_blocked(gaia_path)
                 if is_blocked:

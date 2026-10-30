@@ -692,7 +692,7 @@ def test_reads_before_any_turn_are_explicit(turns):
     assert turns.metrics("s1")["status"] == "error"
 
 
-# ── Folding rules (mirror ChatView.tsx) ────────────────────────────────────
+# ── Folding rules (mirror ChatView.tsx, streamSteps.ts, chatStream.ts) ──
 
 
 def test_fold_matches_the_ui():
