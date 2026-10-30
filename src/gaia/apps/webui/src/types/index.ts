@@ -1126,6 +1126,8 @@ export interface ProviderInfo {
     key_state?: 'read' | 'waiting_for_os_permission';
     key_message?: string | null;
     models_discovered?: boolean;
+    /** The provider's model list is down, so GAIA offers models it already knows. */
+    known_models?: boolean;
     env_var?: string;
     base_url?: string | null;
     error?: string;

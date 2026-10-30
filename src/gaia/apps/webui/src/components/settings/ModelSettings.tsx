@@ -134,6 +134,7 @@ export function ModelSettings() {
                 ok: true,
                 text: r.remember_error
                     ? `Connected for this session only — the key could not be kept: ${r.remember_error}`
+                    : r.known_models ? `${provider.name} can't list its models right now. Your key still works, so GAIA connected using models it already knows.`
                     : r.remembered ? 'Connected. The key is kept for next time.' : 'Connected.',
             });
             await loadProviders();
@@ -417,6 +418,12 @@ export function ModelSettings() {
                     {notice && (
                         <p className={notice.ok ? 'settings-ok' : 'settings-error'} role={notice.ok ? 'status' : 'alert'}>
                             {notice.text}
+                        </p>
+                    )}
+
+                    {provider.known_models && (
+                        <p className="settings-hint" role="status">
+                            {provider.name} can't list its models right now, so GAIA is showing models it already knows. Your key still works, but this list may be out of date.
                         </p>
                     )}
 

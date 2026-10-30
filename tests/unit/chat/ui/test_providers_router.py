@@ -617,7 +617,77 @@ def test_connect_reports_a_key_the_store_did_not_keep(client, lemonade, keys):
     assert "did not keep" in body["remember_error"]
 
 
-def test_connect_drops_a_key_that_discovers_no_models(client, lemonade, keys):
+@pytest.fixture
+def model_list(monkeypatch):
+    """Fireworks' answer to the list check, and the server restart, faked."""
+    from gaia.llm import fireworks_known_models as known
+    from gaia.llm.providers import fireworks
+
+    state = {"check": fireworks.ModelListCheck(fireworks.ModelListState.REJECTED)}
+    state["restarts"], state["keys_checked"] = [], []
+
+    def check(key, **_):
+        state["keys_checked"].append(key)
+        return state["check"]
+
+    monkeypatch.setattr(fireworks, "check_model_list", check)
+    monkeypatch.setattr(
+        known, "use_known_models", lambda _: state["restarts"].append(1)
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade",
+        lambda *a: state.get("own", True),
+    )
+    return state
+
+
+def _list_failing():
+    from gaia.llm.providers.fireworks import ModelListCheck, ModelListState
+
+    return ModelListCheck(ModelListState.FAILING, "HTTP 500: Error listing")
+
+
+def test_a_failing_model_list_keeps_the_key_and_serves_known_models(
+    client, lemonade, keys, model_list
+):
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list["check"] = _list_failing()
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "models_discovered": 9}
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 200
+    assert resp.json()["remembered"] is True
+    assert keys["remembered"] == [("fireworks", KEY)]
+    assert model_list["restarts"] == [1]
+    assert KEY not in resp.text
+
+
+def test_a_failing_list_on_a_system_server_blames_fireworks_not_the_key(
+    client, lemonade, keys, model_list
+):
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list.update(check=_list_failing(), own=False)
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert "HTTP 500" in detail and "did not reject" in detail
+    assert keys["remembered"] == [("fireworks", KEY)]
+    assert model_list["restarts"] == []
+    assert KEY not in resp.text
+
+
+def test_a_stored_key_is_checked_when_no_models_come_back(
+    client, lemonade, keys, model_list
+):
+    keys["stored"]["fireworks"] = KEY
+    model_list["check"] = _list_failing()
+    client.post("/api/providers/fireworks/connect", json={})
+    assert model_list["keys_checked"] == [KEY]
+    assert model_list["restarts"] == [1]
+
+
+def test_connect_drops_a_key_that_discovers_no_models(
+    client, lemonade, keys, model_list
+):
     lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
     resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
     assert resp.status_code == 401

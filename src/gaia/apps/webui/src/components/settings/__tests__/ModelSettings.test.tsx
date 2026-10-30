@@ -61,6 +61,18 @@ describe('ModelSettings provider keys', () => {
         expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toHaveAttribute('aria-checked', 'true');
     });
 
+    it('says when the models shown are known ones, because the list is down', async () => {
+        withProviders(fireworks({ models_discovered: true, key_source: 'stored', known_models: true }));
+        const card = await openFireworks();
+        expect(within(card).getByRole('status')).toHaveTextContent(/can't list its models.*Your key still works.*out of date/);
+    });
+
+    it('stays quiet about known models on the live list', async () => {
+        withProviders(fireworks({ models_discovered: true, key_source: 'stored' }));
+        const card = await openFireworks();
+        expect(within(card).queryByText(/can't list its models/)).not.toBeInTheDocument();
+    });
+
     it('takes the key in a password field', async () => {
         const card = await openFireworks();
         expect(within(card).getByLabelText('Fireworks AI API key')).toHaveAttribute('type', 'password');
