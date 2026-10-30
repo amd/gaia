@@ -448,6 +448,7 @@ jobs:
             tests/test_hardware_advisor_agent.py \
             tests/installer/test_installer_scenarios.py \
             tests/integration/test_browser_use_live.py \
+            tests/integration/test_audio_generation_live.py \
             tests/integration/test_chat_hub_wheel_journey.py \
             tests/integration/test_chat_ui_integration.py \
             tests/integration/test_documents_router.py \
