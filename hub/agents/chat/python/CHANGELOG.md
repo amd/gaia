@@ -6,6 +6,11 @@
   `find_files`, which that profile does not register, so the first discovery step
   failed. They now name `search_file`, which it does register. Profiles with the
   filesystem tools keep the `find_files` wording (#6070).
+- With Local only on (`gaia config set network_policy local_ai_only`), the
+  Perplexity-backed `search_web` tool is not registered, because it answers
+  through Perplexity's cloud AI. A cached agent that still has it refuses with
+  the same reason. The DuckDuckGo `search_web` from the browser tools still
+  registers: it runs no AI model.
 - Resolves the user's real Documents folder for the session guidance, including
   Windows Known Folder Move/OneDrive and Linux `XDG_DOCUMENTS_DIR`, instead of
   assuming it is always `~/Documents` (#5885). File search and the Agent UI's
