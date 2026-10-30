@@ -20,7 +20,7 @@ import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -3996,7 +3996,12 @@ These positions indicate where to split the text."""
                     raise ValueError("response contains an invalid rerank result")
                 seen.add(index)
                 order.append(index)
-                scores.append(1.0 / (1.0 + math.exp(-float(score))))
+                # Stable sigmoid: math.exp overflows on large negative logits.
+                logit = float(score)
+                if logit >= 0:
+                    scores.append(1.0 / (1.0 + math.exp(-logit)))
+                else:
+                    scores.append(math.exp(logit) / (1.0 + math.exp(logit)))
             if len(order) != len(candidate_chunks):
                 raise ValueError("response does not score every candidate")
             return order, scores
@@ -4014,11 +4019,13 @@ These positions indicate where to split the text."""
         self._load_embedder()
         reranking_model = self._resolve_reranking_model()
 
+        # Generate query embedding
         if self.config.show_stats:
-            print(f"Searching through {len(chunks_snapshot)} chunks...")
+            print(f"🔍 Searching through {len(chunks_snapshot)} chunks...")
         self.log.debug(f"Encoding query: {query[:50]}...")
         query_embedding = self._encode_query(query)
 
+        # Search for similar chunks; reranking widens the candidate pool
         result_limit = min(self.config.max_chunks, len(chunks_snapshot))
         multiplier = max(1, int(self.config.reranking_candidate_multiplier))
         candidate_limit = (
@@ -4027,7 +4034,7 @@ These positions indicate where to split the text."""
             else result_limit
         )
         if self.config.show_stats:
-            print(f"Finding {candidate_limit} vector candidates...")
+            print(f"  🎯 Finding {candidate_limit} most relevant chunks...")
         # pylint: disable=no-value-for-parameter
         distances, indices = index_snapshot.search(
             query_embedding.astype("float32"), candidate_limit
@@ -4038,15 +4045,19 @@ These positions indicate where to split the text."""
         scores = []
         for idx, dist in zip(indices[0], distances[0]):
             idx = int(idx)
+            # FAISS can surface stale or invalid positions relative to the
+            # captured chunk snapshot; skip anything outside the snapshot.
             if idx < 0 or idx >= len(chunks_snapshot):
                 continue
             retrieved_indices.append(idx)
             retrieved_chunks.append(chunks_snapshot[idx])
             scores.append(1.0 / (1.0 + float(dist)))
 
-        if reranking_model:
-            reranked = self._rerank_candidates(query, retrieved_chunks, reranking_model)
-            order, rerank_scores = reranked
+        # A lone candidate keeps its vector score; there is nothing to reorder.
+        if reranking_model and len(retrieved_chunks) > 1:
+            order, rerank_scores = self._rerank_candidates(
+                query, retrieved_chunks, reranking_model
+            )
             retrieved_indices = [retrieved_indices[i] for i in order]
             retrieved_chunks = [retrieved_chunks[i] for i in order]
             scores = rerank_scores
@@ -4055,14 +4066,13 @@ These positions indicate where to split the text."""
         scores = scores[:result_limit]
 
         if self.config.show_stats:
-            average = sum(scores) / len(scores) if scores else 0.0
+            avg_relevance = sum(scores) / len(scores) if scores else 0.0
             print(
-                f"Retrieved {len(retrieved_chunks)} chunks (avg relevance: {average:.3f})"
+                f"  ✅ Retrieved {len(retrieved_chunks)} chunks (avg relevance: {avg_relevance:.3f})"
             )
 
         self.log.debug(
-            f"Retrieved {len(retrieved_chunks)} chunks with scores: "
-            f"{[f'{score:.3f}' for score in scores]}"
+            f"Retrieved {len(retrieved_chunks)} chunks with scores: {[f'{s:.3f}' for s in scores]}"
         )
         snapshot["retrieved_indices"] = retrieved_indices
         snapshot["retrieved_chunks"] = retrieved_chunks
