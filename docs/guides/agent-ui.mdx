@@ -553,6 +553,13 @@ delete, `git add` — still asks, and runs only when you allow it.
 **Settings → Permissions** lists every chat with full access or "always allow"
 answers and lets you revoke them. Grants end when GAIA restarts.
 
+The same pane has **Start new chats in full access**, off by default. Turning
+it on asks you to confirm a plain warning first; turning it off takes one
+click. It sets the same `full_access` option as the TUI's `/full-access always`.
+The next new chat follows it right away, unless you already picked a mode on
+the message box's shield for that chat. Chats already open keep their mode. It
+can only be changed on the PC running GAIA, not from a phone over mobile access.
+
 A Hub-installed GAIA, which runs as its own process, follows the chat's mode
 too, from agent contract 2.14. It stops asking, but its shell guardrails stay
 on, so those commands still reach you as a confirmation. If the mode can't be
@@ -615,7 +622,8 @@ reads nothing.
   - **Phone access:** turns mobile access on or off, shows the QR code, and
     names the phone that connected.
   - **Permission mode:** Ask or Full access, the same setting as the shield in
-    the message box.
+    the message box. It covers this chat only; new chats follow **Settings →
+    Permissions**.
 
   A Hub-installed GAIA, which runs as its own process, is held to the
   internet setting. It can be given another folder, but a folder can't be
