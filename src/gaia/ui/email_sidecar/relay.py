@@ -47,7 +47,7 @@ import uuid
 from typing import Any, Callable, ContextManager, Dict, List, Optional
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
-from gaia.agents.base.tool_grants import SITE_ARG
+from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, SITE_ARG
 from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
@@ -172,6 +172,19 @@ def _kind_re() -> "re.Pattern":
     return re.compile(rf'"kind"\s*:\s*"(?:{alt})"')
 
 
+#: Tools whose every call asks afresh, so "always" is never relayed for them:
+#: the Agent UI's ``requiresFreshConsent``, mirrored so no client can grant one.
+_FRESH_CONSENT_TOOLS = frozenset(
+    {
+        "share_engineering_context",
+        "append_engineering_context",
+        "approve_engineering_code",
+        "capture_skill",
+        PATH_ACCESS_PROMPT_TOOL,
+    }
+)
+
+
 def _user_wait(event: Dict[str, Any], answers_confirmations: bool) -> Optional[str]:
     """The prompt or question id the sidecar now waits on the user for, if any."""
     etype = event.get("type")
@@ -187,11 +200,14 @@ def _dispatch_one(
     event: Dict[str, Any],
     profile: RelayProfile = EMAIL_PROFILE,
     answers_confirmations: bool = False,
+    offers_always: bool = False,
 ) -> bool:
     """Emit one canonical event as a UI event. Returns True if terminal.
 
     *answers_confirmations* says the sidecar waits on a ``needs_confirmation``
     for an answer over ``tool_decision``; otherwise the prompt is a card only.
+    *offers_always* says the chat can list and revoke the sidecar's "always"
+    grants, so a prompt that carries a scope may offer one.
     """
     etype = event.get("type")
     if answers_confirmations:
@@ -203,16 +219,24 @@ def _dispatch_one(
     if etype == "needs_confirmation" and answers_confirmations:
         confirm_id = str(event.get("confirm_id") or "")
         if confirm_id:
-            handler.set_relay_confirmation(confirm_id)
-            # The UI's own approval prompt. No always_scope: an "always" grant
-            # would live in the sidecar, where this chat can neither list nor
-            # revoke it, so only allow-once and deny are offered.
+            tool = str(event.get("action", ""))
+            always_scope = (
+                str(event.get("always_scope") or "")
+                if offers_always and tool not in _FRESH_CONSENT_TOOLS
+                else ""
+            )
+            handler.set_relay_confirmation(confirm_id, always_scope or None)
+            # The UI's own approval prompt.
             request: Dict[str, Any] = {
                 "type": "permission_request",
-                "tool": str(event.get("action", "")),
+                "tool": tool,
                 "confirm_id": confirm_id,
                 "summary": str(event.get("summary", "")),
             }
+            if always_scope:
+                request["always_scope"] = always_scope
+                if event.get("always_label"):
+                    request["always_label"] = str(event["always_label"])
             if event.get("risk"):
                 request["risk"] = str(event["risk"])
             if event.get("tool_label"):
@@ -507,6 +531,7 @@ def relay_query(
     profile: RelayProfile = EMAIL_PROFILE,
     session_id: Optional[str] = None,
     answers_confirmations: bool = False,
+    offers_always: bool = False,
     documents: Optional[List[str]] = None,
     allowed_paths: Optional[List[str]] = None,
     working_directory: Optional[str] = None,
@@ -558,6 +583,10 @@ def relay_query(
     *answers_confirmations* — the caller has established that this sidecar
     takes ``tool_decision`` answers (``profiles.confirmations_supported``), so
     a ``needs_confirmation`` becomes an Allow once / Deny prompt.
+
+    *offers_always* — the caller has established that this sidecar lists and
+    revokes its "always" grants (``profiles.grants_supported``), so a prompt
+    with a scope also offers Always allow.
 
     Runs synchronously on the caller's thread — the UI backend already runs
     the whole per-turn producer off the event loop in a worker/daemon thread
@@ -722,7 +751,9 @@ def relay_query(
                     handler.come_back_to_model()
                     if handler.cancelled.is_set():
                         break
-            if _dispatch_one(handler, event, profile, answers_confirmations):
+            if _dispatch_one(
+                handler, event, profile, answers_confirmations, offers_always
+            ):
                 terminated = True
                 break
             waiting_on = _user_wait(event, answers_confirmations)

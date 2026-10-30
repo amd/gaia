@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gaia.config import GaiaConfig, gaia_home
 from gaia.utils.process_owner import current_owner, owner_is_gone
+from gaia.utils.sqlite_wal import enable_wal
 
 from .chat_search import fold, snippet
 
@@ -258,7 +259,8 @@ class ChatDatabase:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
-        self._conn.execute("PRAGMA journal_mode = WAL")
+        self._conn.execute("PRAGMA busy_timeout = 5000")
+        enable_wal(self._conn)
         self._init_schema()
         logger.info("Chat database initialized: %s", db_path)
 
@@ -571,7 +573,7 @@ class ChatDatabase:
                 """SELECT s.*,
                           (SELECT COUNT(*) FROM messages WHERE session_id = s.id AND role != 'autonomous') as message_count
                    FROM sessions s
-                   ORDER BY s.updated_at DESC
+                   ORDER BY s.updated_at DESC, s.rowid DESC
                    LIMIT ? OFFSET ?""",
                 (limit, offset),
             ).fetchall()
@@ -621,7 +623,7 @@ class ChatDatabase:
         automated = "" if include_automated else " WHERE kind NOT IN (?, ?)"
         with self._transaction():
             sessions = self._conn.execute(
-                f"SELECT id, title FROM sessions{automated} ORDER BY updated_at DESC",
+                f"SELECT id, title FROM sessions{automated} ORDER BY updated_at DESC, rowid DESC",
                 () if include_automated else AUTOMATED_SESSION_KINDS,
             ).fetchall()
             first_hit = {

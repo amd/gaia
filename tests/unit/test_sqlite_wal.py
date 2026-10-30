@@ -54,21 +54,33 @@ class _Conn:
     after *switch_fails* locked attempts the switch itself succeeds.
     """
 
-    def __init__(self, error, modes, switch_fails=10**9, busy_ms=200):
+    def __init__(self, error, modes, switch_fails=10**9, busy_ms=200, wait=None):
         self.error, self.modes = error, list(modes)
         self.switch_fails, self.busy_ms, self.statements = switch_fails, busy_ms, []
+        self.wait = wait  # called with the seconds a locked statement blocks
+
+    def _blocked(self):
+        if self.wait:
+            self.wait(self.busy_ms / 1000)
 
     def execute(self, sql):
         self.statements.append(sql)
         if sql == "PRAGMA busy_timeout":
             return _Row((self.busy_ms,))
+        if sql.startswith("PRAGMA busy_timeout="):
+            self.busy_ms = int(sql.split("=")[1])
+            return _Row((self.busy_ms,))
+        if sql == "PRAGMA database_list":
+            return _Row((0, "main", "/data/m.db"))
         if sql == "PRAGMA journal_mode=WAL":
             if self.switch_fails > 0:
                 self.switch_fails -= 1
+                self._blocked()
                 raise sqlite3.OperationalError(self.error)
             return _Row(("wal",))
         mode = self.modes.pop(0) if len(self.modes) > 1 else self.modes[0]
         if isinstance(mode, Exception):
+            self._blocked()
             raise mode
         return _Row((mode,))
 
@@ -118,7 +130,7 @@ def test_a_switch_locked_on_a_database_not_in_wal_raises_naming_the_mode(mode, c
 
 def test_the_retry_stops_at_the_busy_timeout(clock):
     conn = _Conn("database is locked", ["delete"], busy_ms=150)
-    with pytest.raises(sqlite3.OperationalError, match=r"within 0\.15 s"):
+    with pytest.raises(sqlite3.OperationalError, match=r"after 0\.\d s"):
         enable_wal(conn)
     # The last sleep can start just before the deadline, and is at most 25 ms.
     assert 0.15 <= clock.now < 0.175
@@ -127,9 +139,65 @@ def test_the_retry_stops_at_the_busy_timeout(clock):
 
 def test_a_zero_busy_timeout_tries_once(clock):
     conn = _Conn("database is locked", ["delete"], busy_ms=0)
-    with pytest.raises(sqlite3.OperationalError, match="1 attempts"):
+    with pytest.raises(sqlite3.OperationalError, match=r"\(1 attempt\)"):
         enable_wal(conn)
     assert conn.switches() == 1
+
+
+def test_a_blocked_switch_and_mode_read_wait_the_busy_timeout_once(clock):
+    locked = sqlite3.OperationalError("database is locked")
+    conn = _Conn("database is locked", [locked], busy_ms=5000, wait=clock.sleep)
+    with pytest.raises(sqlite3.OperationalError, match="after 5.0 s") as caught:
+        enable_wal(conn)
+    assert clock.now == 5.0
+    assert "unknown (locked) mode" in str(caught.value)
+
+
+def test_the_error_names_the_database_file_and_counts_attempts(clock):
+    conn = _Conn("database is locked", ["delete"], busy_ms=1000, wait=clock.sleep)
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        enable_wal(conn)
+    assert "could not switch /data/m.db to WAL mode" in str(caught.value)
+    assert "(1 attempt)" in str(caught.value)
+
+
+def test_the_busy_timeout_is_restored_after_a_failure_and_a_success(clock):
+    failing = _Conn("database is locked", ["delete"], busy_ms=50)
+    with pytest.raises(sqlite3.OperationalError):
+        enable_wal(failing)
+    assert failing.busy_ms == 50
+
+    working = _Conn("database is locked", ["wal"], busy_ms=50)
+    enable_wal(working)
+    assert working.busy_ms == 50
+
+
+def test_a_zero_busy_timeout_still_sees_an_opener_that_already_switched(clock):
+    enable_wal(_Conn("database is locked", ["wal"], busy_ms=0, wait=clock.sleep))
+
+
+class _LateBlocker(_Conn):
+    """Fails the first switches at once, then blocks each statement its full busy timeout."""
+
+    def __init__(self, instant_fails, **kwargs):
+        super().__init__("database is locked", ["delete"], **kwargs)
+        self.instant_fails = instant_fails
+
+    def _blocked(self):
+        if self.instant_fails > 0:
+            self.instant_fails -= 1
+            return
+        super()._blocked()
+
+
+@pytest.mark.parametrize("instant_fails", [1, 3, 10])
+def test_a_switch_that_blocks_on_a_retry_waits_only_the_time_left(instant_fails, clock):
+    conn = _LateBlocker(instant_fails, busy_ms=1000, wait=clock.sleep)
+    with pytest.raises(sqlite3.OperationalError, match="still in delete mode"):
+        enable_wal(conn)
+    # One jitter sleep (max 25 ms) can start just before the deadline.
+    assert 1.0 <= clock.now <= 1.025
+    assert conn.busy_ms == 1000
 
 
 @pytest.mark.parametrize("error", ["disk I/O error", "unable to open database file"])
@@ -157,6 +225,7 @@ def test_a_locked_database_not_in_wal_mode_still_fails_and_says_why(tmp_path):
         assert time.monotonic() - t0 < 5
         assert "locked" in str(caught.value)
         assert "still in delete mode" in str(caught.value)
+        assert str(db) in str(caught.value)
     finally:
         holder.execute("ROLLBACK")
 
@@ -318,3 +387,20 @@ def test_several_processes_opening_one_new_memory_db_all_succeed(
             child.stdin.close()
             child.wait(timeout=30)
     assert not failed, f"{len(failed)} of {procs * rounds} opens failed: {failed[0]}"
+
+
+def test_chat_database_retries_wal_switch_while_another_process_releases(tmp_path):
+    """Agent UI chat.db uses the same bounded WAL opener as other stores."""
+    from gaia.ui.database import ChatDatabase
+
+    db_path = tmp_path / "chat.db"
+    holder = _writer_holding(db_path, "DELETE")
+    release = threading.Timer(0.5, lambda: holder.execute("COMMIT"))
+    release.start()
+    try:
+        db = ChatDatabase(str(db_path))
+        assert db._conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        db.close()
+    finally:
+        release.join()
+        holder.close()

@@ -46,6 +46,7 @@ from gaia.eval.config import DEFAULT_AGENT_TYPE
 from gaia.eval.eval_lock import exclusive_eval
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
+from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
 
 logger = logging.getLogger(__name__)
 
@@ -1506,6 +1507,11 @@ def preflight_check(backend_url, scenarios=None):
         errors.extend(command_errors or _check_mcp_server_handshakes())
 
     # Check claude CLI
+    if cloud_blocked():
+        errors.append(
+            "Local only is on, and scenarios are driven and judged by Claude in "
+            "the cloud. Run `gaia config set network_policy cloud_allowed` first."
+        )
     claude_bin = shutil.which("claude")
     if not claude_bin:
         errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
@@ -2121,6 +2127,7 @@ def run_scenario_subprocess(
     cli_raw = None
     driver_proc = None
 
+    assert_provider_permitted("the Claude Code CLI")
     try:
         proc = _run_driver(cmd, input=prompt, timeout=timeout, cwd=str(REPO_ROOT))
         driver_proc = proc
@@ -2585,6 +2592,7 @@ def run_fix_iteration(scorecard, run_dir, iteration):
     claude_cmd = shutil.which("claude") or "claude"
     cmd = [claude_cmd, "-p", prompt, "--dangerously-skip-permissions"]
 
+    assert_provider_permitted("the Claude Code CLI")
     print(f"[FIX] Invoking Claude Code fixer (iteration {iteration})...")
     try:
         proc = subprocess.run(
