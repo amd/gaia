@@ -63,6 +63,19 @@
       "kv_bytes_per_token": 36864
     },
     {
+      "id": "LFM3-1.7B-GGUF",
+      "register_as": "user.LFM3-1.7B-GGUF",
+      "provider": "local",
+      "label": "LFM3 1.7B",
+      "note": "optional preview: small agent model, no vision; needs a Lemonade whose llama.cpp is b11960 or newer",
+      "size_gb": 1.02,
+      "checkpoint": "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M",
+      "recipe": "llamacpp",
+      "reasoning": true,
+      "min_ctx_size": 65536,
+      "kv_bytes_per_token": 12288
+    },
+    {
       "id": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
       "provider": "local",
       "label": "Qwen3 Coder 30B A3B"
