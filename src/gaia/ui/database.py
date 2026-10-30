@@ -271,6 +271,7 @@ _CHAT_SCHEMA_COLUMNS = {
         "agent_steps",
         "inference_stats",
         "model_messages",
+        "page_elements",
         "search_text",
         "turn_summary",
     },
