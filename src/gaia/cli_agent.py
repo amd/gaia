@@ -7,7 +7,7 @@ scaffolding a new agent package, bumping its version, and running the quality
 gates that publishing requires:
 
 * ``gaia agent init <name> --language python|cpp`` — scaffold a package that
-  mirrors ``hub/agents/hello-world/python/`` (the canonical reference layout).
+  mirrors ``tests/fixtures/agents/hello-world/`` (the SDK reference package).
 * ``gaia agent version <patch|minor|major>`` — bump the SemVer in
   ``gaia-agent.yaml`` (and keep ``pyproject.toml`` / ``__init__.py`` in sync).
 * ``gaia agent test`` — quality gates in two modes:
@@ -379,7 +379,7 @@ def cmd_init(args) -> None:
 
 
 def _scaffold_python(pkg_dir: Path, names: _Names) -> None:
-    """Write the Python package layout (mirrors hub/agents/hello-world/python)."""
+    """Write the Python package layout (mirrors tests/fixtures/agents/hello-world)."""
     description = f"{names.display_name} — a GAIA agent (edit this description)"
     code_dir = pkg_dir / names.package
     tests_dir = pkg_dir / "tests"
