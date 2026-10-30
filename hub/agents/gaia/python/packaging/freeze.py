@@ -22,7 +22,7 @@ Design notes / gotchas baked in (mirrors the email sidecar's freeze):
   AND copy its metadata so the entry-point lookup succeeds in the frozen app.
 - ``GaiaAgent`` subclasses ``ChatAgent`` and registers tools lazily from the
   ``full`` profile's tool groups (RAG, filesystem, scratchpad, browser,
-  screenshot), so collect both agent packages wholesale.
+  screenshot), so collect the agent package wholesale.
 - ``gaia.connectors`` discovers providers dynamically; collect it explicitly.
 - ``gaia-agent.yaml``, the agent's own ``gaia_agent/skills`` and the starter
   pack (``hub/skills``) are DATA, invisible to the import analyzer ->
@@ -67,7 +67,6 @@ PKG_ROOT = REPO_ROOT / "hub" / "agents" / "gaia" / "python"
 # at the source roots directly.
 PATHEX = [
     PKG_ROOT,
-    REPO_ROOT / "hub" / "agents" / "chat" / "python",
     REPO_ROOT / "src",
 ]
 
@@ -90,9 +89,8 @@ COLLECT_SUBMODULES = [
     "uvicorn",
     # keyring: OS backend resolution via entry points.
     "keyring",
-    # Both agent packages register tools lazily inside functions.
+    # The agent package registers tools lazily inside functions.
     "gaia_agent",
-    "gaia_agent_chat",
     # connector provider discovery is dynamic.
     "gaia.connectors",
     # pydantic v2 ships a compiled core; collect data to be safe.
@@ -120,7 +118,7 @@ REQUIRED_IMPORTS = ["anthropic"]
 # Modules only ever imported by name at runtime.
 HIDDEN_IMPORTS = [tiktoken_bundle.PLUGIN_MODULE]
 # importlib.metadata version probes + entry-point agent discovery.
-COPY_METADATA = ["keyring", "amd-gaia", "gaia-agent-gaia", "gaia-agent-chat"]
+COPY_METADATA = ["keyring", "amd-gaia", "gaia-agent-gaia"]
 
 # What a ``run_python`` script may import. The frozen binary is the only Python
 # a user of the release has, and nothing in GAIA imports most of these, so the

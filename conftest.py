@@ -67,7 +67,7 @@ _SOURCE_ROOTS = _source_roots()
 #: Modules whose origin proves which checkout is under test. The hub agents are
 #: listed too: they are separately editable-installed, so ``gaia`` can resolve
 #: here while ``gaia_agent`` quietly comes from another worktree.
-_ANCHOR_MODULES = ("gaia", "gaia_agent", "gaia_agent_chat")
+_ANCHOR_MODULES = ("gaia", "gaia_agent")
 
 
 def _prepend_source_roots() -> None:

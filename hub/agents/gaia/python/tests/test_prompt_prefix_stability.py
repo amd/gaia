@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 from gaia_agent import stdio
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-from gaia_agent_chat.agent import ChatAgent
+from gaia_agent.chat_agent import ChatAgent
 
 from gaia.agents.base.history import SessionHistory
 from gaia.agents.base.memory import MemoryMixin

@@ -64,23 +64,20 @@ def console_logging():
 
 @pytest.fixture
 def stub_chat(monkeypatch, console_logging, tmp_path):
-    """Install a stub agent in both the chat wheel and the flagship wheel."""
+    """Install a stub agent in the flagship wheel."""
     monkeypatch.setenv(AGENT_LOG_ENV, str(tmp_path / "agent.log"))
 
     def install(outcome):
         agent_cls = _stub_agent_class(outcome)
-        for pkg, cls, cfg in (
-            ("gaia_agent_chat", "ChatAgent", "ChatAgentConfig"),
-            ("gaia_agent", "GaiaAgent", "GaiaAgentConfig"),
-        ):
+        for pkg, cls, cfg in (("gaia_agent", "GaiaAgent", "GaiaAgentConfig"),):
             agent_mod = types.ModuleType(f"{pkg}.agent")
             setattr(agent_mod, cls, agent_cls)
             setattr(agent_mod, cfg, _StubConfig)
             monkeypatch.setitem(sys.modules, pkg, types.ModuleType(pkg))
             monkeypatch.setitem(sys.modules, f"{pkg}.agent", agent_mod)
-        app_mod = types.ModuleType("gaia_agent_chat.app")
+        app_mod = types.ModuleType("gaia_agent.interactive")
         app_mod.interactive_mode = lambda agent: None
-        monkeypatch.setitem(sys.modules, "gaia_agent_chat.app", app_mod)
+        monkeypatch.setitem(sys.modules, "gaia_agent.interactive", app_mod)
 
     return install
 

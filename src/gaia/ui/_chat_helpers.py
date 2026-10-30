@@ -33,8 +33,7 @@ from typing import Any, Callable, ContextManager, Optional, Tuple
 from fastapi import HTTPException
 
 from gaia.agents.install_hints import (
-    CHAT_WHEEL_AGENT_IDS,
-    agent_import_error_message,
+    LEGACY_FLAGSHIP_AGENT_IDS,
     agent_not_installed_message,
 )
 from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
@@ -101,34 +100,6 @@ from .utils import UPLOAD_LINK_RE, attached_upload_paths, managed_documents_dir
 from .warmup import wait_for_warm_up
 
 logger = logging.getLogger(__name__)
-
-
-def _stamp_chat_identity(config) -> None:
-    """Inject ``namespaced_agent_id="installed:chat"`` into a ``ChatAgentConfig``
-    BEFORE ``ChatAgent(config)`` is constructed.
-
-    Must be applied to the *config*, not to the instance after construction.
-    The connectors activation filter (``Agent._active_mcp_servers`` →
-    ``MCPClientManager.servers_for_agent``) is consulted inside
-    ``ChatAgent.__init__`` → ``super().__init__`` → ``_register_tools``,
-    so the agent must already know its namespaced id by the time
-    ``_register_tools`` runs. A post-construction stamp on the instance
-    is too late — ``_register_tools`` has already loaded the unfiltered
-    MCP-tool set.
-
-    ``ChatAgent.__init__`` reads ``config.namespaced_agent_id`` at its top
-    and sets ``self._gaia_namespaced_agent_id`` from it before invoking
-    ``super().__init__``. This helper just centralises the
-    ``"installed:chat"`` literal so every direct-construction site in this
-    module uses the same value the registry assigns the gaia-agent-chat wheel
-    (#1102) and a fifth caller can't forget.
-
-    Idempotent — only sets the field if it is still its default ``None``,
-    so callers that already set a custom namespaced id (e.g. a future
-    custom-Chat wrapper) are not clobbered.
-    """
-    if getattr(config, "namespaced_agent_id", None) is None:
-        config.namespaced_agent_id = "installed:chat"
 
 
 def _register_agent_memory_ops(agent) -> None:
@@ -1413,20 +1384,20 @@ def _agent_unavailable_message(requested: str, registry) -> str:
     Mirrors the fail-loudly precedent at _chat_helpers.py around line 589 — no
     silent swap to chat, just a clear message the user can act on.
 
-    The ``gaia-agent-chat`` ids are the one case where the generic message is a
-    dead end: they are hidden, so "pick another agent from the selector" names
-    a selector they are not in, and every historical session carries one. When
-    the wheel is genuinely absent, name the package and its install command
-    instead — a recorded load error still wins, since it says more than
-    "missing".
+    ChatAgent's old ids are the one case where the generic message is a dead
+    end: they resolve to the flagship, so "pick another agent from the
+    selector" names a selector they are not in, and every historical session
+    carries one. When the flagship is genuinely absent, name its package and
+    install command instead — a recorded load error still wins, since it says
+    more than "missing".
     """
     if (
-        requested in CHAT_WHEEL_AGENT_IDS
-        and importlib.util.find_spec("gaia_agent_chat") is None
+        requested in LEGACY_FLAGSHIP_AGENT_IDS
+        and importlib.util.find_spec("gaia_agent") is None
     ):
         return agent_not_installed_message(
             f"The '{requested}' agent is not installed",
-            "gaia-agent-chat",
+            "gaia-agent-gaia",
             next_step="Then restart the server.",
         )
 
@@ -2531,6 +2502,8 @@ def _dispatch_sidecar_query(
             f"'{agent_type}' has no sidecar relay profile; it cannot be "
             f"relayed. Known sidecars: {sorted(SIDECAR_AGENT_IDS)}."
         )
+    # A legacy id (``chat``) relays as the sidecar it resolves to.
+    agent_type = profile.agent_id
 
     try:
         handle = daemon_client.acquire_handle(agent_type)
@@ -4240,120 +4213,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         }
                     )
 
-                elif agent_type == "chat":
-                    # -- Cache miss: ChatAgent --
-                    try:
-                        from gaia_agent_chat.agent import (
-                            ChatAgent,
-                            ChatAgentConfig,
-                        )
-                    except ImportError as e:
-                        raise RuntimeError(
-                            agent_import_error_message(
-                                e,
-                                "The chat agent is not installed",
-                                "gaia-agent-chat",
-                                next_step="Then restart the server.",
-                            )
-                        ) from e
-
-                    logger.info(
-                        "chat: Creating new chat agent (ChatAgent) for session %s",
-                        session_id[:8],
-                    )
-                    _session_kwargs = _session_agent_kwargs(
-                        rag_file_paths=[],  # streaming path indexes separately below
-                        library_paths=library_paths,
-                        allowed=allowed,
-                        session_id=session_id,
-                        working_directory=working_directory,
-                        dynamic_tools=dynamic_tools,
-                        memory_incognito=_memory_off(session, db),
-                    )
-                    config = ChatAgentConfig(
-                        model_id=model_id,
-                        streaming=True,
-                        silent_mode=False,
-                        debug=False,
-                        device=device,
-                        min_context_size=device_ctx,
-                        **_session_kwargs,
-                    )
-
-                    _stamp_chat_identity(config)
-                    t_construct = _time.monotonic()
-                    with writing_tool_registry(sse_handler):
-                        agent = ChatAgent(config)
-                    logger.info(
-                        "chat: Invoking agent chat for session %s, model=%s took=%.3fs",
-                        session_id[:8],
-                        model_id,
-                        _time.monotonic() - t_construct,
-                    )
-                    _register_agent_memory_ops(agent)
-                    agent.console = sse_handler  # Assign early so tool events flow
-
-                    # Early-exit if consumer disconnected
-                    if sse_handler.cancelled.is_set():
-                        return
-
-                    # -- Phase 3: RAG indexing --
-                    # Session-attached docs are indexed with full SSE progress events.
-                    # Library docs are silently pre-indexed from disk cache so the
-                    # system prompt shows them as "already indexed" — preventing the
-                    # LLM from calling index_document again on unchanged files.
-                    # The hash-based cache (RAGSDK) guarantees no re-processing
-                    # unless file content has actually changed.
-                    if rag_file_paths and agent.rag:
-                        t_rag = _time.monotonic()
-                        _index_rag_with_progress(agent, rag_file_paths, sse_handler)
-                        logger.info(
-                            "PERF RAG indexing session=%s took=%.3fs",
-                            session_id[:8],
-                            _time.monotonic() - t_rag,
-                        )
-
-                    # -- Phase 3b: Silently pre-index library docs from cache --
-                    # Library docs that are already on disk are loaded from the
-                    # hash-based RAG cache (no LLM/embedding re-computation for
-                    # unchanged files).  Adding them to agent.indexed_files causes
-                    # rebuild_system_prompt() to emit the ANTI-RE-INDEX RULE, so
-                    # the LLM will query them directly instead of re-indexing.
-                    if library_paths and agent.rag:
-                        preindexed = 0
-                        for fpath in library_paths:
-                            try:
-                                result = agent.rag.index_document(fpath)
-                                if result.get("success") and not result.get("error"):
-                                    agent.indexed_files.add(fpath)
-                                    preindexed += 1
-                            except Exception as lib_err:
-                                logger.debug(
-                                    "Library pre-index skipped for %s: %s",
-                                    fpath,
-                                    lib_err,
-                                )
-                        if preindexed:
-                            agent.rebuild_system_prompt()
-                            logger.info(
-                                "Pre-indexed %d library doc(s) from cache", preindexed
-                            )
-
-                    # Cache the agent for subsequent turns in this session.
-                    _store_agent(session_id, model_id, document_ids, agent, agent_type)
-                    logger.info(
-                        "chat: Total setup (cache miss, chat) session=%s took=%.3fs",
-                        session_id[:8],
-                        _time.monotonic() - t0,
-                    )
-                    sse_handler._emit(
-                        {
-                            "type": "status",
-                            "status": "info",
-                            "message": "Sending to model...",
-                        }
-                    )
-
                 elif _should_relay_to_sidecar(agent_type, _agent_registry):
                     # #2109: a sidecar turn is a SELF-CONTAINED early-exit
                     # path — it relays the sidecar's canonical /query loop and
@@ -4397,7 +4256,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     return
 
                 else:
-                    # -- Cache miss: non-chat agent via registry --
+                    # -- Cache miss: create the agent via the registry --
                     registry = _agent_registry
                     if registry is None or registry.get(agent_type) is None:
                         # Registry unavailable or agent_type unknown — emit a
@@ -4426,9 +4285,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             session_id[:8],
                         )
                         t_construct = _time.monotonic()
-                        # Same session-scoped kwargs as the built-in Chat
-                        # streaming path. Registered agents backed by ChatAgent
-                        # (e.g. gaia-lite) need these so session docs are
+                        # Session-scoped kwargs: agents backed by ChatAgent
+                        # (the flagship) need these so session docs are
                         # reachable and PathValidator accepts absolute paths.
                         #
                         # IMPORTANT: pass ``rag_file_paths=[]`` so ChatAgent
@@ -4463,6 +4321,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                 mail_provider=_session_mail_provider(session),
                             )
                         agent.console = sse_handler
+                        _register_agent_memory_ops(agent)
                         logger.info(
                             "chat: Invoking agent %s for session %s, model=%s took=%.3fs",
                             agent_type,
