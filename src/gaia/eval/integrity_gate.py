@@ -213,6 +213,9 @@ def _write_summary(lines) -> None:
 
 
 def main(argv=None) -> int:
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(
         prog="python -m gaia.eval.integrity_gate",
         description="Fail a CI eval run that did not actually measure what it compares.",

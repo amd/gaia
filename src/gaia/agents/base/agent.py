@@ -14,7 +14,6 @@ import contextvars
 import datetime
 import inspect
 import json
-import logging
 import math
 import os
 import queue
@@ -180,6 +179,7 @@ from gaia.llm.retry import (
     model_retry_notices,
     retry_state_of,
 )
+from gaia.logger import get_logger
 from gaia.utils import awake_clock
 from gaia.utils.json_string import extract_json_string_field
 from gaia.utils.power import stay_awake
@@ -191,9 +191,9 @@ if TYPE_CHECKING:
     from gaia.skills import Skill, SkillManager, SkillSetResolution, SkillSets
     from gaia.skills.binaries import BinaryGrants
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Set up logging via the project logger; importing this module must not
+# reconfigure the root logger.
+logger = get_logger(__name__)
 
 
 def _skill_validation_error(message: str) -> Exception:

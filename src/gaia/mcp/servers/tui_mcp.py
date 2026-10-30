@@ -847,6 +847,9 @@ def create_tui_mcp() -> "MCPServer":
 
 
 def main():
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(description="GAIA TUI control MCP Server")
     parser.add_argument(
         "--port",

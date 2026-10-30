@@ -202,11 +202,12 @@ def cli_main():
 
     args = parser.parse_args()
 
-    # Setup logging
+    # Setup logging; explicit now that gaia.logger has no import side effect.
     import logging
 
-    from gaia.logger import log_manager
+    from gaia.logger import configure
 
+    log_manager = configure()
     log_manager.set_level("gaia", getattr(logging, args.logging_level))
 
     try:

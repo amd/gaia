@@ -551,8 +551,9 @@ async def async_main(action, **kwargs):
     log = get_logger(__name__)
 
     if action == "chat":
-        from gaia.logger import log_manager
+        from gaia.logger import configure
 
+        log_manager = configure()
         log_manager.configure_agent_console(debug=kwargs.get("debug", False))
 
     # Map actions to agent profiles for Lemonade initialization
@@ -966,8 +967,9 @@ def _launch_interactive_cli(log=None):
     if log is None:
         log = get_logger(__name__)
 
-    from gaia.logger import log_manager
+    from gaia.logger import configure
 
+    log_manager = configure()
     log_manager.configure_agent_console(debug=False)
 
     try:
@@ -4667,6 +4669,10 @@ def _handle_schedule(args):
 
 
 def main():
+    from gaia.logger import configure
+
+    log_manager = configure()
+
     use_os_trust_store()
     parser = build_parser()
     log = get_logger(__name__)
@@ -4762,8 +4768,6 @@ def main():
         return
 
     # Set logging level using the GaiaLogger manager (if provided)
-    from gaia.logger import log_manager
-
     if hasattr(args, "logging_level"):
         log_manager.set_level("gaia", getattr(logging, args.logging_level))
 
