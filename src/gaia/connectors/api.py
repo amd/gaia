@@ -65,7 +65,9 @@ from gaia.connectors.store import (
     delete_connection,
 )
 from gaia.connectors.store import list_connections as _store_list
-from gaia.connectors.store import peek_connection
+from gaia.connectors.store import (
+    peek_connection,
+)
 from gaia.connectors.tokens import get_or_refresh, load_current_connection
 
 logger = logging.getLogger(__name__)
