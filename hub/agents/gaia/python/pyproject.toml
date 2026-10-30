@@ -27,7 +27,7 @@ requires-python = ">=3.10"
 # not drag faiss/pymupdf in just to import the class. RAG's real dependencies
 # come from `gaia init` into the active interpreter (#2358).
 dependencies = [
-  "amd-gaia>=0.25.3",
+  "amd-gaia>=0.25.4",
 ]
 
 [project.scripts]

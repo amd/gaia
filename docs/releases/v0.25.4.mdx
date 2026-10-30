@@ -1,0 +1,113 @@
+---
+title: "v0.25.4"
+description: "Arabic interface and bilingual document Q&A, a local-only mode, image indexing and email threads, and fixes for file paths, storage and context size."
+---
+
+# GAIA v0.25.4 Release Notes
+
+## What's New
+
+- **Use the Agent UI in Arabic, and ask about Arabic, English or mixed documents in either language** — the interface runs fully right to left, answers follow the language of the question, and citations open the document at the cited page. Arabic PDFs keep their numbers and Latin terms when indexed. (PR [#6165](https://github.com/amd/gaia/pull/6165))
+- **Keep every AI request on this PC** — `gaia config set network_policy local_ai_only` refuses any request to a cloud model before it is sent, across chat, agents, documents, speech, the Agent UI, the terminal UI and web search. (PR [#5956](https://github.com/amd/gaia/pull/5956))
+- **Index screenshots, receipts and scanned pages** — PNG, JPG, WebP, BMP, GIF and TIFF files are read with the vision model when you pick or drop them. (PR [#5651](https://github.com/amd/gaia/pull/5651))
+- **The GAIA agent reads whole email threads and finds mail waiting on your reply**, in Gmail and Outlook, still read-only. (PR [#6124](https://github.com/amd/gaia/pull/6124))
+- **Add to this reply and Always allow work with the GAIA agent** — a message sent mid-answer reaches the running turn, and "Always allow" grants are listed and revocable per chat and in Settings. (PR [#5541](https://github.com/amd/gaia/pull/5541))
+- **Start new chats in full access from Settings › Permissions**, after confirming a warning. (PR [#5827](https://github.com/amd/gaia/pull/5827))
+- **Skills can carry their own tools into the release build**, gated like the core tools they resemble. (PRs [#5450](https://github.com/amd/gaia/pull/5450), [#5454](https://github.com/amd/gaia/pull/5454))
+- **The Agent UI no longer adds an "Example Agent" to every agent list**; unedited copies are removed. (PR [#6123](https://github.com/amd/gaia/pull/6123))
+
+## Bug Fixes
+
+- **A chat you start is no longer stuck on "Waiting for the GPU"** behind a background task GAIA proposed for itself. (PR [#6096](https://github.com/amd/gaia/pull/6096))
+- **"Save it to my Documents folder" writes to your Documents folder**, not GAIA's hidden one, and shell, code search, watched folders and saved audio, screenshot and download paths use the chat's folder. (PRs [#6074](https://github.com/amd/gaia/pull/6074), [#6069](https://github.com/amd/gaia/pull/6069))
+- **A repo picked with `index_codebase` is remembered on the next turn.** (PR [#6056](https://github.com/amd/gaia/pull/6056))
+- **A context window you set deliberately small is kept**, and a GPU that reports an implausible amount of VRAM no longer picks an unsafe one. (PRs [#6152](https://github.com/amd/gaia/pull/6152), [#6150](https://github.com/amd/gaia/pull/6150))
+- **Chats get a topic title while their first answer runs** on a cloud model, and a failed title is retried on later turns. (PRs [#5972](https://github.com/amd/gaia/pull/5972), [#6174](https://github.com/amd/gaia/pull/6174))
+- **Two Agent UI processes starting together no longer race on a chat-database upgrade**, the email and chat databases retry their setup, and a locked database waits its timeout once and names the file. (PRs [#6151](https://github.com/amd/gaia/pull/6151), [#6044](https://github.com/amd/gaia/pull/6044), [#6054](https://github.com/amd/gaia/pull/6054))
+- **Undo is offered after a turn that changed files and then errored**, and a reply that only ran read-only commands like `ls` no longer warns that Undo can't restore files. (PRs [#6083](https://github.com/amd/gaia/pull/6083), [#6120](https://github.com/amd/gaia/pull/6120))
+- **The terminal UI says when it is older than the installed GAIA**, with a download link. (PR [#6141](https://github.com/amd/gaia/pull/6141))
+- **`gaia-desktop` runs from a terminal after installing the `.deb`.** (PR [#6131](https://github.com/amd/gaia/pull/6131))
+- **Outlook unread listings work.** (PR [#6119](https://github.com/amd/gaia/pull/6119))
+- **"Remind me tomorrow" no longer promises an alert GAIA can't deliver**, and a memory setting that fails to save says so instead of reporting success. (PRs [#6127](https://github.com/amd/gaia/pull/6127), [#6081](https://github.com/amd/gaia/pull/6081))
+- **Document summaries follow the style you asked for**, and the data profile no longer offers web and media tools it doesn't have. (PRs [#6057](https://github.com/amd/gaia/pull/6057), [#6053](https://github.com/amd/gaia/pull/6053))
+- **The flagship agent wheel ships its starter skills.** (PR [#6080](https://github.com/amd/gaia/pull/6080))
+- **Importing `gaia` no longer reconfigures the host program's logging.** (PR [#5951](https://github.com/amd/gaia/pull/5951))
+- **Ctrl+D or Ctrl+C at the agent import prompt answers "no"** instead of crashing. (PR [#6140](https://github.com/amd/gaia/pull/6140))
+- **Docs** — fixed broken `amd-gaia.ai` links, replaced the retired `--bypass-permissions` with `--full-access`, and corrected the guides index, custom-agent, skills, eval and `/query` contract pages. (PRs [#6066](https://github.com/amd/gaia/pull/6066), [#6129](https://github.com/amd/gaia/pull/6129), [#6147](https://github.com/amd/gaia/pull/6147), [#6146](https://github.com/amd/gaia/pull/6146), [#6145](https://github.com/amd/gaia/pull/6145), [#6133](https://github.com/amd/gaia/pull/6133), [#6134](https://github.com/amd/gaia/pull/6134), [#6135](https://github.com/amd/gaia/pull/6135), [#6137](https://github.com/amd/gaia/pull/6137), [#6113](https://github.com/amd/gaia/pull/6113))
+
+## Known Issues
+
+- **Attaching an image on a PC that uses only AMD LLM Gateway models starts a ~5 GB vision-model download inside the turn.** Run `gaia download --agent vlm` first so the download happens up front. Tracked in [#5990](https://github.com/amd/gaia/issues/5990).
+- **A relayed GAIA turn can lose its final answer after you approve a prompt**, about one time in ten. It says the step didn't run; send the message again. Tracked in [#6019](https://github.com/amd/gaia/issues/6019).
+
+## Contributors
+
+Thanks to the community members who contributed to this release:
+
+- [@huong8373tt-beep](https://github.com/huong8373tt-beep) — chat-folder and Documents paths, GPU preemption for foreground chats, code-index repo memory, context-window and VRAM handling, database upgrades and WAL setup, Undo, terminal UI update notice, Debian `gaia-desktop`, Outlook unread, reminders, memory settings, summary styles, starter skills in the wheel, docs and test reliability (PRs [#6069](https://github.com/amd/gaia/pull/6069), [#6074](https://github.com/amd/gaia/pull/6074), [#6096](https://github.com/amd/gaia/pull/6096), [#6056](https://github.com/amd/gaia/pull/6056), [#6152](https://github.com/amd/gaia/pull/6152), [#6150](https://github.com/amd/gaia/pull/6150), [#6151](https://github.com/amd/gaia/pull/6151), [#6044](https://github.com/amd/gaia/pull/6044), [#6087](https://github.com/amd/gaia/pull/6087), [#6083](https://github.com/amd/gaia/pull/6083), [#6120](https://github.com/amd/gaia/pull/6120), [#6141](https://github.com/amd/gaia/pull/6141), [#6131](https://github.com/amd/gaia/pull/6131), [#6119](https://github.com/amd/gaia/pull/6119), [#6127](https://github.com/amd/gaia/pull/6127), [#6081](https://github.com/amd/gaia/pull/6081), [#6057](https://github.com/amd/gaia/pull/6057), [#6080](https://github.com/amd/gaia/pull/6080), [#6113](https://github.com/amd/gaia/pull/6113), [#6097](https://github.com/amd/gaia/pull/6097))
+- [@rhmatzeka](https://github.com/rhmatzeka) — docs corrections across guides, custom agents, skills and eval, and eval and email test cleanup (PRs [#6147](https://github.com/amd/gaia/pull/6147), [#6146](https://github.com/amd/gaia/pull/6146), [#6145](https://github.com/amd/gaia/pull/6145), [#6135](https://github.com/amd/gaia/pull/6135), [#6134](https://github.com/amd/gaia/pull/6134), [#6133](https://github.com/amd/gaia/pull/6133), [#6129](https://github.com/amd/gaia/pull/6129), [#6132](https://github.com/amd/gaia/pull/6132), [#6128](https://github.com/amd/gaia/pull/6128))
+- [@tylerbea](https://github.com/tylerbea) — the full-access toggle in Settings and chat titles that arrive during the first answer (PRs [#5827](https://github.com/amd/gaia/pull/5827), [#5972](https://github.com/amd/gaia/pull/5972))
+- [@akshat-lakhera](https://github.com/akshat-lakhera) — locked-database waits and honest data-profile tool lists (PRs [#6054](https://github.com/amd/gaia/pull/6054), [#6053](https://github.com/amd/gaia/pull/6053))
+- [@nathan-vincent-dev](https://github.com/nathan-vincent-dev) — the agent import prompt's Ctrl+D/Ctrl+C handling and an eval docs fix (PRs [#6140](https://github.com/amd/gaia/pull/6140), [#6137](https://github.com/amd/gaia/pull/6137))
+- [@bniladridas](https://github.com/bniladridas) — side-effect-free logging on import (PR [#5951](https://github.com/amd/gaia/pull/5951))
+- [@muzman123](https://github.com/muzman123) — broken `amd-gaia.ai` doc links (PR [#6066](https://github.com/amd/gaia/pull/6066))
+
+## Full Changelog
+
+**53 commits** since v0.25.3:
+
+- `2a5a2b177` — feat(ui,rag): Arabic interface and bilingual document Q&A (#6165)
+- `dbcd55a44` — fix(ui): do not warn Undo after read-only shell commands (#6120)
+- `4eb6aab9d` — ci(unit): guard recurring bug shapes and run only the tests a PR can reach (#5653)
+- `fc5001857` — fix(ui): wait for a cancelled chat title to stop before the turn runs (#6174)
+- `4ace42416` — fix(hub): ship starter skills in flagship wheel (#6080)
+- `20abdc4c5` — ci: workflow alert issues dedupe and close themselves; add issue-filing rules (#5408)
+- `bd438272d` — fix(logger): make log configuration explicit, remove import side effect (#5951)
+- `063ff26c6` — ci(audits): one proactive audit a night, with quota gate and carry-over (#5404)
+- `c980ccede` — ci(eval): score Gemma on Strix Point, refuse cross-model compares (#5511)
+- `b357bd95e` — chore(eval): remove 34 unused prompt files from eval/prompts (#6128)
+- `1b28f5ff3` — feat(skills): skill context API for paths, programs, temp files and preferences (#5454)
+- `203724815` — feat(agent-ui): default full-access toggle in Settings > Permissions (#5827)
+- `83ad57e6f` — refactor(agents): fold ChatAgent into the flagship package (#6139)
+- `ef1f9766f` — fix(ui): reject implausible VRAM reports (#6150)
+- `4462f602a` — fix(ui): serialize chat database schema upgrades (#6151)
+- `df9b9e0e7` — docs(plans): release eval hardening — stress and adversarial gaps (#5493)
+- `414a2aa05` — docs(guides): card every guide the User Guides nav lists on the index page (#6147)
+- `3ba0956ad` — docs(custom-agent): snapshot each agent's tools after registering them (#6146)
+- `fb05a2c39` — docs: name /full-access confirm and the environment tags for --exclude-tag (#6145)
+- `642e61413` — fix(agent): respect deliberately small context windows (#6152)
+- `46531e586` — feat(skills): ship bundled skill code in the binary and gate it like core tools (#5450)
+- `9544088a3` — docs(gaia): move post-0.3.3 changelog entries back to Unreleased (#6158)
+- `d9c56574d` — feat(ui): Add to this reply and Always allow work with the flagship agent (#5541)
+- `15d0e463a` — feat(rag): index images by reading their text with the vision model (#5651)
+- `630b7374e` — fix(ui): retry chat titles and name a chat while its first answer runs (#5972)
+- `c8805ce92` — feat(llm): Local only — no GAIA AI request reaches a cloud model (#5956)
+- `8afe6d06f` — fix(code-index): retain selected repo across turns (#6056)
+- `93128f7a9` — fix(storage): retry WAL setup for remaining databases (#6044)
+- `d01897c2d` — fix(agent): resolve the user's Documents folder (#6074)
+- `d6c399836` — fix(memory): avoid promising undelivered reminder alerts (#6127)
+- `6ac3cc1a6` — fix(memory): report settings persistence failures (#6081)
+- `9ee540d5c` — fix(agent): resolve remaining tool paths in chat workspace (#6069)
+- `c7077aba1` — fix(storage): stop a locked database making GAIA wait 3x its timeout (#6054)
+- `65ebf7b54` — test(email): drop the prompt assertions against the retired email agent (#6132)
+- `8c16e5b0b` — fix(ui): make timestamp-tied chat ordering deterministic (#6087)
+- `2c1655e78` — fix(tui): notify when the terminal UI is outdated (#6141)
+- `7cf4d93f0` — fix(installer): restore gaia-desktop command on Debian (#6131)
+- `9e7ec94d3` — fix(ui): let foreground chats preempt background goal runs (#6096)
+- `7f8eea186` — fix(email): make Outlook unread filters sortable (#6119)
+- `e040fb798` — test(slack): wait for bridge child to finish exec (#6097)
+- `67293725b` — fix(ui): keep Undo available after error turns (#6083)
+- `8fa713b17` — fix(rag): align document summary styles with skill contract (#6057)
+- `737d581be` — fix(chat): advertise web and media tools only in profiles that register them (#6053)
+- `c3f66e28e` — feat(email): flagship reads threads and finds mail waiting on you (#6124)
+- `ddfe80aeb` — refactor(agents): keep one reference agent package, remove the rest (#6123)
+- `d4ffc5c77` — fix(cli): treat Ctrl+D/Ctrl+C at the agent import prompt as "no" (#6140)
+- `d22ec1143` — docs(eval-ci): drop the --backend cloud-provider tip (#6137)
+- `a7bff67b9` — docs(eval): use tags the shipped scenarios carry in the tag-filter example (#6135)
+- `d348724c0` — docs(gaia): quote the real Access denied message (#6134)
+- `16b3029e6` — docs(skills): create ~/my-skills before forking a starter skill (#6133)
+- `857996a23` — docs: replace the retired --bypass-permissions and /bypass with --full-access (#6129)
+- `f4c63c46e` — docs(spec): cover query fields through contract 2.25 (#6113)
+- `7d13eac07` — fix(docs): add /docs/ prefix to broken amd-gaia.ai links (#6066)
+
+Full Changelog: [v0.25.3...v0.25.4](https://github.com/amd/gaia/compare/v0.25.3...v0.25.4)
