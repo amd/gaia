@@ -10,7 +10,7 @@ import pytest
 
 pypdf = pytest.importorskip("pypdf")
 
-from gaia.rag import pypdf_bidi  # noqa: E402
+from gaia.rag.arabic_text import normalize_arabic_pdf_text  # noqa: E402
 
 # Bytes the content stream draws -> the text ToUnicode says they are.
 _GLYPHS = {
@@ -64,7 +64,6 @@ def _extract(content: bytes) -> str:
 
 
 def test_digits_inside_an_arabic_run_survive_extraction():
-    pypdf_bidi.install()
     text = _extract(b"BT /F1 12 Tf 10 100 Td (ABC 40% CBA) Tj ET")
 
     assert "40" in text
@@ -74,45 +73,32 @@ def test_digits_inside_an_arabic_run_survive_extraction():
 
 
 def test_latin_inside_an_arabic_run_survives_extraction():
-    pypdf_bidi.install()
     text = _extract(b"BT /F1 12 Tf 10 100 Td (AB net CA) Tj ET")
 
     assert "net" in text
     assert text.count("ب") == 2
 
 
-def test_install_is_idempotent():
-    from pypdf._text_extraction import _text_extractor
-
-    pypdf_bidi.install()
-    first = _text_extractor.get_display_str
-    pypdf_bidi.install()
-
-    assert _text_extractor.get_display_str is first
-
-
-def test_visitor_callers_keep_pypdf_behaviour():
-    """A caller passing visitor_text still gets every run through the visitor."""
-    pypdf_bidi.install()
-    reader = pypdf.PdfReader(
-        io.BytesIO(_pdf(b"BT /F1 12 Tf 10 100 Td (ABC 40% CBA) Tj ET"))
-    )
-    runs = []
-    reader.pages[0].extract_text(visitor_text=lambda t, *_: runs.append(t))
-
-    assert "40" in "".join(runs)
-
-
 def test_presentation_forms_become_base_letters():
-    pypdf_bidi.install()
-    text = pypdf_bidi.normalize_arabic_presentation_forms(
-        _extract(b"BT /F1 12 Tf 10 100 Td (DA) Tj ET")
-    )
+    text = normalize_arabic_pdf_text(_extract(b"BT /F1 12 Tf 10 100 Td (DA) Tj ET"))
 
     assert "ﻻ" not in text
     assert "لا" in text  # lam, alef — logical order
 
 
+def test_arabic_page_gets_arabic_yeh_and_heh_back():
+    # Chrome's PDFs report medial yeh and heh with the Persian letters.
+    text = normalize_arabic_pdf_text("دلیل ھذا في")
+
+    assert text == "دليل هذا في"
+
+
+def test_persian_page_keeps_its_letters():
+    persian = "کتابی برای شما"
+
+    assert normalize_arabic_pdf_text(persian) == persian
+
+
 def test_normalization_leaves_other_compatibility_characters_alone():
-    assert pypdf_bidi.normalize_arabic_presentation_forms("m² ﬁle") == "m² ﬁle"
-    assert pypdf_bidi.normalize_arabic_presentation_forms("") == ""
+    assert normalize_arabic_pdf_text("m² ﬁle") == "m² ﬁle"
+    assert normalize_arabic_pdf_text("") == ""

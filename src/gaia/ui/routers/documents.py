@@ -566,7 +566,7 @@ async def get_document_status(
         "indexing_status": doc.get("indexing_status", "complete"),
         "chunk_count": doc.get("chunk_count", 0),
         "is_active": is_active,
-        "progress": index_progress(doc_id) if is_active else None,
+        "progress": index_progress(doc_id),
     }
 
 
@@ -584,15 +584,16 @@ async def get_document_file(doc_id: str, db: ChatDatabase = Depends(get_db)):
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     path = Path(doc.get("filepath") or "")
+    real = Path(ensure_document_path_allowed(path))
     if path.is_symlink():
         raise HTTPException(status_code=403, detail="Symbolic links are not served")
-    if not path.is_file():
+    if not real.is_file():
         raise HTTPException(
             status_code=404,
             detail=f"{doc.get('filename') or doc_id} is no longer on disk at {path}",
         )
     return FileResponse(
-        path=str(path),
+        path=str(real),
         media_type=_INLINE_MEDIA_TYPES.get(
             path.suffix.lower(), "application/octet-stream"
         ),

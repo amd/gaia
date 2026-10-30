@@ -781,10 +781,12 @@ class ChatAgent(
         if not self.rag:
             return ""
         lines = []
-        if self.rag.indexed_files:
-            scripts = {fp: self._scripts(fp) for fp in self.rag.indexed_files}
+        # Copied first: a background index can add to the set during this loop.
+        indexed = list(self.rag.indexed_files)
+        if indexed:
+            scripts = {fp: self._scripts(fp) for fp in indexed}
             entries = sorted(
-                {self._indexed_entry(fp, scripts[fp]) for fp in self.rag.indexed_files},
+                {self._indexed_entry(fp, scripts[fp]) for fp in indexed},
                 key=str.lower,
             )
             lines.append(f"[Indexed documents: {', '.join(entries)}]")

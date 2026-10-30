@@ -52,7 +52,7 @@ from gaia.llm.lemonade_client import (
     EMBEDDER_UBATCH_TOKENS,
 )
 from gaia.logger import get_logger
-from gaia.rag import pypdf_bidi
+from gaia.rag.arabic_text import normalize_arabic_pdf_text
 from gaia.security import PathValidator
 from gaia.utils.document_formats import (
     UNSUPPORTED_DOCUMENTS,
@@ -67,9 +67,6 @@ from gaia.utils.file_lock import (
     write_bytes_atomic,
     write_text_atomic,
 )
-
-if PdfReader is not None and PdfReader.__module__.startswith("pypdf."):
-    pypdf_bidi.install()
 
 _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -328,8 +325,9 @@ def _script_of(ch: str) -> Optional[str]:
 # saved vectors, and extracted-text markdown. clear_cache() deletes nothing else.
 _CACHE_OWNED_FILE = re.compile(
     r"^(?:[0-9a-f]{16}_[0-9a-f]{32}|[0-9a-f]{64}_notfound)(?:_[0-9a-f]{8})?"
-    r"\.json(?:\.sig|\.[0-9a-f]{24}\.npy)?$"
+    r"\.json(?:\.sig)?$"
     r"|_extracted\.md$"
+    r"|^vectors_[0-9a-f]{24}\.npy$"
 )
 
 
@@ -1380,9 +1378,7 @@ class RAGSDK:
                 page_start = time_module.time()
 
                 # Step 1: Extract text with pypdf
-                pypdf_text = pypdf_bidi.normalize_arabic_presentation_forms(
-                    page.extract_text() or ""
-                )
+                pypdf_text = normalize_arabic_pdf_text(page.extract_text() or "")
 
                 # Step 2: Check for images
                 has_imgs = False
@@ -2867,16 +2863,19 @@ These positions indicate where to split the text."""
         index.add(embeddings.astype("float32"))
         return index
 
-    def _vectors_path(self, cache_path: str, chunks: List[str]) -> str:
+    def _vectors_path(self, chunks: List[str]) -> str:
         """Where the embeddings of *chunks* under the current embedder are kept.
 
         The name binds the vectors to the embedding model and the exact chunk
-        text, so a different model, chunking or file never reads them.
+        text, so different text never reads them and the same text, indexed
+        again from a new temp copy, adds no second file.
         """
         digest = hashlib.sha256(self.config.embedding_model.encode("utf-8"))
         for chunk in chunks:
             digest.update(b"\x1e" + chunk.encode("utf-8"))
-        return f"{cache_path}.{digest.hexdigest()[:24]}.npy"
+        return os.path.join(
+            self.config.cache_dir, f"vectors_{digest.hexdigest()[:24]}.npy"
+        )
 
     def _load_vectors(self, path: str, count: int) -> Optional["np.ndarray"]:
         """Saved embeddings at *path*, or None when absent or not *count* rows."""
@@ -2923,7 +2922,7 @@ These positions indicate where to split the text."""
 
         self._load_embedder()
 
-        vectors_path = self._vectors_path(cache_path, chunks) if cache_path else None
+        vectors_path = self._vectors_path(chunks) if cache_path else None
         saved = self._load_vectors(vectors_path, len(chunks)) if vectors_path else None
         if saved is not None:
             if progress_callback is not None and chunks:

@@ -69,6 +69,19 @@ def test_a_file_removed_from_disk_says_where_it_was(home, client):
     assert "notes.md" in resp.json()["detail"]
 
 
+def test_a_document_outside_the_document_roots_is_not_served(
+    home, client, tmp_path, monkeypatch
+):
+    notes = home / "notes.md"
+    notes.write_text("# Notes")
+    doc_id = _add(client, notes)
+    moved = tmp_path / "elsewhere"
+    moved.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: moved)
+
+    assert client.get(f"/api/documents/{doc_id}/file").status_code == 403
+
+
 def test_a_symlinked_library_file_is_not_served(home, client, tmp_path):
     notes = home / "notes.md"
     notes.write_text("# Notes")

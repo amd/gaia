@@ -91,6 +91,16 @@ def test_a_non_latin_document_is_marked_and_brings_the_cross_language_note():
     assert "Answer in the language of the user's latest message" in note
 
 
+def test_a_document_finishing_mid_turn_does_not_fail_the_turn():
+    indexed = {"/docs/a.pdf", "/docs/b.pdf"}
+    rag = MagicMock(indexed_files=indexed)
+    rag.document_scripts.side_effect = lambda _fp: indexed.add("/docs/c.pdf") or []
+    with chat_agent_build_context("full", rag_indexed_files=[]) as agent:
+        agent._memory_store = None
+        agent.rag = rag
+        assert "a.pdf" in agent.get_memory_dynamic_context()
+
+
 def test_latin_only_documents_get_no_cross_language_note():
     rag = MagicMock(indexed_files={"/docs/terms.pdf"})
     rag.document_scripts.return_value = ["Latin"]

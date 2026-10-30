@@ -412,7 +412,7 @@
     transform: rotate(90deg);
 }
 .md-content details summary:dir(rtl)::before {
-    content: 'C0';
+    content: '\25C0';
 }
 .md-content details[open] summary:dir(rtl)::before {
     transform: rotate(-90deg);

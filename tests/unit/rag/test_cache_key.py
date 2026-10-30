@@ -10,6 +10,7 @@ exact chunks, so a reload reuses them and a different embedder re-embeds.
 
 import json
 import os
+import shutil
 from unittest.mock import patch
 
 import numpy as np
@@ -111,6 +112,21 @@ def test_reloading_with_the_same_embedder_reuses_saved_vectors(tmp_path, documen
     assert reopened.index.ntotal == len(reopened.chunks)
 
 
+def test_the_same_text_from_a_new_temp_copy_adds_no_second_vectors_file(
+    tmp_path, document
+):
+    first = _make(tmp_path)
+    assert first.index_document(document)["success"]
+    copy = tmp_path / "gaia_upload_copy.txt"
+    shutil.copy(document, copy)
+
+    reindexed = _make(tmp_path)
+    assert reindexed.index_document(str(copy))["success"]
+
+    names = os.listdir(first.config.cache_dir)
+    assert len([n for n in names if n.endswith(".npy")]) == 1
+
+
 def test_damaged_saved_vectors_are_re_embedded(tmp_path, document):
     first = _make(tmp_path)
     assert first.index_document(document)["success"]
@@ -132,7 +148,9 @@ def test_chunk_cache_and_markdown_share_one_content_key(tmp_path, document):
     assert f"{key}_extracted.md" in names
     assert os.path.basename(sdk._get_cache_path(document)) in names
     # rag-cache.lock is the cross-process lock every entry in the dir shares.
-    assert all(name.startswith(key) for name in names if name != "rag-cache.lock")
+    # Vectors are named by their text, so a new temp copy of a document reuses them.
+    keyed = [n for n in names if not n.startswith(("rag-cache.lock", "vectors_"))]
+    assert all(name.startswith(key) for name in keyed)
     assert all(_CACHE_OWNED_FILE.search(n) for n in names if n != "rag-cache.lock")
 
 
