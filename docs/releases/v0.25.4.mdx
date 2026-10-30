@@ -29,6 +29,8 @@ description: "Arabic interface and bilingual document Q&A, a local-only mode, im
 - **`gaia-desktop` runs from a terminal after installing the `.deb`.** (PR [#6131](https://github.com/amd/gaia/pull/6131))
 - **Outlook unread listings work.** (PR [#6119](https://github.com/amd/gaia/pull/6119))
 - **"Remind me tomorrow" no longer promises an alert GAIA can't deliver**, and a memory setting that fails to save says so instead of reporting success. (PRs [#6127](https://github.com/amd/gaia/pull/6127), [#6081](https://github.com/amd/gaia/pull/6081))
+- **Data questions about a workbook read every sheet**, not just the first, so a balance sheet on sheet two is found. (PR [#6130](https://github.com/amd/gaia/pull/6130))
+- **`gaia -p ""` fails straight away with a clear message** instead of hanging when the prompt variable is empty. (PR [#6168](https://github.com/amd/gaia/pull/6168))
 - **Document summaries follow the style you asked for**, and the data profile no longer offers web and media tools it doesn't have. (PRs [#6057](https://github.com/amd/gaia/pull/6057), [#6053](https://github.com/amd/gaia/pull/6053))
 - **The flagship agent wheel ships its starter skills.** (PR [#6080](https://github.com/amd/gaia/pull/6080))
 - **Importing `gaia` no longer reconfigures the host program's logging.** (PR [#5951](https://github.com/amd/gaia/pull/5951))
@@ -54,8 +56,11 @@ Thanks to the community members who contributed to this release:
 
 ## Full Changelog
 
-**53 commits** since v0.25.3:
+**56 commits** since v0.25.3:
 
+- `4479732b8` — fix(release): redeploy the website when a final release publishes (#6162)
+- `156c21ba6` — fix(tools): let analyze_data_file read every sheet of a workbook (#6130)
+- `5fb8835b2` — fix(cli): refuse an empty gaia -p prompt instead of hanging (#6168)
 - `2a5a2b177` — feat(ui,rag): Arabic interface and bilingual document Q&A (#6165)
 - `dbcd55a44` — fix(ui): do not warn Undo after read-only shell commands (#6120)
 - `4eb6aab9d` — ci(unit): guard recurring bug shapes and run only the tests a PR can reach (#5653)
