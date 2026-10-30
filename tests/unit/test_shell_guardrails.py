@@ -1552,3 +1552,31 @@ class TestBlanketApproval:
 
         assert result["status"] == "success", result
         assert notes == [("shell", "echo x > made.txt")]
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "ls; touch made.txt",
+            "ls && touch made.txt",
+            "cat src.txt | tee made.txt",
+            "ls 2>made.txt",
+            "echo $(touch made.txt)",
+            "echo `touch made.txt`",
+            "find . -delete",
+            "sed -i s/x/y/ src.txt",
+            "sort -o made.txt src.txt",
+            "git log --output=made.txt",
+            "Remove-Item src.txt",
+            "Get-ChildItem | Remove-Item",
+            "cd .. && ls",
+            "ls\ntouch made.txt",
+        ],
+    )
+    def test_full_access_write_shapes_are_never_classified_read_only(self, command):
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command", ["ls", "cat src.txt", "git status", "wc -l src.txt"]
+    )
+    def test_full_access_plain_reads_are_classified_read_only(self, command):
+        assert _Host(full_access=True)._line_is_read_only(command) is True
