@@ -350,7 +350,7 @@ def _sleeper(*extra_argv):
         proc.kill()
     proc.wait()
     pytest.fail(
-        "child process never reached its test script; " f"last cmdline={last_cmdline!r}"
+        f"child process never reached its test script; last cmdline={last_cmdline!r}"
     )
 
 
