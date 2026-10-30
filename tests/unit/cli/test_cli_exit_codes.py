@@ -16,7 +16,11 @@ import types
 import pytest
 
 from gaia import cli
-from gaia.logger import AGENT_LOG_ENV, log_manager
+from gaia.logger import AGENT_LOG_ENV, configure
+
+# The chat path under test reconfigures handlers installed by an owning
+# process; `gaia.cli:main` does via configure(), so the tests do too.
+log_manager = configure()
 
 
 class _StubConfig:

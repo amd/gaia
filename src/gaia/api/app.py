@@ -314,6 +314,10 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    from gaia.logger import configure
+
+    configure()
+
     if args.command == "start":
         start_server(
             args.host,

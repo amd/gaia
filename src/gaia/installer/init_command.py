@@ -80,7 +80,9 @@ def hub_unreachable_message(
     One line because the Agent UI setup wizard shows the last error line as
     the reason setup failed.
     """
-    from gaia.logger import log_manager
+    from gaia.logger import configure
+
+    log_manager = configure()
 
     cause = exc.__cause__ or exc
     if "CERTIFICATE_VERIFY_FAILED" in str(cause):

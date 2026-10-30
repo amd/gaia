@@ -100,39 +100,36 @@ jobs:
       # would be both noisy and wrong; read the job log instead.
       - name: Open issue on auth failure
         if: failure() && github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # The canary probes whichever account CLAUDE_ACCOUNT selects; name that one.
-          ACTIVE_SECRET: ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'CLAUDE_CODE_OAUTH_TOKEN_SECONDARY' || 'CLAUDE_CODE_OAUTH_TOKEN' }}
-        run: |
-          TITLE="WARNING: Claude CI auth canary failed - CI cannot call Claude"
-          BODY="The monthly Claude auth canary failed. **The failing step's error line names which of the two causes applies** - they need different people, so read it before acting.
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: report
+          key: claude-auth-canary
+          legacy-title-prefix: "WARNING: Claude CI auth canary failed"
+          title: "WARNING: Claude CI auth canary failed - CI cannot call Claude"
+          labels: |
+            bug
+            devops
+          assignees: kovtcharov-amd
+          body: |
+            The monthly Claude auth canary failed. **The failing step's error line names which of the two causes applies** - they need different people, so read it before acting.
 
-          **Quota exhausted (\`QUOTA EXHAUSTED\` in the log):** the credential is fine and the org is out of budget. Read the error line for which limit was hit and when it resets - usage limits lapse on their own, spend caps do not. An Anthropic org admin can raise it at https://claude.ai/admin-settings/usage. Rotating the repo secrets will not help.
+            **Quota exhausted (`QUOTA EXHAUSTED` in the log):** the credential is fine and the org is out of budget. Read the error line for which limit was hit and when it resets - usage limits lapse on their own, spend caps do not. An Anthropic org admin can raise it at https://claude.ai/admin-settings/usage. Rotating the repo secrets will not help.
 
-          **Credential invalid (\`CREDENTIAL INVALID\` in the log):** run \`claude setup-token\` locally, signed in to the account behind \`$ACTIVE_SECRET\`, then update that repo secret:
-          \`\`\`
-          gh secret set $ACTIVE_SECRET --repo $GITHUB_REPOSITORY
-          \`\`\`
+            **Credential invalid (`CREDENTIAL INVALID` in the log):** run `claude setup-token` locally, signed in to the account behind `${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'CLAUDE_CODE_OAUTH_TOKEN_SECONDARY' || 'CLAUDE_CODE_OAUTH_TOKEN' }}`, then update that repo secret:
+            ```
+            gh secret set ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'CLAUDE_CODE_OAUTH_TOKEN_SECONDARY' || 'CLAUDE_CODE_OAUTH_TOKEN' }} --repo ${{ github.repository }}
+            ```
 
-          Until fixed, the Claude AI Assistant jobs (PR review, @claude replies, auto-fix, release notes) authenticate-and-fail silently — they post nothing.
+            Until fixed, the Claude AI Assistant jobs (PR review, @claude replies, auto-fix, release notes) authenticate-and-fail silently — they post nothing. This issue closes itself on the next green scheduled canary.
 
-          - Failing run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+            - Failing run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-          cc @kovtcharov-amd"
+            cc @kovtcharov-amd
 
-          # EVERY gh call here needs an explicit --repo. The job does check the repo out
-          # now (for the probe classifier), but relying on the inferred remote is what
-          # broke this before: `gh issue create` without --repo, back when there was no
-          # checkout, died with "fatal: not a git repository" and the alert was never filed. The
-          # canary failed, its own notification failed, and nobody was told — the exact
-          # silent-safety-net shape this canary exists to prevent (run 30690604648).
-          # Reuse an existing open canary issue instead of filing a new one each month.
-          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search 'in:title Claude CI auth canary failed' --json number --jq '.[0].number // empty')
-          if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "$BODY"
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY" \
-              --assignee kovtcharov-amd --label bug --label devops
-          fi
+      - name: Close the auth issue once the canary is green again
+        if: success() && github.event_name == 'schedule'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key: claude-auth-canary
+          legacy-title-prefix: "WARNING: Claude CI auth canary failed"
