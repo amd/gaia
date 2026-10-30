@@ -1621,6 +1621,28 @@ class TestBlanketApproval:
         monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
         assert _Host(full_access=True)._line_is_read_only(command) is True
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "find . {-delete,}",
+            "find . {-delete,-print}",
+            "sort {-o,}x f",
+            "git log {--output=x,}",
+            "find . -delet[e]",
+            "find . -delet?",
+            "git log --outpu[t]=x",
+            "sort -[o] x f",
+            "ls *",
+        ],
+    )
+    @pytest.mark.parametrize("dialect", ["posix", "cmd"])
+    def test_full_access_brace_and_glob_expansion_may_write(
+        self, command, dialect, monkeypatch
+    ):
+        # sh expands these off Windows; Git's GNU tools expand their own argv on it.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
     @pytest.mark.skipif(os.name == "nt", reason="needs sh to run the line")
     def test_full_access_quoted_substitution_warns_undo_cannot_restore_it(
         self, env_pre_approves, monkeypatch, tmp_path

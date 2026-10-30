@@ -3368,6 +3368,10 @@ class ShellToolsMixin:
         # even inside double quotes; the shell-less parse sees only text.
         if _pipe_dialect() == "posix" and ("$" in command or "`" in command):
             return False
+        # Braces and globs can expand into a write flag (`find . {-delete,}`):
+        # sh does it off Windows, Git's GNU tools do it to their own argv on it.
+        if any(char in command for char in "{*?["):
+            return False
         steps, parse_error = _parse_line(command, bypass_gates=False)
         if parse_error is not None or not steps:
             return False
