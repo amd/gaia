@@ -8,10 +8,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.3.3]
 
-Released with GAIA 0.25.3, and requires the `gaia`
-Python CLI 0.25.3+ on `PATH`. Integrators: the sidecar contract is now
-**2.25**; clients built for 2.18 keep working, and older binaries refuse
-the new `turns` field with `422`, so probe `/version` before sending it.
+Released with GAIA 0.25.3, and requires the `gaia` Python CLI 0.25.3+ on `PATH`.
+Integrators: the sidecar contract is now **2.25**; clients built for 2.18
+keep working, and older binaries refuse the new `turns` field with `422`,
+so probe `/version` before sending it.
 
 - **AMD LLM Gateway models run their tool calls.** The agent asks each cloud
   model once whether it calls tools natively, and runs tool calls written as
