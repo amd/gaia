@@ -1633,6 +1633,42 @@ class TestChatSendEndpoint:
         assert data["content"] == "This is a response."
         assert "message_id" in data
 
+    @patch("gaia.ui.agent_loop.agent_loop.yield_to_user")
+    @patch("gaia.ui.routers.chat.turn_takes_the_line", return_value=True)
+    @patch("gaia.ui.server._get_chat_response")
+    def test_local_chat_request_preempts_a_goal_tick(
+        self, mock_chat, mock_takes_line, mock_yield, client
+    ):
+        mock_chat.return_value = "This is a response."
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+
+        response = client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+
+        assert response.status_code == 200
+        mock_takes_line.assert_called_once()
+        mock_yield.assert_called_once_with()
+
+    @patch("gaia.ui.agent_loop.agent_loop.yield_to_user")
+    @patch("gaia.ui.routers.chat.turn_takes_the_line", return_value=False)
+    @patch("gaia.ui.server._get_chat_response")
+    def test_cloud_chat_request_does_not_preempt_a_goal_tick(
+        self, mock_chat, mock_takes_line, mock_yield, client
+    ):
+        mock_chat.return_value = "This is a response."
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+
+        response = client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+
+        assert response.status_code == 200
+        mock_takes_line.assert_called_once()
+        mock_yield.assert_not_called()
+
     @patch("gaia.ui.server._get_chat_response")
     def test_non_streaming_saves_both_messages(self, mock_chat, client, db):
         mock_chat.return_value = "Bot reply"

@@ -17,6 +17,7 @@ from gaia.config import gaia_home
 from gaia.database.mixin import DatabaseMixin
 from gaia.filesystem.categorizer import auto_categorize as _auto_categorize
 from gaia.filesystem.name_match import fts_name_terms
+from gaia.utils.sqlite_wal import enable_wal
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +219,7 @@ class FileSystemIndexService(DatabaseMixin):
 
         # A file that is not a database fails here; rebuild rather than raise.
         try:
-            self._db.execute("PRAGMA journal_mode=WAL")
+            enable_wal(self._db)
         except sqlite3.DatabaseError as exc:
             if not _is_corruption(exc):
                 # Locked, or an AV/backup tool holding the file.
@@ -257,7 +258,7 @@ class FileSystemIndexService(DatabaseMixin):
             logger.debug("close_db during rebuild raised (%s); continuing", exc)
         self.rebuilt_from = _move_aside(db_path)
         self.init_db(db_path)
-        self._db.execute("PRAGMA journal_mode=WAL")
+        enable_wal(self._db)
 
     # ------------------------------------------------------------------
     # Schema management
@@ -313,7 +314,7 @@ class FileSystemIndexService(DatabaseMixin):
         self.rebuilt_from = _move_aside(db_path)
 
         self.init_db(db_path)
-        self._db.execute("PRAGMA journal_mode=WAL")
+        enable_wal(self._db)
         self.execute(_SCHEMA_SQL)
         self.insert(
             "schema_version",

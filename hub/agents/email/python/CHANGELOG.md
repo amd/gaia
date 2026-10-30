@@ -9,6 +9,17 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Concurrent startup no longer fails to open the email state database
+  during SQLite WAL-mode setup.** The agent now uses GAIA core's bounded WAL
+  retry helper when another email agent is opening the same `state.db`.
+  Its core floor is now 0.25.3, the first release with that helper. (#6041)
+- **Unread Outlook listings no longer fail at Microsoft Graph.** The core and
+  email-agent backends now put a broad `receivedDateTime` predicate before
+  `isRead` whenever they sort unread mail newest-first. That meets Graph's
+  `$filter` / `$orderby` rule instead of returning `InefficientFilter` (#4806).
+- **The email package no longer installs beside an incompatible GAIA core.**
+  Its declared core floor covers the email agent module-level imports,
+  including its guided Outlook setup route. (#4430)
 - **A note the model writes before a tool call no longer shows as
   `[unmapped agent event: commentary]`.** The host's output handler now marks
   that text as `commentary`; the translator drops it, since the words already

@@ -69,6 +69,7 @@ from gaia.ui.email_sidecar.profiles import (
     reasoning_supported,
     scope_supported,
     surface_supported,
+    turns_supported,
     working_directory_supported,
 )
 from gaia.ui.memory_settings import memory_enabled
@@ -1982,6 +1983,41 @@ def _relayed_history(
     return context
 
 
+def _relayed_turns(
+    turns: list,
+    model_id: str | None,
+    query: str,
+    sse_handler,
+    session_id: str | None,
+) -> list:
+    """The chat's recorded turns that fit *model_id*'s history budget, kept whole.
+
+    A turn larger than the whole budget is sent shortened (#5864); turns newly
+    out of the model's view stream a ``history_cut`` status.
+    """
+    from gaia.agents.base.history import CutReporter, fit_turns, relayed_history_budget
+
+    budget = relayed_history_budget(
+        model_id, query, cloud=bool(model_id) and bool(_ui_cloud_provider(model_id))
+    )
+    reporter = (
+        _history_cuts.setdefault(session_id, CutReporter()) if session_id else None
+    )
+
+    def on_cut(cut) -> None:
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": cut.notice,
+                "turns": cut.turns,
+                "tokens": cut.tokens,
+            }
+        )
+
+    return fit_turns(turns, budget, on_cut, reporter)
+
+
 #: What a stopped turn's reply is saved as when it wrote no text.
 _CANCELLED_REPLY = "Cancelled."
 
@@ -2253,6 +2289,7 @@ def _dispatch_sidecar_query(
     hold_internet_off: Callable[[], ContextManager[bool]] | None = None,
     recording: TurnRecording | None = None,
     max_steps: int | None = None,
+    turns: list | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
@@ -2485,10 +2522,23 @@ def _dispatch_sidecar_query(
     if sse_handler.cancelled.is_set():
         return
 
+    # A sidecar that takes recorded turns sees earlier tool calls; an older
+    # one gets the text pairs. Both are fitted here, and the sidecar re-fits.
+    relayed_turns = (
+        turns
+        if turns is not None and turns_supported(profile, handle.api_version)
+        else None
+    )
+    context: list = []
     try:
-        context = _relayed_history(
-            history_pairs, model_id, query, sse_handler, session_id
-        )
+        if relayed_turns is None:
+            context = _relayed_history(
+                history_pairs, model_id, query, sse_handler, session_id
+            )
+        else:
+            relayed_turns = _relayed_turns(
+                relayed_turns, model_id, query, sse_handler, session_id
+            )
     except (LemonadeClientError, ModelFitError, GaiaConfigError) as exc:
         sse_handler._emit(
             {
@@ -2550,6 +2600,7 @@ def _dispatch_sidecar_query(
             ),
             reasoning=reasoning_supported(profile, handle.api_version),
             max_steps=max_steps,
+            turns=relayed_turns,
         )
     finally:
         sse_handler.relay_ignores_internet = False
@@ -3719,6 +3770,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     turn_started = _time.monotonic()
     sse_handler = None
     producer = None
+    # Bound before the try so the error path can link a recording on any failure.
+    turn_box: dict = {}
     cleanup_done = False
     # When the turn was stopped and its thread got its grace period already.
     stop_grace_spent = False
@@ -3792,14 +3845,18 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         # A relayed sidecar only sees the transcript it is sent; in-process
         # agents restore traces below.
-        history_pairs = (
-            _build_history_pairs(model_context_messages(db, request.session_id))
+        relay_messages = (
+            model_context_messages(db, request.session_id)
             if _should_relay_to_sidecar(
                 request.agent_type or session.get("agent_type") or "chat",
                 _agent_registry,
             )
             else []
         )
+        from gaia.agents.base.history import transcript_turns
+
+        history_pairs = _build_history_pairs(relay_messages)
+        relay_turns = transcript_turns(relay_messages)
 
         # Resolve document IDs to file paths.
         # Session-specific docs get auto-indexed; library docs are available
@@ -3882,7 +3939,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # can yield the thinking event immediately.
         result_holder = {"answer": "", "error": None, "model_loads": []}
         inbox_holder: dict = {}
-        turn_box: dict = {}
 
         def _run_agent():
             recording = TurnRecording(session_id)
@@ -4091,6 +4147,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             held_internet_off, db, session_id
                         ),
                         recording=recording,
+                        turns=relay_turns,
+                    )
+                    result_holder["model_messages"] = getattr(
+                        sse_handler, "relayed_model_messages", None
                     )
                     return
 
@@ -4916,7 +4976,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 captured_steps if (keep_steps and captured_steps) else None
             )
             if sse_type == "error":
-                db.add_message(request.session_id, "assistant", content, ends_turn=True)
+                msg_id = db.add_message(
+                    request.session_id, "assistant", content, ends_turn=True
+                )
+                link_warning = (
+                    turn_box["recording"].link_message(msg_id)
+                    if "recording" in turn_box
+                    else None
+                )
+                if link_warning:
+                    yield _undo_link_warning_event(link_warning)
                 yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
             else:
                 failed = sse_type == "failed"
@@ -4958,10 +5027,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             error_msg = str(e)
         else:
             error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
+        link_warning = None
         try:
-            db.add_message(request.session_id, "assistant", error_msg, ends_turn=True)
+            msg_id = db.add_message(
+                request.session_id, "assistant", error_msg, ends_turn=True
+            )
+            link_warning = (
+                turn_box["recording"].link_message(msg_id)
+                if "recording" in turn_box
+                else None
+            )
         except Exception as exc:
             logger.error("Could not persist chat error: %s", exc)
+        if link_warning:
+            yield _undo_link_warning_event(link_warning)
         error_data = json.dumps({"type": "error", "content": error_msg})
         yield f"data: {error_data}\n\n"
     finally:

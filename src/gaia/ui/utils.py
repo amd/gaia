@@ -31,6 +31,7 @@ from gaia.config import (
     unsafe_gaia_home_reason,
 )
 from gaia.llm.lemonade_embedded import gaia_home
+from gaia.utils.user_folders import documents_dir
 
 from .models import (
     DocumentResponse,
@@ -75,6 +76,7 @@ ALLOWED_EXTENSIONS = frozenset(
         ".csv",
         ".json",
         ".xlsx",
+        ".epub",
         ".html",
         ".htm",
         ".xml",
@@ -392,7 +394,7 @@ def sanitize_document_path(user_path: str) -> Path:
 
         detail = (
             f"{hint} "
-            f"Supported formats: PDF, PPTX, TXT, MD, CSV, JSON, XLSX, "
+            f"Supported formats: PDF, DOCX, PPTX, XLSX, EPUB, TXT, MD, CSV, JSON, "
             f"HTML, XML, YAML, and 30+ code file formats. "
             f"Want support for {category + ' files' if category else 'this file type'}? "
             f"Request it at https://github.com/amd/gaia/issues/new?title=[Feature]%20Support%20{ext}%20file%20indexing"
@@ -661,6 +663,23 @@ def _describe_roots(roots: Sequence[Path]) -> str:
     return ", ".join(by_real.values())
 
 
+def is_within_document_roots(path: Path) -> bool:
+    """Return whether *path* is browseable under the configured document roots.
+
+    The lexical check runs first, so a path outside every root (a UNC share,
+    say) is rejected without touching the filesystem.
+    """
+    roots = document_roots()
+    try:
+        lexical = Path(os.path.abspath(str(path)))
+        if not any(lexical.is_relative_to(root) for root in roots):
+            return False
+        resolved = path.resolve()
+    except (OSError, ValueError):
+        return False
+    return any(resolved.is_relative_to(root) for root in roots)
+
+
 def ensure_within_home(resolved: Path) -> None:
     """Raise HTTP 403 if *resolved* is not inside an allowed document root.
 
@@ -859,12 +878,13 @@ def build_quick_links() -> list:
 
     candidates = [
         ("Desktop", home / "Desktop", "desktop"),
-        ("Documents", home / "Documents", "documents"),
+        ("Documents", documents_dir(home), "documents"),
         ("Downloads", home / "Downloads", "download"),
     ]
 
     for name, candidate_path, icon in candidates:
-        if candidate_path.is_dir():
+        # Roots first: is_dir() on a UNC path outside them can hang on SMB.
+        if is_within_document_roots(candidate_path) and candidate_path.is_dir():
             links.append(QuickLink(name=name, path=str(candidate_path), icon=icon))
 
     return links

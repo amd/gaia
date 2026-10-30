@@ -2,6 +2,7 @@
 /* SPDX-License-Identifier: MIT */
 
 .new-chat {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -10,7 +11,19 @@
     padding: 24px 16px 18vh;
 }
 
+/* Typing drops the composer to the bottom, where the chat will continue. */
+.new-chat.is-docked {
+    align-items: flex-end;
+    padding-bottom: 16px;
+}
+
+.new-chat.is-docked .new-chat-greeting {
+    opacity: 0;
+    visibility: hidden;
+}
+
 .new-chat-inner {
+    position: relative;
     width: 100%;
     max-width: var(--content-w);
 }
@@ -52,6 +65,7 @@
 }
 
 .new-chat-greeting {
+    transition: opacity var(--duration-slow) var(--ease), visibility var(--duration-slow);
     margin-bottom: 14px;
     color: var(--text-primary);
     font-family: var(--font-greeting);

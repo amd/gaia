@@ -164,7 +164,7 @@ answer stays in view. The response is
 
 | `type` | Payload | Meaning |
 |---|---|---|
-| `status` | `{ message, phase?, queue? }` | progress narration (also folds `step`/`thinking`/`plan`). `phase: "model_queue"` means the turn is waiting for the model behind another request: it repeats every ~2 s with `queue` (`event` queued/granted, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`) |
+| `status` | `{ message, phase?, queue? }` | progress narration (also folds `step`/`thinking`/`plan`). `phase: "model_queue"` means the turn is waiting for the model behind another request: it repeats every ~2 s with `queue` (`event` queued/granted, `scope`, `position`, `queue_length`, `holder`, `holder_model`, `held_for_s`, `waited_s`, `model`; a field the wait cannot know is omitted) |
 | `token` | `{ delta }` | an incremental chunk of assistant text |
 | `tool_call` | `{ tool, args }` | the agent is invoking a tool |
 | `tool_result` | `{ tool, render?, data }` | a tool returned; `render` names a typed card |

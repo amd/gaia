@@ -462,3 +462,82 @@ class TestScheduleConfigFromJson:
     def test_from_json_unknown_key_raises(self):
         with pytest.raises(ValueError, match="Invalid schedule_config"):
             ScheduleConfig.from_json('{"bogus_key": 1}')
+
+
+class TestRunNow:
+    """Run now runs a task once without moving its schedule (#5718)."""
+
+    async def test_runs_once_and_keeps_the_next_scheduled_time(self, scheduler):
+        await scheduler.create_task("ping", "every 1h", "Say PING")
+        before = scheduler.get_task("ping")["next_run_at"]
+
+        started = await scheduler.run_task_now("ping")
+        assert started["running"] is True
+        await asyncio.gather(*scheduler._manual_runs)
+
+        after = scheduler.get_task("ping")
+        assert after["running"] is False
+        assert after["run_count"] == 1
+        assert after["last_result"] == "ran: Say PING"
+        assert after["next_run_at"] == before
+        messages = scheduler._db.get_messages(after["session_id"])
+        assert messages[-1]["content"] == "ran: Say PING"
+
+    async def test_refuses_a_second_run_while_one_is_in_flight(self, fake_db):
+        release = asyncio.Event()
+
+        async def slow(prompt):
+            await release.wait()
+            return "done"
+
+        sched = Scheduler(db=fake_db, executor=slow)
+        await sched.start()
+        try:
+            await sched.create_task("slow", "every 1h", "P")
+            await sched.run_task_now("slow")
+            with pytest.raises(ValueError, match="already running"):
+                await sched.run_task_now("slow")
+
+            # A timed run landing meanwhile is skipped, not run twice.
+            await asyncio.sleep(0)
+            task = sched._tasks["slow"]
+            await sched._execute_task(task)
+            assert task.run_count == 1
+
+            release.set()
+            await asyncio.gather(*sched._manual_runs)
+            assert sched.get_task("slow")["running"] is False
+        finally:
+            await sched.shutdown()
+
+    async def test_unknown_task(self, scheduler):
+        with pytest.raises(KeyError):
+            await scheduler.run_task_now("nope")
+
+
+class TestRunNowStops:
+    """Deleting a schedule or stopping GAIA stops its Run now, like its timer."""
+
+    async def _start_slow(self, fake_db):
+        async def slow(prompt):
+            await asyncio.Event().wait()
+
+        sched = Scheduler(db=fake_db, executor=slow)
+        await sched.start()
+        await sched.create_task("slow", "every 1h", "P")
+        await sched.run_task_now("slow")
+        await asyncio.sleep(0)
+        return sched, next(iter(sched._manual_runs))
+
+    async def test_delete_cancels_it(self, fake_db):
+        sched, run = await self._start_slow(fake_db)
+        try:
+            await sched.delete_task("slow")
+            assert run.cancelled()
+        finally:
+            await sched.shutdown()
+
+    async def test_shutdown_cancels_it(self, fake_db):
+        sched, run = await self._start_slow(fake_db)
+        await sched.shutdown()
+        assert run.cancelled()

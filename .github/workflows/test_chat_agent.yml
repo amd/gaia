@@ -12,6 +12,7 @@ on:
     branches: [ main ]
     paths:
       - 'hub/agents/chat/python/**'
+      - 'hub/agents/gaia/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       # Only lane that installs the chat wheel, so the only lane where
@@ -95,6 +96,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'hub/agents/chat/python/**'
+      - 'hub/agents/gaia/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       # Only lane that installs the chat wheel, so the only lane where
@@ -206,8 +208,9 @@ jobs:
           uv pip install --system -e .[dev,rag,ui,api]
           # Install pytest-mock for mocking tests
           uv pip install --system pytest-mock
-          # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102)
-          uv pip install --system -e hub/agents/chat/python
+          # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+          # The flagship too: the retrieval harness binds GaiaAgent's search keys.
+          uv pip install --system -e hub/agents/chat/python -e hub/agents/gaia/python
 
       - name: Check no test file skips wholesale
         run: python util/check_module_skips.py --workflow test_chat_agent.yml --job test-chat-agent
@@ -254,6 +257,7 @@ jobs:
             tests/unit/test_chat_system_prompt_budget.py \
             tests/unit/test_dynamic_tool_filtering.py \
             tests/unit/test_indexed_docs_per_turn.py \
+            tests/unit/test_profilespec_characterization.py \
             tests/unit/test_prompt_size_budget.py \
             tests/unit/test_sd_rule_gating.py \
             tests/unit/test_run_python_tool.py \

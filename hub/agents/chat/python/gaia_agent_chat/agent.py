@@ -48,11 +48,7 @@ from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia_agent_chat.tool_requests import requested_tools
 
 from gaia.agents.base.agent import Agent, default_max_steps
-from gaia.agents.base.checks import (
-    attach_check,
-    check_from_python_run,
-    snippet_target,
-)
+from gaia.agents.base.checks import attach_check, check_from_python_run, snippet_target
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_KEEP_STEPS,
@@ -75,6 +71,7 @@ from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
+    AudioGenerationToolsMixin,
     AudioToolsMixin,
     BrowserToolsMixin,
     BrowserUseToolsMixin,
@@ -90,11 +87,13 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import documents_still_indexing
-from gaia.env import child_env
-from gaia.llm.inference_location import (
-    InferenceLocation,
-    resolve_inference_location,
+from gaia.agents.tools.workspace_paths import (
+    _resolve_target,
+    _workspace_default,
+    _workspace_target,
 )
+from gaia.env import child_env
+from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
 from gaia.llm.lemonade_client import (
     _endpoint_label,
     configured_lemonade_url,
@@ -114,6 +113,7 @@ from gaia.security import (
 )
 from gaia.utils.file_lock import held_by_another_program
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
+from gaia.utils.user_folders import documents_dir
 from gaia.vlm.mixin import VLMToolsMixin
 
 # Sentinel for not-yet-built lazy attributes (``rag``, ``session_manager`` —
@@ -364,7 +364,8 @@ class ChatAgentConfig:
     memory_incognito: bool = False
 
     # Optional capability flags (disabled by default to keep document Q&A focused)
-    enable_sd_tools: bool = False  # Stable Diffusion image generation
+    enable_sd_tools: bool = False  # Lemonade image generation
+    enable_audio_generation_tools: bool = False  # Lemonade music and sound effects
 
     # MCP settings.
     # 50 default is the validated middle ground: covers the 49-tool MCP
@@ -432,6 +433,7 @@ class ChatAgent(
     ScreenshotToolsMixin,
     SDToolsMixin,
     AudioToolsMixin,
+    AudioGenerationToolsMixin,
     WaitToolsMixin,
     ReasoningEffortToolsMixin,
     MCPClientMixin,
@@ -1456,8 +1458,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
 **FILE BROWSING:** browse_directory (navigate), list_recent_files (recent), get_file_info (metadata).
 
-**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`. Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process.
 """
+        # Only advertise web and media tools the profile registers.
+        unsupported = "**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md ."
+        if "web_browse" in spec.tool_groups:
+            unsupported += " Web browsing IS supported via `search_web` / `fetch_page` / `download_file`."
+        unsupported += " Image analysis IS supported via `analyze_image`."
+        if "media_transcribe" in spec.tool_groups:
+            unsupported += " Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process."
+        data_file_rules += unsupported + "\n"
         # A rule about a tool the session lacks made the model offer images.
         if getattr(self.config, "enable_sd_tools", False):
             data_file_rules += """
@@ -1549,7 +1558,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             if has_gaia_docs:
                 line += (
                     " To save a new file to the user's Documents folder, use "
-                    f"{Path.home() / 'Documents'}: GAIA's documents folder is "
+                    f"{documents_dir()}: GAIA's documents folder is "
                     "GAIA's own."
                 )
             line += "\n"
@@ -1902,7 +1911,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 Returns:
                     Dictionary with files, directories, and total count
                 """
-                path = os.path.expanduser(path)
+                path = str(_resolve_target(path, None, _workspace_default(self)))
                 denied = read_access_error(self, path)
                 if denied:
                     return denied
@@ -1964,7 +1973,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except ValueError as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
-                file_path = os.path.expanduser(file_path)
+                file_path = str(
+                    _resolve_target(file_path, None, _workspace_default(self))
+                )
                 if not self.path_validator.is_path_allowed(file_path):
                     return {
                         "status": "error",
@@ -2311,6 +2322,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     sd_output_dir,
                     _sd_err,
                     exc_info=True,
+                )
+
+        # Music and SFX: flag-gated like image generation; no downloads at init.
+        if getattr(self.config, "enable_audio_generation_tools", False):
+            from gaia.config import GAIA_CONFIG_DIR
+
+            audio_dir = GAIA_CONFIG_DIR / "cache" / "audio" / "generations"
+            try:
+                self.init_audio_generation(output_dir=str(audio_dir))
+            except OSError as err:
+                logger.warning(
+                    "Audio generation unavailable: cannot write %s: %s", audio_dir, err
                 )
 
         # ── Phase 3: Web & System tools ──────────────────────────────────────────
@@ -2784,7 +2807,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 ts = time.strftime("%Y%m%d_%H%M%S")
                 output_path = str(tts_dir / f"speech_{ts}.wav")
             else:
-                output_path = os.path.expanduser(output_path)
+                output_path = str(_workspace_target(self, output_path))
                 denied = write_access_error(self, output_path)
                 if denied:
                     return denied
@@ -3049,6 +3072,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         for doc in documents:
             try:
                 if os.path.exists(doc):
+                    # Naming a file to index is the grant to read it; a folder is never granted.
+                    if os.path.isfile(doc):
+                        self.path_validator.add_allowed_path(doc)
                     logger.info(f"Indexing document: {doc}")
                     result = self.rag.index_document(doc)
 

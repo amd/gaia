@@ -205,6 +205,7 @@ func checkDaemon(ctx context.Context, t Transport, cfg Config, rep *Report) Stat
 		return row.commit(rep)
 	}
 
+	rep.CoreVersion = inf.GaiaVersion
 	row.State = StateOK
 	row.Line = fmt.Sprintf("running (pid %d) · host API v%s", inf.PID, inf.APIVersion)
 	return row.commit(rep)
@@ -786,6 +787,15 @@ func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State
 			row.State = StateOK
 			row.Line = "chat uses " + chat
 		}
+		setRow(rep, row)
+		return row.State, false
+	}
+
+	// A cloud default_model arrives as the sidecar's model; a launch on a picked
+	// local model never uses it, so check the picked one instead. No window check:
+	// the sidecar's ctx describes the default, not the pick.
+	if cfg.Model != "" && gaiaLemonade.IsCloudID(body.Model.ID) {
+		row := checkLocalModelDownloaded(ctx, cfg.Model, model)
 		setRow(rep, row)
 		return row.State, false
 	}

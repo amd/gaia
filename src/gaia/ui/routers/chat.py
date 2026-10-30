@@ -138,6 +138,14 @@ async def send_message(
         )
     await session_lock.acquire()
 
+    # Foreground local work takes precedence over autonomous background goals.
+    # Resolve once so a settings change cannot disagree with the later queue check.
+    takes_line = turn_takes_the_line(db, session, request.agent_type)
+    if takes_line:
+        from gaia.ui.agent_loop import agent_loop
+
+        agent_loop.yield_to_user()
+
     # A streamed turn takes its place in line inside the run, so leaving the
     # chat while it waits doesn't drop it. A non-streamed one is saved first,
     # so a long wait never loses it.
@@ -147,7 +155,7 @@ async def send_message(
         try:
             question_id = db.begin_turn(sid, request.message)
             _set_provisional_title(db, sid, request.message)
-            if turn_takes_the_line(db, session, request.agent_type):
+            if takes_line:
                 await turn_queue.acquire(sid)
                 holds_turn = True
         except TurnCancelled:
@@ -625,19 +633,21 @@ async def cancel_stream(request: CancelStreamRequest):
     """
     from .._chat_helpers import _active_sse_handlers
 
+    handler = _active_sse_handlers.get(request.session_id)
+    if handler:
+        # Mark a resumed relay cancelled before withdrawing its queued hand-back.
+        handler.cancelled.set()
+        turn_queue.cancel(request.session_id)
+        # #2109: an email-relay turn can be parked in a blocking socket read that
+        # the cancelled flag alone can't interrupt — force it to error out now.
+        handler.close_active_relay_response()
+        return {"status": "ok", "cancelled": True}
     # A turn still waiting in line has no handler yet; withdraw it instead.
     if turn_queue.cancel(request.session_id):
         return {"status": "ok", "cancelled": True}
-    handler = _active_sse_handlers.get(request.session_id)
-    if not handler:
-        raise HTTPException(
-            status_code=404, detail="No active chat session found for this session ID"
-        )
-    handler.cancelled.set()
-    # #2109: an email-relay turn can be parked in a blocking socket read that
-    # the cancelled flag alone can't interrupt — force it to error out now.
-    handler.close_active_relay_response()
-    return {"status": "ok", "cancelled": True}
+    raise HTTPException(
+        status_code=404, detail="No active chat session found for this session ID"
+    )
 
 
 @router.get("/api/chat/active")
