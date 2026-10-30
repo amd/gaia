@@ -2,11 +2,11 @@
 
 ## Unreleased
 
-- The `full` profile's tool loader gains a `guide` bundle for the flagship's
-  five guide-card tools (`show_recipe`, `show_workout`, `show_how_to`,
-  `show_checklist`, `show_itinerary`) and a `calculator` bundle for
-  `show_tip_calculator` and `show_loan_calculator`. They are optional here
-  because only `GaiaAgent` registers them.
+- With Local only on (`gaia config set network_policy local_ai_only`), the
+  Perplexity-backed `search_web` tool is not registered, because it answers
+  through Perplexity's cloud AI. A cached agent that still has it refuses with
+  the same reason. The DuckDuckGo `search_web` from the browser tools still
+  registers: it runs no AI model.
 - Resolves the user's real Documents folder for the session guidance, including
   Windows Known Folder Move/OneDrive and Linux `XDG_DOCUMENTS_DIR`, instead of
   assuming it is always `~/Documents` (#5885). File search and the Agent UI's
@@ -85,6 +85,11 @@
   0.25.0 it fails at import. The `amd-gaia` floor rises to 0.25.1 in that
   release (a floor above the in-tree core cannot resolve), and
   `tests/test_chat_dependency_floor.py` fails the release until it does.
+- The `full` profile's tool loader gains a `guide` bundle for the flagship's
+  five guide-card tools (`show_recipe`, `show_workout`, `show_how_to`,
+  `show_checklist`, `show_itinerary`) and a `calculator` bundle for
+  `show_tip_calculator` and `show_loan_calculator`. They are optional here
+  because only `GaiaAgent` registers them.
 
 ## 0.2.0
 

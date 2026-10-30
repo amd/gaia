@@ -126,6 +126,8 @@ _STATE_ENV = {
     "GAIA_MEMORY_DB": ("memory", "memory.db"),
     # Cloud calls record model availability here.
     "GAIA_GATEWAY_FILE": ("gateway", "gateway.json"),
+    # The network policy: a developer's own "Local only" must not change results.
+    "GAIA_POLICY_FILE": ("policy", "policy.json"),
     # The stdio agent writes each session's chat history under it.
     "GAIA_TUI_HOME": ("tui",),
     # Opened when gaia is first imported, so it must be set before that.
