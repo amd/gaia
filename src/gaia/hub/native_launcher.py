@@ -721,11 +721,15 @@ class NativeAgentLauncher:
             self._states.pop(pid, None)
 
     def _dead_process_error(self, state: _ProcState) -> NativeAgentError:
-        # The stdout reader may notice a crash before the independent stderr
-        # reader has drained the pipe. Once the process has exited, briefly
-        # join that reader so the original crash diagnostics are retained.
-        # Keep this bounded: descendants could still hold stderr open.
-        if state.proc.poll() is not None:
+        # stdout EOF can land before the exit is reapable and before the
+        # stderr reader drains; both waits are bounded (descendants may hold
+        # the pipes open).
+        try:
+            state.proc.wait(timeout=_STDERR_DRAIN_JOIN_TIMEOUT)
+            exited = True
+        except subprocess.TimeoutExpired:
+            exited = False
+        if exited:
             state._stderr_reader.join(timeout=_STDERR_DRAIN_JOIN_TIMEOUT)
         code = self._format_exit_code(state.proc.returncode)
         stderr = state.recent_stderr()
