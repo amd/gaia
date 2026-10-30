@@ -67,6 +67,12 @@ describe('ModelSettings provider keys', () => {
         expect(within(card).getByRole('status')).toHaveTextContent(/can't list its models.*Your key still works.*out of date/);
     });
 
+    it('says a pasted key replaces the saved one', async () => {
+        withProviders(fireworks({ models_discovered: true, key_source: 'stored' }));
+        const card = await openFireworks();
+        expect(within(card).getByLabelText('Fireworks AI API key')).toHaveAttribute('placeholder', 'Paste a new key to replace the saved one');
+    });
+
     it('stays quiet about known models on the live list', async () => {
         withProviders(fireworks({ models_discovered: true, key_source: 'stored' }));
         const card = await openFireworks();

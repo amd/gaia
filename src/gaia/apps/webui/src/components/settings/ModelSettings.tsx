@@ -30,7 +30,7 @@ function keyStatus(p: ProviderInfo): string {
 
 function keyPlaceholder(p: ProviderInfo): string {
     if (p.key_source === 'environment') return 'Blank uses the environment key';
-    if (p.key_source) return 'Blank keeps the saved key';
+    if (p.key_source) return 'Paste a new key to replace the saved one';
     return 'Paste API key';
 }
 
