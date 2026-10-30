@@ -9,9 +9,21 @@ core helper and ``fetch_page`` are covered by test_fetch_retry_after.py.
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
-from tests.unit.test_fetch_retry_after import URL, _response
 from tests.unit.test_profilespec_characterization import chat_agent_build_context
+
+URL = "https://status.example.com/board"
+
+
+def _response(status, headers=None):
+    response = requests.Response()
+    response.status_code = status
+    response.url = URL
+    response.reason = {429: "Too Many Requests", 404: "Not Found"}.get(status, "")
+    response.headers.update(headers or {})
+    response._content = b""
+    return response
 
 
 @pytest.fixture
