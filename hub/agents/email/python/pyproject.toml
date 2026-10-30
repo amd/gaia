@@ -22,7 +22,7 @@ requires-python = ">=3.10"
 # classifier the agent loads model weights through, so the version that ships
 # is the version the SLM path was validated against.
 dependencies = [
-    "amd-gaia[api]>=0.25.3",
+    "amd-gaia[api]>=0.25.4",
     "specific-ai-tools==0.1.1",
 ]
 
