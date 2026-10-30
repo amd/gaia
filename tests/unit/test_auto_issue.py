@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -501,3 +503,239 @@ def test_prefix_resolves_are_capped_at_the_passing_version():
             assert w.get(
                 "up-to-version"
             ), f"{name} closes every version of {w['key-prefix']}"
+
+
+# --- hotfix versions ----------------------------------------------------------
+
+
+def test_a_hotfix_sorts_after_its_base_release():
+    assert auto_issue.parse_version("v0.24.1.1") > auto_issue.parse_version("v0.24.1")
+    assert auto_issue.parse_version("v0.24.1.1") < auto_issue.parse_version("v0.24.2")
+    assert auto_issue.parse_version("v0.24.1.1-rc1") > auto_issue.parse_version(
+        "v0.24.1"
+    )
+    assert auto_issue.parse_version("v0.24.1.2") > auto_issue.parse_version("v0.24.1.1")
+
+
+def test_a_base_release_pass_leaves_a_later_hotfix_issue_open():
+    issues = [
+        _issue(1, "t", key="eval-flagship/v0.24.1.1"),
+        _issue(2, "t", key="eval-flagship/v0.24.1"),
+        _issue(3, "Flagship eval did not pass on v0.24.1.1"),
+    ]
+    gh = FakeGh(issues)
+    _resolve_eval(gh, "v0.24.1")
+    assert [c[2] for c in gh.writes()] == ["2"]
+
+    gh = FakeGh(issues)
+    _resolve_eval(gh, "v0.24.1.1")
+    assert sorted(c[2] for c in gh.writes()) == ["1", "2", "3"]
+
+
+# --- eval_flagship: what a tier's pass may close ------------------------------
+
+
+def _tiered_eval_issues():
+    return [
+        _issue(1, "x", key="eval-flagship/smoke/v0.26.0-rc1"),
+        _issue(2, "x", key="eval-flagship/full/v0.26.0-rc2"),
+        _issue(3, "Flagship eval did not pass on v0.26.0-rc0"),
+        _issue(4, "x", key="eval-flagship/verify/v0.25.2"),
+        _issue(5, "x", key="eval-flagship/smoke/v0.26.0-rc9"),
+    ]
+
+
+def _escalation():
+    wf = yaml.safe_load((WORKFLOWS / "eval_flagship.yml").read_text(encoding="utf-8"))
+    return wf["jobs"]["release-escalation"]
+
+
+def _escalation_step(name):
+    return next(s for s in _escalation()["steps"] if s.get("name") == name)
+
+
+def test_a_smoke_pass_closes_earlier_smoke_issues_not_a_failed_full_sweep():
+    gh = FakeGh(_tiered_eval_issues())
+    _resolve(
+        gh, "--key-prefix", "eval-flagship/smoke/\n", "--up-to-version=v0.26.0-rc3"
+    )
+    # Not the full sweep (#2), the unmarked legacy issue (#3), a final's verify
+    # issue (#4), or a later RC (#5).
+    assert [c[2] for c in gh.writes()] == ["1"]
+
+
+def test_a_full_pass_closes_smoke_full_and_legacy_issues_on_its_line():
+    gh = FakeGh(_tiered_eval_issues())
+    _resolve(
+        gh,
+        "--key-prefix",
+        "eval-flagship/smoke/\neval-flagship/full/",
+        "--legacy-title-prefix",
+        "Flagship eval did not pass on ",
+        "--up-to-version=v0.26.0-rc3",
+    )
+    assert sorted(c[2] for c in gh.writes()) == ["1", "2", "3"]
+
+
+def test_the_escalation_keys_its_issue_by_tier_and_tag():
+    w = _escalation_step("File (or update) the issue for this tag")["with"]
+    assert (
+        w["key"] == "eval-flagship/${{ needs.eval-gate.outputs.tier }}/"
+        "${{ github.ref_name }}"
+    )
+
+
+def test_only_a_full_pass_adds_full_and_legacy_issues_to_its_close():
+    step = _escalation_step("Close the eval issues this pass disproves")
+    assert "tier != 'verify'" in step["if"]
+    w = step["with"]
+    lines = [ln.strip() for ln in w["key-prefix"].splitlines() if ln.strip()]
+    assert lines[0] == "eval-flagship/smoke/"
+    assert lines[1] == (
+        "${{ needs.eval-gate.outputs.tier == 'full' && 'eval-flagship/full/' || '' }}"
+    )
+    assert "tier == 'full'" in w["legacy-title-prefix"]
+    assert w["up-to-version"] == "${{ github.ref_name }}"
+
+
+def test_a_final_tag_closes_only_its_own_verify_issue():
+    step = _escalation_step("Close this final tag's own verify issue")
+    assert "tier == 'verify'" in step["if"]
+    w = step["with"]
+    assert "key-prefix" not in w and "legacy-title-prefix" not in w
+    assert w["key"] == "eval-flagship/verify/${{ github.ref_name }}"
+
+
+def _run_outcome(tmp_path, **results):
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash not on PATH")
+    step = next(s for s in _escalation()["steps"] if s.get("id") == "outcome")
+    script = tmp_path / "outcome.sh"
+    script.write_text(step["run"], encoding="utf-8", newline="\n")
+    out = tmp_path / "out.txt"
+    out.write_text("", encoding="utf-8")
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "GITHUB_OUTPUT": str(out),
+        "TIER": results.get("tier", "smoke"),
+        "LANES_JOB": results.get("lanes", "success"),
+        "LANES_RESULT": results.get("agent_eval", "success"),
+        "OUTCOMES_RESULT": results.get("tasks", "success"),
+        "VERIFY_RESULT": results.get("verify", "skipped"),
+    }
+    proc = subprocess.run(
+        [bash, str(script)], env=env, capture_output=True, text=True, check=False
+    )
+    state = re.findall(r"^state=(\w+)$", out.read_text(encoding="utf-8"), re.M)
+    return proc.returncode, state
+
+
+@pytest.mark.parametrize(
+    "results, expected",
+    [
+        # Outcomes is skipped on an RC smoke by design: still a pass.
+        ({"tier": "smoke", "tasks": "skipped"}, ["passed"]),
+        ({"tier": "smoke", "agent_eval": "failure", "tasks": "skipped"}, ["failed"]),
+        ({"tier": "smoke", "lanes": "cancelled"}, ["failed"]),
+        # Lanes skipped without failing measured nothing: neither files nor closes.
+        ({"tier": "smoke", "agent_eval": "skipped", "tasks": "skipped"}, ["unproven"]),
+        ({"tier": "full"}, ["passed"]),
+        ({"tier": "full", "tasks": "skipped"}, ["unproven"]),
+        ({"tier": "full", "tasks": "failure"}, ["failed"]),
+        # A final tag runs only verify-final.
+        (
+            {
+                "tier": "verify",
+                "lanes": "skipped",
+                "agent_eval": "skipped",
+                "tasks": "skipped",
+                "verify": "success",
+            },
+            ["passed"],
+        ),
+        (
+            {
+                "tier": "verify",
+                "lanes": "skipped",
+                "agent_eval": "skipped",
+                "tasks": "skipped",
+                "verify": "failure",
+            },
+            ["failed"],
+        ),
+        (
+            {
+                "tier": "verify",
+                "lanes": "skipped",
+                "agent_eval": "skipped",
+                "tasks": "skipped",
+                "verify": "skipped",
+            },
+            ["unproven"],
+        ),
+    ],
+)
+def test_the_escalation_only_closes_on_a_pass_its_tier_actually_ran(
+    tmp_path, results, expected
+):
+    code, state = _run_outcome(tmp_path, **results)
+    assert code == 0
+    assert state == expected
+
+
+def test_an_unknown_tag_tier_fails_loudly(tmp_path):
+    code, state = _run_outcome(tmp_path, tier="backlog")
+    assert code != 0 and state == []
+    code, state = _run_outcome(tmp_path, tier="")
+    assert code != 0 and state == []
+
+
+# --- nightly-patch-release: a job's issue closes only when that job runs green --
+
+
+def _nightly_notify_steps():
+    wf = yaml.safe_load(
+        (WORKFLOWS / "nightly-patch-release.yml").read_text(encoding="utf-8")
+    )
+    return wf["jobs"]["notify-on-failure"]["steps"]
+
+
+def test_a_draft_failure_closes_only_on_a_green_draft():
+    resolves = {
+        s["with"]["key"]: s
+        for s in _nightly_notify_steps()
+        if s.get("with", {}).get("mode") == "resolve"
+    }
+    assert set(resolves) == {
+        "nightly-patch-release/check-failure",
+        "nightly-patch-release/draft-failure",
+    }
+    # A skipped draft (a guard stopped the night) must not close the draft issue.
+    assert (
+        resolves["nightly-patch-release/draft-failure"]["if"]
+        == "needs.draft.result == 'success'"
+    )
+    assert (
+        resolves["nightly-patch-release/check-failure"]["if"]
+        == "needs.check.result == 'success'"
+    )
+
+
+def test_the_check_resolve_never_matches_a_draft_issue():
+    gh = FakeGh(
+        [
+            _issue(1, "⚠️ Nightly patch-release draft failed (target v0.25.3)"),
+            _issue(2, "⚠️ Nightly patch-release check failed (scope undetermined)"),
+            _issue(3, "x", key="nightly-patch-release/draft-failure"),
+            _issue(4, "x", key="nightly-patch-release/check-failure"),
+        ]
+    )
+    _resolve(
+        gh,
+        "--key",
+        "nightly-patch-release/check-failure",
+        "--legacy-title-prefix",
+        "⚠️ Nightly patch-release check failed",
+    )
+    assert sorted(c[2] for c in gh.writes()) == ["2", "4"]

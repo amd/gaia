@@ -466,7 +466,7 @@ jobs:
   # check-runs erroring) is just as silent-by-default as `draft` failing, since only `draft`
   # had a failure handler before. One shared job covers both, `if: always()` so it still runs
   # when `draft` never started (should_draft stayed false, or `check` itself failed).
-  # A later run with no failure closes the issue.
+  # A later run in which the failed job succeeds closes its issue.
   notify-on-failure:
     needs: [check, draft]
     if: >-
@@ -521,25 +521,37 @@ jobs:
             echo "GAIA_AUTO_ISSUE_EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # One issue per failing job. A draft failure closes only when a draft runs
+      # green: a night that stops at a guard (e.g. the half-made release PR the
+      # failed draft left open) never ran the draft, so it proves nothing.
       - name: File a tracking issue
         if: env.FAILED == 'true'
         uses: ./.github/actions/auto-issue
         with:
           mode: report
-          # One rolling issue for either failure type.
-          key: nightly-patch-release/failure
-          legacy-title-prefix: "⚠️ Nightly patch-release"
-          title: ${{ steps.failmsg.outputs.title || '⚠️ Nightly patch-release run failed' }}
+          key: nightly-patch-release/${{ needs.check.result == 'failure' && 'check' || 'draft' }}-failure
+          legacy-title-prefix: ${{ needs.check.result == 'failure' && '⚠️ Nightly patch-release check failed' || '⚠️ Nightly patch-release draft failed' }}
+          title: ${{ steps.failmsg.outputs.title || (needs.check.result == 'failure' && '⚠️ Nightly patch-release check failed' || '⚠️ Nightly patch-release draft failed') }}
           body: ${{ steps.failmsg.outputs.body || format('The nightly patch-release workflow failed in run {0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
           labels: |
             bug
             devops
           assignees: kovtcharov-amd
 
-      - name: Close the tracking issue once a run succeeds
-        if: env.FAILED != 'true'
+      - name: Close the check-failure issue once the check succeeds
+        if: needs.check.result == 'success'
         uses: ./.github/actions/auto-issue
         with:
           mode: resolve
-          key: nightly-patch-release/failure
-          legacy-title-prefix: "⚠️ Nightly patch-release"
+          key: nightly-patch-release/check-failure
+          legacy-title-prefix: "⚠️ Nightly patch-release check failed"
+
+      - name: Close the draft-failure issue once a draft succeeds
+        if: needs.draft.result == 'success'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key: nightly-patch-release/draft-failure
+          legacy-title-prefix: |
+            ⚠️ Nightly patch-release draft failed
+            ⚠️ Nightly patch-release run failed

@@ -9,7 +9,7 @@ and three mutually exclusive "Release check:" states sat open together. Every
 issue this script files carries a hidden marker naming its key, and lookup
 matches that marker exactly:
 
-    <!-- gaia-auto-issue: nightly-patch-release/failure -->
+    <!-- gaia-auto-issue: nightly-patch-release/draft-failure -->
 
 ``report`` comments on (or edits) the open issue carrying the key, else files
 one. ``resolve`` closes every open issue carrying the key, with a comment
@@ -65,21 +65,31 @@ def validate_key(key: str) -> str:
     if not KEY_RE.match(key):
         raise ValueError(
             f"invalid auto-issue key {key!r}: use letters, digits and ._/:- "
-            "(no spaces), e.g. 'nightly-patch-release/failure'"
+            "(no spaces), e.g. 'nightly-patch-release/draft-failure'"
         )
     return key
 
 
-VERSION_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?")
+VERSION_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:-rc(\d+))?")
 
 
-def parse_version(text: str) -> tuple[int, int, int, float] | None:
-    """Last ``X.Y.Z[-rcN]`` in ``text``; a final release sorts after its RCs."""
+def parse_version(text: str) -> tuple[int, int, int, int, float] | None:
+    """Last ``X.Y.Z[.W][-rcN]`` in ``text``; a final release sorts after its RCs.
+
+    A hotfix ``X.Y.Z.W`` sorts after ``X.Y.Z``, so a pass on the base release
+    never closes a later hotfix's issue.
+    """
     found = VERSION_RE.findall(text)
     if not found:
         return None
-    major, minor, patch, rc = found[-1]
-    return int(major), int(minor), int(patch), int(rc) if rc else float("inf")
+    major, minor, patch, hotfix, rc = found[-1]
+    return (
+        int(major),
+        int(minor),
+        int(patch),
+        int(hotfix or 0),
+        int(rc) if rc else float("inf"),
+    )
 
 
 def issue_keys(body: str | None) -> set[str]:
@@ -104,7 +114,7 @@ class Selector:
     except_titles: set[str] = field(default_factory=set)
     #: When set, only issues for this version or an earlier one on the same
     #: major.minor line match; an unparseable version never matches.
-    up_to_version: tuple[int, int, int, float] | None = None
+    up_to_version: tuple[int, int, int, int, float] | None = None
 
     def matches(self, issue: dict) -> bool:
         keys = issue_keys(issue.get("body"))

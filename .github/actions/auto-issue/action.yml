@@ -19,7 +19,7 @@ inputs:
     description: '`report` (file or update) or `resolve` (close on recovery)'
     required: true
   key:
-    description: 'Stable alert key, e.g. `nightly-patch-release/failure`. For resolve, newline-separated keys.'
+    description: 'Stable alert key, e.g. `claude-auth-canary`. For resolve, newline-separated keys.'
     required: false
     default: ''
   key-prefix:
