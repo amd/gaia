@@ -6,7 +6,7 @@ icon: "shield-halved"
 
 # Release eval hardening: stress and adversarial testing
 
-> **Status:** Proposed
+> **Status:** In progress. Section 6's tiering shipped: RC smoke, a full sweep on the nominated RC, a final-tag check, a weekly backlog lane and Qwen3.6 scoring ([#5535](https://github.com/amd/gaia/pull/5535)), real Claude usage per scenario ([#5525](https://github.com/amd/gaia/pull/5525)) and quota stop-and-resume ([#5533](https://github.com/amd/gaia/pull/5533)). Sections 5 and 7 are still proposed, and sections 2 to 4 describe the tree before those landed.
 >
 > **Priority:** P1
 >
@@ -84,10 +84,10 @@ Two structural facts matter more than any single row:
 | pymupdf 2.0 breaks Intel Mac installs ([#5481](https://github.com/amd/gaia/pull/5481)) | Dependency drift, arch | A nightly install with unpinned deps on every OS and arch | `macos-latest` is arm64. No unpinned canary exists. The same class hit httpx 1.0.dev and APScheduler 4.0a |
 | RAG eval fails on VLM image chunks ([#5490](https://github.com/amd/gaia/pull/5490)) | Eval-harness integrity | The retrieval benchmark, which **did** catch it on 2026-10-12 | It only reports, and `[skip eval]` hid it for three RCs |
 | A restart loses replies ([#5386](https://github.com/amd/gaia/pull/5386)) | Lifecycle | `kill -9` the backend mid-stream, then restart | No test killed a turn mid-stream before the fix |
-| Modern Standby counts against time limits ([#5464](https://github.com/amd/gaia/pull/5464), draft) | Clock, standby | A clock and standby simulator | Real standby can't be triggered in CI, and no simulator exists |
+| Modern Standby counts against time limits ([#5464](https://github.com/amd/gaia/pull/5464)) | Clock, standby | A clock and standby simulator | Real standby can't be triggered in CI, and no simulator exists |
 | Undo warns on read-only snippets ([#5436](https://github.com/amd/gaia/pull/5436)) | Gate false positive | A false-positive corpus: correct work must not trigger the warning | Tests asserted the warning appears. None asserted it stays away |
 
-By class: **7 of 17 are lifecycle or multi-process**, 4 are provider or model faults, 2 are resource or eval-integrity, 1 each is drift, honesty, test isolation and a false positive. The flagship scenario eval, the most expensive tier, could plausibly have caught 3 of them (#5413, #5415 and the context overflow), and it caught none.
+By class: **7 of 17 are lifecycle or multi-process**, 4 are provider or model faults, 2 are resource or eval-integrity, 1 each is drift, honesty, test isolation and a false positive. The flagship scenario eval, the most expensive tier, could plausibly have caught 2 of them (#5415 and the context overflow), and it caught neither.
 
 ---
 
@@ -159,7 +159,7 @@ By class: **7 of 17 are lifecycle or multi-process**, 4 are provider or model fa
 
 ## 5. Recommendations, by bugs caught per unit of cost
 
-Each item names its tier and trigger. "Hosted" means GitHub-hosted runners. Strix Halo time goes only to items 8 and 9.
+Each item names its tier and trigger. "Hosted" means GitHub-hosted runners. New Strix Halo time goes only to items 8 and 9; item 3 adds a few targeted re-runs to the existing release eval.
 
 ### 1. A fault-injecting fake model server: per PR, seconds
 
@@ -187,7 +187,7 @@ Would have caught #5469, #5467, #5472, #5438, #5386, #5282, #5378 and #5377. Abo
 - Add a `release-verdict` job that `approve-publish` waits on **for final tags only**. It fails on missing or unmeasured scenarios, and on **confirmed** regressions in a short must-not-regress set: `gaia_honesty`, `gaia_resilience`, `adversarial`, `error_recovery`, and the security and injection scenarios. Anything else that regresses needs a waiver naming the approver in the tag annotation.
 - **Confirm before failing:** re-run only the scenarios that flipped from PASS to FAIL, two more times, and count a regression only if most runs fail (#4473). Compare scores against a measured noise floor: re-grade the same transcripts twice and ignore differences smaller than that spread.
 - **Retry rule**: re-run a scenario that produced no work (an infra error) up to twice and record every attempt. Never re-run one that produced work.
-- A final tag can't inherit a `[skip eval]` pass. It needs a measured run on its own commit, or on an RC whose diff touches no LLM-affecting path.
+- A final tag can't inherit a `[skip eval]` pass. It needs a measured run on its own commit, or on an RC whose diff touches no LLM-affecting path. Since #5535 the final tag's `verify-final` job files an issue when no full sweep exists, but it still doesn't block publish.
 - Make the benchmarks self-contained: vendor the code-retrieval repositories as cached archives, so a red result means the product broke, not someone else's network.
 
 Would have stopped v0.25.0's 14 unexamined regression flags and the three-RC retrieval hole (#5490).
@@ -322,11 +322,11 @@ What that means today:
 - **Tag runs:** none of the flags on the rc16, v0.25.0 or rc2 tag runs led to a fix.
 - **Caveat:** the sample is small and was found by searching PR text for scenario names. Read it as a pattern, not a verdict.
 
-**The scenario lanes don't cover the large default model.** They score Gemma-4-E4B, the default on most PCs. Qwen3.6-35B-A3B is what `gaia init` installs on a 64 GB+ Strix Halo, the pool's own hardware, yet it runs only in the outcomes lane's two task suites. Both regressions above were Qwen3.6-only.
+**The scenario lanes didn't cover the large default model.** They score Gemma-4-E4B, the default on most PCs. Qwen3.6-35B-A3B is what `gaia init` installs on a 64 GB+ Strix Halo, the pool's own hardware, yet it ran only in the outcomes lane's two task suites. Both regressions above were Qwen3.6-only. #5535 now scores Qwen3.6 on the Strix Halo lanes against its own baseline.
 
 ### 6.4 Claude spend
 
-- **Real usage isn't recorded.**
+- **Real usage wasn't recorded** until #5525, so the figures below are estimates.
   - On success, the runner keeps only the judge's structured output and discards the usage and cost that `claude -p` reports.
   - The trace's `cost_estimate` is the model's own guess.
   - One session plays the user and judges every turn, so driver and judge spend can't be separated.
@@ -338,12 +338,12 @@ What that means today:
   - Totals: about 11M tokens written to the cache, 120M read from it, and 0.9M output.
   - That's about $118 at Sonnet 4.6 list price, and 57% of it is cache writes.
   - memory and gaia_memory cost the most, at about 125 turns and $10 each. Next come gaia_skills_tasks, real_world, gaia_files, gaia_core and gaia_rag.
-  - Replace these figures with measured ones once usage is recorded (6.8, PR 1).
+  - Replace these figures with measured ones from runs after #5525.
 - **Capacity: a full sweep doesn't fit the accounts it runs on.**
   - rc2 judged 274 scenarios (about 107M tokens by the same estimate) before both Claude accounts in use ran out, between 14:13 and 14:23 UTC.
   - The first error landed at the same clock time in every lane, including a lane that started an hour late.
   - The remaining 68 scenarios recorded ERRORED within about 3 seconds each, with zero tokens, and the run still reported success.
-  - A full sweep needs about 123% of what both accounts delivered in that window. #5265 tracks stopping and resuming instead.
+  - A full sweep needs about 123% of what both accounts delivered in that window. #5533 now stops the run on a quota outage and resumes it later.
 
 ### 6.5 Cuts that keep coverage
 
@@ -352,7 +352,7 @@ Every cut keeps every scenario in the suite. "Work" cuts reduce machine-hours or
 | Cut | Kind | Saves per sweep | Risk |
 |---|---|---|---|
 | **(a)** Impact-based RC runs: re-run errored and flipped scenarios plus the categories mapped to changed paths, and carry other results forward with their commit | Work | rc3 example: 85 of 343 scenarios, about 75% fewer tokens and machine-hours for that RC | A path map misses an indirect effect. The mandatory-full rule below bounds it |
-| **(b)** Quota-aware stop and resume at scenario level (#5265) | Work | The re-run of a lost run. rc2 spent ~22 machine-hours and lost 20% | Low |
+| **(b)** Quota-aware stop and resume at scenario level (#5265, shipped in #5533) | Work | The re-run of a lost run. rc2 spent ~22 machine-hours and lost 20% | Low |
 | **(c)** Scripted user turns. 941 of 1,078 turns have a literal user message, and 290 scenarios are fully scripted | Work | Most of the driver's API rounds, roughly 30–40% of tokens | Changes the measurement, so it needs a new baseline. The driver must still answer permission prompts (#5358) |
 | **(d)** Deterministic check first. 680 turns carry an `expected_answer` | Work | Small: skip the judge only when the check fails outright, such as a wrong number or a forbidden tool | A deterministic PASS still needs the judge for the other six dimensions |
 | **(e)** Haiku-class driver, Sonnet judge | Work | Needs (c)'s driver/judge split first, and after (c) little driver spend is left | Changes what `EVAL_MODEL` means, so it needs a new baseline (CLAUDE.md) |
@@ -382,7 +382,7 @@ Under the release train ([#5492](https://github.com/amd/gaia/pull/5492)), a fina
 | Smoke | Every RC | 30 stable scenarios, plus any impacted categories and re-runs of errored or flipped scenarios | 2 on Gemma, 1 on Qwen3.6 (same 30), at most 60 min | ~3 | ~19M |
 | Full sweep | The RC nominated for promotion | Everything except the weekly backlog, plus confirmation re-runs | 13, about 2.1 h when packed | ~27 | ~123M |
 | Backlog | Weekly | 26 non-protected scenarios that always or almost always fail, with an owner and a trend issue | 1, about 2.5 h | 2.5 | 11M |
-| Noise study | Once, on v0.25.1 final's commit | Three full sweeps, one per quota window | 13 per sweep | ~85 | ~390M |
+| Noise study | Once, on a final release's commit | Three full sweeps, one per quota window | 13 per sweep | ~85 | ~390M |
 
 **How the smoke tier is picked.**
 
@@ -420,17 +420,17 @@ Where the 52 machine-hours come from:
 
 ### 6.8 Implementation, ranked by savings per effort
 
-All of these land after v0.25.1 final. Flake handling comes before any gate, or the gate gets waived back into report mode.
+PRs 1, 2 and 7 have shipped; the rest are still proposed. Flake handling comes before any gate, or the gate gets waived back into report mode.
 
 | # | PR | Size | Saves | When |
 |---|---|---|---|---|
-| 1 | Record each scenario's real Claude usage (tokens, cache reads and writes, API time, cost) in traces and scorecards. Add quota-aware stop and resume (#5265) | S–M | Stops a run losing 20% as rc2 did, and makes every token figure here measurable | **First** |
-| 2 | RC smoke tier: `eval/ci_tiers.json` built from this data, a `categories` dispatch input, the full sweep on the promotion RC, and a Qwen3.6 smoke lane | M | About 25 machine-hours and 110M tokens per RC that isn't promoted | **First** |
+| 1 | Record each scenario's real Claude usage (tokens, cache reads and writes, API time, cost) in traces and scorecards. Add quota-aware stop and resume (#5265) | S–M | Stops a run losing 20% as rc2 did, and makes every token figure here measurable | **Shipped** (#5525, #5533) |
+| 2 | RC smoke tier: `eval/ci_tiers.json` built from this data, a `categories` dispatch input, the full sweep on the promotion RC, and a Qwen3.6 smoke lane | M | About 25 machine-hours and 110M tokens per RC that isn't promoted | **Shipped** (#5513, #5535) |
 | 3 | Prompt-cache restructure (6.5 f) | S | Up to about half of Claude cost per sweep. Unmeasured until PR 1 | **First** |
-| 4 | Noise study on v0.25.1 final's commit, then a three-run baseline with per-scenario pass rates | S of code, ~85 machine-hours once | Prerequisite for 5 and 6 | After 1 |
+| 4 | Noise study on a final release's commit, then a three-run baseline with per-scenario pass rates | S of code, ~85 machine-hours once | Prerequisite for 5 and 6 | After 1 |
 | 5 | Report-only confirmation: re-run each PASS→FAIL of a stable scenario twice (#5076's measured rule) | M | About 1 machine-hour per sweep. Turns ~16 flagged categories into a short list | After 4 |
 | 6 | The release verdict gate (section 5, item 3) | As in item 3 | — | After 5 |
-| 7 | Weekly backlog lane with an owner and a trend issue | S | Visibility, not savings | When 4 lands. Needs a maintainer call, since evals run on tags only today |
+| 7 | Weekly backlog lane with an owner and a trend issue | S | Visibility, not savings | **Shipped** (#5535), owner @kovtcharov-amd |
 | 8 | Impact-based selection with carry-forward (6.5 a) | M–L | About 75% of a mid-cycle RC | After 2, if RC counts stay high |
 | 9 | Pack scenarios onto machines by measured time | S | Wall time only | Optional |
 | 10 | Scripted turns with a split judge, then a cheaper driver (6.5 c, e) | L, plus a new baseline | Roughly 30–40% of tokens | Only if PR 3 doesn't bring spend down enough |
@@ -457,8 +457,6 @@ A final `vX.Y.Z` tag publishes only when all of these hold on its commit:
 ## 8. Open questions
 
 - Should the must-not-regress set block RCs too, or only finals? Blocking RCs finds problems earlier, but costs more RC re-tags.
-- Who nominates the RC that gets the full sweep, and how? A tag annotation is one option, a dispatch input is another.
-- Is a weekly backlog lane on one machine an acceptable exception to "evals run on tags only"?
 - Should the Claude driver and judge run on a dedicated account? rc2 showed that one sweep needs more than two shared accounts deliver in one window.
 - Can a CPU-only tiny model on hosted runners stand in for the real model in the clean-state journeys, or does that path need Strix Point?
 - Who approves a waiver, and does it belong in the tag annotation or in a committed file the gate reads?
