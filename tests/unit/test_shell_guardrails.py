@@ -1578,5 +1578,63 @@ class TestBlanketApproval:
     @pytest.mark.parametrize(
         "command", ["ls", "cat src.txt", "git status", "wc -l src.txt"]
     )
-    def test_full_access_plain_reads_are_classified_read_only(self, command):
+    @pytest.mark.parametrize("dialect", ["posix", "cmd"])
+    def test_full_access_plain_reads_are_classified_read_only(
+        self, command, dialect, monkeypatch
+    ):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
         assert _Host(full_access=True)._line_is_read_only(command) is True
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'echo "$(rm -rf sub)"',
+            'echo "`rm made.txt`"',
+            'cat "$(touch made.txt)"',
+            'ls "$(mv src.txt made.txt)"',
+            'echo "pre $(cp src.txt made.txt) post"',
+            'grep x "$(rm src.txt)"',
+            'echo "${X:=$(rm src.txt)}"',
+            "head \"$(sh -c 'rm src.txt')\"",
+            'printf "%s" "$(touch made.txt)"',
+            'wc -l "`touch made.txt`"',
+            'git status "$(touch made.txt)"',
+            'echo "$((1))$(touch made.txt)"',
+            'ls "a`touch made.txt`b"',
+            'echo "${HOME}$(touch made.txt)"',
+            'echo "$HOME"',
+        ],
+    )
+    def test_full_access_off_windows_quoted_substitution_may_write(
+        self, command, monkeypatch
+    ):
+        # sh expands these inside double quotes; the shell-less parse does not.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "posix")
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command", ['echo "$(rm -rf sub)"', 'cat "`touch made.txt`"', 'echo "$HOME"']
+    )
+    def test_cmd_exe_does_not_substitute_so_windows_is_unchanged(
+        self, command, monkeypatch
+    ):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
+        assert _Host(full_access=True)._line_is_read_only(command) is True
+
+    @pytest.mark.skipif(os.name == "nt", reason="needs sh to run the line")
+    def test_full_access_quoted_substitution_warns_undo_cannot_restore_it(
+        self, env_pre_approves, monkeypatch, tmp_path
+    ):
+        notes = []
+        monkeypatch.setattr(
+            shell_tools,
+            "note_untracked",
+            lambda kind, command: notes.append((kind, command)),
+        )
+        command = 'echo "$(touch made.txt)"'
+
+        result = run_tool(_Host(full_access=True), command, tmp_path)
+
+        assert result["status"] == "success", result
+        assert (tmp_path / "made.txt").exists()
+        assert notes == [("shell", command)]

@@ -3363,6 +3363,10 @@ class ShellToolsMixin:
         Reparse under the normal policy so redirections and other shell-only
         constructs still count as untracked changes.
         """
+        # Full access hands the raw line to sh, which expands $ and backticks
+        # even inside double quotes; the shell-less parse sees only text.
+        if _pipe_dialect() == "posix" and ("$" in command or "`" in command):
+            return False
         steps, parse_error = _parse_line(command, bypass_gates=False)
         if parse_error is not None or not steps:
             return False
