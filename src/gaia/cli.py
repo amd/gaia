@@ -5035,9 +5035,7 @@ def main():
                 print(f"❌ Error: Failed to initialize TTS: {e}")
                 sys.exit(1)
 
-            test_text = (
-                args.test_text
-                or """
+            test_text = args.test_text or """
 Let's play a game of trivia. I'll ask you a series of questions on a particular topic,
 and you try to answer them to the best of your ability.
 
@@ -5053,7 +5051,6 @@ E) Edgar Allan Poe
 
 Let me know your answer!
 """
-            )
 
             try:
                 if args.test_type == "tts-preprocessing":
