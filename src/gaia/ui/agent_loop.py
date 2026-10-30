@@ -604,9 +604,7 @@ class AgentLoop:
                     logger.info("AgentLoop: tick stopped for a user request")
                 else:
                     reason = "tick timed out"
-                    logger.warning(
-                        "AgentLoop: tick timed out after %ds", _TICK_TIMEOUT
-                    )
+                    logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
                 cancel_event.set()
                 sse_handler.cancelled.set()
                 finished = await wait_until_off_the_model(
