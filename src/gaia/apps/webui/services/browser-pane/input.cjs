@@ -133,28 +133,6 @@ const FRAME_BOX_JS = `([index, x, y]) => {
 
 const call = (fn, arg) => `(${fn})(${JSON.stringify(arg)})`;
 
-// Runs in the parent of a frame: hides that frame's element for a picture, remembering its own visibility.
-const HIDE_FRAME_JS = `async (index) => {
-  const fe = [...document.querySelectorAll("iframe, frame")].find((f) => f.contentWindow === window[index]);
-  if (!fe) return false;
-  if (!fe.hasAttribute("data-gaia-hidden")) {
-    fe.setAttribute("data-gaia-hidden", JSON.stringify([fe.style.getPropertyValue("visibility"), fe.style.getPropertyPriority("visibility")]));
-  }
-  fe.style.setProperty("visibility", "hidden", "important");
-  await new Promise((r) => { requestAnimationFrame(() => requestAnimationFrame(r)); setTimeout(r, 120); });
-  return true;
-}`;
-
-// Undoes HIDE_FRAME_JS for every frame element this document hid.
-const SHOW_FRAMES_JS = `() => {
-  for (const fe of document.querySelectorAll("[data-gaia-hidden]")) {
-    const [value, priority] = JSON.parse(fe.getAttribute("data-gaia-hidden"));
-    fe.removeAttribute("data-gaia-hidden");
-    if (value) fe.style.setProperty("visibility", value, priority);
-    else fe.style.removeProperty("visibility");
-  }
-  return true;
-}`;
 
 /** @param {string} name */
 function keyFor(name) {
@@ -180,10 +158,20 @@ function frameFor(wc, frameId) {
   return frame;
 }
 
-/** The URL whose origin a frame acts as: its origin for about:srcdoc and about:blank frames, else its URL. */
-function frameUrl(frame) {
+/**
+ * The http(s) origin a frame acts as, or null. An about:blank or srcdoc frame
+ * acts as the frame that made it, and Chromium reports that origin; a
+ * sandboxed or data: frame has an opaque origin, which no approval covers.
+ */
+function frameOrigin(frame) {
   const origin = frame.origin;
-  return typeof origin === "string" && /^https?:\/\//.test(origin) ? origin : frame.url;
+  if (typeof origin === "string") return /^https?:\/\/[^/]+$/.test(origin) ? origin : null;
+  try {
+    const url = new URL(frame.url);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : null;
+  } catch {
+    return null;
+  }
 }
 
 function withTimeout(promise, what) {
@@ -320,11 +308,46 @@ async function fill(ctx, frame, selector, text, pressEnter) {
   if (!typeable) {
     throw new BridgeError("not_actionable", "That element doesn't take typing (it is a button, link, checkbox or similar). Use browser_click on it instead.");
   }
-  await clickAt(ctx, at);
+  await clickIn(ctx, frame, at);
   await ctx.exec(frame, call(SELECT_TEXT_JS, selector));
   if (text) await ctx.send("Input.insertText", { text });
   else await pressKey(ctx, "Backspace");
   if (pressEnter) await pressKey(ctx, "Enter");
+}
+
+/**
+ * Click at `at` only if the browser's own hit test puts that point inside
+ * `frame`'s site. The point comes from scripts the page can tamper with, so
+ * it is checked where the page can't reach before any input is sent.
+ */
+async function clickIn(ctx, frame, at) {
+  if (typeof ctx.landing !== "function" || typeof ctx.frameSite !== "function") {
+    throw new BridgeError("internal", "GAIA can't check where a click lands in this tab, so it sends none.");
+  }
+  const want = ctx.frameSite(frame);
+  const got = await ctx.landing(at.x, at.y);
+  if (!want || got !== want) {
+    throw new BridgeError(
+      "not_actionable",
+      "Nothing was clicked: the spot the page gave for that element is not inside the element's own frame, so the click could land somewhere else. Call browser_snapshot() and try again, or ask the user to do this step."
+    );
+  }
+  await clickAt(ctx, at);
+}
+
+/** Keys land in the focused frame: it must be the target's frame, or with no target, a frame on an approved site. */
+function checkFocus(ctx, frame) {
+  if (typeof ctx.focusedFrame !== "function" || typeof ctx.frameSite !== "function") {
+    throw new BridgeError("internal", "GAIA can't check where a key press lands in this tab, so it sends none.");
+  }
+  const focused = ctx.focusedFrame();
+  const ok = frame ? focused === frame : (ctx.allowed || []).includes(ctx.frameSite(focused));
+  if (!ok) {
+    throw new BridgeError(
+      "not_actionable",
+      "No key was pressed: the keyboard focus is in a different frame than the element, so the key could land somewhere else. Call browser_snapshot() and try again, or ask the user to do this step."
+    );
+  }
 }
 
 /**
@@ -340,52 +363,13 @@ async function perform({ ctx, action, frame, selector }) {
       await locate(ctx, frame, selector);
       await ctx.exec(frame, call(FOCUS_JS, selector));
     }
+    checkFocus(ctx, frame);
     await pressKey(ctx, action.key);
     return;
   }
   if (!frame) throw new BridgeError("bad_request", `A ${action.kind} needs a target element.`);
-  if (action.kind === "click") await clickAt(ctx, await locate(ctx, frame, selector));
+  if (action.kind === "click") await clickIn(ctx, frame, await locate(ctx, frame, selector));
   else await fill(ctx, frame, selector, action.text, action.pressEnter);
 }
 
-/**
- * Hide `frames` (each one's element in its parent) for a picture of the page.
- * Throws when one can't be hidden, so a picture never shows it by accident.
- *
- * @returns {Promise<() => Promise<void>>} Shows them again.
- */
-async function hideFrames(ctx, frames, describe) {
-  const parents = new Set();
-  const show = async () => {
-    for (const parent of parents) {
-      try {
-        await parent.executeJavaScript(`(${SHOW_FRAMES_JS})()`, false);
-      } catch (err) {
-        console.error(`[browser-pane] Could not show a frame hidden for a picture again: ${err.message}`);
-      }
-    }
-  };
-  try {
-    for (const frame of frames) {
-      let hidden = false;
-      try {
-        const index = await ctx.exec(frame, `(${FRAME_INDEX_JS})()`);
-        if (index >= 0) {
-          parents.add(frame.parent);
-          hidden = await ctx.exec(frame.parent, call(HIDE_FRAME_JS, index));
-        }
-      } catch (err) {
-        if (err instanceof BridgeError && err.code === "dialog_open") throw err;
-      }
-      if (!hidden) {
-        throw new BridgeError("off_scope", `No picture was taken: the page holds a frame from ${describe(frame)}, which was not approved, and GAIA could not leave it out.`);
-      }
-    }
-  } catch (err) {
-    await show();
-    throw err;
-  }
-  return show;
-}
-
-module.exports = { FRAME_BOX_JS, FRAME_INDEX_JS, HIDE_FRAME_JS, KEYS, PROBE_JS, SHOW_FRAMES_JS, context, elementBox, frameFor, frameUrl, hideFrames, keyFor, locate, perform };
+module.exports = { FRAME_BOX_JS, FRAME_INDEX_JS, KEYS, PROBE_JS, context, elementBox, frameFor, frameOrigin, keyFor, locate, perform };

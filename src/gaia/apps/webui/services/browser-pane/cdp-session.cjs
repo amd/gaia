@@ -19,6 +19,8 @@ const RING_SIZE = 500;
 const MAX_TEXT = 500;
 const MAX_URL = 300;
 const MAX_PENDING_REQUESTS = 1000;
+const MAX_FRAME_DEPTH = 16;
+const AUTO_ATTACH = { autoAttach: true, waitForDebuggerOnStart: false, flatten: true };
 
 const CONSOLE_LEVELS = {
   error: "error",
@@ -128,6 +130,8 @@ class TabCdp {
     this.detachReason = null;
     /** @type {Set<(params: any) => void>} */
     this.bindingListeners = new Set();
+    /** Child sessions for out-of-process frames: sessionId -> the session that attached it. */
+    this.sessions = new Map();
     this.ready = this.attach();
   }
 
@@ -136,12 +140,17 @@ class TabCdp {
     try {
       dbg.attach(PROTOCOL_VERSION);
       this.attached = true;
-      dbg.on("message", (_event, method, params) => this.onMessage(method, params || {}));
+      dbg.on("message", (_event, method, params, sessionId) => {
+        if (sessionId) this.onChildMessage(method, params || {}, sessionId);
+        else this.onMessage(method, params || {});
+      });
       dbg.on("detach", (_event, reason) => {
         this.attached = false;
         this.detachReason = reason;
       });
       await Promise.all([dbg.sendCommand("Runtime.enable"), dbg.sendCommand("Log.enable"), dbg.sendCommand("Network.enable")]);
+      // Out-of-process frames get sessions of their own, so a hit test can follow a point into them.
+      await dbg.sendCommand("Target.setAutoAttach", AUTO_ATTACH);
     } catch (err) {
       this.attached = false;
       this.detachReason = err.message;
@@ -163,6 +172,10 @@ class TabCdp {
   }
 
   onMessage(method, params) {
+    if (method === "Target.attachedToTarget" || method === "Target.detachedFromTarget") {
+      this.onChildMessage(method, params, null);
+      return;
+    }
     if (method === "Runtime.bindingCalled") {
       for (const fn of this.bindingListeners) fn(params);
       return;
@@ -235,12 +248,98 @@ class TabCdp {
   }
 
   /** One CDP command on this tab, once attached. */
-  async send(method, params = {}) {
+  async send(method, params = {}, sessionId = null) {
     await this.ready;
     if (!this.attached) {
       throw new Error(`the DevTools protocol is not attached to this tab (${this.detachReason || "unknown reason"})`);
     }
-    return this.wc.debugger.sendCommand(method, params);
+    return sessionId ? this.wc.debugger.sendCommand(method, params, sessionId) : this.wc.debugger.sendCommand(method, params);
+  }
+
+  /** Track the sessions of out-of-process frames, and attach to their own frames in turn. */
+  onChildMessage(method, params, parentSession) {
+    if (method === "Target.attachedToTarget" && params.targetInfo && params.targetInfo.type === "iframe") {
+      this.sessions.set(params.sessionId, parentSession);
+      this.wc.debugger.sendCommand("Target.setAutoAttach", AUTO_ATTACH, params.sessionId).catch((err) => {
+        this.logger.error(`[browser-pane] Could not follow the frames inside an out-of-process frame: ${err.message}`);
+      });
+    } else if (method === "Target.detachedFromTarget") {
+      this.sessions.delete(params.sessionId);
+    }
+  }
+
+  /**
+   * Every frame on the page as Chromium lays it out, from this tab's session
+   * and its frames' own: frameId -> { sessionId, parentId, url }. Read in the
+   * browser, so nothing the page runs can change the answer.
+   */
+  async frameMap() {
+    const frames = new Map();
+    for (const sessionId of [null, ...this.sessions.keys()]) {
+      let tree;
+      try {
+        ({ frameTree: tree } = await this.send("Page.getFrameTree", {}, sessionId));
+      } catch (err) {
+        if (sessionId && !this.sessions.has(sessionId)) continue; // detached while we looked
+        throw err;
+      }
+      const walk = (node) => {
+        frames.set(node.frame.id, { sessionId, parentId: node.frame.parentId || null, url: node.frame.url || "" });
+        for (const child of node.childFrames || []) walk(child);
+      };
+      walk(tree);
+    }
+    return frames;
+  }
+
+  /**
+   * The site a point in the page's viewport lands on: the innermost frame
+   * under it, followed into out-of-process frames, as an http(s) origin or
+   * null. A trusted click goes there whatever the page's own scripts claim.
+   */
+  async landingOrigin(x, y) {
+    const frames = await this.frameMap();
+    let sessionId = null;
+    for (let depth = 0; depth < MAX_FRAME_DEPTH; depth += 1) {
+      await this.send("DOM.getDocument", { depth: 0 }, sessionId);
+      const hit = await this.send("DOM.getNodeForLocation", { x: Math.round(x), y: Math.round(y), includeUserAgentShadowDOM: true, ignorePointerEventsNone: false }, sessionId);
+      const { node } = await this.send("DOM.describeNode", { backendNodeId: hit.backendNodeId }, sessionId);
+      const inner = node.frameId && node.frameId !== hit.frameId ? frames.get(node.frameId) : null;
+      if (!inner || inner.sessionId === sessionId) return siteOf(frames, inner ? node.frameId : hit.frameId);
+      const { model } = await this.send("DOM.getBoxModel", { backendNodeId: hit.backendNodeId }, sessionId);
+      x -= model.content[0];
+      y -= model.content[1];
+      sessionId = inner.sessionId;
+    }
+    return null;
+  }
+
+  /**
+   * The sites of frames a picture of the page would show that `allowed`
+   * doesn't cover, outermost only: a frame with no box (hidden, or no size)
+   * shows nothing and is left out.
+   */
+  async shownUnapprovedSites(allowed) {
+    const frames = await this.frameMap();
+    const approved = (id) => {
+      const site = siteOf(frames, id);
+      return site !== null && allowed.includes(site);
+    };
+    const sites = [];
+    for (const [id, f] of frames) {
+      if (!f.parentId || approved(id) || !approved(f.parentId)) continue;
+      const parent = frames.get(f.parentId);
+      if (!parent) continue;
+      let model = null;
+      try {
+        const owner = await this.send("DOM.getFrameOwner", { frameId: id }, parent.sessionId);
+        ({ model } = await this.send("DOM.getBoxModel", { backendNodeId: owner.backendNodeId }, parent.sessionId));
+      } catch (err) {
+        if (!/box model|No node|not found/i.test(err.message)) throw err;
+      }
+      if (model && model.width * model.height > 0) sites.push(siteOf(frames, id));
+    }
+    return sites;
   }
 
   /**
@@ -255,4 +354,22 @@ class TabCdp {
   }
 }
 
-module.exports = { Ring, TabCdp, consoleEntry, RING_SIZE };
+/**
+ * The http(s) origin a frame's content belongs to, or null. A blank or srcdoc
+ * frame holds what the frame around it wrote, so it counts as that frame.
+ */
+function siteOf(frames, id) {
+  for (let f = frames.get(id), hops = 0; f && hops < MAX_FRAME_DEPTH; f = frames.get(f.parentId), hops += 1) {
+    let url;
+    try {
+      url = new URL(f.url);
+    } catch {
+      return null;
+    }
+    if (url.protocol === "http:" || url.protocol === "https:") return url.origin;
+    if (url.href !== "about:blank" && url.href !== "about:srcdoc") return null;
+  }
+  return null;
+}
+
+module.exports = { Ring, TabCdp, consoleEntry, siteOf, RING_SIZE };

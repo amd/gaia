@@ -16,6 +16,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -504,7 +505,7 @@ def test_a_plain_html_folder_is_served_on_loopback_with_no_setup(agent, bridge, 
     assert shown["name"] == "static"
     assert shown["folder"] == str(site)
     assert shown["command"] == shlex.join(
-        [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"]
+        [sys.executable, "-m", "gaia.browser.static_server", "--port", str(port)]
         + ["--directory", str(site)]
     )
     out = run()
@@ -669,3 +670,111 @@ def test_a_file_url_without_the_pane_says_to_ask_the_user(monkeypatch, tmp_path)
     )
     assert "Ask the user to run the server" in out
     assert "dev_server" not in out
+
+
+# ------------------------------------------------- the static file server itself
+
+
+@pytest.fixture
+def static_site(tmp_path):
+    """A served folder with a page, a dotfile, a dot-folder and a link out of the folder."""
+    root = tmp_path / "site"
+    (root / "sub").mkdir(parents=True)
+    (root / "index.html").write_text("<h1>Home</h1>")
+    (root / "sub" / "page.html").write_text("<p>Sub</p>")
+    (root / ".env").write_text("SECRET=1")
+    (root / ".git").mkdir()
+    (root / ".git" / "config").write_text("[core]")
+    (root / "empty").mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("not part of the site")
+    try:
+        (root / "out.txt").symlink_to(outside)
+        (root / "inner.html").symlink_to(root / "index.html")
+    except OSError:
+        pass  # no symlinks without privileges on Windows; those cases skip
+    from gaia.browser import static_server
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    httpd = static_server.serve(str(root), port)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield root, port
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def fetch(port, path, host=None):
+    import http.client
+
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request("GET", path, headers={"Host": host or f"127.0.0.1:{port}"})
+    res = conn.getresponse()
+    body = res.read()
+    conn.close()
+    return res.status, body
+
+
+def test_static_server_serves_the_folders_pages(static_site):
+    _root, port = static_site
+    assert fetch(port, "/") == (200, b"<h1>Home</h1>")
+    assert fetch(port, "/sub/page.html")[0] == 200
+    assert fetch(port, "/", host=f"localhost:{port}")[0] == 200
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "attacker.example",
+        "127.0.0.1",
+        "127.0.0.1:1",
+        "localhost.:{port}",
+        "[::1]:{port}",
+        "",
+    ],
+)
+def test_static_server_refuses_a_request_for_another_host(static_site, host):
+    _root, port = static_site
+    status, body = fetch(port, "/", host=host.format(port=port) or " ")
+    assert status == 403
+    assert b"Home" not in body
+
+
+@pytest.mark.parametrize(
+    "path", ["/.env", "/.git/config", "/%2eenv", "/sub/../.env", "/.git/"]
+)
+def test_static_server_never_serves_a_dotfile(static_site, path):
+    _root, port = static_site
+    status, body = fetch(port, path)
+    assert status == 404
+    assert b"SECRET" not in body and b"core" not in body
+
+
+@pytest.mark.parametrize("path", ["/empty/", "/sub/", "/.git/"])
+def test_static_server_lists_no_folder(static_site, path):
+    _root, port = static_site
+    status, body = fetch(port, path)
+    assert status == 404
+    assert b"page.html" not in body
+
+
+def test_static_server_follows_no_link_out_of_the_folder(static_site):
+    root, port = static_site
+    if not (root / "out.txt").is_symlink():
+        pytest.skip("symlinks need privileges on this machine")
+    status, body = fetch(port, "/out.txt")
+    assert status == 404 and b"not part" not in body
+    assert fetch(port, "/inner.html") == (200, b"<h1>Home</h1>")
+
+
+def test_a_static_port_is_random_not_derived_from_the_folder(monkeypatch):
+    monkeypatch.setattr(dev_servers, "_STATIC_PICKS", {})
+    picks = iter([17, 342])
+    monkeypatch.setattr(dev_servers.secrets, "randbelow", lambda n: next(picks))
+    first = dev_servers.static_port("a" * 16, [])
+    assert first == dev_servers.STATIC_PORTS.start + 17
+    # The same folder keeps its pick within this run, so "always" still covers it.
+    assert dev_servers.static_port("a" * 16, []) == first
+    assert dev_servers.static_port("b" * 16, []) == dev_servers.STATIC_PORTS.start + 342

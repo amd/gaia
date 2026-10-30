@@ -46,8 +46,8 @@ function makeHost(url = PAGE) {
     onToggleRequest: jest.fn(),
     onShowRequest: jest.fn(),
     openExternal: jest.fn(),
-    createCdp: () => {
-      const cdp = { send: jest.fn(() => Promise.resolve({})), onNavigationStarted: jest.fn(), logs: jest.fn(), screenshot: jest.fn() };
+    createCdp: (wcArg) => {
+      const cdp = { send: jest.fn(() => Promise.resolve({})), onNavigationStarted: jest.fn(), logs: jest.fn(), screenshot: jest.fn(), landingOrigin: jest.fn((_x, _y) => Promise.resolve(wcArg._landsIn || new URL(wcArg.getURL()).origin)), shownUnapprovedSites: jest.fn(() => Promise.resolve(wcArg._shownSites || [])), };
       cdps.push(cdp);
       return cdp;
     },
@@ -310,6 +310,26 @@ describe("browser_eval scripts", () => {
     await expect(host.agentScript("chat-1", null, "cart.length", APP)).resolves.toEqual(fixture("script_error.json"));
     wc.mainFrame.executeJavaScript.mockRejectedValue(new SyntaxError("Unexpected token ')'"));
     await expect(host.agentScript("chat-1", null, "if (", APP)).resolves.toMatchObject({ ok: false, error: "Unexpected token ')'" });
+  });
+
+  test.each([
+    ["a page that hands back more than the cap", { text: "x".repeat(50000), truncated: false }],
+    ["a page that says it isn't truncated", { text: "y".repeat(4001), truncated: "no" }],
+    ["a page that hands back a bare string", "z".repeat(9000)],
+  ])("the 4000-character cap holds for %s", async (_what, value) => {
+    const { host, wc } = makeHost("http://127.0.0.1:5000/app-state.html");
+    wc.mainFrame.executeJavaScript.mockResolvedValue(value);
+    const reply = await host.agentScript("chat-1", null, "1", APP);
+    expect(reply.ok).toBe(true);
+    expect(reply.json.length).toBeLessThanOrEqual(4000);
+    expect(reply.truncated).toBe(true);
+  });
+
+  test("an error the page hands back is capped too", async () => {
+    const { host, wc } = makeHost("http://127.0.0.1:5000/app-state.html");
+    wc.mainFrame.executeJavaScript.mockResolvedValue({ error: "e".repeat(20000) });
+    const reply = await host.agentScript("chat-1", null, "1", APP);
+    expect(reply.error.length).toBeLessThanOrEqual(4000);
   });
 
   test("a trailing semicolon still makes an expression", async () => {

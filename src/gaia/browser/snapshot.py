@@ -22,6 +22,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Tuple
 
+from gaia.browser.untrusted import defuse, fence
+
 #: Attribute stamped on each snapshotted element; also the click selector.
 REF_ATTR = "data-gaia-ref"
 
@@ -361,13 +363,13 @@ def render(snap: Dict[str, Any], include_text: bool = True) -> str:
         "",
     ]
 
+    notes: List[str] = []
     if snap.get("unread_frames"):
-        lines.insert(
-            2,
+        notes.append(
             "Not read: frames from "
-            + ", ".join(snap["unread_frames"])
+            + ", ".join(defuse(str(o)) for o in snap["unread_frames"])
             + ", because the user has not approved those sites. browser_snapshot "
-            "asks the user before reading them.",
+            "asks the user before reading them."
         )
 
     if snap.get("dialog"):
@@ -413,4 +415,5 @@ def render(snap: Dict[str, Any], include_text: bool = True) -> str:
     if include_text and snap.get("text"):
         lines.extend(["", "Page text:", snap["text"]])
 
-    return "\n".join(lines)
+    page = fence("web page", "What the page showed.", "\n".join(lines))
+    return "\n".join([*notes, page])

@@ -111,6 +111,7 @@ const { titleBarKind, titleBarOptions } = require("./services/window-frame.cjs")
 const { resolveDevQaMode } = require("./services/dev-qa-mode.cjs");
 const { createBrowserPaneService, PANE_PARTITION } = require("./services/browser-pane/ipc.cjs");
 const { DevServerSupervisor } = require("./services/browser-pane/dev-servers.cjs");
+const { servicePorts } = require("./services/browser-pane/service-ports.cjs");
 const {
   DISCOVERY_ENV: PANE_DISCOVERY_ENV,
   createHandlers: createPaneBridgeHandlers,
@@ -798,7 +799,8 @@ function initializeServices() {
 
   folderDialog.registerIpcHandlers();
 
-  const appPorts = () => (paneBridge ? [backendPort, paneBridge.port] : [backendPort]);
+  // GAIA's backend, the pane bridge, and GAIA's other local services: no pane page may reach any.
+  const appPorts = () => [backendPort, ...(paneBridge ? [paneBridge.port] : []), ...servicePorts()];
 
   // Dev servers the agent starts; ones a crash left running are stopped first.
   devServers = new DevServerSupervisor({
@@ -817,7 +819,7 @@ function initializeServices() {
     shell,
     userDataDir: app.getPath("userData"),
     downloadsDir: () => app.getPath("downloads"),
-    // GAIA's backend and the bridge: no pane page may reach either.
+    // GAIA's backend, the bridge and GAIA's other local services: no pane page may reach any.
     blockedPorts: appPorts,
     devServers,
   });

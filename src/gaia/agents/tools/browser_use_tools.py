@@ -32,6 +32,7 @@ from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import DEV_SERVER_TOOL, SITE_ARG
 from gaia.browser.errors import BrowserError, PageDialogOpen, PaneSignInByHand
 from gaia.browser.snapshot import is_pick_ref
+from gaia.browser.untrusted import fence, page_words
 from gaia.logger import get_logger
 
 if TYPE_CHECKING:
@@ -116,6 +117,12 @@ _PANE_SITE_TOOLS = frozenset(
 #: Pane tools that act on one element, which may sit in a frame from another site.
 _PANE_ELEMENT_TOOLS = frozenset({"browser_click", "browser_type", "browser_press"})
 
+#: The most of a browser_eval value the model reads, however much the page returned.
+MAX_SCRIPT_RESULT_CHARS = 4000
+
+#: What a click on a ref the last read of the page didn't hold is, for the gate.
+_UNKNOWN_REF_LABEL = "an element GAIA has not read on the page"
+
 #: Shown when the gate could not read the page's box; it then asks, as for an unknown click.
 _UNREAD_DIALOG = {
     "type": "confirm",
@@ -170,13 +177,15 @@ class BrowserUseToolsMixin:
     _browser_route = None
     _browser_routed: bool = False
     #: (tool, origins) the site gate just asked about; the tool body takes them.
-    _site_pending: Optional[Tuple[str, Tuple[str, ...]]] = None
+    _site_pending: Optional[Tuple[Any, str, Tuple[str, ...]]] = None
+    #: Whether the browser_eval call the gate last read is on a page on this computer.
+    _eval_local: bool = False
     #: (tool, id(args), origins) worked out for the prompt, reused by the gate.
-    _site_memo: Optional[Tuple[str, int, Tuple[str, ...]]] = None
+    _site_memo: Optional[Tuple[Tuple[Any, str, str], Tuple[str, ...]]] = None
     #: (id(args), box) the gate read for browser_dialog, so the prompt and the gate agree.
-    _dialog_memo: Optional[Tuple[int, Optional[dict]]] = None
+    _dialog_memo: Optional[Tuple[Tuple[Any, str, str], Optional[dict]]] = None
     #: (id(args), spec, already running) of the dev server the prompt showed.
-    _dev_pending: Optional[Tuple[int, "DevServerSpec", bool]] = None
+    _dev_pending: Optional[Tuple[Tuple[Any, str, str], "DevServerSpec", bool]] = None
 
     # ------------------------------------------------------------------ internals
 
@@ -294,8 +303,9 @@ class BrowserUseToolsMixin:
     def _take_site_approval(self, tool_name: str) -> List[str]:
         """The origins this call's gate asked about, once. Only a running tool body takes them."""
         pending, self._site_pending = self._site_pending, None
-        if pending and pending[0] == tool_name:
-            return list(pending[1])
+        session = self._call_key(tool_name, None)[0]
+        if pending and pending[:2] == (session, tool_name):
+            return list(pending[2])
         return []
 
     def _pane_site(
@@ -324,9 +334,10 @@ class BrowserUseToolsMixin:
         args = tool_args if isinstance(tool_args, dict) else {}
         memo = self._site_memo
         self._site_memo = None
-        if memo is not None and memo[:2] == (tool_name, id(tool_args)):
-            return memo[2]
+        if memo is not None and memo[0] == self._call_key(tool_name, tool_args):
+            return memo[1]
         frame_origins: List[str] = []
+        self._eval_local = False
         if tool_name == "browser_open":
             origins = [origin_of(str(args.get("url") or ""))]
         elif tool_name == "browser_dialog":
@@ -348,6 +359,7 @@ class BrowserUseToolsMixin:
         if tool_name == "browser_eval":
             # Main refuses browser_eval off this computer, so the user is never asked.
             origins = [o for o in origins if is_loopback_origin(o)]
+            self._eval_local = bool(origins)
         frames: List[str] = []
         if tool_name == "browser_snapshot":
             frames = [o for o in frame_origins if o and o not in origins]
@@ -358,8 +370,10 @@ class BrowserUseToolsMixin:
             except BrowserError as e:
                 logger.warning("Could not read this chat's dev servers: %s", e)
         needed = tuple(dict.fromkeys(o for o in origins if o not in trusted))
-        if any(not self._site_granted(tool_name, o) for o in needed):
-            return needed
+        ungranted = tuple(o for o in needed if not self._site_granted(tool_name, o))
+        if ungranted:
+            # The prompt and the grant check read the first site: it must be one not yet approved.
+            return ungranted + tuple(o for o in needed if o not in ungranted)
         ask = next(
             (
                 o
@@ -372,15 +386,16 @@ class BrowserUseToolsMixin:
 
     def _gate_dialog(self, pane, tool_args) -> Optional[dict]:
         """The box browser_dialog would answer, read once per call; unreadable reads as an unknown confirm."""
+        key = self._call_key("browser_dialog", tool_args)
         memo = self._dialog_memo
-        if memo is not None and memo[0] == id(tool_args):
+        if memo is not None and memo[0] == key:
             return memo[1]
         try:
             box = pane.dialog()
         except BrowserError as e:
             logger.warning("Could not read the box on the pane's page: %s", e)
             box = _UNREAD_DIALOG
-        self._dialog_memo = (id(tool_args), box)
+        self._dialog_memo = (key, box)
         return box
 
     def confirmation_args_for_call(self, tool_name: str, tool_args):
@@ -401,25 +416,54 @@ class BrowserUseToolsMixin:
             return shown  # the tool body raises this before reading anything
         if pane is None:
             return shown
-        # A box read for an earlier call must never answer for this one.
+        # A box read, or an approval recorded, for an earlier call must never answer for this one.
         self._dialog_memo = None
+        self._site_pending = None
         origins = self._pane_site(pane, tool_name, tool_args)
-        self._site_memo = (tool_name, id(tool_args), origins)
+        self._site_memo = (self._call_key(tool_name, tool_args), origins)
         if origins:
             shown = {**shown, SITE_ARG: origins[0]}
+        # Each note makes the prompt one-time: a site grant must never cover it.
+        notes: List[str] = []
+        others = [o for o in origins[1:] if not self._site_granted(tool_name, o)]
+        if others:
+            notes.append(
+                "This also uses pages on "
+                + ", ".join(others)
+                + ", which you have not approved."
+            )
         label = self._irreversible_label(tool_name, tool_args)
-        if label:
+        if label == _UNKNOWN_REF_LABEL:
+            notes.append(
+                "This clicks an element that was not in GAIA's last read of the "
+                "page, so GAIA can't tell what it does."
+            )
+        elif label:
             what = (
                 "presses OK on the page's box"
                 if tool_name == "browser_dialog"
                 else "clicks"
             )
-            # A one-time prompt: a site grant must never cover a click like this.
-            shown = {
-                **shown,
-                RISK_NOTE_ARG: f'This {what} "{label}", which may not be undoable.',
-            }
+            notes.append(f'This {what} "{label}", which may not be undoable.')
+        if tool_name == "browser_eval" and self._eval_local:
+            expression = str(tool_args.get("expression") or "")
+            cut = "..." if len(expression) > 300 else ""
+            notes.append(
+                "This runs a script in the page, which can do anything the page "
+                f"can: {expression[:300]}{cut}"
+            )
+        if notes:
+            shown = {**shown, RISK_NOTE_ARG: " ".join(notes)}
         return shown
+
+    def _call_key(self, tool_name: str, tool_args: Any) -> Tuple[Any, str, str]:
+        """One call, by chat, tool and arguments: what a memo from the gate may answer for."""
+        session = getattr(getattr(self, "config", None), "ui_session_id", None)
+        try:
+            args = json.dumps(tool_args, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            args = repr(tool_args)
+        return session, tool_name, args
 
     def _restore_session_for(self, url: str) -> bool:
         """Reopen the browser with a saved session for ``url``, if one exists.
@@ -580,9 +624,26 @@ class BrowserUseToolsMixin:
             label = self._pick_label(ref)
             if label is None:
                 return "an element the user picked (its label could not be read)"
+        elif ref not in (getattr(self, "_browser_last_elements", None) or {}):
+            return _UNKNOWN_REF_LABEL
         else:
             label = self._element_label(ref)
         return label if self._looks_irreversible(label) else ""
+
+    def _label_changed(self, driver, ref: str) -> bool:
+        """Whether a batch click must stop: the live label names an irreversible action, or can't be read.
+
+        Earlier steps may have changed the page since the gate read the label.
+        """
+        live = getattr(driver, "live_label", None)
+        if not callable(live) or is_pick_ref(ref):
+            return False
+        try:
+            label = live(ref)
+        except BrowserError as e:
+            logger.warning("Could not re-read the label of %s: %s", ref, e)
+            return True
+        return label is None or self._looks_irreversible(label)
 
     def _pick_label(self, ref: str) -> Optional[str]:
         """The live label of an element the user picked, or None when the pane can't say."""
@@ -630,7 +691,9 @@ class BrowserUseToolsMixin:
             pending = self._dev_pending
             # Starting a server asks, unless that exact one already runs.
             return (
-                pending is not None and pending[0] == id(tool_args) and not pending[2]
+                pending is not None
+                and pending[0] == self._call_key(DEV_SERVER_TOOL, tool_args)
+                and not pending[2]
             )
         try:
             pane = self._pane()
@@ -701,10 +764,13 @@ class BrowserUseToolsMixin:
         if tool_name not in _PANE_SITE_TOOLS:
             return False
         origins = self._pane_site(pane, tool_name, tool_args)
-        self._site_pending = (tool_name, origins)
+        self._site_pending = (self._call_key(tool_name, None)[0], tool_name, origins)
         risky = bool(self._irreversible_label(tool_name, tool_args))
         self._dialog_memo = None
-        return bool(origins) or risky
+        # A script can reach anything the page can, so it asks every time, on dev servers too.
+        return (
+            bool(origins) or risky or (tool_name == "browser_eval" and self._eval_local)
+        )
 
     def _step_would_ask(self, tool_name: str, tool_args: dict) -> bool:
         """Whether running this call on its own would put a prompt in front of the user.
@@ -813,7 +879,7 @@ class BrowserUseToolsMixin:
             # The tool body raises the same error before it runs anything.
             logger.info("dev_server start not prompted: %s", e)
             return None
-        self._dev_pending = (id(tool_args), spec, running)
+        self._dev_pending = (self._call_key(DEV_SERVER_TOOL, tool_args), spec, running)
         return spec.prompt_args()
 
     def browser_end_turn(self) -> None:
@@ -825,6 +891,11 @@ class BrowserUseToolsMixin:
         """
         from gaia.browser.pane_driver import PaneDriver
 
+        # An approval or a page read for this turn's calls never carries into the next turn.
+        self._site_pending = None
+        self._site_memo = None
+        self._dialog_memo = None
+        self._dev_pending = None
         driver = self._browser_driver
         if not isinstance(driver, PaneDriver):
             return
@@ -1349,12 +1420,19 @@ class BrowserUseToolsMixin:
             return answer("browser_dialog", _dialog, _truthy(accept), "")
 
         def _eval(expression: str) -> str:
-            driver = mixin._ensure_driver()
-            res = driver.run_script(expression)
+            with mixin._reading("browser_eval") as driver:
+                res = driver.run_script(expression)
+            text = str(res.text)
+            truncated = res.truncated or len(text) > MAX_SCRIPT_RESULT_CHARS
+            text = text[:MAX_SCRIPT_RESULT_CHARS]
             if not res.ok:
-                return f"{driver.where}\nThe script failed: {res.text}"
-            cut = " (cut short)" if res.truncated else ""
-            return f"{driver.where}\nValue on {res.url}{cut}:\n{res.text}"
+                return f"{driver.where}\nThe script failed: " + fence(
+                    "web page", "The error the page's script raised.", text
+                )
+            cut = " (cut short)" if truncated else ""
+            return f"{driver.where}\nValue on {res.url}{cut}:\n" + fence(
+                "web page", "The value the script returned from the page.", text
+            )
 
         @tool(atomic=True, registry=registry)
         def browser_eval(expression: str) -> str:
@@ -1453,7 +1531,17 @@ class BrowserUseToolsMixin:
                     break
                 approved = mixin._take_site_approval(name)
                 try:
-                    with driver.scoped(approved):
+                    with driver.scoped(approved, mixin._granted_frames(name)):
+                        if name == "browser_click" and mixin._label_changed(
+                            driver, str(args.get("ref") or "")
+                        ):
+                            stop = (
+                                f"Stopped before step {n} ({name}): the button now "
+                                "reads differently, or can't be read, and may not be "
+                                f"undoable. Call {_call_text(name, args)} on its "
+                                "own, and GAIA will ask the user."
+                            )
+                            break
                         if name in _BATCH_ACTS:
                             done.append(f"{n}. {_act_step(driver, name, args)}")
                             unread = True
@@ -1478,7 +1566,9 @@ class BrowserUseToolsMixin:
                     seen(snap)
             if unread:
                 try:
-                    with driver.scoped(approved):
+                    with driver.scoped(
+                        approved, mixin._granted_frames("browser_snapshot")
+                    ):
                         snap = driver.snapshot()
                     seen(snap)
                 except Exception as e:  # noqa: BLE001 — reported in the result
@@ -1549,8 +1639,10 @@ class BrowserUseToolsMixin:
             shown = (
                 f", the last {len(lines)}" if res.get("matched", 0) > len(lines) else ""
             )
-            return f"{driver.where}\n{head}{shown}:\n" + "\n".join(
-                f"  {line}" for line in lines
+            return f"{driver.where}\n{head}{shown}:\n" + fence(
+                "dev server",
+                "What the dev server printed.",
+                "\n".join(f"  {line}" for line in lines),
             )
 
         def _run(
@@ -1627,8 +1719,8 @@ def _answered_line(box: Dict[str, Any], accept: bool) -> str:
     if kind == "beforeunload":
         return "Left the page." if accept else "Stayed on the page."
     if kind == "alert":
-        return f'Closed the notice "{message}".'
-    return f'Pressed {"OK" if accept else "Cancel"} on "{message}".'
+        return f"Closed the notice {page_words(message)}."
+    return f'Pressed {"OK" if accept else "Cancel"} on {page_words(message)}.'
 
 
 def _truthy(value: Any) -> bool:
@@ -1758,7 +1850,9 @@ def _render_logs(kind: str, res: dict, errors_only: bool, contains: str) -> str:
     head = f"{len(entries)} {noun} on {res.get('url') or 'this page'}"
     if filters:
         head += f" ({', '.join(filters)})"
-    lines = [head + ":" if entries else head + "."]
+    if not entries:
+        return head + "."
+    lines = []
     for e in entries:
         if kind == "console":
             line = f"  [{e.get('level')}] {e.get('text')}"
@@ -1772,4 +1866,4 @@ def _render_logs(kind: str, res: dict, errors_only: bool, contains: str) -> str:
         lines.append(line)
     if res.get("dropped"):
         lines.append(f"  ... {res['dropped']} older entries were dropped.")
-    return "\n".join(lines)
+    return head + ":\n" + fence("web page", f"The page's {noun}.", "\n".join(lines))

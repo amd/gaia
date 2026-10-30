@@ -11,6 +11,7 @@ next — the browser is the most failure-prone thing GAIA drives, and a bare
 from __future__ import annotations
 
 from gaia.browser.snapshot import is_pick_ref
+from gaia.browser.untrusted import page_words
 
 
 class BrowserError(Exception):
@@ -198,7 +199,7 @@ def describe_dialog(dialog: dict) -> str:
     """One sentence naming a page box and how browser_dialog answers it, for the model."""
     kind = dialog.get("type")
     message = str(dialog.get("message") or "").strip()
-    quoted = f' "{message}"' if message else ""
+    quoted = f" {page_words(message)}" if message else ""
     if kind == "alert":
         return f"The page shows a notice{quoted}. Close it with browser_dialog(accept=True)."
     if kind == "beforeunload":

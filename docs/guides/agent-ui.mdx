@@ -776,9 +776,9 @@ each step happen.
 - **GAIA can take a picture of the page** and read its console messages and
   network requests, which helps when a page you're building misbehaves. On a
   page on this PC it can also run a short script to check what the page doesn't
-  show, such as its stored data or app state: freely on its own dev servers,
-  and after you approve the page otherwise. It never runs scripts on a site
-  that isn't on this PC.
+  show, such as its stored data or app state. It asks every time, showing the
+  script, on its own dev servers too, and never runs scripts on a site that
+  isn't on this PC.
 - **Boxes a page opens show above the page.** When a page shows an `alert` or
   `confirm`, or asks before you leave it, a bar above the page shows the
   message with **OK** and **Cancel** (**Leave** and **Stay**). The page waits
@@ -793,8 +793,9 @@ each step happen.
   inherit the page's approval: before reading or acting in a frame from a
   site other than the page's own or the chat's dev servers, GAIA asks for that
   site, with the same **Allow once**, **Always allow** and **Deny**. Until
-  you approve it, the frame is left out of what GAIA reads and out of its
-  pictures of the page.
+  you approve it, the frame is left out of what GAIA reads, and GAIA takes no
+  picture of a page that shows it. A sandboxed or `data:` frame has no site
+  to approve, so GAIA never reads or acts in one.
 - **GAIA never signs in or types a password.** It asks you to sign in
   yourself in the pane, and the pane keeps that sign-in.
 
@@ -809,9 +810,12 @@ the dev server and show me the home page", and GAIA runs the server, waits for
 its port to answer, and opens it in a pane tab.
 
 **A folder of plain HTML needs no setup.** Ask GAIA to build a page and show
-it, and it serves the folder with Python's built-in server on `127.0.0.1`, so
-nothing else on your network can reach it. The folder keeps the same port
-between runs, so **Always allow** keeps covering it.
+it, and it serves the folder on `127.0.0.1`, so nothing else on your network
+can reach it. The server answers only requests addressed to `127.0.0.1` or
+`localhost` on its port, lists no folders, and serves no dotfiles (`.env`,
+`.git`) and nothing a link leads to outside the folder. Its port is picked at
+random; the folder keeps it until GAIA desktop restarts, so **Always allow**
+keeps covering it until then.
 
 An app with its own dev command defines its servers in `.gaia/launch.json` at
 the top of the project. When that file exists, GAIA uses it:

@@ -30,10 +30,10 @@ import ast
 import hashlib
 import json
 import re
+import secrets
 import shlex
 import socket
 import sys
-import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -261,10 +261,9 @@ def static_spec(folder: Path, port: int) -> DevServerSpec:
         argv=(
             sys.executable,
             "-m",
-            "http.server",
+            "gaia.browser.static_server",
+            "--port",
             str(port),
-            "--bind",
-            "127.0.0.1",
             "--directory",
             str(folder),
         ),
@@ -276,13 +275,30 @@ def static_spec(folder: Path, port: int) -> DevServerSpec:
     )
 
 
+#: The port each folder's static server was given in this process, so a restart keeps it.
+_STATIC_PICKS: Dict[str, int] = {}
+
+
 def static_port(key: str, running: List[Dict[str, Any]]) -> int:
-    """The port a static server keeps: its running one, else its folder's own, else any free one."""
+    """The port a static server keeps: its running one, else the one picked earlier, else a random free one.
+
+    Random rather than derived from the folder, so another program can't
+    know it in advance and be listening there first.
+    """
     for server in running:
         if server.get("key") == key and server.get("status") in ("starting", "ready"):
             return int(server["port"])
-    preferred = STATIC_PORTS.start + zlib.crc32(key.encode()) % len(STATIC_PORTS)
-    return _free_loopback_port(preferred) or _free_loopback_port(0)
+    earlier = _STATIC_PICKS.get(key)
+    if earlier and _free_loopback_port(earlier):
+        return earlier
+    for _ in range(20):
+        port = STATIC_PORTS.start + secrets.randbelow(len(STATIC_PORTS))
+        if _free_loopback_port(port):
+            break
+    else:
+        port = _free_loopback_port(0)
+    _STATIC_PICKS[key] = port
+    return port
 
 
 def _free_loopback_port(port: int) -> Optional[int]:

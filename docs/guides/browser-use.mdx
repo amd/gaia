@@ -63,7 +63,7 @@ Signing in is a hand-off, not something GAIA does for you:
 | `browser_tabs(switch_to)` | List this chat's tabs in the pane, or switch to one; other chats' tabs and private tabs are never listed (browser pane only) | no |
 | `browser_batch(steps)` | Run several of the steps above in one call (browser pane only) | each step as if run alone |
 | `browser_dialog(accept)` | Answer the page's alert, confirm or "leave this page?" box: OK or Cancel (browser pane only; a page's `prompt()` can't open in the desktop app) | OK on another site's box, or on one that names an action that can't be undone |
-| `browser_eval(expression)` | Run one JavaScript expression in the page and get its value as JSON, to check app state or storage the page doesn't show (browser pane only, pages on this PC only) | on its own dev servers, no; on other pages on this PC, yes; refused on any other site |
+| `browser_eval(expression)` | Run one JavaScript expression in the page and get its value as JSON, to check app state or storage the page doesn't show (browser pane only, pages on this PC only) | every time, showing the script; refused on any site not on this PC |
 | `dev_server(action, name, project, errors_only, contains)` | Serve a folder of HTML with no setup, or start, list, stop or read the logs of a dev server from the project's [`.gaia/launch.json`](/guides/agent-ui#dev-servers); start shows it in the pane (browser pane only) | starting one, once per exact command |
 
 In GAIA desktop, a chat open in the window uses the [browser pane](/guides/agent-ui#gaia-uses-the-pane)
@@ -90,9 +90,17 @@ as a payment or sign-in widget embedded in your app. A frame doesn't inherit
 the page's approval: reading or acting in a frame from a site other than the
 page's own or the chat's dev servers asks for that site first, one site per
 prompt, and **Always allow** covers that site from then on. Until you approve
-it, the frame is left out of what GAIA reads, and out of its pictures of the
-page. `browser_snapshot` is the read that asks; other tools leave such a frame
-out and say so.
+it, the frame is left out of what GAIA reads, and GAIA takes no picture of a
+page that shows it. `browser_snapshot` is the read that asks; other tools leave
+such a frame out and say so. A frame with no site of its own (a sandboxed or
+`data:` frame) is never read or acted in.
+
+A step that needs approval for more than one site (a click in a frame, on a
+page you allowed only once) names every site it hasn't been approved for, and
+asks once, with no **Always allow**. Going back, forward or reloading checks
+the page it would land on first. Everything GAIA reads from a page, its logs,
+a script's value and a dev server's output reaches the model marked as page
+data, never as instructions.
 
 Elements are addressed by **ref** (`e1`, `e7`) from the last snapshot, never by
 screen coordinates:

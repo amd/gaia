@@ -36,7 +36,8 @@ function makeHost({ recent = new Map() } = {}) {
     onToggleRequest: jest.fn(),
     onShowRequest: jest.fn(),
     openExternal: jest.fn(),
-    createCdp: () => ({
+    createCdp: (wcArg) => ({
+      landingOrigin: jest.fn((_x, _y) => Promise.resolve(wcArg._landsIn || new URL(wcArg.getURL()).origin)), shownUnapprovedSites: jest.fn(() => Promise.resolve(wcArg._shownSites || [])), 
       send: jest.fn(() => Promise.resolve({})),
       onNavigationStarted: jest.fn(),
       logs: jest.fn(() => ({ entries: [], lastSeq: 0, dropped: 0 })),

@@ -105,7 +105,7 @@ describe("discovery file", () => {
     const main = fs.readFileSync(path.join(WEBUI, "main.cjs"), "utf8");
     expect(main).toMatch(/\[PANE_DISCOVERY_ENV\]: paneDiscoveryFile\(\)/);
     expect(main).toMatch(/paneBridge\.close\(\)/);
-    expect(main).toMatch(/const appPorts = \(\) => \(paneBridge \? \[backendPort, paneBridge\.port\]/);
+    expect(main).toMatch(/const appPorts = \(\) => \[backendPort, \.\.\.\(paneBridge \? \[paneBridge\.port\] : \[\]\), \.\.\.servicePorts\(\)\]/);
     expect(main).toMatch(/blockedPorts: appPorts,/);
   });
 });
@@ -222,8 +222,8 @@ function fakeSession() {
   return ses;
 }
 
-function fakeCdp() {
-  return { onNavigationStarted: jest.fn(), logs: jest.fn(), screenshot: jest.fn(), ready: Promise.resolve() };
+function fakeCdp(wcArg) {
+  return { onNavigationStarted: jest.fn(), logs: jest.fn(), screenshot: jest.fn(), ready: Promise.resolve(), landingOrigin: jest.fn((_x, _y) => Promise.resolve(wcArg._landsIn || new URL(wcArg.getURL()).origin)), shownUnapprovedSites: jest.fn(() => Promise.resolve(wcArg._shownSites || [])), };
 }
 
 function makeHost() {
@@ -377,7 +377,7 @@ describe("agent ops", () => {
     expect(res.frames.slice(1).map((f) => [f.ok, f.unapproved])).toEqual([
       [false, "https://widget.example"],
       [false, "http://127.0.0.1:13305"],
-      [false, "http://127.0.0.1:13305"],
+      [false, null],
       [false, "http://[::ffff:7f00:1]:13305"],
       [false, "http://0.0.0.0:8888"],
       [false, null],
@@ -393,20 +393,25 @@ describe("agent ops", () => {
     expect(again.frames[1]).toMatchObject({ ok: true, value: { read: widget.url } });
     for (const f of [lemonade, sandboxed, mapped, anyAddr, data]) expect(f.executeJavaScript).not.toHaveBeenCalled();
     await host.agentEvaluate("chat-1", null, "() => 1", null, "all", ["http://localhost:5173", "http://127.0.0.1:13305"]);
-    for (const f of [lemonade, sandboxed]) expect(f.executeJavaScript).toHaveBeenCalled();
-    for (const f of [mapped, anyAddr, data]) expect(f.executeJavaScript).not.toHaveBeenCalled();
+    expect(lemonade.executeJavaScript).toHaveBeenCalled();
+    // A sandboxed frame has an opaque origin: approving the site it came from does not cover it.
+    for (const f of [sandboxed, mapped, anyAddr, data]) expect(f.executeJavaScript).not.toHaveBeenCalled();
   });
 
   test("the page's own frames and the chat's dev server frames are read with no further approval", async () => {
     const { host, frames } = framedPage([
       ["http://localhost:5173/inner"],
       ["about:srcdoc", "http://localhost:5173"],
-      ["about:blank"],
+      ["about:blank", "http://localhost:5173"],
+      ["about:blank", "null"],
       ["http://127.0.0.1:5000/embed"],
     ]);
     const res = await host.agentEvaluate("chat-1", null, "() => 1", null, "all", ["http://localhost:5173", ...devServerOrigins(5000)]);
-    for (const f of frames) expect(f.executeJavaScript).toHaveBeenCalled();
-    expect(res.frames.every((f) => f.ok)).toBe(true);
+    const [inner, srcdoc, blank, opaque, devServer] = frames;
+    for (const f of [inner, srcdoc, blank, devServer]) expect(f.executeJavaScript).toHaveBeenCalled();
+    // A blank frame whose origin is opaque (sandboxed) has no site to approve, so it stays unread.
+    expect(opaque.executeJavaScript).not.toHaveBeenCalled();
+    expect(res.frames.filter((f) => !f.ok).map((f) => f.frameId)).toEqual([`9:${frames.indexOf(opaque) + 1}`]);
   });
 
   test("origin lists the page's frame origins, so a read can ask for them", async () => {
@@ -420,8 +425,57 @@ describe("agent ops", () => {
     ]);
     await expect(host.agentOrigin("chat-1", null)).resolves.toMatchObject({
       origin: "http://localhost:5173",
-      frameOrigins: ["https://widget.example", "http://127.0.0.1:13305"],
+      frameOrigins: ["https://widget.example"],
     });
+  });
+
+  /** A tab on localhost:5173 whose history holds `before` and `after` around it; each step lands on `landsOn` (default: the entry). */
+  function withHistory({ before = null, after = null, landsOn = null } = {}) {
+    const { host } = makeHost();
+    host.navigate(host.activeTabId, "http://localhost:5173/");
+    const wc = host.tabs.get(host.activeTabId).view.webContents;
+    const entries = [before, "http://localhost:5173/", after].filter(Boolean).map((url) => ({ url, title: url }));
+    const here = before ? 1 : 0;
+    const nav = wc.navigationHistory;
+    nav.getAllEntries.mockImplementation(() => entries);
+    nav.getActiveIndex.mockImplementation(() => here);
+    nav.canGoBack.mockImplementation(() => Boolean(before));
+    nav.canGoForward.mockImplementation(() => Boolean(after));
+    const land = (url) => () => {
+      wc._url = landsOn || url;
+      wc.getTitle = jest.fn(() => `Title of ${wc._url}`);
+      setImmediate(() => wc.emit("did-stop-loading"));
+    };
+    nav.goBack.mockImplementation(land(before));
+    nav.goForward.mockImplementation(land(after));
+    wc.reload.mockImplementation(land("http://localhost:5173/"));
+    return { host, wc, nav };
+  }
+
+  test.each([
+    ["back", { before: "http://127.0.0.1:13305/" }],
+    ["forward", { after: "https://mail.example/inbox" }],
+  ])("going %s to a page on a site that is not approved is refused before the tab moves", async (to, history) => {
+    const { host, nav } = withHistory(history);
+    const err = await host.agentNavigate("chat-1", null, to, ["http://localhost:5173"]).catch((e) => e);
+    expect(err).toMatchObject({ code: "off_scope" });
+    expect(JSON.stringify(err.data)).not.toMatch(/13305\/|inbox/);
+    expect(nav.goBack).not.toHaveBeenCalled();
+    expect(nav.goForward).not.toHaveBeenCalled();
+  });
+
+  test("going back to an approved page moves and says where it landed", async () => {
+    const { host, nav } = withHistory({ before: "https://docs.example/a" });
+    const res = await host.agentNavigate("chat-1", null, "back", ["http://localhost:5173", "https://docs.example"]);
+    expect(nav.goBack).toHaveBeenCalled();
+    expect(res).toMatchObject({ url: "https://docs.example/a", title: "Title of https://docs.example/a" });
+  });
+
+  test("a step that lands somewhere not approved never returns that page's address or title", async () => {
+    const { host } = withHistory({ landsOn: "https://other.example/secret-path" });
+    const err = await host.agentNavigate("chat-1", null, "reload", ["http://localhost:5173"]).catch((e) => e);
+    expect(err).toMatchObject({ code: "off_scope", data: { origin: "https://other.example" } });
+    expect(err.message).not.toMatch(/secret-path|Title of/);
   });
 
   test("a new tab page has nothing to read", async () => {
@@ -487,6 +541,108 @@ describe("console and network rings", () => {
     expect(cdp.logs({ kind: "network", afterSeq: 0, errorsOnly: false, pattern: "OK", limit: 50 }).entries).toHaveLength(1);
 
     cdp.onNavigationStarted();
+    expect(cdp.logs({ kind: "console", afterSeq: 0, errorsOnly: false, pattern: null, limit: 50 }).entries).toEqual([]);
+  });
+});
+
+describe("the browser's own view of the page's frames", () => {
+  const PAGE = "http://127.0.0.1:5000";
+  const WIDGET = "https://widget.example";
+
+  /**
+   * A fake DevTools target: `frames` is the frame tree per session, `hits`
+   * answers DOM.getNodeForLocation per session, `boxes` DOM.getBoxModel by node.
+   */
+  async function browserSees({ frames, hits = {}, boxes = {}, owners = {} }) {
+    const wc = new (require("electron").WebContentsView)().webContents;
+    const cdp = new TabCdp(wc, quiet);
+    await cdp.ready;
+    for (const sid of Object.keys(frames)) {
+      if (sid !== "main") wc.debugger.emit("message", {}, "Target.attachedToTarget", { sessionId: sid, targetInfo: { type: "iframe" } });
+    }
+    const sent = [];
+    wc.debugger.sendCommand.mockImplementation((method, params = {}, sid) => {
+      const session = sid || "main";
+      sent.push([method, session]);
+      if (method === "Page.getFrameTree") return Promise.resolve({ frameTree: frames[session] });
+      if (method === "DOM.getDocument") return Promise.resolve({ root: { nodeId: 1 } });
+      if (method === "DOM.getNodeForLocation") return Promise.resolve(hits[session](params.x, params.y));
+      if (method === "DOM.describeNode") return Promise.resolve({ node: { nodeName: params.backendNodeId >= 100 ? "IFRAME" : "DIV", frameId: params.frameIdOf } });
+      if (method === "DOM.getBoxModel") {
+        const box = boxes[params.backendNodeId];
+        return box ? Promise.resolve({ model: box }) : Promise.reject(new Error("Could not compute box model."));
+      }
+      if (method === "DOM.getFrameOwner") return Promise.resolve({ backendNodeId: owners[params.frameId] });
+      return Promise.resolve({});
+    });
+    return { cdp, sent };
+  }
+
+  const tree = (id, url, children = [], parentId) => ({ frame: { id, url, parentId }, childFrames: children });
+
+  test("a point is followed into an out-of-process frame, by the browser's layout", async () => {
+    const describeNode = (backendNodeId) => ({ 101: "W" })[backendNodeId];
+    const { cdp } = await browserSees({
+      frames: { main: tree("M", `${PAGE}/`), s1: tree("W", `${WIDGET}/pay`, [], "M") },
+      hits: { main: () => ({ backendNodeId: 101, frameId: "M" }), s1: (x, y) => ({ backendNodeId: 5, frameId: "W", at: [x, y] }) },
+      boxes: { 101: { content: [100, 200, 400, 200, 400, 300, 100, 300], width: 300, height: 100 } },
+    });
+    const send = cdp.wc.debugger.sendCommand.getMockImplementation();
+    cdp.wc.debugger.sendCommand.mockImplementation((method, params = {}, sid) =>
+      method === "DOM.describeNode" ? Promise.resolve({ node: { nodeName: "IFRAME", frameId: describeNode(params.backendNodeId) || (sid ? "W" : "M") } }) : send(method, params, sid)
+    );
+    await expect(cdp.landingOrigin(150, 250)).resolves.toBe(WIDGET);
+    const located = cdp.wc.debugger.sendCommand.mock.calls.filter(([m]) => m === "DOM.getNodeForLocation");
+    expect(located.at(-1)).toEqual(["DOM.getNodeForLocation", expect.objectContaining({ x: 50, y: 50 }), "s1"]);
+  });
+
+  test("a point in the page itself, or in a blank frame it wrote, is the page's site", async () => {
+    const { cdp } = await browserSees({
+      frames: { main: tree("M", `${PAGE}/`, [tree("B", "about:srcdoc", [], "M")]) },
+      hits: { main: (x) => ({ backendNodeId: 5, frameId: x < 100 ? "M" : "B" }) },
+    });
+    await expect(cdp.landingOrigin(10, 10)).resolves.toBe(PAGE);
+    await expect(cdp.landingOrigin(150, 10)).resolves.toBe(PAGE);
+  });
+
+  test("a point in a data: frame has no site", async () => {
+    const { cdp } = await browserSees({
+      frames: { main: tree("M", `${PAGE}/`, [tree("D", "data:text/html,x", [], "M")]) },
+      hits: { main: () => ({ backendNodeId: 5, frameId: "D" }) },
+    });
+    await expect(cdp.landingOrigin(10, 10)).resolves.toBeNull();
+  });
+
+  test("only frames that show, from sites not approved, and the outermost of them, are named", async () => {
+    const { cdp } = await browserSees({
+      frames: {
+        main: tree("M", `${PAGE}/`, [tree("H", "https://hidden.example/", [], "M"), tree("Z", "https://zero.example/", [], "M")]),
+        s1: tree("W", `${WIDGET}/pay`, [tree("N", "https://nested.example/", [], "W")], "M"),
+        s2: tree("A", "https://ads.example/", [], "M"),
+      },
+      owners: { H: 1, Z: 2, W: 3, A: 4, N: 5 },
+      boxes: { 2: { width: 0, height: 0 }, 3: { width: 300, height: 100 }, 4: { width: 10, height: 10 }, 5: { width: 50, height: 50 } },
+    });
+    await expect(cdp.shownUnapprovedSites([PAGE])).resolves.toEqual([WIDGET, "https://ads.example"]);
+    await expect(cdp.shownUnapprovedSites([PAGE, WIDGET])).resolves.toEqual(["https://nested.example", "https://ads.example"]);
+    await expect(cdp.shownUnapprovedSites([PAGE, WIDGET, "https://nested.example", "https://ads.example"])).resolves.toEqual([]);
+  });
+
+  test("a frame session that can't be read fails the check instead of passing it", async () => {
+    const { cdp } = await browserSees({ frames: { main: tree("M", `${PAGE}/`), s1: tree("W", `${WIDGET}/`, [], "M") } });
+    const send = cdp.wc.debugger.sendCommand.getMockImplementation();
+    cdp.wc.debugger.sendCommand.mockImplementation((method, params, sid) =>
+      method === "Page.getFrameTree" && sid === "s1" ? Promise.reject(new Error("Target crashed")) : send(method, params, sid)
+    );
+    await expect(cdp.shownUnapprovedSites([PAGE])).rejects.toThrow(/Target crashed/);
+  });
+
+  test("events from frame sessions never land in the tab's own logs", async () => {
+    const wc = new (require("electron").WebContentsView)().webContents;
+    const cdp = new TabCdp(wc, quiet);
+    await cdp.ready;
+    expect(wc.debugger.sendCommand).toHaveBeenCalledWith("Target.setAutoAttach", expect.objectContaining({ autoAttach: true, flatten: true }));
+    wc.debugger.emit("message", {}, "Runtime.consoleAPICalled", { type: "error", args: [{ type: "string", value: "from a frame" }] }, "s9");
     expect(cdp.logs({ kind: "console", afterSeq: 0, errorsOnly: false, pattern: null, limit: 50 }).entries).toEqual([]);
   });
 });

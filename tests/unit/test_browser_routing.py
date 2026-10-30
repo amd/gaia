@@ -328,4 +328,5 @@ def test_logs_render_one_line_per_entry(pane_agent):
         "1 console messages on http://127.0.0.1:5000/broken.html (errors only):"
         == lines[1]
     )
-    assert "Uncaught TypeError" in lines[2] and "broken.html:12" in lines[2]
+    assert lines[2].startswith("<page_data_")
+    assert "Uncaught TypeError" in lines[4] and "broken.html:12" in lines[4]

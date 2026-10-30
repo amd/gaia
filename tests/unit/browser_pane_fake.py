@@ -36,7 +36,7 @@ class FakeBridge:
             "attach": fixture("attach_attached.json"),
             "tabs": fixture("tabs_user_page.json"),
             "navigate": fixture("navigate.json"),
-            "evaluate": fixture("evaluate_snapshot.json"),
+            "evaluate": self._evaluate,
             "origin": fixture("origin_loopback.json"),
             "screenshot": fixture("screenshot.json"),
             "logs": fixture("logs_console.json"),
@@ -44,6 +44,10 @@ class FakeBridge:
             "viewport": fixture("viewport.json"),
             "devServers": self._dev_servers,
         }
+        #: What ``evaluate`` answers with for a page read; tests replace it.
+        self.snapshot: Dict[str, Any] = fixture("evaluate_snapshot.json")
+        #: A live label read: selector -> the label the page shows now (None: gone).
+        self.labels: Dict[str, Any] = {}
         #: The dev servers this chat's ``devServers`` list op reports.
         self.servers: List[Dict[str, Any]] = []
         bridge = self
@@ -106,6 +110,31 @@ class FakeBridge:
             404,
             {"error": {"code": "unknown_op", "message": "devServers", "data": {}}},
         )
+
+    def _evaluate(self, body: Dict[str, Any]) -> Reply:
+        from gaia.browser.pane_driver import _LIVE_LABEL_JS
+
+        if body.get("script") != _LIVE_LABEL_JS:
+            return self.snapshot
+        selector = body["args"]
+        if selector in self.labels:
+            label = self.labels[selector]
+        else:
+            label = next(
+                (
+                    el.get("name") or ""
+                    for f in self.snapshot["frames"]
+                    if f.get("ok")
+                    for el in (f.get("value") or {}).get("elements") or []
+                    if f'"{el["ref"]}"' in selector
+                ),
+                None,
+            )
+        return {
+            "tabId": "tab-1",
+            "url": self.snapshot.get("url"),
+            "frames": [{"frameId": None, "url": "", "ok": True, "value": label}],
+        }
 
     def ops(self) -> List[str]:
         return [r["op"] for r in self.requests]

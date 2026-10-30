@@ -413,7 +413,7 @@ posix("which local pages the agent may use without asking", () => {
       onToggleRequest: jest.fn(),
       onShowRequest: jest.fn(),
       openExternal: jest.fn(),
-      createCdp: () => ({ send: jest.fn(() => Promise.resolve({})), onNavigationStarted: jest.fn(), logs: jest.fn(), screenshot: jest.fn() }),
+      createCdp: (wcArg) => ({ send: jest.fn(() => Promise.resolve({})), onNavigationStarted: jest.fn(), logs: jest.fn(), screenshot: jest.fn(), landingOrigin: jest.fn((_x, _y) => Promise.resolve(wcArg._landsIn || new URL(wcArg.getURL()).origin)), shownUnapprovedSites: jest.fn(() => Promise.resolve(wcArg._shownSites || [])), }),
     });
     host.setView(chat, false);
     host.openTab(url);

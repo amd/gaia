@@ -101,13 +101,14 @@ function isLoopbackUrl(url) {
 
 /** The origin a frame acts as, for approval: its site's, or null when it has no http(s) one. */
 function frameOriginOf(frame) {
-  const origin = originOf(input.frameUrl(frame));
+  const origin = input.frameOrigin(frame);
   return origin && /^https?:\/\//.test(origin) ? origin : null;
 }
 
 /** True for a frame the op was not approved to read: approval is per frame origin, like a page's. */
 function isUnapprovedFrame(frame, allowedOrigins) {
-  return !inScope(input.frameUrl(frame), allowedOrigins);
+  const origin = input.frameOrigin(frame);
+  return origin === null || !allowedOrigins.includes(origin);
 }
 
 /** True when `frame` sits somewhere inside `outer`. */
@@ -813,6 +814,11 @@ class PaneHost {
       const nav = wc.navigationHistory;
       if (to === "back" && !nav.canGoBack()) throw new BridgeError("navigation_failed", "There is no earlier page in this tab.", { url: wc.getURL() });
       if (to === "forward" && !nav.canGoForward()) throw new BridgeError("navigation_failed", "There is no later page in this tab.", { url: wc.getURL() });
+      // History moves no will-navigate sees, so the page it lands on is checked before it moves.
+      const entries = nav.getAllEntries();
+      const step = { back: -1, forward: 1, reload: 0 }[to];
+      const dest = (entries[nav.getActiveIndex() + step] || {}).url || "";
+      if (!inScope(dest, allowedOrigins)) throw this.offScopeError(dest, "open");
       await this.withAgent(tab, allowedOrigins, async () => {
         const done = this.nextLoad(wc);
         this.historyStep(tab, to);
@@ -826,7 +832,15 @@ class PaneHost {
       await this.withAgent(tab, allowedOrigins, () => this.agentLoad(tab, to));
     }
     const wc = tab.view.webContents;
+    // Where a page lands is the agent's to read only on an approved site.
+    if (!inScope(wc.getURL(), allowedOrigins)) throw this.offScopeError(wc.getURL(), "read");
     return { tabId: tab.state.id, url: wc.getURL(), title: wc.getTitle() };
+  }
+
+  /** A page or frame on a site this call was not approved for; names the site, never the address or title. */
+  offScopeError(url, verb) {
+    const origin = originOf(url) || "a page that is not a web address";
+    return new BridgeError("off_scope", `The page is on ${origin}, which this call was not approved to ${verb}.`, { origin });
   }
 
   checkAgentUrl(url, allowedOrigins) {
@@ -942,22 +956,40 @@ class PaneHost {
         const scrolled = await ctx.exec(wc.mainFrame, "({ x: scrollX, y: scrollY })");
         rect = { ...box, x: box.x + scrolled.x, y: box.y + scrolled.y };
       }
-      // Frames from sites the user hasn't approved are left out of the picture.
-      const show = await input.hideFrames(ctx, unapprovedTopFrames(wc, allowedOrigins), (f) => frameOriginOf(f) || f.url);
+      // A picture shows every frame on screen, so none may be from a site the user hasn't approved,
+      // before the capture or after it (a frame can appear while it is taken).
+      await this.requireNoShownFrames(tab, allowedOrigins);
       let image;
       try {
         image = nativeImage.createFromBuffer(await withTimeout(tab.cdp.screenshot(rect), EVAL_TIMEOUT_MS, "Taking the picture"));
       } catch (err) {
         if (err instanceof BridgeError) throw err;
         throw new BridgeError("internal", `Could not take a picture of the page: ${err.message}`);
-      } finally {
-        await show();
       }
+      await this.requireNoShownFrames(tab, allowedOrigins);
       if (image.getSize().width > maxWidth) image = image.resize({ width: maxWidth });
       const size = image.getSize();
       this.requirePage(tab, allowedOrigins);
       return { png: image.toPNG().toString("base64"), width: size.width, height: size.height, url: wc.getURL() };
     });
+  }
+
+  /** Refuse a picture while the page shows a frame from a site this call wasn't approved for. */
+  async requireNoShownFrames(tab, allowedOrigins) {
+    let sites;
+    try {
+      sites = await tab.cdp.shownUnapprovedSites(allowedOrigins);
+    } catch (err) {
+      throw new BridgeError("internal", `No picture was taken: GAIA could not check the page's frames (${err.message}).`);
+    }
+    if (sites.length === 0) return;
+    const named = [...new Set(sites.map((s) => s || "a frame with no site of its own"))];
+    throw new BridgeError(
+      "off_scope",
+      `No picture was taken: the page shows frames from ${named.join(", ")}, which the user has not approved. ` +
+        "Call browser_snapshot to ask the user about those sites, then take the picture.",
+      { origin: named[0], origins: named }
+    );
   }
 
   async agentLogs(sessionId, id, query, allowedOrigins) {
@@ -985,8 +1017,8 @@ class PaneHost {
     this.requireNoDialog(tab);
     const frame = target ? input.frameFor(wc, target.frameId) : null;
     // Input in a frame lands on that frame's site, which needs approval like a page on it.
-    if (frame && frame !== wc.mainFrame && !inScope(input.frameUrl(frame), allowedOrigins)) {
-      const origin = originOf(input.frameUrl(frame)) || frame.url;
+    if (frame && frame !== wc.mainFrame && isUnapprovedFrame(frame, allowedOrigins)) {
+      const origin = frameOriginOf(frame) || "a frame with no site of its own";
       throw new BridgeError("off_scope", `That element is in a frame from ${origin}, which this call was not approved to use.`, { origin });
     }
     this.deps.onShowRequest(sessionId);
@@ -999,7 +1031,15 @@ class PaneHost {
         tab.dispatching = true;
         let done;
         try {
-          const acting = input.perform({ ctx: input.context(tab.cdp, stop), action, frame, selector: target && target.selector });
+          const ctx = {
+            ...input.context(tab.cdp, stop),
+            // Checked in the browser, not by the page's scripts: where a click lands and where keys go.
+            landing: (x, y) => tab.cdp.landingOrigin(x, y),
+            frameSite: (f) => (f === wc.mainFrame ? originOf(wc.getURL()) : input.frameOrigin(f)),
+            focusedFrame: () => wc.focusedFrame || wc.mainFrame,
+            allowed: allowedOrigins,
+          };
+          const acting = input.perform({ ctx, action, frame, selector: target && target.selector });
           done = await this.raceDialog(tab, withTimeout(acting, ACT_TIMEOUT_MS, "Acting on the page"));
         } catch (err) {
           if (err instanceof BridgeError) throw err;
@@ -1059,8 +1099,11 @@ class PaneHost {
           return { ...reply, ok: false, error: err.message };
         }
         if (ran.dialog) return { ...reply, ok: false, error: STOPPED_FOR_DIALOG, dialog: ran.dialog };
-        if (ran.value.error !== undefined) return { ...reply, ok: false, error: ran.value.error };
-        return { ...reply, ok: true, json: ran.value.text, truncated: ran.value.truncated };
+        // The page runs the wrapper too, so its shape and size are checked here, not trusted.
+        const value = ran.value && typeof ran.value === "object" ? ran.value : { text: String(ran.value) };
+        if (value.error !== undefined) return { ...reply, ok: false, error: String(value.error).slice(0, MAX_SCRIPT_RESULT) };
+        const text = typeof value.text === "string" ? value.text : String(value.text);
+        return { ...reply, ok: true, json: text.slice(0, MAX_SCRIPT_RESULT), truncated: value.truncated === true || text.length > MAX_SCRIPT_RESULT };
       },
       { acting: true }
     );

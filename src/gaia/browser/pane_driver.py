@@ -11,7 +11,7 @@ looking at, so "the page open in the browser pane" means what it says.
 Every op that reads or loads a page carries ``allowedOrigins``. The chat's
 own running dev servers need no entry; localhost otherwise does, like any
 site. Main refuses to read a page on any other origin, skips frames from
-any other origin (and hides them in pictures), and stops a navigation that
+any other origin (and takes no picture while one shows), and stops a navigation that
 would land on one during the op, so a page that wanders off while the agent
 reads it is never handed to the model.
 """
@@ -99,6 +99,15 @@ class ScriptResult:
     text: str
     truncated: bool
     url: str
+
+
+# The same label, or null when the element is gone, so a batch never clicks what it can't read.
+_LIVE_LABEL_JS = """(sel) => {
+  const el = document.querySelector(sel);
+  if (!el) return null;
+  const label = el.getAttribute("aria-label") || el.innerText || el.value || el.getAttribute("title") || "";
+  return String(label).replace(/\\s+/g, " ").trim().slice(0, 120);
+}"""
 
 
 @dataclass(frozen=True)
@@ -263,6 +272,26 @@ class PaneDriver:
                 f"Could not read the picked element in the browser pane: {main['error']}"
             )
         return str(main["value"] or "")
+
+    def live_label(self, ref: str) -> Optional[str]:
+        """The label ``ref`` shows now, read again from its frame; None when it is gone or unreadable."""
+        target = self._target(ref)
+        res = self._call(
+            "evaluate",
+            {
+                "tabId": None,
+                "script": _LIVE_LABEL_JS,
+                "args": target["selector"],
+                "frames": "main" if target["frameId"] is None else "all",
+                **self._frame_scope(),
+            },
+        )
+        frame = next(
+            (f for f in res["frames"] if f["frameId"] == target["frameId"]), None
+        )
+        if frame is None or not frame["ok"] or not isinstance(frame.get("value"), str):
+            return None
+        return frame["value"]
 
     def frame_origin(self, ref: str) -> Optional[str]:
         """The origin of the frame ``ref`` is in, or None for the main frame or an unknown ref."""

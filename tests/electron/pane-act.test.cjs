@@ -44,8 +44,8 @@ function makeHost() {
     onToggleRequest: jest.fn(),
     onShowRequest: jest.fn(),
     openExternal: jest.fn(),
-    createCdp: () => {
-      const cdp = { send: jest.fn(() => Promise.resolve({})), onNavigationStarted: jest.fn(), logs: jest.fn(), screenshot: jest.fn() };
+    createCdp: (wcArg) => {
+      const cdp = { send: jest.fn(() => Promise.resolve({})), onNavigationStarted: jest.fn(), logs: jest.fn(), screenshot: jest.fn(), landingOrigin: jest.fn((_x, _y) => Promise.resolve(wcArg._landsIn || new URL(wcArg.getURL()).origin)), shownUnapprovedSites: jest.fn(() => Promise.resolve(wcArg._shownSites || [])), };
       cdps.push(cdp);
       return cdp;
     },
@@ -172,6 +172,7 @@ describe("checks before input lands", () => {
  */
 function frameChain(wc, { depth = 1, probe = POINT, boxes = [], origin = "http://localhost:5000" } = {}) {
   const main = wc.mainFrame;
+  wc._landsIn = origin;
   const frames = [];
   let parent = main;
   for (let level = 0; level < depth; level += 1) {
@@ -264,6 +265,28 @@ describe("elements inside frames", () => {
     expect(inputSent(cdp)).toHaveLength(3);
   });
 
+  test.each([
+    ["a sandboxed frame from an approved site", "null"],
+    ["a blank frame with no site of its own", undefined],
+  ])("acting in %s is refused: an opaque origin has no approval", async (_what, origin) => {
+    const { host, wc, cdp } = makeHost();
+    const { leaf, target } = frameChain(wc);
+    leaf.origin = origin;
+    if (origin === undefined) leaf.url = "about:blank";
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, target, APP)).rejects.toMatchObject({ code: "off_scope" });
+    expect(leaf.executeJavaScript).not.toHaveBeenCalled();
+    expect(inputSent(cdp)).toEqual([]);
+  });
+
+  test("a blank frame acts as the site that made it", async () => {
+    const { host, wc, cdp } = makeHost();
+    const { leaf, target } = frameChain(wc);
+    leaf.url = "about:blank";
+    leaf.origin = "http://localhost:5000";
+    await host.agentAct("chat-1", null, { kind: "click" }, target, APP);
+    expect(inputSent(cdp)).toHaveLength(3);
+  });
+
   test("a gone frame is element_not_found", () => {
     const { wc } = makeHost();
     expect(() => frameFor(wc, "7:7")).toThrow(expect.objectContaining({ code: "element_not_found" }));
@@ -282,86 +305,105 @@ describe("elements inside frames", () => {
   });
 });
 
-describe("pictures leave out frames from sites that are not approved", () => {
-  /** frames: [origin, parentIndex|null]; each child answers its index, each parent hides on request. */
-  function framedShot(specs) {
+describe("pictures never show frames from sites that are not approved", () => {
+  function shot() {
     const { host, wc, cdp } = makeHost();
     const { nativeImage } = require("electron");
     const image = { getSize: () => ({ width: 800, height: 600 }), toPNG: () => Buffer.from("png"), resize: () => image };
     nativeImage.createFromBuffer = jest.fn(() => image);
-    const events = [];
-    cdp.screenshot.mockImplementation(() => {
-      events.push("capture");
-      return Promise.resolve(Buffer.from("png"));
-    });
-    const main = wc.mainFrame;
-    const frames = [];
-    const answer = (frame) => (code) => {
-      if (code.includes("parent.length")) return Promise.resolve(0);
-      if (code.includes("data-gaia-hidden") && code.includes('"hidden"')) {
-        events.push(`hide in ${frame === main ? "main" : frame.url}`);
-        return Promise.resolve(true);
-      }
-      if (code.includes("removeAttribute")) {
-        events.push(`show in ${frame === main ? "main" : frame.url}`);
-        return Promise.resolve(true);
-      }
-      return Promise.resolve(true);
-    };
-    main.executeJavaScript.mockImplementation(answer(main));
-    specs.forEach(([origin, parentAt], i) => {
-      const frame = { processId: 20 + i, routingId: 1, url: `${origin}/f${i}.html`, origin, parent: parentAt === null ? main : frames[parentAt], executeJavaScript: jest.fn() };
-      frame.executeJavaScript.mockImplementation(answer(frame));
-      frames.push(frame);
-    });
-    main.framesInSubtree = [main, ...frames];
-    return { host, frames, events, cdp };
+    cdp.screenshot.mockResolvedValue(Buffer.from("png"));
+    return { host, wc, cdp };
   }
 
-  test("an unapproved frame is hidden for the picture and shown again after", async () => {
-    const { host, events } = framedShot([[PAY_SITE, null], ["http://localhost:5000", null]]);
-    await host.agentScreenshot("chat-1", null, null, 1280, APP);
-    expect(events).toEqual(["hide in main", "capture", "show in main"]);
-  });
-
-  test("approving the frame's site shows it in the picture", async () => {
-    const { host, events } = framedShot([[PAY_SITE, null]]);
-    await host.agentScreenshot("chat-1", null, null, 1280, [...APP, PAY_SITE]);
-    expect(events).toEqual(["capture"]);
-  });
-
-  test("a frame inside an unapproved frame goes with it; only the outer one is hidden", async () => {
-    const { host, events } = framedShot([[PAY_SITE, null], ["http://127.0.0.1:13305", 0]]);
-    await host.agentScreenshot("chat-1", null, null, 1280, APP);
-    expect(events).toEqual(["hide in main", "capture", "show in main"]);
-  });
-
-  test("an unapproved frame inside an approved one is hidden in that frame", async () => {
-    const { host, events, frames } = framedShot([[PAY_SITE, null], ["http://127.0.0.1:13305", 0]]);
-    await host.agentScreenshot("chat-1", null, null, 1280, [...APP, PAY_SITE]);
-    expect(events).toEqual([`hide in ${frames[0].url}`, "capture", `show in ${frames[0].url}`]);
-  });
-
-  test("a frame that can't be hidden means no picture at all", async () => {
-    const { host, frames, cdp } = framedShot([[PAY_SITE, null]]);
-    frames[0].executeJavaScript.mockImplementation(() => Promise.resolve(-1));
-    await expect(host.agentScreenshot("chat-1", null, null, 1280, APP)).rejects.toMatchObject({ code: "off_scope", message: expect.stringContaining(PAY_SITE) });
+  test("a page showing an unapproved frame gets no picture, and the error names the site", async () => {
+    const { host, wc, cdp } = shot();
+    wc._shownSites = [PAY_SITE, null];
+    const err = await host.agentScreenshot("chat-1", null, null, 1280, APP).catch((e) => e);
+    expect(err).toMatchObject({ code: "off_scope", data: { origin: PAY_SITE } });
+    expect(err.message).toMatch(/browser_snapshot/);
     expect(cdp.screenshot).not.toHaveBeenCalled();
+    expect(cdp.shownUnapprovedSites).toHaveBeenCalledWith(APP);
   });
 
-  test("the frames are shown again when the picture fails", async () => {
-    const { host, events, cdp } = framedShot([[PAY_SITE, null]]);
-    cdp.screenshot.mockImplementation(() => Promise.reject(new Error("gone")));
+  test("a frame that appears while the picture is taken throws the picture away", async () => {
+    const { host, wc, cdp } = shot();
+    cdp.screenshot.mockImplementation(() => {
+      wc._shownSites = ["http://127.0.0.1:13305"];
+      return Promise.resolve(Buffer.from("png"));
+    });
+    await expect(host.agentScreenshot("chat-1", null, null, 1280, APP)).rejects.toMatchObject({ code: "off_scope" });
+    expect(cdp.screenshot).toHaveBeenCalledTimes(1);
+  });
+
+  test("with every shown frame approved the picture is taken", async () => {
+    const { host, cdp } = shot();
+    await expect(host.agentScreenshot("chat-1", null, null, 1280, [...APP, PAY_SITE])).resolves.toMatchObject({ png: expect.any(String) });
+    expect(cdp.shownUnapprovedSites).toHaveBeenCalledTimes(2);
+  });
+
+  test("a frame check that fails means no picture", async () => {
+    const { host, cdp } = shot();
+    cdp.shownUnapprovedSites.mockRejectedValue(new Error("session gone"));
     await expect(host.agentScreenshot("chat-1", null, null, 1280, APP)).rejects.toMatchObject({ code: "internal" });
-    expect(events).toEqual(["hide in main", "show in main"]);
+    expect(cdp.screenshot).not.toHaveBeenCalled();
   });
 
   test("a picture of an element inside an unapproved frame is refused before the page is touched", async () => {
-    const { host, frames, cdp } = framedShot([[PAY_SITE, null]]);
-    const target = { frameId: `${frames[0].processId}:${frames[0].routingId}`, selector: SEL };
+    const { host, wc, cdp } = shot();
+    const { leaf, target } = frameChain(wc, { origin: PAY_SITE });
     await expect(host.agentScreenshot("chat-1", null, target, 1280, APP)).rejects.toMatchObject({ code: "off_scope", data: { origin: PAY_SITE } });
-    expect(frames[0].executeJavaScript).not.toHaveBeenCalled();
+    expect(leaf.executeJavaScript).not.toHaveBeenCalled();
     expect(cdp.screenshot).not.toHaveBeenCalled();
+  });
+});
+
+describe("trusted input lands where the browser says, not where the page says", () => {
+  test("a click whose point the browser places in another frame's site is not sent", async () => {
+    const { host, wc, cdp } = makeHost();
+    pageSays(wc, POINT);
+    wc._landsIn = "http://127.0.0.1:13305";
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP)).rejects.toMatchObject({ code: "not_actionable", message: expect.stringMatching(/Nothing was clicked/) });
+    expect(inputSent(cdp)).toEqual([]);
+    expect(cdp.landingOrigin).toHaveBeenCalledWith(POINT.x, POINT.y);
+  });
+
+  test("typing whose click would land in another frame's site types nothing", async () => {
+    const { host, wc, cdp } = makeHost();
+    pageSays(wc, { ...POINT, tag: "input", type: "email" });
+    wc._landsIn = PAY_SITE;
+    await expect(host.agentAct("chat-1", null, { kind: "fill", text: "ada@example.com", pressEnter: true }, TARGET, APP)).rejects.toMatchObject({ code: "not_actionable" });
+    expect(inputSent(cdp)).toEqual([]);
+  });
+
+  test("a frame click whose point lands in the page around it is not sent", async () => {
+    const { host, wc, cdp } = makeHost();
+    const { target } = frameChain(wc, { origin: PAY_SITE });
+    wc._landsIn = "http://127.0.0.1:5000";
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, target, [...APP, PAY_SITE])).rejects.toMatchObject({ code: "not_actionable" });
+    expect(inputSent(cdp)).toEqual([]);
+  });
+
+  test("a hit test that fails sends nothing", async () => {
+    const { host, wc, cdp } = makeHost();
+    pageSays(wc, POINT);
+    cdp.landingOrigin.mockRejectedValue(new Error("No node found at given location"));
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP)).rejects.toBeTruthy();
+    expect(inputSent(cdp)).toEqual([]);
+  });
+
+  test("a key with no target goes nowhere while focus sits in an unapproved frame", async () => {
+    const { host, wc, cdp } = makeHost();
+    wc.focusedFrame = { url: `${PAY_SITE}/x`, origin: PAY_SITE, parent: wc.mainFrame };
+    await expect(host.agentAct("chat-1", null, { kind: "press", key: "Enter" }, null, APP)).rejects.toMatchObject({ code: "not_actionable" });
+    expect(inputSent(cdp)).toEqual([]);
+  });
+
+  test("a key for an element goes nowhere if focus ends up in another frame", async () => {
+    const { host, wc, cdp } = makeHost();
+    pageSays(wc, POINT);
+    wc.focusedFrame = { url: `${PAY_SITE}/x`, origin: PAY_SITE, parent: wc.mainFrame };
+    await expect(host.agentAct("chat-1", null, { kind: "press", key: "Enter" }, TARGET, APP)).rejects.toMatchObject({ code: "not_actionable" });
+    expect(inputSent(cdp)).toEqual([]);
   });
 });
 
