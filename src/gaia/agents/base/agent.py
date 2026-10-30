@@ -724,6 +724,26 @@ def _is_image_tool(tool_name: str) -> bool:
     return tool_name.lower().startswith(_SD_CAPABILITY_TOOLS)
 
 
+def _loaded_context_is_too_small(loaded_ctx: Any, requested_ctx: Any) -> bool:
+    """Return whether the backend's loaded window is below the requested one.
+
+    The requested value is the agent's effective window, including an explicit
+    client pin such as ``GAIA_CTX_SIZE=16384``.  Comparing those two values is
+    deliberately independent of the error wording: llama.cpp reports the
+    same context size in both a genuine bad-load error and an intentional
+    small-window overflow.
+    """
+    return (
+        isinstance(loaded_ctx, int)
+        and not isinstance(loaded_ctx, bool)
+        and loaded_ctx > 0
+        and isinstance(requested_ctx, int)
+        and not isinstance(requested_ctx, bool)
+        and requested_ctx > 0
+        and loaded_ctx < requested_ctx
+    )
+
+
 # Final answer when a turn still overflows the model's context window after
 # the one-shot shrink-and-retry (#2763) -- shared across every agent, so it
 # names the constraint generically (no tool- or domain-specific vocabulary)
@@ -7790,15 +7810,27 @@ Do NOT wrap conversational replies in JSON.
 
                 ctx = m.get("recipe_options", {}).get("ctx_size") or 0
                 # Clamp like the load path: a model at its max can't reload larger.
-                expected_ctx = resolve_effective_ctx_size(
-                    resolve_ctx_size(
-                        model=m.get("model_name") or own_model,
-                        device=self.device,
-                        base_url=base_url,
-                    ),
-                    m.get("max_context_window"),
+                # An exact client pin is the requested window for this
+                # agent. Without this, a deliberate 16K pin is compared with
+                # the registry's normal 64K target and is misclassified as a
+                # bad load (#5284).
+                backend = getattr(
+                    getattr(self, "chat", None), "llm_client", None
                 )
-                if 0 < ctx < expected_ctx:
+                backend = getattr(backend, "_backend", backend)
+                pin = getattr(backend, "ctx_size_override", None)
+                if isinstance(pin, int) and not isinstance(pin, bool) and pin > 0:
+                    expected_ctx = pin
+                else:
+                    expected_ctx = resolve_effective_ctx_size(
+                        resolve_ctx_size(
+                            model=m.get("model_name") or own_model,
+                            device=self.device,
+                            base_url=base_url,
+                        ),
+                        m.get("max_context_window"),
+                    )
+                if _loaded_context_is_too_small(ctx, expected_ctx):
                     return True
             return False
         except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
@@ -10181,19 +10213,17 @@ Do NOT wrap conversational replies in JSON.
                         logger.error(f"Unexpected error during streaming: {e}")
                         err_text = str(e).lower()
                         is_ctx_overflow = is_context_overflow_error(err_text)
-                        # See non-streaming branch for explanation: re-raise
-                        # if model was loaded with the wrong (small) ctx so
-                        # the chat helper can reload it at 32K.
-                        is_wrong_ctx_loaded = is_ctx_overflow and (
-                            "context size (4096" in err_text
-                            or "context size (8192" in err_text
-                            or "context size (16384" in err_text
-                            or "n_ctx': 4096" in err_text
-                            or "n_ctx': 8192" in err_text
-                            or "n_ctx': 16384" in err_text
+                        # See the non-streaming branch for explanation: re-raise
+                        # only when the backend loaded below the requested
+                        # window, so the chat helper can reload it correctly.
+                        # Do not infer a bad load from the error's numeric
+                        # context size: that same number is valid when the
+                        # user intentionally pinned a smaller window. The
+                        # health probe compares the loaded window with the
+                        # requested one instead (#5284).
+                        is_wrong_ctx_loaded = (
+                            is_ctx_overflow and self._is_loaded_ctx_too_small()
                         )
-                        if is_ctx_overflow and not is_wrong_ctx_loaded:
-                            is_wrong_ctx_loaded = self._is_loaded_ctx_too_small()
                         if is_wrong_ctx_loaded:
                             self.error_history.append(
                                 {
@@ -10385,16 +10415,14 @@ Do NOT wrap conversational replies in JSON.
                         # then probe Lemonade health if substring missed
                         # (typical: AgentSDK stringifies typed exception to
                         # user_message, dropping n_ctx detail).
-                        is_wrong_ctx_loaded = is_ctx_overflow and (
-                            "context size (4096" in err_text
-                            or "context size (8192" in err_text
-                            or "context size (16384" in err_text
-                            or "n_ctx': 4096" in err_text
-                            or "n_ctx': 8192" in err_text
-                            or "n_ctx': 16384" in err_text
+                        # Do not infer a bad load from the error's numeric
+                        # context size: that same number is valid when the
+                        # user intentionally pinned a smaller window. The
+                        # health probe compares the loaded window with the
+                        # requested one instead (#5284).
+                        is_wrong_ctx_loaded = (
+                            is_ctx_overflow and self._is_loaded_ctx_too_small()
                         )
-                        if is_ctx_overflow and not is_wrong_ctx_loaded:
-                            is_wrong_ctx_loaded = self._is_loaded_ctx_too_small()
                         if is_wrong_ctx_loaded:
                             self.error_history.append(
                                 {
