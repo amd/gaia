@@ -92,6 +92,7 @@ module_skips:
       - tests/unit/chat/test_session_prompt_context.py
       - tests/unit/test_chat_agent_integration.py
       - tests/unit/test_chat_dynamic_tools.py
+      - tests/unit/test_chat_fetch_webpage_retry_after.py
       - tests/unit/test_chat_fix_contracts.py
       - tests/unit/test_chat_inline_web_ssrf.py
       - tests/unit/test_chat_system_prompt_budget.py

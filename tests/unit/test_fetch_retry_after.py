@@ -10,11 +10,9 @@ user when the limit resets.
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 import requests
 
 from gaia.web.client import fetch_error_text
-from tests.unit.test_profilespec_characterization import chat_agent_build_context
 
 URL = "https://status.example.com/board"
 
@@ -89,35 +87,3 @@ def test_fetch_page_reports_retry_after():
 
     assert result.startswith("Error fetching page:")
     assert "3600 s (about 60 min)" in result
-
-
-@pytest.fixture
-def fetch_webpage():
-    with chat_agent_build_context("full") as agent:
-        agent._register_tools()
-        yield agent, agent._tools_registry["fetch_webpage"]["function"]
-
-
-def test_fetch_webpage_reports_retry_after(fetch_webpage):
-    agent, tool = fetch_webpage
-    client = MagicMock()
-    client.get.return_value = _response(429, {"Retry-After": "3600"})
-
-    with patch.object(agent, "_inline_web_client", return_value=client):
-        result = tool(URL)
-
-    assert result["status"] == "error"
-    assert result["retry_after"] == "3600"
-    assert "Retry-After" in result["hint"]
-
-
-def test_fetch_webpage_error_without_retry_after_has_no_hint(fetch_webpage):
-    agent, tool = fetch_webpage
-    client = MagicMock()
-    client.get.return_value = _response(404)
-
-    with patch.object(agent, "_inline_web_client", return_value=client):
-        result = tool(URL)
-
-    assert result["status"] == "error"
-    assert "retry_after" not in result and "hint" not in result
