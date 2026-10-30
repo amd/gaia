@@ -149,7 +149,26 @@ def test_list_inbox_unread_only_sets_filter():
         return json_response({"value": []})
 
     make_backend(handler).list_inbox(unread_only=True)
-    assert seen["url"].params["$filter"] == "isRead eq false"
+    assert seen["url"].params["$filter"] == (
+        "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false"
+    )
+
+
+@pytest.mark.parametrize("unread_only", [True, False])
+def test_list_inbox_filter_leads_with_the_sorted_property(unread_only):
+    """Graph answers InefficientFilter when $orderby's property does not lead
+    $filter (#4806)."""
+    seen = {}
+
+    def handler(request):
+        seen["url"] = request.url
+        return json_response({"value": []})
+
+    make_backend(handler).list_inbox(unread_only=unread_only)
+    params = seen["url"].params
+    assert params["$orderby"] == "receivedDateTime desc"
+    if "$filter" in params:
+        assert params["$filter"].startswith("receivedDateTime ")
 
 
 def test_list_inbox_without_unread_sends_no_filter():
@@ -854,6 +873,9 @@ def test_skill_tools_required_match_the_registered_tools():
         "search_email",
         "read_email",
         "list_mail_folders",
+        "get_thread",
+        "list_connected_mailboxes",
+        "list_waiting_on_you",
     }
     assert registered <= set(_TOOL_REGISTRY)
     assert set(_inbox_triage_skill().gaia.tools_required) == registered
@@ -879,17 +901,15 @@ def test_email_tools_are_bundled_for_the_loader():
     pytest.importorskip("gaia_agent_chat")
     from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 
-    bundles = PROFILE_TOOL_CONFIGS["full"].bundles
-    email = next(
-        (b for b in bundles if b.name == "email"),
-        None,
-    )
-    assert email is not None, (
-        "the 'email' bundle is missing from the full profile: add it to "
+    bundles = {b.name: b for b in PROFILE_TOOL_CONFIGS["full"].bundles}
+    missing = {"email", "email_threads"} - set(bundles)
+    assert not missing, (
+        f"bundle(s) {missing} missing from the full profile: add them to "
         "gaia_agent_chat.tool_bundles.FULL_BUNDLES or the loader can never "
         "pull the email tools in as a cohort"
     )
-    assert email.members == set(_inbox_triage_skill().gaia.tools_required)
+    members = bundles["email"].members | bundles["email_threads"].members
+    assert members == set(_inbox_triage_skill().gaia.tools_required)
 
 
 # --------------------------------------------------------------------------

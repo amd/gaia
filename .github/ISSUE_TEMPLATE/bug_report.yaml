@@ -89,4 +89,4 @@ body:
     attributes:
       value: |
         ---
-        Need a hand? See the [README](https://github.com/amd/gaia/blob/main/README.md), [FAQ](https://amd-gaia.ai/reference/faq), and [troubleshooting guide](https://amd-gaia.ai/reference/troubleshooting). Thanks for helping make GAIA better!
+        Need a hand? See the [README](https://github.com/amd/gaia/blob/main/README.md), [FAQ](https://amd-gaia.ai/docs/reference/faq), and [troubleshooting guide](https://amd-gaia.ai/docs/reference/troubleshooting). Thanks for helping make GAIA better!
