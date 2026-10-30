@@ -798,8 +798,27 @@ class TestBrowserToolsMixin:
     def test_find_with_no_match_says_so_instead_of_guessing(self):
         fetch = self._serve("<p>" + "no prices here " * 50 + "</p>")
         out = fetch("https://example.com", find="$")
-        assert "No occurrence of '$'" in out
+        assert "No exact occurrence of '$'" in out
         assert "not found" in out
+
+    def test_find_falls_back_to_a_passage_with_all_words(self):
+        fetch = self._serve(
+            "<p>Sunday departures leave from the east terminal. "
+            "The Pier 9 shuttle boards there at 10:30. " + "filler " * 30 + "</p>"
+        )
+        out = fetch("https://example.com", find="Sunday Pier 9")
+        assert "Exact phrase 'Sunday Pier 9' was not found" in out
+        assert "Sunday departures" in out
+        assert "Pier 9 shuttle" in out
+
+    def test_text_mode_hints_when_a_page_has_many_links(self):
+        fetch = self._serve(
+            "<p>Choose a branch from this directory.</p>"
+            "<a href='/a'>A</a><a href='/b'>B</a><a href='/c'>C</a>"
+        )
+        out = fetch("https://example.com")
+        assert "3 links on this page" in out
+        assert "extract='links'" in out
 
     def test_find_marks_matches_it_could_not_fit(self):
         fetch = self._serve(
