@@ -54,35 +54,28 @@ def _purge_custom_agent_modules():
 
 
 class TestBuiltinRegistration:
-    # chat/doc/file ship as the standalone gaia-agent-chat wheel (#1102),
-    # discovered via the gaia.agent entry point. The chat-specific tests below
-    # importorskip the wheel so a framework-only env tolerates its absence.
-    def test_chat_registered_when_wheel_installed(self):
-        pytest.importorskip("gaia_agent_chat")
+    # The flagship ships as the gaia-agent-gaia wheel, discovered via the
+    # gaia.agent entry point. Tests that need it importorskip the wheel so a
+    # framework-only env tolerates its absence.
+    def test_flagship_registered_when_wheel_installed(self):
+        pytest.importorskip("gaia_agent")
         registry = AgentRegistry()
         registry.discover()
-        assert registry.get("chat") is not None
-
-    def test_chat_source_is_installed(self):
-        pytest.importorskip("gaia_agent_chat")
-        registry = AgentRegistry()
-        registry.discover()
-        reg = registry.get("chat")
+        reg = registry.get("gaia")
+        assert reg is not None
         assert reg.source == "installed"
-
-    def test_chat_has_conversation_starters(self):
-        pytest.importorskip("gaia_agent_chat")
-        registry = AgentRegistry()
-        registry.discover()
-        reg = registry.get("chat")
         assert len(reg.conversation_starters) > 0
 
-    def test_list_returns_all_builtins(self):
-        pytest.importorskip("gaia_agent_chat")
+    def test_list_returns_the_flagship_and_no_retired_chat_profiles(self):
+        pytest.importorskip("gaia_agent")
         registry = AgentRegistry()
         registry.discover()
         ids = [r.id for r in registry.list()]
-        assert "chat" in ids
+        assert "gaia" in ids
+        # ChatAgent's profiles folded into the flagship (#6099): they are
+        # aliases now, never registrations of their own.
+        for retired in ("chat", "doc", "file"):
+            assert retired not in ids
 
     def test_unknown_agent_returns_none(self):
         registry = AgentRegistry()
@@ -95,21 +88,12 @@ class TestBuiltinRegistration:
         with pytest.raises(ValueError, match="Unknown agent ID"):
             registry.create_agent("nonexistent-agent-xyz")
 
-    # ---- Consolidated model tiers (#1162) ----
-    # The former per-agent "-lite" registrations (chat-lite, doc-lite, …) and
-    # gaia-lite were collapsed into a "lite" model TIER of the single base
-    # agent. The old IDs survive only as legacy aliases.
-
-    # chat/doc/file (ChatAgent profiles) ship as the standalone gaia-agent-chat
-    # hub wheel (#1102); their full+lite tiers are verified in that package's
-    # own tests. The framework-only suite asserts tiers on chat/doc/file only
-    # when the gaia-agent-chat wheel is installed (importorskip below).
-    #
-    # The data (AnalystAgent) and web (BrowserAgent) agents, and their -lite
-    # aliases, were removed outright in the agent-collapse — their capability
-    # lives in the flagship agent's scratchpad/browser tools now, not a
-    # separate registration.
-    _BASE_AGENTS = ["chat", "doc", "file"]
+    # ---- Legacy ids (#1162, #6099) ----
+    # The per-agent "-lite" registrations became a "lite" model TIER (#1162),
+    # and ChatAgent's chat/doc/file profiles folded into the flagship (#6099).
+    # Every one of those ids survives only as an alias of ``gaia``, so a
+    # stored session reopens on the flagship without a DB migration.
+    _LEGACY_IDS = ["chat", "doc", "file"]
     _LEGACY_LITE_IDS = [
         "chat-lite",
         "doc-lite",
@@ -125,148 +109,118 @@ class TestBuiltinRegistration:
         for legacy in self._LEGACY_LITE_IDS:
             assert legacy not in ids, f"{legacy} must no longer be its own card"
 
-    def test_base_agents_declare_full_and_lite_tiers(self):
-        pytest.importorskip("gaia_agent_chat")
+    def test_flagship_declares_full_and_lite_tiers(self):
+        pytest.importorskip("gaia_agent")
         registry = AgentRegistry()
         registry.discover()
-        for agent_id in self._BASE_AGENTS:
-            reg = registry.get(agent_id)
-            assert reg is not None, agent_id
-            tier_names = [t.name for t in reg.model_tiers]
-            assert tier_names == ["full", "lite"], (agent_id, tier_names)
-            full, lite = reg.model_tiers
-            # Full tier carries no model list — the agent's own default wins.
-            assert full.models == []
-            assert full.default is True
-            # Lite tier pins the ~4B preset and a memory floor.
-            assert lite.models[0] == _EXPECTED_PRIMARY
-            assert all("4b" in m.lower() for m in lite.models), lite.models
-            assert lite.min_memory_gb == 5.0
+        reg = registry.get("gaia")
+        tier_names = [t.name for t in reg.model_tiers]
+        assert tier_names == ["full", "lite"], tier_names
+        full, lite = reg.model_tiers
+        # Full tier carries no model list — the agent's own default wins.
+        assert full.models == []
+        assert full.default is True
+        # Lite tier pins the ~4B preset and a memory floor.
+        assert lite.models[0] == _EXPECTED_PRIMARY
+        assert all("4b" in m.lower() for m in lite.models), lite.models
+        assert lite.min_memory_gb == 5.0
 
-    def test_base_agents_are_hidden_from_selection(self):
-        """chat/doc/file are retired as user-facing choices — the flagship
-        supersedes them — but must stay resolvable by id so stored sessions,
-        the ``*-lite`` aliases, and the eval scenarios keep working.
-        """
-        pytest.importorskip("gaia_agent_chat")
+    def test_every_legacy_id_resolves_to_the_flagship(self):
+        """canonical_id is a pure alias mapping — it holds with or without the
+        flagship installed; get() resolves only when it is."""
         registry = AgentRegistry()
         registry.discover()
-        for agent_id in self._BASE_AGENTS:
-            reg = registry.get(agent_id)
-            # Half 2 — still routable. A hard delete would fail here, which is
-            # the regression this guards (#4103: falling through to the
-            # flagship's larger prompt costs 12-41s of extra TTFT per call).
-            assert reg is not None, f"{agent_id} must remain resolvable"
-            assert callable(reg.factory), f"{agent_id} must stay constructible"
-            # Half 1 — no longer a choice.
-            assert reg.hidden is True, f"{agent_id} must not be offered as a choice"
-        # What the UI picker renders (routers/agents.py filters on .hidden).
-        selectable = {r.id for r in registry.list() if not r.hidden}
-        assert selectable.isdisjoint(self._BASE_AGENTS), selectable
+        installed = registry.get("gaia") is not None
+        for legacy in self._LEGACY_IDS + self._LEGACY_LITE_IDS:
+            assert registry.canonical_id(legacy) == "gaia", legacy
+            reg = registry.get(legacy)
+            if installed:
+                assert reg is not None and reg.id == "gaia", legacy
+            else:
+                assert reg is None, legacy
 
-    def test_legacy_lite_ids_resolve_to_base_agent(self):
+    def test_a_registered_id_is_never_rewritten_by_an_alias(self):
+        """A real registration under a legacy id wins over the alias, so an
+        agent the user installed as ``doc`` is not hijacked by the flagship."""
         registry = AgentRegistry()
-        registry.discover()
-        expected = {
-            "chat-lite": "chat",
-            "doc-lite": "doc",
-            "file-lite": "file",
-            # gaia-lite historically aliased doc-lite.
-            "gaia-lite": "doc",
-        }
-        for legacy, base in expected.items():
-            # canonical_id is a pure alias mapping — holds whether or not the
-            # base agent's wheel is installed.
-            assert registry.canonical_id(legacy) == base
-            # chat/doc/file ship as the standalone gaia-agent-chat wheel
-            # (#1102); only assert the registration resolves when the base
-            # agent is actually registered.
-            if base in {r.id for r in registry.list()}:
-                reg = registry.get(legacy)
-                assert reg is not None and reg.id == base
+        registry._register(  # pylint: disable=protected-access
+            AgentRegistration(
+                id="doc",
+                name="Doc",
+                description="",
+                source="custom_python",
+                conversation_starters=[],
+                factory=lambda **_kw: None,
+                agent_dir=None,
+                models=[],
+            )
+        )
+        assert registry.canonical_id("doc") == "doc"
+        assert registry.get("doc").name == "Doc"
 
-    def test_legacy_chat_lite_create_agent_uses_lite_tier(self):
-        """``create_agent('chat-lite')`` builds chat with the ~4B preset."""
-        pytest.importorskip("gaia_agent_chat")
+    def test_legacy_lite_create_agent_uses_lite_tier(self):
+        """``create_agent('chat-lite')`` builds the flagship with the ~4B preset."""
+        pytest.importorskip("gaia_agent")
         registry = AgentRegistry()
         registry.discover()
-        with patch("gaia_agent_chat.agent.ChatAgent") as mock_agent:
-            registry.create_agent("chat-lite")
-        mock_agent.assert_called_once()
-        config = mock_agent.call_args.kwargs["config"]
-        assert config.model_id == _EXPECTED_PRIMARY
-        assert config.prompt_profile == "chat"
-
-    def test_legacy_gaia_lite_create_agent_uses_doc_profile(self):
-        """gaia-lite resolves to the doc agent on the lite tier."""
-        pytest.importorskip("gaia_agent_chat")
-        registry = AgentRegistry()
-        registry.discover()
-        with patch("gaia_agent_chat.agent.ChatAgent") as mock_agent:
-            registry.create_agent("gaia-lite")
-        config = mock_agent.call_args.kwargs["config"]
-        assert config.model_id == _EXPECTED_PRIMARY
-        assert config.prompt_profile == "doc"
+        for legacy in self._LEGACY_LITE_IDS:
+            with patch("gaia_agent.agent.GaiaAgent") as mock_agent:
+                registry.create_agent(legacy)
+            mock_agent.assert_called_once()
+            config = mock_agent.call_args.kwargs["config"]
+            assert config.model_id == _EXPECTED_PRIMARY, legacy
 
     def test_explicit_model_id_overrides_lite_tier(self):
         """A caller-pinned ``model_id`` wins over the alias's lite preset."""
-        pytest.importorskip("gaia_agent_chat")
+        pytest.importorskip("gaia_agent")
         registry = AgentRegistry()
         registry.discover()
-        with patch("gaia_agent_chat.agent.ChatAgent") as mock_agent:
+        with patch("gaia_agent.agent.GaiaAgent") as mock_agent:
             registry.create_agent("chat-lite", model_id="Custom-Model-Override")
         config = mock_agent.call_args.kwargs["config"]
         assert config.model_id == "Custom-Model-Override"
 
-    def test_explicit_model_tier_selects_lite_on_base_id(self):
-        """The base id + ``model_tier='lite'`` selects the ~4B preset (#1162)."""
-        pytest.importorskip("gaia_agent_chat")
+    def test_explicit_model_tier_selects_lite_on_a_legacy_id(self):
+        """A legacy id + ``model_tier='lite'`` selects the ~4B preset (#1162)."""
+        pytest.importorskip("gaia_agent")
         registry = AgentRegistry()
         registry.discover()
-        with patch("gaia_agent_chat.agent.ChatAgent") as mock_agent:
+        with patch("gaia_agent.agent.GaiaAgent") as mock_agent:
             registry.create_agent("chat", model_tier="lite")
         config = mock_agent.call_args.kwargs["config"]
         assert config.model_id == _EXPECTED_PRIMARY
 
-    def test_base_chat_create_agent_uses_default_model(self):
-        """Plain ``chat`` (full tier) leaves model_id unset for the agent default."""
-        pytest.importorskip("gaia_agent_chat")
+    def test_legacy_ids_create_the_flagship_on_its_default_model(self):
+        """Plain ``chat``/``doc``/``file`` (full tier) leave model_id unset."""
+        pytest.importorskip("gaia_agent")
         registry = AgentRegistry()
         registry.discover()
-        with patch("gaia_agent_chat.agent.ChatAgent") as mock_agent:
-            registry.create_agent("chat")
-        config = mock_agent.call_args.kwargs["config"]
-        assert config.model_id is None
+        for legacy in self._LEGACY_IDS:
+            with patch("gaia_agent.agent.GaiaAgent") as mock_agent:
+                registry.create_agent(legacy)
+            config = mock_agent.call_args.kwargs["config"]
+            assert config.model_id is None, legacy
 
-    def test_legacy_chat_lite_resolve_model_returns_4b(self):
+    def test_legacy_lite_resolve_model_returns_4b(self):
         """``resolve_model('chat-lite')`` must honour the alias's lite tier.
 
         Regression: a session stored with ``agent_type='chat-lite'`` must
-        still resolve to the 4B preset even though the base ``chat`` agent
-        carries no top-level ``models`` preference (#1162).
+        still resolve to the 4B preset even though the flagship carries no
+        top-level ``models`` preference (#1162).
         """
-        pytest.importorskip("gaia_agent_chat")
+        pytest.importorskip("gaia_agent")
         registry = AgentRegistry()
         registry.discover()
-        resolved = registry.resolve_model(
-            "chat-lite",
-            available_models=[_EXPECTED_PRIMARY, "Something-Else"],
-        )
-        assert resolved == _EXPECTED_PRIMARY
+        for legacy in self._LEGACY_LITE_IDS:
+            resolved = registry.resolve_model(
+                legacy,
+                available_models=[_EXPECTED_PRIMARY, "Something-Else"],
+            )
+            assert resolved == _EXPECTED_PRIMARY, legacy
 
-    def test_legacy_gaia_lite_resolve_model_returns_4b(self):
-        pytest.importorskip("gaia_agent_chat")
-        registry = AgentRegistry()
-        registry.discover()
-        resolved = registry.resolve_model(
-            "gaia-lite",
-            available_models=[_EXPECTED_PRIMARY, "Something-Else"],
-        )
-        assert resolved == _EXPECTED_PRIMARY
-
-    def test_base_chat_resolve_model_returns_none(self):
+    def test_legacy_full_tier_resolve_model_returns_none(self):
         """The full tier defers to the agent default — resolve_model is None."""
-        pytest.importorskip("gaia_agent_chat")
+        pytest.importorskip("gaia_agent")
         registry = AgentRegistry()
         registry.discover()
         resolved = registry.resolve_model("chat", available_models=[_EXPECTED_PRIMARY])
@@ -275,18 +229,17 @@ class TestBuiltinRegistration:
     def test_canonical_id_maps_aliases_and_passes_through_known_ids(self):
         registry = AgentRegistry()
         registry.discover()
-        # Known IDs pass through unchanged.
-        assert registry.canonical_id("chat") == "chat"
-        # Legacy lite IDs resolve to their base agent.
-        assert registry.canonical_id("chat-lite") == "chat"
-        assert registry.canonical_id("gaia-lite") == "doc"
+        assert registry.canonical_id("gaia") == "gaia"
+        assert registry.canonical_id("chat") == "gaia"
+        assert registry.canonical_id("chat-lite") == "gaia"
+        assert registry.canonical_id("gaia-lite") == "gaia"
         # Unknown IDs pass through so callers can surface the miss themselves
         # (``get`` returns ``None``, ``create_agent`` raises ValueError).
         assert registry.canonical_id("unknown-agent") == "unknown-agent"
 
-    def test_chat_has_no_memory_requirement_by_default(self):
-        """Chat (full tier) leaves min_memory_gb unset — existing behaviour."""
-        pytest.importorskip("gaia_agent_chat")
+    def test_flagship_has_no_memory_requirement_by_default(self):
+        """The full tier leaves min_memory_gb unset — existing behaviour."""
+        pytest.importorskip("gaia_agent")
         registry = AgentRegistry()
         registry.discover()
         reg = registry.get("chat")

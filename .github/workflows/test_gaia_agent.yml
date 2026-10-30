@@ -27,7 +27,8 @@ on:
       - 'util/check_ci_path_coverage.py'
       - 'hub/agents/gaia/python/**'
       - 'hub/agents/gaia/CAPABILITY_MATRIX.md'
-      - 'hub/agents/chat/python/**'
+      # ChatAgent's tests, moved here in #6099, reuse its characterization harness.
+      - 'tests/unit/test_profilespec_characterization.py'
       - 'hub/skills/**'
       # The flagship composes providers, RAG, connectors and the UI's stdio
       # adapters; restricting this to agent modules misses runtime regressions.
@@ -84,7 +85,8 @@ on:
       - 'util/check_ci_path_coverage.py'
       - 'hub/agents/gaia/python/**'
       - 'hub/agents/gaia/CAPABILITY_MATRIX.md'
-      - 'hub/agents/chat/python/**'
+      # ChatAgent's tests, moved here in #6099, reuse its characterization harness.
+      - 'tests/unit/test_profilespec_characterization.py'
       - 'hub/skills/**'
       # The flagship composes providers, RAG, connectors and the UI's stdio
       # adapters; restricting this to agent modules misses runtime regressions.
@@ -162,7 +164,7 @@ jobs:
           # when Playwright is importable (the Chromium download is not needed
           # for that).
           uv pip install --system -e ".[dev,api,browser]"
-          uv pip install --system -e hub/agents/chat/python -e hub/agents/gaia/python
+          uv pip install --system -e hub/agents/gaia/python
 
       - name: Check no test file skips wholesale
         run: python util/check_module_skips.py --workflow test_gaia_agent.yml --job test-gaia-agent
@@ -217,7 +219,7 @@ jobs:
           echo "================================================================"
           echo "                  TOOL-PROMPT BUDGET TESTS"
           echo "================================================================"
-          # The file opens with importorskip("gaia_agent_chat"), so it silently
+          # The file opens with importorskip("gaia_agent"), so it silently
           # skipped in test_unit.yml and ran in no lane at all (#3294). This is
           # the cheapest lane that installs that wheel.
           python -m pytest \
@@ -267,8 +269,8 @@ jobs:
           echo "================================================================"
           echo "              COMMAND-INJECTION REGRESSION TESTS"
           echo "================================================================"
-          # notify_desktop lives in the chat package, so its half of this file
-          # only executes where that package is installed — this lane. The
+          # notify_desktop lives in the flagship package, so its half of this
+          # file only executes where that package is installed — this lane. The
           # PPTX-filename half needs no agent package and also runs in
           # test_unit.yml; running the whole file here keeps both guarded.
           python -m pytest \

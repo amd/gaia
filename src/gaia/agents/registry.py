@@ -551,13 +551,17 @@ class AgentRegistry:
     # those sessions working without a DB migration. All lookups (``get``,
     # ``create_agent``, ``resolve_model``) honour the map.
     #
-    # ``gaia-lite`` historically aliased ``doc-lite`` (doc profile, ~4B model),
-    # so it resolves to ``doc`` with the lite tier.
+    # The ChatAgent profiles ``chat``, ``doc`` and ``file`` were folded into the
+    # flagship package (#6099), so they and their ``-lite`` forms resolve to
+    # ``gaia``; a stored session naming one reopens on the flagship.
     _LEGACY_ID_ALIASES: Dict[str, str] = {
-        "chat-lite": "chat",
-        "doc-lite": "doc",
-        "file-lite": "file",
-        "gaia-lite": "doc",
+        "chat": "gaia",
+        "doc": "gaia",
+        "file": "gaia",
+        "chat-lite": "gaia",
+        "doc-lite": "gaia",
+        "file-lite": "gaia",
+        "gaia-lite": "gaia",
     }
 
     # Model tier implied by each legacy "-lite" alias. ``create_agent`` and
@@ -614,8 +618,8 @@ class AgentRegistry:
         """Return the current canonical ID for *agent_id*, resolving aliases.
 
         Returns the input unchanged when no alias exists so callers can use
-        the result as a stable cache key — both ``chat`` and the legacy
-        ``chat-lite`` resolve to ``chat``, so the per-session agent cache
+        the result as a stable cache key — both ``gaia`` and the legacy
+        ``chat-lite`` resolve to ``gaia``, so the per-session agent cache
         doesn't thrash when a client mixes the old and new names.
         """
         if agent_id in self._agents:
@@ -806,7 +810,7 @@ class AgentRegistry:
 
         # Spec form (docs/spec/agent-hub-restructure.mdx): the entry point may
         # target the Agent subclass directly, e.g.
-        # ``chat = "gaia_agent_chat.agent:ChatAgent"``. Build a registration
+        # ``gaia = "gaia_agent.agent:GaiaAgent"``. Build a registration
         # from its class attributes in that case.
         from gaia.agents.base.agent import Agent as BaseAgent
 
@@ -1198,7 +1202,7 @@ class AgentRegistry:
     def get(self, agent_id: str) -> Optional[AgentRegistration]:
         """Return the registration for *agent_id*, or ``None``.
 
-        Legacy aliases (e.g. ``chat-lite`` → ``gaia-lite``) are resolved
+        Legacy aliases (e.g. ``chat-lite`` → ``gaia``) are resolved
         transparently so existing persisted sessions keep working after a
         rename.
         """
@@ -1288,7 +1292,7 @@ class AgentRegistry:
         Raises:
             ValueError: If *agent_id* is not registered.
         """
-        # Route through get() so legacy aliases (e.g. chat-lite → chat)
+        # Route through get() so legacy aliases (e.g. chat-lite → gaia)
         # resolve consistently with lookups.
         reg = self.get(agent_id)
         if reg is None:

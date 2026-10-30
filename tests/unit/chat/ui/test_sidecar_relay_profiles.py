@@ -112,7 +112,6 @@ def _registered_tool_names() -> set:
         "src/gaia/sd",
         "src/gaia/vlm",
         "src/gaia/agents/code_index",
-        "hub/agents/chat/python",
         "hub/agents/gaia/python",
     ]
 

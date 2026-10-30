@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.security import PathValidator

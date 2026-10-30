@@ -19,7 +19,7 @@ on:
       - '.github/workflows/test_security.yml'
       - 'pyproject.toml'
       - 'src/gaia/security.py'
-      - 'hub/agents/chat/python/**'
+      - 'hub/agents/gaia/python/**'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -31,7 +31,7 @@ on:
       - '.github/workflows/test_security.yml'
       - 'pyproject.toml'
       - 'src/gaia/security.py'
-      - 'hub/agents/chat/python/**'
+      - 'hub/agents/gaia/python/**'
   merge_group:
   workflow_dispatch:
 
@@ -63,9 +63,9 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system -e .[dev,rag]
-          # verify_*.py instantiate ChatAgent, which ships as the standalone
-          # gaia-agent-chat wheel (#1102).
-          uv pip install --system -e hub/agents/chat/python
+          # verify_*.py instantiate ChatAgent, which ships in the flagship
+          # gaia-agent-gaia wheel (#6099).
+          uv pip install --system -e hub/agents/gaia/python
 
       - name: Run Path Validator Security Tests
         env:
@@ -162,9 +162,9 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system -e .[dev,rag]
-          # verify_*.py instantiate ChatAgent, which ships as the standalone
-          # gaia-agent-chat wheel (#1102).
-          uv pip install --system -e hub/agents/chat/python
+          # verify_*.py instantiate ChatAgent, which ships in the flagship
+          # gaia-agent-gaia wheel (#6099).
+          uv pip install --system -e hub/agents/gaia/python
         shell: pwsh
 
       - name: Run Path Validator Security Tests

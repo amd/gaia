@@ -85,7 +85,7 @@ module_skips:
       - tests/unit/agents/test_email_agent_tools.py
       - tests/unit/agents/test_email_llm_triage.py
 
-  - reason: Needs the gaia-agent-chat wheel, which test_unit.yml does not install.
+  - reason: Needs the gaia-agent-gaia wheel (ChatAgent), which test_unit.yml does not install.
     runs_in: test_chat_agent.yml
     paths:
       - tests/unit/agents/test_registry.py

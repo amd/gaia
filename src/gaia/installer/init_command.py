@@ -132,8 +132,8 @@ INIT_PROFILES = {
         "description": "The flagship GAIA agent — chat, documents, data, web, memory",
         # Installs the flagship from the Agent Hub, which publishes it as a
         # native binary (`gaia-agent`), not a wheel -- so nothing it installs is
-        # importable. `gaia chat` still needs the `gaia-agent-chat` and
-        # `gaia-agent-gaia` wheels separately; the completion message says so.
+        # importable. `gaia chat` still needs the `gaia-agent-gaia` wheel
+        # separately; the completion message says so.
         "agent": "gaia",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~6 GB",

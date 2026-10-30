@@ -15,9 +15,9 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
 
@@ -34,8 +34,8 @@ def gaia_docs(tmp_path, monkeypatch):
 def _build(**overrides) -> ChatAgent:
     config = ChatAgentConfig(silent_mode=True, **overrides)
     with (
-        patch("gaia_agent_chat.agent.RAGSDK"),
-        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
     ):
         return ChatAgent(config)
 

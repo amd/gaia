@@ -495,7 +495,7 @@ def installed_copy(repo: str) -> Tuple[Path, ...]:
 
 @functools.lru_cache(maxsize=None)
 def gaia_imports(
-    roots: Tuple[str, ...] = ("amd-gaia", "gaia-agent", "gaia-agent-chat")
+    roots: Tuple[str, ...] = ("amd-gaia", "gaia-agent", "gaia-agent-gaia")
 ) -> frozenset:
     """Distributions GAIA's agent process may import: *roots* and what they require.
 

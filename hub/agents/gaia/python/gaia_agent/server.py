@@ -57,7 +57,6 @@ from gaia_agent.session_registry import (
     close_agent,
 )
 from gaia_agent.session_registry import registry as session_registry
-from gaia_agent_chat.session import validate_session_id
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import StreamingResponse
 
@@ -67,6 +66,7 @@ from gaia.agents.base.readiness import start_advice, version_meets_min
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
+from gaia.sidecar.session_ids import validate_session_id
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 from gaia.ui.turn_insights import turn_record
 from gaia.version import LEMONADE_MIN_VERSION

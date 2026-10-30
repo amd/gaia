@@ -289,7 +289,7 @@ jobs:
           # branch's code) or session creation dies with ModuleNotFoundError.
           # Core gaia stays editable (-e .) so eval fixtures + thresholds
           # resolve in-repo.
-          install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/chat/python -e hub/agents/gaia/python'
+          install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/gaia/python'
 
       - name: Check the venv interpreter
         env:
@@ -305,9 +305,9 @@ jobs:
               exit 1
             }
           }
-          & $env:VENV_PY -c "import gaia, gaia_agent, gaia_agent_chat"
+          & $env:VENV_PY -c "import gaia, gaia_agent"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent / gaia_agent_chat - the editable installs in the Setup Python Environment step are broken."
+            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent - the editable installs in the Setup Python Environment step are broken."
             exit 1
           }
           $bare = (Get-Command python -ErrorAction SilentlyContinue).Source

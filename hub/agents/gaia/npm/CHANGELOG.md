@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **The agent ships as one Python package.** `ChatAgent`, the class the agent
+  builds on, moved into `gaia-agent-gaia` (`gaia_agent.chat_agent`), so the
+  binary and a pip install no longer need `gaia-agent-chat`. Prompts and tools
+  are unchanged. Agent UI chats saved under the retired `chat`, `doc` and
+  `file` agents now reopen on this agent (#6099).
+
 ## [0.3.3]
 
 Released with GAIA 0.25.3, and requires the `gaia` Python CLI 0.25.3+ on `PATH`.
