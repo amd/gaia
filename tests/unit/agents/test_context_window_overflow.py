@@ -3,7 +3,9 @@
 from gaia.agents.base.agent import _loaded_context_is_too_small
 
 
-def test_intentionally_small_loaded_window_is_not_misclassified_when_requested() -> None:
+def test_intentionally_small_loaded_window_is_not_misclassified_when_requested() -> (
+    None
+):
     """A pinned 16K window is the requested target, not a bad 64K load."""
     assert not _loaded_context_is_too_small(16384, 16384)
     assert not _loaded_context_is_too_small(8192, 8192)

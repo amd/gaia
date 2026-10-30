@@ -7814,9 +7814,7 @@ Do NOT wrap conversational replies in JSON.
                 # agent. Without this, a deliberate 16K pin is compared with
                 # the registry's normal 64K target and is misclassified as a
                 # bad load (#5284).
-                backend = getattr(
-                    getattr(self, "chat", None), "llm_client", None
-                )
+                backend = getattr(getattr(self, "chat", None), "llm_client", None)
                 backend = getattr(backend, "_backend", backend)
                 pin = getattr(backend, "ctx_size_override", None)
                 if isinstance(pin, int) and not isinstance(pin, bool) and pin > 0:
