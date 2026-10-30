@@ -34,6 +34,7 @@ Endpoints covered:
 """
 
 import contextlib
+import json
 import sqlite3
 import sys
 from unittest.mock import MagicMock, patch
@@ -1649,6 +1650,121 @@ class TestMemorySettings:
         data = resp.json()
         assert data["memory_enabled"] is False
         assert data["mcp_memory_enabled"] is True
+
+    def test_put_system_discovery_consent_keeps_db_unchanged_when_json_save_fails(
+        self, client
+    ):
+        """The dashboard must not claim consent changed when its source of truth failed."""
+        with patch(
+            "gaia.agents.base.memory._save_memory_settings",
+            side_effect=RuntimeError("disk full"),
+        ):
+            resp = client.put(
+                "/api/memory/settings", json={"system_discovery_consent": True}
+            )
+
+        assert resp.status_code == 500
+        assert "Could not save system discovery setting" in resp.json()["detail"]
+        assert (
+            client.get("/api/memory/settings").json()["system_discovery_consent"]
+            is False
+        )
+
+
+class TestMemorySettingsFile:
+    def test_save_refuses_to_overwrite_malformed_settings(self, tmp_path, monkeypatch):
+        """A parse failure must preserve unrelated settings instead of replacing the file."""
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "memory_settings.json"
+        malformed = "{not valid json"
+        settings_path.write_text(malformed, encoding="utf-8")
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        with pytest.raises(RuntimeError, match="Could not read memory settings"):
+            memory_module._save_memory_settings({"system_context_enabled": False})
+
+        assert settings_path.read_text(encoding="utf-8") == malformed
+
+    def test_save_refuses_to_overwrite_non_object_root(self, tmp_path, monkeypatch):
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "memory_settings.json"
+        settings_path.write_text("[1, 2]", encoding="utf-8")
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        with pytest.raises(RuntimeError, match="must be an object"):
+            memory_module._save_memory_settings({"system_context_enabled": True})
+
+        assert settings_path.read_text(encoding="utf-8") == "[1, 2]"
+        assert memory_module._load_memory_settings() == {}
+
+    def test_save_raises_when_the_file_cannot_be_written(self, tmp_path, monkeypatch):
+        from gaia.agents.base import memory as memory_module
+
+        blocker = tmp_path / "not_a_dir"
+        blocker.write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            memory_module, "_MEMORY_SETTINGS_PATH", blocker / "memory_settings.json"
+        )
+
+        with pytest.raises(RuntimeError, match="Could not"):
+            memory_module._save_memory_settings({"system_context_enabled": True})
+
+    def test_save_merges_and_keeps_unrelated_keys(self, tmp_path, monkeypatch):
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "sub" / "memory_settings.json"
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        memory_module._save_memory_settings({"onboarding_completed_at": "t0"})
+        memory_module._save_memory_settings({"system_context_enabled": True})
+
+        assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+            "onboarding_completed_at": "t0",
+            "system_context_enabled": True,
+        }
+
+    def test_failed_consent_save_applies_no_other_key(self, client):
+        """A 500 must not leave half the request applied."""
+        with patch(
+            "gaia.agents.base.memory._save_memory_settings",
+            side_effect=RuntimeError("read-only"),
+        ):
+            resp = client.put(
+                "/api/memory/settings",
+                json={
+                    "memory_enabled": False,
+                    "mcp_memory_enabled": True,
+                    "system_discovery_consent": True,
+                },
+            )
+
+        assert resp.status_code == 500
+        data = client.get("/api/memory/settings").json()
+        assert data["memory_enabled"] is True
+        assert data["mcp_memory_enabled"] is False
+        assert data["system_discovery_consent"] is False
+
+    def test_consent_withdrawal_writes_file_then_db(
+        self, client, tmp_path, monkeypatch
+    ):
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "memory_settings.json"
+        settings_path.write_text('{"keep": 1}', encoding="utf-8")
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        resp = client.put(
+            "/api/memory/settings", json={"system_discovery_consent": False}
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["system_discovery_consent"] is False
+        assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+            "keep": 1,
+            "system_context_enabled": False,
+        }
 
 
 # ===========================================================================

@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
 from gaia.security import PathValidator  # noqa: E402
 from tests.unit.test_profilespec_characterization import (  # noqa: E402
@@ -100,7 +100,7 @@ def test_text_to_speech_refuses_an_output_outside(tree, chat):
 
 
 def test_rag_reads_through_the_agents_validator(tree):
-    from gaia_agent_chat.agent import ChatAgent
+    from gaia_agent.chat_agent import ChatAgent
 
     allowed, _, _ = tree
     agent = ChatAgent.__new__(ChatAgent)
@@ -108,7 +108,7 @@ def test_rag_reads_through_the_agents_validator(tree):
     agent.path_validator = PathValidator(allowed_paths=[str(allowed)])
     agent._rag_config = MagicMock()
 
-    with patch("gaia_agent_chat.agent.RAGSDK") as rag_cls:
+    with patch("gaia_agent.chat_agent.RAGSDK") as rag_cls:
         rag = agent._build_rag()
 
     assert rag is rag_cls.return_value
@@ -116,7 +116,7 @@ def test_rag_reads_through_the_agents_validator(tree):
 
 
 def test_is_path_allowed_refuses_a_secret_inside_the_scope(tree):
-    from gaia_agent_chat.agent import ChatAgent
+    from gaia_agent.chat_agent import ChatAgent
 
     allowed, _, _ = tree
     (allowed / ".env").write_text("TOKEN=x", encoding="utf-8")

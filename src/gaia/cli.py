@@ -611,7 +611,7 @@ async def async_main(action, **kwargs):
         # `gaia chat` runs the flagship; it ships as the gaia-agent-gaia wheel.
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent_chat.app import interactive_mode
+            from gaia_agent.interactive import interactive_mode
         except ImportError as e:
             raise RuntimeError(
                 agent_import_error_message(
@@ -977,7 +977,7 @@ def _launch_interactive_cli(log=None):
 
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent_chat.app import interactive_mode
+            from gaia_agent.interactive import interactive_mode
         except ImportError as e:
             raise RuntimeError(
                 agent_import_error_message(
@@ -6902,6 +6902,14 @@ def handle_config_command(args):
         for key in cfg.field_names():
             value = cfg.get(key)
             print(f"  {key} = {value if value is not None else '(unset)'}")
+        from gaia.llm import local_only
+
+        print(f"Policy file: {local_only.policy_path()}")
+        print(f"  {local_only.POLICY_KEY} = {local_only.effective_policy().value}")
+        return
+
+    if args.key == "network_policy":
+        _handle_network_policy(action, args.value if action == "set" else None)
         return
 
     if action == "get":
@@ -6930,6 +6938,52 @@ def handle_config_command(args):
         print(f"✅ Set {args.key} = {cfg.get(args.key)}")
         print(f"   Saved to {config_file}")
         return
+
+
+def _handle_network_policy(action, value) -> None:
+    """``gaia config get|set network_policy``: lives in policy.json, not config.json."""
+    from gaia.config import GaiaConfigError
+    from gaia.llm import local_only
+
+    if action == "get":
+        print(local_only.effective_policy().value)
+        return
+    try:
+        stored = local_only.set_policy(value)
+    except (ValueError, OSError) as e:
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"✅ Set network_policy = {stored.value}")
+    print(f"   Saved to {local_only.policy_path()}")
+    if stored is not local_only.NetworkPolicy.LOCAL_AI_ONLY:
+        return
+    print("   No GAIA AI request will reach a cloud model.")
+    try:
+        cleared = local_only.clear_saved_cloud_models()
+    except GaiaConfigError as e:
+        print(f"⚠️  Saved models were not checked: {e}", file=sys.stderr)
+        return
+    if cleared:
+        from gaia.llm.lemonade_client import resolve_default_chat_model
+
+        for key, model in cleared:
+            print(f"   Cleared {key} (was {model}): it is a cloud model.")
+        print(f"   GAIA now uses {resolve_default_chat_model()} by default.")
+    from gaia.llm.cloud_keys import CloudKeyError, drop_runtime_keys
+
+    try:
+        dropped = drop_runtime_keys()
+    except CloudKeyError as e:
+        print(
+            f"⚠️  Lemonade still holds any cloud key GAIA gave it ({e}). GAIA "
+            "won't use it; restart Lemonade to drop it.",
+            file=sys.stderr,
+        )
+        return
+    # Names come from a fixed table, never from the key-handling call.
+    for provider, name in (("fireworks", "Fireworks AI"), ("amd", "AMD LLM Gateway")):
+        if provider in dropped:
+            print(f"   Removed the {name} key from the running Lemonade Server.")
 
 
 #: Keys that pick which Lemonade GAIA uses; setting one probes and switches.
@@ -7770,7 +7824,11 @@ def _offer_first_boot_onboarding() -> None:
 
     if answer in ("n", "no"):
         # Declining is an answer — record it so the intro is not re-offered.
-        _mark_onboarding_completed()
+        try:
+            _mark_onboarding_completed()
+        except RuntimeError as e:
+            # A persistence failure must not cost the user their chat session.
+            print(f"Could not record your choice: {e}")
         return
 
     # Onboarding is optional; chat is not. A failure to store must not cost

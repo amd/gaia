@@ -1,7 +1,7 @@
 id: chat
 name: Chat
 version: 0.2.0
-description: "GAIA chat agent — conversation, document Q&A (RAG), and file-system profiles"
+description: "Deprecated: re-exports ChatAgent from the flagship gaia-agent-gaia package for one release"
 author: AMD
 license: MIT
 
@@ -22,6 +22,7 @@ python:
   entry_class: ChatAgent
   dependencies:
     - "amd-gaia>=0.25.3"
+    - "gaia-agent-gaia>=0.3.3"
 
 requirements:
   min_memory_gb: 8

@@ -5,7 +5,7 @@
 The RAG tools' side of this lives in tests/unit/test_rag_no_documents_message.py.
 """
 
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 
 def _chat_agent(**config) -> ChatAgent:

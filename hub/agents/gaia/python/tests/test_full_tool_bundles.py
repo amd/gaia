@@ -27,7 +27,7 @@ import json
 import numpy as np
 import pytest
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-from gaia_agent_chat.tool_bundles import (
+from gaia_agent.tool_bundles import (
     FULL_BUNDLES,
     FULL_CORE_TOOLS,
     FULL_OPTIONAL_TOOLS,
@@ -100,7 +100,7 @@ def test_core_and_bundles_cover_the_flagship_registry_exactly(flagship_registry)
     assert not uncovered, (
         f"flagship tools covered by neither FULL_CORE_TOOLS nor a bundle: "
         f"{uncovered}. Add each to a bundle (or CORE) in "
-        "hub/agents/chat/python/gaia_agent_chat/tool_bundles.py — an uncovered "
+        "hub/agents/gaia/python/gaia_agent/tool_bundles.py — an uncovered "
         "tool can never be pulled in with its cohort or recovered via load_tools."
     )
     assert not dangling, (

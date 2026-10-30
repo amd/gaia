@@ -139,8 +139,9 @@ class CodeIndexToolsMixin:
     ) -> None:
         """Initialise mixin state. Safe to call multiple times.
 
-        Not idempotent in one respect: a later call replaces the sandbox
-        ceilings as well as the default repository.
+        A later call always refreshes the sandbox ceilings.  It retains the
+        current repository and SDK only while that repository remains
+        within those refreshed ceilings; otherwise it starts from ``repo_path``.
 
         Args:
             repo_path: Repository root (absolute or relative, resolved here).
@@ -152,16 +153,31 @@ class CodeIndexToolsMixin:
         # expanduser everywhere a root is stored, or a '~'-style
         # allowed_paths config produces a "<cwd>/~" root that rejects the
         # very paths it was meant to allow.
-        self._repo_path = os.path.abspath(os.path.expanduser(repo_path))
+        default_repo_path = os.path.abspath(os.path.expanduser(repo_path))
         # The sandbox ceilings: what a requested repo_path must sit under.
         # ``_repo_path`` tracks the repository currently indexed and does move —
         # conflating the two meant the first index narrowed the ceiling to that
         # repo, so a second repository could never be indexed (#3544).
-        self._code_index_ceilings = (
+        new_ceilings = (
             tuple(os.path.abspath(os.path.expanduser(p)) for p in ceiling_paths)
             if ceiling_paths is not None
-            else (self._repo_path,)
+            else (default_repo_path,)
         )
+
+        # Keep a repo selected by index_codebase across re-registration while it stays in scope.
+        existing_repo_path = getattr(self, "_repo_path", None)
+        if existing_repo_path and code_index_config is None:
+            real_repo_path = str(Path(existing_repo_path).resolve())
+            real_ceilings = [str(Path(path).resolve()) for path in new_ceilings]
+            if any(
+                real_repo_path == ceiling or real_repo_path.startswith(ceiling + os.sep)
+                for ceiling in real_ceilings
+            ):
+                self._code_index_ceilings = new_ceilings
+                return
+
+        self._repo_path = default_repo_path
+        self._code_index_ceilings = new_ceilings
         self._code_index_config = code_index_config
         self._code_index_sdk: Optional[Any] = None
 

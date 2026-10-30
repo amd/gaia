@@ -525,6 +525,16 @@ class PerplexityService(ExternalMCPService):
         # model relays this text to the user, so an accurate refusal is the
         # difference between "set PERPLEXITY_API_KEY" and the agent inventing a
         # network-outage story.
+        from gaia.llm.local_only import SETTINGS_HINT, cloud_blocked
+
+        # Re-checked per call: a cached agent can outlive a switch to Local only.
+        if cloud_blocked():
+            message = (
+                "Web search is unavailable: it answers with Perplexity's cloud AI "
+                f"and Local only is on. {SETTINGS_HINT}"
+            )
+            logger.warning(message)
+            return {"success": False, "error": message, "answer": ""}
         if not self.env.get("PERPLEXITY_API_KEY"):
             message = (
                 "Web search is unavailable: PERPLEXITY_API_KEY is not set. "

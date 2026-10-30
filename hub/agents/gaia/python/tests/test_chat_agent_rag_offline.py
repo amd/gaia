@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, create_autospec, patch
 
 import numpy as np
 import pytest
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 from gaia.agents.tools.rag_tools import SUMMARY_MAX_TOKENS
 from gaia.llm.lemonade_client import MODELS, LemonadeClient

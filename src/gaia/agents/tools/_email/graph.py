@@ -231,7 +231,12 @@ class OutlookReadBackend:
             "$orderby": "receivedDateTime desc",
         }
         if unread_only:
-            params["$filter"] = "isRead eq false"
+            # Graph requires every ordered property to lead $filter; without this
+            # broad lower bound it rejects an unread-only inbox with
+            # InefficientFilter.
+            params["$filter"] = (
+                "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false"
+            )
         data = self._get("/me/mailFolders/inbox/messages", params=params)
         return [message_summary(m) for m in data.get("value", [])]
 
