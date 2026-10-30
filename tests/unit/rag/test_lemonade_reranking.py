@@ -293,6 +293,12 @@ def test_unreachable_lemonade_during_selection_is_raised_with_context():
             ]
         },
         {"results": [None, {"index": 0, "relevance_score": 1}]},
+        {
+            "results": [
+                {"index": 1, "relevance_score": True},
+                {"index": 0, "relevance_score": 1},
+            ]
+        },
     ],
 )
 def test_malformed_rerank_responses_raise_instead_of_reordering(payload):

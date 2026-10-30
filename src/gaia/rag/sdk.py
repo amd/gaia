@@ -4171,11 +4171,13 @@ These positions indicate where to split the text."""
                 index = item.get("index") if isinstance(item, dict) else None
                 score = item.get("relevance_score") if isinstance(item, dict) else None
                 if (
-                    type(index) is not int
+                    isinstance(index, bool)
+                    or not isinstance(index, int)
                     or index < 0
                     or index >= len(candidate_chunks)
                     or index in seen
-                    or type(score) not in (int, float)
+                    or isinstance(score, bool)
+                    or not isinstance(score, (int, float))
                     or not math.isfinite(float(score))
                 ):
                     raise ValueError("response contains an invalid rerank result")
