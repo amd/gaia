@@ -18,6 +18,7 @@ import logging
 import os
 import subprocess
 import sys
+import types
 from pathlib import Path
 from unittest.mock import patch
 
@@ -224,6 +225,28 @@ def unconfigured(monkeypatch, tmp_path):
     root.setLevel(saved_level)
 
 
+def test_flagship_stdio_transport_configures_logging(
+    unconfigured, monkeypatch, tmp_path
+):
+    """Regression: the stdio transport installs GAIA's handlers before moving
+    them, so INFO logs and gaia.log output survive. The HTTP sidecar test
+    covers the other branch."""
+    entry = pytest.importorskip("gaia_agent.entry")
+    stdio = types.ModuleType("gaia_agent.stdio")
+    stdio.main = lambda argv: 0
+    monkeypatch.setitem(sys.modules, "gaia_agent.stdio", stdio)
+
+    assert gaia_logger.log_manager is None
+    assert entry.main([]) == 0
+    assert gaia_logger.log_manager is not None
+
+    log_file = tmp_path / "gaia.log"
+    assert log_file.exists(), "configure() should have created gaia.log"
+    logger = gaia_logger.get_logger("gaia_agent.stdio_test")
+    logger.info("stdio regression check")
+    assert "stdio regression check" in log_file.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize(
     "module_name,func_name,argv",
     _ENTRY_POINTS_HELP,
@@ -243,6 +266,15 @@ def test_entry_point_configures_logging(
     assert (
         gaia_logger.log_manager is not None
     ), f"{module_name}:{func_name} must call gaia.logger.configure()"
+
+
+def test_run_agent_cli_configures_logging(unconfigured):
+    from gaia.agents.base.server import run_agent_cli
+
+    assert gaia_logger.log_manager is None
+    with pytest.raises(SystemExit):
+        run_agent_cli(object(), ["--help"])
+    assert gaia_logger.log_manager is not None
 
 
 def test_eval_bench_child_configures_logging(unconfigured):

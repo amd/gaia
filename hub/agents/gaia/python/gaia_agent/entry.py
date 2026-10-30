@@ -107,8 +107,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # stdout is about to become the event wire, so nothing imported below may
     # log to it — a stray line reaches the reader as a malformed event.
-    from gaia.logger import route_console_logging_to_stderr
+    from gaia.logger import configure, route_console_logging_to_stderr
 
+    # This transport owns the process too, so install GAIA's handlers before
+    # moving them: route_console_logging_to_stderr() only moves handlers that
+    # configure() created.
+    configure()
     route_console_logging_to_stderr()
 
     from gaia_agent.stdio import main as stdio_main

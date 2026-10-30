@@ -106,6 +106,6 @@ def is_windows_console(stream) -> bool:
     import ctypes
     import msvcrt
 
-    mode = ctypes.c_uint32(0)
+    mode = ctypes.c_uint32()
     handle = msvcrt.get_osfhandle(stream.fileno())
     return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
