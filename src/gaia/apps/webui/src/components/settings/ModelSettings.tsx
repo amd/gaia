@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Cloud, Cpu, Loader2 } from 'lucide-react';
+import { Check, Cloud, Cpu, Loader2, Trash2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useModelStore, displayModelName, distinctModelLabels, sameModelId } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
@@ -18,20 +18,9 @@ import type { ProviderId, ProviderInfo, ProviderModel } from '../../types';
 
 const DOWNLOAD_POLL_MS = 2000;
 
-function keyStatus(p: ProviderInfo): string {
-    if (p.key_state === 'waiting_for_os_permission') return p.key_message ?? 'Waiting for the OS to allow reading the saved key.';
-    if (!p.key_source) return 'No key yet.';
-    const connection = p.models_discovered ? `Connected to ${p.name}.` : 'Not connected.';
-    if (p.key_source === 'environment') return `Key set in ${p.env_var}. ${connection}`;
-    if (p.key_hint) return `Key ending in ${p.key_hint} is saved. ${connection}`;
-    if (p.key_source === 'lemonade') return `Key set on the local model server. ${connection}`;
-    return `Key saved. ${connection}`;
-}
-
-function keyPlaceholder(p: ProviderInfo): string {
-    if (p.key_source === 'environment') return 'Blank uses the environment key';
-    if (p.key_source) return 'Paste a new key to replace the saved one';
-    return 'Paste API key';
+function maskedKey(p: ProviderInfo): string {
+    if (p.key_source === 'environment') return `Set in ${p.env_var}`;
+    return `••••••••••••••••••••${p.key_hint ? ` ${p.key_hint}` : ''}`;
 }
 
 /** Local vs Fireworks AI vs AMD LLM Gateway, keys, and the model list — the TUI's /provider. */
@@ -50,6 +39,8 @@ export function ModelSettings() {
     const [query, setQuery] = useState('');
     const [showAllFireworksModels, setShowAllFireworksModels] = useState(false);
     const [key, setKey] = useState('');
+    const [replacingKey, setReplacingKey] = useState(false);
+    const [confirmForget, setConfirmForget] = useState(false);
     const [amd, setAmd] = useState({ base_url: '', auth_header_name: '', auth_header_prefix: '' });
     const [busy, setBusy] = useState<string | null>(null);
     const [memory, setMemory] = useState<string | null>(null);
@@ -60,7 +51,10 @@ export function ModelSettings() {
     const chosenRef = useRef(chosen);
     chosenRef.current = chosen;
     const mounted = useRef(true);
-    useEffect(() => () => { mounted.current = false; }, []);
+    useEffect(() => {
+        mounted.current = true;
+        return () => { mounted.current = false; };
+    }, []);
 
     const provider = providers?.find((p) => p.id === chosen) ?? null;
     const offline = (p: ProviderInfo | null) => p?.network?.reachable === false;
@@ -104,6 +98,8 @@ export function ModelSettings() {
     useEffect(() => { if (activeProvider && !requested) setChosen(activeProvider); }, [activeProvider, requested]);
     useEffect(() => {
         setKey('');
+        setReplacingKey(false);
+        setConfirmForget(false);
         setNotice(null);
         setQuery('');
         setShowAllFireworksModels(false);
@@ -130,6 +126,7 @@ export function ModelSettings() {
             );
             if (movedOn()) return;
             setKey('');
+            setReplacingKey(false);
             setNotice({
                 ok: true,
                 text: r.remember_error
@@ -149,6 +146,7 @@ export function ModelSettings() {
 
     const forget = useCallback(async () => {
         setBusy('forget');
+        setConfirmForget(false);
         setNotice(null);
         try {
             await api.forgetProviderKey(chosen);
@@ -370,9 +368,22 @@ export function ModelSettings() {
                             className="settings-field"
                             onSubmit={(e) => { e.preventDefault(); void connect(); }}
                         >
-                            <span className="settings-label">API key</span>
-                            <span className="settings-hint">{keyStatus(provider)}</span>
-                            {provider.id === 'amd' && (
+                            <div className="settings-row settings-row-between">
+                                <span className="settings-label">API key</span>
+                                {provider.key_source && (
+                                    <span className={`settings-key-status ${connected ? 'settings-ok' : 'settings-error'}`}>
+                                        {connected ? 'Connected' : 'Not connected'}
+                                    </span>
+                                )}
+                            </div>
+                            {!provider.key_source && (
+                                <span className="settings-hint">
+                                    {provider.key_state === 'waiting_for_os_permission'
+                                        ? provider.key_message ?? 'Waiting for the OS to allow reading the saved key.'
+                                        : 'No key yet.'}
+                                </span>
+                            )}
+                            {provider.id === 'amd' && (!provider.key_source || replacingKey) && (
                                 <div className="settings-grid">
                                     <input
                                         className="settings-input"
@@ -390,27 +401,66 @@ export function ModelSettings() {
                                     />
                                 </div>
                             )}
-                            <div className="settings-row">
-                                <input
-                                    className="settings-input"
-                                    type="password"
-                                    autoComplete="off"
-                                    spellCheck={false}
-                                    value={key}
-                                    onChange={(e) => setKey(e.target.value)}
-                                    placeholder={keyPlaceholder(provider)}
-                                    aria-label={`${provider.name} API key`}
-                                />
-                                <button type="submit" className="btn-primary" disabled={busy !== null || (!key && !provider.key_source)}>
-                                    {busy === 'connect' ? <Loader2 size={13} className="spin" /> : null}
-                                    {provider.models_discovered ? 'Reconnect' : 'Connect'}
-                                </button>
-                                {(provider.key_source === 'lemonade' || provider.key_source === 'stored') && (
-                                    <button type="button" className="btn-secondary" onClick={() => void forget()} disabled={busy !== null}>
-                                        Forget key
+                            {provider.key_source && !replacingKey ? (
+                                <div className="settings-row">
+                                    <input
+                                        className="settings-input settings-key-masked"
+                                        readOnly
+                                        value={maskedKey(provider)}
+                                        aria-label={`Saved ${provider.name} API key`}
+                                    />
+                                    {!connected && (
+                                        <button type="submit" className="btn-primary" disabled={busy !== null}>
+                                            {busy === 'connect' ? <Loader2 size={13} className="spin" /> : null}
+                                            Reconnect
+                                        </button>
+                                    )}
+                                    {provider.key_source !== 'environment' && (confirmForget ? (
+                                        <>
+                                            <span className="settings-hint">Remove this key?</span>
+                                            <button type="button" className="btn-danger" onClick={() => void forget()} disabled={busy !== null}>Remove</button>
+                                            <button type="button" className="btn-secondary" onClick={() => setConfirmForget(false)}>Keep</button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <button type="button" className="btn-secondary" onClick={() => setReplacingKey(true)} disabled={busy !== null}>Replace</button>
+                                            <button
+                                                type="button"
+                                                className="btn-secondary settings-key-remove"
+                                                onClick={() => setConfirmForget(true)}
+                                                disabled={busy !== null}
+                                                aria-label="Remove key"
+                                                title="Remove key"
+                                            >
+                                                <Trash2 size={14} aria-hidden="true" />
+                                            </button>
+                                        </>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="settings-row">
+                                    <input
+                                        className="settings-input"
+                                        type="password"
+                                        autoComplete="off"
+                                        spellCheck={false}
+                                        autoFocus={replacingKey}
+                                        value={key}
+                                        onChange={(e) => setKey(e.target.value)}
+                                        placeholder={replacingKey ? 'Paste your new key' : 'Paste API key'}
+                                        aria-label={`${provider.name} API key`}
+                                    />
+                                    <button type="submit" className="btn-primary" disabled={busy !== null || !key}>
+                                        {busy === 'connect' ? <Loader2 size={13} className="spin" /> : null}
+                                        {replacingKey ? 'Save key' : 'Connect'}
                                     </button>
-                                )}
-                            </div>
+                                    {replacingKey && (
+                                        <button type="button" className="btn-secondary" onClick={() => { setKey(''); setReplacingKey(false); }} disabled={busy !== null}>
+                                            Cancel
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                             {provider.error && <p className="settings-error" role="alert">{provider.error}</p>}
                         </form>
                     )}
