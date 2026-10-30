@@ -47,6 +47,22 @@ def test_an_echoed_key_never_reaches_the_failure_detail():
     assert "HTTP 500" in check.detail and KEY not in check.detail
 
 
+@pytest.mark.parametrize("offset", [4, 10, 20])
+@responses.activate
+def test_a_key_echoed_across_the_detail_cut_leaks_no_part_of_itself(offset):
+    pad = "x" * (200 - offset)
+    responses.add(responses.GET, URL, body=f"{pad}{KEY} trailing", status=500)
+    detail = check_model_list(KEY).detail
+    assert KEY[:offset] not in detail
+
+
+@responses.activate
+def test_the_check_only_ever_calls_fireworks():
+    responses.add(responses.GET, URL, json={"data": []}, status=200)
+    check_model_list(KEY)
+    assert [c.request.url for c in responses.calls] == [URL]
+
+
 @responses.activate
 def test_an_unreachable_fireworks_is_a_failure_and_hides_the_exception_text():
     responses.add(responses.GET, URL, body=requests.ConnectionError(f"bad {KEY}"))

@@ -181,7 +181,7 @@
 }
 
 .settings-key-masked {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     color: var(--text-secondary);
     cursor: default;
 }

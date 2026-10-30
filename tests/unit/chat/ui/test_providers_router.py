@@ -1628,3 +1628,75 @@ def test_restore_does_not_bring_back_a_cloud_model_under_local_only(
     assert "Local only is on" in body["restore"]["message"]
     assert db.get_setting("custom_model") is None
     assert keys["ensure"] == []  # no key replay attempted for the cloud model
+
+
+@pytest.fixture
+def known_models_on(monkeypatch):
+    """GAIA's server is serving known Fireworks models; record each way out."""
+    from gaia.llm import fireworks_known_models as known
+
+    left = []
+    monkeypatch.setattr(providers, "_known_models_active", lambda p: p == "fireworks")
+    monkeypatch.setattr(known, "stop_using_known_models", lambda _: left.append(1))
+    return left
+
+
+def test_forgetting_the_key_takes_it_out_of_the_server_start(
+    client, lemonade, keys, known_models_on
+):
+    keys["stored"]["fireworks"] = KEY
+    resp = client.delete("/api/providers/fireworks/key")
+    assert resp.status_code == 200
+    assert known_models_on == [1]
+    assert "fireworks" not in keys["stored"]
+
+
+def test_a_failed_restart_keeps_the_key_rather_than_half_forgetting(
+    client, lemonade, keys, monkeypatch
+):
+    from gaia.llm import fireworks_known_models as known
+    from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+
+    def boom(_):
+        raise EmbeddedLemonadeError("could not stop")
+
+    monkeypatch.setattr(providers, "_known_models_active", lambda p: True)
+    monkeypatch.setattr(known, "stop_using_known_models", boom)
+    keys["stored"]["fireworks"] = KEY
+    resp = client.delete("/api/providers/fireworks/key")
+    assert resp.status_code == 503
+    assert keys["stored"]["fireworks"] == KEY
+    assert lemonade.paths("DELETE") == []
+
+
+def test_a_new_key_during_known_models_restarts_without_the_old_one(
+    client, lemonade, keys, model_list, known_models_on
+):
+    keys["stored"]["fireworks"] = "fw_old_key_0000000000"
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 200
+    assert known_models_on == [1]
+    assert keys["stored"]["fireworks"] == KEY
+
+
+def test_a_rejected_key_is_never_kept_even_mid_outage(
+    client, lemonade, keys, model_list, known_models_on
+):
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 401
+    assert keys["remembered"] == []
+    assert model_list["restarts"] == []
+    assert KEY not in resp.text
+
+
+def test_only_fireworks_falls_back_to_known_models(client, lemonade, keys, model_list):
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list["check"] = _list_failing()
+    resp = client.post(
+        "/api/providers/amd/connect",
+        json={"api_key": KEY, "base_url": "https://gw.example.com/v1"},
+    )
+    assert model_list["keys_checked"] == []
+    assert model_list["restarts"] == []
+    assert KEY not in resp.text

@@ -216,7 +216,8 @@ def check_model_list(
         return ModelListCheck(ModelListState.REJECTED)
     if response.status_code == 200:
         return ModelListCheck(ModelListState.OK)
-    body = http_body_text(response)[:200].strip().replace(api_key, "[key]")
+    # Redact before cutting, or a key echoed across the cut leaks its prefix.
+    body = http_body_text(response).replace(api_key, "[key]")[:200].strip()
     return ModelListCheck(
         ModelListState.FAILING, f"HTTP {response.status_code}: {body}"
     )
