@@ -48,7 +48,8 @@ gaia-agent = "gaia_agent.entry:main"
 gaia = "gaia_agent:build_gaia"
 
 [project.optional-dependencies]
-test = ["pytest"]
+# setuptools: tests/test_starter_skill_build.py runs the real build hooks.
+test = ["pytest", "setuptools>=70.0"]
 
 [tool.setuptools.packages.find]
 include = ["gaia_agent*"]
