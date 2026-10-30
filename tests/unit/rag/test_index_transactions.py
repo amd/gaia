@@ -159,3 +159,21 @@ def test_short_embedding_batch_preserves_existing_document(rag, tmp_path):
     assert not result["success"]
     assert "1/2 vectors" in result["error"]
     _assert_documents(rag, {existing: "Keep the existing document."})
+
+
+def test_indexing_past_the_cap_names_the_evicted_document(rag, tmp_path):
+    rag.config.max_indexed_files = 3
+    paths = []
+    for n in range(4):
+        doc = tmp_path / f"doc{n}.txt"
+        doc.write_text(f"Document number {n}.", encoding="utf-8")
+        paths.append(doc)
+
+    for doc in paths[:3]:
+        result = rag.index_document(str(doc))
+        assert result["success"]
+        assert "evicted" not in result
+
+    result = rag.index_document(str(paths[3]))
+    assert result["success"]
+    assert result["evicted"] == [str(paths[0])]
