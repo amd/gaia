@@ -18,12 +18,15 @@ Endpoints covered:
   PUT    /api/goals/{id}/tasks/{task_id}
 """
 
+from unittest.mock import MagicMock
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import gaia.ui.routers.goals as goals_router_mod
 from gaia.agents.base.goal_store import GoalStore
+from gaia.ui.agent_loop import agent_loop
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -222,6 +225,17 @@ class TestGoalActions:
         resp = client.put(f"/api/goals/{created['id']}/cancel")
         assert resp.status_code == 200
         assert resp.json()["status"] == "cancelled"
+
+    def test_cancel_live_goal_stops_the_running_tick(self, client, monkeypatch):
+        stop_tick = MagicMock(return_value=True)
+        monkeypatch.setattr(agent_loop, "cancel_goal", stop_tick)
+        created = _create_goal(client)
+
+        response = client.put(f"/api/goals/{created['id']}/cancel")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "cancelled"
+        stop_tick.assert_called_once_with(created["id"])
 
     def test_approve_missing_returns_404(self, client):
         assert client.put("/api/goals/no-such/approve").status_code == 404
