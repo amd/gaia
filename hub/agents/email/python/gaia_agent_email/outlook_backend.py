@@ -63,7 +63,10 @@ from typing import (
 )
 
 import httpx
-from gaia_agent_email.outlook_query import translate_query
+from gaia_agent_email.outlook_query import (
+    _RECEIVED_DATE_FLOOR_FILTER,
+    translate_query,
+)
 from gaia_agent_email.outlook_scopes import OUTLOOK_MAIL_SCOPES
 from gaia_agent_email.scopes import AGENT_NAMESPACED_ID
 from gaia_agent_email.timestamps import parse_timestamp_ms
@@ -480,9 +483,7 @@ class LiveOutlookBackend:
             elif _LABEL_UNREAD in labels:
                 # Graph requires receivedDateTime to lead $filter whenever it
                 # also sorts by that field, even for an unread-only list.
-                params["$filter"] = (
-                    "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false"
-                )
+                params["$filter"] = f"{_RECEIVED_DATE_FLOOR_FILTER} and isRead eq false"
                 params["$orderby"] = "receivedDateTime desc"
                 path = "/me/mailFolders/inbox/messages"
             elif _LABEL_SENT in labels:

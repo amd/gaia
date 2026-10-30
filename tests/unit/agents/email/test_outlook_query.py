@@ -98,6 +98,13 @@ def test_is_and_newer_than_combine_with_and():
     )
 
 
+def test_is_and_older_than_combine_with_and():
+    result = translate_query("is:unread older_than:7d", now=_NOW)
+    assert result.filter == (
+        "receivedDateTime le 2026-08-15T12:00:00Z and isRead eq false"
+    )
+
+
 def test_filter_and_search_operators_together_raises():
     with pytest.raises(ValueError, match="cannot be combined"):
         translate_query("is:unread from:alice", now=_NOW)
