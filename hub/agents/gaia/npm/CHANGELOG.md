@@ -25,6 +25,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   starting folder, so the next `search_code_index` looked in the wrong place
   instead of the repository just indexed. The repository is still dropped if
   the allowed folders no longer contain it.
+- **The binary carries the starter skills and their tools.** The release build
+  shipped none of `hub/skills`, so a skill like `rss-digest` loaded in a
+  checkout but its tools were missing from the binary. The pack is now
+  bundled with every module its code imports. A skill tool named like a
+  confirmation-gated core tool (`write_file`, `run_python`) always asks first,
+  and a skill's `write_*` / `edit_*` tool counts as a file change.
 
 ### Added
 
