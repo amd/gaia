@@ -18,6 +18,10 @@ case "$1" in
             chown root:root /opt/GAIA/chrome-sandbox
             chmod 4755 /opt/GAIA/chrome-sandbox
         fi
+        # Restore the documented terminal command for the desktop app.
+        # electron-builder's default post-install script normally creates this link,
+        # but our custom script replaces it.
+        ln -sf /opt/GAIA/gaia-desktop /usr/bin/gaia-desktop
         # Refresh the desktop database so the installed .desktop entry is
         # picked up by menus, launchers, and file associations.
         if command -v update-desktop-database >/dev/null 2>&1; then
