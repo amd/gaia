@@ -7770,7 +7770,11 @@ def _offer_first_boot_onboarding() -> None:
 
     if answer in ("n", "no"):
         # Declining is an answer — record it so the intro is not re-offered.
-        _mark_onboarding_completed()
+        try:
+            _mark_onboarding_completed()
+        except RuntimeError as e:
+            # A persistence failure must not cost the user their chat session.
+            print(f"Could not record your choice: {e}")
         return
 
     # Onboarding is optional; chat is not. A failure to store must not cost
