@@ -1118,6 +1118,8 @@ export interface ProviderInfo {
     registered?: boolean;
     /** Where Lemonade's key comes from; null when none is configured. */
     key_source?: 'environment' | 'lemonade' | 'stored' | null;
+    /** The saved key's last four characters; null when there is none to read. */
+    key_hint?: string | null;
     /**
      * `waiting_for_os_permission` while the OS holds the saved-key read for the
      * user's permission (a macOS keychain dialog): `key_source` is then unknown,

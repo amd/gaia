@@ -67,6 +67,18 @@ describe('ModelSettings provider keys', () => {
         expect(within(card).getByRole('status')).toHaveTextContent(/can't list its models.*Your key still works.*out of date/);
     });
 
+    it.each([
+        [{ models_discovered: true, key_source: 'stored', key_hint: 'a1b2' }, 'Key ending in a1b2 is saved. Connected to Fireworks AI.'],
+        [{ models_discovered: true, key_source: 'lemonade', key_hint: 'a1b2' }, 'Key ending in a1b2 is saved. Connected to Fireworks AI.'],
+        [{ models_discovered: false, key_source: 'stored', key_hint: 'a1b2' }, 'Key ending in a1b2 is saved. Not connected.'],
+        [{ models_discovered: true, key_source: 'lemonade', key_hint: null }, 'Key set on the local model server. Connected to Fireworks AI.'],
+        [{ models_discovered: true, key_source: 'environment' }, 'Key set in FIREWORKS_API_KEY. Connected to Fireworks AI.'],
+    ] as [Partial<ProviderInfo>, string][])('states the key and the connection: %j', async (over, text) => {
+        withProviders(fireworks(over));
+        const card = await openFireworks();
+        expect(within(card).getByText(text)).toBeInTheDocument();
+    });
+
     it('says a pasted key replaces the saved one', async () => {
         withProviders(fireworks({ models_discovered: true, key_source: 'stored' }));
         const card = await openFireworks();
@@ -90,7 +102,7 @@ describe('ModelSettings provider keys', () => {
     it('says when the model server already holds a key, and offers to forget it', async () => {
         withProviders(fireworks({ key_source: 'lemonade' }));
         const card = await openFireworks();
-        expect(within(card).getByText(/A key is already configured/)).toBeInTheDocument();
+        expect(within(card).getByText(/Key set on the local model server/)).toBeInTheDocument();
         expect(within(card).getByRole('button', { name: 'Connect' })).toBeEnabled();
         expect(within(card).getByRole('button', { name: 'Forget key' })).toBeInTheDocument();
     });
@@ -109,7 +121,7 @@ describe('ModelSettings provider keys', () => {
         const card = await openFireworks();
         expect(within(card).getByText(/asking GAIA for keychain access/)).toBeInTheDocument();
         expect(within(card).queryByText('No key yet.')).not.toBeInTheDocument();
-        expect(await within(card).findByText('A saved key will be used.', {}, { timeout: 4000 })).toBeInTheDocument();
+        expect(await within(card).findByText('Key saved. Not connected.', {}, { timeout: 4000 })).toBeInTheDocument();
     });
 
     it('connects with the typed key and clears the field', async () => {

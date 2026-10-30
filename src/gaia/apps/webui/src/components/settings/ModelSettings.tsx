@@ -20,12 +20,12 @@ const DOWNLOAD_POLL_MS = 2000;
 
 function keyStatus(p: ProviderInfo): string {
     if (p.key_state === 'waiting_for_os_permission') return p.key_message ?? 'Waiting for the OS to allow reading the saved key.';
-    switch (p.key_source) {
-        case 'environment': return `A key is set in ${p.env_var} and is in use.`;
-        case 'lemonade': return 'A key is already configured on the local model server.';
-        case 'stored': return 'A saved key will be used.';
-        default: return 'No key yet.';
-    }
+    if (!p.key_source) return 'No key yet.';
+    const connection = p.models_discovered ? `Connected to ${p.name}.` : 'Not connected.';
+    if (p.key_source === 'environment') return `Key set in ${p.env_var}. ${connection}`;
+    if (p.key_hint) return `Key ending in ${p.key_hint} is saved. ${connection}`;
+    if (p.key_source === 'lemonade') return `Key set on the local model server. ${connection}`;
+    return `Key saved. ${connection}`;
 }
 
 function keyPlaceholder(p: ProviderInfo): string {

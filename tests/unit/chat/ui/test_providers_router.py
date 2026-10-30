@@ -617,6 +617,30 @@ def test_connect_reports_a_key_the_store_did_not_keep(client, lemonade, keys):
     assert "did not keep" in body["remember_error"]
 
 
+def _fireworks_view(client):
+    providers_list = client.get("/api/providers").json()["providers"]
+    return next(p for p in providers_list if p["id"] == "fireworks")
+
+
+def test_the_view_shows_only_the_end_of_a_saved_key(client, lemonade, keys):
+    keys["stored"]["fireworks"] = KEY
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "runtime_key_set": True}
+    resp = client.get("/api/providers")
+    assert _fireworks_view(client)["key_hint"] == KEY[-4:]
+    assert KEY not in resp.text
+
+
+def test_a_short_key_gets_no_hint(client, lemonade, keys):
+    keys["stored"]["fireworks"] = "short-key"
+    assert _fireworks_view(client)["key_hint"] is None
+
+
+def test_an_environment_key_gets_no_hint(client, lemonade, keys):
+    keys["stored"]["fireworks"] = KEY
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "env_var_set": True}
+    assert _fireworks_view(client)["key_hint"] is None
+
+
 @pytest.fixture
 def model_list(monkeypatch):
     """Fireworks' answer to the list check, and the server restart, faked."""

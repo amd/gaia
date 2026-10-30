@@ -218,6 +218,10 @@ def _registration(provider: str, body: "ConnectRequest") -> Dict[str, Any]:
 # ── Views ──────────────────────────────────────────────────────────────────
 
 
+_KEY_HINT_LENGTH = 4
+#: A shorter key would give away too much of itself.
+_MIN_KEY_LENGTH_FOR_HINT = 16
+
 #: ``key_state`` while the OS holds the stored-key read for the user's permission.
 KEY_WAITING = "waiting_for_os_permission"
 
@@ -270,6 +274,21 @@ def _key_source(
     return None
 
 
+def _key_hint(provider: str, key_source: Optional[str]) -> Optional[str]:
+    """The saved key's last characters, so the user can tell which key it is."""
+    from gaia.connectors.credential_wait import CredentialStoreWaiting
+
+    if key_source not in ("stored", "lemonade"):
+        return None
+    try:
+        key = _bounded_recall(provider)
+    except CredentialStoreWaiting:
+        return None
+    if not key or len(key) < _MIN_KEY_LENGTH_FOR_HINT:
+        return None
+    return key[-_KEY_HINT_LENGTH:]
+
+
 def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     from gaia.connectors.credential_wait import CredentialStoreWaiting
     from gaia.llm.cloud_keys import env_var_for
@@ -296,6 +315,7 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
         {
             "registered": entry is not None,
             "key_source": key_source,
+            "key_hint": _key_hint(provider, key_source),
             "key_state": key_state,
             "key_message": key_message,
             "models_discovered": bool(entry and entry.get("models_discovered")),
