@@ -672,5 +672,5 @@ def test_tool_docstrings_name_the_ids_the_model_must_pass():
     EmailToolsMixin().register_email_tools()
     doc = _TOOL_REGISTRY["get_thread"]["description"]
     assert "thread_id" in doc and "list_waiting_on_you" in doc
-    waiting = _TOOL_REGISTRY["list_waiting_on_you"]["description"]
+    waiting = " ".join(_TOOL_REGISTRY["list_waiting_on_you"]["description"].split())
     assert "empty list is a real answer" in waiting
