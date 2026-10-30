@@ -11,7 +11,7 @@ next — the browser is the most failure-prone thing GAIA drives, and a bare
 from __future__ import annotations
 
 from gaia.browser.snapshot import is_pick_ref
-from gaia.browser.untrusted import page_words
+from gaia.browser.untrusted import fence, page_words, site_words
 
 
 class BrowserError(Exception):
@@ -167,8 +167,8 @@ class PageOffScope(BrowserError):
 
     def __init__(self, origin: str) -> None:
         super().__init__(
-            f"The page in the browser pane is now on {origin}, which this step was "
-            "not allowed to read, so its content was withheld.\n"
+            "The page in the browser pane is now on a site this step was not "
+            f"allowed to read, so its content was withheld: {site_words(origin)}.\n"
             "  Call browser_snapshot to read it; GAIA will ask the user first."
         )
 
@@ -178,10 +178,26 @@ class PaneNavigationBlocked(BrowserError):
 
     def __init__(self, url: str, origin: str) -> None:
         super().__init__(
-            f"Stopped the browser pane from going to {url}: {origin} was not "
-            "approved for this step.\n"
-            f"  To open it, call browser_open('{url}'); GAIA will ask the user first."
+            "Stopped the browser pane from going to a site that was not approved "
+            f"for this step: {site_words(origin)}.\n"
+            "  To open it, call browser_open with the address below; GAIA will ask "
+            "the user first.\n"
+            + fence("browser pane", "Where the page tried to go.", url)
         )
+
+
+class PaneStepFailed(BrowserError):
+    """A pane step failed. What GAIA knows comes first; the pane's report, which can quote the page, is fenced."""
+
+    def __init__(self, summary: str, detail: str) -> None:
+        text = summary
+        if detail:
+            text += "\n" + fence(
+                "browser pane",
+                "What the browser pane reported; it can quote the page.",
+                detail,
+            )
+        super().__init__(text)
 
 
 class PaneSignInByHand(BrowserError):

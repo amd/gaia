@@ -32,7 +32,7 @@ from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import DEV_SERVER_TOOL, SITE_ARG
 from gaia.browser.errors import BrowserError, PageDialogOpen, PaneSignInByHand
 from gaia.browser.snapshot import is_pick_ref
-from gaia.browser.untrusted import fence, page_words
+from gaia.browser.untrusted import fence, page_words, site_words
 from gaia.logger import get_logger
 
 if TYPE_CHECKING:
@@ -116,6 +116,9 @@ _PANE_SITE_TOOLS = frozenset(
 
 #: Pane tools that act on one element, which may sit in a frame from another site.
 _PANE_ELEMENT_TOOLS = frozenset({"browser_click", "browser_type", "browser_press"})
+
+#: The longest browser_eval script; the prompt shows every character of one.
+MAX_EVAL_SCRIPT_CHARS = 500
 
 #: The most of a browser_eval value the model reads, however much the page returned.
 MAX_SCRIPT_RESULT_CHARS = 4000
@@ -435,8 +438,14 @@ class BrowserUseToolsMixin:
         label = self._irreversible_label(tool_name, tool_args)
         if label == _UNKNOWN_REF_LABEL:
             notes.append(
-                "This clicks an element that was not in GAIA's last read of the "
+                "This acts on an element that was not in GAIA's last read of the "
                 "page, so GAIA can't tell what it does."
+            )
+        elif label and tool_name in ("browser_press", "browser_type"):
+            key = "Enter" if tool_name == "browser_type" else tool_args.get("key")
+            notes.append(
+                f'Pressing {key} here may set off "{label}" on the page, which may '
+                "not be undoable."
             )
         elif label:
             what = (
@@ -446,11 +455,10 @@ class BrowserUseToolsMixin:
             )
             notes.append(f'This {what} "{label}", which may not be undoable.')
         if tool_name == "browser_eval" and self._eval_local:
-            expression = str(tool_args.get("expression") or "")
-            cut = "..." if len(expression) > 300 else ""
             notes.append(
                 "This runs a script in the page, which can do anything the page "
-                f"can: {expression[:300]}{cut}"
+                "can. The whole script: "
+                + _visible_script(str(tool_args.get("expression") or ""))
             )
         if notes:
             shown = {**shown, RISK_NOTE_ARG: " ".join(notes)}
@@ -617,27 +625,48 @@ class BrowserUseToolsMixin:
                 if box is _UNREAD_DIALOG or self._looks_irreversible(message)
                 else ""
             )
-        if tool_name != "browser_click":
+        args = tool_args if isinstance(tool_args, dict) else {}
+        if not _activates(tool_name, args):
             return ""
-        ref = str((tool_args or {}).get("ref") or "")
-        if is_pick_ref(ref):
-            label = self._pick_label(ref)
-            if label is None:
-                return "an element the user picked (its label could not be read)"
-        elif ref not in (getattr(self, "_browser_last_elements", None) or {}):
-            return _UNKNOWN_REF_LABEL
-        else:
-            label = self._element_label(ref)
-        return label if self._looks_irreversible(label) else ""
+        ref = str(args.get("ref") or "")
+        if ref:
+            if is_pick_ref(ref):
+                label = self._pick_label(ref)
+                if label is None:
+                    return "an element the user picked (its label could not be read)"
+            elif ref not in (getattr(self, "_browser_last_elements", None) or {}):
+                return _UNKNOWN_REF_LABEL
+            else:
+                label = self._element_label(ref)
+            if self._looks_irreversible(label):
+                return label
+        if tool_name == "browser_click":
+            return ""
+        # Enter or Space can submit a form or press whatever has focus, so any
+        # irreversible control on the page counts.
+        return next(
+            (
+                name
+                for name in (
+                    getattr(self, "_browser_last_elements", None) or {}
+                ).values()
+                if self._looks_irreversible(name)
+            ),
+            "",
+        )
 
     def _label_changed(self, driver, ref: str) -> bool:
-        """Whether a batch click must stop: the live label names an irreversible action, or can't be read.
+        """Whether a batch step that presses a control must stop: its live label names an irreversible action, or can't be read.
 
         Earlier steps may have changed the page since the gate read the label.
+        A key with no element goes to whatever has focus, which can't be read,
+        so it stops too.
         """
         live = getattr(driver, "live_label", None)
         if not callable(live) or is_pick_ref(ref):
             return False
+        if not ref:
+            return True
         try:
             label = live(ref)
         except BrowserError as e:
@@ -768,9 +797,14 @@ class BrowserUseToolsMixin:
         risky = bool(self._irreversible_label(tool_name, tool_args))
         self._dialog_memo = None
         # A script can reach anything the page can, so it asks every time, on dev servers too.
-        return (
-            bool(origins) or risky or (tool_name == "browser_eval" and self._eval_local)
+        # One too long to show in full is refused by the tool, unasked.
+        script = str((tool_args or {}).get("expression") or "")
+        eval_asks = (
+            tool_name == "browser_eval"
+            and self._eval_local
+            and len(script) <= MAX_EVAL_SCRIPT_CHARS
         )
+        return bool(origins) or risky or eval_asks
 
     def _step_would_ask(self, tool_name: str, tool_args: dict) -> bool:
         """Whether running this call on its own would put a prompt in front of the user.
@@ -1430,7 +1464,7 @@ class BrowserUseToolsMixin:
                     "web page", "The error the page's script raised.", text
                 )
             cut = " (cut short)" if truncated else ""
-            return f"{driver.where}\nValue on {res.url}{cut}:\n" + fence(
+            return f"{driver.where}\nValue on {site_words(res.url)}{cut}:\n" + fence(
                 "web page", "The value the script returned from the page.", text
             )
 
@@ -1448,6 +1482,12 @@ class BrowserUseToolsMixin:
             """
             if not (expression or "").strip():
                 return "Error: give a JavaScript expression to run."
+            if len(expression) > MAX_EVAL_SCRIPT_CHARS:
+                return (
+                    f"Error: not run. A script for browser_eval is at most "
+                    f"{MAX_EVAL_SCRIPT_CHARS} characters, so the user can read all "
+                    "of it before approving. Use a shorter expression."
+                )
             return answer("browser_eval", _eval, expression)
 
         def _act_step(driver, name: str, args: Dict[str, Any]) -> str:
@@ -1465,7 +1505,11 @@ class BrowserUseToolsMixin:
             ref = str(args.get("ref") or "")
             if name == "browser_click":
                 label = mixin._element_label(ref)
-                return f'Clicked {ref} ("{label}").' if label else f"Clicked {ref}."
+                return (
+                    f"Clicked {ref} ({page_words(label, limit=80)})."
+                    if label
+                    else f"Clicked {ref}."
+                )
             if name == "browser_type":
                 enter = bool(args.get("press_enter"))
                 return f"Typed into {ref}" + (" and pressed Enter." if enter else ".")
@@ -1477,7 +1521,7 @@ class BrowserUseToolsMixin:
                 if not url.startswith(("http://", "https://")):
                     raise _Refused(f"invalid URL {url!r}; it must start with http://")
                 snap = driver.goto(url)
-                return f"Opened {snap.get('url') or url}.", snap
+                return f"Opened {site_words(snap.get('url') or url)}.", snap
             if name == "browser_back":
                 return "Went back.", driver.back()
             if name == "browser_snapshot":
@@ -1532,7 +1576,7 @@ class BrowserUseToolsMixin:
                 approved = mixin._take_site_approval(name)
                 try:
                     with driver.scoped(approved, mixin._granted_frames(name)):
-                        if name == "browser_click" and mixin._label_changed(
+                        if _activates(name, args) and mixin._label_changed(
                             driver, str(args.get("ref") or "")
                         ):
                             stop = (
@@ -1723,6 +1767,27 @@ def _answered_line(box: Dict[str, Any], accept: bool) -> str:
     return f'Pressed {"OK" if accept else "Cancel"} on {page_words(message)}.'
 
 
+def _visible_script(expression: str) -> str:
+    """``expression`` as the prompt shows it: every character visible, no run of blanks able to push the rest out of sight."""
+    escaped = json.dumps(expression, ensure_ascii=True)[1:-1]
+    return re.sub(r" {3,}", lambda m: f" [{len(m.group(0))} spaces] ", escaped)
+
+
+#: Keys that press the focused control, like a click.
+_ACTIVATING_KEYS = frozenset({"Enter", "Space"})
+
+
+def _activates(tool_name: str, args: Dict[str, Any]) -> bool:
+    """Whether this call can press a control: a click, Enter or Space, or typing that ends with Enter."""
+    if tool_name == "browser_click":
+        return True
+    if tool_name == "browser_press":
+        return str(args.get("key") or "") in _ACTIVATING_KEYS
+    if tool_name == "browser_type":
+        return _truthy(args.get("press_enter", False))
+    return False
+
+
 def _truthy(value: Any) -> bool:
     """A model's yes: True, or text like "true" or "yes"."""
     if isinstance(value, str):
@@ -1809,6 +1874,7 @@ def _describe_viewport(res: dict) -> str:
 def _render_tabs(res: dict, switched_to: str) -> str:
     tabs = res.get("tabs") or []
     lines = [f"Switched to {switched_to}." if switched_to else f"{len(tabs)} tabs:"]
+    pages = []
     for t in tabs:
         mark = " (showing)" if t.get("active") else ""
         paused = (
@@ -1816,8 +1882,13 @@ def _render_tabs(res: dict, switched_to: str) -> str:
             if t.get("control") == "user"
             else ""
         )
+        lines.append(f"  {t.get('id')}{mark}{paused}")
+        pages.append(
+            f"  {t.get('id')}: {t.get('title') or 'New tab'}  {t.get('url') or ''}".rstrip()
+        )
+    if pages:
         lines.append(
-            f"  {t.get('id')}{mark}{paused} {t.get('title') or 'New tab'}  {t.get('url') or ''}".rstrip()
+            fence("web page", "Each tab's page title and address.", "\n".join(pages))
         )
     return "\n".join(lines)
 
@@ -1847,7 +1918,8 @@ def _render_logs(kind: str, res: dict, errors_only: bool, contains: str) -> str:
         )
         if f
     ]
-    head = f"{len(entries)} {noun} on {res.get('url') or 'this page'}"
+    on = site_words(res["url"]) if res.get("url") else "this page"
+    head = f"{len(entries)} {noun} on {on}"
     if filters:
         head += f" ({', '.join(filters)})"
     if not entries:

@@ -22,7 +22,7 @@
 "use strict";
 
 const { WebContentsView, nativeImage } = require("electron");
-const { attachTabPolicy, classifyNavigation, isLocalPageHost } = require("./navigation-policy.cjs");
+const { attachTabPolicy, classifyNavigation, isLocalPageHost, portOf, reachesAppService } = require("./navigation-policy.cjs");
 const { TabCdp } = require("./cdp-session.cjs");
 const { BridgeError } = require("./bridge-error.cjs");
 const input = require("./input.cjs");
@@ -781,6 +781,8 @@ class PaneHost {
   /** @param {string} sessionId @param {string} url @param {string[]} allowedOrigins */
   async agentOpen(sessionId, url, allowedOrigins) {
     this.checkAgentUrl(url, allowedOrigins);
+    const resolving = this.checkAgentAddress(url);
+    if (resolving) await resolving;
     const id = this.addTab(sessionId);
     const tab = this.requireTab(id);
     tab.state.openedBy = sessionId;
@@ -828,6 +830,8 @@ class PaneHost {
       });
     } else {
       this.checkAgentUrl(to, allowedOrigins);
+      const resolving = this.checkAgentAddress(to);
+      if (resolving) await resolving;
       this.deps.onShowRequest(sessionId);
       await this.withAgent(tab, allowedOrigins, () => this.agentLoad(tab, to));
     }
@@ -841,6 +845,20 @@ class PaneHost {
   offScopeError(url, verb) {
     const origin = originOf(url) || "a page that is not a web address";
     return new BridgeError("off_scope", `The page is on ${origin}, which this call was not approved to ${verb}.`, { origin });
+  }
+
+  /**
+   * Refuse an address whose name resolves to one of GAIA's own services on
+   * this computer. Only an address on one of those ports needs the lookup, so
+   * any other returns null at once and the load starts without waiting.
+   */
+  checkAgentAddress(url) {
+    const parsed = new URL(url);
+    const ports = this.deps.blockedPorts();
+    if (!ports.includes(portOf(parsed))) return null;
+    return reachesAppService(parsed, ports, this.deps.lookup).then((reaches) => {
+      if (reaches) throw new BridgeError("blocked_url", "The browser pane can't open GAIA's own service.", { url });
+    });
   }
 
   checkAgentUrl(url, allowedOrigins) {
@@ -958,6 +976,7 @@ class PaneHost {
       }
       // A picture shows every frame on screen, so none may be from a site the user hasn't approved,
       // before the capture or after it (a frame can appear while it is taken).
+      const frameGen = tab.frameGen;
       await this.requireNoShownFrames(tab, allowedOrigins);
       let image;
       try {
@@ -967,6 +986,9 @@ class PaneHost {
         throw new BridgeError("internal", `Could not take a picture of the page: ${err.message}`);
       }
       await this.requireNoShownFrames(tab, allowedOrigins);
+      if (tab.frameGen !== frameGen) {
+        throw new BridgeError("off_scope", "No picture was taken: the page's frames changed while it was being taken. Try again.");
+      }
       if (image.getSize().width > maxWidth) image = image.resize({ width: maxWidth });
       const size = image.getSize();
       this.requirePage(tab, allowedOrigins);
@@ -1541,6 +1563,14 @@ class PaneHost {
       s.notice = null;
       tab.cdp.onNavigationStarted();
     }));
+    // Counts frames appearing or moving, so a picture can tell the frame tree changed while it was taken.
+    tab.frameGen = 0;
+    wc.on("frame-created", () => {
+      tab.frameGen += 1;
+    });
+    wc.on("did-frame-navigate", () => {
+      tab.frameGen += 1;
+    });
     wc.on("did-navigate", update((_event, url) => {
       s.url = url;
       this.readNavigation(tab);

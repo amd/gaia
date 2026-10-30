@@ -335,6 +335,15 @@ describe("pictures never show frames from sites that are not approved", () => {
     expect(cdp.screenshot).toHaveBeenCalledTimes(1);
   });
 
+  test.each([["frame-created"], ["did-frame-navigate"]])("a frame that comes and goes during the capture (%s) throws the picture away", async (event) => {
+    const { host, wc, cdp } = shot();
+    cdp.screenshot.mockImplementation(() => {
+      wc.emit(event, {}, {});
+      return Promise.resolve(Buffer.from("png"));
+    });
+    await expect(host.agentScreenshot("chat-1", null, null, 1280, APP)).rejects.toMatchObject({ code: "off_scope", message: expect.stringMatching(/frames changed/) });
+  });
+
   test("with every shown frame approved the picture is taken", async () => {
     const { host, cdp } = shot();
     await expect(host.agentScreenshot("chat-1", null, null, 1280, [...APP, PAY_SITE])).resolves.toMatchObject({ png: expect.any(String) });

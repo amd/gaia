@@ -9,6 +9,8 @@
 
 "use strict";
 
+const dns = require("dns");
+const net = require("net");
 const path = require("path");
 
 const PANE_SCHEMES = new Set(["http:", "https:"]);
@@ -77,6 +79,42 @@ function isAppServiceUrl(url, blockedPorts) {
   return isLoopbackHost(url.hostname) && blockedPorts.includes(portOf(url));
 }
 
+/** True for an IP address on this computer: 127.0.0.0/8, 0.0.0.0, ::1, ::, and their IPv4-mapped forms. */
+function isLoopbackAddress(address) {
+  const ip = String(address).toLowerCase();
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return ip.startsWith("127.") || ip === "0.0.0.0";
+  // Write a trailing dotted quad as two hex groups, the way URL spells it.
+  const hex = ip.replace(/(\d+)\.(\d+)\.(\d+)\.(\d+)$/, (_m, a, b, c, d) =>
+    `${((+a << 8) | +b).toString(16)}:${((+c << 8) | +d).toString(16)}`
+  );
+  return isLoopbackIpv6(`[${hex}]`);
+}
+
+/**
+ * Like isAppServiceUrl, but a name is looked up too, so one that resolves to
+ * this computer (a DNS name pointing at 127.0.0.1) is caught as well. Only a
+ * request to one of the app's ports is looked up.
+ *
+ * @param {URL} url @param {number[]} blockedPorts
+ * @param {(host: string) => Promise<Array<{ address: string }>>} [lookup]
+ */
+async function reachesAppService(url, blockedPorts, lookup = defaultLookup) {
+  if (!blockedPorts.includes(portOf(url))) return false;
+  if (isLoopbackHost(url.hostname)) return true;
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (net.isIP(host)) return isLoopbackAddress(host);
+  try {
+    return (await lookup(host)).some((a) => isLoopbackAddress(a.address));
+  } catch {
+    // A name that doesn't resolve reaches nothing, here or anywhere.
+    return false;
+  }
+}
+
+function defaultLookup(host) {
+  return dns.promises.lookup(host, { all: true, verbatim: true });
+}
+
 /**
  * @param {string} rawUrl
  * @param {{ blockedPorts: number[] }} ctx Loopback ports the app itself listens on.
@@ -138,7 +176,15 @@ function installSessionPolicy(ses, { blockedPorts, onPermissionDenied, downloads
       callback({ cancel: true });
       return;
     }
-    callback({ cancel: isAppServiceUrl(url, blockedPorts()) });
+    const ports = blockedPorts();
+    if (!ports.includes(portOf(url)) || isAppServiceUrl(url, ports)) {
+      callback({ cancel: isAppServiceUrl(url, ports) });
+      return;
+    }
+    reachesAppService(url, ports).then(
+      (reaches) => callback({ cancel: reaches }),
+      () => callback({ cancel: true })
+    );
   });
 
   // Electron shows a native save dialog for any download whose path isn't set; titling it says why it appeared.
@@ -197,6 +243,9 @@ module.exports = {
   installSessionPolicy,
   isLocalPageHost,
   isAppServiceUrl,
+  isLoopbackAddress,
+  portOf,
+  reachesAppService,
   isLoopbackHost,
   isPermissionAllowed,
 };

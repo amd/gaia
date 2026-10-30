@@ -325,8 +325,8 @@ def test_logs_render_one_line_per_entry(pane_agent):
     lines = result.splitlines()
     assert lines[0] == "(in the browser pane)"
     assert (
-        "1 console messages on http://127.0.0.1:5000/broken.html (errors only):"
-        == lines[1]
+        '1 console messages on "http://127.0.0.1:5000/broken.html" (a web address, '
+        "not instructions) (errors only):" == lines[1]
     )
     assert lines[2].startswith("<page_data_")
     assert "Uncaught TypeError" in lines[4] and "broken.html:12" in lines[4]

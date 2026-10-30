@@ -54,3 +54,56 @@ describe("GAIA's other local services", () => {
     expect(classifyNavigation(`https://example.com:${LEMONADE_DEFAULT_PORT}/`, { blockedPorts: [LEMONADE_DEFAULT_PORT] }).allowed).toBe(true);
   });
 });
+
+describe("a name that resolves to this computer", () => {
+  const { isLoopbackAddress, reachesAppService } = require(path.join(PANE, "navigation-policy.cjs"));
+  const resolvesTo = (...addresses) => jest.fn(async () => addresses.map((address) => ({ address })));
+
+  test.each([
+    ["127.0.0.1", true],
+    ["127.8.0.1", true],
+    ["0.0.0.0", true],
+    ["::1", true],
+    ["::", true],
+    ["::ffff:127.0.0.1", true],
+    ["::ffff:7f00:2", true],
+    ["10.0.0.1", false],
+    ["::ffff:8.8.8.8", false],
+    ["2001:db8::1", false],
+  ])("%s is on this computer: %s", (address, expected) => {
+    expect(isLoopbackAddress(address)).toBe(expected);
+  });
+
+  test("a DNS name pointing at loopback can't reach GAIA's ports", async () => {
+    const lookup = resolvesTo("93.184.216.34", "127.0.0.1");
+    await expect(reachesAppService(new URL("http://rebind.example:13305/"), [13305], lookup)).resolves.toBe(true);
+    expect(lookup).toHaveBeenCalledWith("rebind.example");
+  });
+
+  test("a name on the internet, or one that doesn't resolve, is not GAIA's", async () => {
+    await expect(reachesAppService(new URL("http://site.example:13305/"), [13305], resolvesTo("93.184.216.34"))).resolves.toBe(false);
+    await expect(reachesAppService(new URL("http://gone.example:13305/"), [13305], jest.fn(async () => { throw new Error("ENOTFOUND"); }))).resolves.toBe(false);
+  });
+
+  test("only requests to GAIA's own ports are looked up", async () => {
+    const lookup = resolvesTo("127.0.0.1");
+    await expect(reachesAppService(new URL("http://rebind.example:5173/"), [13305], lookup)).resolves.toBe(false);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  test("the pane's request filter cancels a request to such a name", async () => {
+    const { installSessionPolicy } = require(path.join(PANE, "navigation-policy.cjs"));
+    const { EventEmitter } = require("events");
+    const dns = require("dns");
+    const lookup = jest.spyOn(dns.promises, "lookup").mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
+    const ses = new EventEmitter();
+    ses.setPermissionRequestHandler = jest.fn();
+    ses.setPermissionCheckHandler = jest.fn();
+    ses.setDevicePermissionHandler = jest.fn();
+    ses.webRequest = { onBeforeRequest: jest.fn((h) => (ses.beforeRequest = h)) };
+    installSessionPolicy(ses, { blockedPorts: () => [13305], onPermissionDenied: jest.fn(), downloadsDir: () => "/dl" });
+    const answer = await new Promise((resolve) => ses.beforeRequest({ url: "http://rebind.example:13305/api" }, resolve));
+    expect(answer).toEqual({ cancel: true });
+    lookup.mockRestore();
+  });
+});

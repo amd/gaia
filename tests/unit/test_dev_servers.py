@@ -731,7 +731,7 @@ def test_static_server_serves_the_folders_pages(static_site):
         "127.0.0.1",
         "127.0.0.1:1",
         "localhost.:{port}",
-        "[::1]:{port}",
+        "[::2]:{port}",
         "",
     ],
 )
@@ -778,3 +778,101 @@ def test_a_static_port_is_random_not_derived_from_the_folder(monkeypatch):
     # The same folder keeps its pick within this run, so "always" still covers it.
     assert dev_servers.static_port("a" * 16, []) == first
     assert dev_servers.static_port("b" * 16, []) == dev_servers.STATIC_PORTS.start + 342
+
+
+def _short_name(path):
+    """The Windows 8.3 name of ``path``, or None when the volume makes none."""
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(32768)
+    if not ctypes.windll.kernel32.GetShortPathNameW(str(path), buf, len(buf)):
+        return None
+    short = Path(buf.value).name
+    return short if short.lower() != path.name.lower() else None
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="8.3 short names are a Windows feature"
+)
+@pytest.mark.parametrize("target", [".env", ".git"])
+def test_static_server_refuses_a_dotfile_by_its_windows_short_name(static_site, target):
+    root, port = static_site
+    short = _short_name(root / target)
+    if short is None:
+        pytest.skip("8.3 short names are off on this volume")
+    path = f"/{short}" if target == ".env" else f"/{short}/config"
+    status, body = fetch(port, path)
+    assert status == 404
+    assert b"SECRET" not in body and b"core" not in body
+
+
+def test_static_server_checks_the_name_a_path_resolves_to(static_site, monkeypatch):
+    root, port = static_site
+    # A file whose resolved name is a dotfile, as a short name or link would be.
+    (root / "ENV~1").write_text("SECRET=2")
+    from gaia.browser import static_server
+
+    real = static_server.os.path.realpath
+    monkeypatch.setattr(
+        static_server.os.path,
+        "realpath",
+        lambda p, *a, **k: real(p, *a, **k).replace("ENV~1", ".env"),
+    )
+    status, body = fetch(port, "/ENV~1")
+    assert status == 404 and b"SECRET" not in body
+
+
+@pytest.mark.parametrize("path", ["/.env::$DATA", "/index.html::$DATA", "/c:/x"])
+def test_static_server_refuses_stream_and_drive_names(static_site, path):
+    _root, port = static_site
+    assert fetch(port, path)[0] == 404
+
+
+def _has_ipv6_loopback():
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+            s.bind(("::1", 0))
+        return True
+    except OSError:
+        return False
+
+
+needs_ipv6 = pytest.mark.skipif(
+    not _has_ipv6_loopback(), reason="this machine has no IPv6 loopback"
+)
+
+
+@needs_ipv6
+def test_the_static_server_holds_its_port_on_ipv6_loopback_too(tmp_path):
+    (tmp_path / "index.html").write_text("<h1>served</h1>")
+    port = dev_servers._free_loopback_port(0)
+    spec = dev_servers.static_spec(tmp_path, port)
+    proc = subprocess.Popen(
+        list(spec.argv),
+        cwd=spec.cwd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        assert "<h1>served</h1>" in _fetch_when_up(f"http://[::1]:{port}/")
+        # Nothing else can take the IPv6 half of the port while it runs.
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as other:
+            with pytest.raises(OSError):
+                other.bind(("::1", port))
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+@needs_ipv6
+def test_a_static_server_whose_ipv6_half_is_taken_fails_loudly(tmp_path):
+    from gaia.browser import static_server
+
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as held:
+        held.bind(("::1", 0))
+        held.listen()
+        port = held.getsockname()[1]
+        with pytest.raises(OSError, match=r"\[::1\]"):
+            static_server.serve_loopback(str(tmp_path), port)
+        # And GAIA never picks such a port in the first place.
+        assert dev_servers._free_loopback_port(port) is None

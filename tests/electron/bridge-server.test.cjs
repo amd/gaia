@@ -478,6 +478,17 @@ describe("agent ops", () => {
     expect(err.message).not.toMatch(/secret-path|Title of/);
   });
 
+  test("the agent can't open a name that resolves to one of GAIA's own ports", async () => {
+    const { host } = makeHost();
+    host.deps.lookup = jest.fn(async () => [{ address: "127.0.0.1" }]);
+    const before = host.tabs.size;
+    await expect(host.agentOpen("chat-1", "http://rebind.example:4321/", ["http://rebind.example:4321"])).rejects.toMatchObject({ code: "blocked_url" });
+    expect(host.deps.lookup).toHaveBeenCalledWith("rebind.example");
+    expect(host.tabs.size).toBe(before);
+    host.deps.lookup = jest.fn(async () => [{ address: "93.184.216.34" }]);
+    await expect(host.agentOpen("chat-1", "http://site.example:4321/", ["http://site.example:4321"])).resolves.toBeTruthy();
+  });
+
   test("a new tab page has nothing to read", async () => {
     const { host } = makeHost();
     await expect(host.agentEvaluate("chat-1", null, "() => 1", null, "main", [])).rejects.toMatchObject({ code: "no_page" });

@@ -26,14 +26,14 @@ from urllib.parse import urlsplit
 
 from gaia.browser.errors import (
     BrowserError,
-    NavigationBlocked,
-    NavigationFailed,
     PageDialogOpen,
     PageOffScope,
     PaneNavigationBlocked,
     PaneProtocolMismatch,
+    PaneStepFailed,
     PaneUnreachable,
 )
+from gaia.browser.untrusted import fence
 
 #: Bridge version this package speaks. Bumped only on an incompatible change.
 PROTOCOL = 1
@@ -147,14 +147,56 @@ def _error_for(code: str, message: str, data: Dict[str, Any]) -> BrowserError:
         return PageDialogOpen(data["dialog"], done=False)
     if code == "off_scope":
         return PageOffScope(str(data.get("origin", "")))
-    if code == "navigation_failed":
-        return NavigationFailed(str(data.get("url", "")), message)
-    if code == "blocked_url":
-        return NavigationBlocked(str(data.get("url", "")), message)
     if code in ("unauthorized", "forbidden", "bad_request", "unknown_op", "internal"):
-        return PaneUnreachable(f"the bridge refused the call ({code}: {message})")
-    # Every other code's message is written for the model: what happened, what to do.
-    return BrowserError(message)
+        return PaneUnreachable(
+            f"the bridge refused the call ({code}). Its report:\n"
+            + fence("browser pane", "What the pane reported.", message)
+        )
+    # Main's messages can quote a page, an address or a program's output, so
+    # the model reads GAIA's own summary and gets the report fenced as data.
+    return PaneStepFailed(_STEP_SUMMARIES.get(code, _STEP_SUMMARY), message)
+
+
+_STEP_SUMMARY = "The browser pane could not do that step."
+
+#: What GAIA says for each bridge code, never quoting the page.
+_STEP_SUMMARIES = {
+    "no_such_tab": "That browser pane tab is gone. Call browser_tabs to see the open ones.",
+    "no_page": "The browser pane tab has no web page in it. Open one with browser_open(url).",
+    "unsupported": "The browser pane can't do that on this page.",
+    "navigation_failed": "The page in the browser pane did not load.",
+    "blocked_url": "The browser pane does not open that address.",
+    "element_not_found": (
+        "That element is not on the page any more. Call browser_snapshot() to get "
+        "current refs, then retry."
+    ),
+    "not_in_desktop": (
+        "This chat can't use the browser pane now: the user switched GAIA desktop "
+        "to another chat. Ask the user to switch back to this chat."
+    ),
+    "timeout": "The browser pane step took too long and was stopped.",
+    "user_active": (
+        "FAILED: this step was not done. The user is using this browser tab, so "
+        "GAIA is paused there. Stop using the browser now, tell the user which "
+        "steps are not done, and ask how to continue."
+    ),
+    "private_tab": (
+        "The user marked that tab private, so GAIA can't see or use it. Open your "
+        "own tab with browser_open(url), or ask the user to switch tabs."
+    ),
+    "not_actionable": (
+        "Nothing was done: that element can't take this action now (it is covered, "
+        "hidden, disabled, or not the right kind of element). Call browser_snapshot() "
+        "and try again, or ask the user to do this step."
+    ),
+    "dialog_open": "Nothing was done: the page is showing a box. Answer it with browser_dialog first.",
+    "dev_server_failed": "The dev server did not start. Its report and last log lines follow.",
+    "port_in_use": "The dev server's port is already taken.",
+    "no_such_server": (
+        'GAIA has not started that dev server. Call dev_server(action="list") to '
+        "see the ones it has."
+    ),
+}
 
 
 #: Every code bridge-server.cjs can send. A test checks this against contract.d.ts.

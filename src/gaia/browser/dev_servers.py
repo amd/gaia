@@ -27,6 +27,7 @@ editing the file approves nothing.
 from __future__ import annotations
 
 import ast
+import errno
 import hashlib
 import json
 import re
@@ -302,15 +303,38 @@ def static_port(key: str, running: List[Dict[str, Any]]) -> int:
 
 
 def _free_loopback_port(port: int) -> Optional[int]:
-    """``port`` if nothing holds it on 127.0.0.1, None if taken; 0 asks the OS for one."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind(("127.0.0.1", port))
-        except OSError:
-            if port == 0:
-                raise
+    """``port`` if nothing holds it on 127.0.0.1 or ::1, None if taken; 0 asks the OS for one.
+
+    The static server listens on both, so both halves must be free.
+    """
+    for _ in range(20 if port == 0 else 1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                if port == 0:
+                    raise
+                return None
+            got = s.getsockname()[1]
+            if _ipv6_loopback_free(got):
+                return got
+        if port != 0:
             return None
-        return s.getsockname()[1]
+    raise OSError("no port free on both 127.0.0.1 and ::1 after 20 tries")
+
+
+def _ipv6_loopback_free(port: int) -> bool:
+    """True when ::1 has no listener on ``port``, or the machine has no IPv6."""
+    try:
+        s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    except OSError:
+        return True
+    with s:
+        try:
+            s.bind(("::1", port))
+        except OSError as e:
+            return e.errno in (errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT, 10049, 10047)
+        return True
 
 
 def _parse(

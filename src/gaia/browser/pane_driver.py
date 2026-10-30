@@ -42,6 +42,7 @@ from gaia.browser.errors import (
     PageDialogOpen,
     PageOffScope,
     PaneSignInByHand,
+    PaneStepFailed,
 )
 from gaia.browser.snapshot import (
     _FIND_JS,
@@ -200,8 +201,8 @@ class PaneDriver:
         )
         main, *subframes = res["frames"]
         if not main["ok"]:
-            raise BrowserError(
-                f"Could not read the page in the browser pane: {main['error']}"
+            raise PaneStepFailed(
+                "Could not read the page in the browser pane.", str(main["error"])
             )
         readable = [
             (f["frameId"], f["value"])
@@ -233,8 +234,8 @@ class PaneDriver:
         )
         main = res["frames"][0]
         if not main["ok"]:
-            raise BrowserError(
-                f"Could not search the page in the browser pane: {main['error']}"
+            raise PaneStepFailed(
+                "Could not search the page in the browser pane.", str(main["error"])
             )
         return main["value"]
 
@@ -268,8 +269,9 @@ class PaneDriver:
         )
         main = res["frames"][0]
         if not main["ok"]:
-            raise BrowserError(
-                f"Could not read the picked element in the browser pane: {main['error']}"
+            raise PaneStepFailed(
+                "Could not read the picked element in the browser pane.",
+                str(main["error"]),
             )
         return str(main["value"] or "")
 

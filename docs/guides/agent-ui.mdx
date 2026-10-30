@@ -770,7 +770,8 @@ each step happen.
   stays, and GAIA tells you so.
 - **Buttons that can't be undone ask first.** Before GAIA clicks something like
   **Delete**, **Place order** or **Create account**, you get an **Allow once**
-  prompt, even on a page on this PC.
+  prompt, even on a page on this PC. Pressing Enter or Space, or typing and
+  pressing Enter, asks the same way on a page that shows such a button.
 
 - **Dev servers GAIA started need no approval.** A server GAIA started for
   this chat is read straight away, so previewing what it built just works.
@@ -785,8 +786,9 @@ each step happen.
   network requests, which helps when a page you're building misbehaves. On a
   page on this PC it can also run a short script to check what the page doesn't
   show, such as its stored data or app state. It asks every time, showing the
-  script, on its own dev servers too, and never runs scripts on a site that
-  isn't on this PC.
+  whole script, on its own dev servers too. A script longer than 500
+  characters is refused, so all of it fits in the prompt. GAIA never runs
+  scripts on a site that isn't on this PC.
 - **Boxes a page opens show above the page.** When a page shows an `alert` or
   `confirm`, or asks before you leave it, a bar above the page shows the
   message with **OK** and **Cancel** (**Leave** and **Stay**). The page waits
@@ -818,9 +820,9 @@ the dev server and show me the home page", and GAIA runs the server, waits for
 its port to answer, and opens it in a pane tab.
 
 **A folder of plain HTML needs no setup.** Ask GAIA to build a page and show
-it, and it serves the folder on `127.0.0.1`, so nothing else on your network
-can reach it. The server answers only requests addressed to `127.0.0.1` or
-`localhost` on its port, lists no folders, and serves no dotfiles (`.env`,
+it, and it serves the folder on `127.0.0.1` and `::1`, so nothing else on your
+network can reach it. The server answers only requests addressed to
+`127.0.0.1`, `[::1]` or `localhost` on its port, lists no folders, and serves no dotfiles (`.env`,
 `.git`) and nothing a link leads to outside the folder. Its port is picked at
 random; the folder keeps it until GAIA desktop restarts, so **Always allow**
 keeps covering it until then.

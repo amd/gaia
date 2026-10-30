@@ -279,7 +279,9 @@ def test_main_withholding_a_page_reaches_the_model_naming_the_origin(
     bridge, discovery_file
 ):
     bridge.replies["evaluate"] = (409, fixture("error_off_scope.json"))
-    with pytest.raises(PageOffScope, match="now on https://evil.example"):
+    with pytest.raises(
+        PageOffScope, match='withheld: "https://evil.example" \\(a web address'
+    ):
         _driver(bridge, discovery_file).snapshot()
 
 
