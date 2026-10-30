@@ -1678,6 +1678,8 @@ models — alongside local inference. Requires **Lemonade Server 11.8.0+**.
 You enter your token once. Lemonade holds it in memory and forgets it on
 restart, so GAIA keeps a copy in your **OS credential store** (DPAPI, Keychain,
 SecretService) and replays it — encrypted at rest, never in a GAIA file.
+`install` replays it as well; installing with a different `--base-url` deletes it, so
+it is never sent to another gateway.
 
 ```bash
 gaia gateway install --base-url https://llm-api.amd.com/Unified/v1  # register the gateway

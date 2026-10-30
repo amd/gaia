@@ -16,6 +16,9 @@
  *   agents/<id>/<version>/CAPABILITY_MATRIX.md  capability matrix markdown, per version (optional)
  *   agents/<id>/<version>/<filename>        the artifact (wheel or binary)
  *
+ * `agents/tui/` and `agents/terminal-hub/` are one package under two ids (see
+ * {@link ID_ALIASES}); a read under either falls back to the other.
+ *
  * Skills (#2467) get their own top-level prefix rather than sharing agents/ —
  * they are a separate lane with a separate publish contract, and a shared prefix
  * would make `listAgentIds` return them as agents:
@@ -31,6 +34,17 @@ import type { AgentManifest, CatalogIndex, SkillManifest } from "./types";
 export const INDEX_KEY = "index.json";
 export const AGENTS_PREFIX = "agents/";
 export const SKILLS_PREFIX = "skills/";
+
+/**
+ * Legacy agent id -> the neutral id replacing it. For one release cycle each id
+ * of a pair resolves the other's objects, and their manifests read as one.
+ */
+export const ID_ALIASES: ReadonlyMap<string, string> = new Map([["terminal-hub", "tui"]]);
+
+/** The other id of `id`'s alias pair, or undefined when it has none. */
+export function aliasOf(id: string): string | undefined {
+  return ID_ALIASES.get(id) ?? [...ID_ALIASES].find(([, canonical]) => canonical === id)?.[0];
+}
 
 export function agentManifestKey(id: string): string {
   return `${AGENTS_PREFIX}${id}/manifest.json`;

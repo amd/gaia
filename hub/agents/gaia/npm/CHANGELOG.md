@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Requires the `gaia` Python CLI 0.25.3+ on `PATH`.
+
 - **On Gemma 4 E4B the agent stops offering features that model fails.** The
   SQL scratchpad, email, image generation, and finding or installing skills
   failed GAIA's agent evals on Gemma, and their 16 tool descriptions were read

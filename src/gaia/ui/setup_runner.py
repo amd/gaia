@@ -53,6 +53,14 @@ _PERCENT_RE = re.compile(r"\]\s*(\d{1,3})%")
 _SIZE_RE = re.compile(r"(\d+(?:\.\d+)?\s*[KMG]B)\s*/\s*(\d+(?:\.\d+)?\s*[KMG]B)")
 _CHAT_MODEL_RE = re.compile(r"^Chat model:\s*(\S+)")
 _LOG_PREFIX_RE = re.compile(r"^\[\d{4}-\d\d-\d\d [\d:]+\]\s*\|")
+# Terminal escapes: OSC (e.g. hyperlinks), CSI (colour, cursor), other ESC
+# sequences, and one cut off at the end of a line. A literal "[" is content.
+_ANSI_RE = re.compile(
+    r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|$)"
+    r"|(?:\x1b\[|\x9b)[0-?]*[ -/]*(?:[@-~]|$)"
+    r"|\x1b[ -/]*[0-~]"
+    r"|\x1b"
+)
 
 
 class SetupError(Exception):
@@ -475,7 +483,13 @@ class SetupRunner:
                     stdin=subprocess.DEVNULL,
                     # Rich wraps a pipe at 80 columns, which would cut the
                     # error line shown as the failure reason mid-sentence.
-                    env={**os.environ, "COLUMNS": str(_UNWRAPPED_COLUMNS)},
+                    env={
+                        **os.environ,
+                        "COLUMNS": str(_UNWRAPPED_COLUMNS),
+                        # Setup output is shown in the browser, not a terminal.
+                        "NO_COLOR": "1",
+                        "CLICOLOR": "0",
+                    },
                     **windows_hidden_popen_kwargs(),
                 )
             except OSError as e:
@@ -582,7 +596,8 @@ class SetupRunner:
                 )
 
     def _consume(self, run: SetupRun, line: str) -> None:
-        line = line.strip()
+        # Defend the browser-facing log against a program that ignores NO_COLOR.
+        line = _ANSI_RE.sub("", line).strip()
         if not line:
             return
         progress = describe(line)
