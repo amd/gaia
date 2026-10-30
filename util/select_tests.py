@@ -18,7 +18,10 @@ everything for nearly any change.
 - Every import and module-naming string in tests and repo tooling, transitively:
   ``mocker.patch("gaia.llm.lemonade_client.X")``, ``python -c "import gaia.cli"``,
   ``import check_test_lane_coverage`` after a ``sys.path`` insert.
-- A file named by a string (``"ci_tiers.json"``) is read by whoever names it.
+- A file named by a string (``"ci_tiers.json"``) is read by whoever names it. A
+  path is matched whole, including one built with ``/`` or ``os.path.join``, so
+  ``root / "hub" / "skills" / "x" / "SKILL.md"`` means that file. A non-Python
+  name with no folder means every file of that name, however common.
 - Tests and tooling that list a directory (``rglob``, ``os.walk``) are affected
   by any file under a directory whose name they spell out.
 - A ``conftest.py`` below the suite root reaches every file beneath it.
@@ -73,6 +76,7 @@ FULL_FRACTION = 0.7
 # which one a string means.
 MAX_BASENAME_FANOUT = 25
 _IGNORED_BASENAMES = {"__init__.py", "README.md", "LICENSE", ".gitignore"}
+_PATH_JOINERS = {"join", "joinpath", "Path", "PurePath", "PurePosixPath"}
 _SCANNER_RE = re.compile(r"\.rglob\(|\.glob\(|os\.walk\(|\.iterdir\(|os\.listdir\(")
 _DOTTED_RE = re.compile(r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+(:[A-Za-z_]\w*)?$")
 _PATH_SPLIT_RE = re.compile(r"[\\/]")
@@ -219,6 +223,9 @@ class _Imports(ast.NodeVisitor):
         self.module_level: List[ast.AST] = []
         self.in_function: List[ast.AST] = []
         self.strings: List[str] = []
+        # Pieces of a joined path: "SKILL.md" there is not a bare file name.
+        self.path_pieces: List[str] = []
+        self._joined: Set[int] = set()
         self._depth = 0
 
     def _function(self, node: ast.AST) -> None:
@@ -245,7 +252,45 @@ class _Imports(ast.NodeVisitor):
 
     def visit_Constant(self, node: ast.Constant) -> None:
         if isinstance(node.value, str):
-            self.strings.append(node.value)
+            if id(node) in self._joined:
+                self.path_pieces.append(node.value)
+            else:
+                self.strings.append(node.value)
+
+    def _add_path(self, parts: List[ast.AST]) -> None:
+        """Record the constant pieces that end a path as one joined string."""
+        tail: List[ast.Constant] = []
+        for part in reversed(parts):
+            if not (isinstance(part, ast.Constant) and isinstance(part.value, str)):
+                break
+            tail.append(part)
+        if len(tail) > 1:
+            self.strings.append("/".join(c.value for c in reversed(tail)))
+            self._joined.update(id(c) for c in tail)
+
+    def visit_BinOp(self, node: ast.BinOp) -> None:
+        if isinstance(node.op, ast.Div):
+            parts: List[ast.AST] = []
+            current: ast.AST = node
+            while isinstance(current, ast.BinOp) and isinstance(current.op, ast.Div):
+                parts.insert(0, current.right)
+                current = current.left
+            if _joins_a_path(current):
+                parts = list(current.args) + parts
+            self._add_path(parts)
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if _joins_a_path(node):
+            self._add_path(node.args)
+        self.generic_visit(node)
+
+
+def _joins_a_path(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+    return name in _PATH_JOINERS
 
 
 def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Graph:
@@ -254,8 +299,12 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
     module_files: Dict[str, str] = {}
     stems: Dict[str, Set[str]] = defaultdict(set)
     basenames: Dict[str, Set[str]] = defaultdict(set)
+    path_suffixes: Dict[str, Set[str]] = defaultdict(set)
     for path in files:
         basenames[PurePosixPath(path).name].add(path)
+        parts = PurePosixPath(path).parts
+        for start in range(len(parts) - 1):
+            path_suffixes["/".join(parts[start:])].add(path)
         if path.endswith(".py"):
             stems[PurePosixPath(path).stem].add(path)
             for root in roots:
@@ -285,6 +334,26 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
                 return name
             name = name.rpartition(".")[0]
         return None
+
+    def read_targets(pieces: List[str], package_code: bool) -> Set[str]:
+        """The tracked files a string naming a path can mean."""
+        name = pieces[-1]
+        # Shipped code naming a script ("run util/lint.py") points the user at
+        # it; only the data files it names are reads.
+        if package_code and name.endswith(".py"):
+            return set()
+        for start in range(len(pieces) - 1):
+            found = path_suffixes.get("/".join(pieces[start:]))
+            if found and len(found) <= MAX_BASENAME_FANOUT:
+                return found
+        targets = basenames.get(name, set())
+        # A test naming SKILL.md under an unknown folder may read any of them,
+        # and coverage records only .py files, so nothing else would catch it.
+        if not package_code and not name.endswith(".py"):
+            return targets
+        if name in _IGNORED_BASENAMES or len(targets) > MAX_BASENAME_FANOUT:
+            return set()
+        return targets
 
     def link(src: str, name: str, edges: Dict[str, Set[str]], parent_only=False):
         found = resolve(name)
@@ -365,7 +434,9 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
         for node in found.in_function:
             link_import(path, node, package, lazy)
 
-        tokens: Set[str] = set()
+        tokens: Set[str] = {
+            p for text in found.path_pieces for p in _PATH_SPLIT_RE.split(text) if p
+        }
         for text in found.strings:
             value = text.strip()
             if package_code and spawns and "." in value:
@@ -391,14 +462,8 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
             if not pieces:
                 continue
             tokens.update(p for p in pieces if "\n" not in p and len(p) < 80)
-            name = pieces[-1]
-            # Shipped code naming a script ("run util/lint.py") points the user
-            # at it; only the data files it names are reads.
-            if name in _IGNORED_BASENAMES or (package_code and name.endswith(".py")):
-                continue
-            targets = basenames.get(name, ())
-            if 0 < len(targets) <= MAX_BASENAME_FANOUT:
-                graph.read_deps[path].update(t for t in targets if t != path)
+            targets = read_targets(pieces, package_code)
+            graph.read_deps[path].update(t for t in targets if t != path)
         # Shipped code that lists a directory is linked by the names it reads.
         if not package_code and _SCANNER_RE.search(source):
             graph.scanner_tokens[path] = tokens

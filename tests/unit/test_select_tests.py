@@ -43,6 +43,10 @@ FILES = {
     ),
     "docs/guides/chat.mdx": "# chat",
     "README.md": "readme",
+    "docs/README.md": "docs readme",
+    "hub/skills/triage/SKILL.md": "---\nname: triage\n---\n",
+    # More SKILL.md files than MAX_BASENAME_FANOUT, so the bare name says nothing.
+    **{f"hub/skills/s{i}/SKILL.md": "" for i in range(30)},
     "tests/__init__.py": "",
     "tests/conftest.py": textwrap.dedent("""
         import pytest
@@ -75,6 +79,22 @@ FILES = {
     "tests/unit/test_docs_tool.py": "import check_docs\n",
     "tests/unit/test_fixture.py": "def test_f(ui_client):\n    pass\n",
     "tests/unit/test_unrelated.py": "def test_u():\n    pass\n",
+    "tests/unit/test_skill_chain.py": (
+        "from pathlib import Path\n"
+        "PATH = Path(__file__).parents[2] / 'hub' / 'skills' / 'triage' / 'SKILL.md'\n"
+    ),
+    "tests/unit/test_skill_literal.py": (
+        "from pathlib import Path\n"
+        "PATH = Path(__file__).parents[2] / 'hub/skills/triage/SKILL.md'\n"
+    ),
+    "tests/unit/test_skill_join.py": (
+        "import os\n"
+        "PATH = os.path.join(ROOT, 'hub', 'skills', 'triage', 'SKILL.md')\n"
+    ),
+    "tests/unit/test_any_skill.py": (
+        "def read(name):\n    return ROOT / name / 'SKILL.md'\n"
+    ),
+    "tests/unit/test_docs_readme.py": "PATH = ROOT / 'docs' / 'README.md'\n",
     "tests/unit/test_proc.py": "import subprocess\nfrom gaia.tools.sinks import go\n",
     "tests/unit/test_chain.py": "def test_c(app):\n    pass\n",
     "tests/unit/test_daemon_start.py": "def test_s():\n    pass\n",
@@ -281,6 +301,28 @@ def test_the_coverage_map_adds_tests_that_executed_an_affected_file(graph):
     # consts -> uses_consts (module level) -> the map's test of uses_consts.
     hit = _selected(graph, "src/gaia/core/consts.py", coverage=coverage)
     assert "tests/unit/test_unrelated.py" in hit
+
+
+@pytest.mark.parametrize(
+    "test",
+    [
+        "tests/unit/test_skill_chain.py",
+        "tests/unit/test_skill_literal.py",
+        "tests/unit/test_skill_join.py",
+    ],
+)
+def test_a_common_file_name_is_selected_by_its_full_path(graph, test):
+    assert test in _selected(graph, "hub/skills/triage/SKILL.md")
+    assert test not in _selected(graph, "hub/skills/s1/SKILL.md")
+
+
+def test_a_common_name_with_an_unknown_folder_reads_every_file_of_that_name(graph):
+    assert "tests/unit/test_any_skill.py" in _selected(graph, "hub/skills/s1/SKILL.md")
+
+
+def test_an_ignored_name_is_still_a_read_when_its_path_is_spelled_out(graph):
+    assert "tests/unit/test_docs_readme.py" in _selected(graph, "docs/README.md")
+    assert "tests/unit/test_docs_readme.py" not in _selected(graph, "README.md")
 
 
 def test_an_unreferenced_file_selects_nothing(graph):
