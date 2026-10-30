@@ -62,6 +62,10 @@ on:
       - 'tests/unit/test_starter_skills.py'
       - 'tests/unit/test_stdio_permission_control.py'
       - 'tests/unit/test_tool_loader_token_budget.py'
+      - 'tests/unit/eval/test_harness_flagship_target.py'
+      - 'tests/unit/eval/conftest.py'
+      - 'src/gaia/eval/tool_cost.py'
+      - 'src/gaia/eval/retrieval/harness.py'
       - 'tests/fixtures/**'
       - 'tests/unit/__init__.py'
       - 'tests/unit/agents/__init__.py'
@@ -119,6 +123,10 @@ on:
       - 'tests/unit/test_starter_skills.py'
       - 'tests/unit/test_stdio_permission_control.py'
       - 'tests/unit/test_tool_loader_token_budget.py'
+      - 'tests/unit/eval/test_harness_flagship_target.py'
+      - 'tests/unit/eval/conftest.py'
+      - 'src/gaia/eval/tool_cost.py'
+      - 'src/gaia/eval/retrieval/harness.py'
       - 'tests/fixtures/**'
       - 'tests/unit/__init__.py'
       - 'tests/unit/agents/__init__.py'
@@ -222,6 +230,7 @@ jobs:
           # the cheapest lane that installs that wheel.
           python -m pytest \
             tests/unit/test_tool_loader_token_budget.py \
+            tests/unit/eval/test_harness_flagship_target.py \
             -v --tb=short
 
       - name: Run Sidecar Contract Tests

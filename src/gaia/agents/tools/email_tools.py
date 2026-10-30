@@ -897,7 +897,7 @@ class EmailToolsMixin:
             was not scanned — say so.
 
             Args:
-                max_inbox: Inbox messages to scan (0 = default 50, max 200)
+                max_inbox: Inbox messages to scan (0 = default 50; Gmail max 100, Outlook 200)
                 min_age_hours: Skip messages younger than this (0 = none)
             """
             try:
