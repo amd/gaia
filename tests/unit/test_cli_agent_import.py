@@ -140,6 +140,7 @@ def test_interactive_non_yes_answer_refuses(tmp_path, monkeypatch, answer):
 # --yes bypasses the prompt entirely
 # ---------------------------------------------------------------------------
 
+
 def test_interactive_prompt_eof_cancels_cleanly(tmp_path, monkeypatch):
     """Ctrl+D / Ctrl+Z at the prompt cancels instead of crashing (#3450)."""
     bundle = _make_bundle(tmp_path)
