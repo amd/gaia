@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import contextlib
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -136,6 +137,70 @@ def test_re_registering_tools_drops_repo_outside_narrowed_allowed_paths(
     assert agent._repo_path != str(outside)
     assert agent._code_index_sdk is None
     assert agent._code_index_ceilings == (str(workspace),)
+
+
+def _retained_repo_after_narrowing(tmp_path, repo, workspace):
+    with _isolated_registry():
+        agent = GaiaAgent(
+            config=GaiaAgentConfig(silent_mode=True, allowed_paths=[str(tmp_path)])
+        )
+        agent._repo_path = str(repo)
+        agent._code_index_sdk = object()
+        agent.config.allowed_paths = [str(workspace)]
+        agent._register_tools()
+    return agent
+
+
+def test_re_registering_tools_drops_a_sibling_sharing_the_ceiling_prefix(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+    workspace = tmp_path / "work"
+    sibling = tmp_path / "work-evil" / "repo"
+    workspace.mkdir()
+    sibling.mkdir(parents=True)
+
+    agent = _retained_repo_after_narrowing(tmp_path, sibling, workspace)
+
+    assert agent._repo_path != str(sibling)
+    assert agent._code_index_sdk is None
+
+
+def test_re_registering_tools_drops_a_link_inside_the_ceiling_pointing_out(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    link = workspace / "link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        if sys.platform != "win32":
+            pytest.skip("creating a directory symlink needs privileges here")
+        import _winapi
+
+        _winapi.CreateJunction(str(outside), str(link))
+
+    agent = _retained_repo_after_narrowing(tmp_path, link, workspace)
+
+    assert agent._repo_path != str(link)
+    assert agent._code_index_sdk is None
+
+
+def test_re_registering_tools_with_dotdot_escape_drops_the_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+    workspace = tmp_path / "workspace"
+    (tmp_path / "outside").mkdir()
+    workspace.mkdir()
+    escaped = workspace / ".." / "outside"
+
+    agent = _retained_repo_after_narrowing(tmp_path, escaped, workspace)
+
+    assert agent._repo_path != str(escaped)
+    assert agent._code_index_sdk is None
 
 
 # --------------------------------------------------------------------------

@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A repository indexed with `index_codebase` stays the code-search folder**
+  (#6055). In the Agent UI, each new turn reset code search to the session's
+  starting folder, so the next `search_code_index` looked in the wrong place
+  instead of the repository just indexed. The repository is still dropped if
+  the allowed folders no longer contain it.
+
 ## [0.3.3]
 
 Released with GAIA 0.25.3, and requires the `gaia` Python CLI 0.25.3+ on `PATH`.
@@ -43,14 +51,6 @@ so probe `/version` before sending it.
   sends no `turns` gets no `model_messages`, so a `final` stays small for
   text-only clients. Pre-2.25 binaries refuse the field with `422`, so probe
   `/version` first.
-
-### Fixed
-
-- **A repository indexed with `index_codebase` stays the code-search folder**
-  (#6055). In the Agent UI, each new turn reset code search to the session's
-  starting folder, so the next `search_code_index` looked in the wrong place
-  instead of the repository just indexed. The repository is still dropped if
-  the allowed folders no longer contain it.
 
 ## [0.3.2]
 
