@@ -3770,6 +3770,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     turn_started = _time.monotonic()
     sse_handler = None
     producer = None
+    # Bound before the try so the error path can link a recording on any failure.
+    turn_box: dict = {}
     cleanup_done = False
     # When the turn was stopped and its thread got its grace period already.
     stop_grace_spent = False
@@ -3937,7 +3939,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # can yield the thinking event immediately.
         result_holder = {"answer": "", "error": None, "model_loads": []}
         inbox_holder: dict = {}
-        turn_box: dict = {}
 
         def _run_agent():
             recording = TurnRecording(session_id)
@@ -5026,6 +5027,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             error_msg = str(e)
         else:
             error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
+        link_warning = None
         try:
             msg_id = db.add_message(
                 request.session_id, "assistant", error_msg, ends_turn=True
@@ -5035,10 +5037,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if "recording" in turn_box
                 else None
             )
-            if link_warning:
-                logger.warning("Could not link undo recording: %s", link_warning)
         except Exception as exc:
             logger.error("Could not persist chat error: %s", exc)
+        if link_warning:
+            yield _undo_link_warning_event(link_warning)
         error_data = json.dumps({"type": "error", "content": error_msg})
         yield f"data: {error_data}\n\n"
     finally:
