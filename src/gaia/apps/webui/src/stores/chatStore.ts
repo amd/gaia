@@ -4,10 +4,11 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode } from '../types';
+import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId } from '../types';
 import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
 
 /** Settings sections, in the order the settings nav shows them. */
 export type SettingsSection =
@@ -82,6 +83,23 @@ function writePref(key: string, value: string): void {
     }
 }
 
+const QUEUES_KEY = 'gaia-chat-message-queues';
+
+/** Queued messages saved before a reload; unreadable ones are reported, not guessed at. */
+function readQueues(): Record<string, QueuedMessage[]> {
+    try {
+        return restoreQueues(JSON.parse(readPref(QUEUES_KEY, '{}')));
+    } catch (err) {
+        log.system.warn('Saved queued messages unreadable; starting with none.', err);
+        return {};
+    }
+}
+
+export interface PendingPrompt {
+    sessionId: string;
+    text: string;
+}
+
 /** A question the agent is blocked on; `expiresAt` is when the backend stops waiting (ms), or null. */
 export interface LiveQuestion {
     sessionId: string;
@@ -119,6 +137,13 @@ interface ChatState {
     activeRunsAt: number;
     /** Apply one GET /api/chat/active poll, sent at `requestedAt`. */
     setActiveRuns: (runs: ActiveRuns, requestedAt: number) => void;
+    /** Messages typed while a chat answered, by chat. Each goes out when that
+     *  chat's turn ends, open or not, and survives a reload. */
+    messageQueues: Record<string, QueuedMessage[]>;
+    updateQueue: (sessionId: string, fn: (items: QueuedMessage[]) => QueuedMessage[]) => void;
+    /** Chats whose queued message found the chat busy, waiting a moment before trying again. */
+    queueHolds: Record<string, boolean>;
+    setQueueHold: (sessionId: string, hold: boolean) => void;
 
     // Messages (for current session)
     messages: Message[];
@@ -189,19 +214,29 @@ interface ChatState {
     showFileBrowser: boolean;
     /** Open settings section, or null when settings is closed. */
     settingsSection: SettingsSection | null;
+    /** Provider tab Settings > Model opens on; null follows the active model. */
+    settingsProvider: ProviderId | null;
     showMemoryDashboard: boolean;
     showSchedules: boolean;
     /** Permission mode picked on the new-chat screen, applied when the chat is created. */
     draftPermissionMode: PermissionMode;
+    /** The user picked the draft mode on the chip; the configured default no longer moves it. */
+    draftPermissionModeChosen: boolean;
     /** The mode a new chat starts in: `full_access` in config, else ask. */
     defaultPermissionMode: PermissionMode;
+    /** The backend has answered with the configured default; until then it is a guess. */
+    defaultPermissionModeKnown: boolean;
     /** Library documents picked with no chat open; the next new chat starts with them. */
     draftDocumentIds: string[];
+    /** The next new chat is created private, so its first message is never remembered. */
+    draftPrivate: boolean;
+    /** A folder the next new chat may read and write from its first message. */
+    draftFolder: string | null;
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
     isLoadingMessages: boolean;
-    /** A first message queued before its chat view mounted; ChatView sends it. */
-    pendingPrompt: string | null;
+    /** A message queued for one chat; only that chat's view sends it. */
+    pendingPrompt: PendingPrompt | null;
     setThemePreference: (pref: ThemePreference) => void;
     /** Color palette; `default` is the built-in warm gray look. */
     palette: PaletteId;
@@ -212,13 +247,18 @@ interface ChatState {
     syncSystemTheme: () => void;
     setShowDocLibrary: (show: boolean) => void;
     setShowFileBrowser: (show: boolean) => void;
-    openSettings: (section?: SettingsSection) => void;
+    openSettings: (section?: SettingsSection, provider?: ProviderId) => void;
     closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
+    /** The user's pick on the new-chat chip. */
     setDraftPermissionMode: (mode: PermissionMode) => void;
     /** Adopt the configured default; an untouched draft follows it. */
     setDefaultPermissionMode: (mode: PermissionMode) => void;
+    /** After a chat is created: the next draft starts from the default again. */
+    resetDraftPermissionMode: () => void;
+    setDraftPrivate: (on: boolean) => void;
+    setDraftFolder: (path: string | null) => void;
     addDraftDocuments: (ids: string[]) => void;
     removeDraftDocument: (id: string) => void;
     clearDraftDocuments: () => void;
@@ -226,8 +266,11 @@ interface ChatState {
     toggleSidebarCollapsed: () => void;
     setSidebarCollapsed: (collapsed: boolean) => void;
     setLoadingMessages: (loading: boolean) => void;
-    setPendingPrompt: (prompt: string | null) => void;
+    setPendingPrompt: (prompt: PendingPrompt | null) => void;
 }
+
+/** The sidebar's Memory, Scheduled tasks and Documents: opening one closes the others. */
+const NO_DESTINATION = { showMemoryDashboard: false, showSchedules: false, showDocLibrary: false };
 
 export const useChatStore = create<ChatState>((set, get) => ({
     agents: [],
@@ -258,24 +301,60 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
             return next;
         }),
+    messageQueues: readQueues(),
+    updateQueue: (sessionId, fn) =>
+        set((state) => {
+            const before = state.messageQueues[sessionId] ?? [];
+            const after = fn(before);
+            if (after.length === before.length && after.every((m, i) => m === before[i])) return state;
+            const messageQueues = { ...state.messageQueues };
+            if (after.length) messageQueues[sessionId] = after;
+            else delete messageQueues[sessionId];
+            writePref(QUEUES_KEY, JSON.stringify(messageQueues));
+            return { messageQueues };
+        }),
+    queueHolds: {},
+    setQueueHold: (sessionId, hold) =>
+        set((state) => {
+            if (!!state.queueHolds[sessionId] === hold) return state;
+            const queueHolds = { ...state.queueHolds };
+            if (hold) queueHolds[sessionId] = true;
+            else delete queueHolds[sessionId];
+            return { queueHolds };
+        }),
     setSessions: (sessions) =>
         set((state) => ({
             // Filter out any sessions that are pending backend deletion so poll
             // results don't resurrect sessions the user already deleted.
             sessions: sessions.filter((s) => !state.pendingDeleteIds.includes(s.id)),
         })),
-    // Opening a chat leaves any full-page view (memory, schedules).
+    // Opening a chat leaves Memory and closes Scheduled tasks.
     setCurrentSession: (id) => set(id
         ? { currentSessionId: id, showMemoryDashboard: false, showSchedules: false }
         : { currentSessionId: id }),
     addSession: (session) =>
         set((state) => ({ sessions: [session, ...state.sessions] })),
+    // The chat's queued messages go with it; the delete button says so first.
     removeSession: (id) =>
-        set((state) => ({
-            sessions: state.sessions.filter((s) => s.id !== id),
-            currentSessionId: state.currentSessionId === id ? null : state.currentSessionId,
-            messages: state.currentSessionId === id ? [] : state.messages,
-        })),
+        set((state) => {
+            const next: Partial<ChatState> = {
+                sessions: state.sessions.filter((s) => s.id !== id),
+                currentSessionId: state.currentSessionId === id ? null : state.currentSessionId,
+                messages: state.currentSessionId === id ? [] : state.messages,
+            };
+            if (state.messageQueues[id]) {
+                const messageQueues = { ...state.messageQueues };
+                delete messageQueues[id];
+                writePref(QUEUES_KEY, JSON.stringify(messageQueues));
+                next.messageQueues = messageQueues;
+            }
+            if (state.queueHolds[id]) {
+                const queueHolds = { ...state.queueHolds };
+                delete queueHolds[id];
+                next.queueHolds = queueHolds;
+            }
+            return next;
+        }),
     updateSessionInList: (id, updates) =>
         set((state) => ({
             sessions: state.sessions.map((s) => (s.id === id ? { ...s, ...updates } : s)),
@@ -339,7 +418,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (last.type !== 'thinking') return state;
             steps[steps.length - 1] = {
                 ...last,
-                detail: (last.detail ? last.detail + '\n' : '') + content,
+                // Streamed pieces carry their own spacing, as the saved turn joins them.
+                detail: (last.detail ?? '') + content,
                 active: true,
             };
             return { agentSteps: steps };
@@ -411,11 +491,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showDocLibrary: false,
     showFileBrowser: false,
     settingsSection: null,
+    settingsProvider: null,
     showMemoryDashboard: false,
     showSchedules: false,
     draftPermissionMode: 'ask',
+    draftPermissionModeChosen: false,
     defaultPermissionMode: 'ask',
+    defaultPermissionModeKnown: false,
     draftDocumentIds: [],
+    draftPrivate: false,
+    draftFolder: null,
     setThemePreference: (pref) => {
         writePref('gaia-chat-theme', pref);
         const theme = resolveTheme(pref);
@@ -447,21 +532,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
     sidebarCollapsed: readPref('gaia-chat-sidebar-collapsed', 'false') === 'true',
     isLoadingMessages: false,
     pendingPrompt: null,
-    setShowDocLibrary: (show) => set({ showDocLibrary: show }),
+    setShowDocLibrary: (show) =>
+        set(show ? { ...NO_DESTINATION, showDocLibrary: true } : { showDocLibrary: false }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
-    openSettings: (section = 'general') => set({ settingsSection: section }),
-    closeSettings: () => set({ settingsSection: null }),
+    openSettings: (section = 'general', provider) => set({ settingsSection: section, settingsProvider: provider ?? null }),
+    closeSettings: () => set({ settingsSection: null, settingsProvider: null }),
     setShowMemoryDashboard: (show) =>
-        set(show ? { showMemoryDashboard: true, showSchedules: false } : { showMemoryDashboard: false }),
+        set(show ? { ...NO_DESTINATION, showMemoryDashboard: true } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>
-        set(show ? { showSchedules: true, showMemoryDashboard: false } : { showSchedules: false }),
-    setDraftPermissionMode: (mode) => set({ draftPermissionMode: mode }),
+        set(show ? { ...NO_DESTINATION, showSchedules: true } : { showSchedules: false }),
+    setDraftPermissionMode: (mode) => set({ draftPermissionMode: mode, draftPermissionModeChosen: true }),
     setDefaultPermissionMode: (mode) =>
         set((state) => ({
             defaultPermissionMode: mode,
+            defaultPermissionModeKnown: true,
+            // A pick the user made stays, even when it matches the old guess.
             draftPermissionMode:
-                state.draftPermissionMode === state.defaultPermissionMode ? mode : state.draftPermissionMode,
+                !state.draftPermissionModeChosen && state.draftPermissionMode === state.defaultPermissionMode
+                    ? mode
+                    : state.draftPermissionMode,
         })),
+    resetDraftPermissionMode: () =>
+        set((state) => ({ draftPermissionMode: state.defaultPermissionMode, draftPermissionModeChosen: false })),
+    setDraftPrivate: (on) => set({ draftPrivate: on }),
+    setDraftFolder: (path) => set({ draftFolder: path }),
     addDraftDocuments: (ids) =>
         set((state) => {
             const toAdd = ids.filter((id) => !state.draftDocumentIds.includes(id));

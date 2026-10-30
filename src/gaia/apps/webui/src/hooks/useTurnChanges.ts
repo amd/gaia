@@ -47,6 +47,11 @@ function load(sessionId: string): Promise<void> {
     return entry.inFlight;
 }
 
+/** Re-read the chat's listing, e.g. after Undo all, so every answer's row updates. */
+export function refreshTurnChanges(sessionId: string): Promise<void> {
+    return load(sessionId);
+}
+
 /** Test hook: forget every cached listing. */
 export function resetTurnChangesCache(): void {
     cache.clear();

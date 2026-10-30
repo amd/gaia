@@ -13,6 +13,9 @@ on:
       - 'src/gaia/apps/webui/**'
       - 'tests/electron/**'
       - '.github/workflows/test_electron.yml'
+      # `npm ci` at the repo root installs the electron/apps workspaces.
+      - 'package.json'
+      - 'package-lock.json'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -22,6 +25,9 @@ on:
       - 'src/gaia/apps/webui/**'
       - 'tests/electron/**'
       - '.github/workflows/test_electron.yml'
+      # `npm ci` at the repo root installs the electron/apps workspaces.
+      - 'package.json'
+      - 'package-lock.json'
   merge_group:
   workflow_dispatch:
 

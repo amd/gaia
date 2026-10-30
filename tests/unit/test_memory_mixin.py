@@ -592,6 +592,13 @@ class TestSystemContext:
         prompt = mixin_host.get_memory_system_prompt()
         assert "No personal memories stored yet" in prompt
 
+    def test_reminder_instruction_does_not_promise_an_alert(self, mixin_host):
+        prompt = mixin_host.get_memory_system_prompt()
+
+        assert "does NOT send an alert" in prompt
+        assert "Never promise an automatic notification" in prompt
+        assert "next time the user chats" in prompt
+
     def test_stable_prompt_no_nudge_when_personal_memories_exist(self, mixin_host):
         """The 'no personal memories' nudge disappears once user data is stored."""
         mixin_host.memory_store.store(
@@ -1663,6 +1670,7 @@ class TestToolExecutionLogging:
         rows = mixin_host.memory_store.get_tool_history("write_file")
         assert len(rows) == 1
         assert rows[0]["success"] == 0
+        assert rows[0]["executed"] is False
         assert rows[0]["error"] == error
 
     def test_execute_tool_logs_failure(self, mixin_host):
@@ -1886,6 +1894,21 @@ class TestProcessQueryCacheInvalidation:
             mixin_host.process_query("first query")
             mock_post.assert_called_once()
 
+        assert mixin_host._memory_post_init_pending is False
+
+    def test_post_init_waits_out_a_private_turn(self, mixin_host):
+        """Upkeep reads existing memories with the turn's model, so a private or
+        memory-off turn leaves it pending for the first memory-on turn."""
+        mixin_host._incognito = True
+        with patch.object(mixin_host, "_run_memory_post_init") as mock_post:
+            mixin_host.process_query("private query")
+            mock_post.assert_not_called()
+        assert mixin_host._memory_post_init_pending is True
+
+        mixin_host._incognito = False
+        with patch.object(mixin_host, "_run_memory_post_init") as mock_post:
+            mixin_host.process_query("memory-on query")
+            mock_post.assert_called_once()
         assert mixin_host._memory_post_init_pending is False
 
     def test_post_init_not_called_on_second_query(self, mixin_host):
@@ -3685,6 +3708,45 @@ class TestRecallToolTemporal:
         contents = [r.get("content", "") for r in result["results"]]
         assert any("Temporal recall beta" in c for c in contents)
 
+    def test_recall_time_to_date_includes_boundary_day(self, mixin_with_tools):
+        """A date-only time_to includes items stored later that day (#3524)."""
+        func_remember = mixin_with_tools._registered_tools["remember"]["function"]
+        with patch(
+            "gaia.agents.base.memory_store._now_iso",
+            return_value="2025-03-31T15:00:00-07:00",
+        ):
+            func_remember(
+                fact="Boundary day recall delta fact",
+                category="fact",
+            )
+
+        func_recall = mixin_with_tools._registered_tools["recall"]["function"]
+        result = func_recall(
+            query="Boundary day recall delta",
+            time_to="2025-03-31",
+        )
+        assert result["status"] == "found"
+        contents = [r.get("content", "") for r in result["results"]]
+        assert any("Boundary day recall delta" in c for c in contents)
+
+    def test_recall_browse_time_to_date_includes_boundary_day(self, mixin_with_tools):
+        """Browse-mode recall also keeps items from the time_to day (#3524)."""
+        func_remember = mixin_with_tools._registered_tools["remember"]["function"]
+        with patch(
+            "gaia.agents.base.memory_store._now_iso",
+            return_value="2025-03-31T15:00:00-07:00",
+        ):
+            func_remember(
+                fact="Boundary day browse epsilon fact",
+                category="fact",
+            )
+
+        func_recall = mixin_with_tools._registered_tools["recall"]["function"]
+        result = func_recall(time_to="2025-03-31")
+        assert result["status"] == "found"
+        contents = [r.get("content", "") for r in result["results"]]
+        assert any("Boundary day browse epsilon" in c for c in contents)
+
     def test_recall_by_time_range_only_finds_items(self, mixin_with_tools):
         """recall(time_from, time_to) without query returns filtered results."""
         func_remember = mixin_with_tools._registered_tools["remember"]["function"]
@@ -3783,6 +3845,31 @@ class TestSearchPastConversationsTemporal:
         assert result["count"] >= 1
         contents = [r.get("content", "") for r in result["results"]]
         assert any("Conversation range beta" in c for c in contents)
+
+    def test_search_conversations_time_to_date_includes_boundary_day(
+        self, mixin_with_tools
+    ):
+        """Conversation search keeps turns from the date-only time_to day (#3524)."""
+        with patch(
+            "gaia.agents.base.memory_store._now_iso",
+            return_value="2025-03-31T15:00:00-07:00",
+        ):
+            mixin_with_tools._memory_store.store_turn(
+                "test-conv-boundary",
+                "user",
+                "Boundary day conversation epsilon message",
+            )
+
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        result = func(
+            query="Boundary day conversation epsilon",
+            time_to="2025-03-31",
+        )
+        assert result["status"] == "found"
+        contents = [r.get("content", "") for r in result["results"]]
+        assert any("Boundary day conversation epsilon" in c for c in contents)
 
     def test_search_conversations_no_params_returns_error(self, mixin_with_tools):
         """search_past_conversations() with no params returns error."""

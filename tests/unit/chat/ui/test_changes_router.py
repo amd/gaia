@@ -115,3 +115,59 @@ def test_deleting_the_chat_removes_its_undo_history(client, session_id, tmp_path
     _edit_turn(session_id, tmp_path / "doc.txt", b"a", b"b")
     assert client.delete(f"/api/sessions/{session_id}").status_code == 200
     assert not (home / "snapshots" / session_id).exists()
+
+
+def test_whole_chat_total_and_undo_all(client, session_id, tmp_path):
+    a, b = tmp_path / "a.txt", tmp_path / "b.txt"
+    a.write_bytes(b"a\n")
+    with fs.recording_turn(session_id, turn_id="t1") as rec:
+        fs.before_change(a, "edit_file")
+        a.write_bytes(b"a\nmore\n")
+        fs.before_change(b, "write_file")
+        b.write_bytes(b"new\n")
+    rec.link_message(3)
+
+    total = client.get(f"/api/sessions/{session_id}/changes/total").json()
+    assert total["totals"] == {
+        "files": 2,
+        "additions": 2,
+        "deletions": 0,
+        "uncounted": 0,
+    }
+
+    undo = client.post(f"/api/sessions/{session_id}/changes/undo", json={})
+    assert undo.status_code == 200, undo.text
+    assert a.read_bytes() == b"a\n" and not b.exists()
+    after = client.get(f"/api/sessions/{session_id}/changes/total").json()
+    assert after["files"] == []
+
+
+def test_undo_all_conflict_is_409_and_changes_nothing(client, session_id, tmp_path):
+    target = tmp_path / "doc.txt"
+    _edit_turn(session_id, target, b"old", b"new")
+    target.write_bytes(b"user edit")
+    resp = client.post(f"/api/sessions/{session_id}/changes/undo", json={})
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["conflicts"][0]["path"] == str(target)
+    assert target.read_bytes() == b"user edit"
+
+
+def test_undo_all_refused_while_a_turn_runs(client, session_id, tmp_path):
+    import asyncio
+
+    _edit_turn(session_id, tmp_path / "doc.txt", b"old", b"new")
+    lock = client.app.state.session_locks.setdefault(session_id, asyncio.Lock())
+    lock._locked = True  # held by a running turn
+    try:
+        resp = client.post(f"/api/sessions/{session_id}/changes/undo", json={})
+    finally:
+        lock._locked = False
+    assert resp.status_code == 409
+    assert "still working" in resp.json()["detail"]
+    assert (tmp_path / "doc.txt").read_bytes() == b"new"
+
+
+def test_undo_all_with_nothing_to_undo_is_409(client, session_id):
+    resp = client.post(f"/api/sessions/{session_id}/changes/undo", json={})
+    assert resp.status_code == 409
+    assert "no file changes" in resp.json()["detail"]

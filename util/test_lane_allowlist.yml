@@ -34,6 +34,7 @@ files:
   tests/integration/test_email_bench_throughput.py: Benchmarks triage throughput; needs a live Lemonade Server with the email model.
   tests/integration/test_daemon_broker_lemonade.py: Drives concurrent real model loads through the broker; needs a live Lemonade Server with downloaded models.
   tests/integration/test_lemonade_model_residency.py: Checks an LLM and an embedder stay co-resident; needs a live Lemonade Server with both loaded.
+  tests/integration/test_lemonade_tokenize.py: Proves the real /tokenize request shape the context panel sends and that it never loads a model; needs a live Lemonade Server with a chat model loaded.
   tests/integration/test_lemonade_predownload_checks.py: Proves the real /models, /system-info and /health shapes the unit test mocks; needs a live Lemonade Server.
   tests/integration/test_gateway_lemonade.py: Proves Lemonade accepts the gateway's cloud-provider registration and discovery calls, not just that GAIA sent them; needs a live Lemonade Server 11.8.0+, skips otherwise.
   tests/test_lemonade_health.py: Reads context_size from the real health endpoint; needs a live Lemonade Server.
@@ -88,6 +89,7 @@ module_skips:
     runs_in: test_chat_agent.yml
     paths:
       - tests/unit/agents/test_registry.py
+      - tests/unit/chat/test_session_prompt_context.py
       - tests/unit/test_chat_agent_integration.py
       - tests/unit/test_chat_dynamic_tools.py
       - tests/unit/test_chat_fix_contracts.py
@@ -106,17 +108,23 @@ module_skips:
       - tests/unit/test_run_python_adversarial.py
       - tests/unit/test_run_python_frozen.py
       - tests/unit/test_run_python_frozen_adversarial.py
+      - tests/unit/test_run_python_untracked.py
+      - tests/unit/test_scratch_dir_lifecycle.py
       - tests/unit/test_skill_tools_same_turn.py
       - tests/unit/test_tool_admission_order.py
       - tests/unit/test_tool_loader_disambiguation.py
+      - tests/unit/test_profilespec_characterization.py
 
   - reason: Needs the gaia-agent (flagship) wheel, which test_unit.yml does not install.
     runs_in: test_gaia_agent.yml
     paths:
       - tests/unit/messaging/test_bridge_contract.py
+      - tests/unit/messaging/test_bridge_hung_tool.py
       - tests/unit/test_execute_python_file_cwd.py
       - tests/unit/test_flagship_code_index_scope.py
       - tests/unit/test_stdio_permission_control.py
+      - tests/unit/test_tool_loader_token_budget.py
+      - tests/unit/eval/test_harness_flagship_target.py
 
   - reason: Needs the [mcp] extra, which test_unit.yml does not install.
     runs_in: test_agent_mcp_server.yml
@@ -130,19 +138,3 @@ module_skips:
     paths:
       - tests/unit/eval/test_pdf_document_generator.py
 
-  - reason: >-
-      Broken, and fixing it needs an owner's decision. With the chat wheel
-      installed, 11 of its 17 tests fail: the golden tool sets and prompts predate
-      tools added since (write_clipboard, read_tool_output, ...). The file says a
-      golden update needs sign-off, so it is not updated here. Tracked in #4390.
-    paths:
-      - tests/unit/test_profilespec_characterization.py
-
-  - reason: >-
-      Broken, and fixing it needs an owner's decision. With the chat wheel
-      installed, 4 of its 10 tests fail: the doc profile has 38 tools (pinned 37)
-      and 6498 native tokens (pinned 5128), and the worst-case loaded set (4257
-      tokens) is over its 65% ratio even of the new total, so re-pinning alone
-      would not pass. Tracked in #4391.
-    paths:
-      - tests/unit/test_tool_loader_token_budget.py

@@ -35,6 +35,11 @@ type Recommended struct {
 	// shared margin covers the cache.
 	MinCtxSize      int64 `json:"min_ctx_size"`
 	KVBytesPerToken int64 `json:"kv_bytes_per_token"`
+
+	// Custom marks a model the user added from a Hugging Face link
+	// (ReadCustomModels), which they may remove; SourceURL is that link.
+	Custom    bool   `json:"-"`
+	SourceURL string `json:"-"`
 }
 
 // KVCacheGB is the KV cache at the model's floor window. GAIA grows the window
@@ -50,12 +55,19 @@ func (r Recommended) Matches(id string) bool {
 	if id == r.ID || (r.RegisterAs != "" && id == r.RegisterAs) {
 		return true
 	}
+	// Lemonade lists a registered user.X as X.
+	if r.RegisterAs != "" && SameLocalID(id, r.RegisterAs) {
+		return true
+	}
 	return r.Provider != "local" && rankKey(id) == rankKey(r.ID)
 }
 
 type fitConstants struct {
 	MemoryOverheadFactor float64 `json:"memory_overhead_factor"`
 	MemoryOverheadGB     float64 `json:"memory_overhead_gb"`
+	// WindowsIGPUSharedRAMFraction is the share of RAM WDDM lets an
+	// integrated GPU use beyond its carve-out.
+	WindowsIGPUSharedRAMFraction float64 `json:"windows_igpu_shared_ram_fraction"`
 }
 
 //go:embed recommended_models.json
@@ -76,6 +88,9 @@ func init() {
 	}
 	if doc.Fit.MemoryOverheadFactor <= 0 {
 		panic("recommended_models.json: fit.memory_overhead_factor must be positive")
+	}
+	if doc.Fit.WindowsIGPUSharedRAMFraction <= 0 {
+		panic("recommended_models.json: fit.windows_igpu_shared_ram_fraction must be positive")
 	}
 	recommended, fitRule = doc.Models, doc.Fit
 	// The ranked Fireworks list with its Evidence is RecommendedModels in

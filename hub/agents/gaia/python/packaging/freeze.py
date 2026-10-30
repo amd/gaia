@@ -24,9 +24,13 @@ Design notes / gotchas baked in (mirrors the email sidecar's freeze):
   ``full`` profile's tool groups (RAG, filesystem, scratchpad, browser,
   screenshot), so collect both agent packages wholesale.
 - ``gaia.connectors`` discovers providers dynamically; collect it explicitly.
-- ``gaia-agent.yaml`` and the bundled skills directory are DATA, invisible to the
-  import analyzer -> ``--add-data``. Both resolve relative to ``__file__`` at
-  runtime (see ``gaia_agent/agent.py``).
+- ``gaia-agent.yaml``, the agent's own ``gaia_agent/skills`` and the starter
+  pack (``hub/skills``) are DATA, invisible to the import analyzer ->
+  ``--add-data``. All of it lands under ``gaia_agent/`` and resolves relative to
+  ``__file__`` at runtime (see ``gaia_agent/agent.py``).
+- A bundled skill's ``tools.py`` and ``scripts/`` are imported or run from that
+  data at runtime, so nothing reaches their imports statically. Each one is
+  added as a hidden import, and the build fails if one is not installed.
 - We deliberately do NOT ``--collect-submodules gaia``: the whole core package
   pulls every agent + RAG + torch and explodes the binary. Static analysis from
   the sidecar entry pulls only the reachable core modules.
@@ -34,17 +38,24 @@ Design notes / gotchas baked in (mirrors the email sidecar's freeze):
   the ML stack (torch, transformers, ...). All inference is Lemonade over HTTP
   and never runs in-process, so the ML stack is EXCLUDED to keep the binary lean.
   ``faiss`` stays collected: the memory/RAG working-context index needs it.
+- tiktoken finds ``cl100k_base`` through a plugin it discovers at runtime and
+  downloads the encoding's data on first use -> hidden-import the plugin and
+  bundle the data (``gaia.utils.tiktoken_bundle``), or every token count in the
+  binary is an estimate.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import re
 import shutil
 import sys
 import time
 from pathlib import Path
+
+from gaia.utils import tiktoken_bundle
 
 HERE = Path(__file__).resolve().parent
 ENTRY = HERE / "server.py"
@@ -62,6 +73,14 @@ PATHEX = [
 
 MANIFEST_SRC = PKG_ROOT / "gaia-agent.yaml"
 SKILLS_SRC = PKG_ROOT / "gaia_agent" / "skills"
+#: The first-party starter pack. A checkout discovers it in place; the frozen
+#: binary has no hub/ tree, so it is staged beside the agent's own skills.
+HUB_SKILLS_SRC = REPO_ROOT / "hub" / "skills"
+#: Where both land in the binary — the root ``gaia_agent.agent._SKILLS_DIR`` reads.
+SKILLS_DEST = "gaia_agent/skills"
+# Linux only: the bundled OpenSSL looks for CA certs where the BUILD distro keeps
+# them, so point it at the host's bundle (see the hook's docstring).
+LINUX_CA_HOOK = HERE / "rthook_linux_ca.py"
 
 # Modules PyInstaller must pull in wholesale, and the distributions whose
 # metadata must travel with them. Declared once so the preflight guard below
@@ -90,17 +109,23 @@ COLLECT_SUBMODULES = [
 # collect-all because the wheel carries native .dll/.pyd payloads that static
 # analysis cannot see. ~29 MB, Apache-2.0 (its vendored onnxruntime is MIT).
 COLLECT_ALL = ["faiss", "sherpa_onnx"]
+# Package data the analyzer can't see. pymupdf 2.x imports its layout module on
+# import, which loads ONNX model configs from pymupdf/layout/resources at runtime;
+# without them every ``import pymupdf`` in a run_python script fails.
+COLLECT_DATA = ["pymupdf"]
 # Imported behind an ``except ImportError`` guard, so PyInstaller bundles them
 # only when they are installed and the binary otherwise boots without them.
 # anthropic: ``--use-claude`` and ``/model``, which the TUI forwards to the binary.
 REQUIRED_IMPORTS = ["anthropic"]
+# Modules only ever imported by name at runtime.
+HIDDEN_IMPORTS = [tiktoken_bundle.PLUGIN_MODULE]
 # importlib.metadata version probes + entry-point agent discovery.
 COPY_METADATA = ["keyring", "amd-gaia", "gaia-agent-gaia", "gaia-agent-chat"]
 
 # What a ``run_python`` script may import. The frozen binary is the only Python
 # a user of the release has, and nothing in GAIA imports most of these, so the
 # import analyzer would leave them out. Office output (.xlsx, .docx, .pptx,
-# .pdf), tables and charts are what knowledge-work tasks ask for.
+# .pdf), tables and charts are what users' document and analysis tasks ask for.
 SCRIPT_LIBRARIES = [
     "openpyxl",
     "xlsxwriter",
@@ -174,6 +199,7 @@ def _verify_collect_targets() -> None:
         mod
         for mod in COLLECT_SUBMODULES
         + COLLECT_ALL
+        + COLLECT_DATA
         + REQUIRED_IMPORTS
         + SCRIPT_LIBRARIES
         if importlib.util.find_spec(mod) is None
@@ -225,6 +251,131 @@ def script_hidden_imports() -> list[str]:
     return sorted(n for n in names if _wanted_submodule(n))
 
 
+def _skill_dirs(root: Path) -> list[Path]:
+    """Skill folders directly under *root* (those holding a ``SKILL.md``)."""
+    if not root.is_dir():
+        return []
+    return sorted(p for p in root.iterdir() if (p / "SKILL.md").is_file())
+
+
+def bundled_skill_dirs() -> list[Path]:
+    """Every skill the binary ships: the agent's own, then the starter pack."""
+    return _skill_dirs(SKILLS_SRC) + _skill_dirs(HUB_SKILLS_SRC)
+
+
+def _skill_code_files(skill_dir: Path) -> list[Path]:
+    """The Python a skill runs: ``tools.py`` and anything under ``scripts/``."""
+    files = [skill_dir / "tools.py"] if (skill_dir / "tools.py").is_file() else []
+    scripts = skill_dir / "scripts"
+    if scripts.is_dir():
+        files += sorted(scripts.rglob("*.py"))
+    return files
+
+
+def _is_local_module(name: str, skill_dir: Path, source: Path) -> bool:
+    """True when *name* is a sibling module the skill ships itself.
+
+    The loader puts the skill folder on ``sys.path`` for ``tools.py``, and a
+    script runs with its own folder first on the path.
+    """
+    top = name.split(".")[0]
+    return any(
+        (folder / f"{top}.py").is_file() or (folder / top).is_dir()
+        for folder in {skill_dir, source.parent}
+    )
+
+
+def _find_spec(name: str):
+    """``importlib.util.find_spec``, with a missing parent package read as absent."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(name)
+    except (ModuleNotFoundError, ValueError):
+        return None
+
+
+_IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
+
+
+def _catches_import_error(handler: ast.ExceptHandler) -> bool:
+    kinds = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return any(
+        (isinstance(k, ast.Name) and k.id in _IMPORT_ERRORS)
+        or (isinstance(k, ast.Attribute) and k.attr in _IMPORT_ERRORS)
+        for k in kinds
+    )
+
+
+def _is_type_checking(test: ast.expr) -> bool:
+    return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
+        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+    )
+
+
+def _imports(node: ast.AST, optional: bool = False):
+    """``(import node, optional)`` for every import in *node* and below it.
+
+    An import in the body of a ``try`` that catches ``ImportError``, or of an
+    ``if TYPE_CHECKING:``, is optional: the skill already runs without it.
+    """
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        yield node, optional
+        return
+    guarded: list[ast.stmt] = []
+    if isinstance(node, ast.Try) and any(
+        _catches_import_error(h) for h in node.handlers
+    ):
+        guarded = node.body
+    elif isinstance(node, ast.If) and _is_type_checking(node.test):
+        guarded = node.body
+    for child in ast.iter_child_nodes(node):
+        yield from _imports(child, optional or child in guarded)
+
+
+def skill_code_hidden_imports(skill_dirs: list[Path] | None = None) -> list[str]:
+    """Modules the bundled skills' code imports, as hidden imports.
+
+    PyInstaller analyzes only the entry point's graph, and ``gaia`` is not
+    collected wholesale, so a ``from gaia.web.client import WebClient`` in a
+    skill's ``tools.py`` would ship as an ImportError on load. Fails the build
+    when a module is not installed rather than shipping that.
+    """
+    names: set[str] = set()
+    missing: list[str] = []
+    for skill_dir in bundled_skill_dirs() if skill_dirs is None else skill_dirs:
+        for source in _skill_code_files(skill_dir):
+            tree = ast.parse(source.read_text(encoding="utf-8"), str(source))
+            for node, optional in _imports(tree):
+                if isinstance(node, ast.Import):
+                    found = [alias.name for alias in node.names]
+                    submodules: list[str] = []
+                elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                    found = [node.module] if node.module else []
+                    # `from pkg import mod` names a submodule as often as an
+                    # attribute; only the analyzer-invisible module matters.
+                    submodules = [f"{node.module}.{a.name}" for a in node.names]
+                else:
+                    continue
+                for name in found:
+                    if _is_local_module(name, skill_dir, source):
+                        continue
+                    if _find_spec(name) is None:
+                        if not optional:
+                            missing.append(f"{name} ({source.relative_to(REPO_ROOT)})")
+                        continue
+                    names.add(name)
+                    names.update(m for m in submodules if _find_spec(m) is not None)
+    if missing:
+        raise SystemExit(
+            "freeze: refusing to build -- bundled skill code imports modules "
+            f"that are not installed: {', '.join(sorted(missing))}.\n"
+            "The skill would load in the binary and fail on its first call. "
+            "Install them into the freeze environment, or drop the import."
+        )
+    return sorted(names)
+
+
 def _resolve_add_data() -> list[tuple[Path, str]]:
     """``(source, destination)`` pairs for data the import analyzer cannot see.
 
@@ -253,7 +404,7 @@ def _resolve_add_data() -> list[tuple[Path, str]]:
             f"freeze: bundling {len(skill_files)} skill file(s) from {SKILLS_SRC}",
             flush=True,
         )
-        add_data.append((SKILLS_SRC, "gaia_agent/skills"))
+        add_data.append((SKILLS_SRC, SKILLS_DEST))
     else:
         reason = "absent" if not SKILLS_SRC.is_dir() else "empty"
         print("=" * 78, flush=True)
@@ -268,6 +419,28 @@ def _resolve_add_data() -> list[tuple[Path, str]]:
             flush=True,
         )
         print("=" * 78, flush=True)
+
+    if not HUB_SKILLS_SRC.is_dir():
+        raise SystemExit(
+            f"freeze: required bundle data is missing: {HUB_SKILLS_SRC}\n"
+            "The starter pack would be absent from the binary while a checkout "
+            "has it. Restore hub/skills and re-run."
+        )
+    packaged = {p.name for p in _skill_dirs(SKILLS_SRC)}
+    starter = _skill_dirs(HUB_SKILLS_SRC)
+    clashes = sorted(p.name for p in starter if p.name in packaged)
+    if clashes:
+        raise SystemExit(
+            f"freeze: {', '.join(clashes)} exist(s) in both {SKILLS_SRC} and "
+            f"{HUB_SKILLS_SRC}; both land in {SKILLS_DEST}, so one would "
+            "silently overwrite the other. Rename or remove one copy."
+        )
+    print(
+        f"freeze: bundling {len(starter)} starter-pack skill(s) from {HUB_SKILLS_SRC}",
+        flush=True,
+    )
+    for skill_dir in starter:
+        add_data.append((skill_dir, f"{SKILLS_DEST}/{skill_dir.name}"))
     return add_data
 
 
@@ -283,6 +456,8 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         for d in (work, dist):
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
+    tiktoken_cache = tiktoken_bundle.stage_cache(work / tiktoken_bundle.BUNDLE_DIR)
+    add_data.append((tiktoken_cache, tiktoken_bundle.BUNDLE_DIR))
 
     args = [
         str(ENTRY),
@@ -304,7 +479,13 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         args += ["--collect-submodules", mod]
     for mod in COLLECT_ALL:
         args += ["--collect-all", mod]
-    for mod in script_hidden_imports():
+    for mod in COLLECT_DATA:
+        args += ["--collect-data", mod]
+    for mod in sorted(
+        set(HIDDEN_IMPORTS)
+        | set(script_hidden_imports())
+        | set(skill_code_hidden_imports())
+    ):
         args += ["--hidden-import", mod]
     for distribution in COPY_METADATA:
         args += ["--copy-metadata", distribution]
@@ -312,6 +493,8 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         args += ["--add-data", f"{source}{os.pathsep}{dest}"]
     for mod in EXCLUDES:
         args += ["--exclude-module", mod]
+    if sys.platform.startswith("linux"):
+        args += ["--runtime-hook", str(LINUX_CA_HOOK)]
     args.append("--onefile" if onefile else "--onedir")
 
     t0 = time.time()

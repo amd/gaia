@@ -356,6 +356,18 @@ def test_send_section_derived_from_route_models():
 # ---------------------------------------------------------------------------
 
 
+def test_query_status_documents_model_queue_fields():
+    html = _html()
+
+    assert "<code>status</code> {message, phase?, queue?}" in html
+    assert "<code>model_queue</code>, <code>queue</code> reports" in html
+    # Every field the translator forwards under ``queue`` must be named.
+    from gaia_agent_email.sse_translation import _QUEUE_FIELDS
+
+    for field in _QUEUE_FIELDS:
+        assert f"<code>{field}</code>" in html, field
+
+
 def test_write_and_open_spec_writes_file_and_returns_path(tmp_path, monkeypatch):
     import gaia_agent_email.spec_html as spec_mod
 

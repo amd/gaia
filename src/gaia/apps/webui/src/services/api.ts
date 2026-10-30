@@ -3,12 +3,13 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
-import type { ActiveRuns } from '../types';
-import type { ModelServerInfo } from '../types/api.gen';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
+import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
+import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
 
 const API_BASE = getApiBase();
 
@@ -46,19 +47,48 @@ function parseErrorStatus(errorText: string): string | null {
     }
 }
 
+/** Request fields a 422 names, from the last part of each error's `loc` (e.g. `retention_days`). */
+export function parseErrorFields(errorText: string): string[] {
+    try {
+        const parsed = JSON.parse(errorText).detail;
+        if (!Array.isArray(parsed)) return [];
+        return parsed
+            .map((e) => (Array.isArray(e?.loc) ? e.loc[e.loc.length - 1] : undefined))
+            .filter((f): f is string => typeof f === 'string');
+    } catch {
+        return [];
+    }
+}
+
 /** A non-2xx answer: the message to show, the backend's own words, and its machine-readable reason. */
 export class ApiError extends Error {
     readonly httpStatus: number;
     readonly detail: string;
     readonly reason: string | null;
+    readonly fields: string[];
 
-    constructor(message: string, httpStatus: number, detail: string, reason: string | null) {
+    constructor(message: string, httpStatus: number, detail: string, reason: string | null, fields: string[] = []) {
         super(message);
         this.name = 'ApiError';
         this.httpStatus = httpStatus;
         this.detail = detail;
         this.reason = reason;
+        this.fields = fields;
     }
+}
+
+/** Starlette's bare body or the UI server's catch-all ("Internal server error") — no cause. */
+function isBareInternalError(detail: string): boolean {
+    return detail.trim().toLowerCase() === 'internal server error';
+}
+
+/**
+ * False when a 500 carries no real cause: a bare "Internal Server Error",
+ * a proxy HTML page, or a raw JSON body with an empty or missing `detail`.
+ */
+function hasUsefulServerDetail(detail: string): boolean {
+    const text = detail.trim();
+    return text !== '' && !isBareInternalError(text) && !/^[<{[]/.test(text);
 }
 
 function getFriendlyError(status: number, detail: string): string {
@@ -70,7 +100,7 @@ function getFriendlyError(status: number, detail: string): string {
         // filepath, not a missing file. See issue #728.
         case 404: return detail || 'The requested item was not found.';
         case 413: return detail || 'File too large to process.';
-        case 500: return 'Server error. Please try again.';
+        case 500: return hasUsefulServerDetail(detail) ? detail : 'Server error. Please try again.';
         case 502: return 'Service unavailable. Is the backend running?';
         case 503: return detail || 'Service unavailable.';
         default: return detail || `Request failed (HTTP ${status})`;
@@ -136,7 +166,7 @@ export async function apiFetch<T>(
         const errorText = await res.text().catch(() => '');
         log.api.error(`${method} ${url} - HTTP ${res.status}`, { errorText });
         const detail = parseErrorDetail(errorText);
-        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText), parseErrorFields(errorText));
     }
 
     // Some endpoints (DELETE, fire-and-forget POSTs) intentionally return no
@@ -239,6 +269,26 @@ export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number
     return apiFetch('GET', '/agents');
 }
 
+/** Progress of a hub install, as ``GET /api/agents/{id}/install-status`` reports it. */
+export interface AgentInstallStatus {
+    id: string;
+    /** `queued`, a running phase, then `completed` or `failed`. */
+    status: string;
+    phase: string;
+    percent: number;
+    version: string | null;
+    error: string | null;
+}
+
+/** Start installing an agent from the Agent Hub (202); poll getAgentInstallStatus. */
+export async function installAgent(id: string): Promise<{ id: string; status: string }> {
+    return apiFetch('POST', '/agents/install', { id });
+}
+
+export async function getAgentInstallStatus(id: string): Promise<AgentInstallStatus> {
+    return apiFetch('GET', `/agents/${encodeURIComponent(id)}/install-status`);
+}
+
 // -- First-run setup (same `gaia init` the TUI runs) ----------------------------
 
 /** Hardware report (memory, disk, GPU, NPU) shown on the setup screen. */
@@ -250,8 +300,9 @@ export async function checkSetup(skipChatModel = false): Promise<SetupCheck> {
     return apiFetch('GET', `/setup/check?skip_chat_model=${skipChatModel}`);
 }
 
-export async function startSetup(skipChatModel: boolean): Promise<SetupRunStatus> {
-    return apiFetch('POST', '/setup/run', { skip_chat_model: skipChatModel });
+/** `gaiaLemonade` sets up, and saves, GAIA's own Lemonade Server instead of the user's. */
+export async function startSetup(skipChatModel: boolean, gaiaLemonade = false): Promise<SetupRunStatus> {
+    return apiFetch('POST', '/setup/run', { skip_chat_model: skipChatModel, gaia_lemonade: gaiaLemonade });
 }
 
 export async function getSetupStatus(): Promise<SetupRunStatus> {
@@ -295,7 +346,7 @@ export async function setLemonadeTarget(body: LemonadeTargetBody): Promise<Lemon
     } catch (err) {
         // A 502 here is "saved, but the daemon did not switch" — keep those words.
         if (err instanceof ApiError && err.httpStatus === 502 && err.detail) {
-            throw new ApiError(err.detail, err.httpStatus, err.detail, err.reason);
+            throw new ApiError(err.detail, err.httpStatus, err.detail, err.reason, err.fields);
         }
         throw err;
     }
@@ -317,6 +368,30 @@ export async function connectProvider(
     body: ConnectProviderBody,
 ): Promise<ProviderInfo & { remembered: boolean; remember_error: string | null }> {
     return apiFetch('POST', `/providers/${encodeURIComponent(provider)}/connect`, body);
+}
+
+/** How often a connect held up by an OS credential prompt asks again. */
+export const CONNECT_RETRY_MS = 2000;
+
+/**
+ * Connect, waiting out an OS credential-store prompt: a 409 means the OS is
+ * still asking the user, so say so and ask again until they answer.
+ */
+export async function connectProviderWaitingForOs(
+    provider: string,
+    body: ConnectProviderBody,
+    onWaiting: (message: string) => void,
+    stopped: () => boolean = () => false,
+): Promise<ProviderInfo & { remembered: boolean; remember_error: string | null }> {
+    for (;;) {
+        try {
+            return await connectProvider(provider, body);
+        } catch (err) {
+            if (!(err instanceof ApiError) || err.httpStatus !== 409 || stopped()) throw err;
+            onWaiting(err.detail);
+            await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_MS));
+        }
+    }
 }
 
 export async function forgetProviderKey(provider: string): Promise<{ removed: boolean }> {
@@ -347,6 +422,22 @@ export async function restartLocalModel(confirm = false): Promise<{ status: stri
 
 export async function selectModel(model: string): Promise<ActiveModel> {
     return apiFetch('POST', '/providers/select', { model });
+}
+
+/** Check a pasted Hugging Face link; nothing is saved or downloaded. */
+/** `quant` is a quantization or one of its file names. */
+export async function checkCustomModel(url: string, quant?: string): Promise<CustomModelReport> {
+    return apiFetch('POST', '/providers/local/custom/check', { url, quant: quant || null });
+}
+
+/** Add the model a link names to the local model list (downloads on first use). */
+export async function addCustomModel(url: string, quant?: string): Promise<{ report: CustomModelReport }> {
+    return apiFetch('POST', '/providers/local/custom', { url, quant: quant || null });
+}
+
+/** Remove a model the user added, and its download. */
+export async function removeCustomModel(model: string): Promise<CustomModelRemoved> {
+    return apiFetch('DELETE', `/providers/local/custom/${encodeURIComponent(model)}`);
 }
 
 // -- Cloud prices and spending (#5258) ------------------------------------------
@@ -400,7 +491,7 @@ export async function listSessions(): Promise<{ sessions: Session[]; total: numb
     return { sessions: [...byId.values()], total };
 }
 
-export async function createSession(data: Partial<Session> = {}): Promise<Session> {
+export async function createSession(data: Partial<Session> & { folders?: string[] } = {}): Promise<Session> {
     return apiFetch('POST', '/sessions', data);
 }
 
@@ -409,7 +500,9 @@ export async function updateSession(id: string, data: { title?: string; title_is
 }
 
 export async function deleteSession(id: string): Promise<void> {
-    return apiFetch('DELETE', `/sessions/${id}`);
+    await apiFetch('DELETE', `/sessions/${id}`);
+    // Unsent text must not outlive the chat it was typed into.
+    clearSavedDraft(chatDraftKey(id));
 }
 
 export async function getSession(id: string): Promise<Session> {
@@ -418,6 +511,17 @@ export async function getSession(id: string): Promise<Session> {
 
 export async function pinSession(id: string, pinned: boolean): Promise<Session> {
     return apiFetch('PUT', `/sessions/${id}/pin`, { pinned });
+}
+
+/**
+ * Chats whose title or messages contain `query`, ignoring case and accents.
+ * Eval and scheduled chats count only with `includeAutomated`.
+ */
+export async function searchSessions(
+    query: string, includeAutomated: boolean, signal?: AbortSignal,
+): Promise<SessionSearchResponse> {
+    const params = new URLSearchParams({ q: query, include_automated: String(includeAutomated) });
+    return apiFetch('GET', `/sessions/search?${params}`, undefined, undefined, signal);
 }
 
 /** Clear the chat's unread mark. */
@@ -473,6 +577,8 @@ export async function deleteMessagesFrom(sessionId: string, messageId: number): 
 
 // -- Chat (Streaming with Agent Events) ----------------------------------------
 
+export * from './chatTurnApi';
+
 /**
  * Callbacks for agent streaming events.
  *
@@ -496,9 +602,10 @@ export interface StreamCallbacks {
 
 /** Agent event types that represent activity rather than content. */
 const AGENT_EVENT_TYPES = new Set([
-    'status', 'step', 'thinking', 'plan',
+    'status', 'step', 'thinking', 'commentary', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
     'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
+    'followup_taken', 'followup_returned', 'followup_unavailable', 'context_usage',
 ]);
 
 export function sendMessageStream(
@@ -667,7 +774,7 @@ async function consumeSSEResponse(
         log.stream.error(`SSE connection failed: HTTP ${res.status}`, errText);
         // The server's own words when it gave any, never a raw JSON body.
         const detail = parseErrorDetail(errText);
-        const message = detail && detail !== 'Internal Server Error' ? detail : getFriendlyError(res.status, detail);
+        const message = detail && !isBareInternalError(detail) ? detail : getFriendlyError(res.status, detail);
         callbacks.onError(new ApiError(message, res.status, detail, parseErrorStatus(errText)));
         return;
     }
@@ -851,61 +958,6 @@ export function attachToRun(
     return controller;
 }
 
-/** List session ids that currently have a running chat turn (#1580). */
-export async function getActiveRuns(): Promise<ActiveRuns> {
-    return apiFetch('GET', '/chat/active');
-}
-
-// -- Tool Confirmation ---------------------------------------------------------
-
-/** Answer a tool confirmation: allow once, always allow this call in this chat, or deny. */
-export async function confirmTool(
-    sessionId: string,
-    approved: boolean,
-    options: { always?: boolean; confirmId?: string } = {},
-): Promise<{ status: string; approved: boolean; granted: string | null }> {
-    return apiFetch('POST', '/chat/confirm-tool', {
-        session_id: sessionId,
-        approved,
-        always: options.always ?? false,
-        ...(options.confirmId ? { confirm_id: options.confirmId } : {}),
-    });
-}
-
-export async function getPermissions(sessionId: string): Promise<SessionPermissions> {
-    return apiFetch('GET', `/chat/permissions/${encodeURIComponent(sessionId)}`);
-}
-
-export async function listAllPermissions(): Promise<{ default_mode: PermissionMode; sessions: SessionPermissions[] }> {
-    return apiFetch('GET', '/chat/permissions');
-}
-
-export async function setPermissionMode(sessionId: string, mode: PermissionMode): Promise<SessionPermissions> {
-    return apiFetch('PUT', `/chat/permissions/${encodeURIComponent(sessionId)}`, { mode });
-}
-
-/** Revoke one "always allow" grant, or all of them when `key` is omitted. */
-export async function revokeGrants(sessionId: string, key?: string): Promise<SessionPermissions> {
-    const q = key ? `?key=${encodeURIComponent(key)}` : '';
-    return apiFetch('DELETE', `/chat/permissions/${encodeURIComponent(sessionId)}/grants${q}`);
-}
-
-/** Answer a pending mid-run `needs_input` question (#2595). The agent
- *  blocks server-side until this call lands, so the run continues once it
- *  resolves. */
-export async function respondToInput(
-    sessionId: string,
-    requestId: string,
-    value: string,
-): Promise<{ status: string; request_id: string }> {
-    return apiFetch('POST', '/chat/user-input', { session_id: sessionId, request_id: requestId, value });
-}
-
-/** Cancel an active streaming chat session (sets SSE handler cancelled flag). */
-export async function cancelStream(sessionId: string): Promise<{ cancelled: boolean }> {
-    return apiFetch('POST', '/chat/cancel', { session_id: sessionId });
-}
-
 // -- Documents -----------------------------------------------------------------
 
 export async function listDocuments(): Promise<{ documents: Document[]; total: number; total_size_bytes: number; total_chunks: number }> {
@@ -947,7 +999,8 @@ export async function uploadDocumentBlob(file: File): Promise<Document> {
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        throw new Error(getFriendlyError(res.status, parseErrorDetail(errorText)));
+        const detail = parseErrorDetail(errorText);
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
     }
 
     const data = await res.json();
@@ -1034,9 +1087,10 @@ export async function uploadFile(file: File): Promise<{
     });
 
     if (!res.ok) {
-        const errorText = await res.text().catch(() => 'Upload failed');
+        const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        throw new Error(`Upload failed: ${errorText}`);
+        const detail = parseErrorDetail(errorText);
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
     }
 
     const data = await res.json();
@@ -1122,6 +1176,11 @@ export async function updateSchedule(name: string, status: string): Promise<Sche
     return apiFetch('PUT', `/schedules/${encodeURIComponent(name)}`, { status });
 }
 
+/** Run a schedule once now; its next scheduled time stays as it was. */
+export async function runScheduleNow(name: string): Promise<Schedule> {
+    return apiFetch('POST', `/schedules/${encodeURIComponent(name)}/run`);
+}
+
 export async function deleteSchedule(name: string): Promise<void> {
     return apiFetch('DELETE', `/schedules/${encodeURIComponent(name)}`);
 }
@@ -1154,4 +1213,48 @@ export async function getUndoSettings(): Promise<UndoSettings> {
 
 export async function updateUndoSettings(retentionDays: number, maxMb: number): Promise<UndoSettings> {
     return apiFetch('PUT', '/settings/undo', { retention_days: retentionDays, max_mb: maxMb });
+}
+
+// -- Session panel: Environment, Outputs, Changes (#5279) --------------------
+
+const sessionPath = (sessionId: string) => `/sessions/${encodeURIComponent(sessionId)}`;
+
+export async function getEnvironment(sessionId: string): Promise<SessionEnvironment> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/environment`);
+}
+
+export async function addEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders`, { path });
+}
+
+export async function removeEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders/remove`, { path });
+}
+
+export async function setInternet(sessionId: string, on: boolean): Promise<SessionEnvironment> {
+    return apiFetch('PUT', `${sessionPath(sessionId)}/environment/internet`, { on });
+}
+
+export async function getOutputs(sessionId: string): Promise<SessionOutputs> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/outputs`);
+}
+
+export async function getSessionChanges(sessionId: string): Promise<SessionChanges> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/changes/total`);
+}
+
+export async function undoAllChanges(sessionId: string, force = false): Promise<UndoAllResult> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/changes/undo`, { force });
+}
+
+export async function getSessionGit(sessionId: string): Promise<SessionGit> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/changes/git`);
+}
+
+export async function commitChanges(sessionId: string, root: string, message: string): Promise<{ root: string; commit: string; files: string[]; ignored: string[] }> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/changes/git/commit`, { root, message, confirmed: true });
+}
+
+export async function createPullRequest(sessionId: string, root: string, title: string, body: string): Promise<{ root: string; url: string }> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/changes/git/pr`, { root, title, body, confirmed: true });
 }

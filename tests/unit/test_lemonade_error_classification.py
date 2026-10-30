@@ -517,7 +517,6 @@ def test_agent_extract_lemonade_user_message_typed_in_cycle() -> None:
 # specific phrases is ALSO present (corroboration). A bare load failure must
 # classify as NOT corrupt and surface as an actionable error.
 
-import threading
 import time
 from unittest.mock import patch
 
@@ -627,20 +626,28 @@ class TestLoadModelCorruptRouting:
             "llama-server failed to start"
         )
 
-        # Patching time.sleep reaches every thread; record only this test's.
-        real_sleep, test_thread, backoffs = time.sleep, threading.get_ident(), []
+        # Swap only lemonade_client's ``time`` binding: patching ``time.sleep``
+        # also catches the log-file lock's poll on this same thread.
+        backoffs = []
 
-        def _sleep(seconds):
-            if threading.get_ident() == test_thread:
+        class _ClientTime:
+            def __getattr__(self, name):
+                return getattr(time, name)
+
+            @staticmethod
+            def sleep(seconds):
                 backoffs.append(seconds)
-            else:
-                real_sleep(seconds)
+
+        def _fail_load(*_args, **_kwargs):
+            # Another module sleeping on this thread (the log lock) isn't a backoff.
+            time.sleep(0)
+            raise send_error
 
         with (
-            patch.object(client, "_send_request", side_effect=send_error),
+            patch.object(client, "_send_request", side_effect=_fail_load),
             patch.object(client, "delete_model") as mock_delete,
             patch.object(client, "pull_model_stream") as mock_pull,
-            patch("gaia.llm.lemonade_client.time.sleep", side_effect=_sleep),
+            patch("gaia.llm.lemonade_client.time", _ClientTime()),
         ):
             with pytest.raises(LemonadeClientError) as exc_info:
                 client.load_model(

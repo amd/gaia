@@ -21,6 +21,7 @@ const {
   dialog,
   ipcMain,
   powerMonitor,
+  session,
   shell,
 } = require("electron");
 const path = require("path");
@@ -46,12 +47,18 @@ const _MAIN_LOG_PATH = path.join(_GAIA_DIR, "electron-main.log");
 // very handler we are trying to install, falling through to Electron's bare
 // JS-error dialog.
 let installSafetyNet, installLogTee, _fatalHandler;
+// Set when a fatal error quits the app: the crash dialog was the question,
+// so the quit guard must not ask again.
+let fatalQuitting = false;
 try {
   ({ installSafetyNet, installLogTee } = require("./main-safety-net.cjs"));
   ({ fatal: _fatalHandler } = installSafetyNet({
     logPath: _MAIN_LOG_PATH,
     dialogModule: dialog,
     appModule: app,
+    beforeQuit: () => {
+      fatalQuitting = true;
+    },
   }));
 } catch (err) {
   try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
@@ -63,6 +70,7 @@ try {
 
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
+const { appIconPath, appUserModelId } = require("./services/app-icon.cjs");
 const {
   attachWindowGuards,
   confirmQuit,
@@ -76,12 +84,14 @@ const NotificationService = require("./services/notification-service.cjs");
 const KeepAwake = require("./services/keep-awake.cjs");
 const PortManager = require("./services/port-manager.cjs");
 const { isGaiaBackendProcess } = require("./services/backend-orphan.cjs");
+const { showBackendCrashDialog } = require("./services/backend-crash-dialog.cjs");
 const { buildIndexQuery } = require("./services/index-query.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
 const installerProgressDialog = require("./services/backend-installer-progress-dialog.cjs");
 const autoUpdater = require("./services/auto-updater.cjs");
 const agentSeeder = require("./services/agent-seeder.cjs");
 const systemMetrics = require("./services/system-metrics.cjs");
+const folderDialog = require("./services/folder-dialog.cjs");
 const {
   parseDeepLink,
   extractDeepLinkFromArgv,
@@ -95,27 +105,14 @@ const {
 } = require("./services/link-policy.cjs");
 const { createStartupDeepLinkQueue } = require("./services/deep-link-queue.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
+const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
+const { chromiumSwitches } = require("./services/chromium-switches.cjs");
+const { titleBarKind, titleBarOptions } = require("./services/window-frame.cjs");
 
-// ── F7: Ozone hint (issue #782) ─────────────────────────────────────────────
-// Electron-recommended switch for distro-agnostic Linux behaviour: picks
-// Wayland on Wayland sessions, X11 elsewhere. Must be set before
-// app.whenReady() fires.
-app.commandLine.appendSwitch("ozone-platform-hint", "auto");
-
-// ── F7: --no-sandbox on Linux (issue #782) ───────────────────────────────────
-// chrome-sandbox is deleted from the packaged tree by after-pack.cjs so
-// Chromium must use its unprivileged user-namespace sandbox on every launch
-// path. The .desktop Exec= line already carries --no-sandbox via
-// electron-builder.yml linux.executableArgs, but direct `./GAIA.AppImage`
-// invocations bypass the .desktop entry. Appending the switch here makes
-// all Linux launch paths behave identically.
-if (process.platform === "linux") {
-  app.commandLine.appendSwitch("no-sandbox");
-
-  // Workaround: disable Chromium's Wayland color management which crashes on
-  // some Wayland compositors that implement the wp_color_manager protocol
-  // partially. See issue reports about wayland_wp_color_manager.cc SIGTRAP.
-  app.commandLine.appendSwitch("disable-features", "WaylandColorManagement");
+// No ozone switch: Electron 38+ already picks Wayland or X11, and users override with --ozone-platform=x11.
+for (const [name, value] of chromiumSwitches({ platform: process.platform, env: process.env })) {
+  if (value === undefined) app.commandLine.appendSwitch(name);
+  else app.commandLine.appendSwitch(name, value);
 }
 
 // ── F7: Log tee to ~/.gaia/electron-main.log (issue #782) ───────────────────
@@ -224,6 +221,11 @@ const windowConfig = appConfig.window || {
 // ── State ──────────────────────────────────────────────────────────────────
 
 let backendProcess = null;
+// The in-flight startBackend(), so a quit during startup can wait for the
+// spawn and stop it instead of leaving it behind.
+let backendStarting = null;
+// Set as cleanup() begins; startup stops at its next step once it is.
+let shutdownStarted = false;
 let backendPort = DEFAULT_BACKEND_PORT;
 let healthCheckUrl = `http://localhost:${backendPort}/api/health`;
 let backendStderrTail = [];
@@ -434,46 +436,23 @@ async function startBackend() {
 }
 
 /**
- * Show a user-facing crash dialog with the last ~20 stderr lines and
- * offer to write a diagnostics bundle. Invoked from child.on("exit")
- * when the kill was NOT initiated by us.
+ * Tell the user the backend stopped and offer Restart / Save diagnostics /
+ * Quit. Invoked from child.on("exit") when the kill was NOT initiated by us.
  */
 async function handleBackendCrash(code, signal) {
-  const tail = backendStderrTail.slice(-20).join("\n") || "(no stderr captured)";
-  const detail =
-    `The GAIA backend exited unexpectedly (code=${code}, signal=${signal}).\n\n` +
-    `Recent log output:\n${tail}`;
-
   try {
-    const choice = await dialog.showMessageBox({
-      type: "error",
-      title: "GAIA backend crashed",
-      message: "GAIA backend crashed",
-      detail,
-      buttons: ["Copy diagnostics", "Quit"],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
+    const choice = await showBackendCrashDialog({
+      dialog,
+      app,
+      code,
+      signal,
+      tailLines: backendStderrTail.slice(-8),
+      writeDiagnostics: () => portManager.writeDiagnosticsBundle(),
+      // The backend is gone, so there is no running work to ask about.
+      beforeQuit: () => { fatalQuitting = true; },
+      parent: mainWindow,
     });
-
-    if (choice.response === 0) {
-      try {
-        const bundlePath = await portManager.writeDiagnosticsBundle();
-        await dialog.showMessageBox({
-          type: "info",
-          title: "Diagnostics saved",
-          message: "Diagnostics bundle written",
-          detail: `Attach this file to your bug report:\n${bundlePath}`,
-          buttons: ["OK"],
-        });
-      } catch (err) {
-        console.error("[main] Could not write diagnostics bundle:", err.message);
-        dialog.showErrorBox(
-          "Could not write diagnostics",
-          `Failed to write diagnostics bundle: ${err.message}`
-        );
-      }
-    }
+    console.log(`[main] Backend crash: user chose ${choice}`);
   } catch (err) {
     console.error("[main] handleBackendCrash failed:", err.message);
   }
@@ -546,24 +525,10 @@ function reportBlockedLink(url) {
     );
 }
 
-// No system title bar: the app's own top row is the window's top edge, and
-// the native window controls are drawn into it (traffic lights on macOS).
-// Keep the height in sync with --titlebar-h in src/styles/index.css. The
-// renderer sends its canvas and text colors once it paints; until then the
-// controls use the dark canvas, like the window background.
-const TITLE_BAR_HEIGHT = 48;
-const TITLE_BAR_INITIAL = { color: "#1A1917", symbolColor: "#EFECE6" };
-const IS_MAC = process.platform === "darwin";
+// Windows and macOS draw the native controls into the app's own top row; Linux
+// keeps the system frame (services/window-frame.cjs).
+const TITLE_BAR_KIND = titleBarKind(process.platform);
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
-
-function titleBarOptions() {
-  return IS_MAC
-    ? { titleBarStyle: "hidden", trafficLightPosition: { x: 16, y: 16 } }
-    : {
-        titleBarStyle: "hidden",
-        titleBarOverlay: { ...TITLE_BAR_INITIAL, height: TITLE_BAR_HEIGHT },
-      };
-}
 
 // The renderer sends its canvas and text colors so the controls match the theme.
 ipcMain.handle("window:set-titlebar-colors", (_event, colors) => {
@@ -571,21 +536,32 @@ ipcMain.handle("window:set-titlebar-colors", (_event, colors) => {
   if (!HEX_COLOR.test(color) || !HEX_COLOR.test(symbolColor)) {
     throw new Error(`Title bar colors must be #rrggbb, got ${JSON.stringify(colors)}`);
   }
-  if (!IS_MAC && mainWindow && !mainWindow.isDestroyed()) {
+  if (TITLE_BAR_KIND === "overlay" && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.setTitleBarOverlay({ color, symbolColor });
   }
   return true;
 });
 
+// Registered once: createWindow runs again on every macOS reopen, and the session is shared.
+function titleDownloadSaveDialogs() {
+  // An export is a blob: download, and Chromium titles its Save dialog with the blob URL.
+  session.defaultSession.on("will-download", (_event, item) => {
+    item.setSaveDialogOptions({
+      title: "Save from GAIA",
+      defaultPath: path.join(app.getPath("downloads"), item.getFilename()),
+    });
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
-    ...titleBarOptions(),
+    ...titleBarOptions(process.platform),
     width: windowConfig.width,
     height: windowConfig.height,
     minWidth: windowConfig.minWidth,
     minHeight: windowConfig.minHeight,
     title: APP_NAME,
-    icon: path.join(__dirname, "assets", process.platform === "win32" ? "icon.ico" : "icon.png"),
+    icon: appIconPath(),
     show: false, // Don't show until ready (prevents flash)
     webPreferences: {
       nodeIntegration: false,
@@ -788,6 +764,8 @@ function initializeServices() {
   // #2007: System metrics for the observability dashboard
   systemMetrics.registerIpcHandlers();
 
+  folderDialog.registerIpcHandlers();
+
   console.log("[main] Services initialized");
 }
 
@@ -831,8 +809,19 @@ function setupJumpList() {
 // ── Backend Bootstrap (Phase A) ───────────────────────────────────────────
 
 /** First install found a Lemonade already running: use it, or install GAIA's own? */
-async function chooseLemonadeInDialog(found) {
-  const { response } = await dialog.showMessageBox({
+async function chooseLemonadeInDialog(found, parent) {
+  // Modal to the progress window and in front: otherwise it can open behind
+  // other windows while the install sits at 70% waiting for it.
+  const owner = parent && !parent.isDestroyed() ? parent : null;
+  if (owner) {
+    if (owner.isMinimized()) owner.restore();
+    owner.show();
+    owner.moveTop();
+    owner.focus();
+    // Windows can refuse focus to a background app; the taskbar flash is the hint.
+    if (!owner.isFocused()) owner.flashFrame(true);
+  }
+  const box = {
     type: "question",
     title: "Lemonade Server found",
     message: `A Lemonade Server (v${found.version}) is already running at ${found.url}. Use it instead of installing GAIA's own?`,
@@ -841,7 +830,11 @@ async function chooseLemonadeInDialog(found) {
     defaultId: 0,
     cancelId: 1,
     noLink: true,
-  });
+  };
+  const { response } = owner
+    ? await dialog.showMessageBox(owner, box)
+    : await dialog.showMessageBox(box);
+  if (owner && !owner.isDestroyed()) owner.flashFrame(false);
   return response === 0 ? "external" : "gaia";
 }
 
@@ -892,7 +885,7 @@ async function bootstrapBackend() {
       await backendInstaller.ensureBackend({
         onProgress: progress.onProgress,
         isPackaged: app.isPackaged,
-        chooseLemonade: chooseLemonadeInDialog,
+        chooseLemonade: (found) => chooseLemonadeInDialog(found, progress.window),
       });
       progress.close();
       console.log("[main] Backend bootstrap complete");
@@ -1153,6 +1146,11 @@ if (!gotTheSingleInstanceLock) {
   process.exit(0);
 }
 
+// Before any window: the taskbar reads the ID when a window first appears.
+if (process.platform === "win32") {
+  app.setAppUserModelId(appUserModelId(app.isPackaged));
+}
+
 app.on("second-instance", (_event, argv, _cwd) => {
   // A second launch happened while we were running. Surface our window
   // (the user almost certainly wanted to see it). mainWindow may be null
@@ -1210,9 +1208,16 @@ app.whenReady().then(async () => {
   }
 
   // Start the Python backend
-  backendProcess = await startBackend();
+  if (shutdownStarted) return;
+  backendStarting = startBackend();
+  backendProcess = await backendStarting;
+  if (shutdownStarted) {
+    console.log("[main] Quit during startup — not opening the window");
+    return;
+  }
 
   // Create the window (hidden until ready-to-show)
+  titleDownloadSaveDialogs();
   createWindow();
   isBootstrapping = false; // progress dialog is gone; window-all-closed may now quit
 
@@ -1308,8 +1313,6 @@ app.on("window-all-closed", () => {
 // Electron's before-quit does NOT await async handlers.
 // We use will-quit + event.preventDefault() to perform async cleanup, then re-quit.
 
-let cleanupDone = false;
-
 /** Only while the GAIA service runs: without it, no answer is running. */
 function workCanBeLost() {
   return Boolean(trayManager && backendProcess);
@@ -1338,7 +1341,7 @@ function confirmUpdateRestart() {
 const quitGuard = installQuitGuard({
   app,
   updater: electronAutoUpdater,
-  shouldAsk: workCanBeLost,
+  shouldAsk: () => !fatalQuitting && workCanBeLost(),
   confirm: () => askAboutRunningWork(QUIT),
   onQuitting: () => {
     isQuitting = true;
@@ -1356,24 +1359,11 @@ const quitGuard = installQuitGuard({
   },
 });
 
-app.on("will-quit", (event) => {
-  if (cleanupDone) return; // Cleanup already finished, let the app quit
-
-  event.preventDefault(); // Prevent quit until cleanup is done
-  console.log("[main] will-quit: performing async cleanup...");
-
-  cleanup().then(() => {
-    cleanupDone = true;
-    console.log("[main] Cleanup complete, quitting...");
-    app.quit(); // Re-trigger quit — cleanupDone prevents infinite loop
-  }).catch((err) => {
-    console.error("[main] Cleanup error:", err.message);
-    cleanupDone = true;
-    app.quit();
-  });
-});
+installQuitCleanup({ app, cleanup });
 
 async function cleanup() {
+  shutdownStarted = true;
+
   // Phase F: tear down auto-updater timers and IPC handlers.
   try {
     autoUpdater.destroy();
@@ -1395,24 +1385,43 @@ async function cleanup() {
     keepAwake = null;
   }
 
-  // Stop all managed OS agents gracefully
-  if (agentProcessManager) {
-    console.log("Stopping all managed agents...");
-    try {
-      await agentProcessManager.stopAll();
-    } catch (err) {
-      console.error("Error stopping agents:", err.message);
-    }
-    agentProcessManager = null;
-  }
+  // The agents and the backend stop side by side: each waits out its own
+  // grace period, and in series they could overrun the quit's time limit.
+  await Promise.all([stopAgentsForQuit(), stopBackendForQuit()]);
 
   // Destroy tray icon
   if (trayManager) {
     trayManager.destroy();
     trayManager = null;
   }
+}
 
-  // Stop the Python backend via the port-manager (SIGTERM → wait 3 s → SIGKILL).
+async function stopAgentsForQuit() {
+  if (!agentProcessManager) return;
+  console.log("Stopping all managed agents...");
+  try {
+    await agentProcessManager.stopAll();
+  } catch (err) {
+    console.error("Error stopping agents:", err.message);
+  }
+  agentProcessManager = null;
+}
+
+async function stopBackendForQuit() {
+  // A quit during startup: wait for the spawn so it can be stopped below.
+  if (backendStarting) {
+    try {
+      const started = await backendStarting;
+      if (started && !backendProcess && started.exitCode === null && started.signalCode === null) {
+        backendProcess = started;
+      }
+    } catch (err) {
+      console.error("[main] Backend start failed during quit:", err.message);
+    }
+  }
+
+  // Stop the Python backend and everything it started via the port-manager
+  // (SIGTERM → wait 3 s → SIGKILL).
   // F5: previously we did this inline; extracted so main.cjs stays lean and
   // to prevent orphan leaks across runs (issue #782).
   if (backendProcess) {

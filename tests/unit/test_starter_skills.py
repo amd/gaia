@@ -151,6 +151,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
     """
     from gaia.agents.base.memory import MemoryMixin
     from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.agents.tools.audio_generation_tools import AudioGenerationToolsMixin
     from gaia.agents.tools.audio_tools import AudioToolsMixin
     from gaia.agents.tools.browser_tools import BrowserToolsMixin
     from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
@@ -205,6 +206,11 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
         SDToolsMixin.init_sd(
             _Stub(), output_dir=str(tmp_path_factory.mktemp("sd-images"))
         )
+        # Like SDToolsMixin, audio registers through an initializer. This only
+        # creates a temporary directory; no Lemonade request is issued.
+        AudioGenerationToolsMixin.init_audio_generation(
+            _Stub(), output_dir=str(tmp_path_factory.mktemp("audio-generations"))
+        )
         names = frozenset(_TOOL_REGISTRY)
     finally:
         _TOOL_REGISTRY.clear()
@@ -246,6 +252,9 @@ def test_registry_fixture_actually_registered_something(registry_tool_names):
         # SD registers via init_sd, not a register_* method — if that call
         # starts failing quietly, image-gen's honesty check goes vacuous.
         "generate_image",
+        "list_audio_generation_models",
+        "generate_music",
+        "generate_sound_effect",
     } <= registry_tool_names
 
 

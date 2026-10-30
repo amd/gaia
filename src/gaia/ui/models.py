@@ -66,6 +66,8 @@ class SystemStatus(BaseModel):
     # any agent declaring ``min_memory_gb > 0`` would appear to be over budget.
     memory_available_gb: Optional[float] = None
     initialized: bool = False
+    # Why the desktop app's first-run ``gaia init`` failed; None when it did not.
+    setup_error: Optional[str] = None
     # A factory keeps the version out of the exported schema, which RC builds restamp.
     version: str = Field(default_factory=lambda: _gaia_version)
     # How to start Lemonade ON THIS HOST, resolved server-side by
@@ -390,6 +392,8 @@ class CreateSessionRequest(BaseModel):
     # Mailbox provider for email-backed agents. Gmail by default; "microsoft"
     # routes the email agent to the Outlook backend (see EmailAgentConfig).
     mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
+    # Folders the chat may read and write from its first message.
+    folders: List[str] = Field(default_factory=list)
 
 
 class UpdateSessionRequest(BaseModel):
@@ -458,6 +462,32 @@ class SessionListResponse(BaseModel):
     total: int
 
 
+class SearchSnippet(BaseModel):
+    """Text around a search hit, split so the UI can highlight ``match``."""
+
+    before: str
+    match: str
+    after: str
+
+
+class SessionSearchResult(BaseModel):
+    """One chat that matches a search, with where the first hit was."""
+
+    session_id: str
+    title: str
+    field: Literal["title", "message"]
+    snippet: SearchSnippet
+
+
+class SessionSearchResponse(BaseModel):
+    """Chats matching a search query, newest first, at most ``limit``."""
+
+    query: str
+    results: List[SessionSearchResult]
+    #: More chats matched than ``limit``; only the newest are listed.
+    truncated: bool = False
+
+
 # ── Messages ────────────────────────────────────────────────────────────────
 
 
@@ -517,11 +547,18 @@ class FileListResponse(BaseModel):
         return [{"name": f} if isinstance(f, str) else f for f in files]
 
 
+class McpOutputResponse(BaseModel):
+    """The text an MCP tool returned, capped for the tool row."""
+
+    text: str = ""
+    truncated: bool = False
+
+
 class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
     id: int
-    type: str  # 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert'
+    type: str  # 'thinking' | 'commentary' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert'
     label: str
     detail: Optional[str] = None
     tool: Optional[str] = None
@@ -541,6 +578,9 @@ class AgentStepResponse(BaseModel):
     commandOutput: Optional[CommandOutputResponse] = None
     fileList: Optional[FileListResponse] = None
     mcpServer: Optional[str] = None
+    mcpServerLabel: Optional[str] = None
+    mcpTool: Optional[str] = None
+    mcpOutput: Optional[McpOutputResponse] = None
     latencyMs: Optional[float] = None
     # Render-map card persistence (#2109): populated ONLY when the source
     # tool_result event carried a ``render`` kind (e.g. "email_pre_scan") —
@@ -562,6 +602,12 @@ class InferenceStatsResponse(BaseModel):
     output_tokens: int = 0
     # The agent's own step count for the turn, not the number of activity rows.
     steps: Optional[int] = None
+    # The model that wrote the answer; unset on answers saved before it was recorded.
+    model: Optional[str] = None
+    # Set when the answer was kept from "Retry with…": how long it took, loading included.
+    seconds: Optional[float] = None
+    # True only for an answer kept from "Retry with…".
+    retried: Optional[bool] = None
     # Where the turn was answered, as the footer says it: "on your GPU", "via Fireworks AI".
     place: Optional[str] = None
 
@@ -594,6 +640,18 @@ class TurnSummaryFile(BaseModel):
     mtime: Optional[float] = None
 
 
+class TurnSummaryOutput(BaseModel):
+    """Something the turn made besides a file: an image, an indexed document,
+    a memory or a scheduled task."""
+
+    kind: str  # image | document | memory | schedule
+    name: str
+    path: Optional[str] = None
+    detail: Optional[str] = None
+    # The memory's id, so the panel can tell whether it was forgotten since.
+    ref: Optional[str] = None
+
+
 class TurnSummaryModel(BaseModel):
     """Where the turn's model ran."""
 
@@ -624,6 +682,7 @@ class TurnSummaryResponse(BaseModel):
     documents: List[TurnSummaryDocument] = Field(default_factory=list)
     files: List[TurnSummaryFile] = Field(default_factory=list)
     sites: List[str] = Field(default_factory=list)
+    outputs: List[TurnSummaryOutput] = Field(default_factory=list)
     live_data: TurnSummaryLiveData = Field(default_factory=TurnSummaryLiveData)
     cost: TurnSummaryCost
     # Absent when the turn's model location could not be determined.
@@ -671,6 +730,10 @@ class DocumentResponse(BaseModel):
         "complete"  # pending | indexing | complete | failed | cancelled | missing
     )
     last_error: Optional[str] = None
+    # Set with last_error when retrying can't help until the file is fixed:
+    # "corrupted", "encrypted", "empty" (no extractable text), "empty_file"
+    # (nothing to index) or "unsupported_workbook" (.xls or password-protected).
+    error_kind: Optional[str] = None
 
 
 class DocumentListResponse(BaseModel):
@@ -740,6 +803,8 @@ class IndexFolderResponse(BaseModel):
 
     indexed: int = 0
     failed: int = 0
+    # Files in the folder that aren't a type GAIA indexes.
+    skipped: int = 0
     documents: List[DocumentResponse] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
 

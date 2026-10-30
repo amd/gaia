@@ -312,6 +312,49 @@ def test_live_data_counts_every_internet_tool_and_its_failures(outcomes, expecte
     assert ledger.summary(location=LOCAL)["live_data"] == expected
 
 
+def _offline(tool, args):
+    from gaia.agents.base.offline import offline_refusal
+
+    refusal = offline_refusal(tool, args)
+    assert refusal is not None
+    return refusal
+
+
+def test_a_call_internet_off_refused_contacted_nothing_and_did_not_fail():
+    ledger = TurnLedger()
+    _call(ledger, "search_web", {"query": "q"}, _offline("search_web", {}), False)
+    args = {"url": "https://example.org/a"}
+    _call(ledger, "fetch_page", args, _offline("fetch_page", args), False)
+    summary = ledger.summary(location=LOCAL)
+    assert summary["sites"] == []
+    assert summary["live_data"] == {"attempted": 0, "failed": 0}
+
+
+def test_a_call_the_user_denied_contacted_nothing():
+    ledger = TurnLedger()
+    denied = {"status": "denied", "error": "Tool 'fetch_page' was denied by the user."}
+    _call(ledger, "fetch_page", {"url": "https://example.org"}, denied, False)
+    assert ledger.summary(location=LOCAL)["sites"] == []
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"status": "error", "error": "timed out"},
+        {"status": "error", "executed": True, "error": "HTTP 503"},
+        "Error: timed out",
+    ],
+)
+def test_a_call_that_ran_and_failed_still_counts_and_names_its_site(data):
+    ledger = TurnLedger()
+    _call(ledger, "fetch_page", {"url": "https://example.org"}, data, False)
+    blocked = {"url": "https://other.example"}
+    _call(ledger, "fetch_page", blocked, _offline("fetch_page", blocked), False)
+    summary = ledger.summary(location=LOCAL)
+    assert summary["sites"] == ["example.org"]
+    assert summary["live_data"] == {"attempted": 1, "failed": 1}
+
+
 # ── Wiring: SSE handler, chat helpers, persistence ──────────────────────
 
 

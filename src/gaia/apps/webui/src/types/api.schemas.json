@@ -352,6 +352,16 @@
         ],
         "title": "Latencyms"
       },
+      "mcpOutput": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/McpOutputResponse"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "mcpServer": {
         "anyOf": [
           {
@@ -362,6 +372,28 @@
           }
         ],
         "title": "Mcpserver"
+      },
+      "mcpServerLabel": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mcpserverlabel"
+      },
+      "mcpTool": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mcptool"
       },
       "narration": {
         "anyOf": [
@@ -765,6 +797,30 @@
     "title": "CommandOutputResponse",
     "type": "object"
   },
+  "CommitRequest": {
+    "properties": {
+      "confirmed": {
+        "default": false,
+        "description": "True only after the user saw and confirmed the commit.",
+        "title": "Confirmed",
+        "type": "boolean"
+      },
+      "message": {
+        "title": "Message",
+        "type": "string"
+      },
+      "root": {
+        "title": "Root",
+        "type": "string"
+      }
+    },
+    "required": [
+      "root",
+      "message"
+    ],
+    "title": "CommitRequest",
+    "type": "object"
+  },
   "ConfigureRequest": {
     "properties": {
       "config": {
@@ -925,6 +981,13 @@
         "title": "Document Ids",
         "type": "array"
       },
+      "folders": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Folders",
+        "type": "array"
+      },
       "mail_provider": {
         "anyOf": [
           {
@@ -978,6 +1041,31 @@
       }
     },
     "title": "CreateSessionRequest",
+    "type": "object"
+  },
+  "CustomModelRequest": {
+    "description": "``quant`` picks a quantization; None lets GAIA choose one that fits.",
+    "properties": {
+      "quant": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Quant"
+      },
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "title": "CustomModelRequest",
     "type": "object"
   },
   "DiscoveryCommit": {
@@ -1101,6 +1189,17 @@
       "chunk_count": {
         "title": "Chunk Count",
         "type": "integer"
+      },
+      "error_kind": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error Kind"
       },
       "file_size": {
         "title": "File Size",
@@ -1641,6 +1740,39 @@
     "title": "FileUploadResponse",
     "type": "object"
   },
+  "FolderRequest": {
+    "properties": {
+      "path": {
+        "description": "An absolute folder path.",
+        "minLength": 1,
+        "title": "Path",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "title": "FolderRequest",
+    "type": "object"
+  },
+  "FollowUpRequest": {
+    "properties": {
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "text": {
+        "title": "Text",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "text"
+    ],
+    "title": "FollowUpRequest",
+    "type": "object"
+  },
   "ForwardConnectionRequest": {
     "description": "Body for ``POST /v1/connections/{provider}`` (#1292).\n\nA host app forwards the OAuth client it authenticated the user under\n(``client_id`` + ``client_secret``) plus the user's ``refresh_token``.\nGAIA persists both and refreshes AS THE HOST APP'S CLIENT — no second\nOAuth, no consent step.\n\n``refresh_token`` / ``client_secret`` are secret INPUTS — they are never\nechoed back in any response. ``account_email`` is display-only in v1\n(the keyring slot is single-account per provider). ``grant_agents`` is\nthe list of namespaced agent ids (e.g. ``installed:email``) to grant the\nforwarded scopes so they can resolve the connection ambiently.",
     "properties": {
@@ -1809,6 +1941,11 @@
         "default": 0,
         "title": "Indexed",
         "type": "integer"
+      },
+      "skipped": {
+        "default": 0,
+        "title": "Skipped",
+        "type": "integer"
       }
     },
     "title": "IndexFolderResponse",
@@ -1907,6 +2044,17 @@
         "title": "Input Tokens",
         "type": "integer"
       },
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
       "output_tokens": {
         "default": 0,
         "title": "Output Tokens",
@@ -1922,6 +2070,28 @@
           }
         ],
         "title": "Place"
+      },
+      "retried": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Retried"
+      },
+      "seconds": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Seconds"
       },
       "steps": {
         "anyOf": [
@@ -1995,6 +2165,19 @@
       "id"
     ],
     "title": "InstallRequest",
+    "type": "object"
+  },
+  "InternetRequest": {
+    "properties": {
+      "on": {
+        "title": "On",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "on"
+    ],
+    "title": "InternetRequest",
     "type": "object"
   },
   "KnowledgeCreate": {
@@ -2271,6 +2454,23 @@
       }
     },
     "title": "LoadedModelInfo",
+    "type": "object"
+  },
+  "McpOutputResponse": {
+    "description": "The text an MCP tool returned, capped for the tool row.",
+    "properties": {
+      "text": {
+        "default": "",
+        "title": "Text",
+        "type": "string"
+      },
+      "truncated": {
+        "default": false,
+        "title": "Truncated",
+        "type": "boolean"
+      }
+    },
+    "title": "McpOutputResponse",
     "type": "object"
   },
   "MemorySettingsBody": {
@@ -2883,6 +3083,35 @@
     "title": "PreflightReport",
     "type": "object"
   },
+  "PullRequestRequest": {
+    "properties": {
+      "body": {
+        "default": "",
+        "title": "Body",
+        "type": "string"
+      },
+      "confirmed": {
+        "default": false,
+        "description": "True only after the user saw and confirmed the PR.",
+        "title": "Confirmed",
+        "type": "boolean"
+      },
+      "root": {
+        "title": "Root",
+        "type": "string"
+      },
+      "title": {
+        "title": "Title",
+        "type": "string"
+      }
+    },
+    "required": [
+      "root",
+      "title"
+    ],
+    "title": "PullRequestRequest",
+    "type": "object"
+  },
   "QuickLink": {
     "description": "A quick-access link to a common filesystem location.",
     "properties": {
@@ -2917,6 +3146,56 @@
       }
     },
     "title": "RestartRequest",
+    "type": "object"
+  },
+  "RetryChoiceRequest": {
+    "properties": {
+      "keep": {
+        "enum": [
+          "original",
+          "retry"
+        ],
+        "title": "Keep",
+        "type": "string"
+      },
+      "message_id": {
+        "title": "Message Id",
+        "type": "integer"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "message_id",
+      "keep"
+    ],
+    "title": "RetryChoiceRequest",
+    "type": "object"
+  },
+  "RetryWithRequest": {
+    "properties": {
+      "message_id": {
+        "title": "Message Id",
+        "type": "integer"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "message_id",
+      "model"
+    ],
+    "title": "RetryWithRequest",
     "type": "object"
   },
   "RunningAnswer": {
@@ -3003,6 +3282,10 @@
         ],
         "title": "Created At"
       },
+      "description": {
+        "title": "Description",
+        "type": "string"
+      },
       "error_count": {
         "default": 0,
         "title": "Error Count",
@@ -3015,6 +3298,17 @@
       "interval_seconds": {
         "title": "Interval Seconds",
         "type": "integer"
+      },
+      "last_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Last Error"
       },
       "last_result": {
         "anyOf": [
@@ -3062,6 +3356,11 @@
         "title": "Run Count",
         "type": "integer"
       },
+      "running": {
+        "default": false,
+        "title": "Running",
+        "type": "boolean"
+      },
       "schedule_config": {
         "anyOf": [
           {
@@ -3094,7 +3393,8 @@
       "name",
       "interval_seconds",
       "prompt",
-      "status"
+      "status",
+      "description"
     ],
     "title": "ScheduleResponse",
     "type": "object"
@@ -3132,6 +3432,30 @@
       }
     },
     "title": "ScriptedUserRequest",
+    "type": "object"
+  },
+  "SearchSnippet": {
+    "description": "Text around a search hit, split so the UI can highlight ``match``.",
+    "properties": {
+      "after": {
+        "title": "After",
+        "type": "string"
+      },
+      "before": {
+        "title": "Before",
+        "type": "string"
+      },
+      "match": {
+        "title": "Match",
+        "type": "string"
+      }
+    },
+    "required": [
+      "before",
+      "match",
+      "after"
+    ],
+    "title": "SearchSnippet",
     "type": "object"
   },
   "SelectModelRequest": {
@@ -3352,6 +3676,65 @@
     "title": "SessionResponse",
     "type": "object"
   },
+  "SessionSearchResponse": {
+    "description": "Chats matching a search query, newest first, at most ``limit``.",
+    "properties": {
+      "query": {
+        "title": "Query",
+        "type": "string"
+      },
+      "results": {
+        "items": {
+          "$ref": "#/components/schemas/SessionSearchResult"
+        },
+        "title": "Results",
+        "type": "array"
+      },
+      "truncated": {
+        "default": false,
+        "title": "Truncated",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "query",
+      "results"
+    ],
+    "title": "SessionSearchResponse",
+    "type": "object"
+  },
+  "SessionSearchResult": {
+    "description": "One chat that matches a search, with where the first hit was.",
+    "properties": {
+      "field": {
+        "enum": [
+          "title",
+          "message"
+        ],
+        "title": "Field",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "snippet": {
+        "$ref": "#/components/schemas/SearchSnippet"
+      },
+      "title": {
+        "title": "Title",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "title",
+      "field",
+      "snippet"
+    ],
+    "title": "SessionSearchResult",
+    "type": "object"
+  },
   "SettingsResponse": {
     "description": "Current user settings.",
     "properties": {
@@ -3463,8 +3846,13 @@
     "type": "object"
   },
   "SetupRunRequest": {
-    "description": "``skip_chat_model`` when the chat runs on a cloud provider.",
+    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``gaia_lemonade`` to set up GAIA's own server instead of the user's.",
     "properties": {
+      "gaia_lemonade": {
+        "default": false,
+        "title": "Gaia Lemonade",
+        "type": "boolean"
+      },
       "skip_chat_model": {
         "default": false,
         "title": "Skip Chat Model",
@@ -3818,6 +4206,17 @@
           }
         ],
         "title": "Processor Name"
+      },
+      "setup_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Setup Error"
       },
       "start_command": {
         "anyOf": [
@@ -4183,6 +4582,58 @@
     "title": "TurnSummaryModel",
     "type": "object"
   },
+  "TurnSummaryOutput": {
+    "description": "Something the turn made besides a file: an image, an indexed document,\na memory or a scheduled task.",
+    "properties": {
+      "detail": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Detail"
+      },
+      "kind": {
+        "title": "Kind",
+        "type": "string"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "path": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Path"
+      },
+      "ref": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Ref"
+      }
+    },
+    "required": [
+      "kind",
+      "name"
+    ],
+    "title": "TurnSummaryOutput",
+    "type": "object"
+  },
   "TurnSummaryPage": {
     "description": "A web page the turn read, or a search hit when it read none.",
     "properties": {
@@ -4256,6 +4707,13 @@
             "type": "null"
           }
         ]
+      },
+      "outputs": {
+        "items": {
+          "$ref": "#/components/schemas/TurnSummaryOutput"
+        },
+        "title": "Outputs",
+        "type": "array"
       },
       "pages": {
         "items": {

@@ -609,6 +609,7 @@ def _build_agent_with_failing_embedder(
             "gaia.agents.base.memory.MemoryMixin._embed_text",
             side_effect=embed_exc,
         ),
+        patch("gaia.agents.base.memory.MemoryMixin._pull_missing_embedder"),
     ):
         mock_sdk.return_value = MagicMock()
         return EmailTriageAgent(config=cfg)
@@ -659,6 +660,11 @@ class TestMemoryDegradedStateNotice:
         """A genuinely unreachable Lemonade produces a DIFFERENT message than
         the model-not-pulled case — the remedies aren't interchangeable."""
         monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
+        # GAIA's own Lemonade: a user-set URL (CI sets LEMONADE_BASE_URL)
+        # gets the "model server at <host>" wording instead.
+        monkeypatch.setattr(
+            "gaia.agents.base.memory.configured_lemonade_url", lambda: None
+        )
         connection_refused = RuntimeError(
             "Embedding failed: Error generating embeddings: "
             "Connection refused (localhost:13305)"
@@ -765,5 +771,16 @@ class TestMemoryDegradedStateNotice:
             agent.console = real_console
             assert agent.report_memory_unavailable() is True
             real_console.print_warning.assert_called_once()
+        finally:
+            agent.close_db()
+
+
+def test_state_database_uses_shared_wal_retry_helper(tmp_path):
+    """Email state.db must use the core opener, not a bare WAL pragma."""
+    with patch("gaia_agent_email.agent.enable_wal") as enable_wal:
+        agent = _build_agent(tmp_path, memory_disabled=True)
+        try:
+            enable_wal.assert_called_once_with(agent._db)
+            assert agent._db.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
         finally:
             agent.close_db()

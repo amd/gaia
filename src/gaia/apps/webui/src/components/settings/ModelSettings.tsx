@@ -1,11 +1,13 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Cloud, Cpu, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
-import { useModelStore, displayModelName } from '../../stores/modelStore';
+import { useModelStore, displayModelName, distinctModelLabels, sameModelId } from '../../stores/modelStore';
+import { useChatStore } from '../../stores/chatStore';
 import { ModelContextSize } from './ModelContextSize';
+import { AddCustomModel } from './AddCustomModel';
 import { STATE_LABELS, isDownloading, placementText } from '../modelMeta';
 import '../ModelPicker.css';
 import { CloudPrices } from './CloudPrices';
@@ -17,6 +19,7 @@ import type { ProviderId, ProviderInfo, ProviderModel } from '../../types';
 const DOWNLOAD_POLL_MS = 2000;
 
 function keyStatus(p: ProviderInfo): string {
+    if (p.key_state === 'waiting_for_os_permission') return p.key_message ?? 'Waiting for the OS to allow reading the saved key.';
     switch (p.key_source) {
         case 'environment': return `A key is set in ${p.env_var} and is in use.`;
         case 'lemonade': return 'A key is already configured on the local model server.';
@@ -40,17 +43,27 @@ export function ModelSettings() {
 
     const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
-    const [chosen, setChosen] = useState<ProviderId>(active?.provider ?? 'local');
+    const requested = useChatStore((s) => s.settingsProvider);
+    const [chosen, setChosen] = useState<ProviderId>(requested ?? active?.provider ?? 'local');
     const [models, setModels] = useState<ProviderModel[] | null>(null);
     const [modelsError, setModelsError] = useState<string | null>(null);
     const [query, setQuery] = useState('');
+    const [showAllFireworksModels, setShowAllFireworksModels] = useState(false);
     const [key, setKey] = useState('');
     const [amd, setAmd] = useState({ base_url: '', auth_header_name: '', auth_header_prefix: '' });
     const [busy, setBusy] = useState<string | null>(null);
     const [memory, setMemory] = useState<string | null>(null);
     const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+    const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+
+    // A connect waiting on an OS prompt stops once the user picks another provider or leaves.
+    const chosenRef = useRef(chosen);
+    chosenRef.current = chosen;
+    const mounted = useRef(true);
+    useEffect(() => () => { mounted.current = false; }, []);
 
     const provider = providers?.find((p) => p.id === chosen) ?? null;
+    const offline = (p: ProviderInfo | null) => p?.network?.reachable === false;
     const connected = !!provider && (!provider.remote || !!provider.models_discovered);
 
     const loadProviders = useCallback(async () => {
@@ -80,12 +93,20 @@ export function ModelSettings() {
     }, [rememberNames]);
 
     useEffect(() => { void loadProviders(); }, [loadProviders]);
+    // Ask again while the OS keychain dialog is open, so answering it is enough.
+    const awaitingPermission = !!providers?.some((p) => p.key_state === 'waiting_for_os_permission');
+    useEffect(() => {
+        if (!awaitingPermission) return;
+        const t = setInterval(() => { void loadProviders(); }, DOWNLOAD_POLL_MS);
+        return () => clearInterval(t);
+    }, [awaitingPermission, loadProviders]);
     const activeProvider = active?.provider;
-    useEffect(() => { if (activeProvider) setChosen(activeProvider); }, [activeProvider]);
+    useEffect(() => { if (activeProvider && !requested) setChosen(activeProvider); }, [activeProvider, requested]);
     useEffect(() => {
         setKey('');
         setNotice(null);
         setQuery('');
+        setShowAllFireworksModels(false);
     }, [chosen]);
     useEffect(() => {
         if (connected) void loadModels(chosen);
@@ -100,7 +121,14 @@ export function ModelSettings() {
             const body = chosen === 'amd'
                 ? { api_key: key || undefined, ...Object.fromEntries(Object.entries(amd).filter(([, v]) => v !== '')) }
                 : { api_key: key || undefined };
-            const r = await api.connectProvider(chosen, body);
+            const movedOn = () => !mounted.current || chosenRef.current !== chosen;
+            const r = await api.connectProviderWaitingForOs(
+                chosen,
+                body,
+                (waiting) => { if (!movedOn()) setNotice({ ok: true, text: waiting }); },
+                movedOn,
+            );
+            if (movedOn()) return;
             setKey('');
             setNotice({
                 ok: true,
@@ -110,9 +138,11 @@ export function ModelSettings() {
             });
             await loadProviders();
         } catch (err) {
-            setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
+            if (mounted.current && chosenRef.current === chosen) {
+                setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
+            }
         } finally {
-            setBusy(null);
+            if (mounted.current) setBusy(null);
         }
     }, [amd, chosen, key, loadProviders, provider]);
 
@@ -157,6 +187,30 @@ export function ModelSettings() {
         }
     }, [loadModels]);
 
+    const remove = useCallback(async (model: string) => {
+        setBusy(`rm:${model}`);
+        setNotice(null);
+        try {
+            const r = await api.removeCustomModel(model);
+            setConfirmRemove(null);
+            const cleared = r.cleared.includes('last_model')
+                ? ' New messages use your default model.'
+                : r.cleared.includes('default_model') ? " It was your default model, so GAIA's own default takes its place." : '';
+            setNotice({ ok: true, text: `Removed ${r.display_name} and its download.${cleared}` });
+            await loadModels('local', true);
+            await refreshActive();
+        } catch (err) {
+            setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
+        } finally {
+            setBusy(null);
+        }
+    }, [loadModels, refreshActive]);
+
+    const added = useCallback(async (name: string) => {
+        setNotice({ ok: true, text: `Added ${name}. Choose Download to fetch it, then Use.` });
+        await loadModels('local', true);
+    }, [loadModels]);
+
     // Poll while a download runs so its row shows progress, then its new state.
     const anyDownloading = !!models?.some(isDownloading);
     useEffect(() => {
@@ -172,11 +226,17 @@ export function ModelSettings() {
         );
     }, [models, query]);
     const runnable = filtered.filter((m) => m.available !== false);
+    const fireworksCollapsed = chosen === 'fireworks' && !showAllFireworksModels && !query.trim()
+        && runnable.some((m) => m.rank !== null);
+    const inCollapsedView = (m: ProviderModel) => m.rank !== null || m.id === active?.model;
+    const visibleRunnable = fireworksCollapsed ? runnable.filter(inCollapsedView) : runnable;
+    const hiddenFireworksModels = fireworksCollapsed ? runnable.filter((m) => !inCollapsedView(m)) : [];
     const unavailable = filtered.filter((m) => m.available === false);
+    const labels = distinctModelLabels(models ?? []);
     const activeLocal = active && !active.remote && active.model ? active.model : null;
 
     const renderRow = (m: ProviderModel) => {
-        const current = active?.model === m.id;
+        const current = sameModelId(active?.model, m.id);
         const progress = isDownloading(m) ? m.download_progress : null;
         const meta = [
             placementText(m.placement),
@@ -188,10 +248,11 @@ export function ModelSettings() {
             <li key={m.id} className={`model-row${current ? ' is-current' : ''}`}>
                 <div className="model-row-text">
                     <span className="model-row-name" title={m.id}>
-                        {m.display_name ?? displayModelName(m.id)}
+                        {labels[m.id]}
                         {m.rank && <span className="model-row-rank">#{m.rank} {m.note}</span>}
                         {m.state === 'loaded' && <span className="model-badge is-loaded">{STATE_LABELS.loaded}</span>}
                         {m.fits === true && m.available !== false && <span className="model-badge is-fit">Fits this PC</span>}
+                        {m.custom && <span className="model-badge is-custom">Added by you</span>}
                     </span>
                     {provider?.remote && (
                         <span className={`model-row-meta${m.price ? '' : ' is-unknown-price'}`}>{formatPrice(m.price)}</span>
@@ -202,19 +263,45 @@ export function ModelSettings() {
                     {m.unavailable_reason && <span className="model-row-meta">Can't run here: {m.unavailable_reason}</span>}
                     {m.evidence && <span className="model-row-meta">Measured: {m.evidence}</span>}
                     {progress && (
-                        <progress max={100} value={progress.percent} aria-label={`Downloading ${m.display_name ?? m.id}`} />
+                        <progress max={100} value={progress.percent} aria-label={`Downloading ${labels[m.id]}`} />
+                    )}
+                    {m.custom && m.source_url && (
+                        <span className="model-row-meta">From {m.source_url}</span>
                     )}
                 </div>
+                {m.custom && !current && !progress && (
+                    confirmRemove === m.id ? (
+                        <span className="model-row-confirm">
+                            <button type="button" className="btn-danger" onClick={() => void remove(m.id)} disabled={busy !== null}>
+                                {busy === `rm:${m.id}` ? <Loader2 size={13} className="spin" /> : null}
+                                {m.downloaded ? 'Remove and delete download' : 'Remove'}
+                            </button>
+                            <button type="button" className="btn-secondary" onClick={() => setConfirmRemove(null)} disabled={busy !== null}>
+                                Keep
+                            </button>
+                        </span>
+                    ) : (
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => setConfirmRemove(m.id)}
+                            disabled={busy !== null}
+                            aria-label={`Remove ${labels[m.id]}`}
+                        >
+                            Remove
+                        </button>
+                    )
+                )}
                 {current ? (
                     <span className="model-row-current"><Check size={13} aria-hidden="true" /> In use</span>
                 ) : m.available === false ? null : progress ? (
                     <span className="model-row-current"><Loader2 size={13} className="spin" /> {Math.round(progress.percent)}%</span>
                 ) : !m.downloaded ? (
-                    <button type="button" className="btn-secondary" onClick={() => void download(m.id)} disabled={busy !== null} aria-label={`Download ${m.display_name ?? displayModelName(m.id)}`}>
+                    <button type="button" className="btn-secondary" onClick={() => void download(m.id)} disabled={busy !== null} aria-label={`Download ${labels[m.id]}`}>
                         {busy === `dl:${m.id}` ? <Loader2 size={13} className="spin" /> : null} Download
                     </button>
                 ) : (
-                    <button type="button" className="btn-secondary" onClick={() => void use(m.id)} disabled={busy !== null} aria-label={`Use ${m.display_name ?? displayModelName(m.id)}`}>
+                    <button type="button" className="btn-secondary" onClick={() => void use(m.id)} disabled={busy !== null} aria-label={`Use ${labels[m.id]}`}>
                         {busy === m.id ? <Loader2 size={13} className="spin" /> : null} Use
                     </button>
                 )}
@@ -236,8 +323,10 @@ export function ModelSettings() {
                         type="button"
                         role="radio"
                         aria-checked={chosen === p.id}
-                        className={`provider-tab${chosen === p.id ? ' is-active' : ''}`}
+                        className={`provider-tab${chosen === p.id ? ' is-active' : ''}${offline(p) ? ' is-disabled' : ''}`}
                         onClick={() => setChosen(p.id)}
+                        disabled={offline(p) && chosen !== p.id}
+                        title={offline(p) ? p.network?.detail ?? undefined : undefined}
                     >
                         {p.remote ? <Cloud size={14} aria-hidden="true" /> : <Cpu size={14} aria-hidden="true" />}
                         <span>{p.name}</span>
@@ -266,7 +355,16 @@ export function ModelSettings() {
                         </div>
                     )}
 
-                    {provider.remote && (
+                    {offline(provider) && (
+                        <div className="settings-field">
+                            <p className="settings-error" role="alert">{provider.network?.detail}</p>
+                            <button type="button" className="btn-secondary" onClick={() => void loadProviders()}>
+                                Check again
+                            </button>
+                        </div>
+                    )}
+
+                    {provider.remote && !offline(provider) && (
                         <form
                             className="settings-field"
                             onSubmit={(e) => { e.preventDefault(); void connect(); }}
@@ -342,7 +440,25 @@ export function ModelSettings() {
                             {modelsError && <p className="settings-error" role="alert">{modelsError}</p>}
                             {!models && !modelsError && <p className="settings-hint"><Loader2 size={13} className="spin" /> Loading…</p>}
                             {models && filtered.length === 0 && <p className="settings-hint">No models match.</p>}
-                            <ul className="model-list">{runnable.map(renderRow)}</ul>
+                            <ul className="model-list">{visibleRunnable.map(renderRow)}</ul>
+                            {fireworksCollapsed && hiddenFireworksModels.length > 0 && (
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => setShowAllFireworksModels(true)}
+                                >
+                                    Show all models
+                                </button>
+                            )}
+                            {chosen === 'fireworks' && showAllFireworksModels && !query.trim() && (
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => setShowAllFireworksModels(false)}
+                                >
+                                    Show recommended models
+                                </button>
+                            )}
                             {unavailable.length > 0 && (
                                 <details className="model-unavailable">
                                     <summary>Not available on this PC ({unavailable.length})</summary>
@@ -351,6 +467,8 @@ export function ModelSettings() {
                             )}
                         </div>
                     )}
+
+                    {provider.id === 'local' && connected && <AddCustomModel onAdded={(name) => void added(name)} />}
 
                     {provider.remote && <SpendingLimit />}
                 </section>

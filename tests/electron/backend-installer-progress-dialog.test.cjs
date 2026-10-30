@@ -11,6 +11,7 @@ const { EventEmitter } = require("events");
 const INSTALLER_PATH = "../../src/gaia/apps/webui/services/backend-installer.cjs";
 const DIALOG_PATH =
   "../../src/gaia/apps/webui/services/backend-installer-progress-dialog.cjs";
+const APP_ICON_PATH = "../../src/gaia/apps/webui/services/app-icon.cjs";
 
 const LOG_PATH = "/mock/home/.gaia/install.log";
 const STATE_PATH = "/mock/home/.gaia/install-state.json";
@@ -20,6 +21,7 @@ jest.mock("../../src/gaia/apps/webui/services/backend-installer.cjs", () => ({
   getLogPath: jest.fn(() => "/mock/home/.gaia/install.log"),
   getStatePath: jest.fn(() => "/mock/home/.gaia/install-state.json"),
   ensureBackend: jest.fn(),
+  log: jest.fn(),
 }));
 
 class FakeWindow extends EventEmitter {
@@ -74,6 +76,13 @@ describe("createProgressWindow", () => {
     expect(window.loadURL.mock.calls[0][0]).toMatch(/^data:text\/html/);
   });
 
+  test("carries the GAIA icon, not Electron's", () => {
+    const { dialog } = load();
+    const { window } = dialog.createProgressWindow();
+
+    expect(window.options.icon).toBe(require(APP_ICON_PATH).appIconPath());
+  });
+
   test("registers the install IPC handlers only once across windows", () => {
     const { electron, dialog } = load();
     const handleSpy = jest.spyOn(electron.ipcMain, "handle");
@@ -100,13 +109,15 @@ describe("createProgressWindow", () => {
     expect(window.webContents.send).toHaveBeenCalledTimes(1);
     expect(window.webContents.send).toHaveBeenCalledWith(dialog.IPC_PROGRESS_EVENT, {
       stage: "venv",
+      label: "Setting up GAIA",
       percent: 40,
       message: "Creating venv",
     });
 
-    onProgress("install", 70, "Installing gaia");
+    onProgress("install-package", 70, "Installing gaia");
     expect(window.webContents.send).toHaveBeenLastCalledWith(dialog.IPC_PROGRESS_EVENT, {
-      stage: "install",
+      stage: "install-package",
+      label: "Installing GAIA",
       percent: 70,
       message: "Installing gaia",
     });
@@ -123,6 +134,87 @@ describe("createProgressWindow", () => {
 
     expect(window.isDestroyed()).toBe(true);
     expect(window.webContents.send).not.toHaveBeenCalled();
+  });
+});
+
+/** Run the page's script against a stub DOM; returns the elements and the progress listener. */
+function runPageScript(html) {
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const el = () => ({ textContent: "", style: {}, classList: { remove: jest.fn() } });
+  const elements = { stage: el(), fill: el(), percent: el(), message: el() };
+  let listener = null;
+  const window = { gaiaInstall: { onProgress: (cb) => { listener = cb; } } };
+  const document = { getElementById: (id) => elements[id] };
+  require("vm").runInNewContext(script, { window, document, console, Math });
+  return { elements, send: (payload) => listener(payload) };
+}
+
+describe("progress page", () => {
+  const WIN_LOG = "C:\\Users\\Kalin\\gaia-fresh-home\\.gaia\\electron-install.log";
+
+  test("the footer shows the log path as it is on disk, single backslashes", () => {
+    const { dialog } = load();
+    const html = dialog.buildProgressHtml({ logPath: WIN_LOG });
+
+    const shown = html.match(/Log: <code>([^<]*)<\/code>/)[1];
+    expect(shown).toBe(WIN_LOG);
+    expect(html).not.toContain("\\\\Users");
+  });
+
+  test("HTML in the log path is escaped, not rendered", () => {
+    const { dialog } = load();
+    const html = dialog.buildProgressHtml({ logPath: "C:\\a&b\\<i>\\install.log" });
+
+    expect(html).toContain("Log: <code>C:\\a&amp;b\\&lt;i&gt;\\install.log</code>");
+  });
+
+  test("the first screen has no installer jargon", () => {
+    const { dialog } = load();
+    const html = dialog.buildProgressHtml({ logPath: WIN_LOG });
+    const body = html.slice(html.indexOf("<body>"), html.indexOf("<script>"));
+
+    expect(body).not.toMatch(/backend|pre-flight/i);
+    expect(html).not.toMatch(/text-transform:\s*uppercase/);
+  });
+
+  test("the page shows the stage's label, never its id", () => {
+    const { dialog } = load();
+    const { elements, send } = runPageScript(dialog.buildProgressHtml({ logPath: WIN_LOG }));
+
+    send({ stage: "gaia-init", label: "Getting the AI model ready", percent: 70, message: "Downloading" });
+
+    expect(elements.stage.textContent).toBe("Getting the AI model ready");
+    expect(elements.message.textContent).toBe("Downloading");
+    expect(elements.percent.textContent).toBe("70%");
+  });
+});
+
+describe("stageLabel", () => {
+  const { STAGES } = jest.requireActual(INSTALLER_PATH);
+
+  test.each(Object.values(STAGES))("installer stage %s has a plain label", (stage) => {
+    const { installer, dialog } = load();
+
+    const label = dialog.stageLabel(stage);
+
+    expect(label).toBe(dialog.STAGE_LABELS[stage]);
+    expect(label.toLowerCase()).not.toContain(stage);
+    expect(installer.log).not.toHaveBeenCalled();
+  });
+
+  test("the gaia init stage reads as getting the model ready", () => {
+    const { dialog } = load();
+    expect(dialog.stageLabel("gaia-init")).toBe("Getting the AI model ready");
+  });
+
+  test("an unknown stage shows a neutral label and is logged once", () => {
+    const { installer, dialog } = load();
+
+    expect(dialog.stageLabel("fetch-widgets")).toBe("Setting up GAIA");
+    expect(dialog.stageLabel("fetch-widgets")).toBe("Setting up GAIA");
+
+    expect(installer.log).toHaveBeenCalledTimes(1);
+    expect(installer.log.mock.calls[0][0]).toMatch(/"fetch-widgets" has no label/);
   });
 });
 
@@ -195,14 +287,16 @@ describe("install:* IPC handlers", () => {
 });
 
 describe("showFailureDialog", () => {
+  // A failure outside uv: no "Install uv" button, Retry first.
   const BUTTON = {
-    INSTALL_UV: 0,
-    RETRY: 1,
-    MANUAL: 2,
-    COPY_LOG: 3,
-    OPEN_LOG: 4,
-    QUIT: 5,
+    RETRY: 0,
+    MANUAL: 1,
+    COPY_LOG: 2,
+    OPEN_LOG: 3,
+    QUIT: 4,
   };
+  // A uv failure puts "Install uv" first.
+  const UV = { INSTALL_UV: 0, QUIT: 5 };
 
   function answer(electron, ...responses) {
     for (const response of responses) {
@@ -269,12 +363,34 @@ describe("showFailureDialog", () => {
     }
   });
 
+  test("a failure outside uv offers no Install uv and defaults to Retry", async () => {
+    const { electron, dialog } = load();
+    answer(electron, BUTTON.QUIT);
+
+    await dialog.showFailureDialog(null, { message: "pip failed", stage: "install-package" });
+
+    const opts = electron.dialog.showMessageBox.mock.calls[0][1];
+    expect(opts.buttons).not.toContain("Install uv (auto)");
+    expect(opts.buttons[opts.defaultId]).toBe("Retry");
+  });
+
+  test("a uv failure offers Install uv as the default", async () => {
+    const { electron, dialog } = load();
+    answer(electron, UV.QUIT);
+
+    await dialog.showFailureDialog(null, { message: "no uv", stage: "ensure-uv" });
+
+    const opts = electron.dialog.showMessageBox.mock.calls[0][1];
+    expect(opts.buttons[opts.defaultId]).toBe("Install uv (auto)");
+    expect(opts.buttons[opts.cancelId]).toBe("Quit");
+  });
+
   test("Install uv runs the packaged install and resolves to retry on success", async () => {
     const { electron, installer, dialog } = load();
-    answer(electron, BUTTON.INSTALL_UV);
+    answer(electron, UV.INSTALL_UV);
     installer.ensureBackend.mockResolvedValue("/mock/gaia");
 
-    await expect(dialog.showFailureDialog(null, {})).resolves.toBe("retry");
+    await expect(dialog.showFailureDialog(null, { stage: "ensure-uv" })).resolves.toBe("retry");
 
     expect(installer.ensureBackend).toHaveBeenCalledWith(
       expect.objectContaining({ isPackaged: true, onProgress: expect.any(Function) })
@@ -285,12 +401,12 @@ describe("showFailureDialog", () => {
 
   test("a failed Install uv re-shows the dialog with the new error", async () => {
     const { electron, installer, dialog } = load();
-    answer(electron, BUTTON.INSTALL_UV, BUTTON.QUIT);
+    answer(electron, UV.INSTALL_UV, UV.QUIT);
     const err = Object.assign(new Error("uv download failed"), { stage: "uv" });
     installer.ensureBackend.mockRejectedValue(err);
 
     await expect(
-      dialog.showFailureDialog(null, { message: "first failure" })
+      dialog.showFailureDialog(null, { message: "first failure", stage: "ensure-uv" })
     ).resolves.toBe("quit");
 
     const second = electron.dialog.showMessageBox.mock.calls[1][1];

@@ -15,7 +15,7 @@ import * as api from '../../services/api';
 vi.mock('../../services/api');
 const mockedApi = vi.mocked(api);
 
-const ANSWER_PATH = 'C:\\Users\\me\\gaia-kw-eval\\runs\\verify-01\\answer.md';
+const ANSWER_PATH = 'C:\\Users\\me\\gaia-runs\\report\\answer.md';
 
 function renderAnswer(content: string) {
     const message: Message = {
@@ -44,8 +44,8 @@ describe('answer file paths', () => {
     });
 
     it('accepts forward slashes and a trailing folder separator', () => {
-        renderAnswer('Invoices are in `C:/work/kw-08/invoices/`.');
-        expect(links().map((l) => l.textContent)).toEqual(['C:/work/kw-08/invoices/']);
+        renderAnswer('Invoices are in `C:/work/expenses/invoices/`.');
+        expect(links().map((l) => l.textContent)).toEqual(['C:/work/expenses/invoices/']);
     });
 
     it('leaves a path inside a fenced code block alone', () => {

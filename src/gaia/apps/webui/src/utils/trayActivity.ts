@@ -7,7 +7,7 @@
  * the system status. Nothing here asks the backend for more.
  */
 
-import type { Session, SystemStatus } from '../types';
+import type { AwaitingUser, Session, SystemStatus } from '../types';
 import type { GaiaNotification, TrayActivity, TrayChatRef } from '../types/agent';
 
 /**
@@ -23,6 +23,8 @@ export interface TrayActivityInput {
     systemStatus: SystemStatus | null;
     sessions: Session[];
     runningSessionIds: string[];
+    /** Chats the backend reports waiting on the user, from any window or the phone. */
+    awaitingBySession: Record<string, AwaitingUser>;
     currentSessionId: string | null;
     isStreaming: boolean;
     awaitingUser: boolean;
@@ -52,6 +54,11 @@ export function buildTrayActivity(input: TrayActivityInput): TrayActivity {
     const needsYou: TrayActivity['needsYou'] = [...approvals].map((id) => ({ ...ref(id, byId), reason: 'approval' }));
     if (streamingHere && input.awaitingUser && !approvals.has(input.currentSessionId!)) {
         needsYou.push({ ...ref(input.currentSessionId!, byId), reason: 'answer' });
+    }
+    // A prompt raised in another window never reaches this window's notifications.
+    for (const [id, kind] of Object.entries(input.awaitingBySession)) {
+        if (needsYou.some((n) => n.id === id)) continue;
+        needsYou.push({ ...ref(id, byId), reason: kind === 'question' ? 'answer' : 'approval' });
     }
 
     const waitingOnModel = streamingHere && !input.awaitingUser && input.livePhase && MODEL_WAIT_PHASES.has(input.livePhase)

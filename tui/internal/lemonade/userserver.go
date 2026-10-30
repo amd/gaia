@@ -65,11 +65,15 @@ func RefuseSetupChange(what string) error {
 		base, what, SwitchBackHint)
 }
 
-// RefuseRequest is RefuseSetupChange for one HTTP request; nil for requests
-// that only use the server. path is relative to the API base.
+// RefuseRequest is RefuseSetupChange for one HTTP request, plus the Local only
+// refusal of cloud keys and providers; nil for requests that only use the
+// server. path is relative to the API base.
 func RefuseRequest(method, path string) error {
 	if !IsSetupChange(method, path) {
 		return nil
+	}
+	if err := refuseCloudSetup(method, path); err != nil {
+		return err
 	}
 	return RefuseSetupChange(describeSetupChange(method, path))
 }

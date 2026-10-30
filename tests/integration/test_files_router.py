@@ -361,11 +361,8 @@ class TestFileBrowse:
 
     def test_browse_home_directory(self, client):
         """Default path (no param) should return home directory contents."""
-        # On Windows with no path param, the router lists drive letters
-        # because 'not path' is True and we're on Windows.
-        # We pass the explicit home path instead.
         home = str(Path.home())
-        resp = client.get("/api/files/browse", params={"path": home})
+        resp = client.get("/api/files/browse")
         assert resp.status_code == 200
 
         data = resp.json()

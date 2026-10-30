@@ -146,7 +146,13 @@ const ROLES: Record<string, { role: Role; on: 'page' | 'code' }> = {
   '--g-rc-dim': { role: 'chrome', on: 'page' },
 
   // The starfield is drawn behind everything and carries nothing.
+  '--g-sky-o': { role: 'chrome', on: 'page' },
+  '--g-sky-b': { role: 'chrome', on: 'page' },
   '--g-sky-star': { role: 'chrome', on: 'page' },
+  '--g-sky-f': { role: 'chrome', on: 'page' },
+  '--g-sky-g': { role: 'chrome', on: 'page' },
+  '--g-sky-k': { role: 'chrome', on: 'page' },
+  '--g-sky-m': { role: 'chrome', on: 'page' },
   '--g-sky-hot': { role: 'chrome', on: 'page' },
 
   // Hairlines.

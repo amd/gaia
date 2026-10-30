@@ -90,6 +90,17 @@
     max-height: none;
 }
 
+/* Collapsed code is already capped by line count; expanded, it scrolls. */
+.perm-card-code {
+    max-height: none;
+    white-space: pre;
+    overflow-wrap: normal;
+}
+
+.perm-card-code.is-expanded {
+    max-height: 50vh;
+}
+
 .perm-card-risk {
     margin-top: 6px;
     color: var(--text-primary);

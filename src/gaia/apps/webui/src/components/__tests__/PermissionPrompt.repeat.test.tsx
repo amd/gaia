@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * kw-08 asked "Allow GAIA to use run_python?" nine times in one turn while
+ * One task asked "Allow GAIA to use run_python?" nine times in one turn while
  * "Always allow" sat unnoticed beside "Allow once". From the second identical
  * prompt the card points at it. It never answers for the user, and a different
  * tool, scope, or risk gets no nudge.
@@ -134,6 +134,7 @@ describe('ChatView carries the call risk into the prompt', () => {
         useNotificationStore.setState({ notifications: [], respondToPermission: originalRespond });
         mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
         mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
+        mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
         mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
         mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
         mockedApi.confirmTool.mockResolvedValue(undefined as never);

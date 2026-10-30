@@ -86,6 +86,7 @@ from gaia.llm.inference_location import resolve_inference_location
 from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
+    _model_ids_match,
     cloud_model_provider,
     resolve_default_chat_model,
     resolve_lemonade_base_url,
@@ -212,6 +213,8 @@ class PermissionState:
         self._edit_roots = tuple(edit_roots) if edit_roots else (os.getcwd(),)
         self._lifts_shell_gates = lifts_shell_gates
         self._grants: set = set()
+        #: What each "always" granted, so it can be listed and revoked whole.
+        self._scopes: Dict[str, Any] = {}
         self._handler: Any = None
         if full_access:
             # Starting unattended is the same security event as toggling it on
@@ -240,10 +243,13 @@ class PermissionState:
         operator block, the read-only binary policy and the rate limit (#3373,
         #3374). An unattended harness that only pre-approves prompts sets the
         first and must not inherit the second, which is what
-        ``lifts_shell_gates=False`` buys the HTTP transport.
+        ``lifts_shell_gates=False`` buys the HTTP transport. ``grants_paths``
+        lets an out-of-scope path through without a prompt, but only on a run
+        a person is watching (``answers_confirmations``).
         """
         handler.auto_approve_gated_tools = enabled
         handler.full_access = enabled and self._lifts_shell_gates
+        handler.grants_paths = enabled
         handler.accept_edits = self._accept_edits
         handler.edit_roots = self._edit_roots
 
@@ -281,6 +287,7 @@ class PermissionState:
         with self._lock:
             self._apply(handler, self._full_access)
             handler.session_grants().update(self._grants)
+            handler.session_grant_scopes().update(self._scopes)
             # A human is on the other end of this pipe with a modal on screen,
             # so the wait is theirs to end — see confirm_tool_execution. The
             # TUI answers its own prompt long before this fires (its bound is
@@ -294,8 +301,58 @@ class PermissionState:
         """Take the turn's grants back into the session and drop the handler."""
         with self._lock:
             self._grants.update(handler.session_grants())
+            self._scopes.update(handler.session_grant_scopes())
             if self._handler is handler:
                 self._handler = None
+
+    def grants(self) -> List[Dict[str, str]]:
+        """Every "always" answer in this session, including the running turn's."""
+        with self._lock:
+            return [
+                {"key": key, "label": scope.label}
+                for key, scope in self._live_scopes().items()
+            ]
+
+    def revoke(self, key: Optional[str] = None) -> int:
+        """Revoke one "always" answer, or all of them when *key* is None.
+
+        Takes effect on the very next gated call, including one in a turn
+        already running. A family another remaining answer also granted stays
+        granted. Returns how many answers were revoked.
+        """
+        with self._lock:
+            scopes = self._live_scopes()
+            targets = list(scopes) if key is None else [key]
+            removed = [scopes.pop(k) for k in targets if k in scopes]
+            if not removed:
+                return 0
+            kept = {family for scope in scopes.values() for family in scope.keys}
+            dropped = {f for scope in removed for f in scope.keys} - kept
+            holders = [(self._grants, self._scopes)]
+            if self._handler is not None:
+                holders.append(
+                    (
+                        self._handler.session_grants(),
+                        self._handler.session_grant_scopes(),
+                    )
+                )
+            for families, by_key in holders:
+                families.difference_update(dropped)
+                for scope in removed:
+                    by_key.pop(scope.key, None)
+        audit.warning(
+            "Revoked %d always-allow grant(s): %s",
+            len(removed),
+            ", ".join(scope.label for scope in removed),
+        )
+        return len(removed)
+
+    def _live_scopes(self) -> Dict[str, Any]:
+        """The session's answers plus the running turn's. Caller holds the lock."""
+        scopes = dict(self._scopes)
+        if self._handler is not None:
+            scopes.update(self._handler.session_grant_scopes())
+        return scopes
 
     def resolve(self, decision: str, confirm_id: Optional[str]) -> None:
         """Answer the confirmation the agent thread is parked on.
@@ -809,6 +866,8 @@ def _apply_local_switch(
     chat = agent.chat
     # Raises if unreachable, after waiting out a restart of GAIA's own server.
     base_url, available = _reachable_lemonade_models(agent, target, on_status)
+    # Lemonade lists a registered user.X model as X; switch to the listed name.
+    target = next((m for m in available if _model_ids_match(m, target)), target)
     if target not in available and _replayed_cloud_key(base_url, target):
         available = _lemonade_models(base_url)
     if target not in available:
@@ -880,6 +939,14 @@ def switch_model(
     *on_status* receives a plain-language line while the switch waits for
     GAIA's model server to come back after a restart.
     """
+    from gaia.llm.lemonade_client import cloud_model_provider
+    from gaia.llm.local_only import SETTINGS_HINT, cloud_blocked
+
+    if cloud_blocked() and (is_claude_model(target) or cloud_model_provider(target)):
+        raise RuntimeError(
+            f"Local only is on, so GAIA won't switch to the cloud model {target}. "
+            f"{SETTINGS_HINT}"
+        )
     if is_claude_model(target):
         return _apply_claude_switch(agent, target)
     return _apply_local_switch(agent, target, on_status)

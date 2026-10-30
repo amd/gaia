@@ -138,6 +138,29 @@ def test_indexing_embeds_every_chunk_whole(tmp_path, body, chunk_size):
     assert sdk.recorder.inputs == list(sdk.chunks)
 
 
+@pytest.mark.parametrize("from_cache", [False, True])
+def test_indexing_normalizes_no_break_spaces_only_for_embedding(tmp_path, from_cache):
+    doc = tmp_path / "report.txt"
+    doc.write_text(
+        "Year\u00a0ended\u00a0December\u00a031\nRevenue\u00a02021\u00a01423\n" * 80,
+        encoding="utf-8",
+    )
+    sdk = _make(tmp_path)
+    if from_cache:
+        assert sdk.index_document(str(doc))["success"]
+        sdk = _make(tmp_path)
+
+    result = sdk.index_document(str(doc))
+
+    assert result["success"]
+    assert result.get("from_cache", False) == from_cache
+    assert any("\u00a0" in chunk for chunk in sdk.chunks)
+    assert len(sdk.recorder.inputs) == len(sdk.chunks)
+    assert all("\u00a0" not in text for text in sdk.recorder.inputs)
+    assert "Year ended December 31" in sdk.recorder.inputs[0]
+    assert "Revenue 2021 1423" in sdk.recorder.inputs[0]
+
+
 def test_llm_chunking_output_is_also_cut_to_fit(tmp_path):
     sdk = _make(tmp_path, use_llm_chunking=True)
     sdk.llm_client = Mock()
@@ -148,6 +171,32 @@ def test_llm_chunking_output_is_also_cut_to_fit(tmp_path):
     assert chunks[0] == "short"
     assert len(chunks) > 2
     assert max(len(c) for c in chunks) <= EMBED_MAX_CHARS
+
+
+def test_section_chunking_keeps_vlm_blocks_out_of_body_chunks(tmp_path):
+    sdk = _make(tmp_path, chunk_size=50, chunk_overlap=10)
+    image_marker = "\U0001f5bc\ufe0f"
+    vlm_text = (
+        "IMAGE-CONTENT " + " ".join(f"imgword{i}" for i in range(80)) + " IMAGE-END"
+    )
+    text = (
+        "# Section A\nAlpha body.\n\n"
+        "# Section B\nBeta body.\n\n"
+        "# Section C\nGamma body.\n\n"
+        "# Section D\nDelta body.\n\n"
+        "# Figure\n"
+        f"[Page 1] ### {image_marker} IMAGE 1\n\n"
+        f"{vlm_text}\n\n"
+        "[Page 2]\n# Section E\nEpsilon body."
+    )
+
+    chunks = sdk._split_text_into_chunks(text)
+
+    vlm_chunks = [chunk for chunk in chunks if "IMAGE-CONTENT" in chunk]
+    assert len(vlm_chunks) == 1
+    assert "IMAGE-END" in vlm_chunks[0]
+    assert "Delta body." not in vlm_chunks[0]
+    assert "Epsilon body." not in vlm_chunks[0]
 
 
 def test_oversized_input_is_refused_not_truncated(tmp_path):

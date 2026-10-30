@@ -114,6 +114,17 @@ def _reversion(skill_dir, version):
     path.write_text(text.replace("version: 1.0.0", f"version: {version}"), "utf-8")
 
 
+def _drop_version(skill_dir):
+    """Rewrite the installed manifest so it declares no version at all."""
+    path = skill_dir / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    dropped = "\n".join(
+        line for line in text.splitlines() if not line.startswith("version: ")
+    )
+    assert dropped != text, "the test must actually remove the version"
+    path.write_text(dropped, encoding="utf-8")
+
+
 def _kinds(report):
     return {d.kind for d in report.drifts}
 
@@ -321,6 +332,26 @@ def test_a_skill_outside_the_user_root_is_not_gated(marketplace, tmp_path, attes
 # ----------------------------------------------------------------------
 # Relock
 # ----------------------------------------------------------------------
+
+
+def test_a_manifest_that_drops_its_version_is_not_version_drift(
+    marketplace, unattested
+):
+    """The lock needs a version, the manifest may omit one (#5774).
+
+    Reporting drift here recommends `--relock`, which cannot clear it because the
+    lock format requires a version. The edit still shows up as content drift.
+    """
+    _drop_version(unattested.path)
+
+    report = check_drift(marketplace.skills_root)
+
+    assert DRIFT_VERSION not in _kinds(report)
+    assert not report.clean  # the bytes changed, so content drift is still real
+
+    relock(marketplace.skills_root)
+
+    assert check_drift(marketplace.skills_root).clean
 
 
 def test_relock_records_an_intentional_edit_and_then_validates_clean(

@@ -137,3 +137,27 @@ func TestServerInfoUnreachableIsOnePlainLine(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestALocalModelBesideACloudOneIsStillTheLocalChat(t *testing.T) {
+	h := decodeHealth(t, `{"model_loaded":"fireworks.deepseek-v4p1-flash","all_models_loaded":[
+		{"model_name":"fireworks.deepseek-v4p1-flash","type":"llm","recipe":"cloud"},
+		{"model_name":"Gemma-4-E4B-it-GGUF","type":"llm","recipe":"llamacpp","recipe_options":{"llamacpp_backend":"metal"}}]}`)
+
+	info := describeServer("http://localhost:1/api/v1", 0, h, sysInfoReply{})
+
+	if info.Chat == nil || info.Chat.Backend != "remote" {
+		t.Fatalf("chat = %+v, want the active cloud model", info.Chat)
+	}
+	if info.LocalChat == nil || info.LocalChat.Name != "Gemma-4-E4B-it-GGUF" {
+		t.Fatalf("local chat = %+v, want the resident Gemma", info.LocalChat)
+	}
+}
+
+func TestOnlyACloudModelLeavesNoLocalChat(t *testing.T) {
+	h := decodeHealth(t, `{"model_loaded":"fireworks.deepseek-v4p1-flash","all_models_loaded":[
+		{"model_name":"fireworks.deepseek-v4p1-flash","type":"llm","recipe":"cloud"}]}`)
+
+	if info := describeServer("http://localhost:1/api/v1", 0, h, sysInfoReply{}); info.LocalChat != nil {
+		t.Fatalf("local chat = %+v, want none", info.LocalChat)
+	}
+}

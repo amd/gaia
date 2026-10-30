@@ -62,6 +62,14 @@ describe('Lemonade target API', () => {
         fetchMock().mockResolvedValue(jsonResponse({ detail }, 502));
         await expect(setLemonadeTarget({ mode: 'gaia' })).rejects.toThrow(detail);
     });
+
+    it('keeps the named fields when it rewords a 502', async () => {
+        fetchMock().mockResolvedValue(jsonResponse({ detail: [{ loc: ['body', 'base_url'], msg: 'bad url' }] }, 502));
+        const err = await setLemonadeTarget({ mode: 'gaia' }).catch((e) => e);
+        expect(err).toBeInstanceOf(ApiError);
+        expect(err.message).toBe('bad url');
+        expect(err.fields).toEqual(['base_url']);
+    });
 });
 
 describe('redactSecrets', () => {

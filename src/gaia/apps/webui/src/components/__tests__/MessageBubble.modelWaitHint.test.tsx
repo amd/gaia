@@ -6,7 +6,9 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageBubble } from '../MessageBubble';
-import { MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../../utils/modelWait';
+import { LOCAL_MODEL_WAIT_HINT, MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../../utils/modelWait';
+import { useModelStore } from '../../stores/modelStore';
+import type { ActiveModel } from '../../types';
 import type { Message } from '../../types';
 
 const streaming: Message = {
@@ -37,6 +39,7 @@ beforeEach(() => {
 
 afterEach(() => {
     vi.useRealTimers();
+    useModelStore.setState({ active: null });
 });
 
 describe('model wait hint', () => {
@@ -46,6 +49,14 @@ describe('model wait hint', () => {
         expect(screen.queryByText(MODEL_WAIT_HINT)).not.toBeInTheDocument();
         act(() => { vi.advanceTimersByTime(1000); });
         expect(screen.getByText(MODEL_WAIT_HINT)).toBeInTheDocument();
+    });
+
+    it('on a model on this PC, says a long prompt is slow instead of promising a retry', () => {
+        useModelStore.setState({ active: { inference_remote: false } as ActiveModel });
+        renderBubble('Reading your request');
+        act(() => { vi.advanceTimersByTime(MODEL_WAIT_HINT_S * 1000); });
+        expect(screen.getByText(LOCAL_MODEL_WAIT_HINT)).toBeInTheDocument();
+        expect(screen.queryByText(MODEL_WAIT_HINT)).not.toBeInTheDocument();
     });
 
     function rerenderWith(rerender: ReturnType<typeof render>['rerender'], liveStatus: string) {

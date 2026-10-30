@@ -434,8 +434,14 @@ class TestPropose:
             risk="medium",
         )
         goal = store.propose(p)
-        assert "api_call" in goal.title
+        assert goal.title == "Proposal: Api call"
         assert goal.description.startswith("[agent_inferred]")
+
+    def test_propose_keeps_prose_actions_as_written(self, store):
+        from gaia.agents.base.goal_store import Proposal
+
+        p = Proposal(action="draft email m_1 from bob", rationale="reply needed")
+        assert store.propose(p).title == "Proposal: draft email m_1 from bob"
 
     def test_propose_proposals_visible_in_pending(self, store):
         from gaia.agents.base.goal_store import Proposal

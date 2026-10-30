@@ -16,6 +16,7 @@ patches take effect.
 import asyncio
 import concurrent.futures
 import copy
+import functools
 import importlib.util
 import json
 import logging
@@ -24,9 +25,10 @@ import re as _re
 import sqlite3
 import threading
 import time as _time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, ContextManager, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -42,7 +44,12 @@ from gaia.llm.inference_location import (
     resolve_inference_location,
 )
 from gaia.llm.providers.lemonade import classify_lemonade_exception
-from gaia.security import BLOCKED_DIRECTORIES
+from gaia.security import (
+    BLOCKED_DIRECTORIES,
+    AllowedPathsEnvError,
+    env_allowed_paths,
+    narrow_allowed_paths,
+)
 from gaia.stream_timeout import (
     DEFAULT_STREAM_TIMEOUT_SECONDS,
     MAX_STREAM_TIMEOUT_SECONDS,
@@ -53,28 +60,44 @@ from gaia.ui.email_sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
     api_version_supported,
+    changes_supported,
     confirmations_supported,
+    context_supported,
     documents_supported,
+    followups_supported,
+    grants_supported,
+    internet_supported,
+    memory_supported,
     profile_for,
+    reasoning_supported,
+    scope_supported,
+    surface_supported,
+    turns_supported,
+    working_directory_supported,
 )
 from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
 from gaia.utils import awake_clock as _awake_clock
+from gaia.utils.awake_clock import AwakeClockError
 
+from . import followups
 from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
-from .sse_handler import (
-    _ANSWER_JSON_SUB_RE,
-    _RAG_RESULT_JSON_SUB_RE,
-    _THOUGHT_JSON_SUB_RE,
-    _TOOL_CALL_JSON_SUB_RE,
-    _clean_answer_json,
-    _fix_double_escaped,
+from .session_environment import (
+    apply_environment,
+    folders_refusal,
+    held_internet_off,
 )
+from .session_environment import load as load_environment
+from .session_environment import (
+    with_folder_note,
+    withheld_refusal,
+)
+from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
-from .utils import attached_upload_paths, managed_documents_dir
+from .utils import UPLOAD_LINK_RE, attached_upload_paths, managed_documents_dir
 from .warmup import wait_for_warm_up
 
 logger = logging.getLogger(__name__)
@@ -138,12 +161,43 @@ _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 _background_tasks: set = set()
 
 
+def relayed_turns_in_flight() -> Optional[str]:
+    """Why restarting the daemon now would cut off a chat's agent turn, or None.
+
+    These turns go straight to the agent, so the daemon cannot count them. A
+    chat still starting its turn has no relayed run yet and does not count.
+    """
+    running = sum(
+        1
+        for handler in list(_active_sse_handlers.values())
+        if getattr(handler, "active_relay_run_id", None) is not None
+    )
+    if not running:
+        return None
+    return f"{running} Agent UI chat(s) are still answering"
+
+
 def _spawn_background(coro) -> asyncio.Task:
     """Run *coro* fire-and-forget without letting it be garbage-collected."""
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
+    task.add_done_callback(_log_background_failure)
     return task
+
+
+def _log_background_failure(task: asyncio.Task) -> None:
+    """Log what ended a fire-and-forget task; nobody awaits it to see."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "Background task %s failed: %s",
+            task.get_coro().__qualname__,
+            exc,
+            exc_info=exc,
+        )
 
 
 # ── Agent registry ───────────────────────────────────────────────────────────
@@ -237,10 +291,11 @@ def _agent_type_unknown(agent_type: str, registry) -> bool:
 # even when nothing has changed.  Caching the agent per session_id lets us skip
 # all of that on follow-up turns.
 #
-# Thread-safety: the global turn queue (turn_queue.py) serialises all chat
-# turns, and the per-session session_lock prevents concurrent turns within
-# the same session.  Together they guarantee the cache dict and each agent are
-# accessed by at most one thread at a time — no per-entry locking needed.
+# Thread-safety: ``_agent_cache_lock`` guards the dict, and the per-session
+# session_lock prevents concurrent turns within the same session, so each
+# agent is used by at most one thread at a time — no per-entry locking needed.
+# Turns in different chats can overlap (cloud turns skip turn_queue, and a
+# turn waiting on the user gives its place up).
 _agent_cache: dict[str, dict] = (
     {}
 )  # session_id -> {"agent": Agent, "model_id": str, "agent_type": str, "document_ids": list}
@@ -486,14 +541,18 @@ def _take_model_load_lock(sse_handler=None, stopped=None) -> bool:
 
 def _load_making_room(
     client, model_id: str, ctx: int, resident: list, may_unload: bool, sse_handler
-) -> None:
-    """Load *model_id*, unloading only this process's other models if it won't fit."""
+) -> list:
+    """Load *model_id*, unloading only this process's other models if it won't fit.
+
+    Returns the names of the models unloaded to make room.
+    """
     from gaia.llm.lemonade_client import InsufficientMemoryError
 
     try:
         client.load_model(
             model_id, ctx_size=ctx, prompt=False, timeout=_PREFLIGHT_LOAD_TIMEOUT_S
         )
+        ours = []
     except InsufficientMemoryError:
         wanted = _model_key(model_id)
         ours = [
@@ -521,6 +580,7 @@ def _load_making_room(
             model_id, ctx_size=ctx, prompt=False, timeout=_PREFLIGHT_LOAD_TIMEOUT_S
         )
     note_model_loaded(model_id)
+    return ours
 
 
 # ── Lemonade error classification ──────────────────────────────────────────
@@ -535,27 +595,59 @@ _classify_chat_exception = classify_lemonade_exception
 
 # ── Auto-titling ────────────────────────────────────────────────────────────
 #
-# After the agent finishes a turn, kick off a background task that asks the
-# same LLM (the default chat model if that one is a safety classifier) to
-# generate a 3-6 word title summarising the conversation, then
-# update the session title in the DB. Fires only while the title is still a
-# placeholder ("New Chat" / "New Task" / "Untitled"): once named, a chat keeps
-# its name, so the sidebar never drifts to the latest question. The title is
-# always drawn from the chat's first question, even if that turn was stopped.
+# When the server takes a chat's first message, the chat is named after that
+# question at once (_set_provisional_title), so it has a name even if nobody
+# is watching when the answer finishes. A background task then asks the model
+# the turn runs on (the default chat model if that one is a safety classifier)
+# for a 3-6 word title and updates the session. A cloud model is asked as the
+# turn starts, from the question alone; a local one only after the turn ends,
+# because a local title could take the model before the answer's first call
+# and delay its first token. It fires only while the title is a placeholder
+# ("New Chat" / "New Task" / "Untitled") or still the provisional one: once
+# named, a chat keeps its name, so the sidebar never drifts to the latest
+# question. The title is always drawn from the chat's first question, even if
+# that turn was stopped.
 #
 # Skipped when:
 #   * The session's title_is_custom flag is set — an explicit user/API title
 #     is pinned forever (#2165)
 #   * Title starts with "Eval:" — those are owned by the eval framework
-#   * Title was last updated < 30 s ago — prevents thrash mid-conversation
+#   * A title request is already running for the session, so concurrent
+#     fire-and-forget tasks don't pile up
+#   * The model already titled it, or replied with the name it has
+#     (_AUTO_TITLE_SETTLED)
+#   * Its title requests failed _AUTO_TITLE_MAX_TRIES times in this server
+#     run, so a cloud chat is not billed every turn
+#   * It was asked for a title _AUTO_TITLE_MAX_ATTEMPTS times in this server
+#     run, whatever came of them, so no reply (small talk, a busy model) can
+#     bill a chat every turn
 #   * No agent / no Lemonade base URL available
 #
-# Throttled by a per-session timestamp dict so concurrent fire-and-forget
-# tasks don't pile up.
+# A new turn cancels the chat's pending after-turn title: that turn's own
+# after-turn title replaces it, and it can't wait into the turn's steps.
 _AUTO_TITLE_DEFAULTS = PLACEHOLDER_TITLES
 _AUTO_TITLE_LOCK = threading.Lock()
-_AUTO_TITLE_LAST_AT: dict[str, float] = {}  # session_id -> monotonic ts
-_AUTO_TITLE_THROTTLE_S = 30.0
+_AUTO_TITLE_RUNNING: set[str] = set()
+_AUTO_TITLE_FAILURES: dict[str, int] = {}
+_AUTO_TITLE_MAX_TRIES = 3
+_AUTO_TITLE_ATTEMPTS: dict[str, int] = {}
+_AUTO_TITLE_MAX_ATTEMPTS = 10
+_AUTO_TITLE_SETTLED: set[str] = set()
+_AUTO_TITLE_PENDING: dict[str, asyncio.Task] = {}
+#: While another request holds the model, a title waits this many times (30 s
+#: each), this many seconds apart (~6 min in all), then leaves it to the chat's
+#: next turn. A one-slot local model waits once: a later title could land
+#: between steps of the next turn and evict the conversation's cache.
+_TITLE_BUSY_TRIES = 8
+_TITLE_BUSY_RETRY_S = 15
+
+
+class _TitleModelBusy(Exception):
+    """The title's wait for the model slot hit its limit: the model is in use."""
+
+
+class _NoTopicYet(Exception):
+    """The chat so far is a greeting or small talk, with nothing to name it by."""
 
 
 #: Safety-classifier model families. They answer any prompt with a verdict
@@ -576,6 +668,11 @@ _CLASSIFIER_VERDICT_RE = _re.compile(
     r"^(safe|unsafe|yes|no)([\s,:]+s\d+)*$", _re.IGNORECASE
 )
 _QUESTION_TITLE_MAX_CHARS = 60
+#: A link or image the user typed: ``[text](target)`` / ``![alt](target)``.
+_MARKDOWN_LINK_RE = _re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+#: A cloud model may reason before it answers, and only some providers let a
+#: request turn that off; this leaves room for the reasoning and the title.
+_CLOUD_TITLE_MAX_TOKENS = 512
 
 
 def _is_guard_model(model_id: str) -> bool:
@@ -584,13 +681,28 @@ def _is_guard_model(model_id: str) -> bool:
     return any(pattern in name for pattern in _GUARD_MODEL_NAME_PATTERNS)
 
 
-def _title_model_for(session_model: str) -> str:
-    """The model that writes the title: the session's, unless it is a guard model."""
+def _title_model_for(session_model: str) -> Optional[str]:
+    """The model that writes the title: the session's, unless it is a guard model.
+
+    None when the stand-in for a local guard model would be a cloud model: a
+    local chat's content never leaves the PC just to name it.
+    """
     if not _is_guard_model(session_model):
         return session_model
-    from gaia.llm.lemonade_client import resolve_default_chat_model
+    from gaia.llm.lemonade_client import (
+        cloud_model_provider,
+        resolve_default_chat_model,
+    )
 
     title_model = resolve_default_chat_model()
+    if cloud_model_provider(title_model) and not cloud_model_provider(session_model):
+        logger.info(
+            "Auto-title: %s is a safety classifier and the default model %s is "
+            "a cloud model; keeping the chat's title",
+            session_model,
+            title_model,
+        )
+        return None
     logger.info(
         "Auto-title: %s is a safety classifier; titling with %s instead",
         session_model,
@@ -600,8 +712,16 @@ def _title_model_for(session_model: str) -> str:
 
 
 def _title_from_question(user_msg: str) -> Optional[str]:
-    """The first question itself, cut at a word boundary, as a title."""
-    text = " ".join((user_msg or "").split())
+    """The first question itself, cut at a word boundary, as a title.
+
+    Only the user's own words count: the attachment links the composer appends
+    are dropped, and a message of attachments alone is named by its first file.
+    """
+    user_msg = user_msg or ""
+    words = UPLOAD_LINK_RE.sub(" ", user_msg)
+    text = " ".join(_MARKDOWN_LINK_RE.sub(r"\1", words).split())
+    if not text and (first := UPLOAD_LINK_RE.search(user_msg)):
+        text = first.group("label").strip() or first.group("name")
     if len(text) > _QUESTION_TITLE_MAX_CHARS:
         cut = text[:_QUESTION_TITLE_MAX_CHARS]
         text = (cut.rsplit(" ", 1)[0] or cut) + "…"
@@ -609,14 +729,36 @@ def _title_from_question(user_msg: str) -> Optional[str]:
     return text or None
 
 
-def _should_retitle(current_title: str, title_is_custom: bool = False) -> bool:
-    """True only while the session still carries a placeholder title."""
+def _should_retitle(
+    current_title: str,
+    title_is_custom: bool = False,
+    provisional: Optional[str] = None,
+) -> bool:
+    """True while the title is a placeholder or the *provisional* question title."""
     if title_is_custom:
         return False  # explicit user/API title — pinned (#2165)
     title = (current_title or "").strip()
     if title.startswith("Eval:"):
         return False  # eval framework owns these
+    if provisional and title == provisional:
+        return True
     return not title or title.lower() in _AUTO_TITLE_DEFAULTS
+
+
+def _same_title(a: str, b: str) -> bool:
+    """True when two titles differ only in case, spacing, quotes or end punctuation."""
+
+    def _norm(title: str) -> str:
+        return " ".join(title.split()).strip("\"'`*.!?;:,").strip().casefold()
+
+    return _norm(a or "") == _norm(b or "")
+
+
+def _set_provisional_title(db: ChatDatabase, session_id: str, user_msg: str) -> None:
+    """Name a still-untitled chat after the question the server just took."""
+    title = _title_from_question(user_msg)
+    if title and db.set_provisional_title(session_id, title):
+        logger.info("Named session %s after its first question", session_id[:8])
 
 
 async def _generate_session_title(
@@ -624,6 +766,7 @@ async def _generate_session_title(
     model_id: str,
     user_msg: str,
     assistant_msg: str,
+    latest_msg: str = "",
 ) -> Optional[str]:
     """Ask the chat's model for a short tab-style title.
 
@@ -634,10 +777,11 @@ async def _generate_session_title(
     model: when *model_id* is not loaded, the first question is the title.
 
     Returns the cleaned title (≤ 64 chars, no quotes, no trailing
-    punctuation), the first question for an empty reply or a classifier
-    verdict ("safe", "unsafe S1"), or None when the request fails. The
-    request itself times out at 30 s; the wait for the model slot before it
-    is the broker's.
+    punctuation), the first question when the model is not loaded, or None
+    when the request fails or its reply is no title (empty, or a classifier
+    verdict like "safe"). Raises :class:`_TitleModelBusy` when the model slot
+    stays taken through the 30 s wait, and :class:`_NoTopicYet` when the user
+    has asked for nothing yet. The request itself times out at 30 s.
     """
     from contextlib import nullcontext
 
@@ -648,15 +792,24 @@ async def _generate_session_title(
         LemonadeClientError,
         _model_ids_match,
         cloud_model_provider,
+        find_model_requirement,
         no_thinking_kwargs,
     )
 
+    # As the turn starts there is no answer yet: the question alone names it.
+    answer = f"Assistant: {assistant_msg[:200]}\n" if assistant_msg else ""
+    latest = (
+        f"User: {latest_msg[:400]}\n" if latest_msg and latest_msg != user_msg else ""
+    )
     prompt = (
         "Summarise the user's task in 3 to 6 plain words for a tab/window "
         "title.  Reply with ONLY the title, no quotes, no trailing "
-        "punctuation, no leading verbs like 'Task:' or 'Title:'.\n\n"
+        "punctuation, no leading verbs like 'Task:' or 'Title:'.  If the "
+        "user has not asked for anything yet (only a greeting or small "
+        "talk), reply with only: none\n\n"
         f"User: {user_msg[:400]}\n"
-        f"Assistant: {(assistant_msg or '')[:200]}\n"
+        f"{answer}"
+        f"{latest}"
         "Title:"
     )
 
@@ -666,7 +819,19 @@ async def _generate_session_title(
         )
         # A thinking model would spend all 24 tokens reasoning and title nothing.
         kwargs = dict(no_thinking_kwargs(model_id))
+        mr = find_model_requirement(model_id)
         local = not cloud_model_provider(model_id)
+        if local and not kwargs and model_id.upper().endswith("GGUF"):
+            # Gemma 4 registers no switch, yet reasons on a short question ("hi");
+            # llama.cpp ignores the field in a template that has no such switch.
+            kwargs = {"chat_template_kwargs": {"enable_thinking": False}}
+        if not local:
+            max_tokens = _CLOUD_TITLE_MAX_TOKENS
+        elif mr is not None and mr.reasoning_effort:
+            # It reasons even at "low"; leave room for the title after that.
+            max_tokens = 96
+        else:
+            max_tokens = 24
         # One lease over the residency check and the call, so the model can't
         # be swapped out between them; the call's own lease folds into it.
         lease = model_lease(model_id, priority="background") if local else nullcontext()
@@ -683,7 +848,7 @@ async def _generate_session_title(
             return client.chat_completions(
                 model_id,
                 [{"role": "user", "content": prompt}],
-                max_tokens=24,
+                max_tokens=max_tokens,
                 # Low temperature: titles should be deterministic-ish
                 # for the same conversation.
                 temperature=0.3,
@@ -695,6 +860,8 @@ async def _generate_session_title(
     try:
         data = await asyncio.to_thread(_ask)
     except (LemonadeClientError, BrokerUnavailableError, OSError) as exc:
+        if isinstance(exc, BrokerUnavailableError) and exc.status_code == 504:
+            raise _TitleModelBusy(str(exc)) from exc
         logger.warning("Auto-title request to %s failed: %s", model_id, exc)
         return None
     if data is None:
@@ -703,7 +870,8 @@ async def _generate_session_title(
         )
         return _title_from_question(user_msg)
     try:
-        content = data["choices"][0]["message"].get("content") or ""
+        choice = data["choices"][0]
+        content = choice["message"].get("content") or ""
     except (LookupError, TypeError, AttributeError) as exc:
         logger.warning("Auto-title: unreadable reply from %s: %s", model_id, exc)
         return None
@@ -717,13 +885,59 @@ async def _generate_session_title(
             title = title[len(prefix) :].strip()
     if not title or _CLASSIFIER_VERDICT_RE.match(title):
         logger.warning(
-            "Auto-title: %s replied %r, not a title; "
-            "titling from the first question instead",
+            "Auto-title: %s replied %r (finish_reason=%s), not a title",
             model_id,
             content[:80],
+            choice.get("finish_reason"),
         )
-        return _title_from_question(user_msg)
+        return None
+    # Exact match: a real title can start with "None" ("None values in pandas").
+    if title.lower() == "none":
+        raise _NoTopicYet
     return title[:64]
+
+
+async def _has_side_slot(base_url: str, model_id: str) -> bool:
+    """True when local *model_id* is loaded with a slot beside the conversation's."""
+    from gaia.llm.lemonade_client import SIDE_SLOT, LemonadeClient, LemonadeClientError
+
+    try:
+        client = LemonadeClient(base_url=base_url, verbose=False)
+        slots = await asyncio.to_thread(client.slot_count, model_id)
+    except (LemonadeClientError, OSError) as exc:
+        logger.info(
+            "Auto-title: could not read %s's slots (%s); waiting for it once",
+            model_id,
+            exc,
+        )
+        return False
+    return slots > SIDE_SLOT
+
+
+async def _title_when_model_free(
+    base_url: str, model_id: str, user_msg: str, assistant_msg: str, latest_msg: str
+) -> Optional[str]:
+    """:func:`_generate_session_title`, waiting out a model another request holds."""
+    from gaia.llm.lemonade_client import cloud_model_provider
+
+    request = dict(
+        base_url=base_url,
+        model_id=model_id,
+        user_msg=user_msg,
+        assistant_msg=assistant_msg,
+        latest_msg=latest_msg,
+    )
+    tries = _TITLE_BUSY_TRIES
+    if not cloud_model_provider(model_id) and not await _has_side_slot(
+        base_url, model_id
+    ):
+        tries = 1
+    for _ in range(tries - 1):
+        try:
+            return await _generate_session_title(**request)
+        except _TitleModelBusy:
+            await asyncio.sleep(_TITLE_BUSY_RETRY_S)
+    return await _generate_session_title(**request)
 
 
 def _first_exchange(
@@ -743,21 +957,47 @@ def _first_exchange(
     return user_msg, assistant_msg
 
 
+def _cancel_pending_title(session_id: str) -> None:
+    """Cancel *session_id*'s after-turn title, if one is still waiting or running."""
+    task = _AUTO_TITLE_PENDING.pop(session_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+        logger.info(
+            "Auto-title: a new turn in session %s cancelled its pending title",
+            session_id[:8],
+        )
+
+
+def _spawn_after_turn_title(coro, session_id: str) -> asyncio.Task:
+    """Spawn an after-turn title the chat's next turn can cancel."""
+    task = _spawn_background(coro)
+    _AUTO_TITLE_PENDING[session_id] = task
+
+    def _forget(done: asyncio.Task) -> None:
+        if _AUTO_TITLE_PENDING.get(session_id) is done:
+            del _AUTO_TITLE_PENDING[session_id]
+
+    task.add_done_callback(_forget)
+    return task
+
+
 async def _maybe_update_session_title(
     db: ChatDatabase,
     session_id: str,
     user_msg: str,
     assistant_msg: str,
     model_id: Optional[str],
+    at_turn_start: bool = False,
 ) -> None:
     """Best-effort background task: re-title the session if the rules say so.
 
-    Called fire-and-forget after each assistant turn finishes — never
-    blocks the user's response.  Failures are logged at debug level
-    only because nothing user-visible breaks if the title doesn't update.
+    Called fire-and-forget as each turn starts (*at_turn_start*, skipped
+    unless the model is a cloud one) and after it finishes —
+    never blocks the user's response. *model_id* is the model the turn runs
+    on, so a local chat is never titled by a cloud model. A failure is logged
+    with its reason, and the chat keeps its provisional title until a later
+    turn's try succeeds.
     """
-    if not model_id:
-        return
     # Lookup current session.  If it's gone (deleted while we were
     # generating), bail silently.
     session = db.get_session(session_id)
@@ -765,42 +1005,92 @@ async def _maybe_update_session_title(
         return
     current_title = session.get("title") or ""
     title_is_custom = bool(session.get("title_is_custom"))
-    if not _should_retitle(current_title, title_is_custom):
-        return
+    latest_msg = user_msg
     # Name the chat after its first question, even when that turn was stopped.
     user_msg, assistant_msg = _first_exchange(db, session_id, user_msg, assistant_msg)
+    if not _should_retitle(
+        current_title, title_is_custom, _title_from_question(user_msg)
+    ):
+        return
+    if not model_id:
+        logger.info(
+            "Auto-title: no model is known for session %s's turn; keeping its title",
+            session_id[:8],
+        )
+        return
 
-    # Throttle: don't re-title if we updated within the last 30 s.
-    now = _time.monotonic()
-    with _AUTO_TITLE_LOCK:
-        last = _AUTO_TITLE_LAST_AT.get(session_id, 0.0)
-        if now - last < _AUTO_TITLE_THROTTLE_S:
-            return
-        _AUTO_TITLE_LAST_AT[session_id] = now
+    title_model = _title_model_for(model_id)
+    if not title_model:
+        return
 
-    # Use the same Lemonade endpoint the chat just used.
-    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+    from gaia.llm.lemonade_client import cloud_model_provider, resolve_lemonade_base_url
     from gaia.llm.lemonade_manager import LemonadeManager
 
+    if at_turn_start and not cloud_model_provider(title_model):
+        return
+    # Use the same Lemonade endpoint the chat just used.
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
-    new_title = await _generate_session_title(
-        base_url=base_url,
-        model_id=_title_model_for(model_id),
-        user_msg=user_msg,
-        assistant_msg=assistant_msg,
-    )
-    if not new_title or new_title.lower() == current_title.lower():
+
+    with _AUTO_TITLE_LOCK:
+        if (
+            session_id in _AUTO_TITLE_RUNNING
+            or session_id in _AUTO_TITLE_SETTLED
+            or _AUTO_TITLE_FAILURES.get(session_id, 0) >= _AUTO_TITLE_MAX_TRIES
+            or _AUTO_TITLE_ATTEMPTS.get(session_id, 0) >= _AUTO_TITLE_MAX_ATTEMPTS
+        ):
+            return
+        _AUTO_TITLE_RUNNING.add(session_id)
+        _AUTO_TITLE_ATTEMPTS[session_id] = _AUTO_TITLE_ATTEMPTS.get(session_id, 0) + 1
+    try:
+        new_title = await _title_when_model_free(
+            base_url, title_model, user_msg, assistant_msg, latest_msg
+        )
+    except _NoTopicYet:
+        logger.info(
+            "Auto-title: session %s has no topic yet; its next turn tries again",
+            session_id[:8],
+        )
+        return
+    except _TitleModelBusy as exc:
+        logger.info(
+            "Auto-title: %s stayed in use; session %s's next turn tries again (%s)",
+            title_model,
+            session_id[:8],
+            exc,
+        )
+        return
+    finally:
+        with _AUTO_TITLE_LOCK:
+            _AUTO_TITLE_RUNNING.discard(session_id)
+    if new_title is None:
+        with _AUTO_TITLE_LOCK:
+            _AUTO_TITLE_FAILURES[session_id] = (
+                _AUTO_TITLE_FAILURES.get(session_id, 0) + 1
+            )
+        return
+    if _same_title(new_title, current_title):
+        # The model agrees with the name the chat has: that is its title.
+        with _AUTO_TITLE_LOCK:
+            _AUTO_TITLE_SETTLED.add(session_id)
         return
     try:
-        db.update_session(session_id, title=new_title)
+        # A no-op when the user renamed the chat while the title was written.
+        if not db.replace_auto_title(session_id, current_title, new_title):
+            return
+        with _AUTO_TITLE_LOCK:
+            _AUTO_TITLE_SETTLED.add(session_id)
         logger.info(
             "Auto-titled session %s: %r → %r",
             session_id[:8],
             current_title,
             new_title,
         )
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.debug("Auto-title DB update failed: %s", exc)
+    except (sqlite3.Error, RuntimeError) as exc:
+        logger.warning(
+            "Auto-title: could not save the title of session %s: %s",
+            session_id[:8],
+            exc,
+        )
 
 
 # Eval-only provider opt-in (plan §5c): lets `gaia eval agent` drive a
@@ -1198,6 +1488,7 @@ def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
                 "Agent cache miss (agent_type change) for session %s", session_id[:8]
             )
             return None
+        _agent_cache[session_id] = _agent_cache.pop(session_id)
         return entry["agent"]
 
 
@@ -1208,7 +1499,7 @@ def _store_agent(
     agent,
     agent_type: str = "chat",
 ) -> None:
-    """Cache *agent* for *session_id*.  Evicts the oldest entry if over the limit.
+    """Cache *agent* for *session_id*. Evicts the least-recently-used entry if full.
 
     The agent_type is stored in canonical form so a later lookup with a
     legacy alias still matches (see ``_canonical_agent_type``).
@@ -1448,9 +1739,29 @@ def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> tuple:
         return [], []
 
 
+class DocumentsFolderError(OSError):
+    """GAIA's documents folder can't be created; the message says how to fix it."""
+
+
 def _managed_documents_dir() -> Path:
-    """The Agent UI's own documents folder — the session's writable scratch space."""
-    return managed_documents_dir().resolve()
+    """The Agent UI's own documents folder — the session's writable scratch space.
+
+    Created here because every grant goes through this call: an agent told it
+    may write to a folder that doesn't exist probes the protected parent instead.
+
+    Raises:
+        DocumentsFolderError: The folder cannot be created.
+    """
+    folder = managed_documents_dir()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise DocumentsFolderError(
+            f"Cannot create GAIA's documents folder {folder}: {e}. Check that "
+            f"GAIA_HOME ({folder.parent}) is writable, or point GAIA_HOME at a "
+            f"writable directory and restart the Agent UI."
+        ) from e
+    return folder.resolve()
 
 
 def _unsafe_directory_grant_reason(directory: Path) -> str:
@@ -1475,6 +1786,20 @@ def _unsafe_directory_grant_reason(directory: Path) -> str:
     return ""
 
 
+def _session_working_directory(folders: Optional[list] = None) -> str:
+    """The folder the chat's chip shows, used for bare relative paths.
+
+    A folder the user picked for the chat comes first, so "create notes.txt"
+    lands where the chip and the agent's folder note both say it works.
+    """
+    if folders:
+        return str(Path(folders[0]).expanduser().resolve())
+    cwd = Path.cwd().resolve()
+    if _unsafe_directory_grant_reason(cwd):
+        return str(_managed_documents_dir())
+    return str(cwd)
+
+
 def _compute_allowed_paths(rag_file_paths: list) -> list:
     """Derive a session's filesystem scope from its attached documents.
 
@@ -1490,7 +1815,9 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
 
     Falls back to the current working directory only when nothing is attached,
     and refuses even that when the CWD is a root, ``$HOME``, or overlaps a
-    protected directory — a scope that broad is not a scope.
+    protected directory — a scope that broad is not a scope. When
+    ``GAIA_ALLOWED_PATHS`` shares nothing with that fallback, the folders it
+    names are the scope instead (see :func:`_env_scope_for_fallback`).
 
     Args:
         rag_file_paths: Paths of the documents attached to this session.
@@ -1513,6 +1840,10 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
 
     cwd = Path.cwd().resolve()
     reason = _unsafe_directory_grant_reason(cwd)
+    fallback = [managed] if reason else sorted({managed, str(cwd)})
+    env_scope = _env_scope_for_fallback(fallback)
+    if env_scope:
+        return sorted({managed, *env_scope})
     if reason:
         logger.warning(
             "Refusing to grant this session file access to %s because %s. The "
@@ -1521,8 +1852,52 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
             cwd,
             reason,
         )
-        return [managed]
-    return sorted({managed, str(cwd)})
+    return fallback
+
+
+def _env_scope_for_fallback(fallback: list) -> list:
+    """``GAIA_ALLOWED_PATHS``'s folders, when they share nothing with *fallback*.
+
+    The setting only narrows, but narrowing a default the user never picked to
+    nothing leaves an agent that can open no file at all; the folders the user
+    did name stand in. Entries too broad to grant on their own are skipped.
+
+    Args:
+        fallback: The scope a session with no documents would otherwise get.
+
+    Returns:
+        The usable entries, or ``[]`` when the setting is unset, invalid (the
+        agent's validator, or the relay's :func:`_effective_scope`, reports
+        that), or overlaps *fallback*.
+    """
+    try:
+        ceiling = env_allowed_paths()
+    except AllowedPathsEnvError:
+        return []
+    if ceiling is None or narrow_allowed_paths(fallback, warn=False):
+        return []
+    usable = []
+    for root in ceiling:
+        reason = _unsafe_directory_grant_reason(root)
+        if reason:
+            logger.warning(
+                "Not granting GAIA_ALLOWED_PATHS entry %s because %s.", root, reason
+            )
+        else:
+            usable.append(str(root))
+    return usable
+
+
+def _effective_scope(allowed: list) -> list:
+    """*allowed* as the agent's validator will hold it under ``GAIA_ALLOWED_PATHS``.
+
+    Raises:
+        AllowedPathsEnvError: When ``GAIA_ALLOWED_PATHS`` holds an invalid
+            value. Never answered with an empty scope: a relayed sidecar need
+            not share this process's environment, so it could not say why it
+            refuses every file.
+    """
+    return narrow_allowed_paths(allowed, warn=False)
 
 
 def _with_attachments(allowed: list, attached: list) -> list:
@@ -1541,12 +1916,13 @@ def _relayed_documents(rag_file_paths: list, attached: list) -> list:
     Images are left out: the sidecar indexes what it is sent, and an image is
     read by vision, not indexed.
     """
-    from .routers.files import IMAGE_EXTENSIONS
+    from .routers.files import PREVIEWABLE_IMAGE_EXTENSIONS
 
     extra = [
         p
         for p in attached
-        if p not in rag_file_paths and Path(p).suffix.lower() not in IMAGE_EXTENSIONS
+        if p not in rag_file_paths
+        and Path(p).suffix.lower() not in PREVIEWABLE_IMAGE_EXTENSIONS
     ]
     return list(rag_file_paths) + extra
 
@@ -1570,6 +1946,7 @@ def _session_agent_kwargs(
     library_paths: list,
     allowed: list,
     session_id: str,
+    working_directory: Optional[str] = None,
     dynamic_tools: bool = False,
     memory_incognito: bool = False,
 ) -> dict:
@@ -1598,15 +1975,24 @@ def _session_agent_kwargs(
         "rag_documents": rag_file_paths,
         "library_documents": library_paths,
         "allowed_paths": allowed,
+        "working_directory": working_directory or _session_working_directory(),
         "ui_session_id": session_id,
         "dynamic_tools": dynamic_tools,
         "memory_incognito": memory_incognito,
+        "surface": "agent_ui",
     }
 
 
 def _memory_off(session: dict, db) -> bool:
     """Whether memory is off for *session*: a private chat, or memory disabled."""
     return bool(session.get("private", 0)) or not memory_enabled(db)
+
+
+def _memory_mode(session: dict, db) -> str:
+    """*session*'s memory mode for a relayed sidecar: on, private, or off."""
+    if bool(session.get("private", 0)):
+        return "private"
+    return "on" if memory_enabled(db) else "off"
 
 
 def _apply_memory_state(agent, session: dict, db) -> None:
@@ -1643,31 +2029,274 @@ def _session_mail_provider(session: dict) -> str | None:
 # before the first POST.
 
 
-_RELAY_CONTEXT_PAIRS = 5
-
-# Last history view per in-process chat session, so a model switch that hides
-# more turns is announced too.
+# Last history view per chat session, so a model switch that hides more
+# turns is announced too.
 _history_cuts: dict = {}
+# Messages each relayed chat last showed clipped, so a clip is announced once.
+_relay_clips: dict = {}
+# Each relayed chat's last context measurement, or the reason it has none.
+_relayed_contexts: dict = {}
+_relayed_contexts_lock = threading.Lock()
 
 
-def _query_context_from_history(history_pairs: list) -> list[dict]:
-    """Flatten (user, assistant) history pairs into ``QueryContextItem``-shaped
-    dicts for the sidecar's ``/query`` request body (#2109).
+def record_relayed_context(
+    session_id: str, usage: Optional[dict], reason: Optional[str]
+) -> None:
+    """Keep what a relayed turn measured, or why it has no measurement.
 
-    Mirrors the truncation the in-process chat branches already apply, so an
-    email session's context window stays comparable: last 5 pairs, 2000 chars
-    per turn.
+    A turn with neither (an error, a Stop) keeps the previous measurement.
     """
-    _MAX_CHARS = 2000
-    context: list[dict] = []
-    for user_msg, assistant_msg in history_pairs[-_RELAY_CONTEXT_PAIRS:]:
-        u = user_msg[:_MAX_CHARS]
-        a = assistant_msg[:_MAX_CHARS]
-        if len(assistant_msg) > _MAX_CHARS:
-            a += "... (truncated)"
-        context.append({"role": "user", "content": u})
-        context.append({"role": "assistant", "content": a})
+    with _relayed_contexts_lock:
+        if usage is not None:
+            _relayed_contexts[session_id] = {"usage": usage}
+        elif reason:
+            _relayed_contexts[session_id] = {"reason": reason}
+
+
+def relayed_context_reason(profile, api_version, handler) -> Optional[str]:
+    """Why a relayed turn has no measurement: an old agent, or its own error."""
+    if not context_supported(profile, api_version):
+        return profile.context_upgrade_message
+    return getattr(handler, "relay_context_error", None)
+
+
+def forget_relayed_context(session_id: str) -> None:
+    with _relayed_contexts_lock:
+        _relayed_contexts.pop(session_id, None)
+
+
+def relayed_context(session_id: str) -> Optional[dict]:
+    """``{"usage": ...}`` or ``{"reason": ...}`` for a relayed chat, else None."""
+    with _relayed_contexts_lock:
+        return _relayed_contexts.get(session_id)
+
+
+def _relayed_history(
+    history_pairs: list,
+    model_id: str | None,
+    query: str,
+    sse_handler,
+    session_id: str | None,
+) -> list[dict]:
+    """The chat's earlier turns as ``QueryContextItem`` dicts for ``/query``.
+
+    The in-process policy: whole turns, newest first, within *model_id*'s
+    history budget. A turn larger than the whole budget has its longest
+    messages cut, with a marker saying how much, and anything newly out of the
+    model's view streams a ``history_cut`` status.
+    """
+    from gaia.agents.base.history import (
+        CutReporter,
+        clip_turn,
+        relayed_history_budget,
+        select_history,
+        turn_cost,
+    )
+
+    budget = relayed_history_budget(
+        model_id, query, cloud=bool(model_id) and bool(_ui_cloud_provider(model_id))
+    )
+    turns = []
+    clipped = {}
+    clipped_tokens = {}
+    for pair, (user_msg, assistant_msg) in enumerate(history_pairs):
+        turn = [
+            {"role": "user", "content": user_msg},
+            {"role": "assistant", "content": assistant_msg},
+        ]
+        if budget > 0 and turn_cost(turn) > budget:
+            # To half, where overflow evicts down to, so the next turn keeps it.
+            fitted, clips = clip_turn(turn, budget // 2)
+            for index, cut, total in clips:
+                clipped[(pair, index)] = (cut, total)
+            if clips:
+                clipped_tokens[pair] = turn_cost(turn) - turn_cost(fitted)
+            turn = fitted
+        turns.append(turn)
+
+    cuts = []
+    reporter = (
+        _history_cuts.setdefault(session_id, CutReporter()) if session_id else None
+    )
+    context = select_history(turns, budget, cuts.append, reporter)
+
+    # select_history returns the turns' own message dicts, so identity says
+    # which clipped messages the model still sees.
+    in_view = {id(message) for message in context}
+    shown = {key for key in clipped if id(turns[key[0]][key[1]]) in in_view}
+    seen = _relay_clips.get(session_id, set()) if session_id else set()
+    if session_id:
+        _relay_clips[session_id] = shown
+    new_keys = [key for key in clipped if key in shown and key not in seen]
+    new_clips = [clipped[key] for key in new_keys]
+    notices = [cut.notice for cut in cuts]
+    if new_clips:
+        cut_chars = sum(c[0] for c in new_clips)
+        if len(new_clips) == 1:
+            notices.append(
+                f"An earlier message is too long for the model's context window, so "
+                f"the last {cut_chars:,} of its {new_clips[0][1]:,} characters are "
+                "out of its view."
+            )
+        else:
+            notices.append(
+                f"{len(new_clips)} earlier messages are too long for the model's "
+                f"context window, so {cut_chars:,} of their characters are out of "
+                "its view."
+            )
+    if notices:
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": " ".join(notices),
+                "turns": sum(cut.turns for cut in cuts),
+                "tokens": sum(cut.tokens for cut in cuts)
+                + sum(clipped_tokens[pair] for pair in {key[0] for key in new_keys}),
+            }
+        )
     return context
+
+
+def _relayed_turns(
+    turns: list,
+    model_id: str | None,
+    query: str,
+    sse_handler,
+    session_id: str | None,
+) -> list:
+    """The chat's recorded turns that fit *model_id*'s history budget, kept whole.
+
+    A turn larger than the whole budget is sent shortened (#5864); turns newly
+    out of the model's view stream a ``history_cut`` status.
+    """
+    from gaia.agents.base.history import CutReporter, fit_turns, relayed_history_budget
+
+    budget = relayed_history_budget(
+        model_id, query, cloud=bool(model_id) and bool(_ui_cloud_provider(model_id))
+    )
+    reporter = (
+        _history_cuts.setdefault(session_id, CutReporter()) if session_id else None
+    )
+
+    def on_cut(cut) -> None:
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": cut.notice,
+                "turns": cut.turns,
+                "tokens": cut.tokens,
+            }
+        )
+
+    return fit_turns(turns, budget, on_cut, reporter)
+
+
+#: What a stopped turn's reply is saved as when it wrote no text.
+_CANCELLED_REPLY = "Cancelled."
+
+# A stopped or cut-off reply reads to the model as withdrawn; left blank, the
+# model takes the request as still pending and answers it next turn.
+_STOPPED_REPLY_FOR_MODEL = (
+    "(The user stopped this reply before it finished. Don't continue it "
+    "unless they ask again.)"
+)
+_CUT_OFF_REPLY_FOR_MODEL = (
+    "(This reply was cut off before it finished. Don't continue it unless "
+    "the user asks again.)"
+)
+
+
+def _withdrawn_reply(content: str) -> Optional[str]:
+    """The model's view of a stopped or cut-off reply; None for any other."""
+    from .restart_recovery import (
+        CANCELLED_TURN_NOTICE,
+        ENDED_WITHOUT_REPLY_NOTICE,
+        INTERRUPTED_TURN_NOTICE,
+    )
+
+    text = content.strip()
+    if text == _CANCELLED_REPLY:
+        return _STOPPED_REPLY_FOR_MODEL
+    for notice in (
+        INTERRUPTED_TURN_NOTICE,
+        CANCELLED_TURN_NOTICE,
+        ENDED_WITHOUT_REPLY_NOTICE,
+    ):
+        if text.endswith(notice):
+            # Keep what it streamed and which tools it started.
+            kept = text[: -len(notice)].rstrip()
+            if not kept:
+                return _CUT_OFF_REPLY_FOR_MODEL
+            return f"{kept}\n\n{_CUT_OFF_REPLY_FOR_MODEL}"
+    return None
+
+
+def _with_final_reply(model_messages: Optional[list], reply: str) -> Optional[list]:
+    """*model_messages* with its closing answer replaced by *reply*."""
+    if not model_messages:
+        return model_messages
+    turn = [dict(m) for m in model_messages]
+    last = turn[-1]
+    if last.get("role") == "assistant" and not last.get("tool_calls"):
+        turn[-1] = {"role": "assistant", "content": reply}
+    else:
+        turn.append({"role": "assistant", "content": reply})
+    return turn
+
+
+def _marked_stopped_reply(model_messages: Optional[list]) -> Optional[str]:
+    """The closing reply of a turn stopped mid-answer, which carries the stop note."""
+    if not model_messages:
+        return None
+    last = model_messages[-1]
+    if not isinstance(last, dict) or last.get("role") != "assistant":
+        return None
+    content = last.get("content")
+    if isinstance(content, str) and content.endswith(_STOPPED_REPLY_FOR_MODEL):
+        return content
+    return None
+
+
+def model_context_messages(db, session_id: str) -> list:
+    """The session's messages as a model reads them: stopped replies withdrawn."""
+    messages = []
+    for message in db.get_context_messages(session_id):
+        if message.get("role") == "assistant":
+            reply = _withdrawn_reply(
+                message.get("content") or ""
+            ) or _marked_stopped_reply(message.get("model_messages"))
+            if reply is not None:
+                message = {
+                    **message,
+                    "content": reply,
+                    "model_messages": _with_final_reply(
+                        message.get("model_messages"), reply
+                    ),
+                }
+        messages.append(message)
+    return messages
+
+
+def model_turns(agent, db, session_id: str) -> list:
+    """The session's completed turns as *agent*'s model would be shown them."""
+    from gaia.agents.base.history import text_tool_history, transcript_turns
+
+    turns = transcript_turns(model_context_messages(db, session_id))
+    if (
+        hasattr(agent, "_uses_native_tool_calls")
+        and not agent._uses_native_tool_calls()
+    ):
+        turns = text_tool_history(turns)
+    return turns
+
+
+def cached_session_agent(session_id: str):
+    """The agent that answered this session last, or None when none is cached."""
+    with _agent_cache_lock:
+        entry = _agent_cache.get(session_id)
+        return entry["agent"] if entry is not None else None
 
 
 def _restore_model_history(
@@ -1680,18 +2309,12 @@ def _restore_model_history(
     """
     from gaia.agents.base.history import (
         CutReporter,
+        context_usage,
         history_budget,
         select_history,
-        text_tool_history,
-        transcript_turns,
     )
 
-    turns = transcript_turns(db.get_context_messages(session_id))
-    if (
-        hasattr(agent, "_uses_native_tool_calls")
-        and not agent._uses_native_tool_calls()
-    ):
-        turns = text_tool_history(turns)
+    turns = model_turns(agent, db, session_id)
 
     def on_cut(cut):
         sse_handler._emit(
@@ -1704,6 +2327,10 @@ def _restore_model_history(
             }
         )
 
+    if sse_handler is not None:
+        sse_handler._emit(
+            {"type": "context_usage", **context_usage(agent, turns, query)}
+        )
     agent.conversation_history = select_history(
         turns,
         history_budget(agent, query),
@@ -1805,6 +2432,21 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
         )
 
 
+def _refuse_internet_off(
+    sse_handler: Any, profile: Any, agent_type: str, api_version: Any
+) -> None:
+    """End an internet-off turn for a sidecar too old to be told it is offline."""
+    logger.warning(
+        "%s agent at contract %s can't take internet_off (needs %s)",
+        agent_type,
+        api_version,
+        profile.min_internet_api_version,
+    )
+    sse_handler._emit(
+        {"type": "agent_error", "content": profile.internet_upgrade_message}
+    )
+
+
 def _dispatch_sidecar_query(
     sse_handler,
     request: ChatRequest,
@@ -1813,12 +2455,50 @@ def _dispatch_sidecar_query(
     agent_type: str,
     session_id: str | None = None,
     documents: list | None = None,
+    allowed_paths: list | None = None,
+    folders: list | None = None,
+    withheld: list | None = None,
+    working_directory: str | None = None,
+    memory: str = "on",
+    record_followup: Callable[[str], None] | None = None,
+    internet_off: bool = False,
+    hold_internet_off: Callable[[], ContextManager[bool]] | None = None,
+    recording: TurnRecording | None = None,
+    max_steps: int | None = None,
+    turns: list | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
+
+    *record_followup* saves a message the user added mid-turn to the chat. A
+    sidecar that takes such messages gets them while it runs; otherwise the
+    chat is told up front, so it does not offer to add one.
 
     *documents* are the session's attached file paths. A sidecar that takes
     them gets them on every turn; one that should but is too old to stops
     the turn with an upgrade message rather than answer without them.
+
+    *allowed_paths* is the chat's computed file scope. A sidecar that takes it
+    gets it with ``GAIA_ALLOWED_PATHS`` already applied — the sidecar process
+    need not share this one's environment — so it works where the UI says.
+
+    *folders* are the folders the user added to the chat. They join the scope;
+    a sidecar too old to take a scope stops the turn rather than answer
+    without them. *withheld* are paths the user took away from the chat; an
+    allowed-paths list can't express them, so a chat with any stops the turn
+    rather than hand the sidecar what the user removed.
+
+    *memory* is the chat's memory mode (:func:`_memory_mode`). Likewise, a
+    private or memory-off turn is stopped rather than sent to a sidecar that
+    keeps memory but cannot be told not to save.
+
+    *internet_off* is the chat's Internet switch. Likewise, an internet-off turn
+    is stopped rather than sent to a sidecar that could go online because it is
+    too old to be told not to. *hold_internet_off* re-reads it once the turn has
+    started (``relay_query``), so a switch flipped meanwhile still reaches it.
+
+    *recording* is the turn's undo recording. A sidecar that takes it records
+    its own file changes under a turn of this chat, which is where Changes,
+    Outputs and Undo read them.
 
     Self-contained: every path here either relays the sidecar's ``/query``
     loop to completion or emits a terminal SSE error and returns. The CALLER
@@ -1826,14 +2506,17 @@ def _dispatch_sidecar_query(
     immediately after calling this — it never falls through to the shared
     agent trunk, which assumes a constructed in-process ``agent`` and calls
     ``agent.process_query``/``_maybe_load_expected_model``. The sidecar owns
-    its own model lifecycle; nothing about Lemonade ctx/model selection
-    happens here.
+    its own model lifecycle; nothing here loads or selects a model. The
+    model's window is only read, to size the earlier turns sent with the query.
 
     Every exception the sidecar manager/proxy can raise is caught HERE and
     turned into a terminal SSE error — never left to reach
     ``_classify_chat_exception``, whose substring matching would misclassify
     a sidecar connection error as a Lemonade error and show the wrong remedy.
     """
+    from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_client import LemonadeClientError
+    from gaia.llm.model_fit import ModelFitError
     from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.email_sidecar.errors import SidecarError
     from gaia.ui.email_sidecar.relay import relay_query
@@ -1851,8 +2534,19 @@ def _dispatch_sidecar_query(
     try:
         handle = daemon_client.acquire_handle(agent_type)
     except SidecarError as exc:
-        sse_handler._emit({"type": "agent_error", "content": str(exc)})
+        # The daemon's text names its internals and can carry a traceback.
+        logger.error("chat: could not start the %s agent: %s", agent_type, exc)
+        sse_handler._emit(
+            {"type": "agent_error", "content": profile.start_failed_text(exc.kind)}
+        )
         return
+
+    from gaia.daemon.client import deferred_restart_notice
+
+    # An update is installed but the daemon waits for other work to finish.
+    notice = deferred_restart_notice()
+    if notice:
+        sse_handler._emit({"type": "status", "status": "info", "message": notice})
 
     if not api_version_supported(profile, handle.api_version):
         sse_handler._emit(
@@ -1863,11 +2557,83 @@ def _dispatch_sidecar_query(
     relayed_documents = None
     if documents and profile.min_documents_api_version is not None:
         if not documents_supported(profile, handle.api_version):
+            logger.warning(
+                "%s agent at contract %s can't read documents (needs %s)",
+                agent_type,
+                handle.api_version,
+                profile.min_documents_api_version,
+            )
             sse_handler._emit(
                 {"type": "agent_error", "content": profile.documents_upgrade_message}
             )
             return
         relayed_documents = [str(Path(p).resolve()) for p in documents]
+
+    if withheld:
+        logger.warning(
+            "%s chat %s has withheld paths a relayed agent can't be held to",
+            agent_type,
+            (session_id or "")[:8],
+        )
+        sse_handler._emit({"type": "agent_error", "content": withheld_refusal()})
+        return
+
+    takes_scope = scope_supported(profile, handle.api_version)
+    if folders and not takes_scope:
+        logger.warning(
+            "%s agent at contract %s can't be given folders (needs %s)",
+            agent_type,
+            handle.api_version,
+            profile.min_scope_api_version,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": folders_refusal(agent_type)}
+        )
+        return
+    query = with_folder_note(request.message, folders or [])
+
+    relayed_scope = None
+    if allowed_paths is not None and takes_scope:
+        try:
+            relayed_scope = _effective_scope(sorted({*allowed_paths, *(folders or [])}))
+        except AllowedPathsEnvError as exc:
+            # In process, the agent's validator raises this same error. The
+            # sidecar may not see this environment, so say it here instead of
+            # sending a scope that refuses every file without saying why.
+            sse_handler._emit({"type": "agent_error", "content": str(exc)})
+            return
+
+    relayed_working_directory = None
+    if working_directory is not None and working_directory_supported(
+        profile, handle.api_version
+    ):
+        relayed_working_directory = working_directory
+
+    relayed_memory = None
+    if memory_supported(profile, handle.api_version):
+        relayed_memory = memory
+    elif memory != "on":
+        logger.warning(
+            "%s agent at contract %s can't take memory=%s",
+            agent_type,
+            handle.api_version,
+            memory,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": profile.memory_upgrade_message}
+        )
+        return
+
+    relayed_internet_off = None
+    if profile.min_internet_api_version is not None:
+        if internet_supported(profile, handle.api_version):
+            relayed_internet_off = internet_off
+        elif internet_off:
+            _refuse_internet_off(sse_handler, profile, agent_type, handle.api_version)
+            return
+    ignores_internet = (
+        profile.min_internet_api_version is not None and relayed_internet_off is None
+    )
 
     proxy = handle.proxy()
 
@@ -1876,10 +2642,24 @@ def _dispatch_sidecar_query(
 
     # First-turn-per-session readiness check (#2101 lesson): a 503 from
     # /v1/<agent>/init is contract ("not ready yet"), not a transport failure.
+    import requests
+
     try:
         status_code, init_body = proxy.init()
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
+        return
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        # The agent stopped answering (crashed, hung or shutting down): not the model server.
+        logger.warning(
+            "chat: %s agent at %s did not answer its readiness check: %s",
+            agent_type,
+            proxy.base_url,
+            exc,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": profile.start_failed_text()}
+        )
         return
     if (
         status_code != 200
@@ -1922,46 +2702,141 @@ def _dispatch_sidecar_query(
     if sse_handler.cancelled.is_set():
         return
 
-    context = _query_context_from_history(history_pairs)
-    if len(history_pairs) == _RELAY_CONTEXT_PAIRS + 1:
-        from gaia.agents.base.turn_metrics import count_tokens
-
-        # The window slides from here on; say so once, when it first does.
+    # A sidecar that takes recorded turns sees earlier tool calls; an older
+    # one gets the text pairs. Both are fitted here, and the sidecar re-fits.
+    relayed_turns = (
+        turns
+        if turns is not None and turns_supported(profile, handle.api_version)
+        else None
+    )
+    context: list = []
+    try:
+        if relayed_turns is None:
+            context = _relayed_history(
+                history_pairs, model_id, query, sse_handler, session_id
+            )
+        else:
+            relayed_turns = _relayed_turns(
+                relayed_turns, model_id, query, sse_handler, session_id
+            )
+    except (LemonadeClientError, ModelFitError, GaiaConfigError) as exc:
         sse_handler._emit(
             {
-                "type": "status",
-                "status": "history_cut",
-                "message": (
-                    "Older messages are now out of the model's view: this agent "
-                    f"sees the last {_RELAY_CONTEXT_PAIRS} exchanges of the chat."
-                ),
-                "turns": 1,
-                "tokens": count_tokens(
-                    json.dumps(list(history_pairs[0]), ensure_ascii=False)
+                "type": "agent_error",
+                "content": (
+                    "Could not size this chat's earlier messages to the model's "
+                    f"context window: {exc}"
                 ),
             }
         )
+        return
+
+    from gaia.ui.email_sidecar import grants as relayed_grants
     from gaia.ui.email_sidecar.profiles import full_access_supported
 
-    relay_query(
-        sse_handler,
-        proxy,
-        query=request.message,
-        context=context,
-        model_id=model_id,
-        # The chat's own mode, read per turn: the in-process path applies it
-        # to its handler, the relayed one to the sidecar session.
-        full_access=(
-            session_permissions.for_session(session_id).mode
-            == session_permissions.MODE_FULL_ACCESS
-            if session_id and full_access_supported(profile, handle.api_version)
-            else None
-        ),
-        profile=profile,
-        session_id=session_id,
-        answers_confirmations=confirmations_supported(profile, handle.api_version),
-        documents=relayed_documents,
+    answers_confirmations = confirmations_supported(profile, handle.api_version)
+    offers_always = bool(
+        session_id
+        and answers_confirmations
+        and grants_supported(profile, handle.api_version)
     )
+    if offers_always:
+        try:
+            relayed_grants.reconcile(proxy, session_id)
+        except SidecarError as exc:
+            sse_handler._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        f"Couldn't check what the {profile.display_name} agent "
+                        f"may do without asking in this chat, so this turn was "
+                        f"stopped: {exc}. Send the message again; if it keeps "
+                        "failing, restart the agent from its card."
+                    ),
+                }
+            )
+            return
+
+    run_id = str(uuid.uuid4())
+    inbox = None
+    if (
+        session_id
+        and record_followup is not None
+        and followups_supported(profile, handle.api_version)
+    ):
+
+        def _followup_taken(text: str) -> None:
+            record_followup(text)
+            sse_handler._emit({"type": "followup_taken", "text": text})
+
+        inbox = followups.open_relay_inbox(
+            session_id,
+            lambda text: proxy.followup(run_id, text),
+            _followup_taken,
+        )
+    else:
+        sse_handler._emit({"type": "followup_unavailable"})
+    try:
+        if ignores_internet and hold_internet_off is not None:
+            # Read under the switch's lock, so a later flip to off ends this turn.
+            with hold_internet_off() as internet_off_now:
+                if internet_off_now:
+                    _refuse_internet_off(
+                        sse_handler, profile, agent_type, handle.api_version
+                    )
+                    return
+                sse_handler.relay_ignores_internet = True
+        relay_query(
+            sse_handler,
+            proxy,
+            query=query,
+            run_id=run_id,
+            context=context,
+            model_id=model_id,
+            # The chat's own mode, read per turn: the in-process path applies it
+            # to its handler, the relayed one to the sidecar session.
+            full_access=(
+                session_permissions.for_session(session_id).mode
+                == session_permissions.MODE_FULL_ACCESS
+                if session_id and full_access_supported(profile, handle.api_version)
+                else None
+            ),
+            profile=profile,
+            session_id=session_id,
+            answers_confirmations=answers_confirmations,
+            offers_always=offers_always,
+            documents=relayed_documents,
+            allowed_paths=relayed_scope,
+            working_directory=relayed_working_directory,
+            memory=relayed_memory,
+            internet_off=relayed_internet_off,
+            hold_internet_off=(
+                hold_internet_off if relayed_internet_off is not None else None
+            ),
+            changes_turn_id=(
+                recording.relay()
+                if recording is not None
+                and session_id
+                and changes_supported(profile, handle.api_version)
+                else None
+            ),
+            surface=(
+                "agent_ui" if surface_supported(profile, handle.api_version) else None
+            ),
+            reasoning=reasoning_supported(profile, handle.api_version),
+            max_steps=max_steps,
+            turns=relayed_turns,
+        )
+    finally:
+        sse_handler.relay_ignores_internet = False
+        if inbox is not None:
+            followups.close_relay_inbox(session_id, inbox)
+    if session_id and profile.min_context_api_version is not None:
+        record_relayed_context(
+            session_id,
+            getattr(sse_handler, "relay_context", None),
+            relayed_context_reason(profile, handle.api_version, sse_handler),
+        )
 
 
 def _find_last_tool_step(steps: list) -> dict | None:
@@ -1972,20 +2847,27 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+def _close_reasoning(steps: list, now_ms: int) -> None:
+    """Record how long the reasoning just before the answer ran, on its last piece."""
+    run = []
+    for step in reversed(steps):
+        if step.get("type") != "thinking":
+            break
+        run.append(step)
+    if run and "latencyMs" not in run[0]:
+        run[0]["latencyMs"] = now_ms - run[-1]["timestamp"]
+        run[0]["active"] = False
+
+
 def _agent_ui_wording(text: str) -> str:
-    """Swap the agent's TUI-only "how to switch model" advice for the Agent UI's.
+    """Swap the agent's TUI-only provider advice for the Agent UI's own.
 
     The agent loop can't tell which front-end it serves (the flagship sidecar
-    answers both), so the Agent UI rewrites the one sentence it owns here.
+    answers both), so the Agent UI rewrites the sentences it owns here.
     """
-    from gaia.llm.providers.lemonade import (
-        AGENT_UI_MODEL_SWITCH_HINT,
-        TUI_MODEL_SWITCH_HINT,
-    )
+    from gaia.llm.surface_hints import surface_wording
 
-    if not text or TUI_MODEL_SWITCH_HINT not in text:
-        return text
-    return text.replace(TUI_MODEL_SWITCH_HINT, AGENT_UI_MODEL_SWITCH_HINT)
+    return surface_wording(text, "agent_ui")
 
 
 def _echoes_failed_tool(event: dict, steps: list) -> bool:
@@ -2146,37 +3028,118 @@ def _canonicalize_user_input_request(event: dict) -> dict:
     }
 
 
-# Remediation copy for a turn that produced no answer at all — reserved for a
-# genuine backend failure, never a deliberate cancel or an intentionally-empty
-# final (see _empty_answer_outcome).
-_EMPTY_ANSWER_LEMONADE_MSG = (
-    "I wasn't able to generate a response. Please make sure Lemonade Server "
-    "is running and try again."
+_EMPTY_MODEL_ANSWER_MSG = (
+    "The model returned an empty answer. Send your message again, or try "
+    "another model."
 )
 
 
+_NO_ANSWER_AFTER_TOOLS_MSG = (
+    "GAIA ran its tools but didn't write an answer. Send your message again, "
+    "or try another model."
+)
+
+
+async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str]:
+    """Why the backend left a turn with no answer, or None when it looks fine.
+
+    Asks Lemonade's ``/health`` so a working server is never blamed for a
+    model that simply wrote nothing. Returns user-facing copy naming the
+    cause: the server is unreachable or unhealthy, or the model isn't loaded.
+    """
+    if _eval_provider_kwargs():
+        return None
+    import httpx
+
+    from gaia.llm.lemonade_client import (
+        _model_ids_match,
+        cloud_model_provider,
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+        resolve_lemonade_base_url,
+    )
+    from gaia.llm.lemonade_launcher import describe_start_hint
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{base_url}/health", headers=headers)
+        health = resp.json() if resp.status_code == 200 else None
+    except (httpx.HTTPError, ValueError) as e:
+        logger.warning("Empty-answer health check of %s failed: %s", base_url, e)
+        return (
+            f"No answer came back because Lemonade Server at {base_url} isn't "
+            f"responding. {describe_start_hint().instruction}"
+        )
+    if resp.status_code in (401, 403):
+        # Running, so the start hint would be wrong; the key is what to fix.
+        return (
+            f"No answer came back because Lemonade Server at {base_url} "
+            f"rejected GAIA's API key (HTTP {resp.status_code}). Check that "
+            "LEMONADE_API_KEY matches the key the server was started with."
+        )
+    if not isinstance(health, dict):
+        return (
+            f"No answer came back because Lemonade Server at {base_url} failed "
+            f"its health check (HTTP {resp.status_code}). "
+            f"{describe_start_hint().instruction}"
+        )
+    if not model_id or cloud_model_provider(model_id):
+        return None
+    loaded = health.get("all_models_loaded") or []
+    if any(
+        isinstance(m, dict) and _model_ids_match(m.get("model_name"), model_id)
+        for m in loaded
+    ):
+        return None
+    return (
+        f"Lemonade Server is running, but {model_id} isn't loaded, so no answer "
+        "came back. Send your message again to reload it, or try another model."
+    )
+
+
 def _empty_answer_outcome(
-    turn_cancelled: bool, has_steps: bool
+    turn_cancelled: bool,
+    has_steps: bool,
+    has_card: bool,
+    backend_problem: Optional[str] = None,
+    turn_reported_error: bool = False,
 ) -> tuple[str, str, bool]:
     """Classify a chat turn that ended with no answer text, for the shared
     persistence tail's empty-``full_response`` branch.
 
-    Returns ``(content, sse_type, keep_steps)``:
+    Returns ``(content, sse_type, keep_steps)``; ``sse_type`` is ``done``,
+    ``failed`` (a ``done`` event marked failed) or ``error``:
       * cancelled → ``("Cancelled.", "done", True)`` — a user Stop, not a
         failure; keep the tool steps executed before the cancel and don't
         blame Lemonade.
-      * no answer but steps/cards were produced → ``("", "done", True)`` — a
-        legitimately-empty final (e.g. the whole final turn was an echoed
-        render card the echo-guard stripped to empty); persist empty content
-        but keep the steps/cards so nothing is lost on rehydration.
-      * genuinely nothing → ``(<lemonade copy>, "error", False)`` — no answer,
-        no cancel, no steps: the only case that warrants the Lemonade copy.
+      * a render card was shown → ``("", "done", True)`` — the card is the
+        answer (e.g. an echoed card the echo-guard stripped to empty); keep
+        the steps so the card survives a reload.
+      * steps but no card → ``(<no-answer copy>, "failed", True)`` — the agent
+        ran tools and ended without answering; say so and keep the steps.
+        *has_steps* counts tool steps only, never thinking, plan or error steps.
+      * no tool ran but the turn reported an error → ``("", "failed", True)``
+        — the error step already says what went wrong (e.g. "GAIA couldn't
+        start its agent"); keep it and add no second, contradicting line.
+      * nothing, backend at fault → ``(backend_problem, "error", False)`` —
+        the only case that names Lemonade (see _empty_answer_backend_problem).
+      * nothing, backend fine → ``(<empty-model copy>, "failed", False)`` —
+        the model answered with nothing.
     """
     if turn_cancelled:
-        return "Cancelled.", "done", True
-    if has_steps:
+        return _CANCELLED_REPLY, "done", True
+    if has_card:
         return "", "done", True
-    return _EMPTY_ANSWER_LEMONADE_MSG, "error", False
+    if has_steps:
+        return _NO_ANSWER_AFTER_TOOLS_MSG, "failed", True
+    if turn_reported_error:
+        return "", "failed", True
+    if backend_problem:
+        return backend_problem, "error", False
+    return _EMPTY_MODEL_ANSWER_MSG, "failed", False
 
 
 def _turn_inference_stats(
@@ -2218,9 +3181,16 @@ def _agent_location(agent) -> InferenceLocation | None:
 
 
 def _turn_summary(
-    sse_handler, agent, message: str, answer_event: Optional[dict]
+    sse_handler,
+    agent,
+    message: str,
+    answer_event: Optional[dict],
+    relayed_location: InferenceLocation | None = None,
 ) -> dict:
     """The side rail's account of this turn (see :mod:`gaia.ui.turn_summary`).
+
+    *relayed_location* is where a turn with no in-process agent ran: a sidecar
+    turn answered by the model the chat named.
 
     A failure here becomes an ``error`` the rail shows, so it never costs the
     user the answer it describes.
@@ -2228,7 +3198,9 @@ def _turn_summary(
     try:
         evidence = getattr(agent, "_completion_evidence", None)
         return sse_handler.turn_ledger.summary(
-            location=_agent_location(agent) if agent is not None else None,
+            location=(
+                _agent_location(agent) if agent is not None else relayed_location
+            ),
             written_files=evidence.written_files() if evidence is not None else (),
             display_names=upload_display_names(message),
             usage=answer_event,
@@ -2265,6 +3237,33 @@ def _cloud_place(loc: InferenceLocation) -> Optional[str]:
     return f"via {loc.display}" if loc.remote else None
 
 
+def turn_takes_the_line(
+    db: ChatDatabase, session: dict, agent_type: Optional[str] = None
+) -> bool:
+    """Whether a turn in *session* waits in ``turn_queue`` for the local model.
+
+    A turn answered by a cloud model doesn't: the line protects the one local
+    chat model and its prompt cache, which a cloud turn never touches. What a
+    cloud turn does run locally (the embedder, a vision model) is leased from
+    the daemon's broker like every other caller, and the tool registry has
+    its own lock.
+    """
+    agent_type = agent_type or session.get("agent_type") or "chat"
+    try:
+        model_id, _ctx = resolve_session_model(
+            session, agent_type, db.get_setting("custom_model"), _agent_registry
+        )
+        return not (model_id and _turn_location(model_id).remote)
+    except Exception as exc:  # pylint: disable=broad-except
+        # The turn resolves its model again and reports this error itself.
+        logger.warning(
+            "Could not tell where session %s's turn runs, so it waits in line: %s",
+            session.get("id", "?")[:8],
+            exc,
+        )
+        return True
+
+
 async def _local_place(model_id: str, client, base_url: str, headers: dict) -> str:
     """Where a local turn ran: the device Lemonade reports for the model.
 
@@ -2287,22 +3286,47 @@ async def _local_place(model_id: str, client, base_url: str, headers: dict) -> s
     return f"on your {' and '.join(chips)}" if chips else "on this PC"
 
 
+def _turn_failure(
+    answer_event: Optional[dict],
+    fatal_error: Optional[str],
+    result: Any,
+) -> Tuple[bool, Optional[str]]:
+    """``(failed, explanation)`` for a turn: did a model failure end it?
+
+    Three sources, one per way the news arrives: the agent's answer event
+    (in-process or relayed ``final``), a relayed sidecar's terminal error, and
+    the in-process agent's own result. *explanation* is the text to show when
+    no answer event carried it.
+    """
+    if isinstance(answer_event, dict) and answer_event.get("failed"):
+        return True, None
+    if fatal_error is not None:
+        return True, fatal_error
+    if isinstance(result, dict) and result.get("model_failed"):
+        return True, None
+    return False, None
+
+
 def _done_event(
     msg_id: int,
     content: str,
     turn_cancelled: bool,
     stats: Optional[dict] = None,
     turn_summary: Optional[dict] = None,
+    failed: bool = False,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
     ``cancelled`` is set only when the user's Stop actually ended the run, so
     the UI labels the turn from what happened rather than from the click — a
     Stop that lands after the agent already answered stays an ordinary turn.
+    ``failed`` marks a turn a model failure ended; its content explains why.
     """
     event: dict = {"type": "done", "message_id": msg_id, "content": content}
     if turn_cancelled:
         event["cancelled"] = True
+    elif failed:
+        event["failed"] = True
     if stats:
         event["stats"] = stats
     if turn_summary:
@@ -2319,7 +3343,9 @@ def _done_event(
 _PREFLIGHT_LOAD_TIMEOUT_S = 120
 
 
-def _preflight_load(model_id: str, sse_handler, stopped) -> None:
+def _preflight_load(
+    model_id: str, sse_handler, stopped, loads: Optional[list] = None
+) -> None:
     """Ensure a text-generation LLM is active *with the expected model
     name and a 32K+ context window* before issuing a chat completion.
 
@@ -2351,6 +3377,9 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
     unloaded. When the model won't fit, only models this process loaded are
     unloaded to make room; otherwise the load fails loudly. A Stop
     (``sse_handler.cancelled``) seen after a wait means nothing is loaded.
+
+    A load that happens is appended to *loads*, when given, as
+    ``{"model", "seconds", "replaced"}``.
 
     Note: there is a small TOCTOU window between this check and the
     actual chat request. An eviction in that window fails the turn with an
@@ -2496,6 +3525,8 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                         return
 
                 client = LemonadeClient(verbose=False)
+                load_started = _time.monotonic()
+                replaced = []
                 # A server the user runs keeps its models: GAIA only loads there.
                 may_unload = not is_users_server(base_url)
                 if may_unload:
@@ -2522,7 +3553,8 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                                 "Settings -> Load."
                             )
                         client.unload_model(m["model_name"], ignore_if_not_loaded=True)
-                _load_making_room(
+                        replaced.append(m["model_name"])
+                replaced += _load_making_room(
                     client,
                     model_id,
                     required_ctx,
@@ -2530,6 +3562,14 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                     may_unload,
                     sse_handler,
                 )
+                if loads is not None:
+                    loads.append(
+                        {
+                            "model": model_id,
+                            "seconds": round(_time.monotonic() - load_started, 3),
+                            "replaced": replaced,
+                        }
+                    )
             finally:
                 model_load_lock.release()
     except InsufficientMemoryError as exc:
@@ -2564,14 +3604,14 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
 
 
 def _maybe_load_expected_model(
-    model_id: str, sse_handler=None, cancel_event=None
+    model_id: str, sse_handler=None, cancel_event=None, loads: Optional[list] = None
 ) -> None:
     """Load *model_id* at the window a turn needs before it is queried.
 
-    See :func:`_preflight_load` for what is checked, loaded and raised. A
-    turn stopped while this waits (``sse_handler.cancelled`` for Stop, or the
-    turn's own *cancel_event*, which teardown and the idle stop set) loads
-    nothing: whatever the wait raised then, the stop is why, so this returns
+    See :func:`_preflight_load` for what is checked, loaded, recorded in
+    *loads* and raised. A turn stopped while this waits
+    (``sse_handler.cancelled`` for Stop, or the turn's own *cancel_event*,
+    which teardown and the idle stop set) loads nothing: whatever the wait raised then, the stop is why, so this returns
     and the caller sees the turn as stopped.
     """
 
@@ -2581,7 +3621,7 @@ def _maybe_load_expected_model(
         )
 
     try:
-        _preflight_load(model_id, sse_handler, stopped)
+        _preflight_load(model_id, sse_handler, stopped, loads)
     except Exception as exc:
         if not stopped():
             raise
@@ -2674,6 +3714,8 @@ async def _get_chat_response(
         model_id, device_ctx = resolve_session_model(
             session, agent_type, custom_model, registry
         )
+        if turn_box is not None:
+            turn_box["model"] = model_id
         refusal = spending.limit_refusal(db, model_id)
         if refusal:
             return refusal
@@ -2682,6 +3724,9 @@ async def _get_chat_response(
         # Reuse what a running warm-up is caching rather than read it twice.
         wait_for_warm_up()
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
+        working_directory = _session_working_directory(
+            load_environment(db, session_id)["folders"]
+        )
 
         if cached_agent is not None:
             from gaia.agents.base.console import SilentConsole
@@ -2692,6 +3737,8 @@ async def _get_chat_response(
             with writing_tool_registry():
                 agent._register_tools()
             _extend_cached_scope(agent, allowed)
+            if hasattr(agent, "config"):
+                agent.config.working_directory = working_directory
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
                 for fpath in new_paths:
@@ -2777,6 +3824,7 @@ async def _get_chat_response(
                             library_paths=library_paths,
                             allowed=allowed,
                             session_id=session_id,
+                            working_directory=working_directory,
                             dynamic_tools=dynamic_tools,
                             memory_incognito=_memory_off(session, db),
                         ),
@@ -2804,8 +3852,12 @@ async def _get_chat_response(
                 _register_agent_memory_ops(agent)
 
         _apply_memory_state(agent, session, db)
+        apply_environment(agent, session_id, db)
+        query = with_folder_note(
+            request.message, load_environment(db, session_id)["folders"]
+        )
 
-        _restore_model_history(agent, db, session_id, request.message)
+        _restore_model_history(agent, db, session_id, query)
 
         # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
         # omitted, the agent's __init__ set model_id via kwargs.setdefault —
@@ -2827,7 +3879,7 @@ async def _get_chat_response(
         try:
             # Never re-run on failure: tools the turn already ran would run
             # again. The error says whether sending it again can help.
-            result = agent.process_query(request.message)
+            result = agent.process_query(query)
         finally:
             agent.console = activity._inner
             warning = recording.close()
@@ -2942,8 +3994,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     from gaia.ui.sse_handler import SSEOutputHandler
 
     session_id = request.session_id
+    turn_started = _time.monotonic()
     sse_handler = None
     producer = None
+    # Bound before the try so the error path can link a recording on any failure.
+    turn_box: dict = {}
     cleanup_done = False
     # When the turn was stopped and its thread got its grace period already.
     stop_grace_spent = False
@@ -3017,14 +4072,18 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         # A relayed sidecar only sees the transcript it is sent; in-process
         # agents restore traces below.
-        history_pairs = (
-            _build_history_pairs(db.get_context_messages(request.session_id))
+        relay_messages = (
+            model_context_messages(db, request.session_id)
             if _should_relay_to_sidecar(
                 request.agent_type or session.get("agent_type") or "chat",
                 _agent_registry,
             )
             else []
         )
+        from gaia.agents.base.history import transcript_turns
+
+        history_pairs = _build_history_pairs(relay_messages)
+        relay_turns = transcript_turns(relay_messages)
 
         # Resolve document IDs to file paths.
         # Session-specific docs get auto-indexed; library docs are available
@@ -3057,12 +4116,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Beta dynamic tool loader (#1798). Effective only on the doc agent;
         # GAIA_DYNAMIC_TOOLS still overrides per ChatAgent's resolver.
         dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
-        # ``session_model`` is the model_id we expect to drive the
-        # session with, captured here in the outer scope so the
-        # auto-title background task at the bottom of this generator
-        # can read it without needing access to the inner producer
-        # thread's ``agent`` variable.
-        session_model = model_id
 
         stored_agent_type = session.get("agent_type") or "chat"
         agent_type = request.agent_type or stored_agent_type
@@ -3104,15 +4157,26 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         refusal = spending.limit_refusal(db, model_id)
         if refusal:
             # Saved as the reply, so it stays in the chat and reads as an answer, not a crash.
-            msg_id = db.add_message(session_id, "assistant", refusal)
+            msg_id = db.add_message(session_id, "assistant", refusal, ends_turn=True)
             yield f"data: {json.dumps({'type': 'answer', 'content': refusal})}\n\n"
             yield f"data: {json.dumps(_done_event(msg_id, refusal, False))}\n\n"
             return
+        _cancel_pending_title(session_id)
+        _spawn_background(
+            _maybe_update_session_title(
+                db=db,
+                session_id=session_id,
+                user_msg=request.message,
+                assistant_msg="",
+                model_id=model_id,
+                at_turn_start=True,
+            )
+        )
 
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
-        result_holder = {"answer": "", "error": None}
-        turn_box: dict = {}
+        result_holder = {"answer": "", "error": None, "model_loads": []}
+        inbox_holder: dict = {}
 
         def _run_agent():
             recording = TurnRecording(session_id)
@@ -3126,10 +4190,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
                 cached_agent = _get_cached_agent(session_id, model_id, agent_type)
+                working_directory = _session_working_directory(
+                    load_environment(db, session_id)["folders"]
+                )
 
                 if cached_agent is not None:
                     # -- Cache hit --
                     agent = cached_agent
+                    if hasattr(agent, "config"):
+                        agent.config.working_directory = working_directory
                     agent.console = sse_handler
                     # A non-streaming turn may have built this agent.
                     agent.streaming = True
@@ -3196,6 +4265,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         library_paths=library_paths,
                         allowed=allowed,
                         session_id=session_id,
+                        working_directory=working_directory,
                         dynamic_tools=dynamic_tools,
                         memory_incognito=_memory_off(session, db),
                     )
@@ -3296,6 +4366,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         agent_type,
                         session_id[:8],
                     )
+                    relayed_env = load_environment(db, session_id)
                     _dispatch_sidecar_query(
                         sse_handler,
                         request,
@@ -3304,6 +4375,23 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         agent_type,
                         session_id=session_id,
                         documents=_relayed_documents(rag_file_paths, attached),
+                        allowed_paths=allowed,
+                        folders=relayed_env["folders"],
+                        withheld=relayed_env["withheld"],
+                        working_directory=working_directory,
+                        memory=_memory_mode(session, db),
+                        record_followup=lambda text: db.add_message(
+                            session_id, "user", text
+                        ),
+                        internet_off=relayed_env["internet_off"],
+                        hold_internet_off=functools.partial(
+                            held_internet_off, db, session_id
+                        ),
+                        recording=recording,
+                        turns=relay_turns,
+                    )
+                    result_holder["model_messages"] = getattr(
+                        sse_handler, "relayed_model_messages", None
                     )
                     return
 
@@ -3364,6 +4452,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                     library_paths=library_paths,
                                     allowed=allowed,
                                     session_id=session_id,
+                                    working_directory=working_directory,
                                     dynamic_tools=dynamic_tools,
                                     memory_incognito=_memory_off(session, db),
                                 ),
@@ -3413,14 +4502,25 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         sse_handler._emit({"type": "mcp_status", "servers": mcp_report})
 
                 _apply_memory_state(agent, session, db)
+                apply_environment(agent, request.session_id, db)
+                query = with_folder_note(
+                    request.message, load_environment(db, session_id)["folders"]
+                )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
                     return
 
-                _restore_model_history(
-                    agent, db, session_id, request.message, sse_handler
+                def _followup_taken(text):
+                    db.add_message(session_id, "user", text)
+                    sse_handler._emit({"type": "followup_taken", "text": text})
+
+                inbox_holder["agent"] = agent
+                inbox_holder["inbox"] = followups.open_inbox(
+                    session_id, agent, _followup_taken
                 )
+
+                _restore_model_history(agent, db, session_id, query, sse_handler)
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -3440,7 +4540,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # invisible pre-construction. Using agent.model_id preserves the existing
                 # 100-900s silent-hang protection for all code paths including setdefault.
                 _maybe_load_expected_model(
-                    _effective_model(agent, model_id), sse_handler, cancel_event
+                    _effective_model(agent, model_id),
+                    sse_handler,
+                    cancel_event,
+                    loads=result_holder["model_loads"],
                 )
                 # Stopped while waiting for the model: nothing was loaded,
                 # so the turn must not send its query either.
@@ -3453,13 +4556,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # and the next turn's pre-flight reloads an evicted model.
                 t_query = _time.monotonic()
                 result_holder["agent"] = agent
-                result = agent.process_query(request.message)
+                result = agent.process_query(query)
                 logger.info(
                     "PERF process_query session=%s took=%.3fs",
                     session_id[:8],
                     _time.monotonic() - t_query,
                 )
                 if isinstance(result, dict):
+                    result_holder["result"] = result
+                    result_holder["model"] = _effective_model(agent, model_id)
                     result_holder["model_messages"] = result.get("model_messages")
                     val = result.get("result")
                     result_holder["answer"] = (
@@ -3479,10 +4584,18 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # AgentSDK that wrap the original LemonadeError.
                 classified = _classify_chat_exception(e)
                 if classified is not None:
-                    result_holder["error"] = classified.user_message
+                    result_holder["error"] = _agent_ui_wording(classified.user_message)
                 else:
-                    result_holder["error"] = str(e)
+                    result_holder["error"] = _agent_ui_wording(str(e))
             finally:
+                if "inbox" in inbox_holder:
+                    untaken = followups.close_inbox(
+                        session_id, inbox_holder["agent"], inbox_holder["inbox"]
+                    )
+                    if untaken:
+                        sse_handler._emit(
+                            {"type": "followup_returned", "texts": untaken}
+                        )
                 warning = recording.close()
                 if warning:
                     sse_handler._emit(
@@ -3504,6 +4617,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Also capture agent steps for persistence
         full_response = ""
         answer_event = None
+        fatal_error = None
         captured_steps = []  # Collect agent steps for DB persistence
         persisted_policy_block_msg_id = None
         persisted_policy_block_content = None
@@ -3594,6 +4708,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     answer_event = event
                 elif event_type == "chunk":
                     full_response += event.get("content", "")
+                    _close_reasoning(
+                        captured_steps,
+                        int(asyncio.get_running_loop().time() * 1000),
+                    )
+                elif event_type == "commentary":
+                    # Those chunks narrated a tool call; the answer starts after it.
+                    full_response = ""
+                elif event_type == "agent_error" and event.get("fatal"):
+                    # A relayed sidecar's terminal error: the turn ends here.
+                    fatal_error = event.get("content") or ""
 
                 # Capture agent steps for persistence
                 if event_type == "thinking":
@@ -3608,6 +4732,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "label": "Thinking",
                             "detail": event.get("content"),
                             "active": True,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
+                elif event_type == "commentary":
+                    step_id += 1
+                    for s in captured_steps:
+                        s["active"] = False
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "commentary",
+                            "label": "Commentary",
+                            "detail": event.get("content"),
+                            "active": False,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
                     )
@@ -3626,6 +4764,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "active": True,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                             "mcpServer": event.get("mcp_server"),
+                            "mcpServerLabel": event.get("mcp_server_label"),
+                            "mcpTool": event.get("mcp_tool"),
                         }
                     )
                 elif event_type == "tool_args" and captured_steps:
@@ -3655,6 +4795,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         # Persist structured command output for terminal rendering
                         if event.get("command_output"):
                             tool_step["commandOutput"] = event["command_output"]
+                        if event.get("mcp_output"):
+                            tool_step["mcpOutput"] = event["mcp_output"]
                         # Persist file list for rich file list rendering
                         result_data = event.get("result_data", {})
                         if result_data.get("type") == "file_list":
@@ -3771,7 +4913,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 yield event_data
 
             except queue.Empty:
-                if not producer.is_alive():
+                # The agent can answer and exit between the poll and this check.
+                if not producer.is_alive() and sse_handler.event_queue.empty():
                     break
                 if sse_handler.cancelled.is_set():
                     # Stopped: give the agent a moment to wind down, no more.
@@ -3786,11 +4929,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # already sent but not yet dispatched arrive immediately.
                 if idle_cycles % 25 == 0:
                     yield ": keepalive " + "x" * 490 + "\n\n"
-                # Every 15s (75 cycles) emit a visible status so the user knows
-                # the model is still processing (prompt prefill is silent).
-                # Use status='working' so active=true; consecutive events merge
-                # into a single updating step on the frontend. A running tool
-                # shows its own timer, so the model is not the one being waited on.
+                # Every 15s (75 cycles) say the model is still processing (prompt
+                # prefill is silent). Stream readers such as the MCP server log it;
+                # the Agent UI drops it and times the wait itself. A running tool
+                # means the model is not the one being waited on.
                 if idle_cycles % 75 == 0 and not sse_handler.tool_running():
                     elapsed = int(_turn_clock() - last_event_at)
                     status_evt = json.dumps(
@@ -3840,6 +4982,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             error_data = json.dumps({"type": "error", "content": error_msg})
             yield f"data: {error_data}\n\n"
 
+        # A model failure ended the turn. The streamed text is only its opening
+        # sentence, so the message must say what happened.
+        turn_failed, failure_text = _turn_failure(
+            answer_event, fatal_error, result_holder.get("result")
+        )
+        if turn_failed and answer_event is None:
+            explained = _agent_ui_wording(failure_text or result_holder["answer"] or "")
+            if explained and explained not in full_response:
+                full_response = (
+                    f"{full_response.rstrip()}\n\n{explained}"
+                    if full_response.strip()
+                    else explained
+                )
+
         # Use agent result if no streamed answer was captured
         if not full_response and result_holder["answer"]:
             full_response = _agent_ui_wording(result_holder["answer"])
@@ -3851,29 +5007,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             full_response = idle_message
             yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
 
-        # Clean LLM output artifacts before DB storage.
-        # Apply all canonical patterns so stored content is always clean
-        # regardless of which streaming path was taken.
-        # Order matters: _clean_answer_json MUST run before _THOUGHT_JSON_SUB_RE.
-        # The base agent asks for {"thought":..., "answer":...} JSON; if that JSON
-        # leaks into full_response (e.g. streaming buffer released early), the
-        # thought-stripper would consume the entire blob including the answer,
-        # leaving an empty string.  Extracting the answer first prevents that.
+        # Clean LLM output artifacts before DB storage, whichever streaming
+        # path was taken.
         if full_response:
-            full_response = _TOOL_CALL_JSON_SUB_RE.sub("", full_response)
-            # Extract answer from {"thought":..., "answer":...} before thought stripping.
-            full_response = _clean_answer_json(full_response)
-            full_response = _THOUGHT_JSON_SUB_RE.sub("", full_response)
-            full_response = _RAG_RESULT_JSON_SUB_RE.sub("", full_response)
-            # _ANSWER_JSON_SUB_RE handles mixed content where {"answer": "..."} is
-            # embedded after plain text — strips the duplicate JSON wrapper.
-            full_response = _ANSWER_JSON_SUB_RE.sub("", full_response)
-            full_response = _fix_double_escaped(full_response)
-            # Strip trailing JSON artifact sequences (3+ closing braces = nested tool result leak)
-            full_response = _re.sub(r"\}{3,}\s*$", "", full_response).strip()
-            # Strip trailing code-fence artifacts (e.g. "}\n```" left after JSON extraction)
-            full_response = _re.sub(r"[\n\s]*`{3,}\s*$", "", full_response).strip()
-            full_response = full_response.strip()
+            full_response = clean_reply_text(full_response)
 
         # Guard: if cleaning reduced the response to JSON/code artifacts only
         # (e.g. "}", "}}", "}\n", "}\n```", backtick-only), fall back to the agent's
@@ -3954,16 +5091,58 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
             inference_stats = _turn_inference_stats(inference_stats, answer_event)
+            turn_result = result_holder.get("result")
+            if not isinstance(turn_result, dict):
+                # A relayed turn's timings come back on the sidecar's final event.
+                turn_result = getattr(sse_handler, "relay_performance", None)
+            if isinstance(turn_result, dict):
+                from .turn_insights import summarize_turn
+
+                inference_stats = dict(inference_stats or {})
+                try:
+                    inference_stats["performance"] = summarize_turn(
+                        turn_result,
+                        wall_seconds=_time.monotonic() - turn_started,
+                        model_id=result_holder.get("model") or model_id,
+                        loads=result_holder["model_loads"],
+                    )
+                except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+                    # The answer is still saved; the panel shows the turn as unmeasured.
+                    logger.warning(
+                        "Turn performance for session %s not recorded: %s",
+                        request.session_id,
+                        exc,
+                    )
             if turn_place:
                 inference_stats = {**(inference_stats or {}), "place": turn_place}
-            # Settings › Model shows each model's speed measured on this PC. Not
-            # "model": a kept Retry with… answer uses that key to name its model.
+            # Settings › Model shows each model's speed measured on this PC.
             if inference_stats is not None and model_id:
                 inference_stats["measured_model"] = model_id
+            # The model that wrote this answer, so a later model switch can't relabel it.
+            # A relayed turn has no agent here, but ran on the model it sent.
+            answered_by = result_holder.get("model") or model_id
+            if answered_by:
+                inference_stats = {**(inference_stats or {}), "model": answered_by}
             turn_summary = _turn_summary(
-                sse_handler, result_holder.get("agent"), request.message, answer_event
+                sse_handler,
+                result_holder.get("agent"),
+                request.message,
+                answer_event,
+                # A relayed turn ran on the model it sent; with none, the sidecar picked.
+                relayed_location=turn_location if model_id else None,
             )
 
+            model_messages = result_holder.get("model_messages")
+            if turn_cancelled:
+                # The model sees what was shown, marked as stopped, not a blank.
+                stopped_reply = f"{full_response}\n\n{_STOPPED_REPLY_FOR_MODEL}"
+                model_messages = _with_final_reply(model_messages, stopped_reply)
+                if not model_messages and full_response.strip():
+                    # A relayed turn records none; keep the stop note anyway.
+                    model_messages = [
+                        {"role": "user", "content": request.message},
+                        {"role": "assistant", "content": stopped_reply},
+                    ]
             msg_id = db.upsert_message(
                 request.session_id,
                 persisted_policy_block_msg_id,
@@ -3971,8 +5150,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 full_response,
                 agent_steps=captured_steps if captured_steps else None,
                 inference_stats=inference_stats,
-                model_messages=result_holder.get("model_messages"),
+                model_messages=model_messages,
                 turn_summary=turn_summary,
+                ends_turn=True,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -3982,24 +5162,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             if link_warning:
                 yield _undo_link_warning_event(link_warning)
             spending.record_turn(db, model_id, inference_stats)
-            # Fire-and-forget auto-titling: GAIA renames its own session
-            # once the response is complete. Skips Eval: titles, throttled
-            # to 30 s/session, runs on the same Lemonade slot the chat
-            # just used. Never blocks the user's response.
-            #
-            # NB: ``agent`` lives inside the producer thread's scope and
-            # isn't accessible here. We pass ``session_model`` (set
-            # before the producer started) instead — it's the same
-            # value ``_effective_model`` would have returned for the
-            # default agent factories that honour ``model_id`` kwarg.
-            _spawn_background(
+            # Fire-and-forget auto-titling, on the model this turn ran on.
+            _spawn_after_turn_title(
                 _maybe_update_session_title(
                     db=db,
                     session_id=request.session_id,
                     user_msg=request.message,
                     assistant_msg=full_response,
-                    model_id=session_model,
-                )
+                    model_id=model_id,
+                ),
+                request.session_id,
             )
             done_event = _done_event(
                 msg_id,
@@ -4007,6 +5179,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 turn_cancelled,
                 stats=inference_stats,
                 turn_summary=turn_summary,
+                failed=turn_failed,
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -4024,20 +5197,43 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 result_holder.get("error"),
                 len(captured_steps),
             )
-            # Distinguish a deliberate cancel and a legitimately-empty final
-            # (e.g. a card-echo the echo-guard stripped) from a genuine backend
-            # failure — only the last warrants the Lemonade copy, and the first
-            # two must keep the steps/cards taken before the empty answer.
+            backend_problem = None
+            if not (turn_cancelled or captured_steps):
+                backend_problem = await _empty_answer_backend_problem(
+                    result_holder.get("model") or model_id
+                )
+            # Thinking, plans and errors are not tools that ran.
+            tool_steps = [
+                s for s in captured_steps if s.get("type") in ("tool", "policy_alert")
+            ]
             content, sse_type, keep_steps = _empty_answer_outcome(
-                turn_cancelled, bool(captured_steps)
+                turn_cancelled,
+                bool(tool_steps),
+                any(step.get("render") for step in captured_steps),
+                backend_problem,
+                turn_reported_error=any(
+                    s.get("type") == "error" for s in captured_steps
+                ),
             )
             steps_to_persist = (
                 captured_steps if (keep_steps and captured_steps) else None
             )
             if sse_type == "error":
-                db.add_message(request.session_id, "assistant", content)
+                msg_id = db.add_message(
+                    request.session_id, "assistant", content, ends_turn=True
+                )
+                link_warning = (
+                    turn_box["recording"].link_message(msg_id)
+                    if "recording" in turn_box
+                    else None
+                )
+                if link_warning:
+                    yield _undo_link_warning_event(link_warning)
                 yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
             else:
+                failed = sse_type == "failed"
+                if failed:
+                    yield _sse({"type": "answer", "content": content})
                 turn_summary = _turn_summary(
                     sse_handler, result_holder.get("agent"), request.message, None
                 )
@@ -4048,9 +5244,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     agent_steps=steps_to_persist,
                     model_messages=result_holder.get("model_messages"),
                     turn_summary=turn_summary,
+                    ends_turn=True,
                 )
                 done_event = _done_event(
-                    msg_id, content, turn_cancelled, turn_summary=turn_summary
+                    msg_id,
+                    content,
+                    turn_cancelled,
+                    turn_summary=turn_summary,
+                    failed=failed,
                 )
                 link_warning = (
                     turn_box["recording"].link_message(msg_id)
@@ -4064,11 +5265,25 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
         await _cleanup_stream()
-        error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
+        if isinstance(e, AwakeClockError):
+            # It names its fix (restart GAIA); a resend would fail the same way.
+            error_msg = str(e)
+        else:
+            error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
+        link_warning = None
         try:
-            db.add_message(request.session_id, "assistant", error_msg)
+            msg_id = db.add_message(
+                request.session_id, "assistant", error_msg, ends_turn=True
+            )
+            link_warning = (
+                turn_box["recording"].link_message(msg_id)
+                if "recording" in turn_box
+                else None
+            )
         except Exception as exc:
             logger.error("Could not persist chat error: %s", exc)
+        if link_warning:
+            yield _undo_link_warning_event(link_warning)
         error_data = json.dumps({"type": "error", "content": error_msg})
         yield f"data: {error_data}\n\n"
     finally:
@@ -4115,6 +5330,7 @@ class _RunOutcome:
         self._error = False
         self._done = False
         self._cancelled = False
+        self._failed = False
 
     def observe(self, data: str) -> None:
         # A frame may carry ": padding" lines after its data line.
@@ -4133,9 +5349,10 @@ class _RunOutcome:
         elif kind == "done":
             self._done = True
             self._cancelled = bool(event.get("cancelled"))
+            self._failed = bool(event.get("failed"))
 
     def status(self) -> str:
-        if self._error or not self._done:
+        if self._error or self._failed or not self._done:
             return "failed"
         return "stopped" if self._cancelled else "done"
 
@@ -4165,19 +5382,22 @@ async def _run_chat_lifecycle(
     response, a client disconnect cannot cancel it — the producer finishes
     and persists server-side (#1580 follow-up).
     """
+    from gaia.ui.restart_recovery import TurnJournal
     from gaia.ui.turn_queue import TurnCancelled, TurnSlot, ordinal, turn_queue
 
     session_id = request.session_id
     outcome = _RunOutcome()
+    journal = TurnJournal(db, session_id)
+    shutting_down = False
 
     def _emit(data: str) -> None:
         outcome.observe(data)
+        journal.observe(data)
         run.emit(data)
 
-    queued_at = _time.monotonic()
-
     def _announce_place(position: int) -> None:
-        waited = int(_time.monotonic() - queued_at)
+        # From when this wait began: a turn back from the user counts afresh.
+        waited = int(_time.monotonic() - run.slot.waiting_since)
         _emit(_sse(_queued_status_event(position, ordinal, waited)))
 
     async def _heartbeat() -> None:
@@ -4191,12 +5411,16 @@ async def _run_chat_lifecycle(
         _emit(_sse(_RESUMED_STATUS_EVENT))
 
     # The producer thread hands this back while the turn waits on the user.
-    run.slot = TurnSlot(
-        turn_queue,
-        session_id,
-        asyncio.get_running_loop(),
-        on_position=_announce_place,
-        on_resume=_announce_resume,
+    run.slot = (
+        TurnSlot(
+            turn_queue,
+            session_id,
+            asyncio.get_running_loop(),
+            on_position=_announce_place,
+            on_resume=_announce_resume,
+        )
+        if turn_takes_the_line(db, session, request.agent_type)
+        else None
     )
 
     async def _keep_alive_while_queued() -> None:
@@ -4207,23 +5431,42 @@ async def _run_chat_lifecycle(
             run.emit(_KEEPALIVE_FRAME)
 
     try:
-        keep_alive = asyncio.create_task(_keep_alive_while_queued())
-        heartbeat = asyncio.create_task(_heartbeat())
-        try:
-            await run.slot.acquire()
-        except TurnCancelled:
-            msg_id = db.add_message(session_id, "assistant", "Cancelled.")
-            _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
-            return
-        finally:
-            keep_alive.cancel()
-            heartbeat.cancel()
+        if run.slot is not None:
+            keep_alive = asyncio.create_task(_keep_alive_while_queued())
+            heartbeat = asyncio.create_task(_heartbeat())
+            try:
+                await run.slot.acquire()
+            except TurnCancelled:
+                msg_id = db.add_message(
+                    session_id, "assistant", "Cancelled.", ends_turn=True
+                )
+                _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
+                return
+            finally:
+                keep_alive.cancel()
+                heartbeat.cancel()
         try:
             async for data in _stream_chat_impl(run, db, session, request):
                 _emit(data)
         finally:
-            run.slot.close()
+            if run.slot is not None:
+                run.slot.close()
+    except asyncio.CancelledError:
+        # Shutdown: the marker stays, and the next start says the turn was cut off.
+        shutting_down = True
+        try:
+            journal.flush()
+        except (RuntimeError, sqlite3.Error) as exc:
+            # The database already closed; the text from the last save stands.
+            logger.warning("Could not save the interrupted turn's text: %s", exc)
+        raise
     finally:
+        if not shutting_down:
+            try:
+                journal.close()
+            except (RuntimeError, sqlite3.Error) as exc:
+                # Don't mask the turn's own error; the next start closes the turn.
+                logger.warning("Could not close the finished turn: %s", exc)
         _record_run_outcome(db, session_id, outcome.status())
     # Notify the AgentLoop that a user turn completed (best-effort; no-op if
     # the autonomy loop isn't running). Fires on real run completion rather
@@ -4312,8 +5555,9 @@ _INDEX_TIMEOUT_DEFAULT_S = 600.0
 def _index_timeout_from_env() -> float:
     """Seconds indexing may go without progress (``GAIA_INDEX_TIMEOUT``, default 600).
 
-    Progress is a page extracted or a batch embedded, so a large document that
-    keeps moving is never stopped.
+    Progress is a page extracted, a batch embedded, or a queue update while
+    waiting for the model slot, so a large document that keeps moving is never
+    stopped.
 
     Raises:
         ValueError: the variable is set to something other than a positive number.
@@ -4348,24 +5592,47 @@ def _settled_quietly(future) -> None:
         future.exception()
 
 
-async def _index_document(filepath: Path) -> int:
+# Failures retrying can't fix until the file itself changes: RAG's pdf_status
+# and xlsx_status values, plus "empty_file" for a file with nothing to index.
+PERMANENT_INDEX_FAILURES = frozenset(
+    {"corrupted", "encrypted", "empty", "empty_file", "unsupported_workbook"}
+)
+
+
+class UnreadableDocumentError(RuntimeError):
+    """Indexing failed because of the file itself; ``kind`` says how."""
+
+    def __init__(self, message: str, kind: str):
+        super().__init__(message)
+        self.kind = kind
+
+
+async def _index_document(filepath: Path, display_name: Optional[str] = None) -> int:
     """Index a document using RAG SDK. Returns chunk count.
+
+    ``display_name`` is the user's name for the file when *filepath* is a
+    copy; every error message names it instead of the copy.
 
     Runs on an indexing pool (``_INDEX_MAX_PARALLEL`` at once per pool; small
     files have their own, and the rest wait their turn). Cancelling the
-    awaiting task stops indexing at its next page or embedding batch, and so
-    does going ``GAIA_INDEX_TIMEOUT`` seconds without one; time spent waiting
-    for a worker doesn't count.
+    awaiting task stops indexing at its next page or embedding batch, or
+    ends a wait for the model slot at once; so does going
+    ``GAIA_INDEX_TIMEOUT`` seconds without progress. Queue updates from the
+    broker count as progress; time spent waiting for a worker doesn't. A
+    daemon too old to stream its queue sends no updates, so a wait on one
+    still counts against the timeout.
 
     Note: A return value of 0 means RAG reported success but produced
     no chunks. Callers must treat 0 chunks as a failure condition.
 
     Raises:
-        RuntimeError: If indexing fails or stops making progress.
+        RuntimeError: If indexing fails or stops making progress;
+            ``UnreadableDocumentError`` when the file itself is the problem.
         asyncio.CancelledError: If the awaiting task was cancelled.
     """
-    from gaia.rag.sdk import IndexingStopped
+    from gaia.rag.sdk import IndexingStopped, name_file_for_user
 
+    name = display_name or filepath.name
     stop = threading.Event()
     # Monotonic time of the last page or batch; None until a worker starts.
     progress = {"at": None}
@@ -4373,9 +5640,15 @@ async def _index_document(filepath: Path) -> int:
     def _step() -> None:
         progress["at"] = _time.monotonic()
         if stop.is_set():
-            raise IndexingStopped(filepath.name)
+            raise IndexingStopped(name)
+
+    def _queue_update(_event: dict) -> None:
+        # Waiting in line for the embedder or vision model is not a stall.
+        # Runs on the waiting thread, so it only notes the time.
+        progress["at"] = _time.monotonic()
 
     def _do_index():
+        from gaia.daemon.broker_client import lease_cancel_scope, lease_wait_listener
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
         _step()
@@ -4384,28 +5657,44 @@ async def _index_document(filepath: Path) -> int:
         allowed = [str(filepath.parent), str(Path.home())]
         config = RAGConfig(allowed_paths=allowed)
         rag = RAGSDK(config)
-        result = rag.index_document(
-            str(filepath),
-            progress_callback=lambda _done, _total: _step(),
-            heartbeat=_step,
-        )
-        logger.info("RAG index_document result for %s: %s", filepath, result)
+        # Cancel and the no-progress stop also end a wait for the model.
+        try:
+            with lease_wait_listener(_queue_update), lease_cancel_scope(stop):
+                result = rag.index_document(
+                    str(filepath),
+                    progress_callback=lambda _done, _total: _step(),
+                    heartbeat=_step,
+                    **({"display_name": display_name} if display_name else {}),
+                )
+        except LeaseWaitCancelled as e:
+            raise IndexingStopped(name) from e
+        # A stop absorbed on the way (a degraded image page) is still a stop.
+        if stop.is_set():
+            raise IndexingStopped(name)
+        logger.info("RAG index_document result for %s (%s): %s", name, filepath, result)
 
         if not isinstance(result, dict):
             raise RuntimeError(
-                f"RAG returned unexpected type for {filepath.name}: "
-                f"{type(result).__name__}"
+                f"RAG returned unexpected type for {name}: {type(result).__name__}"
             )
 
         error = result.get("error")
         if error:
-            raise RuntimeError(f"RAG indexing failed for {filepath.name}: {error}")
+            message = f"RAG indexing failed for {name}: {error}"
+            kind = (
+                "empty_file"
+                if result.get("empty_file")
+                else result.get("pdf_status") or result.get("xlsx_status")
+            )
+            if kind in PERMANENT_INDEX_FAILURES:
+                raise UnreadableDocumentError(message, kind)
+            raise RuntimeError(message)
 
         if not result.get("success"):
-            raise RuntimeError(f"RAG indexing unsuccessful for {filepath.name}")
+            raise RuntimeError(f"RAG indexing unsuccessful for {name}")
 
         chunks = result.get("num_chunks", 0) or result.get("chunk_count", 0)
-        logger.info("Indexed %s: %d chunks", filepath, chunks)
+        logger.info("Indexed %s (%s): %d chunks", name, filepath, chunks)
         return chunks
 
     try:
@@ -4424,7 +5713,7 @@ async def _index_document(filepath: Path) -> int:
             if last is not None and _time.monotonic() - last > _INDEX_TIMEOUT_S:
                 stop.set()
                 raise RuntimeError(
-                    f"Indexing {filepath.name} made no progress for "
+                    f"Indexing {name} made no progress for "
                     f"{_INDEX_TIMEOUT_S:g} s and was stopped. Try it again; "
                     f"if it stalls again, raise {_INDEX_TIMEOUT_ENV}."
                 )
@@ -4434,4 +5723,7 @@ async def _index_document(filepath: Path) -> int:
     except (RuntimeError, IndexingStopped):
         raise
     except Exception as e:
-        raise RuntimeError(f"Failed to index {filepath.name}: {e}") from e
+        detail = str(e)
+        if display_name:
+            detail = name_file_for_user(detail, str(filepath), display_name)
+        raise RuntimeError(f"Failed to index {name}: {detail}") from e
