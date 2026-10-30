@@ -138,6 +138,14 @@ async def send_message(
         )
     await session_lock.acquire()
 
+    # Foreground local work takes precedence over autonomous background goals.
+    # Resolve once so a settings change cannot disagree with the later queue check.
+    takes_line = turn_takes_the_line(db, session, request.agent_type)
+    if takes_line:
+        from gaia.ui.agent_loop import agent_loop
+
+        agent_loop.yield_to_user()
+
     # A streamed turn takes its place in line inside the run, so leaving the
     # chat while it waits doesn't drop it. A non-streamed one is saved first,
     # so a long wait never loses it.
@@ -147,7 +155,7 @@ async def send_message(
         try:
             question_id = db.begin_turn(sid, request.message)
             _set_provisional_title(db, sid, request.message)
-            if turn_takes_the_line(db, session, request.agent_type):
+            if takes_line:
                 await turn_queue.acquire(sid)
                 holds_turn = True
         except TurnCancelled:

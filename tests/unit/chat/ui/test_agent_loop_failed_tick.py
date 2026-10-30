@@ -110,3 +110,29 @@ def test_a_failure_keeps_the_progress_an_earlier_run_recorded(loop, monkeypatch)
     notes = GoalStore().get_goal(goal.id).progress_notes
     assert notes.startswith("Read 3 of 5 files.\n")
     assert agent_loop_mod.SIDECAR_TICKS_UNSUPPORTED in notes
+
+
+def test_cancelled_goal_and_queued_sibling_survive_a_stopped_tick(loop, monkeypatch):
+    cancelled = _queued_goal()
+    queued = _queued_goal()
+
+    class CancelledAgent:
+        conversation_history = []
+        device = "gpu"
+        system_prompt = "test"
+
+        def _register_tools(self):
+            pass
+
+        def process_query(self, query):
+            GoalStore().cancel_goal(cancelled.id)
+            assert loop.cancel_goal(cancelled.id) is True
+            raise RuntimeError("the request was cancelled")
+
+    monkeypatch.setattr(helpers, "_agent_registry", None)
+    monkeypatch.setattr(helpers, "_get_cached_agent", lambda *args: CancelledAgent())
+
+    _run_followup(loop)
+
+    assert GoalStore().get_goal(cancelled.id).status == "cancelled"
+    assert GoalStore().get_goal(queued.id).status == "queued"

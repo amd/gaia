@@ -58,6 +58,14 @@ TOKENIZER_ENCODING = "cl100k_base"
 
 DEFAULT_PROFILE = "doc"
 
+# The report measures what ships: the flagship, on its only profile. ``chat``
+# re-measures a ChatAgent profile, which is how #1448's doc-profile numbers
+# were taken and stay reproducible.
+GAIA_AGENT = "gaia"
+CHAT_AGENT = "chat"
+DEFAULT_AGENT = GAIA_AGENT
+FLAGSHIP_PROFILE = "full"
+
 # Tool counts to inject when measuring the prompt-cost slope. 0 is the
 # real-doc baseline; the rest are evenly spaced so linearity is visible.
 SLOPE_K: Tuple[int, ...] = (0, 10, 20, 40)
@@ -147,6 +155,18 @@ def _isolated_registry():
         tools_mod._TOOL_REGISTRY.update(saved)
 
 
+def _enter_deterministic_env(stack: contextlib.ExitStack) -> None:
+    """Force the environment-conditional external tools off for this build.
+
+    No npx -> search_documentation skipped; scrub PERPLEXITY_API_KEY ->
+    search_web skipped. clear=True + filtered copy removes the key for the
+    duration and restores the full environment afterwards.
+    """
+    stack.enter_context(patch("shutil.which", return_value=None))
+    scrubbed = {k: v for k, v in os.environ.items() if k != "PERPLEXITY_API_KEY"}
+    stack.enter_context(patch.dict(os.environ, scrubbed, clear=True))
+
+
 def _build_skeleton_tool_loader(dynamic_tools: bool, profile: str = DEFAULT_PROFILE):
     """Return a real ToolLoader over *profile*'s config, or ``None`` when off.
 
@@ -221,14 +241,7 @@ def build_doc_agent_skeleton(
                 patch("gaia.agents.base.agent.Agent.__init__", return_value=None)
             )
             if deterministic:
-                # No npx -> search_documentation skipped; scrub PERPLEXITY_API_KEY
-                # -> search_web skipped. clear=True + filtered copy removes the key
-                # for the duration and restores the full environment afterwards.
-                stack.enter_context(patch("shutil.which", return_value=None))
-                scrubbed = {
-                    k: v for k, v in os.environ.items() if k != "PERPLEXITY_API_KEY"
-                }
-                stack.enter_context(patch.dict(os.environ, scrubbed, clear=True))
+                _enter_deterministic_env(stack)
 
             with stack:
                 agent = ChatAgent.__new__(ChatAgent)
@@ -262,7 +275,7 @@ def build_doc_agent_skeleton(
             sys.modules.pop(mod, None)
 
 
-def build_full_agent_skeleton(dynamic_tools: bool = True):
+def build_full_agent_skeleton(dynamic_tools: bool = True, deterministic: bool = False):
     """Build a flagship ``GaiaAgent`` skeleton with its ``full`` tools registered.
 
     The ``full``-profile counterpart to :func:`build_doc_agent_skeleton`, and the
@@ -279,8 +292,12 @@ def build_full_agent_skeleton(dynamic_tools: bool = True):
       tools when the embedder is unreachable, which would silently understate
       the flagship's registry by five on any machine without Lemonade.
 
-    Returns a skeleton whose ``_tools_registry`` is the flagship's 67-tool set
-    (66 + ``load_tools`` when *dynamic_tools*).
+    With ``deterministic=True`` the environment-conditional external tools are
+    forced off, exactly as in :func:`build_doc_agent_skeleton`, so a measured
+    report is the same on every machine.
+
+    Returns a skeleton whose ``_tools_registry`` is the flagship's full tool set
+    (plus ``load_tools`` when *dynamic_tools*).
     """
     stubbed = _ensure_optional_deps_stubbed()
     try:
@@ -295,6 +312,8 @@ def build_full_agent_skeleton(dynamic_tools: bool = True):
                 stack.enter_context(
                     patch("gaia.agents.base.agent.Agent.__init__", return_value=None)
                 )
+                if deterministic:
+                    _enter_deterministic_env(stack)
                 agent = GaiaAgent.__new__(GaiaAgent)
                 agent.config = cfg
                 agent._instance_tools = None
@@ -327,6 +346,34 @@ def build_full_agent_skeleton(dynamic_tools: bool = True):
     finally:
         for mod in stubbed:
             sys.modules.pop(mod, None)
+
+
+def build_agent_skeleton(agent: str = DEFAULT_AGENT, profile: Optional[str] = None):
+    """The deterministic, unfiltered skeleton a report measures.
+
+    ``gaia`` is the flagship on its ``full`` profile — what ships. ``chat`` is a
+    ChatAgent on *profile* (default ``doc``), which is how the #1448 baseline
+    was taken; the two are different tool sets and their numbers do not compare.
+    """
+    if agent == GAIA_AGENT:
+        if profile not in (None, FLAGSHIP_PROFILE):
+            raise ValueError(
+                f"The flagship only ships the {FLAGSHIP_PROFILE!r} profile, so "
+                f"--profile {profile} cannot measure it. Pass --agent {CHAT_AGENT} "
+                f"--profile {profile} to measure that ChatAgent profile instead."
+            )
+        return build_full_agent_skeleton(dynamic_tools=False, deterministic=True)
+    if agent == CHAT_AGENT:
+        return build_doc_agent_skeleton(profile or DEFAULT_PROFILE)
+    raise ValueError(
+        f"unknown agent {agent!r}; choose {GAIA_AGENT!r} or {CHAT_AGENT!r}"
+    )
+
+
+def _profile_label(agent: str, profile: Optional[str]) -> str:
+    if agent == GAIA_AGENT:
+        return f"{GAIA_AGENT} agent, {FLAGSHIP_PROFILE}"
+    return f"{CHAT_AGENT} agent, {profile or DEFAULT_PROFILE}"
 
 
 def _render_paths(
@@ -698,9 +745,11 @@ def _fmt(value: Optional[float], suffix: str = "") -> str:
 
 
 def format_markdown_report(
-    profile: str = DEFAULT_PROFILE, scorecard_path: Optional[str] = None
+    profile: Optional[str] = None,
+    scorecard_path: Optional[str] = None,
+    agent_name: str = DEFAULT_AGENT,
 ) -> str:
-    """Build the Part-0 measurement note for *profile* as markdown.
+    """Build the Part-0 measurement note for *agent_name* as markdown.
 
     Deterministic sections (cost, distribution, slope, fixed-subset) are
     computed live. TTFT is filled from *scorecard_path* when given; otherwise
@@ -708,7 +757,8 @@ def format_markdown_report(
     Part 0 never fabricates a backend measurement.
     """
     tok = get_tokenizer()
-    agent = build_doc_agent_skeleton(profile)
+    agent = build_agent_skeleton(agent_name, profile)
+    profile = _profile_label(agent_name, profile)
     cost = measure_tool_prompt_cost(agent, tok=tok)
     dist = tool_size_distribution(agent, tok=tok)
     slope = measure_slope(agent, tok=tok)
@@ -723,12 +773,12 @@ def format_markdown_report(
     lines.append(f"# #1448 Part 0 — tool-prompt cost & TTFT baseline ({profile})")
     lines.append("")
     lines.append(
-        f"- Profile: `{profile}`  |  Tools (deterministic): **{cost['tool_count']}**"
+        f"- Measured: {profile}  |  Tools (deterministic): **{cost['tool_count']}**"
     )
     lines.append(f"- Tokenizer: {tok_note}")
     lines.append("")
     lines.append(
-        f"**The {cost['tool_count']} is the full *unfiltered* `{profile}` registry — the "
+        f"**The {cost['tool_count']} is the full *unfiltered* registry ({profile}) — the "
         '"before" number the loader must shrink, not a CORE set.** It bundles '
         "everything the agent ships today (RAG, file, memory, shell, loop-control, "
         "clipboard, TTS, desktop-notify, window-listing, VLM), while a typical "
@@ -871,23 +921,24 @@ def _ttft_section(scorecard_path: Optional[str]) -> str:
             "python -m gaia.ui.server --port 4200 --host 127.0.0.1   # gemma-4-e4b",
             "gaia eval agent --category tool_selection",
             "#   -> eval/results/<run-id>/scorecard.json",
-            "python -m gaia.eval.tool_cost --profile doc \\",
+            "python -m gaia.eval.tool_cost \\",
             "    --scorecard eval/results/<run-id>/scorecard.json",
             "```",
             "",
             "Cold-start micro-bench (authoritative cold number): evict/restart the",
-            "model, send ONE `doc` query, record its TTFT — eval scenarios may run",
+            "model, send ONE query, record its TTFT — eval scenarios may run",
             "warm. ⚠️ Only ONE `gaia eval agent` at a time (CLAUDE.md eval-serial).",
         ]
     )
 
 
 def _run_live_ttft(
-    profile: str,
+    profile: Optional[str],
     base_url: Optional[str],
     model: str,
     trials: int,
     filter_names: Optional[List[str]] = None,
+    agent_name: str = DEFAULT_AGENT,
 ) -> str:
     """Compare full-vs-subset prompt-prefill TTFT against a resident model.
 
@@ -899,7 +950,7 @@ def _run_live_ttft(
 
     base_url = resolve_lemonade_base_url(base_url)
     subset_names = filter_names if filter_names else list(FIXED_SUBSET_DEFAULT)
-    agent = build_doc_agent_skeleton(profile)
+    agent = build_agent_skeleton(agent_name, profile)
     full = measure_prefill_ttft(agent, base_url=base_url, model=model, n_trials=trials)
     subset = measure_prefill_ttft(
         agent,
@@ -913,6 +964,7 @@ def _run_live_ttft(
     lines = [
         "# #1448 Part 0 — prompt-prefill TTFT (no RAG, model resident)",
         "",
+        f"- Agent: {_profile_label(agent_name, profile)}",
         f"- Backend: `{base_url}`  |  Model: `{model}`  |  Trials: {trials} "
         "(cache-busted, first discarded)",
         "- RAG untouched — immune to the embedder↔chat-model swap.",
@@ -939,9 +991,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         description="Measure tool-prompt cost / slope (#1448 Part 0).",
     )
     parser.add_argument(
+        "--agent",
+        choices=(GAIA_AGENT, CHAT_AGENT),
+        default=DEFAULT_AGENT,
+        help=(
+            "Agent to measure (default: gaia, the flagship on its full "
+            "profile). `chat --profile doc` reproduces the #1448 baseline."
+        ),
+    )
+    parser.add_argument(
         "--profile",
-        default=DEFAULT_PROFILE,
-        help="ChatAgent prompt profile (default: doc)",
+        default=None,
+        help="ChatAgent prompt profile, with --agent chat only (default: doc)",
     )
     parser.add_argument(
         "--scorecard",
@@ -981,6 +1042,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "illustrative FIXED_SUBSET_DEFAULT.",
     )
     args = parser.parse_args(argv)
+    if args.agent == GAIA_AGENT and args.profile not in (None, FLAGSHIP_PROFILE):
+        parser.error(
+            f"the flagship only ships the {FLAGSHIP_PROFILE!r} profile; pass "
+            f"--agent {CHAT_AGENT} --profile {args.profile} to measure that "
+            "ChatAgent profile"
+        )
     if args.live_ttft:
         filter_names = (
             [n.strip() for n in args.filter.split(",") if n.strip()]
@@ -989,11 +1056,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         print(
             _run_live_ttft(
-                args.profile, args.base_url, args.model, args.trials, filter_names
+                args.profile,
+                args.base_url,
+                args.model,
+                args.trials,
+                filter_names,
+                agent_name=args.agent,
             )
         )
     else:
-        print(format_markdown_report(args.profile, args.scorecard))
+        print(format_markdown_report(args.profile, args.scorecard, args.agent))
     return 0
 
 

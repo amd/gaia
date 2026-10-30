@@ -32,6 +32,9 @@ which models you enabled, and what GAIA learned about them, and has no field a s
 
 Lemonade itself holds the token in memory only and forgets it on restart. GAIA notices
 and restores it from the credential store, which is why you are not asked again.
+`gaia gateway install` restores it too. Installing with a different `--base-url` deletes
+the remembered token instead, so a token for one gateway is never sent to another; run
+`gaia gateway auth` for the new one.
 
 ```bash
 gaia gateway auth --no-remember    # do not store it; ask me every restart

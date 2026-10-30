@@ -330,7 +330,9 @@ const (
 type Report struct {
 	AgentID   string
 	AgentName string
-	Rows      []Row
+	// CoreVersion is the GAIA release the verified daemon runs.
+	CoreVersion string
+	Rows        []Row
 	// Chat names the model chat will run on, and its size when it runs here —
 	// "Gemma-4-E4B-it-GGUF (3.2 GB, on this machine)". Empty when unknown.
 	Chat string

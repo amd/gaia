@@ -7,6 +7,14 @@
   through Perplexity's cloud AI. A cached agent that still has it refuses with
   the same reason. The DuckDuckGo `search_web` from the browser tools still
   registers: it runs no AI model.
+- Resolves the user's real Documents folder for the session guidance, including
+  Windows Known Folder Move/OneDrive and Linux `XDG_DOCUMENTS_DIR`, instead of
+  assuming it is always `~/Documents` (#5885). File search and the Agent UI's
+  Documents quick link use the same folder.
+- The data profile's prompt no longer says it can browse the web or transcribe
+  audio and video. It registers neither, so the model promised a tool it could not
+  call. The web and media lines now appear only for profiles that register those
+  tools (#6036).
 - `gaia chat --index <file>` indexes the named file from any working
   directory. A file outside the folder `gaia chat` ran in was refused as "not
   in allowed paths", the error was only logged, and the agent answered without
