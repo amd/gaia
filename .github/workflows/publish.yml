@@ -1201,16 +1201,16 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" --clobber
           echo "✓ attached ${#files[@]} terminal installers and their checksums to ${TAG}"
 
-  # The website builds its "Try the release candidate" entry from the GitHub
-  # releases at deploy time, so a new RC only appears after a rebuild. A final
-  # gets its rebuild from release_components.yml, which also hides the RC again.
-  redeploy-website-rc:
-    name: Redeploy website (release candidate)
+  # The website builds its download links and release entries from the GitHub
+  # releases at deploy time, so a new release only appears after a rebuild.
+  # Finals rebuild here too: release_components.yml's rebuild waits on a
+  # separate hub-publish approval and must not hold the site back.
+  redeploy-website:
+    name: Redeploy website
     needs: [validate, github-release]
     if: >-
       !cancelled() &&
-      needs.github-release.result == 'success' &&
-      needs.validate.outputs.is_rc == 'true'
+      needs.github-release.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: write
