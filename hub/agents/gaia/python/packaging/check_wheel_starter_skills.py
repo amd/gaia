@@ -1,3 +1,5 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Check that a built flagship wheel contains the complete starter pack."""
 
 from __future__ import annotations

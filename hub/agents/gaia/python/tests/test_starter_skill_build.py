@@ -12,6 +12,7 @@ build`` (wheel built from the sdist) all carry it.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -20,7 +21,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from gaia_agent.build import copy_starter_skills
+from gaia_agent.build import checkout_starter_skills, copy_starter_skills
 
 #: tests/ -> python/ -> gaia/ -> agents/ -> hub/ -> repo root
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -115,10 +116,70 @@ def test_missing_starter_root_copies_nothing(tree):
     assert not dest.exists()
 
 
+def _repo_markers(root: Path) -> None:
+    (root / "setup.py").write_text("", encoding="utf-8")
+    (root / ".git").mkdir()
+
+
+def _build_py_at(root: Path) -> Path:
+    path = root / "hub" / "agents" / "gaia" / "python" / "gaia_agent" / "build.py"
+    path.parent.mkdir(parents=True)
+    path.write_text("", encoding="utf-8")
+    (root / "hub" / "skills").mkdir()
+    return path
+
+
+def test_checkout_layout_with_repo_markers_finds_hub_skills(tmp_path):
+    _repo_markers(tmp_path)
+    here = _build_py_at(tmp_path)
+    assert checkout_starter_skills(here) == (tmp_path / "hub" / "skills").resolve()
+
+
+def test_matching_layout_without_repo_markers_is_not_a_checkout(tmp_path):
+    assert checkout_starter_skills(_build_py_at(tmp_path)) is None
+
+
+def test_other_layout_is_not_a_checkout(tmp_path):
+    _repo_markers(tmp_path)
+    (tmp_path / "skills").mkdir()
+    here = tmp_path / "a" / "b" / "c" / "pkg" / "gaia_agent" / "build.py"
+    here.parent.mkdir(parents=True)
+    here.write_text("", encoding="utf-8")
+    assert checkout_starter_skills(here) is None
+
+
+def _symlink(link: Path, target: Path, is_dir: bool) -> None:
+    try:
+        os.symlink(target, link, target_is_directory=is_dir)
+    except OSError as e:
+        pytest.skip(f"cannot create symlinks here: {e}")
+
+
+def test_symlinked_file_in_a_skill_is_refused(tree, tmp_path):
+    starter, package, dest = tree
+    skill = _skill(starter, "alpha")
+    outside = tmp_path / "outside.py"
+    outside.write_text("x", encoding="utf-8")
+    _symlink(skill / "tools.py", outside, is_dir=False)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        copy_starter_skills(starter, dest, package)
+
+
+def test_symlinked_skill_directory_is_refused(tree, tmp_path):
+    starter, package, dest = tree
+    elsewhere = _skill(tmp_path / "elsewhere", "beta")
+    _symlink(starter / "beta", elsewhere, is_dir=True)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        copy_starter_skills(starter, dest, package)
+
+
 @pytest.fixture(scope="module")
 def checkout(tmp_path_factory):
     """A copy of the package beside hub/skills, so builds never touch the repo."""
     root = tmp_path_factory.mktemp("checkout")
+    _repo_markers(root)
     shutil.copytree(HUB_SKILLS, root / "hub" / "skills")
     shutil.copytree(
         PACKAGE_ROOT,
@@ -167,3 +228,42 @@ def test_wheel_built_from_the_sdist_ships_every_starter_skill(checkout, tmp_path
     wheel = _backend(unpacked, "build_wheel", tmp_path / "dist")
     with zipfile.ZipFile(wheel) as archive:
         assert _skills_in(archive.namelist()) == STARTERS | OWNED
+
+
+def _plant_skill(skills: Path) -> None:
+    skill = skills / "planted"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("planted", encoding="utf-8")
+    (skill / "tools.py").write_text("x = 1\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("layout", ["generic", "checkout-shaped"])
+def test_wheel_from_an_unpacked_sdist_never_reads_skills_above_it(
+    checkout, tmp_path, layout
+):
+    sdist = _backend(checkout, "build_sdist", tmp_path / "sdist")
+    if layout == "generic":
+        top = tmp_path / "g"
+        parent = top / "h" / "i"
+    else:
+        top = tmp_path / "r" / "hub"
+        parent = top / "agents" / "gaia"
+    parent.mkdir(parents=True)
+    if layout != "generic":
+        _repo_markers(top.parent)
+    with tarfile.open(sdist) as archive:
+        safe = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
+        archive.extractall(parent, **safe)
+    (unpacked,) = parent.iterdir()
+    if layout != "generic":
+        unpacked = unpacked.rename(parent / "python")
+    # build.py's parents[4] is ``top``: the folder a naive lookup would read.
+    assert (unpacked / "gaia_agent" / "build.py").resolve().parents[4] == top.resolve()
+    _plant_skill(top / "skills")
+
+    wheel = _backend(unpacked, "build_wheel", tmp_path / "dist")
+    with zipfile.ZipFile(wheel) as archive:
+        names = archive.namelist()
+    assert "planted" not in _skills_in(names)
+    assert not any("/planted/" in n for n in names)
+    assert _skills_in(names) == STARTERS | OWNED
