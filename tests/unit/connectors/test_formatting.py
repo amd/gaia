@@ -4,8 +4,8 @@
 Tests for ``gaia.connectors.formatting.format_connector_error``.
 
 Guards the public formatter against silent re-inlining (e.g. someone
-copy-pasting the body back into ``connectors_demo/agent.py`` without
-realising the email agent now imports from this module).
+copy-pasting the body into an agent without realising the email agent
+imports from this module).
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def test_format_connector_error_public_api():
     not_granted = AuthRequiredError(
         AuthRequiredError.Reason.AGENT_NOT_GRANTED,
         provider="google",
-        agent_id="installed:connectors-demo",
+        agent_id="installed:my-agent",
         missing_scopes=["scope-a"],
     )
     assert "AGENT_NOT_GRANTED" in format_connector_error(not_granted)
@@ -137,6 +137,22 @@ def test_format_connector_error_unknown_agent_falls_back_to_generic():
     msg = format_connector_error(err)
     assert "AGENT_NOT_GRANTED" in msg
     assert "scope-x" in msg
+
+
+def test_flagship_grant_gap_never_borrows_the_email_agents_remedy():
+    """The email agent's migration text asks for gmail.modify + send. The
+    read-only flagship must get the scope it actually lacks instead."""
+    readonly = "https://www.googleapis.com/auth/gmail.readonly"
+    err = AuthRequiredError(
+        AuthRequiredError.Reason.AGENT_NOT_GRANTED,
+        provider="google",
+        agent_id="installed:gaia",
+        missing_scopes=[readonly],
+    )
+    msg = format_connector_error(err)
+    assert readonly in msg
+    assert "gmail.send" not in msg
+    assert "gmail.modify" not in msg
 
 
 @pytest.mark.parametrize(

@@ -32,6 +32,9 @@ which models you enabled, and what GAIA learned about them, and has no field a s
 
 Lemonade itself holds the token in memory only and forgets it on restart. GAIA notices
 and restores it from the credential store, which is why you are not asked again.
+`gaia gateway install` restores it too. Installing with a different `--base-url` deletes
+the remembered token instead, so a token for one gateway is never sent to another; run
+`gaia gateway auth` for the new one.
 
 ```bash
 gaia gateway auth --no-remember    # do not store it; ask me every restart
@@ -132,6 +135,7 @@ Gateway models are namespaced `amd.<model>` and work anywhere a local model does
 ```bash
 gaia chat --model amd.Claude-Opus-5
 gaia llm --model amd.Gemma-4-31B "Explain NPU offload"
+gaia -p "Summarize README.md" --model amd.DeepSeek-V4.1-Flash   # one headless agent run
 ```
 
 GAIA recognises them as gateway-hosted and skips the download, load, and model-slot
