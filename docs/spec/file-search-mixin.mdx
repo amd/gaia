@@ -39,8 +39,10 @@ baseline for later edits.
   specific first. The most specific root is searched to unlimited depth; the
   others, which accumulate as the user approves paths, are depth-capped
 - Phase 1: common locations (Documents, Downloads, Desktop) with a depth limit
-- Phase 2: deep drive/root search, only when `deep_search=True` and no
-  `directory` was named
+- Phase 2: deep search, only when `deep_search=True` and no `directory` was
+  named. It searches the user's home first, then the drive/root; the undirected
+  root walk skips noisy top-level OS folders and reports them, while a named
+  `directory` searches that folder normally
 - Early termination on first match for speed
 
 The search root is the declared sandbox, **not** `Path.cwd()`. A sidecar is

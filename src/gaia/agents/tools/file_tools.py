@@ -615,10 +615,21 @@ class FileSearchToolsMixin:
                     nonlocal budget
                     budget = search_scope.SearchBudget()
 
+                root_skipped_dirs = []
+
                 def with_truncation(result: Dict[str, Any]) -> Dict[str, Any]:
                     """Mark a result partial when the walk ran out of budget."""
+                    skipped_notes = []
                     if guard.skipped:
-                        result["skipped_folders"] = guard.note()
+                        skipped_notes.append(guard.note())
+                    if root_skipped_dirs:
+                        paths = ", ".join(str(path) for path in root_skipped_dirs)
+                        skipped_notes.append(
+                            "Skipped OS folders during the deep root search: "
+                            f"{paths}. Search one explicitly with `directory` if needed."
+                        )
+                    if skipped_notes:
+                        result["skipped_folders"] = " ".join(skipped_notes)
                     if not budget.truncated:
                         return result
                     logger.info(
@@ -704,6 +715,7 @@ class FileSearchToolsMixin:
                                     and current_path == location
                                     and item.name in skip_root_dirs
                                 ):
+                                    root_skipped_dirs.append(item)
                                     continue
                                 if item.is_dir() and item.name in _SKIP_DIRS:
                                     continue

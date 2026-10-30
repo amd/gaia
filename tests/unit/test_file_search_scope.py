@@ -1128,3 +1128,45 @@ def test_a_user_folder_named_like_an_os_tree_is_still_searched(
     result = search_file("invoice", deep_search=True)
 
     assert len(result["files"]) == 4, result
+
+
+def test_deep_root_os_folders_are_reported_as_skipped(
+    tmp_path, monkeypatch, registry
+):
+    """A root-level omission must not be reported as a complete root search."""
+    _, home, project = _deep_search_setup(
+        tmp_path, monkeypatch, lambda _host, roots: [Path(roots[0])]
+    )
+    root = Path("/")
+    skipped = [root / "usr", root / "opt"]
+    listed = []
+    real_iterdir = Path.iterdir
+    real_is_dir = Path.is_dir
+
+    def bounded_iterdir(self):
+        listed.append(self)
+        if self == home:
+            return iter(())
+        if self == root:
+            return iter(skipped)
+        return real_iterdir(self)
+
+    def root_children_are_dirs(self):
+        if self in skipped:
+            return True
+        return real_is_dir(self)
+
+    monkeypatch.setattr(Path, "iterdir", bounded_iterdir)
+    monkeypatch.setattr(Path, "is_dir", root_children_are_dirs)
+    search_file = _register_search_file(_Sandbox(home, project))
+    result = search_file("not_here", deep_search=True)
+
+    assert result["skipped_folders"] == (
+        "Skipped OS folders during the deep root search: "
+        f"{root / 'usr'}, {root / 'opt'}. "
+        "Search one explicitly with `directory` if needed."
+    )
+    # The confined test harness may expose its synthetic project root before
+    # the home/root phases; the assertion should pin the root-level omission,
+    # not the incidental order of the earlier scoped sweep.
+    assert listed[-2:] == [home, root]
