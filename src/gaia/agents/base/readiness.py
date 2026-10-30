@@ -435,8 +435,13 @@ def _replay_cloud_key(model_id: str) -> bool:
     provider = str(model_id or "").lower().split(".", 1)[0]
     if "." not in str(model_id or "") or provider not in PROVIDERS:
         return False
+    from gaia.llm.local_only import CloudDisabledError
+
     try:
         return ensure_authenticated(provider)
+    except CloudDisabledError as e:
+        logger.warning(str(e))
+        return False
     except (CloudKeyError, GatewayError, requests.RequestException) as e:
         # Never fatal: the model may simply be absent, and the caller's own
         # "not found" message is the actionable one.
