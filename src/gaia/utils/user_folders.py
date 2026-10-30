@@ -43,9 +43,9 @@ def _windows_known_folder(folder: tuple) -> Path | None:
         result = ctypes.windll.shell32.SHGetKnownFolderPath(
             ctypes.byref(folder_id), 0, None, ctypes.byref(path)
         )
-        if result or not path.value:
-            return None
         try:
+            if result or not path.value:
+                return None
             return Path(path.value)
         finally:
             ctypes.windll.ole32.CoTaskMemFree(path)

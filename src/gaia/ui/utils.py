@@ -663,6 +663,15 @@ def _describe_roots(roots: Sequence[Path]) -> str:
     return ", ".join(by_real.values())
 
 
+def is_within_document_roots(path: Path) -> bool:
+    """Return whether *path* is browseable under the configured document roots."""
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    return any(resolved.is_relative_to(root) for root in document_roots())
+
+
 def ensure_within_home(resolved: Path) -> None:
     """Raise HTTP 403 if *resolved* is not inside an allowed document root.
 
@@ -866,7 +875,7 @@ def build_quick_links() -> list:
     ]
 
     for name, candidate_path, icon in candidates:
-        if candidate_path.is_dir():
+        if candidate_path.is_dir() and is_within_document_roots(candidate_path):
             links.append(QuickLink(name=name, path=str(candidate_path), icon=icon))
 
     return links

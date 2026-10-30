@@ -160,3 +160,18 @@ def test_the_ui_documents_quick_link_follows_the_redirect(monkeypatch, tmp_path)
     links = {link.name: link.path for link in ui_utils.build_quick_links()}
 
     assert links["Documents"] == str(redirected)
+
+
+def test_the_ui_hides_documents_outside_document_roots(monkeypatch, tmp_path):
+    ui_utils = pytest.importorskip("gaia.ui.utils")
+    home = tmp_path / "home"
+    home.mkdir()
+    redirected = tmp_path / "external-documents"
+    redirected.mkdir()
+    monkeypatch.setattr(ui_utils.Path, "home", lambda: home)
+    monkeypatch.setattr(ui_utils, "documents_dir", lambda _home: redirected)
+    monkeypatch.setattr(ui_utils, "document_roots", lambda: [home.resolve()])
+
+    links = {link.name for link in ui_utils.build_quick_links()}
+
+    assert "Documents" not in links

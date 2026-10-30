@@ -44,6 +44,7 @@ from ..utils import (
     build_quick_links,
     ensure_within_home,
     format_size,
+    is_within_document_roots,
     list_windows_drives,
     uploads_dir,
 )
@@ -570,10 +571,14 @@ async def search_files(
 
         home = Path.home()
         priority_dirs = [
-            documents_dir(home),
-            home / "Downloads",
-            home / "Desktop",
-            home / "OneDrive",
+            directory
+            for directory in (
+                documents_dir(home),
+                home / "Downloads",
+                home / "Desktop",
+                home / "OneDrive",
+            )
+            if is_within_document_roots(directory)
         ]
         for loc in priority_dirs:
             if len(matching_files) >= max_results:
