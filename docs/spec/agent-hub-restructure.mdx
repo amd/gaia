@@ -22,7 +22,7 @@ surface, driven by a `SKILL.md` under `hub/skills/`.
 | `chat`, `email` | Migrated to `hub/agents/<id>/python/` — the pattern below still describes them |
 | `gaia` (the flagship) | Ships as `hub/agents/gaia/python/`, composing `chat` as its base class |
 | `code`, `analyst`, `browser`, `fileio`, `docqa`, `doc-search`, `summarize`, `jira`, `docker`, `blender`, `sd`, `emr`, `routing` | **Deleted.** Capability moved to flagship skills in `hub/skills/` — see [Skill Format](/plans/skill-format) |
-| `hello-world`, `word-count`, `connectors-demo` | Kept as teaching templates, not catalog agents |
+| `hello-world`, `word-count`, `connectors-demo` | **Deleted.** `hello-world` survives as the one reference package `gaia agent init` mirrors, at `tests/fixtures/agents/hello-world/` |
 
 The package format below (`gaia-agent.yaml`, `pyproject.toml`, entry-point
 discovery) is still how `chat`, `email`, and `gaia` ship, and still the
