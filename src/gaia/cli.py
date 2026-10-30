@@ -22,7 +22,6 @@ from gaia.env import load_env
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
-    DEFAULT_HOST,
     DEFAULT_LEMONADE_URL,
     DEFAULT_MODEL_NAME,
     DEFAULT_PORT,
@@ -231,127 +230,6 @@ def _lemonade_answers(base_url: str | None = None) -> bool:
     else:
         client = LemonadeClient(keep_alive=True, verbose=False)
     return _probe(client)
-
-
-def ensure_agent_models(
-    agent: str,
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
-    quiet: bool = False,
-    _timeout: int = 1800,  # Reserved for future use
-) -> bool:
-    """
-    Ensure all models required for an agent are downloaded.
-
-    This function checks if models are available and downloads them with
-    streaming progress if needed. Called before starting agents to provide
-    user feedback during model downloads.
-
-    Args:
-        agent: Agent name (chat, rag, talk, vlm, minimal, mcp)
-        host: Lemonade server host
-        port: Lemonade server port
-        quiet: Suppress output (only errors)
-        timeout: Timeout per model in seconds
-
-    Returns:
-        bool: True if all models are available, False on error
-    """
-    log = get_logger(__name__)
-
-    try:
-        client = LemonadeClient(host=host, port=port, verbose=False)
-
-        # Get required models for this agent
-        model_ids = client.get_required_models(agent)
-
-        if not model_ids:
-            return True
-
-        # Check which models need downloading
-        models_to_download = []
-        for model_id in model_ids:
-            if not client.check_model_available(model_id):
-                models_to_download.append(model_id)
-
-        if not models_to_download:
-            log.debug(f"All models for {agent} agent already available")
-            return True
-
-        # Use AgentConsole for nicely formatted progress display
-        console = AgentConsole()
-
-        if not quiet:
-            console.print_info(
-                f"Downloading {len(models_to_download)} model(s) for {agent} agent"
-            )
-
-        # Download each model with progress display
-        for model_id in models_to_download:
-            if not quiet:
-                console.print_download_start(model_id)
-
-            try:
-                event_count = 0
-                last_bytes = 0
-                last_time = time.time()
-
-                for event in client.pull_model_stream(model_name=model_id):
-                    event_count += 1
-                    event_type = event.get("event")
-
-                    if event_type == "progress":
-                        # Skip first 2 spurious events from Lemonade
-                        if event_count <= 2 or quiet:
-                            continue
-
-                        # Calculate download speed
-                        current_bytes = event.get("bytes_downloaded", 0)
-                        current_time = time.time()
-                        time_delta = current_time - last_time
-
-                        speed_mbps = 0.0
-                        if time_delta > 0.1 and current_bytes > last_bytes:
-                            bytes_delta = current_bytes - last_bytes
-                            speed_mbps = (bytes_delta / time_delta) / (1024 * 1024)
-                            last_bytes = current_bytes
-                            last_time = current_time
-
-                        console.print_download_progress(
-                            percent=event.get("percent", 0),
-                            bytes_downloaded=current_bytes,
-                            bytes_total=event.get("bytes_total", 0),
-                            speed_mbps=speed_mbps,
-                        )
-
-                    elif event_type == "complete":
-                        if not quiet:
-                            console.print_download_complete(model_id)
-
-                    elif event_type == "error":
-                        if not quiet:
-                            console.print_download_error(
-                                event.get("error", "Unknown error"), model_id
-                            )
-                        log.error(f"Failed to download {model_id}")
-                        return False
-
-            except LemonadeClientError as e:
-                log.error(f"Failed to download {model_id}: {e}")
-                if not quiet:
-                    console.print_download_error(str(e), model_id)
-                return False
-
-        if not quiet:
-            console.print_success(f"All models ready for {agent} agent")
-
-        return True
-
-    except Exception as e:
-        log.error(f"Failed to ensure models for {agent}: {e}")
-        if not quiet:
-            print(f"❌ Error checking/downloading models: {e}", file=sys.stderr)
-        return False
 
 
 def _cli_error_text(e: BaseException) -> str:

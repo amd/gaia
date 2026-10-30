@@ -1,3 +1,6 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """Helpers to ingest uploaded media into VLM and RAG pipelines.
 
 Provides small, testable wrappers around `VLMClient` and `RAGSDK` so
