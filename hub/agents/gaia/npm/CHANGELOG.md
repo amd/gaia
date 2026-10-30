@@ -239,6 +239,14 @@ Python CLI 0.25.2+ on `PATH`. Integrators: the sidecar contract is now
   sent when the cancel lands is dropped.
 ### Fixed
 
+- **"Forget everything" forgets everything.** It deleted each memory a plain
+  `recall` listed, but that listing holds back sensitive ones, so a saved PIN
+  survived while the agent said memory was empty. The next session then rebuilt
+  the whole profile, a trip the user had asked it to forget included, from past
+  conversations. The new `forget_everything` tool erases all memory and the
+  stored conversations, after the user approves it. A plain `recall` now says
+  how many sensitive entries it held back, and `search_past_conversations`
+  leaves out turns that mention something forgotten after they were said.
 - **"Save it to my Documents folder" saves to the user's Documents folder.**
   The system prompt told GAIA that "my documents" meant its own documents
   folder (`~/.gaia/documents`), so a new file the user asked for in Documents

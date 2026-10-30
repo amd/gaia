@@ -286,6 +286,8 @@ export const enMessages = {
     'tool.update_memory.active': 'Updating memory',
     'tool.forget.done': 'Deleted from memory',
     'tool.forget.active': 'Deleting from memory',
+    'tool.forget_everything.done': 'Erased all memory',
+    'tool.forget_everything.active': 'Erasing all memory',
     'tool.search_past_conversations.done': 'Searched past chats',
     'tool.search_past_conversations.active': 'Searching past chats',
     'tool.request_user_input.done': 'Asked you',

@@ -97,6 +97,7 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     remember: Brain,
     update_memory: Brain,
     forget: Brain,
+    forget_everything: Brain,
     search_past_conversations: Brain,
     request_user_input: MessageCircleQuestionMark,
     // Skills

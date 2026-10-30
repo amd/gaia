@@ -29,7 +29,7 @@ icon: sparkles
 # registers only when GAIA_DYNAMIC_TOOLS=1 turns per-turn selection on.
 # + 3 audio-generation tools (enabled on the flagship, disabled in fast mode).
 # This is the REGISTERED size — what the agent can do.
-tools_count: 101
+tools_count: 102
 
 language: python
 # ChatAgent (gaia_agent.chat_agent) imports gaia.agents.tools.reasoning_tools;

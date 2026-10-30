@@ -753,6 +753,10 @@ class MemoryStoreClosedError(RuntimeError):
     """A store call arrived after ``close()``."""
 
 
+class MemoryScrubError(RuntimeError):
+    """Memory was erased, but the deleted text may still be readable in the file."""
+
+
 class MemoryStore:
     """Pure SQLite storage for agent memory. No agent dependencies."""
 
@@ -4544,30 +4548,78 @@ class MemoryStore:
                 raise
         logger.info("[MemoryStore] FTS5 indexes rebuilt")
 
+    _ERASED_META_KEY = "erased_at"
+
+    def erased_after(self, said_at: str) -> bool:
+        """Whether all of memory was erased at or after *said_at* (an ISO timestamp)."""
+        with self._locked():
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (self._ERASED_META_KEY,)
+            ).fetchone()
+        return row is not None and _as_datetime(row[0]) >= _as_datetime(said_at)
+
     def clear_all(self) -> Dict:
         """Permanently delete all knowledge, tool history, and conversation data.
 
         Wipes every knowledge entry, tool call log, and conversation turn
         from the database.  FTS5 indexes are reset to empty in the same
-        transaction so search stays consistent.
+        transaction so search stays consistent, then the file is vacuumed and
+        its WAL truncated so the deleted text can't be read back from disk.
+
+        Raises:
+            RuntimeError: the rows were deleted but another connection kept the
+                file from being scrubbed.
 
         Returns:
             Dict with counts of deleted rows per table:
             ``{knowledge: int, tool_history: int, conversations: int}``
         """
         with self._locked():
+            # Deleted rows otherwise stay readable in free pages, the WAL and
+            # the FTS index segments of the database file.
+            secure_delete = self._conn.execute("PRAGMA secure_delete").fetchone()[0]
+            self._conn.execute("PRAGMA secure_delete=ON")
             try:
                 knowledge_deleted = self._conn.execute("DELETE FROM knowledge").rowcount
                 self._rebuild_knowledge_fts_locked()
                 tool_deleted = self._conn.execute("DELETE FROM tool_history").rowcount
                 conv_deleted = self._conn.execute("DELETE FROM conversations").rowcount
                 self._rebuild_conversations_fts_locked()
+                # A plain FTS5 delete only tombstones; merging drops the old tokens.
+                for fts in ("knowledge_fts", "conversations_fts"):
+                    self._conn.execute(f"INSERT INTO {fts}({fts}) VALUES('optimize')")
                 # No conversation is left to relearn from.
                 self._conn.execute("DELETE FROM forgotten")
+                # A learning job still queued from before must not refill memory.
+                self._conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (self._ERASED_META_KEY, datetime.now().astimezone().isoformat()),
+                )
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
+                self._conn.execute(f"PRAGMA secure_delete={secure_delete}")
                 raise
+            try:
+                self._conn.execute("VACUUM")
+                busy = self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[
+                    0
+                ]
+            except sqlite3.OperationalError as e:
+                raise MemoryScrubError(
+                    f"Memory at {self._db_path} was erased, but the deleted text "
+                    f"could not be scrubbed from the file ({e}). Close other GAIA "
+                    "windows and erase again."
+                ) from e
+            finally:
+                self._conn.execute(f"PRAGMA secure_delete={secure_delete}")
+            if busy:
+                raise MemoryScrubError(
+                    f"Memory at {self._db_path} was erased, but another connection "
+                    "kept its write-ahead log from being cleared, so deleted text "
+                    "may remain there. Close other GAIA windows and erase again."
+                )
         logger.info(
             "[MemoryStore] cleared all: knowledge=%d tool_history=%d conversations=%d",
             knowledge_deleted,

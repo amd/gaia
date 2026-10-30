@@ -8,6 +8,7 @@
     "fetch_page",
     "fetch_webpage",
     "forget",
+    "forget_everything",
     "get_shell_state",
     "get_system_info",
     "install_cli",
