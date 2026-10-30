@@ -294,7 +294,7 @@ Run only scenarios with specific tags:
 gaia eval agent --tag security --tag t4_adversarial
 ```
 
-A scenario matches when its `tags:` field contains at least one of the given tags. The shipped scenarios use the difficulty tiers `t1_basic`, `t2_compound`, `t3_stress` and `t4_adversarial`, plus `security`, `usability` and `tui`; scenarios you author can carry any tags you like. `--exclude-tag` drops scenarios carrying a tag, after the include filters are applied.
+A scenario matches when its `tags:` field contains at least one of the given tags. The shipped scenarios use the difficulty tiers `t1_basic`, `t2_compound`, `t3_stress` and `t4_adversarial`, plus `security`, `usability` and `tui`; scenarios you author can carry any tags you like. `--exclude-tag` drops scenarios carrying a tag, after the include filters are applied. Shipped scenarios that need a particular environment are tagged for this: for a run without Lemonade, use `--exclude-tag local_blocked_no_embedder --exclude-tag live`.
 
 ### Output Formats
 
