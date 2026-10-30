@@ -53,7 +53,7 @@ def test_removal_preserves_user_data(tmp_path, action, sudo_user):
         assert "gaia uninstall --purge" in result.stdout
 
 
-def _run_script(script, action, tmp_path, *, target=None):
+def _run_script(script, action, tmp_path, *, target=None, regular_file=False):
     """Run a maintainer script with fake absolute paths redirected by sh."""
     home = tmp_path / "home"
     home.mkdir()
@@ -80,6 +80,8 @@ def _run_script(script, action, tmp_path, *, target=None):
     if target is not None:
         link = root / "usr/bin/gaia-desktop"
         link.symlink_to(target)
+    if regular_file:
+        (root / "usr/bin/gaia-desktop").write_text("admin's own launcher\n")
     return (
         subprocess.run(
             ["/bin/sh", str(script_copy), action],
@@ -117,3 +119,36 @@ def test_postrm_preserves_replacement_link(tmp_path):
     assert result.returncode == 0
     assert link.is_symlink()
     assert os.readlink(link) == "/usr/local/bin/custom-desktop"
+
+
+def test_postinst_reconfigure_keeps_our_link(tmp_path):
+    result, link = _run_script(
+        POSTINST, "configure", tmp_path, target="/opt/GAIA/gaia-desktop"
+    )
+    assert result.returncode == 0
+    assert os.readlink(link) == "/opt/GAIA/gaia-desktop"
+
+
+def test_postinst_preserves_replacement_link(tmp_path):
+    result, link = _run_script(
+        POSTINST, "configure", tmp_path, target="/usr/local/bin/custom-desktop"
+    )
+    assert result.returncode == 0
+    assert os.readlink(link) == "/usr/local/bin/custom-desktop"
+
+
+def test_postinst_preserves_dangling_replacement_link(tmp_path):
+    # A broken link fails `-e` but is still someone else's; it must survive.
+    result, link = _run_script(
+        POSTINST, "configure", tmp_path, target=str(tmp_path / "missing")
+    )
+    assert result.returncode == 0
+    assert os.readlink(link) == str(tmp_path / "missing")
+
+
+@pytest.mark.parametrize("script,action", [(POSTINST, "configure"), (POSTRM, "purge")])
+def test_scripts_preserve_regular_file(tmp_path, script, action):
+    result, link = _run_script(script, action, tmp_path, regular_file=True)
+    assert result.returncode == 0
+    assert not link.is_symlink()
+    assert link.read_text() == "admin's own launcher\n"

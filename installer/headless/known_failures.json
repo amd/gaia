@@ -9,6 +9,13 @@
       "signature": "the desktop app's .deb is named 'gaia'"
     },
     {
+      "issue": 5528,
+      "rows": ["ubuntu22-agent-ui-deb", "ubuntu24-agent-ui-deb"],
+      "phase": "install",
+      "kind": "finding",
+      "signature": "`gaia-desktop` is not on PATH"
+    },
+    {
       "issue": 5531,
       "rows": ["win-install-ps1"],
       "phase": "uninstall",
