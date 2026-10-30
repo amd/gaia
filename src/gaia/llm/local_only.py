@@ -387,7 +387,7 @@ def guard_inference(default_model: Optional[Callable[[Any], Optional[str]]] = No
     """Decorate a ``LemonadeClient`` inference method with the Local only check.
 
     The model is read from the method's ``model`` argument, positional or
-    keyword. *default_model(self)* supplies the id the method falls back to
+    keyword, else from a ``payload`` dict's ``"model"`` key. *default_model(self)* supplies the id the method falls back to
     when the caller passes none, so the check sees the model actually used.
     """
 
@@ -402,6 +402,10 @@ def guard_inference(default_model: Optional[Callable[[Any], Optional[str]]] = No
                 model = bound.arguments.get("model")
                 if not model and default_model is not None:
                     model = default_model(self)
+                if not model:
+                    payload = bound.arguments.get("payload")
+                    if isinstance(payload, dict):
+                        model = payload.get("model")
                 # Re-point at a restarted GAIA Lemonade first, or the catalog
                 # read below hits a dead address. Any key replay it attempts is
                 # refused under Local only (cloud_keys.ensure_authenticated).

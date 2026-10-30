@@ -353,6 +353,37 @@ def test_generate_image_checks_its_default_model(
         client.generate_image("a cat")
 
 
+@pytest.fixture
+def lease_entered(monkeypatch):
+    def lease(self, model, request_timeout=None):
+        raise _BodyEntered(model)
+
+    monkeypatch.setattr(LemonadeClient, "_model_slot_lease", lease)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"model": "fireworks.glm-5p3-flash", "prompt": "rain"},
+        {"model": "amd.gpt-oss-120b", "prompt": "rain"},
+        {"prompt": "rain"},
+        {"model": "", "prompt": "rain"},
+    ],
+)
+def test_generate_audio_checks_the_model_in_its_payload(
+    local_only_on, client, no_network, lease_entered, tmp_path, payload
+):
+    with pytest.raises(CloudDisabledError):
+        client.generate_audio(payload, tmp_path / "out.wav")
+
+
+def test_generate_audio_with_a_local_model_reaches_the_method_body(
+    local_only_on, client, no_network, lease_entered, tmp_path
+):
+    with pytest.raises(_BodyEntered):
+        client.generate_audio({"model": LOCAL, "prompt": "rain"}, tmp_path / "o.wav")
+
+
 def test_a_local_model_reaches_the_method_body(local_only_on, client, follows):
     with pytest.raises(_BodyEntered):
         client.chat_completions(LOCAL, [{"role": "user", "content": "hi"}])
