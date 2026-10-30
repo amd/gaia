@@ -185,8 +185,7 @@ if TYPE_CHECKING:
     from gaia.skills import Skill, SkillManager, SkillSetResolution, SkillSets
     from gaia.skills.binaries import BinaryGrants
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Importing the SDK must not configure the embedding application's root logger.
 logger = logging.getLogger(__name__)
 
 

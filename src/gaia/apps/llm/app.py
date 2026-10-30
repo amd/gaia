@@ -179,6 +179,9 @@ def main(
 
 def cli_main():
     """Command line interface."""
+    from gaia.logger import configure_logging
+
+    configure_logging()
     parser = argparse.ArgumentParser(description="Simple LLM App")
 
     parser.add_argument("query", help="Query to send to the LLM")

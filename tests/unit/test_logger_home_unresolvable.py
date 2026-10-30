@@ -16,9 +16,10 @@ from gaia import logger as gaia_logger
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Runs in a fresh interpreter so the import-time logger is really exercised.
+# Runs in a fresh interpreter so import-time logging remains side-effect free.
 _IMPORT_AND_LOG = (
-    "from gaia.logger import get_logger, log_manager\n"
+    "from gaia.logger import configure_logging, get_logger, log_manager\n"
+    "configure_logging()\n"
     "get_logger('gaia.probe').warning('probe-c38')\n"
     "print(log_manager.log_file)\n"
 )
@@ -81,6 +82,34 @@ def _assert_logged_to_tempdir(result, tmp_path):
     assert _same_path(reported, tmp_path / "gaia.log"), reported
     assert "probe-c38" in (tmp_path / "gaia.log").read_text(encoding="utf-8")
     assert "Home directory is not resolvable" in result.stderr
+
+
+def test_importing_sdk_does_not_configure_root_logger(tmp_path):
+    result = _run_child(
+        "import logging\n"
+        "root = logging.getLogger()\n"
+        "before = (root.level, list(root.handlers))\n"
+        "import gaia.logger\n"
+        "import gaia.agents.base\n"
+        "print(root.level == before[0] and root.handlers == before[1])\n",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "True"
+
+
+def test_configure_logging_is_explicit(tmp_path):
+    result = _run_child(
+        "import logging\n"
+        "root = logging.getLogger()\n"
+        "before = len(root.handlers)\n"
+        "from gaia.logger import configure_logging\n"
+        "configure_logging()\n"
+        "print(len(root.handlers) > before)\n",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "True"
 
 
 def test_home_log_file_is_none_when_home_unresolvable(monkeypatch):

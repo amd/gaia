@@ -361,13 +361,54 @@ class GaiaLogger:
         self.log_file = path
 
 
-# Create a global instance
-log_manager = GaiaLogger()
+class _LazyGaiaLogger:
+    """Create GAIA's handler-owning logger only from an explicit entry point.
+
+    Importing the SDK must not reconfigure an embedding application's root
+    logger.  The compatibility object keeps the existing ``log_manager`` API,
+    while its first operational attribute access performs the opt-in setup.
+    Named loggers themselves are safe to obtain during module import.
+    """
+
+    def __init__(self):
+        self._instance = None
+        self._loggers = {}
+
+    def _ensure(self):
+        if self._instance is None:
+            self._instance = GaiaLogger()
+            self._instance.loggers.update(self._loggers)
+            for logger in self._loggers.values():
+                logger.setLevel(self._instance._get_level_for_module(logger.name))
+        return self._instance
+
+    def get_logger(self, name):
+        logger = self._loggers.get(name)
+        if logger is None:
+            logger = logging.getLogger(name)
+            self._loggers[name] = logger
+            if self._instance is not None:
+                logger.setLevel(self._instance._get_level_for_module(name))
+                self._instance.loggers[name] = logger
+        return logger
+
+    def __getattr__(self, name):
+        return getattr(self._ensure(), name)
 
 
-# Convenience function to get a logger
+# Keep the public manager name for callers that need to configure logging, but
+# do not create handlers merely by importing ``gaia.logger``.
+log_manager = _LazyGaiaLogger()
+
+
+# Convenience function to get a named logger without configuring the process.
 def get_logger(name):
     return log_manager.get_logger(name)
+
+
+def configure_logging():
+    """Explicitly install GAIA's process-wide logging handlers."""
+    return log_manager._ensure()
 
 
 def route_console_logging_to_stderr():

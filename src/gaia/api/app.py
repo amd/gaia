@@ -312,6 +312,9 @@ def main() -> None:
         "--port", type=int, default=8080, help="Port number (default: 8080)"
     )
 
+    from gaia.logger import configure_logging
+
+    configure_logging()
     args = parser.parse_args()
 
     if args.command == "start":

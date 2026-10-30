@@ -34,7 +34,7 @@ from gaia.llm.lemonade_client import (
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
 from gaia.log_rotation import log_family
-from gaia.logger import get_logger
+from gaia.logger import configure_logging, get_logger
 from gaia.login_path import apply_login_path
 from gaia.mcp.ports import (
     AGENT_UI_MCP_PORT,
@@ -4667,6 +4667,7 @@ def _handle_schedule(args):
 
 
 def main():
+    configure_logging()
     use_os_trust_store()
     parser = build_parser()
     log = get_logger(__name__)
@@ -5034,7 +5035,9 @@ def main():
                 print(f"❌ Error: Failed to initialize TTS: {e}")
                 sys.exit(1)
 
-            test_text = args.test_text or """
+            test_text = (
+                args.test_text
+                or """
 Let's play a game of trivia. I'll ask you a series of questions on a particular topic,
 and you try to answer them to the best of your ability.
 
@@ -5050,6 +5053,7 @@ E) Edgar Allan Poe
 
 Let me know your answer!
 """
+            )
 
             try:
                 if args.test_type == "tts-preprocessing":

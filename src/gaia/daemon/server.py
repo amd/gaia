@@ -30,7 +30,7 @@ from gaia.daemon.instance import DaemonInstance, remove_instance, write_instance
 from gaia.daemon.scheduler.clock import DaemonClock, JobExecutor
 from gaia.llm.lemonade_service import install_supervisor
 from gaia.llm.lemonade_supervisor import LemonadeSupervisor
-from gaia.logger import get_logger
+from gaia.logger import configure_logging, get_logger
 
 logger = get_logger(__name__)
 
@@ -265,6 +265,8 @@ def run(host: str = HOST) -> None:
     import uvicorn
 
     from gaia.login_path import apply_login_path
+
+    configure_logging()
     from gaia.tls import use_os_trust_store
 
     use_os_trust_store()

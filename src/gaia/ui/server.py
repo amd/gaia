@@ -1237,6 +1237,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
 def main():
     """Run the Agent UI server."""
+    from gaia.logger import configure_logging
+
+    configure_logging()
     import argparse
 
     from gaia.tls import use_os_trust_store
