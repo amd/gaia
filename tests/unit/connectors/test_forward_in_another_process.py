@@ -184,7 +184,7 @@ def _forward_in_another_process(
         timeout=_CHILD_TIMEOUT,
     )
     if kill_after_client_write:
-        assert result.returncode != 0
+        assert result.returncode == 17, result.stderr
         return
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "forwarded"
@@ -234,6 +234,83 @@ def test_a_killed_forward_is_recovered_before_a_new_read(
     assert provider.client_id == OLD_CLIENT
     assert connection["refresh_token"] == "old-refresh"
     assert not store.has_forward_recovery("google")
+
+
+def test_a_disconnect_after_a_killed_forward_is_not_undone(
+    shared_keyring, connected_under_old_client
+):
+    """A stale marker must not bring back a connection the user removed."""
+    from gaia.connectors import store
+
+    _forward_in_another_process(shared_keyring, kill_after_client_write=True)
+    store.delete_connection("google")
+
+    assert not store.has_forward_recovery("google")
+    assert peek_connection("google") is None
+    assert tokens.load_current_connection("google")[1] is None
+    assert peek_connection("google") is None
+
+
+def test_a_reconnect_after_a_killed_forward_is_not_rolled_back(
+    shared_keyring, connected_under_old_client
+):
+    """A new sign-in under the forwarded client supersedes the marker."""
+    from gaia.connectors import store
+
+    _forward_in_another_process(shared_keyring, kill_after_client_write=True)
+    _registry.clear()
+    fresh = get_provider("google")
+    assert fresh.client_id == NEW_CLIENT
+    save_connection(
+        provider="google",
+        account_email="alice@example.com",
+        refresh_token="reconnected-refresh",
+        scopes=[GMAIL],
+        client_id_hash=fresh.client_id_hash,
+    )
+
+    assert not store.has_forward_recovery("google")
+    provider, connection = tokens.load_current_connection("google")
+    assert provider.client_id == NEW_CLIENT
+    assert connection["refresh_token"] == "reconnected-refresh"
+
+
+@pytest.mark.parametrize(
+    "slots",
+    [
+        {"secret:gateway": "attacker"},
+        {"provider:google": None, "google:default": None, "github:default": "x"},
+        {"provider:google": 7},
+    ],
+)
+def test_a_recovery_marker_only_restores_this_providers_two_slots(
+    shared_keyring, connected_under_old_client, slots
+):
+    """A marker naming any other slot is refused, and nothing is written."""
+    import json
+
+    from gaia.connectors import store
+
+    before = keyring.get_password(store.SERVICE_NAME, "secret:gateway")
+    store._kr_set("recovery:forward:google", json.dumps({"version": 1, "slots": slots}))
+    with pytest.raises(ConnectorsError, match="recovery record"):
+        store.recover_forward_recovery("google")
+    assert keyring.get_password(store.SERVICE_NAME, "secret:gateway") == before
+    assert peek_connection("google")["refresh_token"] == "old-refresh"
+
+
+def test_a_corrupt_recovery_marker_is_cleared_by_a_disconnect(
+    shared_keyring, connected_under_old_client
+):
+    """The error tells the user to reconnect; doing so must actually work."""
+    from gaia.connectors import store
+
+    store._kr_set("recovery:forward:google", "{not json")
+    with pytest.raises(ConnectorsError, match="recovery record"):
+        tokens.load_current_connection("google")
+    store.delete_connection("google")
+    assert not store.has_forward_recovery("google")
+    assert tokens.load_current_connection("google")[1] is None
 
 
 @respx.mock

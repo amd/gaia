@@ -385,6 +385,8 @@ def save_connection(
     username = _connection_username(provider, DEFAULT_ACCOUNT)
 
     _kr_set(username, payload)
+    # A completed write supersedes an interrupted forward's recovery record.
+    _kr_delete(_forward_recovery_username(provider))
 
 
 def load_connection(
@@ -547,16 +549,26 @@ def recover_forward_recovery(provider: str) -> bool:
     raw = _kr_get(username)
     if raw is None:
         return False
+    expected = {
+        _provider_credentials_username(provider),
+        _connection_username(provider, DEFAULT_ACCOUNT),
+    }
     try:
         marker = json.loads(raw)
         if marker.get("version") != 1 or not isinstance(marker.get("slots"), dict):
             raise ValueError("unsupported marker")
+        slots = marker["slots"]
+        # Restore only this provider's two slots, never a slot the marker names.
+        if set(slots) != expected or not all(
+            v is None or isinstance(v, str) for v in slots.values()
+        ):
+            raise ValueError("unexpected marker slots")
     except (json.JSONDecodeError, AttributeError, ValueError) as exc:
         raise ConnectorsError(
             f"The recovery record for the {provider} connection is corrupt. "
             "Reconnect from Settings → Connectors before using it again."
         ) from exc
-    restore_connection_slots(marker["slots"])
+    restore_connection_slots(slots)
     _kr_delete(username)
     return True
 
@@ -594,6 +606,8 @@ def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) ->
     verify_keyring_backend()
     username = _connection_username(provider, account_email)
     _kr_delete(username)
+    # Otherwise the next read would restore the connection just removed.
+    _kr_delete(_forward_recovery_username(provider))
 
 
 def _secret_username(name: str) -> str:

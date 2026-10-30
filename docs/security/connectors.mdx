@@ -73,7 +73,8 @@ usable until it expires or is withdrawn, even after the provider is
 disconnected. A forwarded connection records the previous client and
 connection before changing either. An ordinary failure puts both back before
 letting go of the lock; after a crash or power loss, the first locked read
-restores that pair before it applies the client-hash check. No process clears a
+restores that pair before it applies the client-hash check. A later sign-in or
+disconnect discards that record, so recovery never undoes it. No process clears a
 connection because it observed a new client next to the old connection.
 
 ## What we do not protect
