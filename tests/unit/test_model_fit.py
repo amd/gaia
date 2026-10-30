@@ -580,6 +580,67 @@ class TestRealLemonadeReports:
         with pytest.raises(ModelFitError, match="not its memory"):
             capacity_from_system_info(info)
 
+    @pytest.mark.parametrize(
+        "raw", [float("nan"), float("inf"), -8.0, 1024.5, 17179869184, True]
+    )
+    def test_unusable_discrete_vram_never_sizes_a_model(self, raw):
+        info = {
+            "Physical Memory": "16 GB",
+            "devices": {
+                "amd_gpu": [
+                    {
+                        "available": True,
+                        "integrated": False,
+                        "name": "GPU",
+                        "vram_gb": raw,
+                    }
+                ]
+            },
+        }
+
+        with pytest.raises(ModelFitError, match="not its memory"):
+            capacity_from_system_info(info)
+
+    def test_vram_of_1024_gib_is_still_believed(self):
+        info = {
+            "Physical Memory": "16 GB",
+            "devices": {
+                "amd_gpu": [
+                    {
+                        "available": True,
+                        "integrated": False,
+                        "name": "GPU",
+                        "vram_gb": 1024,
+                    }
+                ]
+            },
+        }
+
+        assert capacity_from_system_info(info).memory_gb == pytest.approx(1024.0)
+
+    def test_a_bogus_card_listed_first_does_not_hide_the_real_one(self):
+        info = {
+            "Physical Memory": "16 GB",
+            "devices": {
+                "amd_gpu": [
+                    {
+                        "available": True,
+                        "integrated": False,
+                        "name": "Bogus",
+                        "vram_gb": 17179869184.0,
+                    },
+                    {
+                        "available": True,
+                        "integrated": False,
+                        "name": "AMD Radeon RX 5700 XT",
+                        "vram_gb": 8.0,
+                    },
+                ]
+            },
+        }
+
+        assert capacity_from_system_info(info).memory_gb == pytest.approx(8.0)
+
     def test_legacy_amd_igpu_key_is_read(self):
         info = {
             "devices": {
