@@ -77,3 +77,60 @@ def test_data_profile_unsupported_line_keeps_image_analysis(prompts_and_tools):
         "feature_request.md . Image analysis IS supported via `analyze_image`."
     )
     assert "search_web" not in line and "transcribe_media" not in line
+
+
+def _prompt_for_spec(spec):
+    """Render the prompt with ``spec`` substituted for the data profile."""
+    import gaia_agent_chat.agent as agent_mod
+
+    with (
+        patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
+        patch("gaia_agent_chat.agent.RAGSDK"),
+        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+        patch("gaia.llm.lemonade_client.LemonadeClient"),
+    ):
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, prompt_profile="data"))
+        with patch.object(agent_mod, "get_profile_spec", return_value=spec):
+            return _unsupported_line(agent._get_system_prompt())
+
+
+@pytest.mark.parametrize(
+    "groups, web, media",
+    [
+        (("media_transcribe",), False, True),
+        (("web_browse",), True, False),
+        (("web_browse", "media_transcribe"), True, True),
+        # Near-miss group names must not unlock the sentences.
+        (("web_browse_extra", "media"), False, False),
+    ],
+)
+def test_web_and_media_sentences_follow_tool_groups_independently(groups, web, media):
+    import dataclasses
+
+    spec = dataclasses.replace(
+        PROFILE_SPECS["data"], tool_groups=PROFILE_SPECS["data"].tool_groups + groups
+    )
+    line = _prompt_for_spec(spec)
+    assert ("search_web" in line) is web
+    assert ("transcribe_media" in line) is media
+    assert "Image analysis IS supported via `analyze_image`." in line
+
+
+def test_unknown_profile_falls_back_to_full_and_keeps_web_and_media():
+    """An unrecognised profile registers full's tools, so it must advertise them."""
+    with (
+        patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
+        patch("gaia_agent_chat.agent.RAGSDK"),
+        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+        patch("gaia.llm.lemonade_client.LemonadeClient"),
+    ):
+        agent = ChatAgent(
+            ChatAgentConfig(silent_mode=True, prompt_profile="no-such-profile")
+        )
+        prompt = agent._get_system_prompt()
+        registered = set(agent._tools_registry)
+    assert {"search_web", "transcribe_media"} <= registered
+    line = _unsupported_line(prompt)
+    assert "search_web" in line and "transcribe_media" in line
