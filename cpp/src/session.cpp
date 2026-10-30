@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "gaia/session.h"
+#include "gaia/agent.h"
 
 #include <algorithm>
 #include <chrono>
@@ -306,7 +307,7 @@ std::vector<SessionInfo> SessionStore::list() const {
                     if (msg.value("role", "") == "user") {
                         std::string content;
                         if (msg.contains("content") && msg["content"].is_string()) {
-                            content = msg["content"].get<std::string>();
+                            content = stripTurnContext(msg["content"].get<std::string>());
                         }
                         if (content.size() > 100) {
                             content = content.substr(0, 97) + "...";

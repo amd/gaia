@@ -165,6 +165,7 @@ TEST(ProcessRunnerTest, NoTimeoutMode) {
 // ShellSession — state that survives between commands
 // ---------------------------------------------------------------------------
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -498,4 +499,80 @@ TEST_F(ShellSessionTest, TimeoutKillsTheWholeProcessTree) {
 #else
     GTEST_SKIP() << "Windows needs a Job Object for tree kill (not implemented)";
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// Cancel hook
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A command that waits about two seconds, then writes @p marker from a grandchild shell.
+std::string delayedMarkerCommand(const fs::path& marker) {
+#ifdef _WIN32
+    return "cmd /c \"ping -n 3 127.0.0.1 >nul & echo late> \"" + marker.string() + "\"\"";
+#else
+    return "sh -c 'sleep 2; echo late > \"" + marker.string() + "\"'";
+#endif
+}
+
+}  // namespace
+
+TEST(ProcessCancelTest, CancelKillsTheWholeTreePromptly) {
+    const fs::path marker = fs::temp_directory_path() / "gaia_cancel_marker.txt";
+    std::error_code ec;
+    fs::remove(marker, ec);
+    std::atomic<bool> stop{false};
+    std::thread trigger([&stop] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        stop = true;
+    });
+    const auto t0 = std::chrono::steady_clock::now();
+    auto result = ProcessRunner::run(delayedMarkerCommand(marker), 0, "", {}, 65536, [&stop] { return stop.load(); });
+    const auto took = std::chrono::steady_clock::now() - t0;
+    trigger.join();
+    EXPECT_TRUE(result.cancelled);
+    EXPECT_FALSE(result.timedOut);
+    EXPECT_LT(took, std::chrono::milliseconds(1500));
+    // The grandchild would write the marker about two seconds in; it must be gone.
+    std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+    EXPECT_FALSE(fs::exists(marker)) << "a child of the cancelled command kept running";
+    fs::remove(marker, ec);
+}
+
+TEST(ProcessCancelTest, HookThatNeverFiresChangesNothing) {
+    int polls = 0;
+    auto result = ProcessRunner::run("echo hello", 10000, "", {}, 65536, [&polls] {
+        ++polls;
+        return false;
+    });
+    EXPECT_EQ(result.exitCode, 0);
+    EXPECT_FALSE(result.cancelled);
+    EXPECT_NE(result.stdout_output.find("hello"), std::string::npos);
+}
+
+TEST(ProcessCancelTest, TimeoutStillWinsWithAHookSet) {
+#ifdef _WIN32
+    const char* sleepCmd = "cmd /c ping -n 60 127.0.0.1 >nul";
+#else
+    const char* sleepCmd = "sleep 60";
+#endif
+    auto result = ProcessRunner::run(sleepCmd, 800, "", {}, 65536, [] { return false; });
+    EXPECT_TRUE(result.timedOut);
+    EXPECT_FALSE(result.cancelled);
+}
+
+TEST(ProcessCancelTest, ShellSessionPassesTheHookThrough) {
+    ShellSession session;
+#ifdef _WIN32
+    const char* sleepCmd = "ping -n 30 127.0.0.1 >nul";
+#else
+    const char* sleepCmd = "sleep 30";
+#endif
+    const auto t0 = std::chrono::steady_clock::now();
+    auto result = session.run(sleepCmd, 60000, 65536, [t0] {
+        return std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(300);
+    });
+    EXPECT_TRUE(result.cancelled);
+    EXPECT_LT(std::chrono::steady_clock::now() - t0, std::chrono::seconds(2));
 }

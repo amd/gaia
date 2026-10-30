@@ -54,6 +54,11 @@ public:
     /// Construct with an explicit directory path (for testing).
     explicit AllowedToolsStore(const std::string& dir);
 
+    /// A store that lives only as long as this process: it reads no file,
+    /// writes none, and never records a tool in @p neverGranted (an "always"
+    /// answer for one of those allows that call only).
+    static std::shared_ptr<AllowedToolsStore> sessionOnly(std::set<std::string> neverGranted);
+
     /// Check whether toolName has been permanently allowed.
     bool isAlwaysAllowed(const std::string& toolName) const;
 
@@ -70,8 +75,11 @@ public:
     std::vector<std::string> allAllowed() const;
 
 private:
-    std::string filePath_;
+    AllowedToolsStore(std::nullptr_t, std::set<std::string> neverGranted);
+
+    std::string filePath_;  // empty: session-only
     std::set<std::string> allowed_;
+    std::set<std::string> neverGranted_;
 
     void load();
     void save() const;

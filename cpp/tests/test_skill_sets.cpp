@@ -511,11 +511,11 @@ TEST(SkillSetsManifest, ReadsTheFixtureManifest) {
 }
 
 TEST(SkillSetsManifest, ARealShippedManifestWithoutSkillBlocksIsEmpty) {
-    // cpp/agents/bash/gaia-agent.yaml declares no skills. Reading it must yield
+    // cpp/agents/gaia/gaia-agent.yaml declares no skills. Reading it must yield
     // the falsy empty instance, not an error — every existing agent keeps its
     // behaviour exactly.
     const std::string path =
-        std::string(GAIA_CPP_SOURCE_DIR) + "/agents/bash/gaia-agent.yaml";
+        std::string(GAIA_CPP_SOURCE_DIR) + "/agents/gaia/gaia-agent.yaml";
     ASSERT_TRUE(fs::exists(path)) << path;
 
     const SkillSets sets = parseSkillSetsFile(path);

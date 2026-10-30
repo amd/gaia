@@ -74,12 +74,18 @@ void SseParser::processData(const std::string& payload) {
         }
 
         const auto& choice = j["choices"][0];
+        if (choice.contains("finish_reason") && choice["finish_reason"].is_string()) {
+            finishReason_ = choice["finish_reason"].get<std::string>();
+        }
         if (!choice.contains("delta")) return;
 
         const auto& delta = choice["delta"];
 
         if (delta.contains("tool_calls") && delta["tool_calls"].is_array()) {
             accumulateToolCalls(delta["tool_calls"]);
+        }
+        if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string()) {
+            reasoning_ += delta["reasoning_content"].get<std::string>();
         }
 
         if (!delta.contains("content") || delta["content"].is_null()) return;

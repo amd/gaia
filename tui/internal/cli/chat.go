@@ -65,7 +65,7 @@ var chatCmd = &cobra.Command{
 			return fmt.Errorf("one of --agent or --subprocess is required\n\n" +
 				"Usage: gaia tui chat --agent email\n" +
 				"       gaia tui chat --agent email --query \"triage my inbox\"\n" +
-				"       gaia tui chat --subprocess \"./gaia-bash --json-events\"")
+				"       gaia tui chat --subprocess \"./gaia-agent --json-events\"")
 		}
 		// Opened only once the command is known to be runnable, so a refused
 		// launch never announces a trace it is not going to write.
@@ -114,7 +114,7 @@ func orSubprocess(agentID string) string {
 func init() {
 	chatCmd.Flags().StringVar(&agentID, "agent", "", "catalog agent id to chat with (e.g. \"email\")")
 	chatCmd.Flags().StringVar(&chatModel, "model", "", "model id override (--agent only; the sidecar default is used when unset)")
-	chatCmd.Flags().StringVar(&subprocess, "subprocess", "", "command to spawn agent subprocess (e.g. \"./gaia-bash --json-events\")")
+	chatCmd.Flags().StringVar(&subprocess, "subprocess", "", "command to spawn agent subprocess (e.g. \"./gaia-agent --json-events\")")
 	chatCmd.Flags().StringVar(&query, "query", "", "single query to send. With --agent it is a genuine non-interactive one-shot: it refuses in seconds when a precondition is unmet, answers on stdout, and exits 0 answered / 1 failed / 3 needs approval / 130 interrupted. With --subprocess it opens the interactive chat and sends this as the first message, so it still needs a terminal")
 	chatCmd.Flags().DurationVar(&chatTimeout, "timeout", ui.DefaultOneShotTimeout,
 		"how long one --query turn may take before it is abandoned and reported (--agent only)")

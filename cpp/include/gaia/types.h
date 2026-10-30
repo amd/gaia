@@ -424,6 +424,51 @@ struct AgentConfig {
     /// native tool calling entirely, set nativeToolCalls = NativeToolCalls::Never.
     std::string toolChoice = "auto";
 
+    /// Apply GAIA_BASE_URL, GAIA_MODEL_ID, GAIA_MAX_STEPS, GAIA_CONTEXT_SIZE and
+    /// GAIA_MAX_TOKENS on construction. The flagship resolves its own settings
+    /// and turns this off so they cannot silently override its flags.
+    bool legacyEnvOverrides = true;
+
+    /// When set, each turn writes a JSON trace here (Python's --trace): every
+    /// model call and tool call with timings, results and the messages sent.
+    std::string traceFile;
+
+    // ---- Flagship loop behaviors (Python base Agent parity). All default off
+    // ---- so an agent that does not opt in sees byte-identical prompts.
+
+    /// Keep an oversized tool result whole in a ToolOutputStore and show the
+    /// model a head, a tail, and a handle for `read_tool_output`, instead of
+    /// clipping it to 4,000 characters. The budget scales with contextSize.
+    bool toolOutputPaging = false;
+
+    /// Split `<think>…</think>` reasoning out of replies before they are
+    /// parsed or kept in history, and accept `reasoning_content` as the answer
+    /// when a model put its whole reply there.
+    bool stripThinking = false;
+
+    /// Tell the model how many steps remain at 20 / 10 / 5 left, and answer
+    /// once with no tools when the limit runs out instead of giving up.
+    bool stepBudgetGuidance = false;
+
+    /// Native tool calls whose arguments cannot be decoded are sent back to
+    /// the model as a retry prompt, up to this many in a row, before the turn
+    /// fails. 0 fails the turn on the first one.
+    int malformedToolCallRetries = 0;
+
+    /// Keep saved history within half of contextSize (estimated at ~4 chars
+    /// per token): old tool output is stubbed first, then the oldest turns go.
+    /// Off, history is only capped by maxHistoryMessages.
+    bool historyTokenBudget = false;
+
+    /// Re-prompt a "final answer" that did not finish: tool-call markup typed
+    /// as text, a narrated next step, a planning-only sentence, an answer about
+    /// a workspace file it never opened, or a reply cut off at max_tokens.
+    /// Python's unfinished-answer guards.
+    bool finalAnswerGuards = false;
+
+    /// Bearer key for Lemonade. Empty uses LEMONADE_API_KEY. Never serialized.
+    std::string lemonadeApiKey;
+
     /// Resolve the Auto policy against ``modelId``.
     bool useNativeToolCalls() const;
 

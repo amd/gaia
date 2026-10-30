@@ -45,7 +45,7 @@ TARGET_BY_ID: Dict[str, str] = {
     "process": "process_agent",
     "security-demo": "security_demo",
     "vlm": "vlm_agent",
-    "bash": "gaia-bash",
+    "gaia-native": "gaia-agent",
 }
 
 # Matrix platform triples -> executable suffix.
@@ -214,7 +214,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"error: agents dir not found: {args.agents_dir}", file=sys.stderr)
         return 2
 
-    agent_dirs = sorted(p for p in args.agents_dir.iterdir() if p.is_dir())
+    # Shared sources (e.g. common/) have no manifest and are not agents.
+    agent_dirs = sorted(
+        p
+        for p in args.agents_dir.iterdir()
+        if p.is_dir() and (p / "gaia-agent.yaml").exists()
+    )
     if not agent_dirs:
         print(f"error: no agent manifests under {args.agents_dir}", file=sys.stderr)
         return 2

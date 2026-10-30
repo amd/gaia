@@ -1945,12 +1945,12 @@ AGENT_PROFILES = {
         min_ctx_size=GPU_CTX_SIZE,
         description="Interactive chat with RAG and vision support",
     ),
-    "bash": AgentProfile(
-        name="bash",
-        display_name="Bash Agent",
+    "native": AgentProfile(
+        name="native",
+        display_name="GAIA (native)",
         models=["gemma-4-e4b"],
         min_ctx_size=GPU_CTX_SIZE,
-        description="Native C++ bash scripting agent (gaia-bash binary)",
+        description="The flagship as one native C++ binary (gaia-agent)",
     ),
     "talk": AgentProfile(
         name="talk",
