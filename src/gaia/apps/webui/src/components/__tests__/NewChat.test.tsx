@@ -4,6 +4,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
+import { useBrowserPaneStore } from '../../stores/browserPaneStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
@@ -460,5 +461,26 @@ describe('NewChat after first-run setup failed', () => {
         useChatStore.setState({ systemStatus: { init_state: 'ready', setup_error: null } as SystemStatus });
         render(<NewChat onSend={vi.fn()} />);
         expect(screen.queryByRole('alert')).toBeNull();
+    });
+});
+
+describe('NewChat and the browser pane', () => {
+    afterEach(() => {
+        delete window.gaiaBrowserPane;
+        useBrowserPaneStore.setState({ draftOpen: false });
+    });
+
+    it('offers the browser pane button in the desktop app', () => {
+        window.gaiaBrowserPane = {} as NonNullable<typeof window.gaiaBrowserPane>;
+        useBrowserPaneStore.setState({ draftOpen: false });
+        render(<NewChat onSend={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Show browser pane' }));
+        expect(useBrowserPaneStore.getState().draftOpen).toBe(true);
+        expect(screen.getByRole('button', { name: 'Hide browser pane' })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('has no browser pane button in a plain browser', () => {
+        render(<NewChat onSend={vi.fn()} />);
+        expect(screen.queryByRole('button', { name: /browser pane/ })).toBeNull();
     });
 });

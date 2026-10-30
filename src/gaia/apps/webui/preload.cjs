@@ -105,6 +105,34 @@ contextBridge.exposeInMainWorld("gaiaWindow", {
   setColors: (colors) => ipcRenderer.invoke("window:set-titlebar-colors", colors),
 });
 
+// ── Browser pane ─────────────────────────────────────────────────────────
+// Channel names match CHANNELS in services/browser-pane/ipc.cjs (a sandboxed
+// preload can't require it). Types: services/browser-pane/contract.d.ts.
+contextBridge.exposeInMainWorld("gaiaBrowserPane", {
+  getState: () => ipcRenderer.invoke("pane:get-state"),
+  onState: (cb) => onEvent("pane:state", cb),
+  onCommand: (cb) => onEvent("pane:command", cb),
+  setBounds: (rect) => ipcRenderer.send("pane:set-bounds", rect),
+  setView: (chat, visible) => ipcRenderer.send("pane:set-view", chat, visible),
+  claimDraft: (sessionId) => ipcRenderer.send("pane:claim-draft", sessionId),
+  forgetChat: (sessionId) => ipcRenderer.send("pane:forget-chat", sessionId),
+  setOccluded: (occluded) => ipcRenderer.invoke("pane:set-occluded", occluded),
+  openTab: (url) => ipcRenderer.invoke("pane:open-tab", url),
+  closeTab: (tabId) => ipcRenderer.invoke("pane:close-tab", tabId),
+  selectTab: (tabId) => ipcRenderer.invoke("pane:select-tab", tabId),
+  navigate: (tabId, url) => ipcRenderer.invoke("pane:navigate", tabId, url),
+  history: (tabId, action) => ipcRenderer.invoke("pane:history", tabId, action),
+  toggleDevTools: (tabId) => ipcRenderer.invoke("pane:toggle-devtools", tabId),
+  clearBrowsingData: () => ipcRenderer.invoke("pane:clear-data"),
+  openExternal: (tabId) => ipcRenderer.invoke("pane:open-external", tabId),
+  setControl: (tabId, control) => ipcRenderer.invoke("pane:set-control", tabId, control),
+  setViewport: (tabId, choice) => ipcRenderer.invoke("pane:set-viewport", tabId, choice),
+  togglePicking: () => ipcRenderer.invoke("pane:toggle-picking"),
+  onPicked: (cb) => onEvent("pane:picked", cb),
+  stopDevServer: (key) => ipcRenderer.invoke("pane:stop-dev-server", key),
+  answerDialog: (tabId, accept, text) => ipcRenderer.invoke("pane:answer-dialog", tabId, accept, text),
+});
+
 // ── Install progress (Phase A) ──────────────────────────────────────────
 // Exposed as a separate global so the progress window can use it without
 // pulling in the full gaiaAPI surface (and so it keeps working if an

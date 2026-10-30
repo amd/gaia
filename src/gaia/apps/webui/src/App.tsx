@@ -12,6 +12,8 @@ import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { NotificationCenter } from './components/NotificationCenter';
 import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
+import { BrowserPane } from './components/browser-pane/BrowserPane';
+import { browserPaneApi, useBrowserPaneStore } from './stores/browserPaneStore';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
@@ -473,6 +475,8 @@ function App() {
         clearSavedDraft(NEW_CHAT_DRAFT_KEY);
         if (modeError && !session.private) writeSavedDraft(chatDraftKey(session.id), text);
         addSession(session);
+        // Before the switch, so main moves the screen's tabs instead of showing the chat empty.
+        useBrowserPaneStore.getState().claimDraft(session.id);
         setCurrentSession(session.id);
         setMessages([]);
         setDraftText('');
@@ -624,6 +628,8 @@ function App() {
         );
     }
 
+    // Beside a chat or a new chat, in the desktop app only.
+    const paneApi = !showMemoryDashboard && !showSchedules ? browserPaneApi() : undefined;
     const main = showMemoryDashboard ? (
         <Suspense fallback={<Loading />}><MemoryDashboard /></Suspense>
     ) : currentSessionId ? (
@@ -675,6 +681,7 @@ function App() {
                 )}
                 {main}
             </div>
+            {paneApi && <BrowserPane api={paneApi} />}
 
             {showSchedules && <Suspense fallback={null}><ScheduleManager /></Suspense>}
             {showDocLibrary && <Suspense fallback={null}><DocumentLibrary /></Suspense>}

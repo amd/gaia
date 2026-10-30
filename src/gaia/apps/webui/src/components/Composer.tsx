@@ -4,6 +4,7 @@
 import { useCallback, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { ArrowUp, FileText, Plus, Square, X } from 'lucide-react';
 import type { UseAttachments } from '../hooks/useAttachments';
+import { ElementChips, useElementChipsBlock } from './browser-pane/ElementChip';
 import './Composer.css';
 
 interface ComposerProps {
@@ -45,7 +46,8 @@ export function Composer({
     // What is sent: the text plus a link for each attached file.
     const sentLength = attachments.compose(value.trim()).length;
     const tooLong = sentLength > MAX_MESSAGE_CHARS;
-    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong;
+    const chipsBlock = useElementChipsBlock(streaming);
+    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong && !chipsBlock;
 
     const shownPlaceholder = disabledReason || placeholder;
 
@@ -91,6 +93,7 @@ export function Composer({
             onDrop={handleDrop}
             onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
         >
+            <ElementChips />
             {attachments.attachments.length > 0 && (
                 <ul className="composer-attachments" aria-label="Attached files">
                     {attachments.attachments.map((a) => (
@@ -165,7 +168,7 @@ export function Composer({
                             onClick={onSubmit}
                             disabled={!canSend}
                             aria-label="Queue message"
-                            title="Queue it to send when this reply ends (Enter)"
+                            title={chipsBlock ?? 'Queue it to send when this reply ends (Enter)'}
                         >
                             <ArrowUp size={16} />
                         </button>
@@ -188,7 +191,7 @@ export function Composer({
                             onClick={onSubmit}
                             disabled={!canSend}
                             aria-label="Send"
-                            title="Send (Enter)"
+                            title={chipsBlock ?? 'Send (Enter)'}
                         >
                             <ArrowUp size={16} />
                         </button>

@@ -664,6 +664,227 @@ reads nothing.
     request with GitHub's `gh` tool; it isn't offered from the default branch
     or while the chat's internet is off.
 
+## Browser pane
+
+The desktop app has a browser beside the chat, so you can read a page and talk
+to GAIA about it without switching windows. Press **Cmd+Shift+B** (macOS) or
+**Ctrl+Shift+B** (Windows and Linux), or click the globe button in the chat's
+title bar, to show or hide it. The shortcut works while you're typing in a page
+in the pane too. The browser pane isn't in the web version of the Agent UI.
+
+- **Tabs.** **+** opens a new tab, which lists the pages this chat opened recently.
+  Links that open a new window open as a new tab in the pane instead.
+- **Each chat has its own tabs.** Tabs you or GAIA open belong to the chat on
+  screen, and a link that opens a new window stays in its page's chat.
+  Switching chats shows that chat's tabs, where you left them; a new chat
+  starts with the pane closed and no tabs. Tabs you open on the new-chat
+  screen move to the chat your first message starts. Sign-ins are shared by
+  every chat.
+- **Other chats' pages keep running** in the background, so going back to a
+  chat doesn't reload them. Past 12 open pages across all chats, the pages of
+  the chat you looked at longest ago close. Its tabs keep their address and
+  history and load again when you open that chat, with the scroll position
+  and form text the page last saved; anything newer, and the page's own
+  running state, such as an unsaved draft or a live connection, starts over.
+  The chat on screen and a chat whose page waits on a box never lose their
+  pages this way.
+- **Deleting a chat** closes its tabs and stops the dev servers only it was
+  using.
+- **Address bar.** Type a full address or just a host. `example.com` opens
+  over https; `localhost:5173`, `127.0.0.1` and other addresses on this PC
+  open over http, so local dev servers work as typed.
+- **Back, Forward and Reload.** Reload turns into **Stop** while a page loads.
+- **Developer tools** opens Chromium's DevTools docked at the bottom of the
+  page, inspecting that page rather than GAIA.
+- **Responsive** shows the page at a phone, tablet or laptop size, at a width
+  and height you type, turned sideways with **Rotate**, and in light or dark
+  mode. **Fill pane** and **System** put it back.
+- **Dev servers** lists the [dev servers](#dev-servers) GAIA started, with
+  their status and port, the chat that started each one, **Open in pane** and
+  **Stop**.
+- **More (⋯)** has **Make this tab private**, **Open in system browser**,
+  which hands the page to your default browser, and **Clear browsing data**,
+  which deletes the pane's cookies, site data, cache and recent pages. It never
+  touches your system browser or GAIA's own data.
+- **Resize** by dragging the pane's left edge, or focus the edge and use the
+  arrow keys; double-click it for the default width. The width is remembered,
+  and so is whether each chat has its pane open. The pane and the session
+  panel share the right side, so opening one closes the other.
+
+Pages in the pane run sandboxed and apart from GAIA. They can't use your
+camera, microphone, location or notifications, and the pane says so when a page
+asks. Downloads always ask where to save. Only http and https pages open:
+`file:` links and other schemes are refused with a note above the page, and so
+is GAIA's own local service. While a dialog or menu is open over the pane, the
+page shows as a still picture and comes back live when you close it.
+
+### Send page elements to the chat
+
+Point at part of a page and ask about it. Press **Cmd+Shift+S** (macOS) or
+**Ctrl+Shift+S** (Windows and Linux), or click **Select element** in the pane's
+toolbar, then click an element in the page. It gets an outline labelled with
+its tag and class, and a chip such as `button.primary "Save"` appears above the
+message box.
+
+- **Shift-click** adds more elements, up to eight per message.
+- **Up and Down arrows** move the last pick to its parent and back to a child.
+- **Escape**, **Done** on the strip, or the shortcut again ends picking.
+  Clicks on the page do nothing while you pick.
+- **Each chip has HTML, Styles and Screenshot toggles.** What you switch off is
+  not sent. The selector, role, text and page address always go. Screenshot
+  starts off, because GAIA then studies the picture, which makes the reply
+  slower; turn it on when how the element looks matters.
+- **On a React dev build** the chip also names the component, and where the
+  build records it, its file and line.
+
+When you send, GAIA gets the elements as page data, never as instructions: text
+on the page like "ignore your instructions" is something GAIA reads about, not
+something it does. The message keeps its chips, so you can see what you sent.
+GAIA can click a picked element directly, so "click the button I picked" works.
+A pick lasts until the page reloads or navigates; after that, pick it again.
+
+### GAIA uses the pane
+
+GAIA can open pages in the pane, read the one you're looking at, and click,
+type and press keys in it, inside its frames too. Ask "what does this page say?", "any console errors
+here?", "fill in this form" or "open localhost:5173 and check the settings
+page", and the pane opens if it was closed. Pages GAIA opens get their own tab;
+it never navigates away from a page you opened.
+
+While GAIA reads a page, a strip above it says **GAIA is reading this page**.
+While it clicks and types, the strip says **GAIA is using this tab** and you see
+each step happen.
+
+- **You can take over at any time.** Press **Pause** on the strip, or just
+  click or type in the page while GAIA is using it. GAIA stops there, says
+  which steps it didn't do, and asks how to go on. Press **Resume** to hand the
+  tab back. Any click or keystroke of yours also holds GAIA off that tab for a
+  few seconds.
+- **GAIA only sees this chat's tabs.** It can't list, read or act in another
+  chat's tabs, even by their id.
+- **Private tabs are yours alone.** **Make this tab private** in the **⋯** menu
+  hides the tab from GAIA: it isn't listed when GAIA asks which tabs are open,
+  and GAIA can't read or act in it. A lock shows on the tab.
+- **Your Responsive choice wins.** GAIA can show a page at a phone or tablet
+  size or in dark mode to check how it looks, but if you picked a size, it
+  stays, and GAIA tells you so.
+- **Buttons that can't be undone ask first.** Before GAIA clicks something like
+  **Delete**, **Place order** or **Create account**, you get an **Allow once**
+  prompt, even on a page on this PC. Pressing Enter or Space, or typing and
+  pressing Enter, asks the same way on a page that shows such a button.
+
+- **Dev servers GAIA started need no approval.** A server GAIA started for
+  this chat is read straight away, so previewing what it built just works.
+- **Any other site asks first, `localhost` included,** with **Allow once**,
+  **Always allow** (pages on that site, for this chat) or **Deny**. Other
+  programs on this PC listen on `localhost` too, so a local page is not
+  assumed to be yours. GAIA never reads a site you haven't approved: if a
+  page moves to another site while GAIA is reading it,
+  the move is stopped, and if it moves on its own later, you still see it but
+  GAIA is told only where it went.
+- **GAIA can take a picture of the page** and read its console messages and
+  network requests, which helps when a page you're building misbehaves. On a
+  page on this PC it can also run a short script to check what the page doesn't
+  show, such as its stored data or app state. It asks every time, showing the
+  whole script, on its own dev servers too. A script longer than 500
+  characters is refused, so all of it fits in the prompt. GAIA never runs
+  scripts on a site that isn't on this PC.
+- **Boxes a page opens show above the page.** When a page shows an `alert` or
+  `confirm`, or asks before you leave it, a bar above the page shows the
+  message with **OK** and **Cancel** (**Leave** and **Stay**). The page waits
+  until someone answers. A page's `prompt()` box can't open in the desktop app:
+  Electron refuses it, and the page gets an error instead. GAIA can answer too; it
+  asks you first before pressing OK on another site's box or on one like
+  "Delete account?". If GAIA opened the box and its turn ends without an
+  answer, the box is cancelled, so the page is never left frozen. GAIA never
+  answers a box in a tab you paused or made private.
+- **Frames from another site ask for that site.** GAIA can read, click and
+  type inside frames, including ones from another site, but a frame doesn't
+  inherit the page's approval: before reading or acting in a frame from a
+  site other than the page's own or the chat's dev servers, GAIA asks for that
+  site, with the same **Allow once**, **Always allow** and **Deny**. Until
+  you approve it, the frame is left out of what GAIA reads, and GAIA takes no
+  picture of a page that shows it. A sandboxed or `data:` frame has no site
+  to approve, so GAIA never reads or acts in one.
+- **GAIA never signs in or types a password.** It asks you to sign in
+  yourself in the pane, and the pane keeps that sign-in.
+
+Only the chat open in the window uses the pane. A chat in the terminal, on your
+phone, or in another window keeps using GAIA's own headless browser, and each
+browser tool result says which browser answered.
+
+### Dev servers
+
+GAIA can start your project's dev server and show it in the pane. Ask "start
+the dev server and show me the home page", and GAIA runs the server, waits for
+its port to answer, and opens it in a pane tab.
+
+**A folder of plain HTML needs no setup.** Ask GAIA to build a page and show
+it, and it serves the folder on `127.0.0.1` and `::1`, so nothing else on your
+network can reach it. The server answers only requests addressed to
+`127.0.0.1`, `[::1]` or `localhost` on its port, lists no folders, and serves no dotfiles (`.env`,
+`.git`) and nothing a link leads to outside the folder. Its port is picked at
+random; the folder keeps it until GAIA desktop restarts, so **Always allow**
+keeps covering it until then.
+
+An app with its own dev command defines its servers in `.gaia/launch.json` at
+the top of the project. When that file exists, GAIA uses it:
+
+```json
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5173,
+      "cwd": "apps/web",
+      "env": { "NODE_ENV": "development" },
+      "url": "/"
+    }
+  ]
+}
+```
+
+- **`runtimeExecutable` and `runtimeArgs`** are the command, run as is and
+  never through a shell. **`port`** is where it listens. **`cwd`** (optional)
+  is a folder inside the project. **`url`** (optional) is the page to open.
+  **`readyTimeoutSeconds`** (optional, up to 120) is how long to wait for the
+  port.
+- **`env`** may set only `NODE_ENV`, `PORT`, `HOST`, `HOSTNAME`, `DEBUG`,
+  `LOG_LEVEL`, `BROWSER`, `CI`, `FORCE_COLOR`, `NO_COLOR`, `TZ`,
+  `PYTHONUNBUFFERED`, and names starting `VITE_`, `NEXT_PUBLIC_`, `REACT_APP_`
+  or `PUBLIC_`. The server gets your `PATH`, home folder and locale from
+  GAIA's environment, and none of its keys or tokens.
+- **No file yet?** GAIA writes one for you, then asks before running it.
+- **Starting asks first** and shows the exact command, folder and port.
+  **Always allow** covers that exact command for this chat; if the command,
+  folder, port or `env` changes, GAIA asks again. Writing or editing the file
+  approves nothing. Asking for a server that is already running exactly as
+  written reuses it without asking.
+- **One at a time per name.** Asking again for a running server returns it; a
+  changed configuration restarts it. If the server exits before its port
+  answers, GAIA shows its last 30 log lines.
+- **Logs.** Each server's output goes to one log file of at most 1 MB in the
+  app's data folder. Ask "any errors in the dev server?" and GAIA reads the
+  error lines, or lines holding some text.
+- **The project and `cwd` must be in folders this chat may use.**
+- **Servers start only this way.** A shell command or Python script that
+  starts a server (`python -m http.server`, `npm run dev`, `serve_forever()`)
+  is refused, because those tools wait for the command to finish and would
+  hang the turn. GAIA is told to use the dev server instead, or, outside the
+  desktop app, to ask you to run it in your own terminal. The browser does not
+  open `file://` pages; GAIA serves the file's folder instead.
+- **Servers belong to the app, not one chat.** Any chat's GAIA can use a
+  running server. **Dev servers** names the chat that started each one, and
+  deleting a chat stops the servers no other chat has asked for. GAIA in one
+  chat sees, stops and reads the logs of only the servers it started or reused
+  in that chat.
+- **Quitting GAIA stops every dev server.** If GAIA crashes, the next launch
+  stops the servers it left running, checking each process is still the one
+  it started.
+
 ## Undo a turn
 
 Before GAIA changes a file, it saves a copy. When a turn changed files, its
@@ -823,6 +1044,8 @@ Sessions let you organize conversations by topic. They sync between the CLI (`ga
 | `Ctrl+Shift+O` | New chat |
 | `Ctrl+B` | Show or hide the sidebar |
 | `Ctrl+,` | Settings |
+| `Ctrl+Shift+B` | Show or hide the [browser pane](#browser-pane) (desktop app) |
+| `Ctrl+Shift+S` | [Select an element](#send-page-elements-to-the-chat) in the browser pane |
 
 On macOS, press `⌘` where this table says `Ctrl`; the app labels its shortcuts that way there.
 

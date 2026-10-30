@@ -1,0 +1,13 @@
+{
+  "tabId": "tab-1",
+  "applied": true,
+  "viewport": {
+    "size": {
+      "width": 390,
+      "height": 844,
+      "mobile": true
+    },
+    "colorScheme": "dark",
+    "source": "agent"
+  }
+}

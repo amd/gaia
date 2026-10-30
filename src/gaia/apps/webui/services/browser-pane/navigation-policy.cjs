@@ -1,0 +1,251 @@
+// Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+/**
+ * What pages in the browser pane may do. Separate from link-policy.cjs, which
+ * locks down the app window: the pane is a browser, so any http(s) site loads,
+ * but nothing else does, and the app's own backend is out of reach.
+ */
+
+"use strict";
+
+const dns = require("dns");
+const net = require("net");
+const path = require("path");
+
+const PANE_SCHEMES = new Set(["http:", "https:"]);
+
+/** Permissions a pane page gets; everything else (camera, mic, location, notifications, ...) is denied. */
+const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write"]);
+
+/** The 8 groups of a bracketed IPv6 host as URL spells it ("[::ffff:7f00:1]"), or null. */
+function ipv6Groups(host) {
+  const m = /^\[([0-9a-f:]+)\]$/.exec(host);
+  if (!m) return null;
+  const halves = m[1].split("::");
+  if (halves.length > 2) return null;
+  const part = (s) => (s === "" ? [] : s.split(":").map((g) => parseInt(g, 16)));
+  const head = part(halves[0]);
+  const tail = halves.length === 2 ? part(halves[1]) : [];
+  const fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+  const groups = [...head, ...Array(Math.max(fill, 0)).fill(0), ...tail];
+  return groups.length === 8 && groups.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff) ? groups : null;
+}
+
+/** ::1, ::, and an IPv4-mapped or IPv4-compatible 127.0.0.0/8 or 0.0.0.0: each reaches this computer. */
+function isLoopbackIpv6(host) {
+  const g = ipv6Groups(host);
+  if (!g) return false;
+  if (g.slice(0, 7).every((x) => x === 0)) return g[7] <= 1;
+  const mapped = g.slice(0, 5).every((x) => x === 0) && (g[5] === 0xffff || g[5] === 0);
+  if (!mapped) return false;
+  const firstOctet = g[6] >> 8;
+  return firstOctet === 127 || (g[6] === 0 && g[7] === 0);
+}
+
+function isLoopbackHost(hostname) {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    host === "0.0.0.0" ||
+    isLoopbackIpv6(host)
+  );
+}
+
+/**
+ * Hosts on this computer: localhost, *.localhost, 127.0.0.0/8 and [::1].
+ * browser_eval runs only on these. Python's is_loopback_origin is the same
+ * rule; both are tested against tests/fixtures/browser_pane/bridge/loopback.json.
+ */
+function isLocalPageHost(hostname) {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "[::1]" ||
+    /^127\.(25[0-5]|2[0-4]\d|1?\d?\d)\.(25[0-5]|2[0-4]\d|1?\d?\d)\.(25[0-5]|2[0-4]\d|1?\d?\d)$/.test(host)
+  );
+}
+
+function portOf(url) {
+  if (url.port) return Number(url.port);
+  return url.protocol === "https:" || url.protocol === "wss:" ? 443 : 80;
+}
+
+/** True for any request (page, fetch, socket) to a loopback port the app itself listens on. */
+function isAppServiceUrl(url, blockedPorts) {
+  return isLoopbackHost(url.hostname) && blockedPorts.includes(portOf(url));
+}
+
+/** True for an IP address on this computer: 127.0.0.0/8, 0.0.0.0, ::1, ::, and their IPv4-mapped forms. */
+function isLoopbackAddress(address) {
+  const ip = String(address).toLowerCase();
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return ip.startsWith("127.") || ip === "0.0.0.0";
+  // Write a trailing dotted quad as two hex groups, the way URL spells it.
+  const hex = ip.replace(/(\d+)\.(\d+)\.(\d+)\.(\d+)$/, (_m, a, b, c, d) =>
+    `${((+a << 8) | +b).toString(16)}:${((+c << 8) | +d).toString(16)}`
+  );
+  return isLoopbackIpv6(`[${hex}]`);
+}
+
+/**
+ * Like isAppServiceUrl, but a name is looked up too, so one that resolves to
+ * this computer (a DNS name pointing at 127.0.0.1) is caught as well. Only a
+ * request to one of the app's ports is looked up.
+ *
+ * @param {URL} url @param {number[]} blockedPorts
+ * @param {(host: string) => Promise<Array<{ address: string }>>} [lookup]
+ */
+async function reachesAppService(url, blockedPorts, lookup = defaultLookup) {
+  if (!blockedPorts.includes(portOf(url))) return false;
+  if (isLoopbackHost(url.hostname)) return true;
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (net.isIP(host)) return isLoopbackAddress(host);
+  try {
+    return (await lookup(host)).some((a) => isLoopbackAddress(a.address));
+  } catch {
+    // A name that doesn't resolve reaches nothing, here or anywhere.
+    return false;
+  }
+}
+
+function defaultLookup(host) {
+  return dns.promises.lookup(host, { all: true, verbatim: true });
+}
+
+/**
+ * @param {string} rawUrl
+ * @param {{ blockedPorts: number[] }} ctx Loopback ports the app itself listens on.
+ * @returns {{ allowed: true } | { allowed: false, message: string }}
+ */
+function classifyNavigation(rawUrl, { blockedPorts }) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return { allowed: false, message: `"${rawUrl}" is not a web address.` };
+  }
+  if (url.protocol === "about:" && url.href === "about:blank") return { allowed: true };
+  if (!PANE_SCHEMES.has(url.protocol)) {
+    return {
+      allowed: false,
+      message: `The browser pane opens only http and https pages, not ${url.protocol.replace(/:$/, "")} links.`,
+    };
+  }
+  if (isAppServiceUrl(url, blockedPorts)) {
+    return { allowed: false, message: "The browser pane can't open GAIA's own service." };
+  }
+  return { allowed: true };
+}
+
+function isPermissionAllowed(permission) {
+  return ALLOWED_PERMISSIONS.has(permission);
+}
+
+/**
+ * Apply the policy to the pane's session. Call once per session: Electron
+ * keeps one session object per partition for the life of the app.
+ *
+ * @param {Electron.Session} ses
+ * @param {{
+ *   blockedPorts: () => number[],
+ *   onPermissionDenied: (webContents: Electron.WebContents, permission: string, origin: string) => void,
+ *   downloadsDir: () => string,
+ * }} deps
+ */
+function installSessionPolicy(ses, { blockedPorts, onPermissionDenied, downloadsDir }) {
+  ses.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const allowed = isPermissionAllowed(permission);
+    if (!allowed) {
+      const origin = originOf(details && details.requestingUrl) || originOf(webContents.getURL());
+      onPermissionDenied(webContents, permission, origin);
+    }
+    callback(allowed);
+  });
+  ses.setPermissionCheckHandler((_webContents, permission) => isPermissionAllowed(permission));
+  ses.setDevicePermissionHandler(() => false);
+
+  // Subframes, fetches and sockets too, not just navigations the tab sees.
+  ses.webRequest.onBeforeRequest((details, callback) => {
+    let url;
+    try {
+      url = new URL(details.url);
+    } catch {
+      callback({ cancel: true });
+      return;
+    }
+    const ports = blockedPorts();
+    if (!ports.includes(portOf(url)) || isAppServiceUrl(url, ports)) {
+      callback({ cancel: isAppServiceUrl(url, ports) });
+      return;
+    }
+    reachesAppService(url, ports).then(
+      (reaches) => callback({ cancel: reaches }),
+      () => callback({ cancel: true })
+    );
+  });
+
+  // Electron shows a native save dialog for any download whose path isn't set; titling it says why it appeared.
+  ses.on("will-download", (_event, item) => {
+    item.setSaveDialogOptions({
+      title: "Save download from the browser pane",
+      defaultPath: path.join(downloadsDir(), item.getFilename()),
+    });
+  });
+}
+
+function originOf(rawUrl) {
+  try {
+    return new URL(rawUrl).origin;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Per-tab rules: popups become pane tabs, and refused navigations are
+ * reported on the tab instead of failing without a word.
+ *
+ * @param {Electron.WebContents} webContents
+ * @param {{
+ *   blockedPorts: () => number[],
+ *   openTab: (url: string) => void,
+ *   onBlocked: (url: string, message: string) => void,
+ *   stopsAgent?: (url: string) => boolean,
+ * }} deps
+ */
+function attachTabPolicy(webContents, { blockedPorts, openTab, onBlocked, stopsAgent = () => false }) {
+  webContents.setWindowOpenHandler(({ url }) => {
+    const verdict = classifyNavigation(url, { blockedPorts: blockedPorts() });
+    if (verdict.allowed) openTab(url);
+    else onBlocked(url, verdict.message);
+    return { action: "deny" };
+  });
+  const guard = (event, url) => {
+    const verdict = classifyNavigation(url, { blockedPorts: blockedPorts() });
+    if (!verdict.allowed) {
+      event.preventDefault();
+      onBlocked(url, verdict.message);
+    } else if (stopsAgent(url)) {
+      event.preventDefault();
+    }
+  };
+  webContents.on("will-navigate", (event) => guard(event, event.url));
+  webContents.on("will-redirect", (event) => guard(event, event.url));
+}
+
+module.exports = {
+  ALLOWED_PERMISSIONS,
+  attachTabPolicy,
+  classifyNavigation,
+  installSessionPolicy,
+  isLocalPageHost,
+  isAppServiceUrl,
+  isLoopbackAddress,
+  portOf,
+  reachesAppService,
+  isLoopbackHost,
+  isPermissionAllowed,
+};

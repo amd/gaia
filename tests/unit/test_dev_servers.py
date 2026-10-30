@@ -1,0 +1,906 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""dev_server: launch.json parsing, the folder rule, and approval by command digest.
+
+The tool runs against the recorded loopback bridge, so the tests check which
+ops reached GAIA desktop and what they carried. The gate is driven the way
+``Agent._execute_tool`` drives it: the prompt's arguments first, then the
+confirmation hooks, then the tool body.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import socket
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from gaia.agents.base import console as console_mod
+from gaia.agents.base import tools as tools_mod
+from gaia.agents.base.console import SilentConsole
+from gaia.agents.base.tool_grants import grant_scope
+from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
+from gaia.browser import dev_servers
+from gaia.browser import driver as browser_driver
+from gaia.browser._pane_bridge import DISCOVERY_ENV
+from gaia.browser.dev_servers import LaunchConfigError, load_specs, spec_named
+
+from .browser_pane_fake import FakeBridge, fixture
+
+pytestmark = pytest.mark.allow_network
+
+FIXTURE_APP = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "browser_pane" / "devserver"
+)
+
+
+def write_launch(project: Path, *configs: dict) -> Path:
+    path = project / ".gaia" / "launch.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": "0.0.1", "configurations": list(configs)}))
+    return path
+
+
+WEB = {
+    "name": "web",
+    "runtimeExecutable": "node",
+    "runtimeArgs": ["server.js"],
+    "port": 4173,
+}
+
+
+class _Validator:
+    """The chat's allowed folders, as PathValidator answers for them."""
+
+    def __init__(self, *roots: Path) -> None:
+        self.allowed_paths = {r.resolve() for r in roots}
+        self.scratch_dir = None
+        self.asked: list = []
+        self.user_allows = False
+
+    def is_path_allowed(self, path: str, prompt_user: bool = True) -> bool:
+        assert (
+            prompt_user is False
+        ), "dev_server must never prompt for a folder from its gate"
+        p = Path(path).resolve()
+        return any(p == r or r in p.parents for r in self.allowed_paths)
+
+    def validate_read(self, path: str, prompt_user: bool = True):
+        if self.is_path_allowed(path, prompt_user=False):
+            return True, ""
+        if prompt_user:
+            self.asked.append(Path(path).resolve())
+            if self.user_allows:
+                self.allowed_paths.add(Path(path).resolve())
+                return True, ""
+        return False, f"Access denied: {path} is outside the folders this chat may use."
+
+
+def allow(*roots: Path):
+    validator = _Validator(*roots)
+    return lambda p: validator.is_path_allowed(str(p), prompt_user=False)
+
+
+# ------------------------------------------------------------------ parsing
+
+
+def test_a_configuration_becomes_argv_cwd_port_and_env(tmp_path):
+    (tmp_path / "web").mkdir()
+    write_launch(
+        tmp_path,
+        {
+            **WEB,
+            "cwd": "web",
+            "env": {"NODE_ENV": "development", "VITE_API": "x"},
+            "url": "/home",
+        },
+    )
+    (spec,) = load_specs(tmp_path, allowed=allow(tmp_path))
+    wire = spec.to_wire()
+    assert set(wire) == set(fixture("requests.json")["devServers_ensure"]["spec"])
+    assert wire == {
+        "name": "web",
+        "argv": ["node", "server.js"],
+        "cwd": str((tmp_path / "web").resolve()),
+        "port": 4173,
+        "env": {"NODE_ENV": "development", "VITE_API": "x"},
+        "url": "http://localhost:4173/home",
+        "readyTimeoutMs": 60000,
+    }
+
+
+def test_a_missing_file_tells_the_agent_to_write_one(tmp_path):
+    with pytest.raises(
+        LaunchConfigError,
+        match=r"does not exist\. Write it with write_file.*runtimeExecutable",
+    ):
+        load_specs(tmp_path, allowed=allow(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "config, message",
+    [
+        (
+            {**WEB, "runtimeExecutable": "npm run dev"} | {"runtimeArgs": "dev"},
+            "runtimeArgs",
+        ),
+        ({**WEB, "port": 80}, '"port"'),
+        ({**WEB, "port": "4173"}, '"port"'),
+        (
+            {**WEB, "env": {"ANTHROPIC_API_KEY": "x"}},
+            "env ANTHROPIC_API_KEY is not allowed",
+        ),
+        (
+            {**WEB, "runtimeExecutable": "rm", "runtimeArgs": ["-rf", "dist"]},
+            "deletes files",
+        ),
+        ({**WEB, "url": "http://evil.example/"}, '"url"'),
+        ({**WEB, "name": "../web"}, '"name"'),
+    ],
+)
+def test_a_bad_configuration_names_the_field(tmp_path, config, message):
+    write_launch(tmp_path, config)
+    with pytest.raises(LaunchConfigError, match=message):
+        load_specs(tmp_path, allowed=allow(tmp_path))
+
+
+def test_cwd_may_not_leave_the_project(tmp_path):
+    project = tmp_path / "site"
+    project.mkdir()
+    write_launch(project, {**WEB, "cwd": ".."})
+    with pytest.raises(LaunchConfigError, match="leaves the project folder"):
+        load_specs(project, allowed=allow(tmp_path))
+
+
+def test_cwd_must_be_inside_the_chats_allowed_folders(tmp_path):
+    project = tmp_path / "site"
+    (project / "web").mkdir(parents=True)
+    write_launch(project, {**WEB, "cwd": "web"})
+    only_the_root = lambda p: p == project.resolve()  # noqa: E731
+    with pytest.raises(
+        LaunchConfigError, match="web is outside the folders this chat may use"
+    ):
+        load_specs(project, allowed=only_the_root)
+
+
+def test_a_project_outside_the_allowed_folders_is_never_read(tmp_path):
+    write_launch(tmp_path / "elsewhere", WEB)
+    with pytest.raises(
+        LaunchConfigError, match="outside the folders this chat may use"
+    ):
+        load_specs(tmp_path / "elsewhere", allowed=allow(tmp_path / "mine"))
+
+
+def test_a_name_picks_one_server_and_none_needs_exactly_one(tmp_path):
+    write_launch(tmp_path, WEB, {**WEB, "name": "api", "port": 4174})
+    assert spec_named(tmp_path, "api", allowed=allow(tmp_path)).port == 4174
+    with pytest.raises(LaunchConfigError, match="more than one server.*web, api"):
+        spec_named(tmp_path, "", allowed=allow(tmp_path))
+
+
+def test_env_names_match_the_list_the_app_uses():
+    shared = fixture("dev_server_env.json")
+    assert sorted(dev_servers.ENV_NAMES) == shared["names"]
+    assert list(dev_servers.ENV_PREFIXES) == shared["prefixes"]
+
+
+def test_the_fixture_app_parses(tmp_path):
+    specs = load_specs(FIXTURE_APP, allowed=allow(FIXTURE_APP))
+    assert {s.name for s in specs} >= {"web", "crash"}
+    assert all(s.argv[0] == "node" for s in specs)
+
+
+# ------------------------------------------------------- approval by digest
+
+
+def test_always_is_keyed_on_the_exact_command(tmp_path):
+    write_launch(tmp_path, WEB)
+    before = spec_named(tmp_path, "web", allowed=allow(tmp_path))
+    write_launch(tmp_path, {**WEB, "runtimeArgs": ["server.js", "--verbose"]})
+    after = spec_named(tmp_path, "web", allowed=allow(tmp_path))
+    a, b = grant_scope("dev_server", before.prompt_args()), grant_scope(
+        "dev_server", after.prompt_args()
+    )
+    assert a.keys == (f"dev_server:{before.digest}",)
+    assert a.keys != b.keys
+    assert a.label == f"node server.js in {before.cwd.name}"
+    console = SilentConsole()
+    console.grant_call_for_session("dev_server", before.prompt_args())
+    assert console.call_is_granted("dev_server", before.prompt_args())
+    assert not console.call_is_granted("dev_server", after.prompt_args())
+
+
+def test_env_and_port_are_part_of_what_was_approved(tmp_path):
+    write_launch(tmp_path, WEB)
+    base = spec_named(tmp_path, "web", allowed=allow(tmp_path)).digest
+    write_launch(tmp_path, {**WEB, "port": 4180})
+    assert spec_named(tmp_path, "web", allowed=allow(tmp_path)).digest != base
+    write_launch(tmp_path, {**WEB, "env": {"DEBUG": "1"}})
+    assert spec_named(tmp_path, "web", allowed=allow(tmp_path)).digest != base
+
+
+def test_a_command_whose_name_bounds_nothing_never_offers_always(tmp_path):
+    write_launch(
+        tmp_path,
+        {**WEB, "runtimeExecutable": "bash", "runtimeArgs": ["-c", "node server.js"]},
+    )
+    spec = spec_named(tmp_path, "web", allowed=allow(tmp_path))
+    assert grant_scope("dev_server", spec.prompt_args()) is None
+
+
+def test_only_start_has_a_grant():
+    assert grant_scope("dev_server", {"action": "stop", "name": "web"}) is None
+
+
+# ------------------------------------------------------------- the tool
+
+
+class _Agent(BrowserUseToolsMixin):
+    def __init__(self, root: Path):
+        self.config = SimpleNamespace(ui_session_id="chat-1")
+        self._tool_overrides = {}
+        self.console = SilentConsole()
+        self.path_validator = _Validator(root)
+
+    @property
+    def _tools_registry(self):
+        return {**tools_mod._TOOL_REGISTRY, **self._tool_overrides}
+
+
+@pytest.fixture(autouse=True)
+def _isolated(monkeypatch):
+    saved = dict(tools_mod._TOOL_REGISTRY)
+    monkeypatch.setattr(console_mod, "auto_approve_env_enabled", lambda: False)
+    monkeypatch.setattr(browser_driver, "installed", lambda: False)
+    yield
+    tools_mod._TOOL_REGISTRY.clear()
+    tools_mod._TOOL_REGISTRY.update(saved)
+
+
+def server_state(spec, status="ready"):
+    return {
+        "key": spec.key,
+        "name": spec.name,
+        "argv": list(spec.argv),
+        "cwd": str(spec.cwd),
+        "port": spec.port,
+        "env": dict(spec.env),
+        "url": spec.url,
+        "status": status,
+        "pid": 4242,
+        "startedAt": 1,
+        "exitCode": None,
+        "logFile": "/tmp/x.log",
+    }
+
+
+@pytest.fixture
+def bridge(tmp_path, monkeypatch):
+    fake = FakeBridge()
+    fake.servers = []
+
+    def dev(body):
+        if body["op"] == "list":
+            return {"servers": fake.servers}
+        if body["op"] == "ensure":
+            server = {**server_state_from_wire(body), "status": "ready"}
+            fake.servers.append(server)
+            fake.replies["evaluate"] = page_at(server["url"])
+            return {"server": server, "reused": False, "ms": 820}
+        if body["op"] == "stop":
+            return {"server": {**fake.servers[0], "status": "stopped", "pid": None}}
+        return {
+            "server": fake.servers[0],
+            "lines": ["Error: Cannot find module './App'"],
+            "matched": 1,
+            "total": 9,
+        }
+
+    fake.replies["devServers"] = dev
+    path = tmp_path / "run" / "browser-pane.json"
+    monkeypatch.setenv(DISCOVERY_ENV, str(path))
+    fake.write_discovery(path)
+    yield fake
+    fake.close()
+
+
+def page_at(url):
+    """The fixture page, served from ``url``."""
+    text = json.dumps(fixture("evaluate_snapshot.json"))
+    return json.loads(text.replace("http://127.0.0.1:5000/", url))
+
+
+def server_state_from_wire(body):
+    spec = body["spec"]
+    return {
+        "key": body["key"],
+        **{k: spec[k] for k in ("name", "argv", "cwd", "port", "env", "url")},
+    }
+
+
+@pytest.fixture
+def project(tmp_path):
+    root = tmp_path / "site"
+    root.mkdir()
+    write_launch(root, WEB)
+    return root
+
+
+@pytest.fixture
+def agent(bridge, project):
+    a = _Agent(project)
+    a.register_browser_use_tools()
+    return a
+
+
+def call(agent, **args):
+    """What Agent._execute_tool does: build the prompt, ask the gate, then run the tool."""
+    shown = agent.confirmation_args_for_call("dev_server", args)
+    asks = agent.browser_call_needs_confirmation("dev_server", args)
+    granted = agent.console.call_is_granted("dev_server", shown)
+    return (
+        shown,
+        asks and not granted,
+        lambda: agent._tool_overrides["dev_server"]["function"](**args),
+    )
+
+
+def dev_ops(bridge):
+    return [r["body"] for r in bridge.requests if r["op"] == "devServers"]
+
+
+def test_starting_asks_and_shows_the_exact_command(agent, bridge, project):
+    shown, asks, _run = call(agent, action="start", name="web")
+    assert asks
+    assert shown == {
+        "action": "start",
+        "name": "web",
+        "command": "node server.js",
+        "folder": str(project.resolve()),
+        "port": 4173,
+    }
+    assert [b["op"] for b in dev_ops(bridge)] == ["list"]
+
+
+def test_an_approved_start_sends_the_spec_and_opens_it_in_the_pane(
+    agent, bridge, project
+):
+    _shown, _asks, run = call(agent, action="start", name="web")
+    out = run()
+    ensure = [b for b in dev_ops(bridge) if b["op"] == "ensure"][0]
+    expected = fixture("requests.json")["devServers_ensure"]
+    assert set(ensure) == set(expected)
+    assert ensure["sessionId"] == "chat-1"
+    assert ensure["searchPath"] == os.environ.get("PATH")
+    assert ensure["spec"]["argv"] == ["node", "server.js"]
+    assert ensure["spec"]["cwd"] == str(project.resolve())
+    loads = [
+        r["body"]
+        for r in bridge.requests
+        if r["op"] in ("navigate", "tabs") and r["body"].get("op") != "list"
+    ]
+    assert any(
+        b.get("to") == "http://localhost:4173/"
+        or b.get("url") == "http://localhost:4173/"
+        for b in loads
+    )
+    assert out.splitlines()[0] == "(in the browser pane)"
+    assert 'Dev server "web" (`node server.js`) started in 0.8 s on port 4173' in out
+
+
+def test_writing_launch_json_approves_nothing(agent, bridge):
+    out = agent._tool_overrides["dev_server"]["function"](action="start", name="web")
+    assert "never approved" in out
+    assert "ensure" not in [b["op"] for b in dev_ops(bridge)]
+
+
+def test_an_edit_after_the_prompt_is_refused_not_run(agent, bridge, project):
+    _shown, asks, run = call(agent, action="start", name="web")
+    assert asks
+    write_launch(project, {**WEB, "runtimeArgs": ["evil.js"]})
+    out = run()
+    assert "command changed after the user approved it" in out
+    assert "ensure" not in [b["op"] for b in dev_ops(bridge)]
+
+
+def test_an_always_answer_covers_the_same_command_only(agent, bridge, project):
+    shown, _asks, _run = call(agent, action="start", name="web")
+    agent.console.grant_call_for_session("dev_server", shown)
+    _shown, asks, _run = call(agent, action="start", name="web")
+    assert not asks
+    write_launch(project, {**WEB, "runtimeArgs": ["server.js", "--port", "4173"]})
+    _shown, asks, _run = call(agent, action="start", name="web")
+    assert asks
+
+
+def test_the_same_server_already_running_starts_with_no_prompt(agent, bridge, project):
+    spec = spec_named(project, "web", allowed=allow(project))
+    bridge.servers = [server_state(spec)]
+    _shown, asks, run = call(agent, action="start", name="web")
+    assert not asks
+    run()
+    assert [b["op"] for b in dev_ops(bridge)].count("ensure") == 1
+
+
+def test_a_server_that_crashes_reports_its_last_log_lines(agent, bridge):
+    def dev(body):
+        if body["op"] == "list":
+            return {"servers": []}
+        return (
+            409,
+            {
+                "error": {
+                    "code": "dev_server_failed",
+                    "message": "Dev server \"web\" (node server.js) exited before it answered on port 4173 (exit code 1). Its last log lines:\nError: Cannot find module './missing-config'",
+                    "data": {"exitCode": 1},
+                }
+            },
+        )
+
+    bridge.replies["devServers"] = dev
+    _shown, _asks, run = call(agent, action="start", name="web")
+    out = run()
+    assert out.splitlines()[0] == "(in the browser pane)"
+    assert "Cannot find module './missing-config'" in out
+
+
+def test_logs_send_a_filtered_slice_request(agent, bridge, project):
+    spec = spec_named(project, "web", allowed=allow(project))
+    bridge.servers = [server_state(spec)]
+    out = agent._tool_overrides["dev_server"]["function"](
+        action="logs", errors_only=True
+    )
+    logs = [b for b in dev_ops(bridge) if b["op"] == "logs"][0]
+    assert set(logs) == set(fixture("requests.json")["devServers_logs"])
+    assert logs["key"] == spec.key and logs["errorsOnly"] is True
+    assert "Error: Cannot find module './App'" in out
+    assert not agent.browser_call_needs_confirmation("dev_server", {"action": "logs"})
+
+
+def test_stop_names_the_freed_port(agent, bridge, project):
+    spec = spec_named(project, "web", allowed=allow(project))
+    bridge.servers = [server_state(spec)]
+    out = agent._tool_overrides["dev_server"]["function"](action="stop", name="web")
+    stop = [b for b in dev_ops(bridge) if b["op"] == "stop"][0]
+    assert set(stop) == set(fixture("requests.json")["devServers_stop"])
+    assert 'Stopped dev server "web"; port 4173 is free.' in out
+
+
+def test_no_project_named_finds_the_one_launch_json(agent, bridge):
+    shown, asks, _run = call(agent, action="start")
+    assert asks and shown["name"] == "web"
+
+
+def test_an_app_too_old_for_dev_servers_says_so(agent, bridge):
+    agent._pane()._bridge.ops = frozenset({"hello", "attach", "tabs"})
+    out = agent._tool_overrides["dev_server"]["function"](action="list")
+    assert "older than the agent" in out
+
+
+# ------------------------------------------------- a plain HTML folder, no setup
+
+
+@pytest.fixture
+def site(project):
+    """A folder of plain HTML inside the chat's allowed folder, with no launch.json."""
+    folder = project / "landing page"
+    folder.mkdir()
+    (folder / "index.html").write_text("<h1>Hello</h1>")
+    return folder.resolve()
+
+
+def test_a_plain_html_folder_is_served_on_loopback_with_no_setup(agent, bridge, site):
+    shown, asks, run = call(agent, action="start", project=str(site))
+    port = shown["port"]
+    assert asks
+    assert shown["name"] == "static"
+    assert shown["folder"] == str(site)
+    assert shown["command"] == shlex.join(
+        [sys.executable, "-m", "gaia.browser.static_server", "--port", str(port)]
+        + ["--directory", str(site)]
+    )
+    out = run()
+    ensure = [b for b in dev_ops(bridge) if b["op"] == "ensure"][0]
+    assert ensure["spec"]["argv"] == shlex.split(shown["command"])
+    assert ensure["spec"]["cwd"] == str(site)
+    assert ensure["spec"]["url"] == f"http://localhost:{port}/"
+    assert f'Dev server "static"' in out and f"on port {port}" in out
+
+
+def test_the_run_uses_the_port_the_prompt_showed(agent, bridge, site):
+    shown, _asks, run = call(agent, action="start", project=str(site))
+    with socket.socket() as held:
+        held.bind(("127.0.0.1", shown["port"]))
+        run()
+    ensure = [b for b in dev_ops(bridge) if b["op"] == "ensure"][0]
+    assert ensure["spec"]["port"] == shown["port"]
+    assert str(shown["port"]) in ensure["spec"]["argv"]
+
+
+def test_a_folder_keeps_its_port_so_always_still_covers_it(agent, bridge, site):
+    first, _asks, _run = call(agent, action="start", project=str(site))
+    agent.console.grant_call_for_session("dev_server", first)
+    again, asks, _run = call(agent, action="start", project=str(site))
+    assert again["port"] == first["port"]
+    assert not asks
+
+
+def test_a_running_static_server_keeps_its_port(agent, bridge, site):
+    running = dev_servers.static_spec(site, 18321)
+    bridge.servers = [server_state(running)]
+    shown, asks, run = call(agent, action="start", project=str(site))
+    assert shown["port"] == 18321
+    assert not asks
+    run()
+    assert [b for b in dev_ops(bridge) if b["op"] == "ensure"][0]["spec"]["port"] == (
+        18321
+    )
+
+
+def test_launch_json_wins_over_html_files(agent, bridge, project):
+    (project / "index.html").write_text("<h1>Hi</h1>")
+    shown, _asks, _run = call(agent, action="start", project=str(project))
+    assert shown["name"] == "web" and shown["command"] == "node server.js"
+
+
+def test_a_folder_with_no_html_and_no_launch_json_names_both_fixes(
+    agent, bridge, project
+):
+    empty = project / "empty"
+    empty.mkdir()
+    shown, asks, run = call(agent, action="start", project=str(empty))
+    assert not asks
+    out = run()
+    assert "index.html" in out and "launch.json" in out
+    assert "ensure" not in [b["op"] for b in dev_ops(bridge)]
+
+
+def test_an_html_folder_outside_the_allowed_folders_is_refused(agent, bridge, tmp_path):
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "index.html").write_text("<h1>x</h1>")
+    shown, asks, run = call(agent, action="start", project=str(outside))
+    assert not asks
+    out = run()
+    assert "outside the folders this chat may use" in out
+    assert agent.path_validator.asked, "the user was asked for the folder"
+    assert "ensure" not in [b["op"] for b in dev_ops(bridge)]
+
+
+def test_a_folder_the_user_allows_when_asked_is_served(agent, bridge, tmp_path):
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "index.html").write_text("<h1>x</h1>")
+    agent.path_validator.user_allows = True
+    shown, asks, run = call(agent, action="start", project=str(outside))
+    assert asks and shown["folder"] == str(outside.resolve())
+    run()
+    assert agent.path_validator.asked == [outside.resolve()]
+    assert "ensure" in [b["op"] for b in dev_ops(bridge)]
+
+
+def test_a_named_server_in_a_plain_folder_says_there_is_only_static(agent, site):
+    _shown, _asks, run = call(agent, action="start", project=str(site), name="web")
+    assert '"static"' in run()
+
+
+def test_the_docstring_teaches_the_no_setup_call(agent):
+    doc = agent._tool_overrides["dev_server"]["description"]
+    assert 'dev_server(action="start", project="<folder>")' in " ".join(doc.split())
+
+
+def test_the_static_server_answers_on_loopback_only(tmp_path):
+    (tmp_path / "index.html").write_text("<h1>served</h1>")
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    spec = dev_servers.static_spec(tmp_path, port)
+    proc = subprocess.Popen(
+        list(spec.argv),
+        cwd=spec.cwd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        body = _fetch_when_up(f"http://127.0.0.1:{port}/")
+        assert "<h1>served</h1>" in body
+        lan = _non_loopback_address()
+        if lan is not None:
+            with pytest.raises(OSError):
+                socket.create_connection((lan, port), timeout=2).close()
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+    if lan is None:
+        pytest.skip("no non-loopback address to check the bind against")
+
+
+def _fetch_when_up(url: str) -> str:
+    # A loaded CI runner can take well over 15 s to start a Python process.
+    deadline = time.monotonic() + 60
+    while True:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as r:
+                return r.read().decode()
+        except OSError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.1)
+
+
+def _non_loopback_address():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("192.0.2.1", 9))  # TEST-NET-1: routes, sends nothing
+        except OSError:
+            return None
+        address = s.getsockname()[0]
+    return None if address.startswith("127.") or address == "0.0.0.0" else address
+
+
+# ---------------------------------------------------------- browser_open file://
+
+
+def test_a_file_url_points_at_dev_server_for_its_folder(agent, bridge, site):
+    out = agent._tool_overrides["browser_open"]["function"](
+        url=(site / "index.html").as_uri()
+    )
+    assert "file://" in out
+    assert f'dev_server(action="start", project="{site}")' in out
+    assert "invalid URL" not in out
+    assert not [r for r in bridge.requests if r["op"] == "navigate"]
+
+
+def test_a_file_url_without_the_pane_says_to_ask_the_user(monkeypatch, tmp_path):
+    monkeypatch.setenv(DISCOVERY_ENV, str(tmp_path / "absent.json"))
+    monkeypatch.setattr(browser_driver, "installed", lambda: True)
+    a = _Agent(tmp_path)
+    a.register_browser_use_tools()
+    out = tools_mod._TOOL_REGISTRY["browser_open"]["function"](
+        url=(tmp_path / "index.html").as_uri()
+    )
+    assert "Ask the user to run the server" in out
+    assert "dev_server" not in out
+
+
+# ------------------------------------------------- the static file server itself
+
+
+@pytest.fixture
+def static_site(tmp_path):
+    """A served folder with a page, a dotfile, a dot-folder and a link out of the folder."""
+    root = tmp_path / "site"
+    (root / "sub").mkdir(parents=True)
+    (root / "index.html").write_text("<h1>Home</h1>")
+    (root / "sub" / "page.html").write_text("<p>Sub</p>")
+    (root / ".env").write_text("SECRET=1")
+    (root / ".git").mkdir()
+    (root / ".git" / "config").write_text("[core]")
+    (root / "empty").mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("not part of the site")
+    try:
+        (root / "out.txt").symlink_to(outside)
+        (root / "inner.html").symlink_to(root / "index.html")
+    except OSError:
+        pass  # no symlinks without privileges on Windows; those cases skip
+    from gaia.browser import static_server
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    httpd = static_server.serve(str(root), port)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield root, port
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def fetch(port, path, host=None):
+    import http.client
+
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request("GET", path, headers={"Host": host or f"127.0.0.1:{port}"})
+    res = conn.getresponse()
+    body = res.read()
+    conn.close()
+    return res.status, body
+
+
+def test_static_server_serves_the_folders_pages(static_site):
+    _root, port = static_site
+    assert fetch(port, "/") == (200, b"<h1>Home</h1>")
+    assert fetch(port, "/sub/page.html")[0] == 200
+    assert fetch(port, "/", host=f"localhost:{port}")[0] == 200
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "attacker.example",
+        "127.0.0.1",
+        "127.0.0.1:1",
+        "localhost.:{port}",
+        "[::2]:{port}",
+        "",
+    ],
+)
+def test_static_server_refuses_a_request_for_another_host(static_site, host):
+    _root, port = static_site
+    status, body = fetch(port, "/", host=host.format(port=port) or " ")
+    assert status == 403
+    assert b"Home" not in body
+
+
+@pytest.mark.parametrize(
+    "path", ["/.env", "/.git/config", "/%2eenv", "/sub/../.env", "/.git/"]
+)
+def test_static_server_never_serves_a_dotfile(static_site, path):
+    _root, port = static_site
+    status, body = fetch(port, path)
+    assert status == 404
+    assert b"SECRET" not in body and b"core" not in body
+
+
+@pytest.mark.parametrize("path", ["/empty/", "/sub/", "/.git/"])
+def test_static_server_lists_no_folder(static_site, path):
+    _root, port = static_site
+    status, body = fetch(port, path)
+    assert status == 404
+    assert b"page.html" not in body
+
+
+def test_static_server_follows_no_link_out_of_the_folder(static_site):
+    root, port = static_site
+    if not (root / "out.txt").is_symlink():
+        pytest.skip("symlinks need privileges on this machine")
+    status, body = fetch(port, "/out.txt")
+    assert status == 404 and b"not part" not in body
+    assert fetch(port, "/inner.html") == (200, b"<h1>Home</h1>")
+
+
+def test_a_static_port_is_random_not_derived_from_the_folder(monkeypatch):
+    monkeypatch.setattr(dev_servers, "_STATIC_PICKS", {})
+    picks = iter([17, 342])
+    monkeypatch.setattr(dev_servers.secrets, "randbelow", lambda n: next(picks))
+    first = dev_servers.static_port("a" * 16, [])
+    assert first == dev_servers.STATIC_PORTS.start + 17
+    # The same folder keeps its pick within this run, so "always" still covers it.
+    assert dev_servers.static_port("a" * 16, []) == first
+    assert dev_servers.static_port("b" * 16, []) == dev_servers.STATIC_PORTS.start + 342
+
+
+def _short_name(path):
+    """The Windows 8.3 name of ``path``, or None when the volume makes none."""
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(32768)
+    if not ctypes.windll.kernel32.GetShortPathNameW(str(path), buf, len(buf)):
+        return None
+    short = Path(buf.value).name
+    return short if short.lower() != path.name.lower() else None
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="8.3 short names are a Windows feature"
+)
+@pytest.mark.parametrize("target", [".env", ".git"])
+def test_static_server_refuses_a_dotfile_by_its_windows_short_name(static_site, target):
+    root, port = static_site
+    short = _short_name(root / target)
+    if short is None:
+        pytest.skip("8.3 short names are off on this volume")
+    path = f"/{short}" if target == ".env" else f"/{short}/config"
+    status, body = fetch(port, path)
+    assert status == 404
+    assert b"SECRET" not in body and b"core" not in body
+
+
+def test_static_server_checks_the_name_a_path_resolves_to(static_site, monkeypatch):
+    root, port = static_site
+    # A file whose resolved name is a dotfile, as a short name or link would be.
+    (root / "ENV~1").write_text("SECRET=2")
+    from gaia.browser import static_server
+
+    real = static_server.os.path.realpath
+    monkeypatch.setattr(
+        static_server.os.path,
+        "realpath",
+        lambda p, *a, **k: real(p, *a, **k).replace("ENV~1", ".env"),
+    )
+    status, body = fetch(port, "/ENV~1")
+    assert status == 404 and b"SECRET" not in body
+
+
+@pytest.mark.parametrize("path", ["/.env::$DATA", "/index.html::$DATA", "/c:/x"])
+def test_static_server_refuses_stream_and_drive_names(static_site, path):
+    _root, port = static_site
+    assert fetch(port, path)[0] == 404
+
+
+def _has_ipv6_loopback():
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+            s.bind(("::1", 0))
+        return True
+    except OSError:
+        return False
+
+
+needs_ipv6 = pytest.mark.skipif(
+    not _has_ipv6_loopback(), reason="this machine has no IPv6 loopback"
+)
+
+
+@needs_ipv6
+def test_the_static_server_holds_its_port_on_ipv6_loopback_too(tmp_path):
+    (tmp_path / "index.html").write_text("<h1>served</h1>")
+    port = dev_servers._free_loopback_port(0)
+    spec = dev_servers.static_spec(tmp_path, port)
+    proc = subprocess.Popen(
+        list(spec.argv),
+        cwd=spec.cwd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        assert "<h1>served</h1>" in _fetch_when_up(f"http://[::1]:{port}/")
+        # Nothing else can take the IPv6 half of the port while it runs.
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as other:
+            with pytest.raises(OSError):
+                other.bind(("::1", port))
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+@needs_ipv6
+def test_a_static_server_whose_ipv6_half_is_taken_fails_loudly(tmp_path):
+    from gaia.browser import static_server
+
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as held:
+        held.bind(("::1", 0))
+        held.listen()
+        port = held.getsockname()[1]
+        with pytest.raises(OSError, match=r"\[::1\]"):
+            static_server.serve_loopback(str(tmp_path), port)
+        # And GAIA never picks such a port in the first place.
+        assert dev_servers._free_loopback_port(port) is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/NUL", "/nul.txt", "/COM1", "/sub/CON", "/%00", "/index.html%00.txt", "/a%00b"],
+)
+def test_static_server_answers_device_and_nul_names_with_404_and_keeps_serving(
+    static_site, path
+):
+    _root, port = static_site
+    assert fetch(port, path)[0] == 404
+    assert fetch(port, "/") == (200, b"<h1>Home</h1>")
+
+
+def test_the_static_server_starts_without_looking_up_the_host_name(
+    tmp_path, monkeypatch
+):
+    # The name lookup http.server makes can stall for many seconds on macOS.
+    from gaia.browser import static_server
+
+    def no_lookup(*_args):
+        raise AssertionError("getfqdn called")
+
+    monkeypatch.setattr(static_server.socket, "getfqdn", no_lookup)
+    for server in static_server.serve_loopback(
+        str(tmp_path), dev_servers._free_loopback_port(0)
+    ):
+        server.server_close()

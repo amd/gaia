@@ -382,6 +382,43 @@ FULL_BUNDLES = [
             "text a snapshot did not show."
         ),
     ),
+    # Registered only on a chat open in GAIA desktop's browser pane, and kept
+    # apart so a pull-in of "browser_use" never brings them along.
+    ToolBundle(
+        name="browser_inspect",
+        members=frozenset({"browser_screenshot", "browser_logs", "browser_eval"}),
+        description=(
+            "Look at the page in the browser pane: a picture of it, its "
+            "console errors and network requests, and app state on localhost."
+        ),
+    ),
+    # Also pane-only: keys, screen sizes, tabs, and several steps in one call.
+    ToolBundle(
+        name="browser_pane",
+        members=frozenset(
+            {
+                "browser_press",
+                "browser_viewport",
+                "browser_tabs",
+                "browser_batch",
+                "browser_dialog",
+            }
+        ),
+        description=(
+            "Press keys like Escape, answer a page's alert or confirm box, show "
+            "the page at phone or tablet size or in dark mode, switch tabs, and "
+            "run several browser steps in one call."
+        ),
+    ),
+    # Pane-only as well: serves a folder of HTML, or runs .gaia/launch.json.
+    ToolBundle(
+        name="dev_server",
+        members=frozenset({"dev_server"}),
+        description=(
+            "Serve a web page or site you built, or start, stop and read the "
+            "logs of the project's dev server, and preview it in the browser pane."
+        ),
+    ),
     ToolBundle(
         name="code_index",
         members=frozenset(
@@ -614,6 +651,16 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "browser_sessions",
         "browser_back",
         "browser_find",
+        # Browser pane: registered only for a chat open in GAIA desktop.
+        "browser_screenshot",
+        "browser_logs",
+        "browser_press",
+        "browser_viewport",
+        "browser_tabs",
+        "browser_batch",
+        "browser_dialog",
+        "browser_eval",
+        "dev_server",
         "remember",
         "recall",
         "update_memory",

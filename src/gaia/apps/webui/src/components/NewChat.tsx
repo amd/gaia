@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, FileText, X } from 'lucide-react';
+import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
 import { FolderChip } from './FolderChip';
 import { ModelChip } from './ModelChip';
@@ -280,6 +281,9 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                 contentRef={innerRef}
                 composerRef={composerRef}
             />
+            <div className="new-chat-actions">
+                <BrowserPaneToggle />
+            </div>
             <div className="new-chat-inner" ref={innerRef}>
                 <h1 className="new-chat-greeting" aria-hidden={docked}>{greeting()}</h1>
                 {setupError && !remote && <SetupFailed error={setupError} />}

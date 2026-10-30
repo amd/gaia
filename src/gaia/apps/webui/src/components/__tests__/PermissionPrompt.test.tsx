@@ -28,6 +28,15 @@ afterEach(() => {
 });
 
 describe('PermissionPrompt', () => {
+    it('names the site a browser pane read would show the model', () => {
+        useNotificationStore.getState().addNotification(request({
+            tool: 'browser_snapshot', toolLabel: 'running browser snapshot',
+            toolArgs: { _site: 'https://example.org' },
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByRole('alertdialog')).toHaveTextContent('https://example.org');
+    });
+
     it('shows short code whole, with no expand control', () => {
         useNotificationStore.getState().addNotification(request({
             tool: 'run_python', toolArgs: { code: 'print(1)\nprint(2)' },

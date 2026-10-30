@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.js", "--port", "41730"],
+      "port": 41730
+    },
+    {
+      "name": "crash",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.js", "--port", "41731", "--crash"],
+      "port": 41731
+    }
+  ]
+}

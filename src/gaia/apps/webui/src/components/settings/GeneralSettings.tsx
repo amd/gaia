@@ -7,6 +7,7 @@ import { DesktopAppSettings } from './DesktopAppSettings';
 import { UpdatesSection } from './UpdatesSection';
 import { DEFAULT_CUSTOM, PALETTES, type CustomColors } from '../../utils/palette';
 import { formatShortcut } from '../../utils/platform';
+import { browserPaneApi } from '../../stores/browserPaneStore';
 
 const THEMES: Array<{ value: ThemePreference; label: string }> = [
     { value: 'light', label: 'Light' },
@@ -23,6 +24,9 @@ const SHORTCUTS: Array<[string, string]> = [
     ['Mod+B', 'Show or hide the sidebar'],
     ['Mod+,', 'Settings'],
 ];
+
+/** The desktop app also has the browser pane. */
+const DESKTOP_SHORTCUTS: Array<[string, string]> = [['Mod+Shift+B', 'Show or hide the browser pane']];
 
 export function GeneralSettings() {
     const pref = useChatStore((s) => s.themePreference);
@@ -106,7 +110,7 @@ export function GeneralSettings() {
             <div className="settings-field">
                 <span className="settings-label">Keyboard shortcuts</span>
                 <dl className="shortcut-list">
-                    {SHORTCUTS.map(([keys, what]) => (
+                    {[...SHORTCUTS, ...(browserPaneApi() ? DESKTOP_SHORTCUTS : [])].map(([keys, what]) => (
                         <div key={keys} className="shortcut-row">
                             <dt><kbd>{formatShortcut(keys)}</kbd></dt>
                             <dd>{what}</dd>

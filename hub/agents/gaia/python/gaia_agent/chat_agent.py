@@ -163,6 +163,26 @@ def _imports_gaia_tools(code: str) -> Optional[str]:
     return match.group(0).strip() if match else None
 
 
+def _server_refusal(
+    agent: Any, source: str, folder: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """The refusal for Python that starts a never-ending server, or None."""
+    from gaia.browser.dev_servers import (
+        dev_server_offered,
+        server_in_python,
+        server_refusal,
+    )
+
+    server = server_in_python(source)
+    if server is None:
+        return None
+    return {
+        "status": "error",
+        "error": server_refusal(server.what, folder, dev_server_offered(agent)),
+        "has_errors": True,
+    }
+
+
 def _python_run_result(
     run: Any,
     stdout: str,
@@ -1376,6 +1396,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             browser_section = """
 **BROWSER TOOLS:** search_web (DuckDuckGo, no key), fetch_page (extract readable text/links/tables), download_file (save URL locally; can then index_document).
 """
+        # Only a chat open in GAIA desktop, where the user can see the pane.
+        if browser_section and getattr(self, "_browser_route", None) is not None:
+            browser_section += """**BROWSER PANE:** The user sees a browser pane beside this chat. For "the page", "this page" or anything open in the browser pane, call browser_snapshot to read it (also browser_find, browser_screenshot, browser_logs). browser_open opens a URL there.
+"""
 
         # Tail of Tier 1: indexing note kept separately so gated sections can
         # be inserted between discovery_rules and this tail.
@@ -1975,6 +1999,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "error": f"Could not read {file_path}: {e}",
                         "has_errors": True,
                     }
+                refused = _server_refusal(self, source, str(p.resolve().parent))
+                if refused is not None:
+                    return refused
                 start = time.monotonic()
                 run_dir = p.resolve().parent
                 try:
@@ -2092,6 +2119,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         ),
                         "has_errors": True,
                     }
+                refused = _server_refusal(self, code, None)
+                if refused is not None:
+                    return refused
 
                 try:
                     if hasattr(self, "_project_map_root"):
