@@ -37,8 +37,10 @@ the map is older than ``MAX_MAP_AGE``.
 
 Some changes run the whole suite, because their reach can't be read at all: a
 top-level ``conftest.py``, packaging or pytest config, a deleted or renamed
-``.py`` file, this script, or the workflow that runs it. So does a selection
-over ``FULL_FRACTION`` of the suite, where the saving is gone anyway.
+file, a non-Python file that no string names exactly (only a common name like
+``SKILL.md``, or only a directory scan), this script, or the workflow that runs
+it. So does a selection over ``FULL_FRACTION`` of the suite, where the saving
+is gone anyway.
 
 This is a speed-up for pull requests, not the coverage of record: test_unit.yml
 runs the full suite on every push to main and nightly on all three operating
@@ -136,6 +138,8 @@ class Graph:
     init_deps: Dict[str, Set[str]] = field(default_factory=_edges)
     # Files named by a string: followed one hop, from the changed file.
     read_deps: Dict[str, Set[str]] = field(default_factory=_edges)
+    # Files some string names so that it can mean only that one file.
+    named_exactly: Set[str] = field(default_factory=set)
     scanner_tokens: Dict[str, Set[str]] = field(default_factory=dict)
     # Modules a test runs in a child process (`python -m gaia.cli`): coverage
     # can't see inside it, so their function-level imports always count.
@@ -464,6 +468,8 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
             tokens.update(p for p in pieces if "\n" not in p and len(p) < 80)
             targets = read_targets(pieces, package_code)
             graph.read_deps[path].update(t for t in targets if t != path)
+            if len(targets) == 1:
+                graph.named_exactly.update(targets)
         # Shipped code that lists a directory is linked by the names it reads.
         if not package_code and _SCANNER_RE.search(source):
             graph.scanner_tokens[path] = tokens
@@ -707,6 +713,12 @@ def full_run_reason(
             return f"{path} was deleted or renamed"
         if path.endswith(".py") and path not in graph.files:
             return f"{path} is not tracked by git, so its imports were not read"
+        # Coverage records only .py files, so a data file's readers are known
+        # only from a string that names it and nothing else.
+        if not path.endswith(".py") and path not in graph.named_exactly:
+            return (
+                f"{path} is not named exactly by any file, so its readers are unknown"
+            )
     return None
 
 

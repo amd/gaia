@@ -95,6 +95,43 @@ FILES = {
         "def read(name):\n    return ROOT / name / 'SKILL.md'\n"
     ),
     "tests/unit/test_docs_readme.py": "PATH = ROOT / 'docs' / 'README.md'\n",
+    "tests/unit/test_other_skill.py": (
+        "PATH = ROOT / 'hub' / 'skills' / 's1' / 'SKILL.md'\n"
+    ),
+    # The two shapes the real email tests use to read the inbox-triage skill.
+    "hub/skills/inbox-triage/SKILL.md": "---\nname: inbox-triage\n---\n",
+    "hub/skills/inbox-triage/references/guide.md": "guide",
+    "hub/skills/inbox-triage/references/unread.md": "nobody names me",
+    "tests/unit/test_email_tools_like.py": (
+        "def test_t(root):\n"
+        "    path = root / 'hub' / 'skills' / 'inbox-triage' / 'SKILL.md'\n"
+    ),
+    "tests/unit/test_phishing_like.py": (
+        "from pathlib import Path\n"
+        "def test_p():\n"
+        "    skill = (\n"
+        "        Path(__file__).resolve().parents[4] / "
+        "'hub/skills/inbox-triage/SKILL.md'\n"
+        "    ).read_text()\n"
+    ),
+    "tests/unit/test_skill_refs.py": (
+        "PATH = ROOT / 'hub' / 'skills' / 'inbox-triage' / 'references' / 'guide.md'\n"
+    ),
+    "tests/fixtures/data/cases.json": "[]",
+    "tests/fixtures/other/cases.json": "[]",
+    "tests/unit/test_cases.py": (
+        "FIX = ROOT / 'tests' / 'fixtures' / 'data' / 'cases.json'\n"
+    ),
+    # A bare name shared by two files says nothing about which one.
+    "tests/unit/test_bare_cases.py": "NAME = 'cases.json'\n",
+    "docs/guides/talk.mdx": "# talk",
+    "tests/unit/test_chat_doc.py": "DOC = ROOT / 'docs/guides/chat.mdx'\n",
+    "eval/scenarios/rag/basic.yaml": "id: basic",
+    "eval/scenarios/rag/other.yaml": "id: other",
+    "tests/unit/test_scenarios.py": (
+        "BASIC = ROOT / 'eval' / 'scenarios' / 'rag' / 'basic.yaml'\n"
+        "ALL = list((ROOT / 'eval' / 'scenarios').rglob('*.yaml'))\n"
+    ),
     "tests/unit/test_proc.py": "import subprocess\nfrom gaia.tools.sinks import go\n",
     "tests/unit/test_chain.py": "def test_c(app):\n    pass\n",
     "tests/unit/test_daemon_start.py": "def test_s():\n    pass\n",
@@ -148,7 +185,10 @@ def test_a_file_named_by_a_string_is_read_by_its_namer(graph):
 
 
 def test_a_directory_scan_selects_tests_of_the_scanner(graph):
-    assert "tests/unit/test_docs_tool.py" in _selected(graph, "docs/guides/chat.mdx")
+    # chat.mdx is named by a test, so the selection is precise, and the
+    # scanner that lists docs/ comes along.
+    hit = _selected(graph, "docs/guides/chat.mdx")
+    assert {"tests/unit/test_docs_tool.py", "tests/unit/test_chat_doc.py"} <= hit
 
 
 def test_a_nested_conftest_reaches_every_test_below_it(graph):
@@ -322,11 +362,63 @@ def test_a_common_name_with_an_unknown_folder_reads_every_file_of_that_name(grap
 
 def test_an_ignored_name_is_still_a_read_when_its_path_is_spelled_out(graph):
     assert "tests/unit/test_docs_readme.py" in _selected(graph, "docs/README.md")
-    assert "tests/unit/test_docs_readme.py" not in _selected(graph, "README.md")
 
 
-def test_an_unreferenced_file_selects_nothing(graph):
-    assert _selected(graph, "README.md") == set()
+@pytest.mark.parametrize(
+    "test", ["tests/unit/test_email_tools_like.py", "tests/unit/test_phishing_like.py"]
+)
+def test_the_inbox_triage_skill_selects_the_email_tests_that_read_it(graph, test):
+    # The regression: these two were skipped when only SKILL.md was edited.
+    hit = _selected(graph, "hub/skills/inbox-triage/SKILL.md")
+    assert test in hit
+    assert "tests/unit/test_unrelated.py" not in hit
+
+
+@pytest.mark.parametrize(
+    "changed, reader",
+    [
+        ("hub/skills/inbox-triage/references/guide.md", "test_skill_refs.py"),
+        ("tests/fixtures/data/cases.json", "test_cases.py"),
+        ("eval/scenarios/rag/basic.yaml", "test_scenarios.py"),
+        ("docs/guides/chat.mdx", "test_chat_doc.py"),
+    ],
+)
+def test_a_data_file_named_by_its_path_selects_its_reader(graph, changed, reader):
+    assert f"tests/unit/{reader}" in _selected(graph, changed)
+
+
+# Coverage records only .py files, so a data file nothing names exactly could be
+# read by anything: run everything rather than guess.
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "README.md",
+        "hub/skills/s2/SKILL.md",
+        "hub/skills/inbox-triage/references/unread.md",
+        "tests/fixtures/other/cases.json",
+        "eval/scenarios/rag/other.yaml",
+        "docs/guides/talk.mdx",
+    ],
+)
+def test_a_data_file_no_string_names_exactly_runs_the_full_suite(graph, changed):
+    sel = st.select(graph, [changed])
+    assert sel.full and len(sel.tests) == sel.total
+    assert "not named exactly" in sel.reason
+
+
+def test_one_unattributed_data_file_among_precise_ones_runs_everything(graph):
+    sel = st.select(
+        graph, ["hub/skills/inbox-triage/SKILL.md", "hub/skills/s2/SKILL.md"]
+    )
+    assert sel.full
+
+
+def test_a_renamed_data_file_runs_the_full_suite(graph):
+    # --no-renames: the old path shows as deleted, whatever its new name.
+    sel = st.select(
+        graph, ["tests/fixtures/data/old_cases.json", "tests/fixtures/data/cases.json"]
+    )
+    assert sel.full and "deleted or renamed" in sel.reason
 
 
 @pytest.mark.parametrize(
