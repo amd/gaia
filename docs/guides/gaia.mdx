@@ -200,7 +200,7 @@ In the Agent UI, a Hub-installed GAIA asks with **Allow once** or **Deny** above
 
 The agent's file, document, and data tools are confined to a set of allowed paths. **By default that set is your home directory.**
 
-That's the honest scope for a personal document agent — "ask questions about my files" means your files — and it is still a real boundary: system directories, program files, and other users' home directories fall outside it and are refused. The check runs against the *resolved* path, so a symlink pointing out of the allowed set doesn't get around it; you get an explicit `Access denied to path:` error naming both the requested and the resolved path.
+That's the honest scope for a personal document agent — "ask questions about my files" means your files — and it is still a real boundary: system directories, program files, and other users' home directories fall outside it and are refused. The check runs against the *resolved* path, so a symlink pointing out of the allowed set doesn't get around it; you get an explicit `Access denied: <path> is not in allowed paths.` error naming the path you asked for.
 
 **The allowed set is not the whole story, and shouldn't be treated as one.** Two denylists apply *inside* it, because "in scope" and "safe" are different questions:
 
@@ -328,7 +328,7 @@ gaia init
 
 The hint `GET /v1/gaia/init` returns also names the pull command for whichever Lemonade client this machine has, if you'd rather pull just that one model. Then re-run the readiness check.
 
-### "Access denied to path"
+### "Access denied: … is not in allowed paths"
 
 The file resolves outside the allowed paths — by default, outside your home directory — and either you denied the approval prompt or the path is one that is never granted (see [File access scope](#file-access-scope)). Ask again and approve the prompt when it appears (an unanswered prompt is denied after 10 minutes), or attach the file to the chat. An agent you construct in code can instead take an `allowed_paths` list that covers it.
 
