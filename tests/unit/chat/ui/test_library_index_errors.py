@@ -258,7 +258,7 @@ class TestFailureReason:
         assert failed["last_error"] == "embedder not loaded"
         assert failed["error_kind"] is None
 
-        async def ok(_path, display_name=None):
+        async def ok(_path, display_name=None, progress_key=None):
             return 3
 
         with patch("gaia.ui.server._index_document", ok):

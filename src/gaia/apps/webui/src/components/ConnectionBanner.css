@@ -168,7 +168,7 @@
 @media (max-width: 768px) {
     .connection-banner {
         padding: 8px 16px;
-        padding-left: var(--sidebar-toggle-clearance);
+        padding-inline-start: var(--sidebar-toggle-clearance);
         font-size: 11px;
     }
 }

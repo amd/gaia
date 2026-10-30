@@ -1012,13 +1012,34 @@ export async function deleteDocument(id: string): Promise<void> {
     return apiFetch('DELETE', `/documents/${id}`);
 }
 
+/** How far a running index has got: PDF pages read, then chunks embedded. */
+export interface IndexProgress {
+    phase: 'reading' | 'embedding';
+    done: number;
+    /** Null when the count isn't known upfront (e.g. pages of a non-PDF). */
+    total: number | null;
+}
+
 export async function getDocumentStatus(id: string): Promise<{
     id: string;
     indexing_status: string;
     chunk_count: number;
     is_active: boolean;
+    /** Null unless the document is being indexed right now. */
+    progress: IndexProgress | null;
 }> {
     return apiFetch('GET', `/documents/${id}/status`);
+}
+
+/**
+ * Where a library document opens, at `page` when given. Absolute, so it opens
+ * the same in a browser tab and, from the desktop app's file:// page, in the
+ * system browser (the shell hands http links to it).
+ */
+export function documentFileUrl(id: string, page?: number): string {
+    const url = new URL(`${API_BASE}/documents/${encodeURIComponent(id)}/file`, window.location.href);
+    if (page) url.hash = `page=${page}`;
+    return url.href;
 }
 
 export async function cancelIndexing(id: string): Promise<{ cancelled: boolean; id: string }> {

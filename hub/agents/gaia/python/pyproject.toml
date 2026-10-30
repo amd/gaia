@@ -44,10 +44,15 @@ gaia-agent = "gaia_agent.entry:main"
 gaia = "gaia_agent:build_gaia"
 
 [project.optional-dependencies]
-test = ["pytest"]
+# setuptools: tests/test_starter_skill_build.py runs the real build hooks.
+test = ["pytest", "setuptools>=70.0"]
 
 [tool.setuptools.packages.find]
 include = ["gaia_agent*"]
+
+[tool.setuptools.cmdclass]
+build_py = "gaia_agent.build.build_py"
+sdist = "gaia_agent.build.sdist"
 
 [tool.setuptools.package-data]
 # The manifest and bundled skills must land inside the package so they survive

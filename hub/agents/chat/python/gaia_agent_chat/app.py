@@ -139,6 +139,12 @@ def parse_args():
 
 def main():
     """Main entry point."""
+    try:
+        from gaia.logger import configure
+    except ImportError:  # older amd-gaia sets up logging on import; the pin allows it
+        pass
+    else:
+        configure()
     args = parse_args()
 
     try:

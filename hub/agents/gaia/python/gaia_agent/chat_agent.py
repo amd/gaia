@@ -408,6 +408,16 @@ class ChatAgentConfig:
     namespaced_agent_id: Optional[str] = None
 
 
+# Added to the per-turn document list only when a document is not in Latin script.
+_CROSS_LANGUAGE_NOTE = (
+    "[Documents marked with a script such as [Arabic] are written in it. When the "
+    "question is in another language, search them with the query translated into "
+    'the document\'s language (English "net debt" -> Arabic "صافي الدين"); a '
+    "query in another language rarely finds the passage. Answer in the language of "
+    "the user's latest message and cite every fact with its document and page.]"
+)
+
+
 class ChatAgent(
     MemoryMixin,
     Agent,
@@ -774,12 +784,17 @@ class ChatAgent(
         if not self.rag:
             return ""
         lines = []
-        if self.rag.indexed_files:
+        # Copied first: a background index can add to the set during this loop.
+        indexed = list(self.rag.indexed_files)
+        if indexed:
+            scripts = {fp: self._scripts(fp) for fp in indexed}
             entries = sorted(
-                {f"{Path(fp).name} ({fp})" for fp in self.rag.indexed_files},
+                {self._indexed_entry(fp, scripts[fp]) for fp in indexed},
                 key=str.lower,
             )
             lines.append(f"[Indexed documents: {', '.join(entries)}]")
+            if any(s and s != ["Latin"] for s in scripts.values()):
+                lines.append(_CROSS_LANGUAGE_NOTE)
         pending = sorted({Path(fp).name for fp in documents_still_indexing(self.rag)})
         if pending:
             lines.append(
@@ -787,6 +802,18 @@ class ChatAgent(
                 f"{', '.join(pending)}]"
             )
         return "\n".join(lines)
+
+    def _scripts(self, file_path: str) -> List[str]:
+        """Scripts a document's text is written in, e.g. ``["Arabic", "Latin"]``."""
+        return self.rag.document_scripts(file_path)
+
+    @staticmethod
+    def _indexed_entry(file_path: str, scripts: List[str]) -> str:
+        """``a.pdf (/docs/a.pdf)``, plus ``[Arabic]`` when not only Latin script."""
+        written_in = (
+            f" [{' + '.join(scripts)}]" if scripts and scripts != ["Latin"] else ""
+        )
+        return f"{Path(file_path).name} ({file_path}){written_in}"
 
     def get_memory_dynamic_context(self) -> str:
         """Per-turn context, plus which documents are indexed right now."""

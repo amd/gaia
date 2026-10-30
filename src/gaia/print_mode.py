@@ -175,8 +175,9 @@ def _run_turn(
 ) -> Dict[str, Any]:
     from gaia.cli import initialize_lemonade_for_agent
     from gaia.llm.lemonade_client import resolve_lemonade_base_url
-    from gaia.logger import log_manager
+    from gaia.logger import configure
 
+    log_manager = configure()
     log_manager.configure_agent_console(debug=False)
 
     if model is None:

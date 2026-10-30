@@ -260,6 +260,9 @@ def _build_deregister(
 
 def run(host: str = HOST) -> None:
     """Start the daemon and serve until shutdown. Blocks."""
+    from gaia.logger import configure
+
+    configure()
     import uvicorn
 
     from gaia.login_path import apply_login_path
