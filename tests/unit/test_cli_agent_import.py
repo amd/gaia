@@ -140,6 +140,24 @@ def test_interactive_non_yes_answer_refuses(tmp_path, monkeypatch, answer):
 # --yes bypasses the prompt entirely
 # ---------------------------------------------------------------------------
 
+def test_interactive_prompt_eof_cancels_cleanly(tmp_path, monkeypatch):
+    """Ctrl+D / Ctrl+Z at the prompt cancels instead of crashing (#3450)."""
+    bundle = _make_bundle(tmp_path)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("gaia.utils.terminal.is_windows_console", lambda stream: True)
+
+    def _eof(*args, **kwargs):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", _eof)
+    calls = []
+    _patch_import_agent_bundle(monkeypatch, calls)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.handle_agent_import(_import_args(bundle, yes=False))
+
+    assert excinfo.value.code == 0  # cancelled, same as answering "n"
+    assert calls == []  # nothing was installed
 
 def test_yes_flag_bypasses_prompt(tmp_path, monkeypatch):
     bundle = _make_bundle(tmp_path)
