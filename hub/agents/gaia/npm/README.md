@@ -212,7 +212,7 @@ so probe `/version` first. See
 
 **Internet switched off for the chat? Send `internet_off`** (contract ≥
 2.23) every turn: `true` refuses web search, page fetches, the browser,
-connector, mailbox and Agent Hub tools and commands that contact another host;
+connector and Agent Hub tools, mailbox reads, and commands that contact another host;
 `false` allows them.
 Omit it and the agent keeps its own setting. Binaries older than 2.23 reject
 the field with `422`, so probe `/version` first, do not answer an
