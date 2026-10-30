@@ -464,9 +464,12 @@ def start_email_mcp(
 def main() -> None:
     import argparse
 
-    from gaia.logger import configure
-
-    configure()
+    try:
+        from gaia.logger import configure
+    except ImportError:  # older amd-gaia sets up logging on import; the pin allows it
+        pass
+    else:
+        configure()
 
     parser = argparse.ArgumentParser(description="GAIA Email Triage MCP Server")
     parser.add_argument(

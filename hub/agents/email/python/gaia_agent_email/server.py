@@ -312,9 +312,12 @@ def _add_serve_args(parser: argparse.ArgumentParser) -> None:
 
 
 def main(argv=None) -> int:
-    from gaia.logger import configure
-
-    configure()
+    try:
+        from gaia.logger import configure
+    except ImportError:  # older amd-gaia sets up logging on import; the pin allows it
+        pass
+    else:
+        configure()
     try:
         from gaia.tls import use_os_trust_store
     except ImportError:  # amd-gaia older than the trust-store switch; the pin allows it

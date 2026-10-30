@@ -988,9 +988,12 @@ def interactive_mode(agent: ChatAgent):
 
 def main():
     """Main entry point."""
-    from gaia.logger import configure
-
-    configure()
+    try:
+        from gaia.logger import configure
+    except ImportError:  # older amd-gaia sets up logging on import; the pin allows it
+        pass
+    else:
+        configure()
     args = parse_args()
 
     try:

@@ -268,6 +268,57 @@ def test_entry_point_configures_logging(
     ), f"{module_name}:{func_name} must call gaia.logger.configure()"
 
 
+_HUB_ENTRY_POINTS = [
+    entry for entry in _ENTRY_POINTS_HELP if not entry[0].startswith("gaia.")
+]
+
+
+@pytest.mark.parametrize(
+    "module_name,func_name,argv",
+    _HUB_ENTRY_POINTS,
+    ids=[f"{m}:{f}" for m, f, _ in _HUB_ENTRY_POINTS],
+)
+def test_hub_entry_point_runs_on_core_without_configure(
+    unconfigured, monkeypatch, module_name, func_name, argv
+):
+    """Hub agents pin an amd-gaia that predates configure(); that core sets up
+    logging on import, so the agent must start rather than ImportError."""
+    module = pytest.importorskip(module_name)
+    monkeypatch.delattr(gaia_logger, "configure")
+    monkeypatch.setattr(sys, "argv", [module_name, "--help"])
+    with pytest.raises(SystemExit):
+        if argv is None:
+            getattr(module, func_name)()
+        else:
+            getattr(module, func_name)(argv)
+
+
+@pytest.mark.parametrize("argv", [[], ["--serve", "--port", "1"]])
+def test_flagship_entry_runs_on_core_without_configure(unconfigured, monkeypatch, argv):
+    entry = pytest.importorskip("gaia_agent.entry")
+    stdio = types.ModuleType("gaia_agent.stdio")
+    stdio.main = lambda args: 0
+    monkeypatch.setitem(sys.modules, "gaia_agent.stdio", stdio)
+    monkeypatch.delattr(gaia_logger, "configure")
+    with patch("uvicorn.run"):
+        assert entry.main(argv) in (0, None)
+    assert gaia_logger.log_manager is None
+
+
+def test_flagship_entry_surfaces_import_error_from_inside_configure(
+    unconfigured, monkeypatch
+):
+    """The old-core guard covers a missing configure(), not a broken one."""
+    entry = pytest.importorskip("gaia_agent.entry")
+
+    def broken_configure(*args, **kwargs):
+        raise ImportError("broken handler dependency")
+
+    monkeypatch.setattr(gaia_logger, "configure", broken_configure)
+    with pytest.raises(ImportError, match="broken handler dependency"):
+        entry.main([])
+
+
 def test_run_agent_cli_configures_logging(unconfigured):
     from gaia.agents.base.server import run_agent_cli
 
