@@ -662,7 +662,7 @@ keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model
 remotely, so a local server URL alone does not establish local inference.
 
-`--bypass-permissions` turns off more than the prompt. It also lifts the shell
+`--full-access` turns off more than the prompt. It also lifts the shell
 tool's own guardrails for the session: the shell-only operators — redirection
 (`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`) and the
 newline — parse and run, chaining (`&&`, `||`, `;`, `|`) already ran by

@@ -449,7 +449,7 @@ and an unknown session is a **404** rather than a new one. A malformed
 `session_id` is a **400**, same as on `/query`.
 
 **That bypass stops the prompts; it does not open the shell.** The stdio
-transport's `--bypass-permissions` does both — it runs gated tools unasked *and*
+transport's `--full-access` does both — it runs gated tools unasked *and*
 lifts the shell tool's guardrails (redirection and the other shell-only
 operators, the read-only binary allowlist, the rate limit). That second half is
 arbitrary code execution, appropriate for one local parent on a private pipe and
