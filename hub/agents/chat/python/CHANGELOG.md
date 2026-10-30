@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Asked for a slide or deck, the agent asks whether you want PowerPoint (.pptx)
+  or HTML when you didn't say, and builds nothing until you answer; then it
+  builds that file. It no longer reaches for
+  `generate_image`, which can't render readable text. A successful image is
+  reported by its saved path.
 - `gaia chat --index <file>` indexes the named file from any working
   directory. A file outside the folder `gaia chat` ran in was refused as "not
   in allowed paths", the error was only logged, and the agent answered without

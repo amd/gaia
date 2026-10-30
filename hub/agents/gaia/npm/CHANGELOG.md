@@ -8,6 +8,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.25.3+ on `PATH`.
 
+- **A slide request gets a slide file, not a picture.** Asked for a slide or
+  deck, the agent ran Stable Diffusion and handed back a blurry image of one.
+  It now asks whether you want PowerPoint (.pptx) or HTML when you didn't say,
+  and builds nothing until you answer; then it builds that file.
+- **Image generation no longer reports an image it didn't make.** A server
+  reply with no image, an unreadable one, or a single flat colour (SDXL can
+  return an all-black frame) counted as success. Each is now an error naming
+  what came back, and success gives the saved file's path.
+
 ### For integrators: contract 2.25
 
 - **The agent remembers its own tool calls across turns** (contract **2.25**,
@@ -39,7 +48,6 @@ Python CLI 0.25.2+ on `PATH`. Integrators: the sidecar contract is now
 - **Unknown or misplaced switches are refused.** `gaia --forse` and
   `gaia fetch --developer-mode` now exit 2 instead of silently starting the TUI;
   pass terminal-UI arguments after a bare `--`.
-
 - **The Agent UI's "Under the hood" figures cover GAIA chats.** It said every
   answer was "not measured", because only the agent saw its own step timings.
   `final` now carries `performance` with them: the turn's model and tool
