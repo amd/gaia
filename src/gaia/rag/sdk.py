@@ -385,6 +385,11 @@ class RAGConfig:
     vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
+    # Optional second-stage retrieval. Reranking is off until the user downloads
+    # a reranker in Settings → Models and turns it on explicitly.
+    enable_reranking: bool = False
+    reranking_model: Optional[str] = None
+    reranking_candidate_multiplier: int = 3
     # Security settings
     allowed_paths: Optional[List[str]] = None
 
@@ -492,6 +497,10 @@ class RAGSDK:
         self.llm_client = None
         self.use_lemonade_embeddings = False
         self._embedding_cache = None  # content-keyed query-embed cache (lazy)
+        self._reranking_model: Optional[str] = None
+        self._reranking_checked = False
+        self._reranking_unavailable_logged = False
+        self._reranking_failure_logged = False
         self.index = None
         self.chunks = []
         self.indexed_files = set()
@@ -3915,48 +3924,162 @@ These positions indicate where to split the text."""
         snapshot = self._search_chunks(query)
         return snapshot["retrieved_chunks"], snapshot["scores"]
 
+    def _resolve_reranking_model(self) -> Optional[str]:
+        """Return one downloaded reranker, without downloading or prompting."""
+        if not self.config.enable_reranking:
+            return None
+        if self._reranking_checked:
+            return self._reranking_model
+
+        self._reranking_checked = True
+        try:
+            if self.llm_client is None:
+                from gaia.llm.lemonade_client import LemonadeClient
+
+                self.llm_client = LemonadeClient(base_url=self.config.base_url)
+            models = self.llm_client.list_models(show_all=False).get("data", [])
+            requested = self.config.reranking_model
+            candidates = [
+                item
+                for item in models
+                if item.get("downloaded") is not False
+                and "reranking"
+                in {str(label).lower() for label in item.get("labels", [])}
+            ]
+            if requested:
+                self._reranking_model = next(
+                    (
+                        item.get("id")
+                        for item in candidates
+                        if item.get("id") == requested
+                    ),
+                    None,
+                )
+            elif candidates:
+                self._reranking_model = candidates[0].get("id")
+        except Exception as error:  # noqa: BLE001 - optional feature fallback
+            self.log.warning(
+                "Reranking is unavailable; using vector retrieval: %s", error
+            )
+
+        if not self._reranking_model and not self._reranking_unavailable_logged:
+            wanted = (
+                f" '{self.config.reranking_model}'"
+                if self.config.reranking_model
+                else ""
+            )
+            self.log.info(
+                "Reranking is enabled but no downloaded%s reranker is available; "
+                "using vector retrieval. Download one in Settings → Models.",
+                wanted,
+            )
+            self._reranking_unavailable_logged = True
+        return self._reranking_model
+
+    def _rerank_candidates(
+        self, query: str, candidate_chunks: List[str], model: str
+    ) -> Optional[Tuple[List[int], List[float]]]:
+        """Return candidate positions sorted by Lemonade relevance, or ``None``.
+
+        A malformed or failed optional response is ignored: FAISS remains the
+        complete deterministic fallback, and this path never pulls a model.
+        """
+        if len(candidate_chunks) < 2:
+            return None
+        try:
+            response = self.llm_client.rerank(query, candidate_chunks, model=model)
+            results = response.get("results")
+            if not isinstance(results, list):
+                raise ValueError("response has no results list")
+            order: List[int] = []
+            scores: List[float] = []
+            seen = set()
+            for item in results:
+                index = item.get("index") if isinstance(item, dict) else None
+                score = item.get("relevance_score") if isinstance(item, dict) else None
+                if (
+                    not isinstance(index, int)
+                    or index < 0
+                    or index >= len(candidate_chunks)
+                    or index in seen
+                    or not isinstance(score, (int, float))
+                ):
+                    raise ValueError("response contains an invalid rerank result")
+                seen.add(index)
+                order.append(index)
+                scores.append(float(score))
+            if len(order) != len(candidate_chunks):
+                raise ValueError("response does not score every candidate")
+            return order, scores
+        except Exception as error:  # noqa: BLE001 - optional feature fallback
+            self._reranking_model = None
+            if not self._reranking_failure_logged:
+                self.log.warning(
+                    "Reranking failed; using vector retrieval for this session: %s",
+                    error,
+                )
+                self._reranking_failure_logged = True
+            return None
+
     def _search_chunks(self, query: str) -> Dict[str, Any]:
-        """Retrieve relevant chunks and indices from a consistent snapshot."""
+        """Retrieve chunks from a snapshot, optionally reranking FAISS candidates."""
         snapshot = self._snapshot_query_state()
         chunks_snapshot = snapshot["chunks"]
         index_snapshot = snapshot["index"]
 
         self._load_embedder()
+        reranking_model = self._resolve_reranking_model()
 
-        # Generate query embedding
         if self.config.show_stats:
-            print(f"🔍 Searching through {len(chunks_snapshot)} chunks...")
+            print(f"Searching through {len(chunks_snapshot)} chunks...")
         self.log.debug(f"Encoding query: {query[:50]}...")
         query_embedding = self._encode_query(query)
 
-        # Search for similar chunks
-        k = min(self.config.max_chunks, len(chunks_snapshot))
+        result_limit = min(self.config.max_chunks, len(chunks_snapshot))
+        multiplier = max(1, int(self.config.reranking_candidate_multiplier))
+        candidate_limit = (
+            min(len(chunks_snapshot), result_limit * multiplier)
+            if reranking_model
+            else result_limit
+        )
         if self.config.show_stats:
-            print(f"  🎯 Finding {k} most relevant chunks...")
+            print(f"Finding {candidate_limit} vector candidates...")
         # pylint: disable=no-value-for-parameter
-        distances, indices = index_snapshot.search(query_embedding.astype("float32"), k)
+        distances, indices = index_snapshot.search(
+            query_embedding.astype("float32"), candidate_limit
+        )
 
         retrieved_indices = []
         retrieved_chunks = []
         scores = []
         for idx, dist in zip(indices[0], distances[0]):
             idx = int(idx)
-            # FAISS can surface stale or invalid positions relative to the
-            # captured chunk snapshot; skip anything outside the snapshot.
             if idx < 0 or idx >= len(chunks_snapshot):
                 continue
             retrieved_indices.append(idx)
             retrieved_chunks.append(chunks_snapshot[idx])
             scores.append(1.0 / (1.0 + float(dist)))
 
+        if reranking_model:
+            reranked = self._rerank_candidates(query, retrieved_chunks, reranking_model)
+            if reranked is not None:
+                order, rerank_scores = reranked
+                retrieved_indices = [retrieved_indices[i] for i in order]
+                retrieved_chunks = [retrieved_chunks[i] for i in order]
+                scores = rerank_scores
+        retrieved_indices = retrieved_indices[:result_limit]
+        retrieved_chunks = retrieved_chunks[:result_limit]
+        scores = scores[:result_limit]
+
         if self.config.show_stats:
-            avg_relevance = sum(scores) / len(scores) if scores else 0.0
+            average = sum(scores) / len(scores) if scores else 0.0
             print(
-                f"  ✅ Retrieved {len(retrieved_chunks)} chunks (avg relevance: {avg_relevance:.3f})"
+                f"Retrieved {len(retrieved_chunks)} chunks (avg relevance: {average:.3f})"
             )
 
         self.log.debug(
-            f"Retrieved {len(retrieved_chunks)} chunks with scores: {[f'{s:.3f}' for s in scores]}"
+            f"Retrieved {len(retrieved_chunks)} chunks with scores: "
+            f"{[f'{score:.3f}' for score in scores]}"
         )
         snapshot["retrieved_indices"] = retrieved_indices
         snapshot["retrieved_chunks"] = retrieved_chunks
