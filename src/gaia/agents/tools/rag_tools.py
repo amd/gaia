@@ -2183,7 +2183,9 @@ references from the section summaries.
                         self.rag.config.cache_dir, output_filename
                     )
                 else:
-                    output_path = str(Path(output_path).expanduser().resolve())
+                    output_path = str(
+                        _resolve_target(output_path, None, _workspace_default(self))
+                    )
                     denied = write_access_error(self, output_path)
                     if denied:
                         return denied

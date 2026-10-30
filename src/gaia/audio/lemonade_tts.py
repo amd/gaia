@@ -226,6 +226,7 @@ class LemonadeTTSClient(LemonadeAudioService):
         """
         if not text or not text.strip():
             raise ValueError("text to speak must not be empty.")
+        self._refuse_unless_local()
         body = {
             "model": self.model,
             "input": text,
