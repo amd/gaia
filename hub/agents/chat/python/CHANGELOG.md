@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Resolves the user's real Documents folder for the session guidance, including
+  Windows Known Folder Move/OneDrive and Linux `XDG_DOCUMENTS_DIR`, instead of
+  assuming it is always `~/Documents` (#5885). File search and the Agent UI's
+  Documents quick link use the same folder.
 - The data profile's prompt no longer says it can browse the web or transcribe
   audio and video. It registers neither, so the model promised a tool it could not
   call. The web and media lines now appear only for profiles that register those
