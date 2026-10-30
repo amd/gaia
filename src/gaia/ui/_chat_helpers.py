@@ -581,18 +581,26 @@ _classify_chat_exception = classify_lemonade_exception
 #   * Title starts with "Eval:" — those are owned by the eval framework
 #   * A title request is already running for the session, so concurrent
 #     fire-and-forget tasks don't pile up
+#   * The model already titled it, or replied with the name it has
+#     (_AUTO_TITLE_SETTLED)
 #   * Its title requests failed _AUTO_TITLE_MAX_TRIES times in this server
 #     run, so a cloud chat is not billed every turn
-#   * The model found no topic in it _AUTO_TITLE_MAX_NO_TOPIC times, so a
-#     chat of small talk is not billed every turn either
+#   * It was asked for a title _AUTO_TITLE_MAX_ATTEMPTS times in this server
+#     run, whatever came of them, so no reply (small talk, a busy model) can
+#     bill a chat every turn
 #   * No agent / no Lemonade base URL available
+#
+# A new turn cancels the chat's pending after-turn title: that turn's own
+# after-turn title replaces it, and it can't wait into the turn's steps.
 _AUTO_TITLE_DEFAULTS = PLACEHOLDER_TITLES
 _AUTO_TITLE_LOCK = threading.Lock()
 _AUTO_TITLE_RUNNING: set[str] = set()
 _AUTO_TITLE_FAILURES: dict[str, int] = {}
 _AUTO_TITLE_MAX_TRIES = 3
-_AUTO_TITLE_NO_TOPIC: dict[str, int] = {}
-_AUTO_TITLE_MAX_NO_TOPIC = 10
+_AUTO_TITLE_ATTEMPTS: dict[str, int] = {}
+_AUTO_TITLE_MAX_ATTEMPTS = 10
+_AUTO_TITLE_SETTLED: set[str] = set()
+_AUTO_TITLE_PENDING: dict[str, asyncio.Task] = {}
 #: While another request holds the model, a title waits this many times (30 s
 #: each), this many seconds apart (~6 min in all), then leaves it to the chat's
 #: next turn. A one-slot local model waits once: a later title could land
@@ -702,6 +710,15 @@ def _should_retitle(
     if provisional and title == provisional:
         return True
     return not title or title.lower() in _AUTO_TITLE_DEFAULTS
+
+
+def _same_title(a: str, b: str) -> bool:
+    """True when two titles differ only in case, spacing, quotes or end punctuation."""
+
+    def _norm(title: str) -> str:
+        return " ".join(title.split()).strip("\"'`*.!?;:,").strip().casefold()
+
+    return _norm(a or "") == _norm(b or "")
 
 
 def _set_provisional_title(db: ChatDatabase, session_id: str, user_msg: str) -> None:
@@ -907,6 +924,30 @@ def _first_exchange(
     return user_msg, assistant_msg
 
 
+def _cancel_pending_title(session_id: str) -> None:
+    """Cancel *session_id*'s after-turn title, if one is still waiting or running."""
+    task = _AUTO_TITLE_PENDING.pop(session_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+        logger.info(
+            "Auto-title: a new turn in session %s cancelled its pending title",
+            session_id[:8],
+        )
+
+
+def _spawn_after_turn_title(coro, session_id: str) -> asyncio.Task:
+    """Spawn an after-turn title the chat's next turn can cancel."""
+    task = _spawn_background(coro)
+    _AUTO_TITLE_PENDING[session_id] = task
+
+    def _forget(done: asyncio.Task) -> None:
+        if _AUTO_TITLE_PENDING.get(session_id) is done:
+            del _AUTO_TITLE_PENDING[session_id]
+
+    task.add_done_callback(_forget)
+    return task
+
+
 async def _maybe_update_session_title(
     db: ChatDatabase,
     session_id: str,
@@ -960,20 +1001,18 @@ async def _maybe_update_session_title(
     with _AUTO_TITLE_LOCK:
         if (
             session_id in _AUTO_TITLE_RUNNING
+            or session_id in _AUTO_TITLE_SETTLED
             or _AUTO_TITLE_FAILURES.get(session_id, 0) >= _AUTO_TITLE_MAX_TRIES
-            or _AUTO_TITLE_NO_TOPIC.get(session_id, 0) >= _AUTO_TITLE_MAX_NO_TOPIC
+            or _AUTO_TITLE_ATTEMPTS.get(session_id, 0) >= _AUTO_TITLE_MAX_ATTEMPTS
         ):
             return
         _AUTO_TITLE_RUNNING.add(session_id)
+        _AUTO_TITLE_ATTEMPTS[session_id] = _AUTO_TITLE_ATTEMPTS.get(session_id, 0) + 1
     try:
         new_title = await _title_when_model_free(
             base_url, title_model, user_msg, assistant_msg, latest_msg
         )
     except _NoTopicYet:
-        with _AUTO_TITLE_LOCK:
-            _AUTO_TITLE_NO_TOPIC[session_id] = (
-                _AUTO_TITLE_NO_TOPIC.get(session_id, 0) + 1
-            )
         logger.info(
             "Auto-title: session %s has no topic yet; its next turn tries again",
             session_id[:8],
@@ -996,12 +1035,17 @@ async def _maybe_update_session_title(
                 _AUTO_TITLE_FAILURES.get(session_id, 0) + 1
             )
         return
-    if new_title.lower() == current_title.lower():
+    if _same_title(new_title, current_title):
+        # The model agrees with the name the chat has: that is its title.
+        with _AUTO_TITLE_LOCK:
+            _AUTO_TITLE_SETTLED.add(session_id)
         return
     try:
         # A no-op when the user renamed the chat while the title was written.
         if not db.replace_auto_title(session_id, current_title, new_title):
             return
+        with _AUTO_TITLE_LOCK:
+            _AUTO_TITLE_SETTLED.add(session_id)
         logger.info(
             "Auto-titled session %s: %r → %r",
             session_id[:8],
@@ -3842,6 +3886,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             yield f"data: {json.dumps({'type': 'answer', 'content': refusal})}\n\n"
             yield f"data: {json.dumps(_done_event(msg_id, refusal, False))}\n\n"
             return
+        _cancel_pending_title(session_id)
         _spawn_background(
             _maybe_update_session_title(
                 db=db,
@@ -4800,14 +4845,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 yield _undo_link_warning_event(link_warning)
             spending.record_turn(db, model_id, inference_stats)
             # Fire-and-forget auto-titling, on the model this turn ran on.
-            _spawn_background(
+            _spawn_after_turn_title(
                 _maybe_update_session_title(
                     db=db,
                     session_id=request.session_id,
                     user_msg=request.message,
                     assistant_msg=full_response,
                     model_id=model_id,
-                )
+                ),
+                request.session_id,
             )
             done_event = _done_event(
                 msg_id,

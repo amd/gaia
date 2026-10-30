@@ -215,10 +215,137 @@ def test_small_talk_stops_being_titled_after_a_while():
             asyncio.run(ch._maybe_update_session_title(db, sid, ESSAY, "", CLOUD_MODEL))
         return gen.await_count
 
-    counts = [_no_topic() for _ in range(ch._AUTO_TITLE_MAX_NO_TOPIC + 1)]
+    counts = [_no_topic() for _ in range(ch._AUTO_TITLE_MAX_ATTEMPTS + 1)]
 
-    assert counts[:-1] == [1] * ch._AUTO_TITLE_MAX_NO_TOPIC and counts[-1] == 0
+    assert counts[:-1] == [1] * ch._AUTO_TITLE_MAX_ATTEMPTS and counts[-1] == 0
     assert db.get_session(sid)["title"] == PROVISIONAL
+
+
+# ── Every title request counts; a title the chat already has is final ────
+
+
+def _attempt(db, sid, outcome, model_id=CLOUD_MODEL, at_turn_start=False):
+    """One title try whose outcome is *outcome*; returns how many were made."""
+    ask = AsyncMock(side_effect=outcome)
+    with (
+        patch.object(ch, "_title_when_model_free", ask),
+        patch(
+            "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+            return_value=LEMONADE,
+        ),
+    ):
+        try:
+            asyncio.run(
+                ch._maybe_update_session_title(
+                    db, sid, ESSAY, "Tea", model_id, at_turn_start=at_turn_start
+                )
+            )
+        except asyncio.CancelledError:
+            pass
+    return ask.await_count
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        PROVISIONAL,
+        PROVISIONAL.upper(),
+        PROVISIONAL.title(),
+        f'"{PROVISIONAL}."',
+        f"  {PROVISIONAL.replace(' ', '   ')}!",
+        f"`{PROVISIONAL}`",
+    ],
+)
+def test_a_reply_naming_the_chat_as_it_is_ends_its_titling(reply):
+    """The chat asked again at the start and end of every turn, billing a cloud
+    title each time: the same name was neither saved nor counted."""
+    db, sid = _provisional_chat()
+
+    calls = [
+        _attempt(db, sid, [reply], at_turn_start=start)
+        for _ in range(4)
+        for start in (True, False)
+    ]
+
+    assert calls == [1] + [0] * 7
+    assert db.get_session(sid)["title"] == PROVISIONAL
+
+
+def test_a_short_question_titled_back_in_title_case_is_asked_once(lemonade):
+    """ "Python list comprehension" came back "Python List Comprehension"."""
+    question = "Python list comprehension"
+    lemonade.add(
+        responses.POST,
+        f"{LEMONADE}/chat/completions",
+        json=_reply("Python List Comprehension"),
+    )
+    db = ChatDatabase(":memory:")
+    sid = db.create_session(title="New Task")["id"]
+    db.begin_turn(sid, question)
+    ch._set_provisional_title(db, sid, question)
+
+    with patch(
+        "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+        return_value=LEMONADE,
+    ):
+        for _ in range(3):
+            for start in (True, False):
+                asyncio.run(
+                    ch._maybe_update_session_title(
+                        db, sid, question, "Use [x for x in y]", CLOUD_MODEL, start
+                    )
+                )
+
+    assert len(lemonade.calls) == 1
+    assert db.get_session(sid)["title"] == question
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        f"{PROVISIONAL}s",
+        f"{PROVISIONAL} and coffee",
+        "History of Tea Essay",
+    ],
+)
+def test_a_title_that_differs_by_a_word_is_still_written(reply):
+    db, sid = _provisional_chat()
+
+    assert _attempt(db, sid, [reply]) == 1
+
+    assert db.get_session(sid)["title"] == reply
+    # Named now: later turns leave it alone.
+    assert _attempt(db, sid, ["Something else"]) == 0
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        ch._NoTopicYet,
+        ch._TitleModelBusy("not granted within its 30s wait limit"),
+        asyncio.CancelledError,
+    ],
+    ids=["no-topic", "model-busy", "cancelled"],
+)
+def test_every_kind_of_title_try_counts_toward_the_cap(outcome):
+    """A model that stayed busy was asked again every turn, without end."""
+    db, sid = _provisional_chat()
+
+    calls = [_attempt(db, sid, outcome) for _ in range(ch._AUTO_TITLE_MAX_ATTEMPTS + 2)]
+
+    assert calls == [1] * ch._AUTO_TITLE_MAX_ATTEMPTS + [0, 0]
+    assert sid not in ch._AUTO_TITLE_RUNNING
+
+
+def test_mixed_title_outcomes_share_one_cap():
+    db, sid = _provisional_chat()
+    busy = ch._TitleModelBusy("busy")
+    # Two failures, so the failure cap of 3 never ends it first.
+    outcomes = [busy, ch._NoTopicYet, [None]] * 2 + [busy, ch._NoTopicYet] * 3
+
+    calls = [_attempt(db, sid, outcome) for outcome in outcomes]
+
+    assert calls == [1] * ch._AUTO_TITLE_MAX_ATTEMPTS + [0, 0]
 
 
 def test_the_title_write_never_overwrites_a_rename():
@@ -777,3 +904,99 @@ def test_an_answer_sent_as_the_agent_exits_is_kept(
     messages = db.get_messages(session["id"])
     assert messages[-1]["role"] == "assistant"
     assert messages[-1]["content"] == "Tea began in China."
+
+
+# ── A new turn cancels the chat's pending title ──────────────────────────
+
+
+def test_a_new_turn_cancels_the_chats_pending_title(
+    monkeypatch, local_lemonade, sidecar_flagship
+):
+    """An after-turn title waiting out a busy model (up to ~6 min) could take
+    the model between the next turn's steps; that turn titles the chat itself."""
+    started, cancelled = [], []
+
+    async def _waiting_title(*_args, **_kwargs):
+        started.append(True)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+
+    monkeypatch.setattr(ch, "_title_when_model_free", _waiting_title)
+    cancelled_when_agent_ran = []
+
+    def _fake_dispatch(sse_handler, request, history_pairs, model_id, agent, **kw):
+        cancelled_when_agent_ran.append(len(cancelled))
+        sse_handler._emit({"type": "answer", "content": "Tea began in China."})
+
+    monkeypatch.setattr(ch, "_dispatch_sidecar_query", _fake_dispatch)
+    db = ChatDatabase(":memory:")
+    db.set_setting("custom_model", LOCAL_MODEL)
+    session = db.create_session(title="New Task", agent_type="gaia")
+    sid = session["id"]
+
+    async def _turn(question):
+        db.begin_turn(sid, question)
+        ch._set_provisional_title(db, sid, question)
+        request = ChatRequest(
+            session_id=sid, message=question, stream=True, agent_type="gaia"
+        )
+        async for _ in ch._stream_chat_impl(
+            SimpleNamespace(handler=None), db, session, request
+        ):
+            pass
+
+    async def _drive():
+        await _turn(ESSAY)
+        for _ in range(1000):
+            if started:
+                break
+            await asyncio.sleep(0)
+        assert started, "the first turn's after-turn title never started"
+        db.add_message(sid, "assistant", "Tea began in China.", ends_turn=True)
+        await _turn("And one about coffee?")
+        # The new turn queued its own after-turn title in place of the old one.
+        assert sid in ch._AUTO_TITLE_PENDING
+        ch._cancel_pending_title(sid)
+        await asyncio.gather(*list(ch._background_tasks), return_exceptions=True)
+
+    asyncio.run(_drive())
+
+    assert cancelled_when_agent_ran == [0, 1]
+
+
+def test_a_turn_cancels_only_its_own_chats_title():
+    async def _drive():
+        never = asyncio.Event()
+        mine = ch._spawn_after_turn_title(never.wait(), "chat-a")
+        theirs = ch._spawn_after_turn_title(never.wait(), "chat-b")
+        await asyncio.sleep(0)
+
+        ch._cancel_pending_title("chat-a")
+        await asyncio.gather(mine, return_exceptions=True)
+
+        assert mine.cancelled() and not theirs.done()
+        assert "chat-a" not in ch._AUTO_TITLE_PENDING
+        ch._cancel_pending_title("chat-b")
+        await asyncio.gather(theirs, return_exceptions=True)
+        assert theirs.cancelled()
+
+    asyncio.run(_drive())
+
+
+def test_a_finished_title_is_forgotten_and_never_cancelled():
+    async def _drive():
+        async def _quick():
+            return None
+
+        done = ch._spawn_after_turn_title(_quick(), "chat-c")
+        await done
+        await asyncio.sleep(0)
+
+        assert "chat-c" not in ch._AUTO_TITLE_PENDING
+        ch._cancel_pending_title("chat-c")  # nothing pending: a no-op
+        assert not done.cancelled()
+
+    asyncio.run(_drive())
