@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Requires the `gaia` Python CLI 0.25.3+ on `PATH`.
+
 - **Recipes, workouts, how-tos and checklists show as cards.** Four new tools
   (`show_recipe`, `show_workout`, `show_how_to`, `show_checklist`) send the
   answer as a `guide` card the Agent UI draws, so the reply is a short tip
