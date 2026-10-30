@@ -14,15 +14,19 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
+from gaia.ui import _chat_helpers
 from gaia.ui._chat_helpers import (
-    _EMPTY_ANSWER_LEMONADE_MSG,
+    _EMPTY_MODEL_ANSWER_MSG,
+    _NO_ANSWER_AFTER_TOOLS_MSG,
     _build_history_pairs,
     _canonical_agent_type,
     _compute_allowed_paths,
     _done_event,
+    _empty_answer_backend_problem,
     _empty_answer_outcome,
     _find_last_tool_step,
     _managed_documents_dir,
@@ -394,7 +398,7 @@ class TestEmptyAnswerOutcome:
         """A user Stop is persisted as a 'Cancelled.' marker, not a Lemonade
         error, and keeps the steps taken before the cancel."""
         content, sse_type, keep_steps = _empty_answer_outcome(
-            turn_cancelled=True, has_steps=True
+            turn_cancelled=True, has_steps=True, has_card=False
         )
         assert content == "Cancelled."
         assert sse_type == "done"
@@ -402,32 +406,144 @@ class TestEmptyAnswerOutcome:
 
     def test_cancel_without_steps_still_marks_cancelled(self):
         content, sse_type, keep_steps = _empty_answer_outcome(
-            turn_cancelled=True, has_steps=False
+            turn_cancelled=True, has_steps=False, has_card=False
         )
         assert content == "Cancelled."
         assert sse_type == "done"
         assert keep_steps is True
 
-    def test_empty_answer_with_steps_persists_empty_and_keeps_cards(self):
+    def test_empty_answer_with_a_card_persists_empty_and_keeps_cards(self):
         """A legitimately-empty final (e.g. an echoed render card stripped to
         empty) persists empty content but keeps the steps/cards."""
         content, sse_type, keep_steps = _empty_answer_outcome(
-            turn_cancelled=False, has_steps=True
+            turn_cancelled=False, has_steps=True, has_card=True
         )
         assert content == ""
         assert sse_type == "done"
         assert keep_steps is True
 
-    def test_no_answer_no_cancel_no_steps_uses_lemonade_copy(self):
-        """The Lemonade remediation copy appears ONLY when there is no answer,
-        no cancel, and no steps/cards."""
+    def test_tools_without_an_answer_or_card_fail_loudly(self):
+        """Tools ran but nothing answered: say so, keep the steps, and don't
+        blame Lemonade."""
         content, sse_type, keep_steps = _empty_answer_outcome(
-            turn_cancelled=False, has_steps=False
+            turn_cancelled=False, has_steps=True, has_card=False
         )
-        assert content == _EMPTY_ANSWER_LEMONADE_MSG
-        assert "Lemonade Server is running" in content
+        assert content == _NO_ANSWER_AFTER_TOOLS_MSG
+        assert "Send your message again" in content
+        assert "Lemonade" not in content
+        assert sse_type == "failed"
+        assert keep_steps is True
+
+    def test_an_error_without_a_tool_keeps_the_error_and_adds_nothing(self):
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False,
+            has_steps=False,
+            has_card=False,
+            turn_reported_error=True,
+        )
+        assert content == ""
+        assert sse_type == "failed"
+        assert keep_steps is True
+
+    def test_nothing_with_a_backend_problem_reports_it_as_an_error(self):
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False,
+            has_steps=False,
+            has_card=False,
+            backend_problem="Lemonade Server isn't responding.",
+        )
+        assert content == "Lemonade Server isn't responding."
         assert sse_type == "error"
         assert keep_steps is False
+
+    def test_nothing_with_a_healthy_backend_blames_the_model_not_lemonade(self):
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False, has_steps=False, has_card=False
+        )
+        assert content == _EMPTY_MODEL_ANSWER_MSG
+        assert "Lemonade" not in content
+        assert sse_type == "failed"
+        assert keep_steps is False
+
+
+_BASE = "http://lemonade.test:8000/api/v1"
+
+
+def _probe(model_id, handler):
+    """Run the backend probe against a fake Lemonade served by ``handler``."""
+    real_client = httpx.AsyncClient
+    with (
+        patch.object(_chat_helpers, "_eval_provider_kwargs", return_value={}),
+        patch(
+            "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+            return_value=_BASE,
+        ),
+        patch(
+            "httpx.AsyncClient",
+            lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
+        ),
+        patch(
+            "gaia.llm.lemonade_launcher.describe_start_hint",
+            return_value=MagicMock(instruction="START-HINT"),
+        ),
+    ):
+        return asyncio.run(_empty_answer_backend_problem(model_id))
+
+
+def _health(*names):
+    payload = {"all_models_loaded": [{"model_name": n, "type": "llm"} for n in names]}
+    return lambda request: httpx.Response(200, json=payload)
+
+
+class TestEmptyAnswerBackendProblem:
+    """Lemonade is named only when its own /health says it is at fault."""
+
+    def test_server_up_with_the_model_loaded_is_not_a_problem(self):
+        assert _probe("Gemma-4-E4B-it-GGUF", _health("Gemma-4-E4B-it-GGUF")) is None
+
+    def test_user_namespace_still_matches_the_loaded_model(self):
+        assert _probe("user.Qwen3.5-4B-GGUF", _health("Qwen3.5-4B-GGUF")) is None
+
+    def test_server_down_names_lemonade_and_the_start_hint(self):
+        def refuse(request):
+            raise httpx.ConnectError("connection refused", request=request)
+
+        problem = _probe("Gemma-4-E4B-it-GGUF", refuse)
+        assert _BASE in problem
+        assert "isn't responding" in problem
+        assert problem.endswith("START-HINT")
+        assert "lemonade-server serve" not in problem
+
+    def test_unhealthy_status_names_the_http_code(self):
+        problem = _probe("M-GGUF", lambda request: httpx.Response(503))
+        assert "HTTP 503" in problem
+        assert problem.endswith("START-HINT")
+
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_a_rejected_key_names_the_key_not_a_start_hint(self, status):
+        problem = _probe("M-GGUF", lambda request: httpx.Response(status))
+        assert f"HTTP {status}" in problem
+        assert "LEMONADE_API_KEY" in problem
+        assert "START-HINT" not in problem
+
+    def test_server_up_without_the_model_says_it_is_not_loaded(self):
+        problem = _probe("Gemma-4-E4B-it-GGUF", _health("Other-GGUF"))
+        assert "Lemonade Server is running" in problem
+        assert "Gemma-4-E4B-it-GGUF isn't loaded" in problem
+
+    def test_cloud_model_skips_the_loaded_check(self):
+        assert _probe("fireworks.some-model", _health()) is None
+
+    def test_eval_on_claude_never_touches_lemonade(self):
+        with (
+            patch.object(
+                _chat_helpers,
+                "_eval_provider_kwargs",
+                return_value={"use_claude": True},
+            ),
+            patch("httpx.AsyncClient", side_effect=AssertionError("contacted")),
+        ):
+            assert asyncio.run(_empty_answer_backend_problem("M-GGUF")) is None
 
 
 class TestDoneEvent:
@@ -542,9 +658,11 @@ class TestSessionAgentKwargsShape:
             "rag_documents",
             "library_documents",
             "allowed_paths",
+            "working_directory",
             "ui_session_id",
             "dynamic_tools",
             "memory_incognito",
+            "surface",
         }
 
     def test_memory_off_reaches_the_agent_at_construction(self):
@@ -1044,19 +1162,19 @@ class TestMaybeUpdateSessionTitleHonorsPin:
             {"id": "pin-1", "title": "My Research Project", "title_is_custom": 1}
         )
         gen.assert_not_awaited()
-        db.update_session.assert_not_called()
+        db.replace_auto_title.assert_not_called()
 
     def test_auto_named_session_is_not_renamed_by_a_later_turn(self):
         db, gen = self._run(
             {"id": "auto-2", "title": "Python Sorting Help", "title_is_custom": 0}
         )
         gen.assert_not_awaited()
-        db.update_session.assert_not_called()
+        db.replace_auto_title.assert_not_called()
 
     def test_placeholder_session_is_retitled(self):
         db, gen = self._run({"id": "auto-1", "title": "New Task", "title_is_custom": 0})
         gen.assert_awaited_once()
-        db.update_session.assert_called_once_with("auto-1", title="LLM Title")
+        db.replace_auto_title.assert_called_once_with("auto-1", "New Task", "LLM Title")
 
     def test_stopped_first_turn_still_names_the_chat(self):
         """A first turn stopped before any reply still supplies the title."""
@@ -1107,10 +1225,15 @@ class TestSessionTitleRequest:
         sent = self._sent_kwargs(LARGE_DEFAULT_MODEL_NAME)
         assert sent["chat_template_kwargs"] == {"enable_thinking": False}
 
-    def test_other_models_get_no_template_switch(self):
+    def test_a_model_with_no_registered_switch_titles_with_thinking_off(self):
+        """Gemma 4 reasoned through all 24 tokens on "hi" (measured)."""
         sent = self._sent_kwargs("Gemma-4-E4B-it-GGUF")
-        assert "chat_template_kwargs" not in sent
+        assert sent["chat_template_kwargs"] == {"enable_thinking": False}
         assert sent["max_tokens"] == 24
+
+    def test_a_model_off_llama_cpp_gets_no_template_switch(self):
+        sent = self._sent_kwargs("gemma4-it-e2b-FLM")
+        assert "chat_template_kwargs" not in sent
 
     def test_a_model_that_always_reasons_gets_room_for_it(self):
         """gpt-oss cannot stop reasoning: at 24 tokens, ~6 went to reasoning
@@ -1122,8 +1245,9 @@ class TestSessionTitleRequest:
         assert sent["max_tokens"] > 24
 
     @pytest.mark.parametrize("content", [None, "", "  \n "])
-    def test_reasoning_that_eats_the_budget_still_names_the_chat(self, content):
-        """If gpt-oss reasons past the budget, the reply carries no title text."""
+    def test_reasoning_that_eats_the_budget_is_a_failed_try(self, content):
+        """If gpt-oss reasons past the budget, the reply carries no title text;
+        the chat keeps its question as the name and a later turn asks again."""
         from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
         from gaia.ui import _chat_helpers as ch
 
@@ -1137,7 +1261,7 @@ class TestSessionTitleRequest:
                     "ok",
                 )
             )
-        assert title == "plan a trip to Lisbon"
+        assert title is None
 
     @staticmethod
     def _sent_prompt(model_id, user_msg):
@@ -1197,14 +1321,16 @@ class TestGuardModelTitles:
             )
 
     @pytest.mark.parametrize("verdict", ["safe", "unsafe\nS1", "unsafe S1,S10", "Yes"])
-    def test_classifier_verdict_falls_back_to_the_question(self, verdict):
-        assert self._title_reply(verdict) == "How do I reset my router password"
+    def test_classifier_verdict_is_not_a_title(self, verdict):
+        assert self._title_reply(verdict) is None
 
-    def test_empty_reply_falls_back_to_the_question(self):
-        assert self._title_reply("   ") == "How do I reset my router password"
+    def test_empty_reply_is_not_a_title(self):
+        assert self._title_reply("   ") is None
 
     def test_long_question_is_cut_at_a_word(self):
-        title = self._title_reply("safe", user_msg="word " * 40)
+        from gaia.ui import _chat_helpers as ch
+
+        title = ch._title_from_question("word " * 40)
         assert title.endswith("…") and len(title) <= 64
         assert "wor…" not in title
 
@@ -1215,7 +1341,7 @@ class TestGuardModelTitles:
         from gaia.ui import _chat_helpers as ch
 
         db = MagicMock()
-        sid = f"guard-{session_model}"  # unique: the 30 s throttle is per session
+        sid = f"guard-{session_model}"  # unique: one title request per session
         db.get_session.return_value = {"id": sid, "title": "New Chat"}
         db.get_messages.return_value = []
         gen = AsyncMock(return_value="Router Password Reset")
@@ -1235,7 +1361,9 @@ class TestGuardModelTitles:
                     db, sid, "reset my router", "ok", session_model
                 )
             )
-        db.update_session.assert_called_once_with(sid, title="Router Password Reset")
+        db.replace_auto_title.assert_called_once_with(
+            sid, "New Chat", "Router Password Reset"
+        )
         return gen.await_args.kwargs["model_id"]
 
     @pytest.mark.parametrize(

@@ -34,6 +34,7 @@ from dataclasses import dataclass
 
 from gaia.env import load_env
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 
 load_env()
@@ -156,6 +157,7 @@ class ClaudeCliClient:
 
     def get_completion(self, prompt: str) -> list[TextBlock]:
         """Run one judge prompt and return its reply as content blocks."""
+        assert_provider_permitted("the Claude Code CLI")
         # The prompt goes over stdin, not argv: a judge prompt carries a whole
         # case inbox and would blow the Windows command-line length limit.
         try:

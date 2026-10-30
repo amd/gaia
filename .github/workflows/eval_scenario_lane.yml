@@ -4,8 +4,7 @@
 # One lane of the flagship scenario eval, for ONE pinned local model on ONE
 # runner pool. Called per lane by a model's eval workflow; today that is
 # eval_flagship_gemma_stx.yml (Gemma-4-E4B on Strix Point). eval_flagship.yml
-# still carries its own copy of this job and moves onto this file after the
-# v0.25.1 release, together with the Qwen-on-Strix-Halo baseline (#5505).
+# still carries its own copy of this job, with its tiers and Qwen pin (#5505).
 #
 # The rationale for nearly every step lives beside the same step in
 # eval_flagship.yml: the serial-per-backend rule, why every category gets its

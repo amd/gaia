@@ -19,6 +19,7 @@ on:
       - 'hub/agents/email/python/**'
       - 'hub/agents/email/npm/**'
       - 'src/gaia/agents/base/**'
+      - 'src/gaia/utils/sqlite_wal.py'
       - 'src/gaia/connectors/**'
       - 'src/gaia/eval/**'
       # Triage runs against Lemonade: the pinned version and the client that
@@ -29,6 +30,11 @@ on:
       - 'tests/unit/email/**'
       - 'tests/unit/connectors/**'
       - 'tests/unit/eval/**'
+      # tests/unit/eval/ reads the flagship eval tiers and baselines.
+      - 'eval/ci_tiers.json'
+      - 'util/eval_tiers.py'
+      - 'util/eval_backlog_trend.py'
+      - 'tests/fixtures/eval_baselines/gaia-flagship/**'
       - 'tests/fixtures/email/**'
       - 'tests/test_email_openapi_conformance.py'
       - 'tests/test_ui_email_scope_consent.py'
@@ -84,7 +90,6 @@ on:
       - '.github/workflows/eval_flagship.yml'
       - '.github/workflows/eval_flagship_gemma_stx.yml'
       - '.github/workflows/eval_scenario_lane.yml'
-      - 'tests/fixtures/eval_baselines/gaia-flagship/**'
       - 'tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/**'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
@@ -93,6 +98,7 @@ on:
       - 'hub/agents/email/python/**'
       - 'hub/agents/email/npm/**'
       - 'src/gaia/agents/base/**'
+      - 'src/gaia/utils/sqlite_wal.py'
       - 'src/gaia/connectors/**'
       - 'src/gaia/eval/**'
       # Triage runs against Lemonade: the pinned version and the client that
@@ -103,6 +109,11 @@ on:
       - 'tests/unit/email/**'
       - 'tests/unit/connectors/**'
       - 'tests/unit/eval/**'
+      # tests/unit/eval/ reads the flagship eval tiers and baselines.
+      - 'eval/ci_tiers.json'
+      - 'util/eval_tiers.py'
+      - 'util/eval_backlog_trend.py'
+      - 'tests/fixtures/eval_baselines/gaia-flagship/**'
       - 'tests/fixtures/email/**'
       - 'tests/test_email_openapi_conformance.py'
       - 'tests/test_ui_email_scope_consent.py'
@@ -158,7 +169,6 @@ on:
       - '.github/workflows/eval_flagship.yml'
       - '.github/workflows/eval_flagship_gemma_stx.yml'
       - '.github/workflows/eval_scenario_lane.yml'
-      - 'tests/fixtures/eval_baselines/gaia-flagship/**'
       - 'tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/**'
   merge_group:
   workflow_dispatch:

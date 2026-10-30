@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -218,6 +219,12 @@ func (c *Client) probe(ctx context.Context, inst *Instance) (StaleKind, error) {
 func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 	inst, err := c.Attach(ctx)
 	if err == nil {
+		if why := ReplacedInstall(inst); why != "" {
+			if recentlyDeferred(inst) {
+				return inst, nil
+			}
+			return c.restartOutdated(ctx, inst, why)
+		}
 		return inst, nil
 	}
 	// A contract skew is the user's to resolve — starting a second daemon cannot
@@ -232,6 +239,73 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 		return inst, err
 	}
 	return c.spawnAndWait(ctx)
+}
+
+// deferredRecheck is how long the TUI keeps using a busy out-of-date daemon
+// before it asks the GAIA CLI again, so a chat doesn't start a Python process
+// for every request while the restart waits.
+const deferredRecheck = time.Minute
+
+var (
+	deferredMu sync.Mutex
+	deferredAt = map[string]time.Time{}
+)
+
+func deferredKey(inst *Instance) string {
+	return fmt.Sprintf("%d@%v", inst.PID, inst.StartedAt)
+}
+
+func recentlyDeferred(inst *Instance) bool {
+	deferredMu.Lock()
+	defer deferredMu.Unlock()
+	at, ok := deferredAt[deferredKey(inst)]
+	return ok && time.Since(at) < deferredRecheck
+}
+
+func markDeferred(inst *Instance) {
+	deferredMu.Lock()
+	defer deferredMu.Unlock()
+	deferredAt[deferredKey(inst)] = time.Now()
+}
+
+// restartOutdated replaces a daemon an update left on the previous release.
+// The GAIA CLI's start stops it and starts the installed one under the start
+// lock, or keeps it while it is busy; the TUI attaches to whichever runs.
+func (c *Client) restartOutdated(ctx context.Context, inst *Instance, why string) (*Instance, error) {
+	c.opts.Logf("daemon: %s is out of date (%s); restarting it", inst, why)
+	runCtx, cancel := context.WithTimeout(ctx, c.opts.StartTimeout)
+	defer cancel()
+	cmd, err := c.opts.StartCommand(runCtx)
+	if err != nil {
+		return nil, err
+	}
+	if cmd == nil {
+		return nil, &StartError{Reason: "the configured daemon start command returned no command to run"}
+	}
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Run(); err != nil {
+		return nil, &StartError{Reason: fmt.Sprintf(
+			"the running daemon (pid %d) is out of date (%s), and `%s` could not replace it (%v): %s. "+
+				"Run `gaia daemon restart`",
+			inst.PID, why, strings.Join(cmd.Args, " "), err, strings.TrimSpace(out.String()))}
+	}
+	fresh, err := c.Attach(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if again := ReplacedInstall(fresh); again != "" {
+		if fresh.PID == inst.PID && fresh.StartedAt == inst.StartedAt {
+			// The CLI keeps a busy daemon running until its work is done.
+			c.opts.Logf("daemon: %s is out of date (%s) but busy; using it for now: %s",
+				fresh, again, strings.TrimSpace(out.String()))
+			markDeferred(fresh)
+			return fresh, nil
+		}
+		return nil, &StartError{Reason: fmt.Sprintf(
+			"the daemon is still out of date after a restart (%s). Run `gaia daemon restart`", again)}
+	}
+	return fresh, nil
 }
 
 // checkUnderLock re-checks the registry under the start lock. It returns the

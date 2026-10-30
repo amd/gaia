@@ -36,9 +36,9 @@ Directories (second level listed for only a few):
 
 Entry points: Makefile, src/cli.py, npm run build
 
-NOT installed, do not invoke: cargo, gradle, java, mvn, rustc
+Not on the agent's PATH, do not invoke (they may still be installed; say they are not reachable from the agent's shell, never that the user lacks them): cargo, gradle, java, mvn, rustc
 Read-only commands for run_shell_command: cat, date, diff, find, git, grep, head, ls, …
-Also installed; run_shell_command runs them once the user approves: cmake, curl,
+Also on the PATH; run_shell_command runs them once the user approves: cmake, curl,
 docker, go, node, npm, pip, python, uv
 
 Code index: not built — call index_codebase to enable semantic code search

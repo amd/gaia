@@ -302,12 +302,16 @@ func TestMain(m *testing.M) {
 	if runtime.GOOS == "" { // keeps the import used on every platform
 		return
 	}
+	// A developer's own Local only must not change what these tests write.
+	os.Setenv("GAIA_POLICY_FILE", filepath.Join(os.TempDir(), "gaia-preflight-test-no-policy.json"))
 	// A down Lemonade must never start the developer's real one: by default
 	// the starter finds nothing to start. Tests of the starter opt back in via
 	// autoStartForTest.
 	tryAutoStartLemonade = func(context.Context) (bool, string, string) { return false, "", "" }
 	// Nor may a test start the developer's real daemon to replay a key.
 	replayKeptKey = func(context.Context, string) (bool, error) { return false, nil }
+	// Nor reach the network to check the AMD gateway.
+	probeChatGateway = func(context.Context, string, string) error { return nil }
 	// Nor read the developer's own Lemonade choice, or find their server.
 	cfgDir, err := os.MkdirTemp("", "gaia-preflight-config-")
 	if err != nil {

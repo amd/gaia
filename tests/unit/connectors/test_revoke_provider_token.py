@@ -5,7 +5,7 @@
 honestly when it can't.
 
 Before this fix, ``OAuthPkceHandler.disconnect`` (the real path behind both
-``gaia connectors disconnect`` and the AgentUI's Settings -> Connections ->
+``gaia connectors disconnect`` and the AgentUI's Settings -> Connectors ->
 Disconnect button) only deleted the local keyring entry — the app's live
 Google grant stayed in place, and GAIA reported success as if it had actually
 been revoked. Coverage here:

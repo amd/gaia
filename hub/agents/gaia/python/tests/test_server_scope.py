@@ -12,6 +12,7 @@ named was refused with nobody asked.
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,6 +34,7 @@ class _ScopeAgent:
     def __init__(self, default_scope, **kwargs):
         self.kwargs = kwargs
         self.console = None
+        self.config = SimpleNamespace(working_directory=kwargs.get("working_directory"))
         self.conversation_history = []
         self._cancel_event = None
         self.path_validator = PathValidator(
@@ -96,6 +98,66 @@ def test_the_contract_advertises_allowed_paths():
     assert "allowed_paths" in server_mod.QueryRequest.model_fields
 
 
+def test_the_contract_advertises_working_directory():
+    major, minor = (int(x) for x in server_mod.API_VERSION.split(".")[:2])
+    assert (major, minor) >= (2, 24)
+    assert "working_directory" in server_mod.QueryRequest.model_fields
+
+
+def test_a_new_session_receives_its_working_directory(built, tmp_path):
+    client, agents = built
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    response = _query(
+        client,
+        session_id="s1",
+        allowed_paths=[str(workspace)],
+        working_directory=str(workspace),
+    )
+
+    assert response.status_code == 200, response.text
+    [agent] = agents
+    assert agent.kwargs["working_directory"] == str(workspace)
+
+
+def test_a_relative_working_directory_is_refused(built):
+    client, agents = built
+
+    response = _query(client, session_id="s1", working_directory="workspace")
+
+    assert response.status_code == 422
+    assert "absolute" in response.text
+    assert agents == []
+
+
+def test_a_retained_session_updates_its_working_directory(built, tmp_path):
+    client, agents = built
+    first = tmp_path / "first"
+    later = tmp_path / "later"
+    first.mkdir()
+    later.mkdir()
+
+    assert (
+        _query(
+            client,
+            session_id="s1",
+            allowed_paths=[str(first)],
+            working_directory=str(first),
+        ).status_code
+        == 200
+    )
+    response = _query(
+        client,
+        session_id="s1",
+        working_directory=str(later),
+    )
+
+    assert response.status_code == 200, response.text
+    [agent] = agents
+    assert agent.config.working_directory == str(later)
+
+
 def test_a_new_session_works_in_the_scope_it_was_sent(built, tmp_path):
     client, agents = built
     work = tmp_path / "work"
@@ -118,7 +180,9 @@ def test_a_retained_session_gains_a_later_turns_scope(built, tmp_path):
     first.mkdir()
     later.mkdir()
 
-    assert _query(client, session_id="s1", allowed_paths=[str(first)]).status_code == 200
+    assert (
+        _query(client, session_id="s1", allowed_paths=[str(first)]).status_code == 200
+    )
     r = _query(client, session_id="s1", allowed_paths=[str(first), str(later)])
 
     assert r.status_code == 200, r.text

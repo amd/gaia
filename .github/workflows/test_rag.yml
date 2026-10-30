@@ -45,6 +45,7 @@ on:
       - 'src/gaia/vlm/**'
       - 'src/gaia/chat/**'
       - 'src/gaia/agents/tools/rag_tools.py'
+      - 'src/gaia/agents/tools/document_text.py'
       - 'src/gaia/agents/tools/__init__.py'
       - 'src/gaia/agents/base/tools.py'
       - 'src/gaia/ui/routers/sessions.py'
@@ -57,6 +58,8 @@ on:
       - 'eval/corpus/**'
       - 'data/pdf/**'
       - 'tests/test_rag*.py'
+      - 'tests/integration/conftest.py'
+      - 'tests/integration/test_rag_no_break_spaces.py'
       - 'tests/unit/conftest.py'
       - 'tests/unit/denied_folder.py'
       - 'tests/unit/rag/**'
@@ -104,6 +107,7 @@ on:
       - 'src/gaia/vlm/**'
       - 'src/gaia/chat/**'
       - 'src/gaia/agents/tools/rag_tools.py'
+      - 'src/gaia/agents/tools/document_text.py'
       - 'src/gaia/agents/tools/__init__.py'
       - 'src/gaia/agents/base/tools.py'
       - 'src/gaia/ui/routers/sessions.py'
@@ -116,6 +120,8 @@ on:
       - 'eval/corpus/**'
       - 'data/pdf/**'
       - 'tests/test_rag*.py'
+      - 'tests/integration/conftest.py'
+      - 'tests/integration/test_rag_no_break_spaces.py'
       - 'tests/unit/conftest.py'
       - 'tests/unit/denied_folder.py'
       - 'tests/unit/rag/**'
@@ -187,9 +193,10 @@ jobs:
       uses: ./.github/actions/setup-venv
       with:
         python-version: '3.12'
-        # The chat agent package provides query_documents' search-key expansion,
-        # which the retrieval gate scores as the agent pipeline.
-        install-package: '.[dev,rag] ./hub/agents/chat/python'
+        # The flagship (built on the chat package) provides query_documents'
+        # search-key expansion, which the retrieval gate scores as the agent
+        # pipeline.
+        install-package: '.[dev,rag] ./hub/agents/chat/python ./hub/agents/gaia/python'
 
     - name: Install additional test dependencies
       shell: powershell
@@ -250,6 +257,10 @@ jobs:
             Write-Host "`n=== Running RAG Integration Tests ==="
             python tests/test_rag_integration.py
             if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE" }
+
+            Write-Host "`n=== Dense no-break-space embedding regression ==="
+            python -m pytest tests/integration/test_rag_no_break_spaces.py -v --tb=short
+            if ($LASTEXITCODE -ne 0) { throw "No-break-space regression failed with exit code $LASTEXITCODE" }
 
             # Offline, retrieval-only subset over committed documents, compared to
             # the committed baseline. The full suite runs on release tags (eval_retrieval.yml).

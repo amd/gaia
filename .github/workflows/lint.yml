@@ -20,6 +20,8 @@ on:
       - 'pyproject.toml'
       # lint.py and the checks it imports, and the allowlists they read.
       - 'util/**'
+      # util/release_versions.py --check reads the docs.json navbar label.
+      - 'docs/docs.json'
       - '.security-suppressions.json'
       - '.github/dependabot.yml'
       # `util/check_workflow_triggers.py` validates these, same as
@@ -43,6 +45,8 @@ on:
       - 'pyproject.toml'
       # lint.py and the checks it imports, and the allowlists they read.
       - 'util/**'
+      # util/release_versions.py --check reads the docs.json navbar label.
+      - 'docs/docs.json'
       - '.security-suppressions.json'
       - '.github/dependabot.yml'
       # `util/check_workflow_triggers.py` validates these, same as

@@ -43,9 +43,16 @@ mixin and calling its `register_*_tools()` method. Each row is the exact
 | `filesystem` | `from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin` | File system navigation |
 | `scratchpad` | `from gaia.agents.tools.scratchpad_tools import ScratchpadToolsMixin` | SQL scratchpad tables for data analysis |
 | `browser` | `from gaia.agents.tools.browser_tools import BrowserToolsMixin` | Web search, page fetch, download |
+| `browser_use` | `from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin` | Live-browser tools: open, observe, act, and sign in |
+| `email` | `from gaia.agents.tools.email_tools import EmailToolsMixin` | Read-only mailbox tools (Gmail / Outlook) |
 | `sd` | `from gaia.sd.mixin import SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `from gaia.vlm.mixin import VLMToolsMixin` | Vision LLM / structured extraction |
+| `skills` | `from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
+| `skill_learning` | `from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin` | Persist lessons learned while running a skill |
+| `audio` | `from gaia.agents.tools.audio_tools import AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
+| `audio_generation` | `from gaia.agents.tools.audio_generation_tools import AudioGenerationToolsMixin` | Generate WAV music and sound effects via Lemonade (`init_audio_generation`) |
 | `wait` | `from gaia.agents.tools.wait_tools import WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
+| `reasoning_effort` | `from gaia.agents.tools.reasoning_tools import ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
 
 The sections below show usage patterns for the most common mixins; the
 `file_io` mixin has its own spec at [FileIOToolsMixin](/spec/file-io-tools-mixin).

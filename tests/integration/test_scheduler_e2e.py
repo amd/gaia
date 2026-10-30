@@ -18,6 +18,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from gaia.ui import scheduler as scheduler_module
 from gaia.ui.database import ChatDatabase
 from gaia.ui.routers.schedules import get_scheduler, router
 from gaia.ui.scheduler import Scheduler
@@ -28,6 +29,12 @@ from gaia.ui.scheduler import Scheduler
 async def fake_executor(prompt: str) -> str:
     """Minimal executor for tests that don't care about execution results."""
     return f"ran: {prompt}"
+
+
+@pytest.fixture(autouse=True)
+def one_second_floor(monkeypatch):
+    """Let these tests use 1-second schedules instead of waiting a minute."""
+    monkeypatch.setattr(scheduler_module, "MIN_INTERVAL_SECONDS", 1)
 
 
 @pytest.fixture

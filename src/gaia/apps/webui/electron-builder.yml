@@ -91,7 +91,7 @@ afterPack: ../../../../installer/scripts/after-pack.cjs
 # This baked `url` is INERT at runtime: services/auto-updater.cjs always
 # re-resolves the feed (GAIA_UPDATE_FEED_URL env → feedUrl in
 # ~/.gaia/update-config.json) and calls setFeedURL itself; with nothing
-# configured it enters a loud "no channel" state instead of checking this feed.
+# configured it reads the newest GitHub release on its channel instead of this feed.
 # The value exists only because electron-builder requires a non-empty,
 # expandable `url` to emit app-update.yml at build time.
 #

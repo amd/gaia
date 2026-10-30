@@ -30,6 +30,7 @@ export interface ApiSchemas {
   ContextRequest: ContextRequest;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
+  CustomModelRequest: CustomModelRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
@@ -67,6 +68,7 @@ export interface ApiSchemas {
   LimitRequest: LimitRequest;
   LoadModelRequest: LoadModelRequest;
   LoadedModelInfo: LoadedModelInfo;
+  McpOutputResponse: McpOutputResponse;
   MemorySettingsBody: MemorySettingsBody;
   MessageListResponse: MessageListResponse;
   MessageResponse: MessageResponse;
@@ -89,10 +91,13 @@ export interface ApiSchemas {
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
   ScriptedUserRequest: ScriptedUserRequest;
+  SearchSnippet: SearchSnippet;
   SelectModelRequest: SelectModelRequest;
   SessionListResponse: SessionListResponse;
   SessionPinRequest: SessionPinRequest;
   SessionResponse: SessionResponse;
+  SessionSearchResponse: SessionSearchResponse;
+  SessionSearchResult: SessionSearchResult;
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
   SetupRunRequest: SetupRunRequest;
@@ -215,7 +220,10 @@ export interface AgentStepResponse {
   id: number;
   label: string;
   latencyMs?: number | null;
+  mcpOutput?: McpOutputResponse | null;
   mcpServer?: string | null;
+  mcpServerLabel?: string | null;
+  mcpTool?: string | null;
   narration?: string | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
@@ -250,6 +258,13 @@ export interface FileListResponse {
     [k: string]: unknown | undefined;
   }[];
   total?: number;
+}
+/**
+ * The text an MCP tool returned, capped for the tool row.
+ */
+export interface McpOutputResponse {
+  text?: string;
+  truncated?: boolean;
 }
 /**
  * Request to attach a document to a session.
@@ -381,11 +396,19 @@ export interface CreateSessionRequest {
   agent_type?: string | null;
   device?: string | null;
   document_ids?: string[];
+  folders?: string[];
   mail_provider?: string | null;
   model?: string | null;
   private?: boolean;
   system_prompt?: string | null;
   title?: string | null;
+}
+/**
+ * ``quant`` picks a quantization; None lets GAIA choose one that fits.
+ */
+export interface CustomModelRequest {
+  quant?: string | null;
+  url: string;
 }
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];
@@ -417,6 +440,7 @@ export interface DocumentListResponse {
  */
 export interface DocumentResponse {
   chunk_count: number;
+  error_kind?: string | null;
   file_size: number;
   filename: string;
   filepath: string;
@@ -607,6 +631,7 @@ export interface IndexFolderResponse {
   errors?: string[];
   failed?: number;
   indexed?: number;
+  skipped?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];
@@ -956,15 +981,18 @@ export interface ScheduleListResponse {
  */
 export interface ScheduleResponse {
   created_at?: string | null;
+  description: string;
   error_count?: number;
   id: string;
   interval_seconds: number;
+  last_error?: string | null;
   last_result?: string | null;
   last_run_at?: string | null;
   name: string;
   next_run_at?: string | null;
   prompt: string;
   run_count?: number;
+  running?: boolean;
   schedule_config?: string | null;
   session_id?: string | null;
   status: string;
@@ -981,6 +1009,14 @@ export interface ScheduleResultsResponse {
  */
 export interface ScriptedUserRequest {
   decline_commands?: string[];
+}
+/**
+ * Text around a search hit, split so the UI can highlight ``match``.
+ */
+export interface SearchSnippet {
+  after: string;
+  before: string;
+  match: string;
 }
 export interface SelectModelRequest {
   model: string;
@@ -1026,6 +1062,23 @@ export interface SessionPinRequest {
   pinned: boolean;
 }
 /**
+ * Chats matching a search query, newest first, at most ``limit``.
+ */
+export interface SessionSearchResponse {
+  query: string;
+  results: SessionSearchResult[];
+  truncated?: boolean;
+}
+/**
+ * One chat that matches a search, with where the first hit was.
+ */
+export interface SessionSearchResult {
+  field: "title" | "message";
+  session_id: string;
+  snippet: SearchSnippet;
+  title: string;
+}
+/**
  * Current user settings.
  */
 export interface SettingsResponse {
@@ -1058,9 +1111,11 @@ export interface SettingsUpdateRequest {
   dynamic_tools?: boolean | null;
 }
 /**
- * ``skip_chat_model`` when the chat runs on a cloud provider.
+ * ``skip_chat_model`` when the chat runs on a cloud provider;
+ * ``gaia_lemonade`` to set up GAIA's own server instead of the user's.
  */
 export interface SetupRunRequest {
+  gaia_lemonade?: boolean;
   skip_chat_model?: boolean;
 }
 export interface StartAgentServerRequest {
@@ -1102,6 +1157,7 @@ export interface SystemStatus {
   model_size_gb?: number | null;
   probe_warnings?: string[];
   processor_name?: string | null;
+  setup_error?: string | null;
   start_command?: string | null;
   start_instruction?: string | null;
   time_to_first_token?: number | null;

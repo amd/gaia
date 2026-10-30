@@ -25,8 +25,12 @@ on:
       - '.github/actions/**'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
+      # The flagship's npm package files and lock, read by the installer and version tests.
+      - 'hub/agents/gaia/npm/**'
       - 'hub/skills/**'
       - 'hub/components/*/gaia-agent.yaml'
+      # The flagship pins the install-script tests check install.sh/.ps1 against.
+      - 'hub/agents/gaia/npm/binaries.lock.json'
       # tests/unit/installer covers the installer tree, and
       # tests/integration/test_tui_control_e2e.py builds and drives the real Go
       # TUI, so a TUI-only change has to run the offline-integration job.
@@ -39,6 +43,7 @@ on:
       - 'scripts/audit/**'
       - 'examples/skill_references_example.py'
       - 'eval/ci_lanes.json'
+      - 'eval/ci_tiers.json'
       - 'eval/retrieval/**'
       - 'data/pdf/**'
       - 'cpp/src/unicode_upper_ranges.inc'
@@ -65,8 +70,9 @@ on:
       - 'docs/sdk/sdks/agent-ui.mdx'
       - 'docs/sdk/sdks/rag.mdx'
       - 'docs/sdk/sdks/skills.mdx'
+      - 'docs/sdk/utils/file-watcher.mdx'
+      - 'docs/spec/chat-agent.mdx'
       - 'hub/agents/*/npm/SKILL.md'
-      - 'hub/agents/gaia/npm/binaries.lock.json'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -83,8 +89,12 @@ on:
       - '.github/actions/**'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
+      # The flagship's npm package files and lock, read by the installer and version tests.
+      - 'hub/agents/gaia/npm/**'
       - 'hub/skills/**'
       - 'hub/components/*/gaia-agent.yaml'
+      # The flagship pins the install-script tests check install.sh/.ps1 against.
+      - 'hub/agents/gaia/npm/binaries.lock.json'
       # tests/unit/installer covers the installer tree, and
       # tests/integration/test_tui_control_e2e.py builds and drives the real Go
       # TUI, so a TUI-only change has to run the offline-integration job.
@@ -97,6 +107,7 @@ on:
       - 'scripts/audit/**'
       - 'examples/skill_references_example.py'
       - 'eval/ci_lanes.json'
+      - 'eval/ci_tiers.json'
       - 'eval/retrieval/**'
       - 'data/pdf/**'
       - 'cpp/src/unicode_upper_ranges.inc'
@@ -123,8 +134,9 @@ on:
       - 'docs/sdk/sdks/agent-ui.mdx'
       - 'docs/sdk/sdks/rag.mdx'
       - 'docs/sdk/sdks/skills.mdx'
+      - 'docs/sdk/utils/file-watcher.mdx'
+      - 'docs/spec/chat-agent.mdx'
       - 'hub/agents/*/npm/SKILL.md'
-      - 'hub/agents/gaia/npm/binaries.lock.json'
   merge_group:
   workflow_dispatch:
 
@@ -180,13 +192,14 @@ jobs:
           # real RAGSDK — RAGSDK._check_dependencies() raises ImportError without
           # them. They live only in the [rag]/[ui] extras, which this job (like the
           # RAG dependencies above) does not install.
-          # python-docx, python-pptx, reportlab and slack-sdk: tests/unit/rag/,
+          # python-docx, python-pptx, openpyxl, reportlab and slack-sdk:
+          # tests/unit/rag/, tests/unit/chat/ui/test_xlsx_upload.py,
           # tests/unit/eval/test_pdf_document_generator.py and
           # tests/unit/messaging/test_slack_sdk_contract.py importorskip them at
           # module level, so without them those files skip wholesale (#4206).
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
                                   pyfakefs keyring httpx respx matplotlib "pymupdf<2" cvss responses \
-                                  faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk
+                                  faiss-cpu pypdf python-docx python-pptx openpyxl reportlab slack-sdk
           uv pip install --system -e ".[api]"
 
       - name: Check no test file skips wholesale
@@ -221,6 +234,15 @@ jobs:
           # One worker per vCPU; worksteal evens out the few long tests.
           pytest tests/unit/ -n logical --dist=worksteal -v --tb=short --durations=50 \
             --cov=src/gaia --cov-report=term-missing --cov-report=xml:coverage.xml
+
+      - name: Run relay document tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          # Keep these optional hub packages out of the main unit suite: their
+          # install activates unrelated characterization tests owned by other lanes.
+          uv pip install --system -e "hub/agents/chat/python" -e "hub/agents/gaia/python"
+          pytest tests/unit/test_relay_flagship_documents.py -v --tb=short
 
       - name: Run CLI tool-confirmation integration tests
         env:
@@ -426,6 +448,7 @@ jobs:
             tests/test_hardware_advisor_agent.py \
             tests/installer/test_installer_scenarios.py \
             tests/integration/test_browser_use_live.py \
+            tests/integration/test_audio_generation_live.py \
             tests/integration/test_chat_hub_wheel_journey.py \
             tests/integration/test_chat_ui_integration.py \
             tests/integration/test_documents_router.py \
@@ -475,7 +498,7 @@ jobs:
           # one is needed. A missing one skips files that Linux runs.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
                                   pyfakefs keyring httpx respx matplotlib "pymupdf<2" cvss responses \
-                                  faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk
+                                  faiss-cpu pypdf python-docx python-pptx openpyxl reportlab slack-sdk
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
@@ -492,6 +515,15 @@ jobs:
         # 180 s, not 60: a few CLI-spawning tests take 30-50 s alone and slow
         # down beside other workers, and on Windows a timeout kills the worker.
         run: pytest tests/unit/ -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
+
+      - name: Run relay document tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          # Keep these optional hub packages out of the main unit suite: their
+          # install activates unrelated characterization tests owned by other lanes.
+          uv pip install --system -e "hub/agents/chat/python" -e "hub/agents/gaia/python"
+          pytest tests/unit/test_relay_flagship_documents.py -v --tb=short
 
       - name: Check no GAIA daemon outlived the tests
         if: ${{ !cancelled() }}
@@ -522,7 +554,7 @@ jobs:
           # one is needed.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
                                   pyfakefs keyring httpx respx matplotlib "pymupdf<2" cvss responses \
-                                  faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk
+                                  faiss-cpu pypdf python-docx python-pptx openpyxl reportlab slack-sdk
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
@@ -541,6 +573,15 @@ jobs:
         # 180 s, not 60: a few CLI-spawning tests take 30-50 s alone and slow
         # down beside other workers, and on Windows a timeout kills the worker.
         run: pytest tests/unit/ -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
+
+      - name: Run relay document tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          # Keep these optional hub packages out of the main unit suite: their
+          # install activates unrelated characterization tests owned by other lanes.
+          uv pip install --system -e "hub/agents/chat/python" -e "hub/agents/gaia/python"
+          pytest tests/unit/test_relay_flagship_documents.py -v --tb=short
 
       - name: Run daemon lifetime integration tests (Windows)
         shell: bash

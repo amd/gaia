@@ -3,9 +3,7 @@
 
 # The flagship scenario eval on the model most users run: Gemma-4-E4B-it-GGUF
 # (DEFAULT_MODEL_NAME, every PC too small for Qwen3.6-35B), on the Strix Point
-# pool. eval_flagship.yml covers Strix Halo; once this has its own baseline,
-# the Halo pool can move to Qwen3.6-35B-A3B, the model a big Halo actually
-# runs (#5505).
+# pool. eval_flagship.yml scores Qwen3.6-35B-A3B on Strix Halo (#5505).
 #
 # The model is pinned, not left to the hardware default, and every scorecard
 # records it; `--compare` refuses a baseline captured on another model. The

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/gaiamodel"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -62,6 +63,18 @@ type clearedMsg struct {
 	err    error
 }
 
+// gatewayProbedMsg is whether the AMD gateway's host answered. seq orders
+// checks; connect is set when the read that scheduled it may open the key form.
+type gatewayProbedMsg struct {
+	source  *lemonade.Client
+	err     error
+	seq     int
+	connect bool
+}
+
+// probeGateway is a var so tests reach no network.
+var probeGateway = lemonade.ProbeGatewayFrom
+
 type Model struct {
 	spin          spinner.Model
 	ctx           context.Context
@@ -106,6 +119,24 @@ type Model struct {
 	showDetail bool
 	// server names the Lemonade in use and the backend its chat model runs on.
 	server string
+	// The "add" stage: the pasted link, what checking it found, and the
+	// quantization chosen. The "remove" stage confirms removing removing.
+	addInput  textinput.Model
+	addReport *gaiamodel.Report
+	addQuant  string
+	removing  *lemonade.Entry
+	// focusID is the model to focus once the list next loads; afterRefresh
+	// the note to show then.
+	focusID      string
+	afterRefresh string
+	// currentModel is the model chat runs on, which can't be removed.
+	currentModel string
+	// gatewayChecked is set once a reachability check of the AMD gateway has
+	// answered; gatewayErr is what it found (nil: the host answered).
+	gatewayChecked bool
+	gatewayErr     error
+	// gatewaySeq is the newest check sent; an older answer is dropped.
+	gatewaySeq int
 }
 
 var names = lemonade.ChatProviders
@@ -139,16 +170,26 @@ func (m Model) Init() tea.Cmd {
 		msg := loadedMsg{source: c, providers: p, err: e, restoreErr: restoreErr, started: started}
 		if e == nil {
 			if info, err := c.ServerInfo(m.ctx); err == nil {
-				msg.server = info.StatusLine()
+				msg.server = localServerLine(info)
 			}
 		}
 		return msg
 	}
 }
 
+// localServerLine describes Lemonade under the Local row. A cloud model it
+// is serving belongs to that provider's row, not here.
+func localServerLine(info lemonade.ServerInfo) string {
+	info.Chat = info.LocalChat
+	return info.StatusLine()
+}
+
 // WithSetupStep tells the panel Lemonade is still first-run step n, so its
 // absence reads as a step not reached rather than a fault.
 func (m Model) WithSetupStep(n int) Model { m.setupStep = n; return m }
+
+// WithCurrentModel names the model chat runs on, so it is not removed from under it.
+func (m Model) WithCurrentModel(id string) Model { m.currentModel = id; return m }
 
 // WithCurrent opens the panel on the provider chat runs on now, so enter
 // continues with it; an unknown name leaves Local first.
@@ -174,6 +215,37 @@ func (m Model) WithConnect(provider string) Model {
 }
 
 func (m Model) chosen() string { return names[m.selected] }
+
+// checkGateway asks whether the AMD gateway this Lemonade is set up for
+// answers, so the list can say so before anyone picks it. connect lets the
+// answer open the key form.
+func (m Model) checkGateway(connect bool) (Model, tea.Cmd) {
+	m.gatewaySeq++
+	c, ctx, base, seq := m.client, m.ctx, "", m.gatewaySeq
+	for _, p := range m.providers {
+		if p.Name == "amd" {
+			base = p.BaseURL
+		}
+	}
+	return m, func() tea.Msg {
+		return gatewayProbedMsg{source: c, err: probeGateway(ctx, c.BaseURL, base), seq: seq, connect: connect}
+	}
+}
+
+// gatewayDisabled reports whether the AMD gateway was found unreachable.
+func (m Model) gatewayDisabled() bool {
+	var u *lemonade.UnreachableError
+	return m.gatewayChecked && errors.As(m.gatewayErr, &u)
+}
+
+// gatewayNote is what enter on an unreachable gateway says.
+func (m Model) gatewayNote() string {
+	var u *lemonade.UnreachableError
+	if errors.As(m.gatewayErr, &u) {
+		return u.Brief() + ". Connect to it, then press r to check again."
+	}
+	return ""
+}
 
 // openSetup is enter on a cloud provider: its key form, registering the
 // provider with Lemonade first when a read has proved it absent.
@@ -295,8 +367,16 @@ func loadCatalog(ctx context.Context, c *lemonade.Client, provider string) model
 			}
 		}
 	}
-	entries, err := c.Catalog(ctx, provider, capacity, capErr)
-	return modelsMsg{source: c, entries: entries, capacity: line, err: err}
+	var added []lemonade.Recommended
+	note := ""
+	if provider == "local" {
+		var err error
+		if added, err = readCustomModels(); err != nil {
+			note = "Your added models aren't listed: " + err.Error()
+		}
+	}
+	entries, err := c.Catalog(ctx, provider, capacity, capErr, added...)
+	return modelsMsg{source: c, entries: entries, capacity: line, err: err, note: note}
 }
 
 func waitPull(ch chan tea.Msg) tea.Cmd {
@@ -467,8 +547,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.stage == "setup" {
 			m.fields[3].Placeholder = m.keyPlaceholder()
 		}
-		if m.autoConnect && m.stage == "providers" && v.err == nil {
+		ready := m.autoConnect && m.stage == "providers" && v.err == nil
+		var probe tea.Cmd
+		m, probe = m.checkGateway(ready && m.chosen() == "amd")
+		// The gateway's key form waits for its network check.
+		if ready && m.chosen() != "amd" {
 			m.autoConnect = false
+			next, cmd := m.openSetup()
+			return next, tea.Batch(cmd, probe)
+		}
+		return m, probe
+	case gatewayProbedMsg:
+		if (v.source != nil && v.source != m.client) || v.seq != m.gatewaySeq {
+			return m, nil
+		}
+		m.gatewayChecked, m.gatewayErr = true, v.err
+		if v.connect && m.autoConnect && m.stage == "providers" && m.chosen() == "amd" {
+			m.autoConnect = false
+			if m.gatewayDisabled() {
+				m = m.withDetail(m.gatewayNote(), v.err.Error())
+				return m, nil
+			}
 			return m.openSetup()
 		}
 		return m, nil
@@ -508,8 +607,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
+		if m.focusID != "" {
+			for i, e := range m.entries {
+				if e.Model.ID == m.focusID || (e.Recommended != nil && e.Recommended.Matches(m.focusID)) {
+					m.focus = i
+				}
+			}
+			m.focusID = ""
+		}
 		m = m.withDetail(v.note, v.noteDetail)
+		if m.afterRefresh != "" && v.note == "" {
+			m.note = m.afterRefresh
+		}
+		m.afterRefresh = ""
 		return m, m.Init()
+	case customCheckedMsg:
+		return m.onChecked(v)
+	case customRemovedMsg:
+		return m.onRemoved(v)
 	case pullProgressMsg:
 		if v.ch != m.pullCh || m.stage != "download" {
 			return m, nil
@@ -580,6 +695,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		switch m.stage {
+		case "add":
+			return m.updateAdd(v)
+		case "remove":
+			return m.updateRemove(v)
+		}
 		if v.String() == "esc" {
 			if m.stage == "providers" {
 				m.cancel()
@@ -608,6 +729,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.busy = true
 					m.activity = "Loading models"
 					return m, tea.Batch(m.spin.Tick, m.fetchModels())
+				}
+				if m.chosen() == "amd" && m.gatewayDisabled() {
+					m = m.withDetail(m.gatewayNote(), m.gatewayErr.Error())
+					return m, nil
 				}
 				m.autoConnect = false
 				return m.openSetup()
@@ -645,6 +770,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.note = ""
 				m.activity = "Refreshing models"
 				return m, tea.Batch(m.spin.Tick, m.fetchModels())
+			case "ctrl+a":
+				if m.chosen() == "local" {
+					return m.openAdd()
+				}
+			case "ctrl+x", "delete":
+				if m.chosen() == "local" && m.focus >= 0 && m.focus < len(entries) {
+					return m.openRemove(entries[m.focus]), nil
+				}
 			case "backspace":
 				r := []rune(m.search)
 				if len(r) > 0 {
@@ -746,6 +879,23 @@ func (m Model) filteredEntries() []lemonade.Entry {
 	return out
 }
 
+// gatewayDesc is the AMD row's line: whether its network answers, and only
+// when it does, what its key found.
+func (m Model) gatewayDesc(keyDesc string) string {
+	var u *lemonade.UnreachableError
+	switch {
+	case !m.gatewayChecked:
+		return keyDesc + " · checking the network"
+	case errors.Is(m.gatewayErr, lemonade.ErrCannotCheck):
+		return keyDesc
+	case errors.As(m.gatewayErr, &u):
+		return u.Brief()
+	case m.gatewayErr != nil:
+		return "Via Lemonade · " + m.gatewayErr.Error()
+	}
+	return strings.Replace(keyDesc, "Via Lemonade", "Via Lemonade · network available", 1)
+}
+
 func pullLine(p lemonade.PullProgress) string {
 	parts := []string{}
 	if p.TotalFiles > 1 {
@@ -782,13 +932,19 @@ func (m Model) View() string {
 						desc = "Via Lemonade · key configured"
 					}
 				}
+				if name == "amd" {
+					desc = m.gatewayDesc(desc)
+				}
 			}
 			marker := "  "
 			if i == m.selected {
 				marker = "› "
 			}
 			label := marker + lemonade.Label(name)
-			if i == m.selected {
+			switch {
+			case name == "amd" && m.gatewayDisabled():
+				label = lipgloss.NewStyle().Foreground(theme.Dim).Render(label)
+			case i == m.selected:
 				label = title.Render(label)
 			}
 			lines = append(lines, label, lipgloss.NewStyle().Foreground(theme.Dim).Render("    "+desc))
@@ -853,6 +1009,10 @@ func (m Model) View() string {
 			name = entryName(*e, m.chosen())
 		}
 		lines = append(lines, title.Render("Downloading "+name), "Lemonade is downloading the model to this PC. It is selected when the download finishes.", "", m.spin.View()+" "+m.pullLine)
+	case "add":
+		lines = append(lines, m.addView(w)...)
+	case "remove":
+		lines = append(lines, m.removeView()...)
 	case "models":
 		entries := m.filteredEntries()
 		dim := lipgloss.NewStyle().Foreground(theme.Dim)
@@ -865,18 +1025,15 @@ func (m Model) View() string {
 		start := max(0, m.focus-count+1)
 		for i := start; i < min(len(entries), start+count); i++ {
 			e := entries[i]
-			if e.Recommended != nil && (i == start || entries[i-1].Recommended == nil) {
-				lines = append(lines, title.Render("Recommended"))
-			}
-			if e.Recommended == nil && (i == start || entries[i-1].Recommended != nil) {
-				lines = append(lines, title.Render("All models"))
+			if group := entryGroup(e); i == start || entryGroup(entries[i-1]) != group {
+				lines = append(lines, title.Render(group))
 			}
 			marker := "  "
 			if i == m.focus {
 				marker = "› "
 			}
 			label := entryName(e, m.chosen())
-			if e.Recommended != nil {
+			if e.Recommended != nil && !e.Recommended.Custom {
 				label = "★ " + label
 			}
 			if rank, note, ok := lemonade.Rank(e.Model.ID); ok {
@@ -905,8 +1062,8 @@ func (m Model) View() string {
 			if name := entryName(selected, m.chosen()); name != selected.Model.ID {
 				details = append(details, selected.Model.ID)
 			}
-			if selected.Model.ContextLength > 0 {
-				details = append(details, fmt.Sprintf("Context: %s tokens", formatTokens(selected.Model.ContextLength)))
+			if window := selected.Model.Window(); window > 0 {
+				details = append(details, fmt.Sprintf("Context: %s tokens", formatTokens(window)))
 			}
 			for _, label := range selected.Model.Labels {
 				switch label {
@@ -941,6 +1098,21 @@ func (m Model) View() string {
 	hint := "↑/↓ choose · enter continue · r refresh · esc close"
 	if m.stage == "models" {
 		hint = "type to search · ↑/↓ choose · enter select · ctrl+r refresh · esc back"
+		if m.chosen() == "local" {
+			hint = "type to search · enter select · ctrl+a add from link · " + m.removeOrRefreshHint() + " · esc back"
+		}
+	}
+	if m.stage == "add" {
+		hint = "enter check · esc back"
+		if m.addReport != nil && m.addReport.OK {
+			hint = "enter add · esc back"
+		}
+		if m.addReport != nil && len(m.addReport.Variants) > 1 {
+			hint = strings.Replace(hint, " · esc", " · tab quantization · esc", 1)
+		}
+	}
+	if m.stage == "remove" {
+		hint = "enter remove · esc keep"
 	}
 	if m.stage == "setup" {
 		hint = "tab field · enter connect · ctrl+d forget key · esc back"
@@ -953,6 +1125,11 @@ func (m Model) View() string {
 		switch m.stage {
 		case "models":
 			hint = "type to search · ↑/↓ · enter · esc back"
+			if m.chosen() == "local" {
+				hint = "search · enter · ctrl+a add · " + strings.SplitN(m.removeOrRefreshHint(), " ", 2)[0] + " · esc"
+			}
+		case "add", "remove":
+			hint = "enter · esc back"
 		case "setup":
 			hint = "tab field · enter connect · esc back"
 		case "download":
@@ -997,4 +1174,25 @@ func formatTokens(n int) string {
 		s = s[:i] + "," + s[i:]
 	}
 	return s
+}
+
+// entryGroup is the heading a picker row sits under.
+func entryGroup(e lemonade.Entry) string {
+	switch {
+	case e.Recommended == nil:
+		return "All models"
+	case e.Recommended.Custom:
+		return "Added by you"
+	default:
+		return "Recommended"
+	}
+}
+
+// removeOrRefreshHint offers ctrl+x on a model the user added, ctrl+r elsewhere.
+func (m Model) removeOrRefreshHint() string {
+	entries := m.filteredEntries()
+	if m.focus >= 0 && m.focus < len(entries) && isCustom(entries[m.focus]) {
+		return "ctrl+x remove"
+	}
+	return "ctrl+r refresh"
 }

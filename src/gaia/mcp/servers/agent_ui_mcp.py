@@ -205,7 +205,8 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
 
         elif etype == "tool_args":
             detail = event.get("detail", "")[:200]
-            if detail:
+            # A no-argument call's detail is the tool's label, not its arguments.
+            if detail and event.get("args"):
                 event_log.append(f"  args: {detail}")
 
         elif etype == "tool_result":

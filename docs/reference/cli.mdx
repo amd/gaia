@@ -63,7 +63,8 @@ gaia --cli      # Launch interactive CLI chat instead
 | `--ui-port <port>` | Port for the Agent UI server (default: 4200) |
 | `--ui-dist <path>` | Serve an alternative prebuilt Agent UI bundle (e.g., a PR preview) instead of the one shipped in the installed package |
 | `--cli` | Launch interactive CLI chat |
-| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:13305/api/v1`). Also accepted by the subcommands that talk to Lemonade: `chat`, `prompt`, `talk`, `llm`, `api`, `stats`, and `mcp start`. |
+| `-p`, `--print [prompt]` | Run the GAIA agent once on the prompt, print the answer and exit — see [One-shot headless run](#one-shot-headless-run-gaia-p) |
+| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:13305/api/v1`). Also accepted by `-p` and by the subcommands that talk to Lemonade: `chat`, `prompt`, `talk`, `llm`, `api`, `stats`, and `mcp start`. |
 
 **Examples:**
 
@@ -89,6 +90,93 @@ gaia --ui --base-url https://your-server:13305/api/v1
   `gaia chat --ui` continues to work as an alias. The Agent UI does not gate on your processor model — the Settings panel reports your processor, memory and model status for information only.
 </Note>
 
+### One-shot headless run (`gaia -p`)
+
+`gaia -p` runs the flagship GAIA agent on one prompt, prints the answer, and
+exits — the scriptable counterpart of `claude -p`. stdout carries only the
+answer, so it can be piped or captured; progress, warnings and logs go to
+stderr. GAIA starts Lemonade Server through the daemon if it is not running, so
+there is nothing to launch first.
+
+```bash
+gaia -p "Summarize README.md in three bullets"
+gaia -p "Reply with exactly: pong" --model amd.DeepSeek-V4.1-Flash
+echo "List the Python files here" | gaia -p --output-format json
+```
+
+| Flag | Description |
+|------|-------------|
+| `-p`, `--print [prompt]` | The prompt. With no text after it, the prompt is read from stdin; an empty stdin or an interactive terminal is an error |
+| `--model <id>` | Model to run (local or cloud, e.g. `amd.DeepSeek-V4.1-Flash`). Default: `default_model` from `gaia config`, else the agent's own default |
+| `--output-format text\|json` | `text` (default) prints the answer alone; `json` prints one JSON object (below) |
+| `--verbose` | With `--output-format json`: add the turn's full `conversation` (every model message and tool call) |
+| `--max-steps <n>` | Cap on agent steps for this run, at least 1. Default: the agent's own limit ([Agent step limit](#agent-step-limit)) |
+| `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking |
+| `--full-access` | Full access, as the TUI's `/full-access`: lifts the shell guardrails, so test runners, build tools and other commands outside the no-prompt list run, and grants paths outside the current folder without asking. Implies `--dangerously-skip-permissions` |
+| `--base-url <url>` | Use a remote Lemonade server instead of the local one |
+
+`-p` takes no subcommand: `gaia -p "hi" chat` is a usage error. The flags above
+apply only to `-p`; given before a subcommand without it (`gaia --model X chat`)
+they are a usage error rather than being silently dropped — put them after the
+subcommand instead.
+
+**JSON output.** `--output-format json` prints exactly one line:
+
+```json
+{"type": "result", "is_error": false, "status": "success", "result": "pong",
+ "model": "amd.DeepSeek-V4.1-Flash", "num_steps": 1, "num_tool_calls": 0,
+ "input_tokens": 5120, "cached_tokens": 0, "output_tokens": 4, "duration_s": 1.87,
+ "error_count": 0}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `type` | Always `"result"` |
+| `is_error` | `true` when `status` is anything but `"success"` |
+| `status` | The agent's turn status (`"success"` on a completed answer) |
+| `result` | The answer text (`""` when there is none) |
+| `model` | The model the agent ran |
+| `num_steps` | Agent steps taken |
+| `num_tool_calls` | Tool calls made during the turn |
+| `input_tokens`, `output_tokens` | Tokens summed across the turn's model calls |
+| `cached_tokens` | Input tokens the backend served from its prompt cache |
+| `duration_s` | Wall-clock seconds for the turn, excluding server start-up |
+| `error_count` | Errors the agent recorded during the turn |
+| `error` | Only when `is_error`: why the turn failed |
+| `conversation` | Only with `--verbose`: the turn's messages and tool calls |
+
+**Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other
+than `success`), when the model server could not be started, or when no prompt was
+given; `130` when interrupted; `2` for a usage error such as an unknown flag, a
+launcher flag (`--ui`, `--cli`) combined with `-p`, or `--verbose` without
+`--output-format json`. On any failure the reason
+goes to stderr; in json mode stdout still carries one object, with `is_error: true`
+and an `error` field, so a script never has to parse a traceback. A failure
+before the turn starts (no prompt, server down) prints only `type`, `is_error`,
+`status` and `error`.
+
+**Permissions and file access.** With nobody at the terminal to approve them,
+confirmation-gated tools are **denied** unless you pass
+`--dangerously-skip-permissions` (or the launching environment sets
+`GAIA_AUTO_APPROVE_TOOLS=1` — see [Confirming dangerous tools](#confirming-dangerous-tools)).
+When stdin and stdout are both an interactive terminal, GAIA asks you instead,
+as `gaia chat` does; piping either one in or out means nobody can answer, so the
+call is denied.
+Skipping permissions answers the prompts but does not widen the shell: a command
+outside `run_shell_command`'s no-prompt list (`pytest`, `go test`, `npm run …`) is
+still refused, and file tools stay in the current directory. `--full-access`
+lifts both: commands outside the list run, and paths outside the current folder
+are granted without asking (secrets and other never-grantable paths stay
+refused). It is announced on stderr and logged. Ask for it only for a run you
+would trust with an unguarded shell. `GAIA_ALLOWED_PATHS` narrows the file scope
+in either mode.
+
+<Note>
+  A prompt that is a single flag-like word, such as `gaia -p "--help"`, is read
+  by the parser as that flag. Write `gaia --print="--help"` or pipe it on stdin
+  instead. Prompts containing a space (`gaia -p "--help me"`) are unaffected.
+</Note>
+
 ### Agent step limit
 
 Agents stop after a maximum number of reasoning/tool steps. The flagship GAIA agent (`gaia chat`, the Agent UI, the TUI) defaults to **150**, enough for long desktop tasks such as reading a folder of datasheets and writing a costed BOM. Other agents default to **50**.
@@ -110,7 +198,7 @@ Some skills intentionally need more headroom than the default (e.g. multi-file c
 
 ### Per-tool execution timeout
 
-Each tool call is bounded so a hung tool (e.g. a stuck connector or network request) surfaces an actionable error instead of leaving the agent — and the UI — stuck indefinitely. The default is **180 seconds** per tool. Time a tool spends waiting for you to answer a file-access prompt doesn't count toward it.
+Each tool call is bounded so a hung tool (e.g. a stuck connector or network request) surfaces an actionable error instead of leaving the agent — and the UI — stuck indefinitely. The default is **180 seconds** per tool. Time a tool spends waiting for you to answer a file-access prompt doesn't count toward it, and neither does time the PC spends in S3 sleep or hibernation. Modern Standby counts as running time.
 
 - **Fleet-wide:** set `GAIA_AGENT_TOOL_TIMEOUT` (seconds) to change the default for every tool at once.
 
@@ -244,6 +332,7 @@ gaia init [OPTIONS]
 | `--load` | flag | false | With `--check`: once everything is downloaded, load each model once — the chat model at its context size, the embedding model with a one-word embedding — so "downloaded but will not load" is caught before first use. Exit code `3` means a downloaded model would not load; re-running setup will not fix that. Used by the Go TUI's readiness gate |
 | `--chat-model` | string | — | With `--check`: the local chat model to check instead of the profile default |
 | `--json` | flag | false | With `--check`: print the result as one JSON object — `ready`, `stage` (`setup` or `load`), `reasons`, and per-model `id`, `role`, `size_gb`, `loaded`, `error` |
+| `--progress-json` | flag | false | Also print setup steps and model download progress as one JSON object per line on stdout, for a tool that shows it (the desktop app's installer). Human output still prints around them. See [Progress events](#progress-events) |
 
 **Available Profiles:**
 
@@ -277,6 +366,38 @@ is already installed.
 </Note>
 
 <Note>
+Before it downloads anything, `gaia init` adds up what the models still need and checks
+it against the free space in Lemonade's model store. When they don't all fit, it stops
+before the first download with `Not enough disk space`, how much the models need, how much
+is free, and where, and exits `1`. Each model fitting on its own is not enough. What an
+interrupted download already left there counts as downloaded, so a retry asks only for
+the rest. When GAIA can't read that store (a remote server), a shortfall is a warning and
+the download goes ahead.
+</Note>
+
+#### Progress events
+
+With `--progress-json`, each event is one stdout line holding a JSON object with an
+`event` key. The lines between them are the usual human output; skip any line that is
+not such an object, and any `event` you don't know.
+
+| `event` | Fields | When |
+|---------|--------|------|
+| `step` | `step`, `total`, `message` | A setup step starts |
+| `plan` | `models` (`id`, `bytes_total` or `null` when unknown, `downloaded`), `bytes_total` (what is left to download), `disk_free_bytes` (`null` when Lemonade does not report it) | Before the downloads |
+| `progress` | `model`, `index`, `count`, `bytes_done`, `bytes_total`, `speed_bps` | During a model's download, at most twice a second |
+| `model_done` | `model`, `downloaded` (`false` when it was already on disk) | A model is ready |
+| `done` | `ok` | The downloads finished, or one failed |
+| `error` | `message`, and `model` when one model failed | Something stopped setup |
+
+```json
+{"event": "plan", "models": [{"id": "Gemma-4-E4B-it-GGUF", "bytes_total": 5560000000, "downloaded": false}], "bytes_total": 5560000000, "disk_free_bytes": 412000000000}
+{"event": "progress", "model": "Gemma-4-E4B-it-GGUF", "index": 1, "count": 1, "bytes_done": 1048576000, "bytes_total": 5560000000, "speed_bps": 41000000}
+```
+
+The exit code still says whether setup succeeded.
+
+<Note>
 `gaia init` picks the profile on the *agent* axis only. NPU users must still ask for the
 device axis explicitly with `gaia init --profile npu`, which swaps the GGUF models for
 their FLM equivalents — the default never switches your backend for you. It installs
@@ -302,7 +423,9 @@ models, its 23.3 GB of weights and vision projector plus the context cache at it
 smallest, 64K window, so a 64 GB+ Strix Halo or a 32 GB GPU, but not a 24 GB card or a
 CPU-only PC — `gaia init` also sets up `Qwen3.6-35B-A3B-GGUF` (a 23 GB Lemonade
 built-in MoE, run with thinking on, needs Lemonade v11.7.0 or newer) as the chat model,
-prints why, and records it as `default_model`. It loads with the largest window the
+prints why, and records it as `default_model`. It must also fit the memory free when
+setup runs, so a PC busy with other apps keeps Gemma and says why: close them and
+re-run `gaia init`. If setup's verify step fails, no default model is recorded. It loads with the largest window the
 memory holds, up to 262,144 tokens: 256K on a Strix Halo, about 88K on a 32 GB GPU
 (see [Context length follows memory](/guides/ai-providers#context-length-follows-memory)). Gemma is
 still downloaded, since vision and document-image extraction load it by name. Every
@@ -468,7 +591,7 @@ gaia uninstall [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--venv` | flag | Remove the Python environment (`~/.gaia/venv/`) |
-| `--purge` | flag | Remove venv + chats + documents + embedded Lemonade + config + logs + installer binaries (`~/.gaia/bin`) + traces + daemon state (`~/.gaia/host`), and undo the installer's PATH edits |
+| `--purge` | flag | Remove venv + chats + documents + memory + sessions + undo snapshots of changed files + config + installed agents + caches + embedded Lemonade + logs + installer binaries (`~/.gaia/bin`) + traces + daemon state (`~/.gaia/host`) + saved sign-ins and API keys + the desktop app's `gaia` shim, and undo the installer's PATH edits |
 | `--purge-lemonade` | flag | Also remove Lemonade Server (requires `--purge`) |
 | `--purge-models` | flag | Also remove downloaded Lemonade models (requires `--purge`) |
 | `--purge-hf-cache` | flag | Also remove `~/.cache/huggingface/` (requires `--purge`) |
@@ -486,7 +609,7 @@ gaia uninstall --purge --dry-run
 gaia uninstall --venv
 ```
 
-```bash Full Purge (venv + chats + documents + embedded Lemonade + config + installer leftovers)
+```bash Full Purge (venv + your data + embedded Lemonade + saved keys + installer leftovers)
 gaia uninstall --purge
 ```
 
@@ -500,10 +623,25 @@ gaia uninstall --purge --purge-lemonade --yes
 </CodeGroup>
 
 <Warning>
-`--purge` permanently deletes your chat history, uploaded documents, configuration,
-embedded Lemonade downloads, agent traces, and the daemon's state in `~/.gaia/host` —
-including its custody database (agent memory, sessions, and audit history). Use `--purge --dry-run` first to preview the purge tier; pair other cleanup tiers with `--dry-run` to preview those instead.
+`--purge` permanently deletes your chat history, uploaded documents, what GAIA
+remembers about you (`memory.db`), its file and scratchpad indexes, goals, sessions,
+`config.json`, installed agents (`~/.gaia/agents`), caches, embedded Lemonade downloads,
+agent traces, and the daemon's state in `~/.gaia/host` — including its custody database
+(agent memory, sessions, and audit history). It also deletes GAIA's sign-ins and API keys
+from the OS credential store (service `gaia.connections`) — only when it purges the default
+`~/.gaia`, since that store is shared by every GAIA home. Use `--purge --dry-run` first to
+preview the purge tier; it lists only what exists. Pair other cleanup tiers with `--dry-run`
+to preview those instead.
 </Warning>
+
+<Note>
+`--purge` keeps `~/.gaia` itself and what is not GAIA's to delete: your connector setup
+(`mcp_servers.json`, `connectors/`, and the MCP server secrets that file names), your own
+skills in `~/.gaia/skills`, and any file another tool put there. The plan and the end of the
+run list each kept entry. The desktop app's `~/.local/bin/gaia` shim (or `$XDG_BIN_HOME/gaia`)
+is removed only when it is the app's exact wrapper around this GAIA home's venv; any other
+`gaia` there is left alone and named.
+</Note>
 
 <Note>
 `--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon
@@ -695,7 +833,7 @@ same way — via the `gaia.agent` entry point, so the registry discovers it
 automatically:
 
 ```bash From PyPI (pip)
-pip install gaia-agent-hello-world          # one agent
+pip install gaia-agent-email          # one agent
 ```
 
 <Note>
@@ -704,7 +842,7 @@ PyPI publishing for `gaia-agent-*` wheels is currently paused (tracked by
 resolve yet. Until publishing lands, install an agent straight from this repo:
 
 ```bash From source (works today)
-uv pip install "gaia-agent-hello-world @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/hello-world/python"
+uv pip install "gaia-agent-email @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/email/python"
 ```
 </Note>
 
@@ -718,18 +856,19 @@ gaia agent install <id> --version 0.5.0    # a specific version
 gaia agent install <id> --trust            # required for non-verified agents
 ```
 
-`gaia agent list` shows what is available to install (with an `[installed]`
-marker) so you know which id to pass. This is the supported way to provision a sidecar
+`gaia agent list` shows what is available to install so you know which id to pass.
+An installed agent shows the version on disk with an `[installed]` marker, plus the
+catalog's latest version when the two differ. This is the supported way to provision a sidecar
 agent on a machine with no UI.
 
 <Note>
-`gaia agent install` installs **in-process**. [`gaia hub install`](#hub-command)
-performs the same install through the daemon, which additionally stops that
-agent's running sidecar first and keeps it stopped for the whole download —
-the install directory is the sidecar's own binary cache. Reach for `gaia hub`
-when the daemon supervises the agent, and `gaia agent` when it does not (or
-when the daemon extras are not installed). Both enforce the same `--trust` gate
-and the same SHA-256 verification.
+`gaia agent install` installs **in-process**. Updating an agent that is
+running replaces its binary in place (on Windows the running copy is moved
+aside and deleted by the next install), then stops the running sidecar so the
+next chat starts the new version. [`gaia hub install`](#hub-command) performs
+the same install through the daemon, which instead stops that agent's sidecar
+first and keeps it stopped for the whole download. Both enforce the same
+`--trust` gate and the same SHA-256 verification.
 </Note>
 
 Running a sidecar agent starts its sidecar automatically on first use;
@@ -1539,6 +1678,8 @@ models — alongside local inference. Requires **Lemonade Server 11.8.0+**.
 You enter your token once. Lemonade holds it in memory and forgets it on
 restart, so GAIA keeps a copy in your **OS credential store** (DPAPI, Keychain,
 SecretService) and replays it — encrypted at rest, never in a GAIA file.
+`install` replays it as well; installing with a different `--base-url` deletes it, so
+it is never sent to another gateway.
 
 ```bash
 gaia gateway install --base-url https://llm-api.amd.com/Unified/v1  # register the gateway
@@ -1600,6 +1741,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3.6-35B-A3B-GGUF` on a PC with the memory for it and never overwrites a value you set. `user.Qwen3.8-Flash-Next-GGUF` is available on a 128 GB Strix Halo; choose it here, `gaia init` never does |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) for commands that load without naming a model. A model always runs on the device it was built for |
 | `context_sizes` | _(empty)_ | Context window per local model, set in the Agent UI under **Settings → Model** (`gaia config set` refuses it). A model not listed gets GAIA's automatic size; `GAIA_CTX_SIZE` overrides it |
+| `custom_models` | _(empty)_ | Local models you added from a Hugging Face link, managed with [`gaia model`](#model-command), the Agent UI or the TUI (`gaia config set` refuses it) |
 | `profile` | `chat` | Last `gaia init` profile |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, `rocm`, `metal`, `cpu`, or `auto` to let Lemonade choose. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
@@ -1610,6 +1752,58 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
 | `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui#undo-a-turn) |
 | `undo_max_mb` | `500` | Megabytes those copies may use; the oldest turns are removed first; the size limit never removes the newest |
+| `network_policy` | `cloud_allowed` | `local_ai_only` makes GAIA refuse every cloud AI model — see [Local only](#local-only). Stored in `~/.gaia/policy.json`, not in `config.json` |
+
+### Local only
+
+```bash
+gaia config set network_policy local_ai_only   # no AI request reaches a cloud model
+gaia config get network_policy
+gaia config set network_policy cloud_allowed   # allow cloud models again
+```
+
+With `local_ai_only`, GAIA refuses every AI request to a model Lemonade's catalog
+doesn't list as local: Fireworks and AMD LLM Gateway models, Lemonade router
+collections, and any model id the catalog doesn't know. The refusal names the model
+and how to turn the setting off. Downloading a local model still works.
+
+It applies everywhere GAIA sends a prompt or a key:
+
+- Chat, agents, documents, speech-to-text and text-to-speech run only on local models.
+- Anthropic Claude is refused, including `gaia eval`'s judges and the `claude` CLI that
+  eval, benchmarks and session harvesting launch. `gaia eval agent` stops at its
+  preflight check.
+- GAIA stops handing stored cloud keys to Lemonade, and takes back any it already
+  gave a running GAIA Lemonade. The Agent UI and `gaia-tui` refuse to connect a
+  cloud provider, enter a gateway token, or switch to a cloud model.
+- The web-search tool that answers through Perplexity's cloud AI is turned off.
+
+Setting it also clears a saved cloud model (Fireworks, AMD LLM Gateway or Claude)
+from `default_model` and `last_model` in `config.json`, and prints what it cleared
+and the local model GAIA uses instead. `gaia config show` lists the policy file and the current level.
+
+What it does not cover:
+
+- Non-AI network features: web page fetch, connectors and MCP servers keep working
+  and keep their own permissions.
+- A Lemonade Server you run on another machine: GAIA treats the models it lists as
+  local, so prompts go to that machine.
+- An agent sidecar (such as email) built before this setting existed: it runs its
+  own copy of GAIA, so a cloud model named in a request to it isn't checked. Update
+  the agent with `gaia agent install <id>`.
+- A key set in Lemonade's own environment (for example
+  `LEMONADE_FIREWORKS_API_KEY`), or a key a Lemonade you run yourself holds: GAIA's own
+  requests are still refused, but a program talking to Lemonade directly could use it.
+  If GAIA can't reach its Lemonade when you turn Local only on, it says so; restart
+  Lemonade to drop any key it still holds.
+
+`offline` is reserved for a stricter level that also blocks non-AI network
+features; it is refused for now.
+
+The setting lives in `~/.gaia/policy.json` (move it with `GAIA_POLICY_FILE`), not in
+`config.json`, so a project config passed with `--config` can't relax it. If the
+file can't be read, GAIA treats it as `local_ai_only` until you fix or rewrite it.
+GAIA versions released before this setting existed ignore the file.
 
 ### Full access
 
@@ -1727,9 +1921,14 @@ gaia download [OPTIONS]
 | `--agent` | string | all | Agent to download models for |
 | `--list` | flag | false | List required models without downloading |
 | `--timeout` | integer | 1800 | Timeout per model in seconds |
-| `--host` | string | localhost | Lemonade server host |
-| `--port` | integer | 13305 | Lemonade server port |
+| `--host` | string | GAIA's server | Lemonade server host |
+| `--port` | integer | GAIA's server | Lemonade server port |
 | `--clear-cache` | flag | false | Delete all downloaded GAIA models to free up disk space |
+
+Without `--host` or `--port`, `gaia download` uses the same Lemonade Server as the
+rest of GAIA: `LEMONADE_BASE_URL` if set, otherwise GAIA's own Lemonade on whatever
+port it started on (`gaia lemonade embedded status` shows it).
+`--host` on its own targets Lemonade's standard port (13305) on that host.
 
 **Available Agents:**
 chat, talk, rag, vlm, minimal, mcp
@@ -1793,6 +1992,33 @@ current Lemonade that is `lemonade pull MODEL_NAME`. When a GAIA command finds a
 model missing, its error names the exact command for your machine, so you never
 have to guess which client you have.
 
+### Model Command
+
+Add a GGUF chat model from a Hugging Face link to the local model list, shared
+with the Agent UI and the TUI. See
+[Add a model from Hugging Face](/guides/ai-providers#add-a-model-from-hugging-face)
+for what is checked.
+
+```bash
+gaia model check https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF
+gaia model add https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF --quant Q8_0
+gaia model list
+gaia model remove user.Qwen3-4B-Instruct-2507-Q8_0-GGUF
+```
+
+| Subcommand | What it does |
+|------------|--------------|
+| `check <link>` | Run the checks and show the model it would add; nothing is saved |
+| `add <link>` | Run the checks and, when they pass, add the model. It downloads the first time you pick it |
+| `remove <id>` | Delete the model's download from Lemonade, forget it, and clear `default_model` / `last_model` if either named it |
+| `list` | The models you added, with the link each came from |
+
+`<link>` is any page of a model repo, a `.gguf` file link, or `owner/repo[:QUANT]`.
+`--quant` picks a quantization or one of its file names (default: a 4-bit one
+such as Q4_K_M, else the largest that fits).
+`--json` prints one JSON object. Exit codes: `0` done, `1` refused (the reason is
+printed), `2` the model server or config could not be read.
+
 ---
 
 ## Embedded Lemonade
@@ -1819,7 +2045,7 @@ in which case a free one is picked and remembered instead. `start` writes them t
 so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
-✅ Embedded Lemonade 2026.42.1 running on http://localhost:62232/api/v1
+✅ Embedded Lemonade 2026.44.1 running on http://localhost:62232/api/v1
    pid 26080   logs: ~/.gaia/lemonade/lemond.log
 
    The instance is private. Load its URL and API key with:
@@ -2056,6 +2282,7 @@ gaia eval agent [OPTIONS]
 | `--target-pass-rate` | float | `0.90` | Stop fix iterations when judged pass rate reaches this threshold |
 | `--compare` | string(s) | -- | Compare two scorecard files, or one scorecard against saved baseline |
 | `--save-baseline` | flag | false | Save this run's scorecard as `eval/results/baseline.json` |
+| `--resume` | string | -- | Finish a run that stopped because Claude was unavailable: runs only its scenarios without a result, under the run's own settings, and updates its scorecard. Takes the run directory |
 | `--capture-session` | string | -- | Convert an Agent UI session (by UUID) into a YAML scenario file |
 | `--scenario-dir` | string | -- | Additional scenario directory to scan (repeatable) |
 | `--corpus-dir` | string | -- | Additional corpus directory to scan (repeatable) |
@@ -2096,6 +2323,10 @@ gaia eval agent --compare eval/results/latest/scorecard.json
 
 ```bash Explicit Two-File Comparison
 gaia eval agent --compare eval/results/run_A/scorecard.json eval/results/run_B/scorecard.json
+```
+
+```bash Resume After a Quota Stop
+gaia eval agent --resume eval/results/eval-20261021-141300
 ```
 
 ```bash Capture Session to Scenario
@@ -2440,7 +2671,7 @@ Skills are discovered from three roots, highest precedence first:
     gaia-testing                 -          experimental  claude-import  -
     ```
 
-    A skill shadowed by a higher-precedence copy of the same name is reported on stderr rather than hidden. A skill directory that fails to parse is listed with its error and the command exits `4`.
+    A skill shadowed by a higher-precedence copy of the same name is reported on stderr rather than hidden. A skill directory that fails to parse is listed with its error and the command exits `4`. One under the read-only `claude-import` roots belongs to another tool, so it is listed as a warning (`import_errors` in `--json`) and does not change the exit code.
   </Tab>
 
   <Tab title="info">
@@ -2623,7 +2854,11 @@ Skills are discovered from three roots, highest precedence first:
 
     The version is a SemVer range — `web-research@^1.2`, `@>=1.0.0, <2.0.0`,
     `@1.4.7`, or omitted for the latest. The highest published version satisfying
-    it wins, the same rule agent `dependencies:` use.
+    it wins. A range admits a prerelease only if one of its targets names a
+    prerelease of the same `major.minor.patch`, such as `@>=1.3.0-rc.1`.
+    Omitting the version or using `*` / `latest` prefers the highest stable
+    release; only when none exists does it select the highest prerelease.
+    `any` and an empty range behave the same way.
 
     Install verifies the artifact's SHA-256 against the hub manifest, verifies the
     bundle's `SIGNATURE.json` over every file, then installs at
@@ -2916,7 +3151,7 @@ gaia skill trust list
 ```
 </CodeGroup>
 
-**Exit codes:** `0` success · `2` missing/unknown subcommand · `3` skill not found · `4` invalid skill (bad manifest, name collision without `--force`, or a discovery root containing a malformed skill).
+**Exit codes:** `0` success · `2` missing/unknown subcommand · `3` skill not found · `4` invalid skill (bad manifest, name collision without `--force`, or a GAIA discovery root containing a malformed skill — a malformed `claude-import` skill is only a warning).
 
 ### Loading a skill into an agent
 
@@ -2950,9 +3185,11 @@ skills:
 Every `Agent` subclass resolves this block at construction, so a **custom agent**
 under `~/.gaia/agents/<id>/` consumes an installed hub skill by dropping a
 `gaia-agent.yaml` beside its `agent.py` — no code change, no registration call.
-Resolution mirrors agent `dependencies:`: highest installed version satisfying the
-range, tool providers ordered before their consumers, and fail-loud on a conflict
-or a dependency cycle. A missing `required: true` skill raises with the
+Resolution checks the installed version against the range, orders tool providers
+before their consumers, and fails loudly on a conflict or a dependency cycle.
+A pinned range admits a prerelease only when a target names a prerelease of the
+same `major.minor.patch`. Unrestricted pins accept an installed prerelease.
+A missing `required: true` skill raises with the
 `gaia skill install` command that fixes it; a missing optional one is logged and
 skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 `load_declared_skills()` yourself.
@@ -3344,13 +3581,28 @@ and no scheduled job pending, and the next GAIA command starts a fresh one. Set
 The daemon for `~/.gaia` never idles out. `gaia kill --daemons` finds and stops
 any that are still left.
 
+After an update replaces GAIA, the daemon still running the previous release is
+restarted, with its agents, by the next GAIA command or app launch that starts
+or attaches to it. The daemon records its release in `instance.json`, and a
+client compares that with the version now installed where the daemon runs from.
+A daemon started by a release older than this check is restarted only by a
+client from the same Python environment.
+
+A busy daemon is not restarted: while an agent turn is still running (including
+one waiting on a tool or your approval), a scheduled job is running or due,
+another GAIA app (the terminal app or the Agent UI) is connected, or its model
+server answered a request in the last two minutes, clients keep using it. Each
+command that finds it out of date says so, and the Agent UI shows the same note
+in the chat. A later command restarts it once it is free, or run
+`gaia daemon restart` to restart it now.
+
 **Daemon HTTP surface** (the daemon serves no OpenAPI schema, so this is the
 contract; every route needs `Authorization: Bearer <token>` from
 `~/.gaia/host/instance.json`):
 
 | Route | Purpose |
 |-------|---------|
-| `GET /daemon/v1/status` | pid / port / uptime / API version |
+| `GET /daemon/v1/status` | pid / port / uptime / API version, and `relayed_turns`: agent turns open through the relay |
 | `POST /daemon/v1/lemonade/ensure` | Start GAIA's embedded Lemonade Server if stopped and return where it listens (409 if not managed, 503 on a start failure). Host API ≥ 1.2 |
 | `POST /daemon/v1/lemonade/start` | Start or attach the local model server — GAIA's embedded one when `gaia init` installed it and `LEMONADE_BASE_URL` is unset, otherwise the system install; returns 503 with actionable detail on refusal. Host API ≥ 1.3 |
 | `GET /daemon/v1/lemonade/status` | Whether this daemon supervises a server, its PID, and its log path. Host API ≥ 1.3 |
@@ -3361,7 +3613,7 @@ contract; every route needs `Authorization: Bearer <token>` from
 | `GET /daemon/v1/lemonade/target` | Which Lemonade GAIA uses and who chose it, with the saved API key for your own server (for the terminal UI, which can't read the Python credential store). Host API ≥ 1.5 |
 | `POST /daemon/v1/shutdown` | graceful drain + exit |
 | `GET /daemon/v1/agents` | registered sidecars — never the bearer token |
-| `POST /daemon/v1/agents/{id}/ensure` | spawn-or-attach; the body carries the sidecar token |
+| `POST /daemon/v1/agents/{id}/ensure` | spawn-or-attach; the body carries the sidecar token. A failure names its cause in the `X-GAIA-Error-Kind` header: `start_failed`, `out_of_date`, `capacity`, `mode_conflict` or `not_installed` |
 | `POST /daemon/v1/agents/{id}/stop` | tree-kill + verify the pid is gone |
 | `GET /daemon/v1/catalog` | Download-server catalog merged with local install state (`?refresh` / `?installed_only` / `?include_unsupervised`). Each entry carries `installable_version` (the newest version whose `min_gaia_version` this core meets) and `requires_gaia_version` (set when the latest needs a newer core); `update_available` only counts an installable version. An entry whose published floor is unreadable carries `core_gate_error` and offers nothing to install |
 | `POST /daemon/v1/agents/{id}/install` | 202, queue an install (`{"version": "...", "trusted": true}`, both optional; `version` defaults to the newest version this core meets; `trusted` defaults to **false** → 403 for a non-verified agent; 409 when the version needs a newer core) |
@@ -3380,7 +3632,7 @@ The flagship GAIA agent comes from `gaia init`, not from here.
 ```bash
 gaia hub list                      # what is available + what is installed
 gaia hub list --installed          # only what is installed (works offline)
-gaia hub install email --trust     # required: email is a non-verified agent
+gaia hub install email
 gaia hub uninstall email           # stops the sidecar first, then removes the dir
 ```
 
@@ -3450,7 +3702,7 @@ Options accepted by every `gaia tui` command:
 
 There is no `list`, `install`, `uninstall`, or `hub` subcommand — the TUI does
 not install agents. Installing the email sidecar is the Python CLI's job
-(`gaia hub install email --trust`, see [Hub Command](#hub-command)).
+(`gaia hub install email`, see [Hub Command](#hub-command)).
 
 #### `run --query` is a real one-shot
 
@@ -3772,45 +4024,6 @@ the connector with `gaia connectors configure mcp-tavily --set TAVILY_API_KEY=tv
 
 ---
 
-### Kill Command
-
-Terminate processes running on specific ports.
-
-```bash
-gaia kill [OPTIONS]
-```
-
-**Options:**
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `--port` | integer | Port number to kill process on |
-| `--lemonade` | flag | Kill Lemonade server (port 13305) |
-| `--daemons` | flag | List running GAIA daemons; stop those whose home folder or `instance.json` is gone |
-
-**Examples:**
-
-<CodeGroup>
-```bash Kill Lemonade Server
-gaia kill --lemonade
-```
-
-```bash Kill by Port
-gaia kill --port 13305
-```
-
-```bash Stop Orphaned Daemons
-gaia kill --daemons
-```
-</CodeGroup>
-
-This command will:
-- Find the process ID (PID) bound to the specified port
-- Forcefully terminate that process
-- Report killed, refused, and failed listeners; exit 1 on any refusal or failure. An empty port is a successful no-op (exit 0). Listing and forceful termination commands each have a five-second timeout.
-
----
-
 ### Diagnostics Command
 
 Bundle system info and logs into a tarball for bug reports.
@@ -3844,9 +4057,11 @@ gaia diagnostics --output /tmp/my-bundle.tgz
 </CodeGroup>
 
 The bundle includes:
-- System info snapshot (`uname -a`, distro, relevant env vars, all TCP listeners via `ss -tlnp`)
-- State files from `~/.gaia/` (config, session data — no chat content)
-- Log files: `~/.gaia/gaia.log` with its rotated copies (`gaia.log.1`, `gaia.log.2`, ...) and `~/.gaia/electron-main.log`, omitted with `--no-logs`. A log over 50 MB is bundled as its last 50 MB, named `<file>.tail`.
+- System info snapshot: OS version (`uname -a` and distro on Linux, `sw_vers` on macOS, `ver` on Windows), relevant env vars with secrets redacted, the pid and port of the GAIA daemon, GAIA's Lemonade and the Agent UI backend with what listens on them, and all TCP listeners (`ss -tlnp` on Linux, `lsof -iTCP -sTCP:LISTEN` on macOS, `netstat -ano` on Windows)
+- `~/.gaia/electron-install-state.json` (no chat content)
+- Log files, omitted with `--no-logs`: `~/.gaia/gaia.log`, the Electron logs (`electron-install.log`, `electron-main.log`, `electron-updater.log`), `~/.gaia/logs/*.log`, the daemon log (`~/.gaia/host/daemon.log`), GAIA's Lemonade log (`~/.gaia/lemonade/lemond.log`) and agent sidecar logs (`~/.gaia/agents/*/logs/*.log`), each with its rotated copies (`gaia.log.1`, ...). A log over 50 MB is bundled as its last 50 MB, named `<file>.tail`.
+
+API keys and tokens in GAIA's state files (`lemonade/state.json`, `host/instance.json`) are never bundled.
 
 ---
 
@@ -3855,7 +4070,7 @@ The bundle includes:
 Most commands support these options. They come from a shared parent parser, so
 despite the name they are **not** accepted by `gaia agent`, `gaia cache`,
 `gaia config`, `gaia connectors`, `gaia daemon`, `gaia diagnostics`, `gaia engineering`,
-`gaia gateway`, `gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory` or
+`gaia gateway`, `gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory`, `gaia model` or
 `gaia skill` — passing one there fails with `unrecognized arguments`.
 
 | Option | Type | Default | Description |
@@ -3879,7 +4094,7 @@ Backend flags are accepted only by the commands that use them, and any other com
 |-------|-------------|
 | `--use-claude`, `--claude-model` | `chat`, `prompt`, `talk` |
 | `--model` | `chat`, `prompt`, `talk`, `llm`, `email` (and eval subcommands that define their own) |
-| `--base-url` | `chat`, `prompt`, `talk`, `llm`, `email`, `api`, `stats`, `mcp start` |
+| `--base-url` | `chat`, `prompt`, `talk`, `llm`, `api`, `stats`, `mcp start` |
 | `--trace` | `chat`, `email` |
 | `--max-steps`, `--list-tools`, `--stream` | `chat` |
 

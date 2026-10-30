@@ -215,9 +215,13 @@ class _Handler:
         self.full_access = False
         self.confirm_timeout_seconds = 0
         self._grants = set()
+        self._scopes = {}
 
     def session_grants(self):
         return self._grants
+
+    def session_grant_scopes(self):
+        return self._scopes
 
 
 def test_attach_hands_the_turn_both_halves_of_full_access():
@@ -882,6 +886,30 @@ def test_model_switch_to_local_succeeds(monkeypatch, stub_lemonade):
     assert agent._use_claude is False
     assert agent.model_id == "Qwen3-4B-Instruct-2507-GGUF"
     assert agent.config.model_id == "Qwen3-4B-Instruct-2507-GGUF"
+
+
+def test_model_switch_to_a_custom_model_uses_the_name_lemonade_lists(
+    monkeypatch, stub_lemonade
+):
+    """A model registered as user.X is listed as X; /model user.X must find it."""
+    from gaia_agent import stdio as stdio_mod
+
+    built = []
+    monkeypatch.setattr(
+        stdio_mod,
+        "_lemonade_models",
+        lambda base_url: ["Gemma-4-E4B-it-GGUF", "Qwen3-0.6B-Q4_K_M-GGUF"],
+    )
+    monkeypatch.setattr(
+        stdio_mod, "create_client", lambda **kwargs: built.append(kwargs) or object()
+    )
+    agent = _ModelSwitchAgent()
+
+    events = _events(_model_run(agent, "/model user.Qwen3-0.6B-Q4_K_M-GGUF"))
+
+    assert [e["type"] for e in events] == ["status", "final"]
+    assert built[0]["model"] == "Qwen3-0.6B-Q4_K_M-GGUF"
+    assert agent.chat.config.model == "Qwen3-0.6B-Q4_K_M-GGUF"
 
 
 def test_model_switch_unknown_claude_id_is_refused_not_accepted(monkeypatch):
