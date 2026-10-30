@@ -12,7 +12,6 @@ from gaia_agent_chat.profiles import PROFILE_SPECS
 # Prompt names with no registered tool; remove an entry once its prompt is fixed.
 _KNOWN_GAPS = {
     "chat": {"query_specific_file"},  # appears only inside a banned-output example
-    "doc": {"find_files"},
 }
 
 
@@ -39,6 +38,36 @@ def test_prompt_names_only_registered_tools(profile, prompts_and_tools):
     prompt, registered = prompts_and_tools[profile]
     named = {name for name in known if re.search(rf"\b{re.escape(name)}\b", prompt)}
     assert named - registered == _KNOWN_GAPS.get(profile, set())
+
+
+# The discovery block as "file" and "full" render it; the flagship runs "full",
+# so these bytes must not move when the doc profile's wording changes.
+_FS_DISCOVERY_RULES = """
+**SMART DISCOVERY WORKFLOW:**
+1. Domain question + nothing relevant indexed: `find_files` with 1-2 document-type keywords (handbook / report / manual / policy / guide), NOT the question's content terms. If nothing after 2 tries, `browse_directory`.
+2. Files found → `index_document` immediately (no confirmation), then query and answer in the same turn.
+3. Already indexed → query directly.
+
+**NEVER ASK PERMISSION TO INDEX.** "Would you like me to index this?" is BANNED. If a document is referenced and you can locate it, index + query + answer in one flow.
+
+**SEARCH LOOP PREVENTION:** Same `find_files` / `browse_directory` query twice with same result → STOP and acknowledge.
+
+**VAGUE FOLLOW-UP ("what about X?"):** find_files("X") → index_document → query_specific_file with whatever question is implicit, or "key topics overview" if none.
+"""
+
+
+@pytest.mark.parametrize("profile", ["file", "full", "no-such-profile"])
+def test_filesystem_profiles_discovery_rules_are_unchanged(profile):
+    """Profiles that register find_files keep the original discovery bytes."""
+    prompt = _prompt_for_profile(profile)
+    assert _FS_DISCOVERY_RULES in prompt
+
+
+def test_doc_profile_discovery_rules_use_search_file(prompts_and_tools):
+    prompt, registered = prompts_and_tools["doc"]
+    assert {"search_file", "browse_directory"} <= registered
+    assert "find_files" not in prompt
+    assert _FS_DISCOVERY_RULES.replace("find_files", "search_file") in prompt
 
 
 def test_data_profile_does_not_advertise_web_or_media(prompts_and_tools):
@@ -77,6 +106,18 @@ def test_data_profile_unsupported_line_keeps_image_analysis(prompts_and_tools):
         "feature_request.md . Image analysis IS supported via `analyze_image`."
     )
     assert "search_web" not in line and "transcribe_media" not in line
+
+
+def _prompt_for_profile(profile):
+    with (
+        patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
+        patch("gaia_agent_chat.agent.RAGSDK"),
+        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+        patch("gaia.llm.lemonade_client.LemonadeClient"),
+    ):
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, prompt_profile=profile))
+        return agent._get_system_prompt()
 
 
 def _prompt_for_spec(spec):

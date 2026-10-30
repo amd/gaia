@@ -1326,17 +1326,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 """
 
         # ── Tier 1: Discovery workflow (compact form) ──
-        discovery_rules = """
+        # find_files comes only from the file_fs group; profiles without it
+        # search with search_file, which doc_rag registers.
+        find_tool = "find_files" if "file_fs" in spec.tool_groups else "search_file"
+        discovery_rules = f"""
 **SMART DISCOVERY WORKFLOW:**
-1. Domain question + nothing relevant indexed: `find_files` with 1-2 document-type keywords (handbook / report / manual / policy / guide), NOT the question's content terms. If nothing after 2 tries, `browse_directory`.
+1. Domain question + nothing relevant indexed: `{find_tool}` with 1-2 document-type keywords (handbook / report / manual / policy / guide), NOT the question's content terms. If nothing after 2 tries, `browse_directory`.
 2. Files found → `index_document` immediately (no confirmation), then query and answer in the same turn.
 3. Already indexed → query directly.
 
 **NEVER ASK PERMISSION TO INDEX.** "Would you like me to index this?" is BANNED. If a document is referenced and you can locate it, index + query + answer in one flow.
 
-**SEARCH LOOP PREVENTION:** Same `find_files` / `browse_directory` query twice with same result → STOP and acknowledge.
+**SEARCH LOOP PREVENTION:** Same `{find_tool}` / `browse_directory` query twice with same result → STOP and acknowledge.
 
-**VAGUE FOLLOW-UP ("what about X?"):** find_files("X") → index_document → query_specific_file with whatever question is implicit, or "key topics overview" if none.
+**VAGUE FOLLOW-UP ("what about X?"):** {find_tool}("X") → index_document → query_specific_file with whatever question is implicit, or "key topics overview" if none.
 """
 
         # ── Tier 1b: Optional tool sections — each block is only injected when

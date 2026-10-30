@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The doc profile's discovery rules told the model to start a search with
+  `find_files`, which that profile does not register, so the first discovery step
+  failed. They now name `search_file`, which it does register. Profiles with the
+  filesystem tools keep the `find_files` wording (#6070).
 - Resolves the user's real Documents folder for the session guidance, including
   Windows Known Folder Move/OneDrive and Linux `XDG_DOCUMENTS_DIR`, instead of
   assuming it is always `~/Documents` (#5885). File search and the Agent UI's
