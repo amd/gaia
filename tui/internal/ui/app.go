@@ -108,7 +108,7 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 		return fmt.Errorf("cannot start --subprocess %q: %w", argv[0], err)
 	}
 
-	c := client.NewSubprocessClient(bin, argv[1:], dev).WithTrace(trace)
+	c := client.NewSubprocessClient(bin, argv[1:], dev).WithTrace(trace).WithLogf(control.DevLogf)
 	defer func() {
 		if err := closeSession(c, os.Stderr, slowCloseNotice); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -192,7 +192,7 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	if removed, err := control.ClearStale(daemon.PIDAlive); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 	} else if removed && dev {
-		fmt.Fprintln(os.Stderr, "[DEBUG] removed a stale control discovery file")
+		control.DevLogf("removed a stale control discovery file")
 	}
 
 	if ctrl == nil {
