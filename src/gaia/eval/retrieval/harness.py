@@ -111,8 +111,7 @@ def agent_query_tool(rag) -> Callable[[str], dict]:
     except ImportError as e:
         raise ImportError(
             "The agent retrieval pipeline needs the flagship agent package "
-            "(hub/agents/gaia/python, which depends on hub/agents/chat/python): "
-            "run `uv pip install -e hub/agents/chat/python -e hub/agents/gaia/python`."
+            "(hub/agents/gaia/python): run `uv pip install -e hub/agents/gaia/python`."
         ) from e
     from gaia.agents.base.tools import (  # pylint: disable=import-outside-toplevel
         _TOOL_REGISTRY,

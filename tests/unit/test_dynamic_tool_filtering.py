@@ -21,8 +21,8 @@ import json
 import pytest
 
 # build_doc_agent_skeleton builds a doc-profile ChatAgent, which ships in the
-# standalone gaia-agent-chat wheel (#1102); skip when a framework-only env lacks it.
-pytest.importorskip("gaia_agent_chat")
+# flagship gaia-agent-gaia wheel (#6099); skip when a framework-only env lacks it.
+pytest.importorskip("gaia_agent")
 
 from gaia.eval.tool_cost import build_doc_agent_skeleton  # noqa: E402
 

@@ -117,10 +117,10 @@ matter alone — no eval-harness access needed.
 Run the following commands from the repository root:
 
 ```sh
-# Prerequisites: install the eval extras + this repo's chat/gaia hub
-# packages, start a Lemonade Server with the model on AMD Ryzen AI
+# Prerequisites: install the eval extras + this repo's gaia hub
+# package, start a Lemonade Server with the model on AMD Ryzen AI
 # hardware, and have the Claude Code CLI on PATH (the eval driver).
-uv pip install -e ".[dev,eval,ui,api]" -e hub/agents/chat/python -e hub/agents/gaia/python
+uv pip install -e ".[dev,eval,ui,api]" -e hub/agents/gaia/python
 gaia init   # installs and starts Lemonade Server; it must stay running
 
 # Step 0: stage fixtures + start the fixture server (see

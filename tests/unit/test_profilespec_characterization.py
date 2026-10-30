@@ -35,9 +35,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); skip the
+# ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
 from gaia.eval.tool_cost import (  # noqa: E402
     _build_skeleton_tool_loader,
@@ -101,7 +101,7 @@ def chat_agent_build_context(
         os.chdir(cwd)
     stubbed = _ensure_optional_deps_stubbed()
     try:
-        from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+        from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
         cfg = ChatAgentConfig(
             rag_documents=[],
@@ -302,7 +302,7 @@ def test_profile_prompt_and_tools_match_golden(row_id, kwargs, tmp_path):
 
 def test_get_system_prompt_uses_declarative_profile_spec():
     """Keep system-prompt assembly declarative and table-driven."""
-    from gaia_agent_chat.agent import ChatAgent
+    from gaia_agent.chat_agent import ChatAgent
 
     source = inspect.getsource(ChatAgent._get_system_prompt)
     assert "if profile ==" not in source, (
@@ -313,7 +313,7 @@ def test_get_system_prompt_uses_declarative_profile_spec():
 
 def test_register_tools_uses_declarative_profile_spec():
     """Keep tool registration declarative and table-driven."""
-    from gaia_agent_chat.agent import ChatAgent
+    from gaia_agent.chat_agent import ChatAgent
 
     source = inspect.getsource(ChatAgent._register_tools)
     assert "if profile ==" not in source, (

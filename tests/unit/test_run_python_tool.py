@@ -16,14 +16,14 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import (  # noqa: E402
+from gaia_agent.chat_agent import (  # noqa: E402
     ChatAgent,
     ChatAgentConfig,
     _imports_gaia_tools,
 )
-from gaia_agent_chat.tool_bundles import FULL_CORE_TOOLS  # noqa: E402
+from gaia_agent.tool_bundles import FULL_CORE_TOOLS  # noqa: E402
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION  # noqa: E402
 from gaia.agents.base.checks import CHECK_RESULT_KEY, CheckResult  # noqa: E402
@@ -56,8 +56,8 @@ def make_run_python():
 
     def build(allowed_path):
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(
                 ChatAgentConfig(silent_mode=True, allowed_paths=[str(allowed_path)])

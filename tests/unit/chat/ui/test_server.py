@@ -1256,8 +1256,21 @@ class TestSessionEndpoints:
         assert resp.status_code == 422
         detail = resp.json()["detail"]
         assert "'data'" in detail
-        assert "chat, email, gaia" in detail
+        assert "email, gaia" in detail
         assert client.get("/api/sessions").json()["total"] == 0
+
+    def test_a_legacy_chat_id_is_accepted_but_not_listed(
+        self, client, gaia_only_registry
+    ):
+        """``chat`` resolves to the flagship (#6099): a client still sending it
+        gets a session, but it is not offered as an id of its own."""
+        assert (
+            client.post("/api/sessions", json={"agent_type": "chat"}).status_code == 200
+        )
+        detail = client.post("/api/sessions", json={"agent_type": "data"}).json()[
+            "detail"
+        ]
+        assert "chat" not in detail.split("Registered agent ids:")[1]
 
     def test_create_session_registered_agent_type_accepted(
         self, client, gaia_only_registry
@@ -1299,7 +1312,7 @@ class TestSessionEndpoints:
         detail = client.post("/api/sessions", json={"agent_type": "data"}).json()[
             "detail"
         ]
-        assert "Registered agent ids: chat, email, gaia." in detail
+        assert "Registered agent ids: email, gaia." in detail
 
     def test_update_session_mail_provider(self, client):
         sid = client.post("/api/sessions", json={}).json()["id"]

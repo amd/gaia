@@ -33,8 +33,7 @@ def extract_docx_text(docx_path: str) -> str:
     content controls) and block-level content controls are recursed into.
 
     Known omissions: header/footer text (separate XML parts, usually
-    repeated boilerplate) and embedded images (TODO #1072: VLM extraction
-    for images embedded in .docx files).
+    repeated boilerplate) and embedded images.
 
     Raises:
         ImportError: python-docx is not installed.
