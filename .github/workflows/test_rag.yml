@@ -193,9 +193,10 @@ jobs:
       uses: ./.github/actions/setup-venv
       with:
         python-version: '3.12'
-        # The chat agent package provides query_documents' search-key expansion,
-        # which the retrieval gate scores as the agent pipeline.
-        install-package: '.[dev,rag] ./hub/agents/chat/python'
+        # The flagship (built on the chat package) provides query_documents'
+        # search-key expansion, which the retrieval gate scores as the agent
+        # pipeline.
+        install-package: '.[dev,rag] ./hub/agents/chat/python ./hub/agents/gaia/python'
 
     - name: Install additional test dependencies
       shell: powershell
