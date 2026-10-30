@@ -561,6 +561,25 @@ class TestRealLemonadeReports:
         with pytest.raises(ModelFitError, match="not its memory"):
             capacity_from_system_info(_fixture("lemonade11_amd_dgpu_windows.json"))
 
+    def test_implausible_discrete_vram_is_not_a_model_capacity(self):
+        """Do not turn a malformed byte count into an unsafe context window (#6148)."""
+        info = {
+            "Physical Memory": "16 GB",
+            "devices": {
+                "amd_gpu": [
+                    {
+                        "available": True,
+                        "integrated": False,
+                        "name": "AMD Radeon RX 5700 XT",
+                        "vram_gb": 17179869184.0,
+                    }
+                ]
+            },
+        }
+
+        with pytest.raises(ModelFitError, match="not its memory"):
+            capacity_from_system_info(info)
+
     def test_legacy_amd_igpu_key_is_read(self):
         info = {
             "devices": {

@@ -7,6 +7,7 @@ Provides singleton initialization shared by CLI and SDK flows.
 Operates at the LLM level (not agent level) for flexibility with community agents.
 """
 
+import math
 import sys
 import threading
 import time
@@ -166,19 +167,28 @@ def _iter_gpu_entries(devices) -> Iterator[Dict[str, Any]]:
 
 
 def _coerce_vram_gb(raw) -> Optional[float]:
-    """Parse a device entry's ``vram_gb``, or ``None`` when it is unusable."""
-    if raw is None:
+    """Parse a plausible finite ``vram_gb``, or ``None`` when it is unusable.
+
+    Lemonade's device contract is GiB. A malformed byte count can otherwise be
+    displayed as exabytes and drive an unsafe context recommendation, so reject
+    values outside the largest plausible single-GPU range instead of guessing a
+    unit conversion.
+    """
+    if raw is None or isinstance(raw, bool):
         return None
     try:
-        return float(raw)
+        vram_gb = float(raw)
     except (TypeError, ValueError):
+        vram_gb = None
+    if vram_gb is None or not math.isfinite(vram_gb) or not 0.0 <= vram_gb <= 1024.0:
         log = get_logger(__name__)
         log.warning(
-            "Lemonade reported a non-numeric vram_gb (%r); "
+            "Lemonade reported an implausible vram_gb (%r); "
             "reporting VRAM as undetected rather than guessing.",
             raw,
         )
         return None
+    return vram_gb
 
 
 def _gpu_rank(entry: Dict[str, Any]) -> Tuple[int, float, int, int]:

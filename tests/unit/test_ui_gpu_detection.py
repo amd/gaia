@@ -157,6 +157,22 @@ def test_gpu_display_info_non_numeric_vram_is_undetected_not_zero(caplog):
     assert "vram_gb" in caplog.text
 
 
+def test_gpu_display_info_rejects_a_byte_count_as_gib(caplog):
+    """A malformed server value must not advertise exabytes of VRAM (#6148)."""
+    devices = {
+        "amd_gpu": [
+            {
+                "available": True,
+                "name": "AMD Radeon RX 5700 XT",
+                "vram_gb": 17179869184.0,
+            }
+        ]
+    }
+
+    assert gpu_display_info(devices) == ("AMD Radeon RX 5700 XT", None)
+    assert "implausible vram_gb" in caplog.text
+
+
 # ── /api/system/status ───────────────────────────────────────────────────
 
 
