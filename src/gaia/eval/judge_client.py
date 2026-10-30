@@ -264,6 +264,9 @@ def probe_judge_credential(model: str | None = None) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(
         description="Judge credential utilities for the judged evals."
     )

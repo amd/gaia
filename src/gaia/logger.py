@@ -8,6 +8,7 @@ import sys
 import tempfile
 import warnings
 from pathlib import Path
+from typing import Optional
 
 from gaia.log_rotation import SharedRotatingFileHandler
 from gaia.tool_cancellation import AbandonedWorkerLogFilter
@@ -361,18 +362,68 @@ class GaiaLogger:
         self.log_file = path
 
 
-# Create a global instance
-log_manager = GaiaLogger()
+#: Set by :func:`configure`. Importing this module must have no side effect on
+#: the host process's logging.
+log_manager: Optional[GaiaLogger] = None
 
 
-# Convenience function to get a logger
+def configure(log_file=None):
+    """Install GAIA's logging configuration in this process, explicitly.
+
+    Importing ``gaia.logger`` (directly or via ``gaia``, which imports
+    ``gaia.agents.base``) no longer reconfigures the root logger or opens log
+    files; entry points that own the process (``gaia.cli:main``, the
+    ``gaia-mcp`` console script, ``gaia.ui.server:main``, the eval tools, the
+    LLM app runner) call this first, so an application embedding the SDK
+    keeps its own logging setup intact. Idempotent: calls after the
+    first return the already-installed manager.
+    """
+    global log_manager
+    if log_manager is not None:
+        return log_manager
+    log_manager = GaiaLogger(log_file)
+    # Loggers created before configure() ran (any module-level ``get_logger``
+    # in the import graph) come back inert, with no level of their own. Apply
+    # the per-module defaults to the ones still unset so ``set_level`` sees
+    # the same population the memoized path always did, and register them
+    # in ``self.loggers`` so ``set_level`` can update them too.
+    for name, state in list(logging.Logger.manager.loggerDict.items()):
+        if (
+            isinstance(state, logging.Logger)
+            and (name == "gaia" or name.startswith("gaia."))
+            and state.level == logging.NOTSET
+        ):
+            state.setLevel(log_manager._get_level_for_module(name))
+            log_manager.loggers[name] = state
+    return log_manager
+
+
 def get_logger(name):
+    """Return the named logger.
+
+    Before :func:`configure` the returned logger is untouched: it carries no
+    handlers and no level of its own, and this function touches nothing but
+    it. After :func:`configure` the manager supplies default levels and
+    memoization, as it always did.
+    """
+    if log_manager is None:
+        return logging.getLogger(name)
     return log_manager.get_logger(name)
 
 
 def route_console_logging_to_stderr():
     """Redirect stdout console logging to stderr (stdio-transport safety).
 
-    See :meth:`GaiaLogger.route_console_logging_to_stderr`.
+    See :meth:`GaiaLogger.route_console_logging_to_stderr`. Operates on the
+    root logger's handlers, so it is safe both before and after
+    :func:`configure` (before it there is nothing to move; moves by some
+    other library are still caught).
     """
-    log_manager.route_console_logging_to_stderr()
+    for handler in logging.getLogger().handlers:
+        # FileHandler subclasses StreamHandler but its stream is the log
+        # file, so the ``is sys.stdout`` identity check skips it.
+        if (
+            isinstance(handler, logging.StreamHandler)
+            and getattr(handler, "stream", None) is sys.stdout
+        ):
+            handler.setStream(sys.stderr)

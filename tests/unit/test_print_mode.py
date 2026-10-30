@@ -413,9 +413,11 @@ def stub_env(monkeypatch):
     init = MagicMock(return_value=(True, "http://detected:13305/api/v1"))
     monkeypatch.setattr("gaia.cli.initialize_lemonade_for_agent", init)
 
-    from gaia.logger import log_manager
-
-    monkeypatch.setattr(log_manager, "configure_agent_console", MagicMock())
+    manager = MagicMock()
+    monkeypatch.setattr("gaia.logger.configure", lambda *args, **kwargs: manager)
+    # print_mode's logger is bound at import; a logging test that ran first can
+    # leave its level at INFO, which would print a caught traceback to stderr.
+    monkeypatch.setattr("gaia.print_mode.log", MagicMock())
     return init
 
 
