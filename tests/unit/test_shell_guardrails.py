@@ -1624,6 +1624,24 @@ class TestBlanketApproval:
     @pytest.mark.parametrize(
         "command",
         [
+            "sort -^o made.txt src.txt",
+            "sort -%OS:Windows_NT=o% made.txt src.txt",
+            "find sub -dele^te",
+            "find sub %OS:Windows_NT=-delete%",
+            "find sub -delet%COMSPEC:~-1%",
+            "find sub !DEL_FLAG!",
+        ],
+    )
+    def test_full_access_cmd_escapes_and_expansion_may_write(
+        self, command, monkeypatch
+    ):
+        # cmd.exe rewrites these before the program sees them.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
             "find . {-delete,}",
             "find . {-delete,-print}",
             "sort {-o,}x f",

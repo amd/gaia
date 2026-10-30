@@ -3372,6 +3372,9 @@ class ShellToolsMixin:
         # sh does it off Windows, Git's GNU tools do it to their own argv on it.
         if any(char in command for char in "{*?["):
             return False
+        # cmd.exe rewrites ^ escapes and %VAR% / !VAR! expansions the same way.
+        if _pipe_dialect() == "cmd" and any(char in command for char in "^%!"):
+            return False
         steps, parse_error = _parse_line(command, bypass_gates=False)
         if parse_error is not None or not steps:
             return False
