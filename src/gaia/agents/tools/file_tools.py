@@ -873,7 +873,7 @@ class FileSearchToolsMixin:
                 # exactly this result.
                 if not deep_search or directory:
                     # Name the places that were searched. A bare zero reads as
-                    # "there are none", and the model relays it that way (#3576).
+                    # "there are none", and the model relays it that way.
                     where = ", ".join(str(r) for r in roots) or "nowhere"
                     return with_truncation(
                         {
@@ -1132,7 +1132,7 @@ class FileSearchToolsMixin:
 
                 # os.path.exists() is true for a directory too, so without this
                 # check open() below raises IsADirectoryError into the generic
-                # except Exception handler as a raw errno string (amd/gaia#3890).
+                # except Exception handler as a raw errno string.
                 if os.path.isdir(file_path):
                     return {
                         "status": "error",
@@ -1292,7 +1292,7 @@ class FileSearchToolsMixin:
             id_rsa, *.pem...) are never searched.
             """
             try:
-                # Relative to the workspace, not this process's cwd (#3576).
+                # Relative to the workspace, not this process's cwd.
                 directory, unresolved = self._resolve_search_directory(
                     directory or ".", allow_file=True
                 )
@@ -1913,7 +1913,7 @@ class FileSearchToolsMixin:
                     # Validate write access (skip overwrite prompt since we're editing).
                     # Pass the *actual* size of the replacement string so
                     # MAX_WRITE_SIZE_BYTES is enforced — passing 0 here would
-                    # silently bypass the size guardrail (#495 review feedback).
+                    # silently bypass the size guardrail (review feedback).
                     is_allowed, reason = path_validator.validate_write(
                         str(resolved_path),
                         content_size=len(new_content.encode("utf-8")),
