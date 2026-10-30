@@ -6,9 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from gaia_agent_chat.agent import ChatAgent
-from gaia_agent_chat.app import interactive_mode
-from gaia_agent_chat.session import SessionManager
+from gaia_agent.chat_agent import ChatAgent
+from gaia_agent.interactive import interactive_mode
+from gaia_agent.session import SessionManager
 
 
 @pytest.fixture

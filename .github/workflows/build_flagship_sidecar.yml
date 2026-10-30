@@ -152,11 +152,8 @@ jobs:
         run: |
           set -euo pipefail
           uv venv .venv-freeze --python 3.12
-          # gaia-agent-gaia is a hard dependency of gaia-agent-chat (GaiaAgent
-          # subclasses ChatAgent), so chat is installed from the same checkout
-          # rather than resolved from PyPI — the frozen binary must contain the
-          # ChatAgent this commit was developed against, not whatever is
-          # published.
+          # ChatAgent ships inside gaia-agent-gaia (#6099), so the flagship
+          # checkout is all the frozen binary needs from hub/agents/.
           #
           # `rag` is required, not optional, in THIS lane: the agent's own
           # pyproject leaves it out because a wheel gets it from `gaia init`
@@ -176,7 +173,6 @@ jobs:
           # freeze.py bundles its cl100k_base data and fails the build without it.
           uv pip install --python .venv-freeze \
             -e ".[api,rag,diarize,browser]" \
-            -e hub/agents/chat/python \
             -e hub/agents/gaia/python \
             anthropic \
             pandas \

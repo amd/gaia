@@ -83,7 +83,7 @@ SITE_PACKAGES_DIRNAME = "site-packages"
 # install --target` install is only importable via an explicit sys.path
 # mutation in the installing process (see _hot_register) -- a later, unrelated
 # process using the SAME interpreter/venv (e.g. the next `gaia chat`
-# invocation, which imports `gaia_agent_chat` directly rather than through
+# invocation, which imports `gaia_agent` directly rather than through
 # AgentRegistry) would otherwise never see it. Python's `site` module reads
 # every `.pth` file in site-packages at interpreter startup and appends each
 # line to sys.path, so one shared file with one absolute path per installed
@@ -1425,7 +1425,7 @@ def _snapshot_backup(agent_id: str, install_root: Path) -> None:
 # _hot_register (below) makes a freshly-installed wheel importable in the
 # CALLING process only, via an in-memory sys.path mutation. Some callers
 # never construct an AgentRegistry at all -- e.g. `gaia chat`'s CLI handler
-# does a bare `from gaia_agent_chat.agent import ChatAgent` (cli.py) -- so a
+# does a bare `from gaia_agent.agent import GaiaAgent` (cli.py) -- so a
 # later, unrelated `gaia` invocation using the SAME interpreter/venv would
 # still fail to import a wheel agent installed by an earlier `gaia init`.
 # Writing one absolute site-packages path per installed wheel agent into a
@@ -1853,7 +1853,7 @@ def install(
                 # later, unrelated `gaia` invocation using the same
                 # interpreter/venv can import this wheel too (#2358) — closes
                 # the gap for call sites that never touch AgentRegistry (e.g.
-                # `gaia chat`'s hardcoded `import gaia_agent_chat`).
+                # `gaia chat`'s hardcoded `import gaia_agent`).
                 if artifact_kind == ARTIFACT_KIND_WHEEL:
                     _add_wheel_agent_to_active_env_path(
                         install_dir / SITE_PACKAGES_DIRNAME,
