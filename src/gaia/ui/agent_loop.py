@@ -590,9 +590,23 @@ class AgentLoop:
 
         worker.add_done_callback(_clear_active_goals)
         try:
-            done, _ = await asyncio.wait({worker}, timeout=_TICK_TIMEOUT)
+            deadline = time.monotonic() + _TICK_TIMEOUT
+            done = set()
+            # Poll so a cancel or foreground turn is seen mid-tool, not at the timeout.
+            while not done and not stopped_for_foreground.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                done, _ = await asyncio.wait({worker}, timeout=min(0.5, remaining))
             if not done:
-                logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
+                if stopped_for_foreground.is_set():
+                    reason = "tick stopped for user"
+                    logger.info("AgentLoop: tick stopped for a user request")
+                else:
+                    reason = "tick timed out"
+                    logger.warning(
+                        "AgentLoop: tick timed out after %ds", _TICK_TIMEOUT
+                    )
                 cancel_event.set()
                 sse_handler.cancelled.set()
                 finished = await wait_until_off_the_model(
@@ -606,7 +620,7 @@ class AgentLoop:
                         session_id[:8],
                     )
                     self._lingering_ticks[session_id] = worker
-                    return LoopDirective("idle", reason="tick timed out")
+                    return LoopDirective("idle", reason=reason)
         except asyncio.CancelledError:
             cancel_event.set()
             sse_handler.cancelled.set()
@@ -626,12 +640,11 @@ class AgentLoop:
         except Exception as exc:
             logger.error("Could not persist autonomous turn: %s", exc, exc_info=True)
 
+        if stopped_for_foreground.is_set():
+            # A cancel or foreground chat paused this shared tick: its error is
+            # the stop itself, and sibling goals stay queued for the next tick.
+            return LoopDirective("idle", reason="tick stopped for user")
         if result_holder["error"]:
-            if stopped_for_foreground.is_set():
-                # A user cancellation or foreground chat paused this shared
-                # tick. GoalStore already records the cancelled goal, while
-                # sibling goals must stay actionable for the next tick.
-                return LoopDirective("idle", reason="tick stopped for user")
             # The goals are still actionable, so continuing would rerun the
             # failure at once until the hourly budget is gone.
             self._fail_goals(goals[:3], result_holder["error"])
