@@ -25,14 +25,14 @@ import publish_agents_to_hub as pub  # noqa: E402  (path set above)
 
 # Real package dirs (rel_path resolves against REPO_ROOT), fake subprocesses.
 PKG_A = lap.AgentPackage(
-    dist_name="gaia-agent-hello-world",
-    agent_id="hello-world",
-    path=lap.AGENTS_DIR / "hello-world" / "python",
+    dist_name="gaia-agent-chat",
+    agent_id="chat",
+    path=lap.AGENTS_DIR / "chat" / "python",
 )
 PKG_B = lap.AgentPackage(
-    dist_name="gaia-agent-word-count",
-    agent_id="word-count",
-    path=lap.AGENTS_DIR / "word-count" / "python",
+    dist_name="gaia-agent-email",
+    agent_id="email",
+    path=lap.AGENTS_DIR / "email" / "python",
 )
 
 
@@ -81,7 +81,7 @@ def test_select_agents_default_is_all():
 
 
 def test_select_agents_subset_preserves_request_order():
-    assert pub.select_agents([PKG_A, PKG_B], ["word-count", "hello-world"]) == [
+    assert pub.select_agents([PKG_A, PKG_B], ["email", "chat"]) == [
         PKG_B,
         PKG_A,
     ]
@@ -100,30 +100,30 @@ def test_select_agents_unknown_id_fails_loudly():
 def test_all_published(two_agents):
     runner = FakeRunner(
         {
-            ("pack", "hello-world"): (0, "Built wheel"),
-            ("publish", "hello-world"): (0, "Published"),
-            ("pack", "word-count"): (0, "Built wheel"),
-            ("publish", "word-count"): (0, "Published"),
+            ("pack", "chat"): (0, "Built wheel"),
+            ("publish", "chat"): (0, "Published"),
+            ("pack", "email"): (0, "Built wheel"),
+            ("publish", "email"): (0, "Published"),
         }
     )
     outcomes = pub.run_pipeline(_args(), runner)
     assert [o.status for o in outcomes] == [pub.STATUS_PUBLISHED] * 2
     actions = [(a, d) for a, d, _ in runner.calls]
     assert actions == [
-        ("pack", "hello-world"),
-        ("publish", "hello-world"),
-        ("pack", "word-count"),
-        ("publish", "word-count"),
+        ("pack", "chat"),
+        ("publish", "chat"),
+        ("pack", "email"),
+        ("publish", "email"),
     ]
 
 
 def test_publish_cli_gets_hub_url_and_skips_pypi(two_agents):
     runner = FakeRunner(
         {
-            ("pack", "hello-world"): (0, ""),
-            ("publish", "hello-world"): (0, ""),
-            ("pack", "word-count"): (0, ""),
-            ("publish", "word-count"): (0, ""),
+            ("pack", "chat"): (0, ""),
+            ("publish", "chat"): (0, ""),
+            ("pack", "email"): (0, ""),
+            ("publish", "email"): (0, ""),
         }
     )
     pub.run_pipeline(_args(), runner)
@@ -137,47 +137,47 @@ def test_publish_cli_gets_hub_url_and_skips_pypi(two_agents):
 def test_409_without_skip_existing_is_failure(two_agents):
     runner = FakeRunner(
         {
-            ("pack", "hello-world"): (0, ""),
-            ("publish", "hello-world"): (
+            ("pack", "chat"): (0, ""),
+            ("publish", "chat"): (
                 1,
                 f"Error: this version {pub.VERSION_EXISTS_MARKER}: bump it",
             ),
-            ("pack", "word-count"): (0, ""),
-            ("publish", "word-count"): (0, ""),
+            ("pack", "email"): (0, ""),
+            ("publish", "email"): (0, ""),
         }
     )
     outcomes = pub.run_pipeline(_args(), runner)
     by_id = {o.agent_id: o for o in outcomes}
-    assert by_id["hello-world"].status == pub.STATUS_FAILED
-    assert "409" in by_id["hello-world"].detail
-    assert by_id["word-count"].status == pub.STATUS_PUBLISHED
+    assert by_id["chat"].status == pub.STATUS_FAILED
+    assert "409" in by_id["chat"].detail
+    assert by_id["email"].status == pub.STATUS_PUBLISHED
 
 
 def test_409_with_skip_existing_is_skip(two_agents):
     runner = FakeRunner(
         {
-            ("pack", "hello-world"): (0, ""),
-            ("publish", "hello-world"): (
+            ("pack", "chat"): (0, ""),
+            ("publish", "chat"): (
                 1,
                 f"Error: this version {pub.VERSION_EXISTS_MARKER}: bump it",
             ),
-            ("pack", "word-count"): (0, ""),
-            ("publish", "word-count"): (0, ""),
+            ("pack", "email"): (0, ""),
+            ("publish", "email"): (0, ""),
         }
     )
     outcomes = pub.run_pipeline(_args("--skip-existing"), runner)
     by_id = {o.agent_id: o for o in outcomes}
-    assert by_id["hello-world"].status == pub.STATUS_SKIPPED
-    assert by_id["word-count"].status == pub.STATUS_PUBLISHED
+    assert by_id["chat"].status == pub.STATUS_SKIPPED
+    assert by_id["email"].status == pub.STATUS_PUBLISHED
 
 
 def test_non_409_failure_is_failure_even_with_skip_existing(two_agents):
     runner = FakeRunner(
         {
-            ("pack", "hello-world"): (0, ""),
-            ("publish", "hello-world"): (1, "Error: Hub rejected the token (401)"),
-            ("pack", "word-count"): (0, ""),
-            ("publish", "word-count"): (0, ""),
+            ("pack", "chat"): (0, ""),
+            ("publish", "chat"): (1, "Error: Hub rejected the token (401)"),
+            ("pack", "email"): (0, ""),
+            ("publish", "email"): (0, ""),
         }
     )
     outcomes = pub.run_pipeline(_args("--skip-existing"), runner)
@@ -188,16 +188,16 @@ def test_non_409_failure_is_failure_even_with_skip_existing(two_agents):
 def test_pack_failure_skips_publish(two_agents):
     runner = FakeRunner(
         {
-            ("pack", "hello-world"): (1, "build exploded"),
-            ("pack", "word-count"): (0, ""),
-            ("publish", "word-count"): (0, ""),
+            ("pack", "chat"): (1, "build exploded"),
+            ("pack", "email"): (0, ""),
+            ("publish", "email"): (0, ""),
         }
     )
     outcomes = pub.run_pipeline(_args(), runner)
     assert outcomes[0].status == pub.STATUS_FAILED
     assert "pack failed" in outcomes[0].detail
     actions = [(a, d) for a, d, _ in runner.calls]
-    assert ("publish", "hello-world") not in actions
+    assert ("publish", "chat") not in actions
 
 
 # ---------------------------------------------------------------------------
@@ -214,10 +214,10 @@ def test_dry_run_packs_only_and_needs_no_token(monkeypatch):
 
     monkeypatch.setattr(pub, "_require_hub_token", _boom)
 
-    runner = FakeRunner({("pack", "hello-world"): (0, "Built wheel")})
+    runner = FakeRunner({("pack", "chat"): (0, "Built wheel")})
     outcomes = pub.run_pipeline(_args("--dry-run"), runner)
     assert [o.status for o in outcomes] == [pub.STATUS_PACKED]
-    assert [(a, d) for a, d, _ in runner.calls] == [("pack", "hello-world")]
+    assert [(a, d) for a, d, _ in runner.calls] == [("pack", "chat")]
 
 
 # ---------------------------------------------------------------------------
@@ -250,14 +250,14 @@ def test_hub_url_falls_back_to_env(monkeypatch):
 
 def test_main_exit_codes(two_agents, monkeypatch):
     results = {
-        ("pack", "hello-world"): (0, ""),
-        ("publish", "hello-world"): (0, ""),
-        ("pack", "word-count"): (0, ""),
-        ("publish", "word-count"): (0, ""),
+        ("pack", "chat"): (0, ""),
+        ("publish", "chat"): (0, ""),
+        ("pack", "email"): (0, ""),
+        ("publish", "email"): (0, ""),
     }
     monkeypatch.setattr(pub, "_default_runner", FakeRunner(results))
     assert pub.main(["--hub-url", "http://localhost:8788"]) == 0
 
-    results[("publish", "word-count")] = (1, "Error: kaboom")
+    results[("publish", "email")] = (1, "Error: kaboom")
     monkeypatch.setattr(pub, "_default_runner", FakeRunner(results))
     assert pub.main(["--hub-url", "http://localhost:8788"]) == 1

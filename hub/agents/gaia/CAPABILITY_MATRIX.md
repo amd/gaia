@@ -9,12 +9,12 @@ python hub/agents/gaia/python/packaging/capability_matrix.py
 
 ## Definitions
 
-- **tools_count**: the number of registered agent-loop tools for the default construction (prompt_profile='full', memory available): FULL_CORE_TOOLS unioned with every FULL_BUNDLES member in gaia_agent_chat.tool_bundles (which the flagship's registry must equal exactly, including the 8 skill-library tools and the 4 code-index tools), less the load_tools escape hatch, which registers only when GAIA_DYNAMIC_TOOLS=1 turns per-turn tool selection on. This is the REGISTERED size — what the agent can do. It is distinct from the REST surface's 8 functional verbs, a purpose-built streaming facade for external callers.
+- **tools_count**: the number of registered agent-loop tools for the default construction (prompt_profile='full', memory available): FULL_CORE_TOOLS unioned with every FULL_BUNDLES member in gaia_agent_chat.tool_bundles (which the flagship's registry must equal exactly, including the 8 skill-library tools and the 4 code-index tools), less the load_tools escape hatch, which registers only when GAIA_DYNAMIC_TOOLS=1 turns per-turn tool selection on, and set_reasoning_effort, which registers only on a model that grades its reasoning (gpt-oss). This is the REGISTERED size — what the agent can do. It is distinct from the REST surface's 11 functional verbs, a purpose-built streaming facade for external callers.
 - **no quality eval sentinel**: `no quality eval (contract-tested only)` -- the op is contract/shape-tested only; no judged quality bar exists for it.
 
 ## Capability matrix
 
-8 exposed ops (8 REST functional, no MCP surface) and their eval coverage:
+11 exposed ops (11 REST functional, no MCP surface) and their eval coverage:
 
 | Op | Surface | Eval coverage |
 |---|---|---|
@@ -25,13 +25,16 @@ python hub/agents/gaia/python/packaging/capability_matrix.py
 | `query/{run_id}/respond` | REST | no quality eval (contract-tested only) |
 | `query/{run_id}/tool_decision` | REST | no quality eval (contract-tested only) |
 | `sessions/{session_id}/bypass` | REST | no quality eval (contract-tested only) |
+| `sessions/{session_id}/grants` | REST | no quality eval (contract-tested only) |
+| `sessions/{session_id}/internet` | REST | no quality eval (contract-tested only) |
 | `skills` | REST | no quality eval (contract-tested only) |
 
 The committed SSE sequence pins under `python/eval_baselines/query_sequences/` shape-test the `/query` stream (canonical event vocabulary, ordering, single terminal) via `gaia.eval.sidecar_harness` — contract coverage, not a judged quality bar.
 
 ## Surface totals
 
-- Registered agent-loop tools: **95** (CORE 16 + 25 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
+- Registered agent-loop tools: **101** (CORE 16 + 27 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
+  - `audio_generation`: 3
   - `browser_nav`: 2
   - `browser_use`: 6
   - `cli_setup`: 3
@@ -40,12 +43,13 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `data`: 6
   - `desktop`: 3
   - `email`: 5
+  - `email_threads`: 3
   - `file_browse`: 3
   - `file_discovery`: 5
   - `file_edit`: 3
   - `file_search`: 3
   - `image_gen`: 3
-  - `loop_control`: 3
+  - `loop_control`: 4
   - `media_transcription`: 4
   - `memory`: 5
   - `rag_index`: 5
@@ -66,7 +70,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `search_skill_hub`
   - `skill_status`
   - `unload_skill`
-- REST functional verbs: **8** (12 total operations in the sidecar contract, including the health/version/init probes)
+- REST functional verbs: **11** (15 total operations in the sidecar contract, including the health/version/init probes)
   - `memory`
   - `query`
   - `query/{run_id}/cancel`
@@ -74,6 +78,9 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `query/{run_id}/respond`
   - `query/{run_id}/tool_decision`
   - `sessions/{session_id}/bypass`
+  - `sessions/{session_id}/grants`
+  - `sessions/{session_id}/grants`
+  - `sessions/{session_id}/internet`
   - `skills`
 - MCP tools: **0** (see MCP Scope Decision)
 - Eval suites: **2**

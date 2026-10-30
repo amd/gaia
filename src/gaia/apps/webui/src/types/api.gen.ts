@@ -24,11 +24,13 @@ export interface ApiSchemas {
   ChatModelRequest: ChatModelRequest;
   ChatRequest: ChatRequest;
   CommandOutputResponse: CommandOutputResponse;
+  CommitRequest: CommitRequest;
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
   ContextRequest: ContextRequest;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
+  CustomModelRequest: CustomModelRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
@@ -46,6 +48,8 @@ export interface ApiSchemas {
   FileStatusRequest: FileStatusRequest;
   FileStatusResponse: FileStatusResponse;
   FileUploadResponse: FileUploadResponse;
+  FolderRequest: FolderRequest;
+  FollowUpRequest: FollowUpRequest;
   ForwardConnectionRequest: ForwardConnectionRequest;
   GoalCreate: GoalCreate;
   GoalStatusUpdate: GoalStatusUpdate;
@@ -58,11 +62,13 @@ export interface ApiSchemas {
   InferenceStatsResponse: InferenceStatsResponse;
   InitTaskInfo: InitTaskInfo;
   InstallRequest: InstallRequest;
+  InternetRequest: InternetRequest;
   KnowledgeCreate: KnowledgeCreate;
   KnowledgeUpdate: KnowledgeUpdate;
   LimitRequest: LimitRequest;
   LoadModelRequest: LoadModelRequest;
   LoadedModelInfo: LoadedModelInfo;
+  McpOutputResponse: McpOutputResponse;
   MemorySettingsBody: MemorySettingsBody;
   MessageListResponse: MessageListResponse;
   MessageResponse: MessageResponse;
@@ -74,18 +80,24 @@ export interface ApiSchemas {
   ParseScheduleResponse: ParseScheduleResponse;
   PermissionModeRequest: PermissionModeRequest;
   PreflightReport: PreflightReport;
+  PullRequestRequest: PullRequestRequest;
   QuickLink: QuickLink;
   RestartRequest: RestartRequest;
+  RetryChoiceRequest: RetryChoiceRequest;
+  RetryWithRequest: RetryWithRequest;
   RunningAnswer: RunningAnswer;
   RunningIndexJob: RunningIndexJob;
   ScheduleListResponse: ScheduleListResponse;
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
   ScriptedUserRequest: ScriptedUserRequest;
+  SearchSnippet: SearchSnippet;
   SelectModelRequest: SelectModelRequest;
   SessionListResponse: SessionListResponse;
   SessionPinRequest: SessionPinRequest;
   SessionResponse: SessionResponse;
+  SessionSearchResponse: SessionSearchResponse;
+  SessionSearchResult: SessionSearchResult;
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
   SetupRunRequest: SetupRunRequest;
@@ -103,6 +115,7 @@ export interface ApiSchemas {
   TurnSummaryFile: TurnSummaryFile;
   TurnSummaryLiveData: TurnSummaryLiveData;
   TurnSummaryModel: TurnSummaryModel;
+  TurnSummaryOutput: TurnSummaryOutput;
   TurnSummaryPage: TurnSummaryPage;
   TurnSummaryResponse: TurnSummaryResponse;
   UndoRequest: UndoRequest;
@@ -207,7 +220,10 @@ export interface AgentStepResponse {
   id: number;
   label: string;
   latencyMs?: number | null;
+  mcpOutput?: McpOutputResponse | null;
   mcpServer?: string | null;
+  mcpServerLabel?: string | null;
+  mcpTool?: string | null;
   narration?: string | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
@@ -242,6 +258,13 @@ export interface FileListResponse {
     [k: string]: unknown | undefined;
   }[];
   total?: number;
+}
+/**
+ * The text an MCP tool returned, capped for the tool row.
+ */
+export interface McpOutputResponse {
+  text?: string;
+  truncated?: boolean;
 }
 /**
  * Request to attach a document to a session.
@@ -316,6 +339,14 @@ export interface ChatRequest {
   session_id: string;
   stream?: boolean;
 }
+export interface CommitRequest {
+  /**
+   * True only after the user saw and confirmed the commit.
+   */
+  confirmed?: boolean;
+  message: string;
+  root: string;
+}
 export interface ConfigureRequest {
   config?: {
     [k: string]: unknown | undefined;
@@ -365,11 +396,19 @@ export interface CreateSessionRequest {
   agent_type?: string | null;
   device?: string | null;
   document_ids?: string[];
+  folders?: string[];
   mail_provider?: string | null;
   model?: string | null;
   private?: boolean;
   system_prompt?: string | null;
   title?: string | null;
+}
+/**
+ * ``quant`` picks a quantization; None lets GAIA choose one that fits.
+ */
+export interface CustomModelRequest {
+  quant?: string | null;
+  url: string;
 }
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];
@@ -401,6 +440,7 @@ export interface DocumentListResponse {
  */
 export interface DocumentResponse {
   chunk_count: number;
+  error_kind?: string | null;
   file_size: number;
   filename: string;
   filepath: string;
@@ -521,6 +561,16 @@ export interface FileUploadResponse {
   size: number;
   url: string;
 }
+export interface FolderRequest {
+  /**
+   * An absolute folder path.
+   */
+  path: string;
+}
+export interface FollowUpRequest {
+  session_id: string;
+  text: string;
+}
 /**
  * Body for ``POST /v1/connections/{provider}`` (#1292).
  *
@@ -581,6 +631,7 @@ export interface IndexFolderResponse {
   errors?: string[];
   failed?: number;
   indexed?: number;
+  skipped?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];
@@ -603,8 +654,11 @@ export interface InferenceCommitItem {
  */
 export interface InferenceStatsResponse {
   input_tokens?: number;
+  model?: string | null;
   output_tokens?: number;
   place?: string | null;
+  retried?: boolean | null;
+  seconds?: number | null;
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
@@ -623,6 +677,9 @@ export interface InstallRequest {
   id: string;
   trust_native?: boolean;
   version?: string | null;
+}
+export interface InternetRequest {
+  on: boolean;
 }
 export interface KnowledgeCreate {
   category?: string;
@@ -714,6 +771,7 @@ export interface TurnSummaryResponse {
   files?: TurnSummaryFile[];
   live_data?: TurnSummaryLiveData;
   model?: TurnSummaryModel | null;
+  outputs?: TurnSummaryOutput[];
   pages?: TurnSummaryPage[];
   sites?: string[];
 }
@@ -757,6 +815,17 @@ export interface TurnSummaryModel {
   provider: string;
   provider_name: string;
   remote: boolean;
+}
+/**
+ * Something the turn made besides a file: an image, an indexed document,
+ * a memory or a scheduled task.
+ */
+export interface TurnSummaryOutput {
+  detail?: string | null;
+  kind: string;
+  name: string;
+  path?: string | null;
+  ref?: string | null;
 }
 /**
  * A web page the turn read, or a search hit when it read none.
@@ -861,11 +930,30 @@ export interface PreflightReport {
   tier?: string;
   warnings?: string[];
 }
+export interface PullRequestRequest {
+  body?: string;
+  /**
+   * True only after the user saw and confirmed the PR.
+   */
+  confirmed?: boolean;
+  root: string;
+  title: string;
+}
 /**
  * ``confirm`` is required to reload a model on a server GAIA does not run.
  */
 export interface RestartRequest {
   confirm?: boolean;
+}
+export interface RetryChoiceRequest {
+  keep: "original" | "retry";
+  message_id: number;
+  session_id: string;
+}
+export interface RetryWithRequest {
+  message_id: number;
+  model: string;
+  session_id: string;
 }
 /**
  * A chat whose answer is still being written.
@@ -893,15 +981,18 @@ export interface ScheduleListResponse {
  */
 export interface ScheduleResponse {
   created_at?: string | null;
+  description: string;
   error_count?: number;
   id: string;
   interval_seconds: number;
+  last_error?: string | null;
   last_result?: string | null;
   last_run_at?: string | null;
   name: string;
   next_run_at?: string | null;
   prompt: string;
   run_count?: number;
+  running?: boolean;
   schedule_config?: string | null;
   session_id?: string | null;
   status: string;
@@ -918,6 +1009,14 @@ export interface ScheduleResultsResponse {
  */
 export interface ScriptedUserRequest {
   decline_commands?: string[];
+}
+/**
+ * Text around a search hit, split so the UI can highlight ``match``.
+ */
+export interface SearchSnippet {
+  after: string;
+  before: string;
+  match: string;
 }
 export interface SelectModelRequest {
   model: string;
@@ -963,6 +1062,23 @@ export interface SessionPinRequest {
   pinned: boolean;
 }
 /**
+ * Chats matching a search query, newest first, at most ``limit``.
+ */
+export interface SessionSearchResponse {
+  query: string;
+  results: SessionSearchResult[];
+  truncated?: boolean;
+}
+/**
+ * One chat that matches a search, with where the first hit was.
+ */
+export interface SessionSearchResult {
+  field: "title" | "message";
+  session_id: string;
+  snippet: SearchSnippet;
+  title: string;
+}
+/**
  * Current user settings.
  */
 export interface SettingsResponse {
@@ -995,9 +1111,11 @@ export interface SettingsUpdateRequest {
   dynamic_tools?: boolean | null;
 }
 /**
- * ``skip_chat_model`` when the chat runs on a cloud provider.
+ * ``skip_chat_model`` when the chat runs on a cloud provider;
+ * ``gaia_lemonade`` to set up GAIA's own server instead of the user's.
  */
 export interface SetupRunRequest {
+  gaia_lemonade?: boolean;
   skip_chat_model?: boolean;
 }
 export interface StartAgentServerRequest {
@@ -1039,6 +1157,7 @@ export interface SystemStatus {
   model_size_gb?: number | null;
   probe_warnings?: string[];
   processor_name?: string | null;
+  setup_error?: string | null;
   start_command?: string | null;
   start_instruction?: string | null;
   time_to_first_token?: number | null;

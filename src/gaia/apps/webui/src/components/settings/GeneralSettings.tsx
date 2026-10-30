@@ -4,7 +4,9 @@
 import { useChatStore } from '../../stores/chatStore';
 import type { ThemePreference } from '../../utils/theme';
 import { DesktopAppSettings } from './DesktopAppSettings';
+import { UpdatesSection } from './UpdatesSection';
 import { DEFAULT_CUSTOM, PALETTES, type CustomColors } from '../../utils/palette';
+import { formatShortcut } from '../../utils/platform';
 
 const THEMES: Array<{ value: ThemePreference; label: string }> = [
     { value: 'light', label: 'Light' },
@@ -16,10 +18,10 @@ const SHORTCUTS: Array<[string, string]> = [
     ['Enter', 'Send'],
     ['Shift+Enter', 'New line'],
     ['Esc', 'Stop the answer'],
-    ['Ctrl+Shift+O', 'New chat'],
-    ['Ctrl+K', 'Search chats'],
-    ['Ctrl+B', 'Show or hide the sidebar'],
-    ['Ctrl+,', 'Settings'],
+    ['Mod+Shift+O', 'New chat'],
+    ['Mod+K', 'Search chats'],
+    ['Mod+B', 'Show or hide the sidebar'],
+    ['Mod+,', 'Settings'],
 ];
 
 export function GeneralSettings() {
@@ -53,6 +55,7 @@ export function GeneralSettings() {
                 </div>
             </div>
             <DesktopAppSettings />
+            <UpdatesSection />
             <div className="settings-field">
                 <span className="settings-label" id="palette-label">Colors</span>
                 <div className="palette-grid" role="radiogroup" aria-labelledby="palette-label">
@@ -105,7 +108,7 @@ export function GeneralSettings() {
                 <dl className="shortcut-list">
                     {SHORTCUTS.map(([keys, what]) => (
                         <div key={keys} className="shortcut-row">
-                            <dt><kbd>{keys}</kbd></dt>
+                            <dt><kbd>{formatShortcut(keys)}</kbd></dt>
                             <dd>{what}</dd>
                         </div>
                     ))}

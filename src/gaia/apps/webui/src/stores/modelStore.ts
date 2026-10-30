@@ -21,6 +21,7 @@ interface ModelState {
     /** Friendly names the backend gave, by model id. */
     names: Record<string, string>;
     refresh: () => Promise<void>;
+    retryNow: () => void;
     select: (model: string) => Promise<void>;
     queue: (model: string | null) => void;
     applyQueued: () => Promise<void>;
@@ -30,7 +31,37 @@ interface ModelState {
 
 const RESTORE_RETRY_MS = 5_000;
 const RESTORE_RETRIES = 24;
+/** A failed read is retried, doubling up to the cap: the backend may still be starting. */
+export const MODEL_RETRY_INITIAL_MS = 1_000;
+export const MODEL_RETRY_MAX_MS = 30_000;
 let restoreRetries = 0;
+let namesRequested = false;
+let failRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let failRetryMs = MODEL_RETRY_INITIAL_MS;
+
+function clearFailRetry(): void {
+    if (failRetryTimer) clearTimeout(failRetryTimer);
+    failRetryTimer = null;
+}
+
+/** Forget pending retries and backoff, so each test starts from a fresh launch. */
+export function resetModelRetryForTests(): void {
+    clearFailRetry();
+    failRetryMs = MODEL_RETRY_INITIAL_MS;
+    restoreRetries = 0;
+    namesRequested = false;
+}
+
+/** Local models' friendly names, read once so every surface names a model as the chip does. */
+async function loadLocalNames(remember: ModelState['rememberNames']): Promise<void> {
+    try {
+        const r = await api.listProviderModels('local');
+        if (r?.models) remember(r.models);
+    } catch (err) {
+        namesRequested = false;
+        log.system.warn('Model names unavailable; raw model ids show until the model list loads', err);
+    }
+}
 
 export const useModelStore = create<ModelState>((set, get) => ({
     active: null,
@@ -40,8 +71,14 @@ export const useModelStore = create<ModelState>((set, get) => ({
     queueError: null,
     names: {},
     refresh: async () => {
+        if (!namesRequested) {
+            namesRequested = true;
+            void loadLocalNames(get().rememberNames);
+        }
         try {
             const active = await api.getActiveModel();
+            clearFailRetry();
+            failRetryMs = MODEL_RETRY_INITIAL_MS;
             const r = active.restore;
             // The model server is still starting; the saved model is checked once it answers.
             if (r?.status === 'pending' && restoreRetries < RESTORE_RETRIES) {
@@ -57,7 +94,19 @@ export const useModelStore = create<ModelState>((set, get) => ({
             });
         } catch (err) {
             set({ error: err instanceof Error ? err.message : String(err) });
+            // Without this the chip says "Model" for the whole session when the
+            // window loaded before the backend listened.
+            if (!failRetryTimer) {
+                failRetryTimer = setTimeout(() => { failRetryTimer = null; void get().refresh(); }, failRetryMs);
+                failRetryMs = Math.min(failRetryMs * 2, MODEL_RETRY_MAX_MS);
+            }
         }
+    },
+    /** Read the model now if the last read failed (the backend just became reachable). */
+    retryNow: () => {
+        if (!failRetryTimer) return;
+        clearFailRetry();
+        void get().refresh();
     },
     select: async (model) => {
         const active = await api.selectModel(model);
@@ -101,6 +150,18 @@ useChatStore.subscribe((state, prev) => {
     }
 });
 
+/** Re-render when friendly names arrive; pair with displayModelName in render. */
+export function useModelNames(): Record<string, string> {
+    return useModelStore((s) => s.names);
+}
+
+/** Same local model: Lemonade lists a registered `user.X` as `X`, in any case. */
+export function sameModelId(a: string | null | undefined, b: string | null | undefined): boolean {
+    if (!a || !b) return false;
+    const bare = (id: string) => id.toLowerCase().replace(/^user\./, '');
+    return bare(a) === bare(b);
+}
+
 /** The friendly name the backend gave a model, else its short id. */
 export function displayModelName(model: string): string {
     const state = useModelStore.getState();
@@ -112,7 +173,7 @@ export function displayModelName(model: string): string {
 /** The backend's answer to where a session's chat is answered (`inference_remote: null` = unknown). */
 export type InferenceLocation = Pick<
     Session,
-    'inference_remote' | 'inference_provider_name' | 'inference_description'
+    'inference_remote' | 'inference_provider_name' | 'inference_description' | 'effective_model'
 >;
 
 /**
@@ -144,7 +205,11 @@ export function inferencePlace(
     active: ActiveModel | null,
     location: InferenceLocation | undefined,
 ): InferencePlace | null {
-    if (active?.remote) {
+    // The chat names a model this window's pick doesn't (another window or the TUI
+    // changed it): its own location goes with that name, or the chip contradicts itself.
+    const pickIsStale =
+        !!location?.effective_model && !!active?.model && location.effective_model !== active.model;
+    if (active?.remote && !(pickIsStale && location?.inference_remote !== undefined)) {
         return {
             remote: true,
             label: active.provider === 'fireworks' ? 'Fireworks AI' : 'AMD LLM Gateway',
@@ -191,8 +256,40 @@ export function selectChipModel(
     return session?.effective_model || active?.model || null;
 }
 
+/** The model id without its cloud provider prefix ("fireworks." or "amd."). */
+function stripProviderPrefix(model: string): string {
+    return /^(fireworks|amd)\./.test(model) ? model.slice(model.indexOf('.') + 1) : model;
+}
+
 /** The model name without its provider prefix or catalogue path. */
 export function shortModelName(model: string): string {
-    const withoutProvider = /^(fireworks|amd)\./.test(model) ? model.slice(model.indexOf('.') + 1) : model;
+    const withoutProvider = stripProviderPrefix(model);
     return withoutProvider.slice(withoutProvider.lastIndexOf('/') + 1);
+}
+
+/**
+ * A label per model for one list, keyed by id. Names already unique are kept;
+ * models that would share one show as much of their id as tells them apart.
+ */
+export function distinctModelLabels(models: Array<{ id: string; display_name?: string | null }>): Record<string, string> {
+    const labels: Record<string, string> = {};
+    for (const m of models) labels[m.id] = m.display_name || displayModelName(m.id);
+    const byLabel = new Map<string, string[]>();
+    for (const m of models) byLabel.set(labels[m.id], [...(byLabel.get(labels[m.id]) ?? []), m.id]);
+    for (const ids of byLabel.values()) {
+        if (ids.length < 2) continue;
+        const paths = ids.map((id) => stripProviderPrefix(id).split('/'));
+        let tails = ids;
+        for (let n = 1; n <= Math.max(...paths.map((p) => p.length)); n++) {
+            const candidate = paths.map((p) => p.slice(-n).join('/'));
+            if (new Set(candidate).size === candidate.length) { tails = candidate; break; }
+        }
+        ids.forEach((id, i) => { labels[id] = tails[i]; });
+    }
+    return labels;
+}
+
+/** A cloud provider's name as people know it; an unknown id is shown as given. */
+export function cloudProviderName(provider: string): string {
+    return provider === 'fireworks' ? 'Fireworks AI' : provider === 'amd' ? 'AMD LLM Gateway' : provider;
 }

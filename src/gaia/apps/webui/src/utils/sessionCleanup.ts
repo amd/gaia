@@ -31,6 +31,8 @@ interface DraftCheckState {
     messages: unknown[];
     isStreaming: boolean;
     runningSessionIds: string[];
+    /** Messages typed into each chat that have not gone out yet. */
+    messageQueues?: Record<string, unknown[]>;
 }
 
 /**
@@ -43,6 +45,8 @@ export function isAbandonedDraft(sessionId: string, state: DraftCheckState): boo
     if (s.title !== DRAFT_TITLE) return false;
     if ((s.message_count ?? 0) !== 0) return false;
     if (state.runningSessionIds.includes(sessionId)) return false;
+    // Messages still waiting to go out make it a chat in progress.
+    if (state.messageQueues?.[sessionId]?.length) return false;
     // `messages` only reflects the CURRENT session, so it's only authoritative
     // for the current one. A background session relies on message_count above.
     if (state.currentSessionId === sessionId) {
@@ -66,6 +70,7 @@ export async function cleanupAbandonedDraft(sessionId: string | null): Promise<b
         messages: store.messages,
         isStreaming: store.isStreaming,
         runningSessionIds: store.runningSessionIds,
+        messageQueues: store.messageQueues,
     };
     if (!isAbandonedDraft(sessionId, state)) return false;
 

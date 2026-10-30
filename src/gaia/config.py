@@ -437,6 +437,10 @@ class GaiaConfig:
             )
         if "context_sizes" in data:
             cls._check_context_sizes(data["context_sizes"], config_file)
+        if "custom_models" in data:
+            from gaia.llm.custom_models import validate_entries
+
+            validate_entries(data["custom_models"], config_file)
         kwargs = {k: v for k, v in data.items() if k in known}
         if "llamacpp_backend" in kwargs:
             kwargs["llamacpp_backend"] = cls._check_llamacpp_backend(

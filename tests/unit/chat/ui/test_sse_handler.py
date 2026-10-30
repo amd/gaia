@@ -14,6 +14,7 @@ import time
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.ui import sse_handler as sse_module
 from gaia.ui.sse_handler import (
     SSEOutputHandler,
     _fix_double_escaped,
@@ -264,8 +265,23 @@ class TestPrintThought:
         assert len(events) == 1
         assert events[0] == {
             "type": "thinking",
-            "content": "I should search for files first",
+            "content": "I should search for files first\n",
         }
+
+    def test_a_thought_already_ending_in_a_newline_is_not_doubled(self, handler):
+        handler.print_thought("Plan step\n")
+        assert _drain(handler)[0]["content"] == "Plan step\n"
+
+    def test_an_empty_thought_stays_empty(self, handler):
+        handler.print_thought("")
+        assert _drain(handler)[0]["content"] == ""
+
+    def test_adjacent_thoughts_do_not_fuse_when_joined(self, handler):
+        handler.print_thought("Executing plan step")
+        handler.print_thought("Start with the README")
+        joined = "".join(e["content"] for e in _drain(handler))
+        assert "stepStart" not in joined
+        assert joined == "Executing plan step\nStart with the README\n"
 
 
 # ===========================================================================
@@ -482,12 +498,16 @@ class TestPrettyPrintJsonArguments:
         assert len(events) == 1
         assert events[0]["type"] == "tool_args"
 
-    def test_non_dict_data_with_arguments_title_emits_tool_result(self, handler):
-        """If data is not a dict, even with title='Arguments', fall through."""
-        handler.pretty_print_json("just a string", title="Arguments")
+    def test_non_dict_arguments_are_still_arguments_not_a_result(self, handler, caplog):
+        """Malformed arguments must not pose as the tool's result before it runs."""
+        handler._last_tool_name = "test_tool"
+        with caplog.at_level("WARNING", logger="gaia.ui.sse_handler"):
+            handler.pretty_print_json("just a string", title="Arguments")
         events = _drain(handler)
         assert len(events) == 1
-        assert events[0]["type"] == "tool_result"
+        assert events[0]["type"] == "tool_args"
+        assert events[0]["args"] == {}
+        assert "test_tool" in caplog.text and "just a string" in caplog.text
 
 
 # ===========================================================================
@@ -1263,16 +1283,26 @@ class TestResponseEnvelopeNeverStreamsRaw:
             handler.print_streaming_text(piece)
             assert _content(_drain(handler)) == [], handler._stream_buffer[:80]
 
-    def test_huge_envelope_token_by_token_is_not_quadratic(self, handler):
+    def test_huge_envelope_token_by_token_is_not_quadratic(self, handler, monkeypatch):
         """A 400 KB file write streamed 4 chars at a time scans each char once."""
         content = 'x \\"{y}\\" ' * 40_000
         envelope = (
             '{"thought": "t", "tool": "write_file", '
             f'"tool_args": {{"file_path": "a.md", "content": "{content}"}}}}'
         )
-        started = time.monotonic()
+        # Counted, not timed: a rescan per token is ~2e10 chars, a resumed scan
+        # ~4e5, and wall time on a loaded runner can't tell them apart reliably.
+        scanned = []
+        real_scan = sse_module._json_object_end
+
+        def counting_scan(text, start, resume=None):
+            scanned.append(len(text) - (resume[0] if resume else start))
+            return real_scan(text, start, resume)
+
+        monkeypatch.setattr(sse_module, "_json_object_end", counting_scan)
         assert _content(_stream(handler, _pieces(envelope, 4))) == []
-        assert time.monotonic() - started < 5
+        assert len(scanned) > len(envelope) // 8, "the envelope was never scanned"
+        assert sum(scanned) <= 2 * len(envelope), sum(scanned)
 
     def test_think_tag_inside_an_envelope_string_is_content(self, handler):
         envelope = (

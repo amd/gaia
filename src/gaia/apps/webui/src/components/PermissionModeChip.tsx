@@ -7,8 +7,9 @@ import { Popover } from './Popover';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import type { PermissionMode } from '../types';
+import { announcePermissionMode, usePermissionModeEvents } from '../utils/permissionModeEvents';
 
-const MODES: Array<{ mode: PermissionMode; label: string; note: string }> = [
+export const MODES: Array<{ mode: PermissionMode; label: string; note: string }> = [
     { mode: 'ask', label: 'Ask before acting', note: 'GAIA asks before it edits files, runs commands or uses tools that change things.' },
     { mode: 'full_access', label: 'Full access', note: 'Runs every tool and command without asking, in this chat only.' },
 ];
@@ -38,6 +39,8 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
         return () => { cancelled = true; };
     }, [sessionId, draftMode]);
 
+    usePermissionModeEvents(sessionId, setMode);
+
     const apply = useCallback(async (next: PermissionMode) => {
         if (next === 'full_access' && !confirming) {
             setConfirming(true);
@@ -46,7 +49,9 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
         setError(null);
         try {
             if (sessionId) {
-                setMode((await api.setPermissionMode(sessionId, next)).mode);
+                const saved = (await api.setPermissionMode(sessionId, next)).mode;
+                setMode(saved);
+                announcePermissionMode(sessionId, saved);
             } else {
                 setDraftMode(next);
                 setMode(next);

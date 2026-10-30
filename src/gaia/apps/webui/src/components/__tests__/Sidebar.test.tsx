@@ -8,6 +8,7 @@ import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
 import type { Session } from '../../types';
+import * as messageQueue from '../../utils/messageQueue';
 
 vi.mock('../../services/api');
 
@@ -32,13 +33,14 @@ beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date(2026, 8, 29, 12));
     mockedApi.deleteSession.mockResolvedValue(undefined);
+    mockedApi.searchSessions.mockResolvedValue({ query: '', results: [] });
     useModelStore.setState({
         active: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma', remote: false, is_default: true },
     });
     useChatStore.setState({
         sessions: SESSIONS, currentSessionId: null, runningSessionIds: [], pendingDeleteIds: [],
         sidebarOpen: true, sidebarCollapsed: false, settingsSection: null,
-        showMemoryDashboard: false, showSchedules: false,
+        showMemoryDashboard: false, showSchedules: false, messageQueues: {},
     });
 });
 
@@ -58,8 +60,26 @@ describe('Sidebar', () => {
     it('filters chats by search', () => {
         render(<Sidebar onNewChat={vi.fn()} />);
         fireEvent.change(screen.getByRole('searchbox', { name: /Search chats/ }), { target: { value: 'trip' } });
-        expect(screen.getByText('Plan the trip')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Plan the trip' })).toBeInTheDocument();
         expect(screen.queryByText('Fix the build')).not.toBeInTheDocument();
+    });
+
+    it('puts search above New chat, expanded and collapsed', () => {
+        const above = (a: HTMLElement, b: HTMLElement) =>
+            !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+        const { unmount } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(above(
+            screen.getByRole('searchbox', { name: /Search chats/ }),
+            screen.getByRole('button', { name: 'New chat' }),
+        )).toBe(true);
+        unmount();
+
+        useChatStore.setState({ sidebarCollapsed: true });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(above(
+            screen.getByRole('button', { name: 'Search chats' }),
+            screen.getByRole('button', { name: /New chat/ }),
+        )).toBe(true);
     });
 
     it('New chat calls onNewChat', () => {
@@ -99,6 +119,36 @@ describe('Sidebar', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Confirm delete Tax questions' }));
         await waitFor(() => expect(mockedApi.deleteSession).toHaveBeenCalledExactlyOnceWith('c'));
         await waitFor(() => expect(screen.queryByText('Tax questions')).not.toBeInTheDocument());
+    });
+
+    it('shows a chat still holding messages to send, and flags one that failed', () => {
+        useChatStore.getState().updateQueue('b', (q) => messageQueue.enqueue(messageQueue.enqueue(q, 'one', 'queued'), 'two', 'queued'));
+        useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(q, 'bad', 'failed'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(screen.getByText('2 to send')).toBeInTheDocument();
+        expect(screen.getByText('1 not sent')).toBeInTheDocument();
+    });
+
+    it("says a delete takes the chat's unsent messages with it, and does", async () => {
+        useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(messageQueue.enqueue(q, 'one', 'queued'), 'two', 'failed'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Delete Tax questions' }));
+        expect(screen.getByText('Delete 2 unsent?')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm delete Tax questions and its 2 unsent messages' }));
+        await waitFor(() => expect(mockedApi.deleteSession).toHaveBeenCalledExactlyOnceWith('c'));
+        await waitFor(() => expect(useChatStore.getState().messageQueues.c).toBeUndefined());
+    });
+
+    it('keeps the unsent messages when the delete fails', async () => {
+        mockedApi.deleteSession.mockRejectedValue(new Error('Database is locked'));
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(q, 'keep me', 'queued'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Delete Tax questions' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm delete Tax questions and its 1 unsent message' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked');
+        expect(useChatStore.getState().messageQueues.c.map((m) => m.text)).toEqual(['keep me']);
     });
 
     it('keeps the chat and says why when delete fails', async () => {

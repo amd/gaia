@@ -266,9 +266,158 @@ export interface InferenceStats {
     output_tokens: number;
     /** The agent's own step count for the turn. */
     steps?: number | null;
+    /** The model that wrote the answer; absent on answers saved before it was recorded. */
+    model?: string | null;
+    /** Set when the answer came from Retry with…: how long its model took, loading included. */
+    seconds?: number | null;
+    /** True only for an answer kept from Retry with…. */
+    retried?: boolean | null;
     /** Where the turn was answered: "on your GPU", "via Fireworks AI". */
     place?: string | null;
 }
+
+/** Estimated tokens the next model call holds, by kind (GET /api/chat/context). */
+export interface ContextUsage {
+    window: number;
+    reply_reserve: number;
+    system: number;
+    tools: number;
+    documents: number;
+    history: number;
+    query: number;
+    used: number;
+    history_budget: number;
+    history_used: number;
+    turns_in_view: number;
+    turns_hidden: number;
+    /** Oldest turns the next overflow drops, by their question. */
+    at_risk: string[];
+    at_risk_tokens: number;
+    /** Parts of `system` the skills and memory fragments take. */
+    skills?: number;
+    memory?: number;
+    /** Part of `tools` the tool schemas take; the rest is replayed tool activity. */
+    tool_definitions?: number;
+    /** Between turns only: whether the counts came from the model's own tokenizer. */
+    tokenizer?: { exact: true; model: string } | { exact: false; reason: string };
+    /** Between turns only: the panel's categories; their tokens add up to `used`. */
+    categories?: Array<{ key: string; label: string; tokens: number }>;
+    tool_loading?: { loaded: string[]; on_demand: string[] };
+    model?: string | null;
+    /** A cloud model's own window from the catalog, when larger than what GAIA admits. */
+    model_window?: number | null;
+    /** What the agent moved out of the window to keep going; absent when it reports nothing. */
+    context_state?: ContextState | null;
+}
+
+/** The agent's own account of context it put away or summarized (``context_state()``). */
+export interface ContextState {
+    /** Tool results already used, replaced by a re-read handle. */
+    put_away?: { results: number; tokens: number } | null;
+    /** Older turns folded into a rolling summary; originals stay searchable. */
+    summarized?: { turns: number; tokens: number; summary_tokens: number } | null;
+}
+
+/** GET /api/chat/performance/{id}: one turn's measured performance. Null = not measured. */
+export interface TurnPerformance {
+    message_id: number;
+    created_at: string;
+    model: string | null;
+    time: {
+        wall_seconds: number;
+        model_seconds: number | null;
+        gaia_seconds: number | null;
+        tool_seconds: number;
+        waiting_seconds: number;
+        own_seconds: number | null;
+    };
+    first_token_seconds: number | null;
+    /** `server`: the model server's own timing. `client`: measured by GAIA on the stream. */
+    first_token_source?: 'server' | 'client' | null;
+    prefill_tokens_per_second: number | null;
+    /** `client` means derived from GAIA's first-token time, so it includes network time. */
+    prefill_source?: 'server' | 'client' | null;
+    generation_tokens_per_second: number | null;
+    generation_source?: 'server' | 'client' | null;
+    model_calls: number;
+    tokens_in: number | null;
+    tokens_new: number | null;
+    tokens_cached: number | null;
+    tokens_out: number | null;
+    /** The last request's whole templated prompt, as the server counted it. */
+    last_prompt_tokens: number | null;
+    tool_calls: number;
+    /** All tool time the step timer measured, the same total as the time split. */
+    tool_seconds_total?: number;
+    /** A null name is tool time measured outside any recorded step. */
+    tools: Array<{ name: string | null; seconds: number | null }>;
+    loads: Array<{ model: string | null; seconds: number; replaced?: string[]; during?: 'request' }>;
+    cost: { kind: 'local' | 'estimate' | 'unknown'; usd: number | null };
+    /** Why a value is unknown, keyed by field. */
+    unknown?: Partial<Record<'first_token_seconds' | 'prefill_tokens_per_second' | 'generation_tokens_per_second' | 'tokens' | 'tokens_cached' | 'time', string>>;
+}
+
+export interface ChatPerformance {
+    /** The newest answer's id; the last turn is unknown when `turns` has no record of it. */
+    latest_message_id: number | null;
+    turns: TurnPerformance[];
+    totals: {
+        turns: number;
+        wall_seconds: number | null;
+        model_seconds: number | null;
+        gaia_seconds: number | null;
+        tokens_in: number | null;
+        tokens_cached: number | null;
+        tokens_out: number | null;
+        tool_calls: number | null;
+        loads: number;
+        load_seconds: number | null;
+        usd: number | null;
+        unpriced_turns: number;
+    };
+    /** The model as Lemonade reports it now. */
+    now: {
+        model: string | null;
+        /** `local`, a cloud provider name, `cloud`, or `unknown`. */
+        provider: string;
+        loaded: boolean | null;
+        device: string | null;
+        backend: string | null;
+        ctx_size: number | null;
+        weights_gb: number | null;
+        kv_cache_gb: number | null;
+        free_gb: number | null;
+        error: string | null;
+    };
+}
+
+/** A retried answer from another model, held until one is kept. */
+export interface RetryResult {
+    message_id: number;
+    model: string;
+    content: string;
+    stats: {
+        model: string;
+        retried: true;
+        seconds: number;
+        load_seconds: number;
+        input_tokens: number;
+        output_tokens: number;
+        tokens_per_second: number;
+        time_to_first_token: number;
+    };
+}
+
+/** GET /api/chat/context: the meter's numbers, or why there are none yet. */
+export type ContextUsageResult = ({ available: true } & ContextUsage) | { available: false; reason: string };
+
+/** POST /api/chat/retry-with/choose: which answer the chat now continues from. */
+export type RetryChoice = { kept: 'original' } | {
+    kept: 'retry';
+    content: string;
+    /** The retry's numbers over the turn's saved ones, so `steps` and `place` carry over. */
+    stats: RetryResult['stats'] & Pick<InferenceStats, 'steps' | 'place'>;
+};
 
 export interface Message {
     id: number;
@@ -323,6 +472,8 @@ export interface Document {
     sessions_using: number;
     indexing_status?: 'pending' | 'indexing' | 'complete' | 'failed' | 'cancelled' | 'missing';
     last_error?: string | null;
+    /** Set when retrying can't help until the file is fixed: corrupted, encrypted, empty (no text), empty_file (nothing to index) or unsupported_workbook (.xls or password-protected). */
+    error_kind?: string | null;
 }
 
 /** A file attached to a message before sending. */
@@ -407,6 +558,8 @@ export interface SystemStatus {
     disk_space_gb: number;
     memory_available_gb: number | null;
     initialized: boolean;
+    /** Why the desktop app's first-run `gaia init` failed; null when it did not. */
+    setup_error?: string | null;
     version: string;
     // Extended Lemonade info
     lemonade_version: string | null;
@@ -510,6 +663,8 @@ export interface BrowseResponse {
 export interface IndexFolderResponse {
     indexed: number;
     failed: number;
+    /** Files in the folder of a type GAIA doesn't index. */
+    skipped?: number;
     documents: Document[];
     errors: string[];
 }
@@ -541,6 +696,12 @@ export interface Schedule {
     session_id: string | null;
     /** Parsed natural-language schedule as JSON; null for plain-interval schedules. */
     schedule_config: string | null;
+    /** When it runs, e.g. "Weekdays at 8:00 AM" — the same words the form preview shows. */
+    description: string;
+    /** The last run's error; null when it succeeded. */
+    last_error: string | null;
+    /** A run is in flight right now, timed or Run now. */
+    running?: boolean;
 }
 
 /** A single execution result for a scheduled task. */
@@ -576,6 +737,8 @@ export interface TunnelStatus {
     startedAt: string | null;
     error: string | null;
     publicIp: string | null;
+    /** The device behind the latest authenticated remote request. */
+    device?: { name: string; lastSeen: string } | null;
 }
 
 // ── Agent Activity Types ──────────────────────────────────────────────────
@@ -607,7 +770,7 @@ export interface RetrievalChunk {
 /** A single step in the agent's execution. */
 export interface AgentStep {
     id: number;
-    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
+    type: 'thinking' | 'commentary' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
     /** Short label shown in collapsed view. */
     label: string;
     /** Detailed content shown when expanded. */
@@ -651,8 +814,20 @@ export interface AgentStep {
     };
     /** MCP server name (for MCP tools). */
     mcpServer?: string;
+    /** The connector's display name, e.g. "Git" (for MCP tools). */
+    mcpServerLabel?: string;
+    /** The server's own tool name, e.g. "git_log" (for MCP tools). */
+    mcpTool?: string;
+    /** The text an MCP tool returned. */
+    mcpOutput?: McpOutput;
     /** Tool call latency in milliseconds. */
     latencyMs?: number;
+}
+
+/** The text an MCP tool returned, capped by the server. */
+export interface McpOutput {
+    text: string;
+    truncated?: boolean;
 }
 
 /** Extended SSE event types for agent communication. */
@@ -663,6 +838,7 @@ export type StreamEventType =
     | 'status'       // Agent state change
     | 'step'         // Step progress
     | 'thinking'     // Agent reasoning
+    | 'commentary'   // A note the agent wrote before a tool call
     | 'plan'         // Agent plan
     | 'tool_start'   // Tool execution started
     | 'tool_end'     // Tool execution completed
@@ -675,7 +851,11 @@ export type StreamEventType =
     | 'needs_input' // Mid-run question (#2595) — answerable; the run blocks until POST /chat/user-input
     | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
-    | 'agent_created'; // New agent created — triggers agent list refresh
+    | 'agent_created' // New agent created — triggers agent list refresh
+    | 'followup_taken'    // The running turn took a message sent mid-turn
+    | 'followup_returned' // The turn ended without taking these mid-turn messages
+    | 'followup_unavailable' // The running turn can't take a message mid-turn
+    | 'context_usage';    // What this turn's model call holds, by kind
 
 export interface StreamEvent {
     type: StreamEventType;
@@ -683,6 +863,10 @@ export interface StreamEvent {
     message_id?: number;
     /** On `done`: the user's Stop ended this run (absent when it completed normally). */
     cancelled?: boolean;
+    /** On `followup_taken`: the message the running turn took. */
+    text?: string;
+    /** On `followup_returned`: messages the turn ended without taking. */
+    texts?: string[];
     // Agent-specific fields
     status?: string;
     message?: string;
@@ -750,6 +934,12 @@ export interface StreamEvent {
     timeout_seconds?: number;
     /** MCP server name (for tool_start of MCP tools). */
     mcp_server?: string;
+    /** The connector's display name (for tool_start of MCP tools). */
+    mcp_server_label?: string;
+    /** The server's own tool name (for tool_start of MCP tools). */
+    mcp_tool?: string;
+    /** The text an MCP tool returned (for tool_result of MCP tools). */
+    mcp_output?: McpOutput;
     /** Tool call latency in milliseconds (for tool_result). */
     latency_ms?: number;
     /** agent_error the agent recovers from by retrying, rather than a turn-ending one. */
@@ -813,22 +1003,41 @@ export interface SetupCheck {
     cloud_steps?: SetupStep[];
 }
 
+/** A failed setup with a known fix: the user's Lemonade Server isn't answering. */
+export interface SetupProblem {
+    kind: 'server_unreachable';
+    /** One plain sentence: what is wrong. */
+    message: string;
+    /** How to start that server, or null when this PC has none to start. */
+    start: string | null;
+    /** Setup can switch to GAIA's own server instead. */
+    use_gaia: boolean;
+    /** Set when it can't switch from here (LEMONADE_BASE_URL), and what does. */
+    switch_hint: string | null;
+}
+
 export interface SetupRunStatus {
     state: 'idle' | 'running' | 'verifying' | 'ready' | 'failed' | 'cancelled';
     steps?: SetupStep[];
     text?: string;
     percent?: number | null;
+    /** How much of the current download is done, e.g. "1.20 GB of 5.60 GB". */
+    size?: string | null;
     error?: string | null;
+    problem?: SetupProblem | null;
     command?: string;
     log_tail?: string[];
     skip_chat_model?: boolean;
+    /** The run is switching to GAIA's own server; a retry must keep switching. */
+    gaia_lemonade?: boolean;
     /** The chat model setup chose, once it has said. */
     chat_model?: string | null;
 }
 
 /** GET /api/setup/plan: what setup will use and download, before it starts. */
 export interface SetupPlan {
-    lemonade: { mode: 'gaia' | 'external'; url: string; reachable: boolean };
+    /** `url` is null while GAIA's own server isn't running: it has no address yet. */
+    lemonade: { mode: 'gaia' | 'external'; url: string | null; reachable: boolean };
     chat_model: { id: string; user_set: boolean; size_gb: number | null; downloaded: boolean | null };
     recommended_model: string | null;
     /** GAIA's own server isn't running yet, so the final pick comes once it is. */
@@ -840,8 +1049,9 @@ export interface SetupPlan {
     download_gb: number | null;
 }
 
-/** A task a new chat offers, from an installed skill and what is set up. */
+/** A task a new chat offers, from what is set up on this PC. */
 export interface StartCard {
+    /** The skill that sharpens this task when installed; also the card's id. */
     skill: string;
     title: string;
     note: string;
@@ -853,7 +1063,8 @@ export interface StartCard {
 /** GET /api/onboarding/start */
 export interface StartScreen {
     cards: StartCard[];
-    working_folder: { path: string; name: string; gaia_folder: boolean };
+    /** choosable: a new chat can be given another folder. */
+    working_folder: { path: string; name: string; gaia_folder: boolean; choosable: boolean };
     /** Why there are no cards: the agent couldn't list its skills. */
     skills_error?: string | null;
 }
@@ -907,10 +1118,26 @@ export interface ProviderInfo {
     registered?: boolean;
     /** Where Lemonade's key comes from; null when none is configured. */
     key_source?: 'environment' | 'lemonade' | 'stored' | null;
+    /**
+     * `waiting_for_os_permission` while the OS holds the saved-key read for the
+     * user's permission (a macOS keychain dialog): `key_source` is then unknown,
+     * not absent, and `key_message` says what to do.
+     */
+    key_state?: 'read' | 'waiting_for_os_permission';
+    key_message?: string | null;
     models_discovered?: boolean;
     env_var?: string;
     base_url?: string | null;
     error?: string;
+    /** AMD gateway only: whether its host answers from this network. */
+    network?: ProviderNetwork;
+}
+
+export interface ProviderNetwork {
+    /** Null when this PC can't tell: Lemonade runs elsewhere, or a proxy carries the traffic. */
+    reachable: boolean | null;
+    /** Why it can't be reached; null when it can. */
+    detail: string | null;
 }
 
 export interface ActiveModel {
@@ -961,6 +1188,50 @@ export interface ProviderModel {
     download_progress?: DownloadProgress | null;
     /** List price per million tokens; null when unknown (never shown as $0). Cloud models only. */
     price?: ModelPrice | null;
+    /** Added by the user from a Hugging Face link, so it can be removed. */
+    custom?: boolean;
+    /** The link it was added from. */
+    source_url?: string | null;
+}
+
+/** One check run on a pasted Hugging Face link. */
+export interface CustomModelCheck {
+    id: 'link' | 'repo' | 'gguf' | 'chat' | 'architecture' | 'fit' | 'new';
+    label: string;
+    ok: boolean;
+    detail: string;
+}
+
+/** POST /api/providers/local/custom/check — what a pasted link would add. */
+export interface CustomModelReport {
+    ok: boolean;
+    url: string;
+    checks: CustomModelCheck[];
+    error: string | null;
+    warnings: string[];
+    /** Every quantization, by its first file (two can share a quant name). */
+    variants: { quant: string; file: string; size_gb: number; fits: boolean; reason: string | null }[];
+    repo?: string;
+    model_id?: string;
+    display_name?: string;
+    quant?: string;
+    /** The chosen quantization's first file. */
+    file?: string;
+    checkpoint?: string;
+    size_gb?: number;
+    architecture?: string | null;
+    context_length?: number | null;
+    vision?: boolean;
+    tool_calling?: boolean;
+    llamacpp_version?: string;
+}
+
+/** DELETE /api/providers/local/custom/{id}. */
+export interface CustomModelRemoved {
+    removed: string;
+    display_name: string;
+    /** Config keys that named the model and were cleared: default_model, last_model. */
+    cleared: string[];
 }
 
 export type LocalModelState = 'loaded' | 'downloaded' | 'not_downloaded';
@@ -1073,11 +1344,18 @@ export interface SessionPermissions {
 
 // ── Skills (GET /api/skills) ──────────────────────────────────────────────
 
+/** Which discovery root a skill was found in. */
+export type SkillSource = 'agent-bundled' | 'user' | 'claude-import';
+
 export interface SkillInfo {
     name: string;
     description: string;
+    /** Omitted by older Hub sidecars; false means a selectable task skill. */
+    always_on?: boolean;
     version: string | null;
     tier: string | null;
     tools: string[];
     path: string;
+    /** Absent when an older GAIA agent answered the listing. */
+    source?: SkillSource | null;
 }

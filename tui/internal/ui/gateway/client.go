@@ -429,6 +429,8 @@ func (c *Client) ListModels() ([]Model, error) {
 			Recipe        string   `json:"recipe"`
 			Labels        []string `json:"labels"`
 			ContextLength int      `json:"context_length"`
+			// The provider's window; context_length is the 4096 it was "loaded" at.
+			MaxContextWindow int `json:"max_context_window"`
 		} `json:"data"`
 	}
 	if err := c.do(http.MethodGet, "models", nil, &payload); err != nil {
@@ -441,10 +443,14 @@ func (c *Client) ListModels() ([]Model, error) {
 		if entry.Recipe != cloudRecipe || !strings.HasPrefix(entry.ID, prefix) {
 			continue
 		}
+		ctx := entry.ContextLength
+		if entry.MaxContextWindow > 0 {
+			ctx = entry.MaxContextWindow
+		}
 		models = append(models, Model{
 			ID:      entry.ID,
 			Labels:  entry.Labels,
-			CtxSize: entry.ContextLength,
+			CtxSize: ctx,
 		})
 	}
 	sort.SliceStable(models, func(i, j int) bool {

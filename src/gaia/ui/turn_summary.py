@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 from urllib.parse import urlparse
 
+from gaia.agents.base.verification import EXECUTED_KEY
 from gaia.llm.inference_location import InferenceLocation
 from gaia.logger import get_logger
 
@@ -47,6 +48,16 @@ WRITE_TOOLS = frozenset(
         "replace_function",
         "update_gaia_md",
     }
+)
+
+#: Indexing tools, keyed to the argument naming what they indexed.
+_INDEX_TOOLS = {"index_document": "file_path", "index_directory": "directory_path"}
+
+_SHELL_TOOLS = frozenset({"run_shell_command", "run_command"})
+
+#: ``gaia schedule add`` run from the shell creates a scheduled task.
+_SCHEDULE_ADD_RE = re.compile(
+    r"\bgaia\s+schedule\s+add\b(?:.*?--name[ =](?:\"(?P<name>[^\"]+)\"|'(?P<n2>[^']+)'|(?P<n3>\S+)))?"
 )
 
 #: The host the built-in ``search_web`` sends its queries to (``WebClient``).
@@ -95,6 +106,24 @@ def is_openable(path: str) -> bool:
     return Path(path).suffix.lower() in OPENABLE_SUFFIXES
 
 
+def search_hits(text: str) -> List[Dict[str, str]]:
+    """The ``title``/``url`` of each hit in a ``search_web`` text result."""
+    return [
+        {"title": m.group("title").strip(), "url": m.group("url")}
+        for m in _SEARCH_HIT_RE.finditer(text)
+    ]
+
+
+def _search_sources(data: Any) -> Optional[List[Any]]:
+    """A ``search_web`` result's hits, from its text or from the summary a
+    relayed turn carries instead; None when it is neither."""
+    if isinstance(data, str):
+        return search_hits(data)
+    if isinstance(data, dict) and isinstance(data.get("sources"), list):
+        return data["sources"]
+    return None
+
+
 def _payload(data: Any) -> Any:
     """A tool result as a dict when it is JSON, else as given."""
     if isinstance(data, str) and data.lstrip().startswith("{"):
@@ -112,6 +141,14 @@ def _host(url: Any) -> Optional[str]:
     if not host:
         return None
     return host[4:] if host.startswith("www.") else host
+
+
+def _ran(call: Mapping[str, Any]) -> bool:
+    """Whether the tool body ran, so a refused or denied call contacted nothing."""
+    data = call.get("data")
+    if not isinstance(data, dict):
+        return True
+    return data.get(EXECUTED_KEY) is not False and data.get("status") != "denied"
 
 
 def _web_url(url: Any) -> bool:
@@ -165,14 +202,17 @@ class TurnLedger:
                     match = _PAGE_TITLE_RE.search(data)
                     title = match.group("title").strip() if match else None
                 read.setdefault(url, {"url": url, "title": title, "kind": "page"})
-            elif tool == "search_web" and isinstance(data, str):
-                for match in _SEARCH_HIT_RE.finditer(data):
-                    url = match.group("url")
+            elif tool == "search_web":
+                for hit in _search_sources(data) or []:
+                    url = hit.get("url") if isinstance(hit, dict) else None
+                    if not _web_url(url):
+                        continue
+                    title = hit.get("title")
                     hits.setdefault(
                         url,
                         {
                             "url": url,
-                            "title": match.group("title").strip(),
+                            "title": title if isinstance(title, str) else None,
                             "kind": "search_result",
                         },
                     )
@@ -222,12 +262,13 @@ class TurnLedger:
         sites: List[str] = []
         for call in self._finished():
             tool = call["tool"]
-            if tool not in LIVE_DATA_TOOLS:
+            if tool not in LIVE_DATA_TOOLS or not _ran(call):
                 continue
             arg = LIVE_DATA_TOOLS[tool]
             if arg is None:
                 # Only the built-in search (text result) has a known backend.
-                host = _SEARCH_HOST if isinstance(call["data"], str) else None
+                searched = _search_sources(call["data"]) is not None
+                host = _SEARCH_HOST if searched else None
             else:
                 host = _host(call["args"].get(arg))
             if host and host not in sites:
@@ -247,8 +288,76 @@ class TurnLedger:
                 paths.append(path)
         return paths
 
+    def _produced(self) -> List[Dict[str, Any]]:
+        """Things the turn made besides files: images, indexed documents,
+        memories and schedules, for the session panel's Outputs (#5277)."""
+        out: List[Dict[str, Any]] = []
+        for call in self._finished():
+            tool, args, data = call["tool"], call["args"], call["data"]
+            status = data.get("status") if isinstance(data, dict) else None
+            if not call["success"] or status in ("error", "skipped"):
+                continue
+            if tool == "generate_image" and isinstance(data, dict):
+                path = data.get("image_path")
+                if isinstance(path, str):
+                    out.append(
+                        {
+                            "kind": "image",
+                            "name": Path(path).name,
+                            "path": path,
+                            "detail": args.get("prompt"),
+                        }
+                    )
+            elif tool in _INDEX_TOOLS:
+                path = args.get(_INDEX_TOOLS[tool])
+                if isinstance(path, str) and path:
+                    path = os.path.expanduser(path)
+                    out.append(
+                        {"kind": "document", "name": Path(path).name, "path": path}
+                    )
+            elif tool == "remember" and isinstance(args.get("fact"), str):
+                out.append(
+                    {
+                        "kind": "memory",
+                        "name": args["fact"][:120],
+                        "detail": args.get("category"),
+                        "ref": (
+                            data.get("knowledge_id") if isinstance(data, dict) else None
+                        ),
+                    }
+                )
+            elif tool == "schedule_send":
+                out.append(
+                    {
+                        "kind": "schedule",
+                        "name": str(args.get("subject") or "Scheduled email"),
+                        "detail": args.get("send_at"),
+                    }
+                )
+            elif tool in _SHELL_TOOLS:
+                command = args.get("command")
+                match = (
+                    _SCHEDULE_ADD_RE.search(command)
+                    if isinstance(command, str)
+                    else None
+                )
+                if match:
+                    out.append(
+                        {
+                            "kind": "schedule",
+                            "name": match.group("name")
+                            or match.group("n2")
+                            or match.group("n3")
+                            or "Scheduled task",
+                            "detail": command[:200],
+                        }
+                    )
+        return out[:_MAX_FILES]
+
     def live_data(self) -> Dict[str, int]:
-        calls = [c for c in self._finished() if c["tool"] in LIVE_DATA_TOOLS]
+        calls = [
+            c for c in self._finished() if c["tool"] in LIVE_DATA_TOOLS and _ran(c)
+        ]
         return {
             "attempted": len(calls),
             "failed": sum(1 for c in calls if not c["success"]),
@@ -291,6 +400,7 @@ class TurnLedger:
             "documents": documents,
             "files": files[:_MAX_FILES],
             "sites": self._sites(),
+            "outputs": self._produced(),
             "live_data": self.live_data(),
             "cost": _cost(location, usage or {}),
         }

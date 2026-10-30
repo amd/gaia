@@ -792,7 +792,7 @@ def render_endpoint_spec_html() -> str:
     stays stateless).</p>
   <p class="desc">Each SSE frame is <code>data: {json}</code> discriminated on
     <code>type</code>, one of the <b>eight canonical event types</b>:
-    <code>status</code> {message} &middot; <code>token</code> {delta} &middot;
+    <code>status</code> {message, phase?, queue?} &middot; <code>token</code> {delta} &middot;
     <code>tool_call</code> {tool, args} &middot; <code>tool_result</code>
     {tool, render?, data} &middot; <code>needs_confirmation</code>
     {run_id, action, summary} &middot; <code>needs_input</code>
@@ -800,7 +800,12 @@ def render_endpoint_spec_html() -> str:
     <code>final</code> {answer, usage?} &middot;
     <code>error</code> {detail, status}. The stream is terminated by <b>exactly one
     <code>final</code> or <code>error</code></b>. Lines beginning <code>:</code>
-    are heartbeat comments and carry no payload.</p>
+    are heartbeat comments and carry no payload. When <code>phase</code> is
+    <code>model_queue</code>, <code>queue</code> reports <code>event</code>
+    (<code>queued</code>, then <code>granted</code>), <code>scope</code>,
+    <code>position</code>, <code>queue_length</code>, <code>holder</code>,
+    <code>holder_model</code>, <code>held_for_s</code>, <code>waited_s</code>,
+    and <code>model</code>; a field the wait cannot know is omitted.</p>
   <p class="desc"><b>Mid-run questions (#2469):</b> the agent can ask the user
     something <i>while it runs</i> — most importantly to set up or repair mailbox
     access instead of printing a shell command. It emits <code>needs_input</code>
@@ -877,7 +882,8 @@ def render_endpoint_spec_html() -> str:
   <p class="desc">Approve or deny a tool the agent is blocking on (send / forward /
     delete / quarantine / calendar-create). Body:
     <code>{ "session_id": str, "approved": bool }</code>. The run resumes when this
-    returns. 404 when no run is awaiting confirmation.</p>
+    returns. 404 when no run is active; 409 when the run has no tool
+    confirmation pending, so the decision was not delivered.</p>
 </div>
 
 <div class="endpoint-block">
@@ -1006,6 +1012,15 @@ def render_endpoint_spec_html() -> str:
     drive-by web-page access. Non-browser clients send no Origin and are
     unaffected.</li>
 </ul>
+
+<h2>Transient connection errors</h2>
+<p class="body-t">When another GAIA process or request is mid-save on the mailbox
+  connection, a mailbox route answers <strong>HTTP 502</strong> with a detail saying
+  the connection &ldquo;is being saved by another GAIA operation&rdquo;. The
+  <code class="inl">/v1/email/agent/*</code> routes answer the same case with
+  <strong>HTTP 503</strong> and a <code class="inl">Retry-After</code> header. Both are
+  transient, not a broken mailbox: retry shortly and don&rsquo;t prompt the user to
+  reconnect.</p>
 
 <h2>Endpoints</h2>
 

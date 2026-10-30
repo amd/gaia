@@ -19,7 +19,7 @@ FileSearchToolsMixin provides agent-agnostic file search and management operatio
 
 **Key Features:**
 - 3-phase intelligent file search (workspace → common locations → deep scan)
-- Type-aware file reading (Python AST, Markdown structure, binary detection)
+- Type-aware file reading (Python AST, binary detection)
 - Grep-like content search across file systems
 - Directory search with depth control
 - Generic file writing with directory creation
@@ -41,6 +41,10 @@ baseline for later edits.
 - Phase 1: common locations (Documents, Downloads, Desktop) with a depth limit
 - Phase 2: deep drive/root search, only when `deep_search=True` and no
   `directory` was named
+  - The user's home is walked first, then each drive or `/`
+  - At a filesystem root, OS trees (`System`, `Library`, `private`, `usr`, `opt`,
+    `proc`, `sys`, `dev`, `run`, `snap`) are walked last, not skipped; one the
+    budget never reaches is listed in `unfinished_paths`
 - Early termination on first match for speed
 
 The search root is the declared sandbox, **not** `Path.cwd()`. A sidecar is
@@ -146,12 +150,12 @@ class FileSearchToolsMixin:
 
         File Type Support:
         - Python (.py): AST validation + symbol extraction (functions/classes)
-        - Markdown (.md): Headers + code blocks + links extraction
+        - Markdown (.md, .mdx): the content only; file_type "markdown"
         - Word (.docx), PDF, Excel (.xlsx): extracted text in budget-sized
           parts ("offset", "total_chars", "next_offset"; None at the end).
-          Same contract as FileIOToolsMixin.read_file. Other binary document
-          formats (.doc, .pptx, .xls, OpenDocument) return an error pointing
-          at index_document.
+          Same contract as FileIOToolsMixin.read_file. .pptx and .epub
+          return an error pointing at index_document; .doc, .ppt, .xls and
+          OpenDocument return an error saying what to re-save them as.
         - Binary: Detection with size reporting
         - Text: Raw content with line count. A file with a UTF-16, UTF-32,
           or UTF-8 byte-order mark is decoded in that encoding and reports
@@ -181,17 +185,6 @@ class FileSearchToolsMixin:
                     "line": int
                 }],
 
-                # Markdown-specific
-                "headers": List[str],
-                "code_blocks": List[{
-                    "language": str,
-                    "code": str
-                }],
-                "links": List[{
-                    "text": str,
-                    "url": str
-                }],
-
                 # Binary-specific
                 "is_binary": bool
             }
@@ -206,11 +199,17 @@ class FileSearchToolsMixin:
         case_sensitive: bool = False
     ) -> Dict[str, Any]:
         """
-        Grep-like file content search.
+        Grep-like file content search over every text file.
+
+        Every file passes read_file's gate before any byte of it is opened:
+        credentials and keys (.env, id_rsa, *.pem, credentials.json, ...)
+        and links leading outside the allowed folders are skipped and
+        counted, never read. UTF-16/32 text with a BOM is searched as text.
 
         Args:
             pattern: Text pattern to find
-            directory: Where to search (default: current)
+            directory: Where to search (default: the workspace); a file
+                path searches that one file
             file_pattern: File glob filter (e.g., '*.py')
             case_sensitive: Case sensitivity (default: False)
 
@@ -226,6 +225,8 @@ class FileSearchToolsMixin:
                 }],
                 "total_matches": int,  # Max 100
                 "files_searched": int,
+                "files_skipped_protected": int,  # Only when the gate refused
+                                                 # a file; the message says so
                 "message": str
             }
         """
@@ -413,11 +414,12 @@ if matching_files:
 # Phase 2: Deep drive search — never when a directory was named
 if not deep_search or directory:
     return {"status": "success", "files": [], "searched_paths": [...], ...}
+search_location(Path.home(), max_depth=999)  # home first
 if platform.system() == "Windows":
     for drive in ["C:/", "D:/", ...]:
         search_location(drive, max_depth=999)
 else:
-    search_location(Path("/"), max_depth=999)
+    search_location(Path("/"), max_depth=999)  # OS trees deferred to the end
 ```
 
 A zero result reports where it looked: `searched_paths`, a `search_context` of
@@ -457,7 +459,6 @@ Key tests:
 - 3-phase search progression
 - File type detection and analysis
 - Python AST symbol extraction
-- Markdown structure parsing
 - Binary file detection
 - Grep content search
 - Directory creation on write

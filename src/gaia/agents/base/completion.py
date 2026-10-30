@@ -37,6 +37,8 @@ SIDE_EFFECT_PATHS = {
     "take_screenshot": ("file_path", "output_path", "path"),
     "text_to_speech": ("file_path", "output_path", "audio_path"),
     "generate_image": ("file_path", "output_path", "image_path"),
+    "generate_music": ("audio_path",),
+    "generate_sound_effect": ("audio_path",),
 }
 _EXEC_TOOLS = frozenset({"run_python", "execute_python_file", "run_shell_command"})
 _UNOBSERVABLE = object()
@@ -213,17 +215,25 @@ def _payload(value: Any) -> dict:
     return tool_result_dict(value) or {}
 
 
+#: Marks of a code identifier rather than a file or folder name: a leading
+#: underscore, a call, a scope or an assignment.
+_CODE_NAME = re.compile(r"^_|[()=<>]|::")
+
+
 def _path_token(match: re.Match) -> str | None:
     value = next(g for g in match.groups() if g is not None).strip()
     value = value.lstrip("([").rstrip(".,;:)]?!")
     if not value or "://" in value or "@" in value or "\x00" in value:
         return None
+    if "<" in value or ">" in value:
+        return None  # a placeholder such as `<folder>/<name>`, not a real path
     quoted = any(match.group(i) is not None for i in (1, 2, 3))
     suffix = value.rsplit(".", 1)[-1].lower()
     # Dotted initials (U.S, e.g) are abbreviations, not file names.
     abbreviation = all(len(part) == 1 for part in value.split("."))
     if (
-        quoted
+        # A quoted code name is not a destination: `_daemon_alive`, `run()`.
+        (quoted and not _CODE_NAME.search(value))
         or "/" in value
         or "\\" in value
         or (
@@ -447,13 +457,18 @@ def _normalize_key(path: str, base: str) -> str:
     ):
         # A drive-lettered path off Windows: no filesystem here can resolve it.
         return ntpath.normcase(ntpath.normpath(ntpath.join(base, path)))
-    # Write tools report resolved paths; junctions and macOS /tmp are symlinks.
     # Prose names folders as `%TEMP%` or `$HOME`; tools report them expanded.
-    return os.path.normcase(
-        os.path.realpath(
-            os.path.join(base, os.path.expandvars(os.path.expanduser(path)))
-        )
-    )
+    joined = os.path.join(base, os.path.expandvars(os.path.expanduser(path)))
+    if joined.startswith(("\\\\", "//")):
+        # A network share: resolving it is a network round trip per mention,
+        # and an unreachable server raises. Its identity is its text.
+        return os.path.normcase(os.path.normpath(joined))
+    # Write tools report resolved paths; junctions and macOS /tmp are symlinks.
+    try:
+        return os.path.normcase(os.path.realpath(joined))
+    except OSError:
+        # Unresolvable (a vanished mount, a device name): the text is the key.
+        return os.path.normcase(os.path.normpath(joined))
 
 
 class CompletionEvidence:
@@ -485,6 +500,8 @@ class CompletionEvidence:
         # (ledger sequence, what the run named) for runs that printed something.
         self.summaries: list[tuple[int, str]] = []
         self._exec_started = 0
+        # key -> the path as the write tool reported it, for showing the user.
+        self.written_as: dict[str, str] = {}
 
     def key(self, path: str, root: str | None = None) -> str:
         return _normalize_key(
@@ -547,6 +564,11 @@ class CompletionEvidence:
 
     def _readable(self, path: str, validator: Any = None) -> bool:
         """Whether the read boundary allows inspecting *path*, without prompting."""
+        unc = ("\\\\", "//")
+        if path.startswith(unc) and not self.root.startswith(unc):
+            # Never inside a local workspace, and asking a validator about it
+            # resolves it: a network round trip that can raise.
+            return False
         if validator is not None:
             allowed, _ = validator.validate_read(path, prompt_user=False)
             return bool(allowed)
@@ -627,6 +649,7 @@ class CompletionEvidence:
                 continue
             key = self.key(path, args.get("project_dir"))
             self.removed.discard(key)
+            self.written_as[key] = path
             self.files[key] = FileEvidence(
                 key,
                 self.sequence if successful else 0,
@@ -833,12 +856,15 @@ class CompletionEvidence:
         answer: str,
         claims_file_write: Callable[[str], bool],
         soft: list[str] | None = None,
+        readback: bool = True,
     ) -> list[str]:
         """Missing work that makes the turn incomplete.
 
         With no save asked for, nothing written and no "I/we saved", a save
         claim may be information ("downloads are saved to ~/Downloads"); its
         gap goes to *soft*, worth one correction but never an incomplete turn.
+        ``readback=False`` drops the read-it-back check, for a turn the model
+        call ended before the model could read anything back.
         """
         required = {self.key(path) for path in self.requested}
         # "Save it as notes.md in my Documents folder" names the file, not its
@@ -976,7 +1002,7 @@ class CompletionEvidence:
                 "The requested output file has no recorded successful write; an earlier side-effect file does not fulfill that save."
             )
         pathless_save = not required and (self.save_requested or claim_without_path)
-        for item in self.files.values():
+        for item in self.files.values() if readback else ():
             # Requested or claimed outputs need readback; an ordinary edit does not.
             data_output = (
                 pathless_save
@@ -1095,6 +1121,13 @@ def caveated_answer(answer: str | None, gaps: list[str]) -> str:
     return f"{answer.rstrip()}\n\nI couldn't confirm all of this:\n\n" + "\n".join(
         f"- {gap[:1].upper()}{gap[1:]}" for gap in gaps
     )
+
+
+def saved_before_error(paths: list[str]) -> str:
+    """Name the files a turn saved before a failed model call ended it."""
+    if len(paths) == 1:
+        return f"Saved before the error: `{paths[0]}`."
+    return "Saved before the error:\n\n" + "\n".join(f"- `{p}`" for p in paths)
 
 
 def incomplete_answer(gaps: list[str]) -> str:

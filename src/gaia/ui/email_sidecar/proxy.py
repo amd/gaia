@@ -49,6 +49,10 @@ _QUERY_CONNECT_TIMEOUT = 10.0
 # sidecar timeout — a hung sidecar would make Cancel as slow as not cancelling.
 _CANCEL_TIMEOUT = 10.0
 
+# Internet switch POST timeout: it runs under the chat's switch lock, so a hung
+# sidecar must not stall the toggle (and every later flip) for the general timeout.
+_SWITCH_TIMEOUT = 10.0
+
 
 def _extract_detail(resp) -> str:
     """Pull the sidecar's actionable message from a non-2xx response.
@@ -197,6 +201,57 @@ class SidecarProxy:
                 f"decision: {exc}"
             ) from exc
 
+    def followup(self, run_id: str, text: str) -> dict:
+        """Hand run *run_id* a message the user sent mid-turn (contract >= 2.15).
+
+        A 404/409 (run over, agent not taking input) raises: the caller must
+        keep the message rather than show it as delivered.
+        """
+        import requests
+
+        path = f"{self.prefix}/query/{run_id}/followup"
+        try:
+            return self._post(path, {"text": text})
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to add the "
+                f"message to its reply: {exc}"
+            ) from exc
+
+    def list_grants(self, session_id: str) -> dict:
+        """The sidecar session's "always allow" grants (contract >= 2.26).
+
+        A 404 (no such session) raises; the caller decides what it means.
+        """
+        import requests
+
+        try:
+            return self._get(f"{self.prefix}/sessions/{session_id}/grants")
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to list its "
+                f"permissions: {exc}"
+            ) from exc
+
+    def revoke_grant(self, session_id: str, key: Optional[str] = None) -> dict:
+        """Revoke one "always allow" grant, or all with *key* None (>= 2.26)."""
+        import requests
+
+        path = f"{self.prefix}/sessions/{session_id}/grants"
+        try:
+            resp = self._session.delete(
+                f"{self.base_url}{path}",
+                params={"key": key} if key is not None else None,
+                timeout=self.timeout,
+            )
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to revoke a "
+                f"permission: {exc}"
+            ) from exc
+        self._raise_for_status(resp, path)
+        return resp.json()
+
     def skills(self) -> dict:
         """The skills the agent can load (flagship, contract >= 2.17)."""
         import requests
@@ -224,6 +279,29 @@ class SidecarProxy:
             raise SidecarError(
                 f"could not reach the {self.agent_id} sidecar to set full "
                 f"access: {exc}"
+            ) from exc
+
+    def set_internet(self, session_id: str, internet_off: bool) -> dict:
+        """Turn the sidecar session's internet on or off (contract >= 2.23).
+
+        Raises on any failure, including the 404 for a session the sidecar has
+        not created yet.
+        """
+        import requests
+
+        path = f"{self.prefix}/sessions/{session_id}/internet"
+        try:
+            resp = self._session.post(
+                f"{self.base_url}{path}",
+                json={"internet_off": bool(internet_off)},
+                timeout=_SWITCH_TIMEOUT,
+            )
+            self._raise_for_status(resp, path)
+            return resp.json()
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to switch the "
+                f"internet: {exc}"
             ) from exc
 
     def query_stream(

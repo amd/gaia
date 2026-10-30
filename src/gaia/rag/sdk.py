@@ -6,6 +6,7 @@
 GAIA RAG SDK - Simple PDF document retrieval and Q&A
 """
 
+import codecs
 import errno
 import hashlib
 import hmac
@@ -42,6 +43,7 @@ except Exception:  # pylint: disable=broad-except
 
 from gaia import config as gaia_config
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
@@ -50,13 +52,49 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.logger import get_logger
 from gaia.security import PathValidator
+from gaia.utils.document_formats import (
+    UNSUPPORTED_DOCUMENTS,
+    unsupported_document_message,
+)
 from gaia.utils.file_lock import (
     FileLockError,
     FileLockTimeout,
     file_lock,
+    held_by_another_program,
+    lock_dir_unwritable,
     write_bytes_atomic,
     write_text_atomic,
 )
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
+
+_TEXT_BOM_ENCODINGS = (
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+_TEXT_FALLBACK_ENCODINGS = ("utf-8", "cp1252", "latin-1")
+_TEXT_TRIED_ENCODINGS = ", ".join(
+    dict.fromkeys([e for _, e in _TEXT_BOM_ENCODINGS] + list(_TEXT_FALLBACK_ENCODINGS))
+)
+
+
+def _decode_text_bytes(data: bytes) -> str:
+    """Decode text bytes without letting latin-1 hide Windows encodings."""
+    for bom, encoding in _TEXT_BOM_ENCODINGS:
+        if data.startswith(bom):
+            return data.decode(encoding)
+
+    for encoding in _TEXT_FALLBACK_ENCODINGS:
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    # latin-1 never fails; only a corrupt BOM-tagged file raises (above).
+    raise UnicodeDecodeError("text", data, 0, len(data), "unsupported encoding")
+
 
 # --- PDF extraction errors ---------------------------------------------------
 # These inherit from ValueError so existing `except ValueError` blocks in
@@ -94,6 +132,68 @@ class EmptyPDFError(PDFExtractionError):
     status = "empty"
 
 
+class ImageExtractionError(ValueError):
+    """Raised when an image file cannot be read into text, with a remedy."""
+
+
+# Each page is one VLM call (seconds to tens of seconds), so a fax-sized TIFF is
+# fine and a 500-page archive is a mistake to stop early.
+MAX_IMAGE_PAGES = 50
+
+
+def _flatten_for_vlm(img):
+    """Upright, opaque copy of *img*: EXIF rotation applied, alpha on white.
+
+    Image files only. PDF-embedded images are shown as the PDF places them, so
+    the PDF path must not rotate them by their own EXIF tag.
+    """
+    from PIL import Image, ImageOps  # pylint: disable=import-outside-toplevel
+
+    img = ImageOps.exif_transpose(img)
+    if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+        # The VLM drops alpha, so a transparent background would read as black.
+        rgba = img.convert("RGBA")
+        white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        img = Image.alpha_composite(white, rgba).convert("RGB")
+    return img
+
+
+def _image_pages_for_vlm(img, file_name: str) -> list:
+    """The prepared VLM inputs for an opened image file, one per page."""
+    from PIL import ImageSequence  # pylint: disable=import-outside-toplevel
+
+    from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
+        prepare_pil_image_for_vlm,
+    )
+
+    if img.format != "TIFF":
+        return [prepare_pil_image_for_vlm(_flatten_for_vlm(img))]
+
+    page_count = getattr(img, "n_frames", 1)
+    if page_count > MAX_IMAGE_PAGES:
+        raise ImageExtractionError(
+            f"Cannot index image {file_name}: it has {page_count} pages, and GAIA "
+            f"reads at most {MAX_IMAGE_PAGES} pages from one image file.\n"
+            "Split the TIFF into smaller files and index each one."
+        )
+    return [
+        prepare_pil_image_for_vlm(_flatten_for_vlm(frame))
+        for frame in ImageSequence.Iterator(img)
+    ]
+
+
+class SpreadsheetReadError(ValueError):
+    """An Excel workbook that can't be read; ``status`` is its error kind."""
+
+    def __init__(self, message: str, status: str):
+        super().__init__(message)
+        self.status = status
+
+
+# Legacy .xls and password-protected .xlsx are both OLE2 compound files.
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
 def _missing_package_hint(*packages: str) -> str:
     from gaia.agents.install_hints import (  # pylint: disable=import-outside-toplevel
         missing_package_hint,
@@ -129,6 +229,47 @@ class IndexingStopped(Exception):
     It leaves ``index_document`` as raised: the document is not indexed, and
     any cache it had is kept.
     """
+
+
+def _stop_behind(error: BaseException) -> Optional[Exception]:
+    """The stop *error* was raised from, if any.
+
+    A stop (:class:`IndexingStopped`, or :class:`LeaseWaitCancelled` from a
+    cancelled model-slot wait) can be wrapped by the client on the way out.
+    """
+    seen = set()
+    current: Optional[BaseException] = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, (IndexingStopped, LeaseWaitCancelled)):
+            return current
+        seen.add(id(current))
+        current = _next_in_chain(current)
+    return None
+
+
+def _next_in_chain(error: BaseException) -> Optional[BaseException]:
+    """The exception Python's traceback shows *error* as raised from or during."""
+    if error.__cause__ is not None:
+        return error.__cause__
+    if error.__suppress_context__:
+        return None
+    return error.__context__
+
+
+def name_file_for_user(text: str, file_path: str, display_name: str) -> str:
+    """Replace every spelling of *file_path* in *text* with *display_name*.
+
+    Indexing often runs on a private copy of the user's file; this keeps the
+    copy's path and name out of messages the user reads.
+    """
+    path = Path(file_path)
+    spellings = {str(file_path), str(path), path.as_posix(), os.path.realpath(path)}
+    for spelling in sorted(spellings, key=len, reverse=True):
+        text = text.replace(spelling, display_name)
+    # Any other spelling of the copy's folder (8.3 names, a symlinked temp dir).
+    return re.sub(
+        r"(?:[^\s'\"()]*[\\/])?" + re.escape(path.name), lambda _m: display_name, text
+    )
 
 
 # The running index_document's ``heartbeat`` on this thread, called once per
@@ -313,6 +454,40 @@ class RAGResponse:
     query_metadata: Optional[Dict[str, Any]] = None  # Query-level metadata
 
 
+def _same_file(a: str, b: str) -> bool:
+    """Whether *a* and *b* name one file, however spelled.
+
+    Case, 8.3 short names, UNC and extended-length paths all name the same file.
+    A file that no longer exists is compared by its normalised real path.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(
+            os.path.realpath(b)
+        )
+
+
+def _locked_cause(
+    error: Optional[BaseException], file_path: str
+) -> Optional[PermissionError]:
+    """The lock on *file_path* in *error*'s chain, if any.
+
+    Parsers wrap the OS error they hit, so the chain is walked the way Python
+    prints it. A lock that names another file (a temp or cache file) is not
+    this document's; a read error carries no filename, an open names the file.
+    """
+    seen = set()
+    while error is not None and id(error) not in seen:
+        if isinstance(error, PermissionError) and held_by_another_program(error):
+            name = error.filename
+            if name is None or _same_file(os.fsdecode(name), file_path):
+                return error
+        seen.add(id(error))
+        error = _next_in_chain(error)
+    return None
+
+
 class RAGSDK:
     """
     Simple RAG SDK for document Q&A (PDF, TXT, MD, RST, LOG, CSV, JSON, XLSX,
@@ -457,6 +632,19 @@ class RAGSDK:
                 )
             raise ImportError(error_msg)
 
+    def _log_read_failure(
+        self, error: BaseException, file_path: str, message: str
+    ) -> None:
+        """A warning for a lock, which the caller may retry; *message* otherwise."""
+        locked = _locked_cause(error, file_path)
+        if locked is not None:
+            self.log.warning(
+                f"Could not read {file_path}: another program may have it locked, "
+                f"or it is not readable: {locked}"
+            )
+        else:
+            self.log.error(message)
+
     def _safe_open(self, file_path: str, mode="rb"):
         """
         Safely open file with path validation and O_NOFOLLOW to prevent symlink attacks.
@@ -502,7 +690,10 @@ class RAGSDK:
         except OSError as e:
             if e.errno == errno.ELOOP:  # too many symbolic links
                 raise PermissionError(f"Symlinks not allowed: {file_path}")
-            raise IOError(f"Cannot open file {file_path}: {e}")
+            # Keep the errno: it is how a caller tells a locked file apart.
+            raise OSError(
+                e.errno, f"Cannot open file: {e.strerror}", str(file_path)
+            ) from e
 
         # Verify it's a regular file (not directory or special file)
         try:
@@ -527,7 +718,7 @@ class RAGSDK:
         """
         Get or create HMAC key for cache integrity verification.
 
-        The key is stored per-installation in ~/.gaia/cache/hmac.key
+        The key is stored per-installation in <gaia_home>/cache/hmac.key
         and is used to sign cache files to prevent tampering. Cached in
         memory after first load to avoid repeated disk reads.
 
@@ -537,7 +728,7 @@ class RAGSDK:
         if self._hmac_key is not None:
             return self._hmac_key
 
-        key_dir = Path.home() / ".gaia" / "cache"
+        key_dir = gaia_config.gaia_home() / "cache"
         key_path = key_dir / "hmac.key"
 
         # Locked so two first-run processes cannot each mint a key and leave
@@ -637,13 +828,18 @@ class RAGSDK:
         )
         return hashlib.sha256(spec.encode("utf-8")).hexdigest()[:8]
 
-    def _content_key(self, file_path: str) -> str:
+    def _content_key(self, file_path: str, raise_locked: bool = False) -> str:
         """``<path hash>_<content hash>``: the shared stem of a document's cache files.
 
         The content hash (not mtime/size) makes same-size edits and sub-second
         rewrites invalidate; the path hash keeps identical files apart. An
         unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
         then fails at extraction.
+
+        Raises:
+            PermissionError: With ``raise_locked``, when the read is refused as
+                :func:`held_by_another_program`. Hashing reads every byte, so
+                this sees a lock in any format before a parser misreports it.
         """
         path = Path(file_path).absolute()
         try:
@@ -653,6 +849,8 @@ class RAGSDK:
                 while chunk := f.read(8192):
                     hasher.update(chunk)
         except OSError as e:
+            if raise_locked and held_by_another_program(e):
+                raise
             self.log.warning(f"Cannot read file for cache key: {e}")
             return f"{hashlib.sha256(str(path).encode()).hexdigest()}_notfound"
         path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
@@ -690,6 +888,9 @@ class RAGSDK:
             except EmbeddingUnavailableError:
                 raise
             except Exception as e:
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
                 raise EmbeddingUnavailableError(self.config.embedding_model, e) from e
 
     def _start_embedder(self):
@@ -790,7 +991,8 @@ class RAGSDK:
                 f"{EMBED_MAX_CHARS}-char input limit (longest: {max(oversized)} "
                 "chars). Split them with gaia.rag.sdk.split_for_embedding first."
             )
-        safe_texts = list(texts)
+        # No-break spaces in extracted tables can exceed one token per character.
+        safe_texts = [text.replace("\u00a0", " ") for text in texts]
 
         all_embeddings = []
 
@@ -849,6 +1051,9 @@ class RAGSDK:
             try:
                 response = self._request_embeddings(batch_texts, wait_callback)
             except Exception as e:  # noqa: BLE001 — classified, then re-raised
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
                 if "physical batch size" in str(e) and not reloaded:
                     self.log.warning(
                         f"   ⚠️  Batch {batch_num}: the embedder was reloaded with a "
@@ -1190,6 +1395,8 @@ class RAGSDK:
                             if image_texts:
                                 vlm_pages_count += 1
                                 total_images_processed += len(image_texts)
+                    except LeaseWaitCancelled:
+                        raise
                     except Exception as img_error:
                         page_warning = (
                             f"image extraction failed on page {i}: {img_error}"
@@ -1383,11 +1590,16 @@ class RAGSDK:
                 "  2. Try opening the file in PowerPoint to confirm it is readable\n"
                 "  3. Save as PDF and index the PDF instead"
             )
-            self.log.error(f"Corrupted PPTX (bad zip): {pptx_path}: {e}")
+            self._log_read_failure(
+                e, pptx_path, f"Corrupted PPTX (bad zip): {pptx_path}: {e}"
+            )
             raise ValueError(msg) from e
 
         try:
-            prs = Presentation(pptx_path)
+            # A stream, not the path: given a path, python-pptx's is_zipfile
+            # check swallows a lock and reports the file as not a package.
+            with open(pptx_path, "rb") as stream:
+                prs = Presentation(stream)
         except Exception as e:
             msg = (
                 f"Could not read PowerPoint file: {file_name}\n"
@@ -1398,7 +1610,7 @@ class RAGSDK:
                 "  2. Try opening the file in PowerPoint to confirm it is readable\n"
                 "  3. Save as PDF and index the PDF instead"
             )
-            self.log.error(f"Corrupted PPTX {pptx_path}: {e}")
+            self._log_read_failure(e, pptx_path, f"Corrupted PPTX {pptx_path}: {e}")
             raise ValueError(msg) from e
 
         try:
@@ -1572,6 +1784,8 @@ class RAGSDK:
                             if image_texts:
                                 vlm_slides_count += 1
                                 total_images_processed += len(image_texts)
+                    except LeaseWaitCancelled:
+                        raise
                     except Exception as img_error:
                         self.log.warning(
                             f"Image extraction failed on slide {i}: {img_error}"
@@ -1849,27 +2063,20 @@ These positions indicate where to split the text."""
     def _extract_text_from_text_file(self, file_path: str) -> str:
         """Extract text from text-based file (txt, md, etc.)."""
         try:
-            encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252"]
-            text = None
+            with self._safe_open(file_path, "rb") as f:
+                data = f.read()
 
-            for encoding in encodings:
-                try:
-                    # Use _safe_open with binary mode, then decode
-                    with self._safe_open(file_path, "rb") as f:
-                        text = f.read().decode(encoding)
-                    break
-                except (UnicodeDecodeError, AttributeError):
-                    continue
-
-            if text is None:
+            try:
+                text = _decode_text_bytes(data)
+            except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode file: {file_path}\n"
-                    f"Tried encodings: {', '.join(encodings)}\n"
+                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Convert the file to UTF-8 encoding\n"
                     "  2. Check if the file is corrupted\n"
                     "  3. Ensure the file is a text file (not binary)"
-                )
+                ) from exc
 
             if self.config.show_stats:
                 print(f"  ✅ Loaded text file ({len(text):,} characters)")
@@ -1877,7 +2084,9 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from text file")
             return text.strip()
         except Exception as e:
-            self.log.error(f"Error reading text file {file_path}: {e}")
+            self._log_read_failure(
+                e, file_path, f"Error reading text file {file_path}: {e}"
+            )
             raise
 
     def _extract_text_from_csv(self, csv_path: str) -> str:
@@ -1886,59 +2095,54 @@ These positions indicate where to split the text."""
             import csv
 
             text_parts = []
-            encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252"]
 
-            for encoding in encodings:
-                try:
-                    # Use _safe_open with binary mode, then decode for csv.reader
-                    from io import StringIO
+            from io import StringIO
 
-                    with self._safe_open(csv_path, "rb") as f:
-                        text = f.read().decode(encoding)
-                        reader = csv.reader(StringIO(text))
-                        rows = list(reader)
+            with self._safe_open(csv_path, "rb") as f:
+                data = f.read()
 
-                        if not rows:
-                            raise ValueError("CSV file is empty")
+            try:
+                decoded = _decode_text_bytes(data)
+            except UnicodeDecodeError as exc:
+                raise ValueError(
+                    f"Failed to decode CSV file: {csv_path}\n"
+                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    "Suggestions:\n"
+                    "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
+                    "  2. Check if the file is a valid CSV (not corrupted)\n"
+                    "  3. Try opening and re-saving in a text editor"
+                ) from exc
 
-                        # Include header as context
-                        if rows:
-                            header = rows[0]
-                            text_parts.append(f"Columns: {', '.join(header)}\n")
+            reader = csv.reader(StringIO(decoded))
+            rows = list(reader)
 
-                        # Convert rows to readable text
-                        for row in rows[1:]:
-                            # Create a readable row format
-                            row_text = []
-                            for i, cell in enumerate(row):
-                                if i < len(header):
-                                    row_text.append(f"{header[i]}: {cell}")
-                                else:
-                                    row_text.append(cell)
-                            text_parts.append(" | ".join(row_text))
+            if not rows:
+                raise ValueError("CSV file is empty")
 
-                        text = "\n".join(text_parts)
+            # Include header as context
+            header = rows[0]
+            text_parts.append(f"Columns: {', '.join(header)}\n")
 
-                        if self.config.show_stats:
-                            print(
-                                f"  ✅ Loaded CSV file ({len(rows)} rows, {len(header)} columns)"
-                            )
+            # Convert rows to readable text
+            for row in rows[1:]:
+                # Create a readable row format
+                row_text = []
+                for i, cell in enumerate(row):
+                    if i < len(header):
+                        row_text.append(f"{header[i]}: {cell}")
+                    else:
+                        row_text.append(cell)
+                text_parts.append(" | ".join(row_text))
 
-                        self.log.info(f"📊 Extracted {len(rows)} rows from CSV")
-                        return text
-                except UnicodeDecodeError:
-                    continue
+            text = "\n".join(text_parts)
 
-            raise ValueError(
-                f"Failed to decode CSV file: {csv_path}\n"
-                f"Tried encodings: {', '.join(encodings)}\n"
-                "Suggestions:\n"
-                "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
-                "  2. Check if the file is a valid CSV (not corrupted)\n"
-                "  3. Try opening and re-saving in a text editor"
-            )
+            if self.config.show_stats:
+                print(f"  ✅ Loaded CSV file ({len(rows)} rows, {len(header)} columns)")
+
+            self.log.info(f"📊 Extracted {len(rows)} rows from CSV")
+            return text
         except Exception as e:
-            self.log.error(f"Error reading CSV {csv_path}: {e}")
+            self._log_read_failure(e, csv_path, f"Error reading CSV {csv_path}: {e}")
             raise
 
     def _extract_text_from_json(self, json_path: str) -> str:
@@ -1981,38 +2185,110 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from JSON")
             return text
         except Exception as e:
-            self.log.error(f"Error reading JSON {json_path}: {e}")
+            self._log_read_failure(e, json_path, f"Error reading JSON {json_path}: {e}")
             raise
 
     def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
-        """Extract text from Excel (.xlsx / .xls) files using openpyxl."""
-        try:
-            import openpyxl
+        """Extract text from an Excel .xlsx workbook using openpyxl.
 
-            wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+        Raises:
+            SpreadsheetReadError: The file is not a readable .xlsx workbook
+                (``corrupted``), is a legacy .xls or password-protected one
+                (``unsupported_workbook``), or has no cell values (``empty_file``).
+            ImportError: openpyxl is not installed.
+        """
+        try:
+            import openpyxl  # pylint: disable=import-outside-toplevel
+        except ImportError as e:
+            raise ImportError(
+                "openpyxl is required to read Excel files. "
+                + _missing_package_hint("openpyxl")
+            ) from e
+        from openpyxl.utils.exceptions import (  # pylint: disable=import-outside-toplevel
+            InvalidFileException,
+        )
+
+        name = Path(xlsx_path).name
+        legacy = SpreadsheetReadError(
+            f"Could not read {name}: it is not in the .xlsx format (a legacy .xls "
+            "workbook, or one protected with a password). Open it in Excel, save "
+            "a copy as .xlsx without a password, then index that copy.",
+            "unsupported_workbook",
+        )
+        try:
+            with open(xlsx_path, "rb") as f:
+                magic = f.read(len(_OLE2_MAGIC))
+            if magic == _OLE2_MAGIC or Path(xlsx_path).suffix.lower() == ".xls":
+                raise legacy
+            try:
+                wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+            except InvalidFileException as e:
+                raise legacy from e
+            # KeyError: the zip lacks a part every workbook has (xl/workbook.xml).
+            except (zipfile.BadZipFile, KeyError) as e:
+                self.log.warning(f"openpyxl could not open {xlsx_path}: {e!r}")
+                raise SpreadsheetReadError(
+                    f"Could not read {name}: it is not a valid .xlsx workbook. "
+                    "Open it in Excel and save it again as .xlsx, or re-download "
+                    "it, then index the new copy.",
+                    "corrupted",
+                ) from e
             parts = []
+            has_values = False
+
+            def _numeric(cell: str) -> bool:
+                return cell.strip().replace(".", "").replace("-", "").isdigit()
 
             for sheet in wb.worksheets:
                 parts.append(f"Sheet: {sheet.title}")
 
                 # Collect rows, skipping entirely blank rows
                 rows = []
-                for row in sheet.iter_rows(values_only=True):
+                row_numbers = []
+                for number, row in enumerate(sheet.iter_rows(values_only=True), 1):
                     cells = [str(c) if c is not None else "" for c in row]
                     if any(c.strip() for c in cells):
                         rows.append(cells)
+                        row_numbers.append(number)
+                merged_starts = {
+                    (r.min_row, r.min_col)
+                    for r in sheet.merged_cells.ranges
+                    if r.max_col > r.min_col
+                }
 
                 if not rows:
                     continue
+                has_values = True
+
+                # Single-cell rows above the header are titles when merged
+                # across the table, or when a row of labels then numbers follows.
+                first_wide = next(
+                    (
+                        i
+                        for i, r in enumerate(rows)
+                        if sum(1 for c in r if c.strip()) > 1
+                    ),
+                    0,
+                )
+                merged_titles = all(
+                    (row_numbers[i], next(j for j, c in enumerate(r) if c.strip()) + 1)
+                    in merged_starts
+                    for i, r in enumerate(rows[:first_wide])
+                )
+                labels_then_numbers = (
+                    first_wide + 1 < len(rows)
+                    and not any(_numeric(c) for c in rows[first_wide])
+                    and any(_numeric(c) for c in rows[first_wide + 1])
+                )
+                if first_wide and (merged_titles or labels_then_numbers):
+                    for row in rows[:first_wide]:
+                        parts.append(" ".join(c for c in row if c.strip()))
+                    rows = rows[first_wide:]
 
                 # Use first non-empty row as header if it looks like one
                 # (contains at least one non-numeric string cell)
                 header = rows[0]
-                has_header = any(
-                    c.strip()
-                    and not c.strip().replace(".", "").replace("-", "").isdigit()
-                    for c in header
-                )
+                has_header = any(c.strip() and not _numeric(c) for c in header)
 
                 if has_header and len(rows) > 1:
                     parts.append(
@@ -2021,7 +2297,9 @@ These positions indicate where to split the text."""
                     for row in rows[1:]:
                         row_parts = []
                         for i, cell in enumerate(row):
-                            col_name = header[i] if i < len(header) else f"Col{i+1}"
+                            col_name = (
+                                header[i].strip() if i < len(header) else ""
+                            ) or f"Col{i+1}"
                             if cell.strip():
                                 row_parts.append(f"{col_name}: {cell}")
                         if row_parts:
@@ -2030,6 +2308,12 @@ These positions indicate where to split the text."""
                     for row in rows:
                         parts.append(" | ".join(c for c in row if c.strip()))
 
+            if not has_values:
+                raise SpreadsheetReadError(
+                    f"{name} has no cell values to index. Add data to the "
+                    "workbook, save it, then index it again.",
+                    "empty_file",
+                )
             text = "\n".join(parts)
 
             if self.config.show_stats:
@@ -2041,7 +2325,9 @@ These positions indicate where to split the text."""
             )
             return text
         except Exception as e:
-            self.log.error(f"Error reading Excel file {xlsx_path}: {e}")
+            self._log_read_failure(
+                e, xlsx_path, f"Error reading Excel file {xlsx_path}: {e}"
+            )
             raise
 
     def _extract_text_from_docx(self, docx_path: str) -> str:
@@ -2062,13 +2348,163 @@ These positions indicate where to split the text."""
         try:
             text = extract_docx_text(docx_path)
         except (ImportError, ValueError) as e:
-            self.log.error(f"Error reading Word file {docx_path}: {e}")
+            self._log_read_failure(
+                e, docx_path, f"Error reading Word file {docx_path}: {e}"
+            )
             raise
 
         if self.config.show_stats:
             print(f"  ✅ Loaded Word file ({len(text):,} chars)")
         self.log.info(f"📄 Extracted {len(text):,} characters from Word file")
         return text
+
+    def _extract_text_from_image(self, image_path: str) -> tuple:
+        """Read an image file's text with the vision model.
+
+        Each page is sent as the PDF path sends an embedded image, after EXIF
+        rotation and flattening transparency onto white. A multi-page TIFF is
+        read page by page; other formats (animated GIF included) by their
+        first frame. There is no non-VLM path: an image the VLM cannot read
+        fails instead of indexing empty or placeholder text.
+
+        Returns:
+            (text, metadata) — metadata has vlm_pages and total_images set to
+            the number of pages read, and num_pages for a multi-page TIFF.
+
+        Raises:
+            ImageExtractionError: VLM turned off or unavailable, the file is not
+                a decodable image, it has more than MAX_IMAGE_PAGES pages, or the
+                VLM found no text in it.
+        """
+        import io  # pylint: disable=import-outside-toplevel
+
+        from PIL import Image  # pylint: disable=import-outside-toplevel
+
+        from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
+        from gaia.llm.lemonade_launcher import (  # pylint: disable=import-outside-toplevel
+            describe_client_hint,
+            describe_start_hint,
+        )
+        from gaia.llm.vlm_client import (  # pylint: disable=import-outside-toplevel
+            VLMExtractionError,
+        )
+
+        file_name = Path(image_path).name
+        model = self.config.vlm_model
+
+        if not self.config.use_vlm:
+            raise ImageExtractionError(
+                f"Cannot index image {file_name}: image text extraction is off "
+                "(RAGConfig.use_vlm=False).\n"
+                "Images are read by the vision model; set use_vlm=True to index them."
+            )
+
+        # Outside the try: a locked file must reach index_document as PermissionError.
+        raw = Path(image_path).read_bytes()
+        try:
+            with Image.open(io.BytesIO(raw)) as img:
+                pages = _image_pages_for_vlm(img, file_name)
+        except ImageExtractionError:
+            raise
+        except (OSError, ValueError, Image.DecompressionBombError) as e:
+            self.log.error(f"Unreadable image {image_path}: {e}")
+            raise ImageExtractionError(
+                f"Could not read image: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted or not a supported image.\n"
+                "Re-export it as PNG or JPEG and index it again."
+            ) from e
+
+        vlm = VLMClient(vlm_model=model, base_url=self.config.base_url)
+        if not vlm.check_availability():
+            try:
+                vlm.client.health_check()
+            except Exception as e:  # pylint: disable=broad-except
+                if not _is_connection_failure(e):
+                    raise ImageExtractionError(
+                        f"Cannot index image {file_name}: Lemonade Server at "
+                        f"{vlm.server_url} returned an error: {e}\n"
+                        "Check the Lemonade Server log, then index the image again."
+                    ) from e
+                raise ImageExtractionError(
+                    f"Cannot index image {file_name}: Lemonade Server isn't "
+                    f"reachable at {vlm.server_url}.\n"
+                    f"{describe_start_hint().instruction}\n"
+                    "Then index the image again."
+                ) from e
+            # Reachable, so the model is what's missing; `gaia init` skips it.
+            pull = describe_client_hint("pull", model).instruction
+            raise ImageExtractionError(
+                f"Cannot index image {file_name}: vision model {model} is not "
+                f"available at {vlm.server_url}.\n"
+                "Images are indexed by reading their text with the vision model.\n"
+                "To fix:\n"
+                f"  1. Download it. {pull}\n"
+                f"     Or download {model} in the Lemonade Model Manager "
+                f"({vlm.server_url}).\n"
+                "  2. Index the image again."
+            )
+
+        if self.config.show_stats:
+            print(f"  🖼️  Reading image text with {model} ({len(pages)} page(s))...")
+        page_texts = []
+        try:
+            for page_num, page in enumerate(pages, 1):
+                _beat()
+                results = vlm.extract_from_page_images([page], page_num=page_num)
+                page_texts.append(
+                    "\n\n".join(r["text"].strip() for r in results).strip()
+                )
+        except VLMExtractionError as e:
+            raise ImageExtractionError(
+                f"Could not read text from image {file_name}: {e}"
+            ) from e
+        finally:
+            vlm.cleanup()
+
+        if len(pages) == 1:
+            text = page_texts[0]
+        else:
+            text = "\n\n".join(
+                f"[Page {i}]\n{t}" for i, t in enumerate(page_texts, 1) if t
+            )
+        if not text.strip():
+            raise ImageExtractionError(
+                f"No text found in image: {file_name}\n"
+                f"The vision model ({model}) read the image but returned no text."
+            )
+
+        self.log.info(
+            f"🖼️  Extracted {len(text):,} characters from {file_name} "
+            f"({len(pages)} page(s))"
+        )
+        metadata = {
+            "num_pages": len(pages) if len(pages) > 1 else None,
+            "vlm_pages": len(pages),
+            "total_images": len(pages),
+            "vlm_checked": True,
+            "vlm_available": True,
+        }
+        return text, metadata
+
+    def _extract_text_from_epub(self, epub_path: str) -> tuple:
+        """Extract an EPUB book's text; returns ``(text, num_chapters)``."""
+        from gaia.rag.epub_utils import (  # pylint: disable=import-outside-toplevel
+            extract_epub_text,
+        )
+
+        try:
+            text, num_chapters = extract_epub_text(epub_path)
+        except ValueError as e:
+            self.log.error(f"Error reading EPUB file {epub_path}: {e}")
+            raise
+
+        if self.config.show_stats:
+            print(f"  ✅ Loaded EPUB ({num_chapters} chapters, {len(text):,} chars)")
+        self.log.info(
+            f"📖 Extracted {len(text):,} characters from EPUB ({num_chapters} chapters)"
+        )
+        return text, num_chapters
 
     def _extract_text_from_file(self, file_path: str) -> tuple:
         """
@@ -2077,8 +2513,8 @@ These positions indicate where to split the text."""
         Returns:
             (text, metadata_dict) tuple where metadata_dict contains:
             - num_pages: int (for PDFs/PPTX) or None
-            - vlm_pages: int (for PDFs/PPTX with VLM) or None
-            - total_images: int (for PDFs/PPTX with VLM) or None
+            - vlm_pages: int (for PDFs/PPTX/images with VLM) or None
+            - total_images: int (for PDFs/PPTX/images with VLM) or None
         """
         file_type = self._get_file_type(file_path)
         metadata = {"num_pages": None, "vlm_pages": None, "total_images": None}
@@ -2105,6 +2541,10 @@ These positions indicate where to split the text."""
             metadata["total_images"] = pptx_metadata.get("total_images", 0)
             return text, metadata
 
+        # Image files (read by the vision model)
+        elif file_type in IMAGE_EXTENSIONS:
+            return self._extract_text_from_image(file_path)
+
         # Text-based files
         elif file_type in [".txt", ".md", ".mdx", ".markdown", ".rst", ".log"]:
             return self._extract_text_from_text_file(file_path), metadata
@@ -2118,12 +2558,21 @@ These positions indicate where to split the text."""
             return self._extract_text_from_json(file_path), metadata
 
         # Excel files
-        elif file_type in [".xlsx", ".xls"]:
+        elif file_type == ".xlsx":
             return self._extract_text_from_xlsx(file_path), metadata
 
         # Word files
         elif file_type == ".docx":
             return self._extract_text_from_docx(file_path), metadata
+
+        # E-books
+        elif file_type == ".epub":
+            text, num_chapters = self._extract_text_from_epub(file_path)
+            metadata["num_chapters"] = num_chapters
+            return text, metadata
+
+        elif file_type in UNSUPPORTED_DOCUMENTS:
+            raise ValueError(unsupported_document_message(file_path, file_type))
 
         # Code files (treat as text for Q&A purposes)
         elif file_type in [
@@ -2201,10 +2650,36 @@ These positions indicate where to split the text."""
 
         # Unknown file type - try as text
         else:
+            self._refuse_binary(file_path, file_type)
             self.log.warning(
                 f"Unknown file type {file_type}, attempting to read as text"
             )
             return self._extract_text_from_text_file(file_path), metadata
+
+    def _refuse_binary(self, file_path: str, file_type: str) -> None:
+        """Raise when *file_path* holds binary data; latin-1 would "decode" it as garbage."""
+        with self._safe_open(file_path, "rb") as f:
+            head = f.read(8192)
+        has_nul = b"\x00" in head
+        for bom, encoding in _TEXT_BOM_ENCODINGS:
+            if head.startswith(bom):
+                # UTF-16/32 text is full of NUL bytes; judge its decoded form.
+                decoder = codecs.getincrementaldecoder(encoding)()
+                try:
+                    has_nul = "\x00" in decoder.decode(head, final=False)
+                except UnicodeDecodeError:
+                    return  # the text decoder reports the bad encoding
+                break
+        if has_nul:
+            raise ValueError(
+                f"Cannot index {Path(file_path).name}: it is a binary file, not "
+                f"text, and GAIA has no reader for {file_type} files.\n"
+                "Supported: PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), "
+                "EPUB, images (PNG, JPG, ...), plain text, Markdown, CSV, JSON, HTML "
+                "and source code. "
+                "Convert the file to one of these (PDF works for most documents) "
+                "and index that copy."
+            )
 
     def _split_text_into_chunks(self, text: str) -> List[str]:
         """
@@ -2249,10 +2724,14 @@ These positions indicate where to split the text."""
         protected_text = text
         for i, match in enumerate(re.finditer(vlm_pattern, text, re.DOTALL)):
             placeholder = f"<<<VLM_BLOCK_{i}>>>"
-            vlm_blocks.append(
-                {"placeholder": placeholder, "content": match.group(0).strip()}
+            block = match.group(0)
+            content = block.rstrip()
+            vlm_blocks.append({"placeholder": placeholder, "content": content})
+            # Keep the whitespace after the block, or restoring it fuses its last
+            # word to the next image or page marker.
+            protected_text = protected_text.replace(
+                block, placeholder + block[len(content) :], 1
             )
-            protected_text = protected_text.replace(match.group(0), placeholder, 1)
 
         # STEP 2: Identify natural document boundaries
         # Look for markdown headers, section breaks, or significant whitespace
@@ -2314,7 +2793,11 @@ These positions indicate where to split the text."""
         vlm_paragraphs = set()
         for idx, para in enumerate(paragraphs):
             # Check if this paragraph contains VLM markers
-            if "### 🖼️ IMAGE" in para or "**Content Extracted from Images:**" in para:
+            if (
+                "### 🖼️ IMAGE" in para
+                or "**Content Extracted from Images:**" in para
+                or any(block["placeholder"] in para for block in vlm_blocks)
+            ):
                 vlm_paragraphs.add(idx)
                 self.log.debug(
                     f"Paragraph {idx} marked as VLM content (will keep atomic)"
@@ -2866,19 +3349,33 @@ These positions indicate where to split the text."""
         progress_callback: Optional[Callable[[int, int], None]] = None,
         wait_callback: Optional[Callable[[int], None]] = None,
         heartbeat: Optional[Callable[[], None]] = None,
+        display_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Index a document for retrieval; see :meth:`_index_document`.
 
         ``heartbeat`` is called once per extracted PDF page. Raising
         :class:`IndexingStopped` from it, or from ``progress_callback``,
         stops the index and keeps any cache the document had.
+
+        ``display_name`` is the name the user knows the file by, when
+        ``file_path`` is a copy. The returned ``file_name`` and ``error`` use
+        it in place of the copy's path.
         """
+        if display_name:
+            self.log.info(f"Indexing {display_name} (copy at {file_path})")
         previous = getattr(_HEARTBEAT, "fn", None)
         _HEARTBEAT.fn = heartbeat
         try:
-            return self._index_document(file_path, progress_callback, wait_callback)
+            stats = self._index_document(file_path, progress_callback, wait_callback)
         finally:
             _HEARTBEAT.fn = previous
+        if display_name:
+            stats["file_name"] = display_name
+            if stats.get("error"):
+                stats["error"] = name_file_for_user(
+                    str(stats["error"]), file_path, display_name
+                )
+        return stats
 
     def _index_document(
         self,
@@ -2919,7 +3416,11 @@ These positions indicate where to split the text."""
                 "num_chunks": int,
                 "total_indexed_files": int,
                 "total_chunks": int,
-                "error": str (if failed)
+                "error": str (if failed),
+                "error_type": str (some failures: "file_locked",
+                    "cache_busy" or "embedding_unavailable"),
+                "xlsx_status": str (an unreadable workbook: "corrupted",
+                    "unsupported_workbook" or "empty_file")
             }
 
         Raises:
@@ -2965,6 +3466,7 @@ These positions indicate where to split the text."""
                 print(f"❌ File is empty: {file_path}")
                 print("   The file has no content to index")
             stats["error"] = "File is empty"
+            stats["empty_file"] = True
             return stats
 
         # Enforce maximum file size limit (prevent OOM)
@@ -3030,7 +3532,10 @@ These positions indicate where to split the text."""
                 return stats
 
         # Check cache - the cache key is based on file content hash
-        content_key = self._content_key(file_path)
+        try:
+            content_key = self._content_key(file_path, raise_locked=True)
+        except PermissionError as e:
+            return self._document_locked(stats, file_path, e)
         cache_path = self._get_cache_path(file_path, content_key)
         md_cache_path = self._extracted_markdown_path(content_key)
 
@@ -3172,14 +3677,15 @@ These positions indicate where to split the text."""
                 if not limits_ok:
                     stats["memory_limit_warning"] = True
                 return stats
-            except IndexingStopped:
+            except (IndexingStopped, LeaseWaitCancelled):
                 raise
             except EmbeddingUnavailableError as e:
                 # The cache is fine; the embedder is not. Keep the cache.
                 return self._embedding_failed(stats, file_path, e)
             except FileLockError as e:
-                # Busy, not corrupt: re-extracting would redo another process's work.
-                return self._cache_busy(stats, file_path, e)
+                # Not corrupt: re-extracting would redo another process's work,
+                # or fail the same way saving into an unwritable cache.
+                return self._cache_lock_failed(stats, file_path, e)
             except Exception as e:
                 # A miss, not a delete: re-indexing replaces the entry atomically,
                 # and deleting here could destroy a fresh cache another process
@@ -3197,7 +3703,17 @@ These positions indicate where to split the text."""
 
         try:
             # Extract text based on file type
-            text, file_metadata = self._extract_text_from_file(file_path)
+            try:
+                text, file_metadata = self._extract_text_from_file(file_path)
+            except Exception as e:
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
+                # Only the document's own read: a cache write can fail with EACCES too.
+                locked = _locked_cause(e, file_path)
+                if locked is not None:
+                    return self._document_locked(stats, file_path, locked)
+                raise
 
             # Store metadata in stats if available (for PDFs)
             if file_metadata.get("num_pages"):
@@ -3378,35 +3894,81 @@ These positions indicate where to split the text."""
             stats["error"] = str(e)
             stats["pdf_status"] = e.status
             return stats
-        except IndexingStopped:
+        except SpreadsheetReadError as e:
+            if self.config.show_stats:
+                print(f"❌ Failed to index {Path(file_path).name}: {e}")
+            self.log.error(f"Excel extraction failed for {file_path}: {e.status}")
+            stats["error"] = str(e)
+            stats["xlsx_status"] = e.status
+            return stats
+        except (IndexingStopped, LeaseWaitCancelled):
             raise
         except EmbeddingUnavailableError as e:
             return self._embedding_failed(stats, file_path, e)
+        except FileLockError as e:
+            return self._cache_lock_failed(stats, file_path, e)
         except Exception as e:
-            if self.config.show_stats:
-                print(f"❌ Failed to index {Path(file_path).name}: {e}")
-            self.log.error(
-                f"Failed to index {file_path}: {type(e).__name__}: {e}",
-                exc_info=True,
-            )
-            stats["error"] = str(e)
-            return stats
+            return self._index_failed(stats, file_path, e)
 
-    def _cache_busy(
+    def _document_locked(
+        self, stats: Dict[str, Any], file_path: str, error: PermissionError
+    ) -> Dict[str, Any]:
+        """Index stats for a document Windows would not let us read."""
+        message = (
+            f"Could not read {Path(file_path).name}: another program may have it "
+            "open, or you may not have permission to read it. Close any program "
+            "using it and index the document again."
+        )
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        # A warning: the caller gets error_type and decides whether to retry.
+        self.log.warning(f"{message} ({error})")
+        stats["error"] = message
+        stats["error_type"] = "file_locked"
+        return stats
+
+    def _index_failed(
+        self, stats: Dict[str, Any], file_path: str, e: Exception
+    ) -> Dict[str, Any]:
+        """Index stats for a document that failed for any other reason."""
+        if self.config.show_stats:
+            print(f"❌ Failed to index {Path(file_path).name}: {e}")
+        self.log.error(
+            f"Failed to index {file_path}: {type(e).__name__}: {e}",
+            exc_info=True,
+        )
+        stats["error"] = str(e)
+        return stats
+
+    def _cache_lock_failed(
         self, stats: Dict[str, Any], file_path: str, error: FileLockError
     ) -> Dict[str, Any]:
-        """Index stats for a document whose cache another process holds locked."""
-        message = f"Could not read the cached index for {Path(file_path).name}: {error}"
+        """Index stats for a document whose cache lock could not be taken.
+
+        ``error_type`` is ``cache_busy`` when another process held the lock,
+        ``cache_unwritable`` when this user cannot create files in the cache
+        folder, and ``cache_lock_error`` when the lock file itself is unusable.
+        """
+        folder = error.lock_path.parent
+        name = Path(file_path).name
         if isinstance(error, FileLockTimeout):
-            message += (
-                " Another GAIA process is probably indexing into the same cache; "
-                "index the document again once it finishes."
+            error_type = "cache_busy"
+            message = f"Could not use the cached index for {name} in {folder}: {error}"
+        elif lock_dir_unwritable(error):
+            error_type = "cache_unwritable"
+            message = (
+                f"Cannot use the RAG cache folder {folder} for {name}: {error} "
+                "The document itself is fine."
             )
+        else:
+            error_type = "cache_lock_error"
+            message = f"Cannot open the RAG cache lock in {folder} for {name}: {error}"
         if self.config.show_stats:
             print(f"❌ {message}")
         self.log.error(message)
         stats["error"] = message
-        stats["error_type"] = "cache_busy"
+        stats["error_type"] = error_type
+        stats["cache_dir"] = str(folder)
         return stats
 
     def _embedding_failed(

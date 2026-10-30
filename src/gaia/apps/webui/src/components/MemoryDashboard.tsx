@@ -9,6 +9,8 @@ import {
     Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks,
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import * as memoryApi from '../services/memoryApi';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
@@ -98,6 +100,7 @@ interface ToolStat {
     total_calls: number;
     success_count: number;
     failure_count: number;
+    denied_count?: number;
     success_rate: number;
     avg_duration_ms: number;
     last_used: string | null;
@@ -409,68 +412,38 @@ export function MemoryDashboard() {
         return () => document.removeEventListener('mousedown', handler);
     }, [showMaintenanceMenu]);
 
-    // Close on Escape key
-    useEffect(() => {
-        const handler = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                if (betaConfirm) {
-                    setBetaConfirm(null);
-                } else if (deleteConfirm) {
-                    setDeleteConfirm(false);
-                } else if (reinitConfirm) {
-                    setReinitConfirm(false);
-                } else if (convDetail) {
-                    setConvDetail(null);
-                } else if (showMaintenanceMenu) {
-                    setShowMaintenanceMenu(false);
-                } else if (showAddForm || editingId) {
-                    setShowAddForm(false);
-                    setEditingId(null);
-                } else if (expandedRowId) {
-                    setExpandedRowId(null);
-                } else {
-                    setShowMemoryDashboard(false);
-                }
-            }
-        };
-        document.addEventListener('keydown', handler);
-        return () => document.removeEventListener('keydown', handler);
-    }, [convDetail, showMaintenanceMenu, showAddForm, editingId, expandedRowId, setShowMemoryDashboard, betaConfirm, deleteConfirm, reinitConfirm]);
+    // Escape backs out one level: the innermost open piece first, then the dashboard.
+    useEscapeToClose(true, () => {
+        if (betaConfirm) {
+            setBetaConfirm(null);
+        } else if (deleteConfirm) {
+            setDeleteConfirm(false);
+        } else if (reinitConfirm) {
+            setReinitConfirm(false);
+        } else if (convDetail) {
+            setConvDetail(null);
+        } else if (showMaintenanceMenu) {
+            setShowMaintenanceMenu(false);
+        } else if (showAddForm || editingId) {
+            setShowAddForm(false);
+            setEditingId(null);
+        } else if (expandedRowId) {
+            setExpandedRowId(null);
+        } else {
+            setShowMemoryDashboard(false);
+        }
+    });
 
     // Modal focus handling for the beta-confirm dialog: move focus in, keep Tab
     // inside it, and hand focus back to the toggle that opened it.
+    useFocusTrap(betaConfirmRef, !!betaConfirm);
     useEffect(() => {
         if (!betaConfirm) return;
         const panel = betaConfirmRef.current;
         if (!panel) return;
         const opener = document.activeElement as HTMLElement | null;
         panel.focus();
-
-        const focusable = () => Array.from(
-            panel.querySelectorAll<HTMLElement>(
-                'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-            )
-        );
-        const handler = (e: KeyboardEvent) => {
-            if (e.key !== 'Tab') return;
-            const items = focusable();
-            if (items.length === 0) {
-                e.preventDefault();
-                return;
-            }
-            const active = document.activeElement;
-            const inside = !!active && panel.contains(active) && active !== panel;
-            if (e.shiftKey && (!inside || active === items[0])) {
-                e.preventDefault();
-                items[items.length - 1].focus();
-            } else if (!e.shiftKey && (!inside || active === items[items.length - 1])) {
-                e.preventDefault();
-                items[0].focus();
-            }
-        };
-        document.addEventListener('keydown', handler);
         return () => {
-            document.removeEventListener('keydown', handler);
             opener?.focus();
         };
     }, [betaConfirm]);
@@ -1284,7 +1257,7 @@ export function MemoryDashboard() {
                                                 stats?.knowledge?.by_category
                                                     ? Object.entries(stats.knowledge.by_category)
                                                         .slice(0, 3)
-                                                        .map(([k, v]) => `${v} ${k}s`)
+                                                        .map(([k, v]) => `${v} ${k}${v === 1 ? '' : 's'}`)
                                                         .join(', ')
                                                     : 'No entries'
                                             );
@@ -1831,6 +1804,7 @@ export function MemoryDashboard() {
                                                         <th>Tool</th>
                                                         <th>Calls</th>
                                                         <th>Success</th>
+                                                        <th>Denied</th>
                                                         <th>Avg Time</th>
                                                         <th>Last Used</th>
                                                         <th>Last Error</th>
@@ -1852,6 +1826,7 @@ export function MemoryDashboard() {
                                                                     </span>
                                                                 </div>
                                                             </td>
+                                                            <td>{t.denied_count ?? 0}</td>
                                                             <td>{formatDuration(t.avg_duration_ms)}</td>
                                                             <td>
                                                                 <span className="mem-date-cell" title={formatDateFull(t.last_used)}>

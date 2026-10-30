@@ -35,6 +35,13 @@ Custom agents can have their own:
 
 A custom agent is a Python module — add custom tools, built-in tool mixins, MCP servers, or any logic you need.
 
+<Tip>
+  Want an installable package instead of a single file? `gaia agent init my-agent` scaffolds
+  one that registers through the `gaia.agent` entry point and passes `gaia agent test --lint`
+  as-is. The [`hello-world` reference package](https://github.com/amd/gaia/tree/main/tests/fixtures/agents/hello-world)
+  shows the same layout filled in. See the [CLI reference](/reference/cli#agent-command).
+</Tip>
+
 ### Directory structure
 
 ```
@@ -89,6 +96,7 @@ GAIA ships with ready-to-use tool mixins. To enable most of them, inherit the mi
 | `shell` | `gaia.agents.tools.shell_tools.ShellToolsMixin` | `self.register_shell_tools()` |
 | `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | `self.register_screenshot_tools()` |
 | `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `self.register_wait_tools()` |
+| `reasoning_effort` | `gaia.agents.tools.reasoning_tools.ReasoningEffortToolsMixin` | `self.register_reasoning_effort_tools()` (registers only on a model that grades reasoning, such as gpt-oss) |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | `self.init_sd()` |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | `self.init_vlm()` |
 
@@ -119,7 +127,7 @@ your code.
 
 A connector lets users:
 
-1. **Authenticate once** in Settings → Connections (OAuth flow for
+1. **Authenticate once** in Settings → Connectors (OAuth flow for
    Google-style providers, paste-an-API-key for MCP servers).
 2. **Grant scopes per agent** so each agent only sees the data it
    actually needs. The Agent UI surfaces this when a user first picks
@@ -127,15 +135,15 @@ A connector lets users:
 3. **Trust that secrets stay in the OS keyring**, never in plaintext
    files or env vars baked into your code.
 
-{/* TODO(screenshot): Capture the Settings → Connections page showing connector
+{/* TODO(screenshot): Capture the Settings → Connectors page showing connector
     authentication options. Save to docs/assets/img/custom-agent/connections-settings.png
     and add a Frame block here pointing at /assets/img/custom-agent/connections-settings.png. */}
 
 Declare what your agent needs by setting `REQUIRED_CONNECTORS` on the
 class, and call `get_credential_sync(connector_id, agent_id, required_scopes=[...])`
 from inside a tool to get a usable token. The
-[`connectors-demo` agent](https://github.com/amd/gaia/blob/main/hub/agents/connectors-demo/python/gaia_agent_connectors_demo/agent.py)
-is a working reference for both `oauth_pkce` (Google) and `mcp_server`
+[agent-author guide](/sdk/infrastructure/connectors#agent-author-guide) has a
+complete working agent, and covers both `oauth_pkce` (Google) and `mcp_server`
 (GitHub) connectors.
 
 {/* TODO(screenshot): Capture the per-agent connector grant prompt showing requested
@@ -151,7 +159,7 @@ is a working reference for both `oauth_pkce` (Google) and `mcp_server`
 
 ## Export and import agents
 
-Custom agents can be packaged into a single `.zip` bundle and shared between machines, teammates, or environments with the `gaia agent export` and `gaia agent import` CLI commands. Exports include every `~/.gaia/agents/*` directory with an `agent.py` — the installer-seeded bundled example included; imported copies land as user-owned agents the seeder never touches.
+Custom agents can be packaged into a single `.zip` bundle and shared between machines, teammates, or environments with the `gaia agent export` and `gaia agent import` CLI commands. Exports include every `~/.gaia/agents/*` directory with an `agent.py`; imported copies land as user-owned agents the installer's seeder never touches.
 
 ```bash
 # Export every custom agent to ~/.gaia/export.zip
@@ -200,30 +208,26 @@ Bundles are validated on import. The receiving end enforces conservative limits 
 ## Examples
 
 <AccordionGroup>
-  <Accordion title="Example Agent — simple personality">
+  <Accordion title="Greeter Agent — simple personality">
     ```python
     from gaia.agents.base.agent import Agent
     from gaia.agents.base.console import AgentConsole
 
 
-    class ExampleAgent(Agent):
-        AGENT_ID = "example-agent"
-        AGENT_NAME = "Example Agent"
-        AGENT_DESCRIPTION = (
-            "A bundled example agent that shows how installer-seeded custom agents work"
-        )
+    class GreeterAgent(Agent):
+        AGENT_ID = "greeter-agent"
+        AGENT_NAME = "Greeter Agent"
+        AGENT_DESCRIPTION = "A friendly greeter with a personality and no tools"
         CONVERSATION_STARTERS = [
-            "What are you an example of?",
-            "How do I build my own agent like you?",
+            "Say hello",
+            "What can you do?",
         ]
 
         def _get_system_prompt(self) -> str:
             return (
-                "You are GAIA's bundled Example Agent — a working demonstration of a "
-                "custom agent seeded by the installer. Explain plainly that you exist "
-                "to show how custom agents are packaged and loaded, and point anyone "
-                "who wants to build their own to "
-                "https://amd-gaia.ai/docs/guides/custom-agent."
+                "You are a warm, upbeat greeter. Welcome the user, answer in one "
+                "to three short sentences, and say plainly that you have no tools "
+                "when asked to do something that needs one."
             )
 
         def _create_console(self) -> AgentConsole:

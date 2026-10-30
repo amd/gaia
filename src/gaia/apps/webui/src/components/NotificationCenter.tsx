@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useCallback } from 'react';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useShallow } from 'zustand/react/shallow';
 import {
   Bell,
@@ -123,14 +124,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
     [respondToPermission]
   );
 
-  // Close on Escape — skip if a higher-priority modal already handled it
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  useEscapeToClose(true, onClose);
 
   // Filter type tabs
   const filterTypes: Array<{ key: NotificationType | null; label: string }> = [

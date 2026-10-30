@@ -24,6 +24,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
 	"github.com/amd/gaia/tui/internal/ui/theme"
+	"github.com/amd/gaia/tui/internal/update"
 )
 
 // prepareTerminal does everything that has to TALK to the terminal before
@@ -79,8 +80,10 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithFullAccessNotice(notice).
-		WithClaude(useClaude, claudeModel)).
+		WithClaude(useClaude, claudeModel).
+		WithTerminalVersion(update.Current)).
 		WithTrace(trace).
+		WithUpdateCheck().
 		WithLocalPreflight(preflight.LocalOptions{
 			// The gate has to answer about the binary this launch will actually
 			// spawn — with --mock that is the mock, not the name the seed carries.
@@ -194,9 +197,24 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 
 	if ctrl == nil {
 		p := tea.NewProgram(model, teaOptions()...)
-		if _, err := p.Run(); err != nil {
+		// Bubble Tea quits on SIGINT/SIGTERM but not SIGHUP, so closing the
+		// terminal window skipped the Close above and orphaned the agent.
+		hup := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		defer func() {
+			signal.Stop(hup)
+			close(hup)
+		}()
+		go func() {
+			if _, ok := <-hup; ok {
+				p.Quit()
+			}
+		}()
+		final, err := p.Run()
+		if err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
+		beforeExit(final)
 		return nil
 	}
 
@@ -220,7 +238,7 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	// A deferred Stop covers a normal exit only; a signalled one has to remove
 	// the discovery file too, or it keeps advertising a pid, a port and a token.
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer func() {
 		signal.Stop(sigs)
 		close(sigs)
@@ -238,12 +256,35 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	// Bracket Run: tea.Program.Send silently discards messages outside it, so
 	// the control API must refuse injection rather than report a false success.
 	srv.MarkRunning()
-	_, err = p.Run()
+	final, err := p.Run()
 	srv.MarkStopped()
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
+	beforeExit(final)
 	return nil
+}
+
+// exitHook is a model with work to finish once the program has stopped —
+// however it stopped: a key, a closed terminal, a signal.
+type exitHook interface{ BeforeExit() error }
+
+// beforeExit runs the final model's exit work, after unwrapping the
+// recorder and repaint wrappers around it.
+func beforeExit(m tea.Model) {
+	for m != nil {
+		if h, ok := m.(exitHook); ok {
+			if err := h.BeforeExit(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+			return
+		}
+		u, ok := m.(interface{ Unwrap() tea.Model })
+		if !ok {
+			return
+		}
+		m = u.Unwrap()
+	}
 }
 
 // RunAgent launches one catalog agent by id, over whatever transport that entry
@@ -315,7 +356,7 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		// it ran after the client, so a machine with no gaia-agent got
 		// ForAgent's bare "no runnable binary" instead of the gate's three-part
 		// answer, which names where it looked and how to get the program.
-		cfg := preflight.ConfigFor(agent.ID, agent.Name)
+		cfg := oneShotConfig(agent.ID, agent.Name, model)
 		var rep preflight.Report
 		if agent.Transport == catalog.TransportDaemon {
 			t := preflight.NewDaemonTransport(daemon.New(daemon.Options{Logf: logf}))
@@ -354,7 +395,27 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		res := RunOneShot(ctx, c, query, os.Stdout, os.Stderr, dev, logf)
+
+		// The agent leads its own process group on POSIX, so a terminal Ctrl+C
+		// never reaches it: left to the default disposition, this process died
+		// and the turn ran on. Trapped, it is stopped the way Esc stops it.
+		sigs := make(chan os.Signal, 2)
+		signal.Notify(sigs, interruptSignals...)
+		defer signal.Stop(sigs)
+		res := runOneShotInterruptible(ctx, c, query, os.Stdout, os.Stderr, dev, logf,
+			interruptOptions{
+				sigs:        sigs,
+				cancelGrace: interruptCancelGrace,
+				abandonWait: interruptAbandonWait,
+				release:     func() { signal.Stop(sigs) },
+			})
+		if res.Interrupted {
+			// Explicit, not left to the defer: a stop that could not end the
+			// agent must say so before the process exits.
+			if err := c.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "❌ Could not stop the agent, so it may still be running: %v\n", err)
+			}
+		}
 		return res.ExitCode, nil
 	}
 
@@ -367,7 +428,8 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithClaude(useClaude, claudeModel).
-		WithModel(model)).
+		WithModel(model).
+		WithTerminalVersion(update.Current)).
 		WithTrace(trace)
 	if err := run(m, dev, ctrl); err != nil {
 		return 1, err
@@ -420,6 +482,17 @@ func launchFullAccess(agent catalog.Agent, fullAccess, saved bool) (bool, string
 		return false, "", err
 	}
 	return fullAccess, "", nil
+}
+
+// oneShotConfig is the readiness check for a --query turn. It carries the model
+// the turn runs on, so a cloud model is checked rather than the local default.
+func oneShotConfig(agentID, name, model string) preflight.Config {
+	cfg := preflight.ConfigFor(agentID, name)
+	// Only the flagship takes a per-turn model; email ignores one.
+	if agentID == catalog.FlagshipID {
+		cfg.Model = model
+	}
+	return cfg
 }
 
 // oneShotModel is the model a --query run uses: an explicit --model, else the

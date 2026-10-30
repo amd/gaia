@@ -150,6 +150,24 @@ def test_the_old_childs_exit_never_replaces_the_restart_message(proc_cls):
         ch.close()
 
 
+def test_after_a_restart_the_user_is_told_to_resend_not_to_continue():
+    """The new child never saw the question, so "continue" would get an answer
+    to nothing. The user must learn the conversation is gone and resend."""
+    clock, seen, procs = FakeClock(), [], []
+    ch = _channel(_spawner(procs), clock, seen)
+    try:
+        ch.submit(Turn(text="stuck"))
+        assert _wait_for(lambda: procs[0].stdin.lines)
+        _wedge(clock, procs[0])
+        assert _wait_for(lambda: _texts(seen, "stuck", "error"))
+        detail = _texts(seen, "stuck", "error")[0]["detail"].lower()
+        assert "continue" not in detail
+        assert "no longer remembers this conversation" in detail
+        assert "send your message again" in detail
+    finally:
+        ch.close()
+
+
 def test_a_late_line_from_the_replaced_child_never_reaches_the_next_turn():
     """The old child's reader is still alive (its pipe stayed open) when it
     flushes a final answer meant for the stopped turn."""

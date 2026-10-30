@@ -24,6 +24,7 @@ from gaia.agents.tools.path_access import (
     readable_entry,
     write_access_error,
 )
+from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
 from gaia.rag.sdk import EmbeddingUnavailableError
@@ -33,6 +34,10 @@ logger = get_logger(__name__)
 
 _RAG_HINT = "Set self.rag = <RAGSDK instance, or None to disable RAG>."
 _RAG_DOC_ANCHOR = "docs/spec/rag-tools-mixin.mdx#host-agent-contract"
+_SESSION_SAVE_WARNING = (
+    "The document is available in this conversation, but the session was not saved. "
+    "Retry saving the session before exiting to keep its document attachments."
+)
 
 #: Output budget for one summary reply. The RAG client's 1024 default cut a
 #: meeting summary off mid-sentence; a model that always reasons (Gemma 4)
@@ -247,6 +252,37 @@ def _index_embedding_error(stats: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_CACHE_LOCK_HINTS = {
+    "cache_busy": (
+        "Another process is using the document cache ({cache}). Tell the "
+        "user, and index the document again once it finishes."
+    ),
+    "cache_unwritable": (
+        "The document is fine: GAIA cannot write its document cache folder "
+        "({cache}). Tell the user to fix that folder's permissions; do not "
+        "suggest they check the document."
+    ),
+    "cache_lock_error": (
+        "The document is fine: GAIA could not open the lock file in its "
+        "document cache folder ({cache}). Tell the user the error; do not "
+        "suggest they check the document."
+    ),
+}
+
+
+def _index_cache_error(stats: Dict[str, Any], file_path: str) -> Dict[str, Any]:
+    """The result for a document whose cache lock could not be taken."""
+    error_type = stats["error_type"]
+    return {
+        "status": "error",
+        "error_type": error_type,
+        "error": stats.get("error"),
+        "file_name": stats.get("file_name", Path(file_path).name),
+        "cache_dir": stats.get("cache_dir"),
+        "hint": _CACHE_LOCK_HINTS[error_type].format(cache=stats.get("cache_dir")),
+    }
+
+
 def _require_rag(host: Any) -> Any:
     """Read ``host.rag``, raising loudly if never bound.
 
@@ -296,6 +332,62 @@ def _ambiguous_file_error(requested: str, candidates: list) -> Dict[str, Any]:
         ),
         "candidates": candidates,
     }
+
+
+def _chunks_have_pages(chunks: List[Dict[str, Any]]) -> bool:
+    """True when any chunk carries a page number (PDFs do; markdown and text don't)."""
+    return any("page" in chunk for chunk in chunks)
+
+
+def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
+    """How query_documents asks the model to cite: the full path, plus pages if any."""
+    instruction = (
+        "Use the provided document chunks to answer the user's question.\n\n"
+        "CRITICAL CITATION REQUIREMENT:\n"
+        "When referencing a document, you MUST include its FULL ABSOLUTE FILE PATH "
+        "from the 'source_file' field of each chunk. This allows the user to click "
+        "and open the file directly.\n\n"
+    )
+    if has_pages:
+        instruction += (
+            "Format: 'According to <absolute_path> (page X):'\n"
+            "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
+            "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n\n"
+        )
+        if not all_paged:
+            instruction += (
+                "Some chunks have no 'page' field: their files have no pages, so "
+                "cite those by path alone and don't mention pages for them.\n\n"
+            )
+    else:
+        instruction += (
+            "Format: 'According to <absolute_path>:'\n"
+            "Example: 'According to C:\\Users\\john\\docs\\notes.md:'\n"
+            "These chunks have no page numbers, so cite none and don't mention pages.\n\n"
+        )
+    return instruction + (
+        "IMPORTANT: Always use the full path exactly as given in source_file. "
+        "Do NOT shorten it to just the filename."
+    )
+
+
+def _file_instruction(file_name: str, num_chunks: int, has_pages: bool) -> str:
+    """How query_specific_file asks the model to cite one file, with pages if any."""
+    instruction = (
+        f"Use these chunks from {file_name} to answer the question. Read through ALL "
+        f"{num_chunks} chunks completely before answering.\n\nCRITICAL CITATION REQUIREMENT:\n"
+    )
+    if not has_pages:
+        return instruction + (
+            f"Your answer MUST start with: 'According to {file_name}:'. These chunks have "
+            "no page numbers, so cite none and don't mention pages."
+        )
+    return instruction + (
+        f"Your answer MUST start with: 'According to {file_name}, page X:' where X is the "
+        "page number from the chunk's 'page' field.\n\n"
+        f"Example: If chunk has 'page': 2, say 'According to {file_name}, page 2:'\n"
+        f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'"
+    )
 
 
 def extract_page_from_chunk(
@@ -360,6 +452,14 @@ class RAGToolsMixin:
     are provided by FileSearchToolsMixin from gaia.agents.tools.file_tools
     """
 
+    def _no_documents_message(self) -> str:
+        """What an empty index means, as the tools report it to the model.
+
+        A host whose documents are scoped to one conversation overrides this:
+        "nothing is indexed" there reads as an empty library, which it may not be.
+        """
+        return "No documents are currently indexed."
+
     def register_rag_tools(self) -> None:
         """Register RAG-related tools."""
         from gaia.agents.base.tools import tool
@@ -381,11 +481,12 @@ class RAGToolsMixin:
             try:
                 # Check if RAG is initialized and has documents
                 if not rag or not rag.index or len(rag.chunks) == 0:
+                    message = self._no_documents_message()
                     return {
                         "status": "no_documents",
-                        "message": "No documents are currently indexed.",
+                        "message": message,
                         "instruction": (
-                            "No documents are indexed yet. "
+                            f"{message} "
                             "For domain-specific questions (HR policies, PTO, remote work, company procedures, "
                             "financial data, project plans, technical specs): use the SMART DISCOVERY WORKFLOW — "
                             "use search_file to find relevant files, index_document to index them, then query_specific_file to answer. "
@@ -757,17 +858,9 @@ class RAGToolsMixin:
                     "num_chunks": len(top_chunks),
                     "search_keys_used": search_keys,
                     "source_files": matched_source_files,
-                    "instruction": (
-                        "Use the provided document chunks to answer the user's question.\n\n"
-                        "CRITICAL CITATION REQUIREMENT:\n"
-                        "When referencing a document, you MUST include its FULL ABSOLUTE FILE PATH "
-                        "from the 'source_file' field of each chunk. This allows the user to click "
-                        "and open the file directly.\n\n"
-                        "Format: 'According to <absolute_path> (page X):'\n"
-                        "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
-                        "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n\n"
-                        "IMPORTANT: Always use the full path exactly as given in source_file. "
-                        "Do NOT shorten it to just the filename."
+                    "instruction": _documents_instruction(
+                        _chunks_have_pages(formatted_chunks),
+                        all("page" in chunk for chunk in formatted_chunks),
                     ),
                 }
 
@@ -830,6 +923,7 @@ class RAGToolsMixin:
                 )
 
                 auto_indexed = False
+                save_warning = ""
                 matching_files = _match_indexed_files(rag.indexed_files, file_path)
 
                 if not matching_files:
@@ -845,7 +939,9 @@ class RAGToolsMixin:
                     if len(matching_files) == 0:
                         # Auto-index the file if it exists on disk instead of failing.
                         # This avoids the slow fail → plan → index → re-query cycle.
-                        disk_path = os.path.expanduser(file_path)
+                        disk_path = str(
+                            _resolve_target(file_path, None, _workspace_default(self))
+                        )
                         denied = read_access_error(self, disk_path)
                         if denied:
                             return denied
@@ -872,9 +968,11 @@ class RAGToolsMixin:
                                             file_path
                                         )
                                         if hasattr(self, "session_manager"):
-                                            self.session_manager.save_session(
+                                            if not self.session_manager.save_session(
                                                 self.current_session
-                                            )
+                                            ):
+                                                save_warning = _SESSION_SAVE_WARNING
+                                                logger.warning(save_warning)
                                 if hasattr(self, "rebuild_system_prompt"):
                                     self.rebuild_system_prompt()
                                 # Re-match after auto-indexing
@@ -888,6 +986,8 @@ class RAGToolsMixin:
                                 idx_result.get("error_type") == "embedding_unavailable"
                             ):
                                 return _index_embedding_error(idx_result)
+                            elif idx_result.get("error_type") in _CACHE_LOCK_HINTS:
+                                return _index_cache_error(idx_result, file_path)
                             else:
                                 return {
                                     "status": "error",
@@ -1258,8 +1358,15 @@ class RAGToolsMixin:
                     "file": str(target_file),
                     "source_files": [source_path],
                     "auto_indexed": auto_indexed,
-                    "instruction": f"Use these chunks from {Path(target_file).name} to answer the question. Read through ALL {len(top_chunks)} chunks completely before answering.\n\nCRITICAL CITATION REQUIREMENT:\nYour answer MUST start with: 'According to {Path(target_file).name}, page X:' where X is the page number from the chunk's 'page' field.\n\nExample: If chunk has 'page': 2, say 'According to {Path(target_file).name}, page 2:'\nIf info from multiple pages, say 'According to {Path(target_file).name}, pages 2 and 5:'",
+                    "instruction": _file_instruction(
+                        Path(target_file).name,
+                        len(top_chunks),
+                        _chunks_have_pages(formatted_chunks),
+                    ),
                 }
+                if save_warning:
+                    result["warning"] = save_warning
+                    result["message"] += f". {save_warning}"
 
                 # Add debug info to result if debug mode is enabled
                 if debug_info:
@@ -1313,7 +1420,7 @@ class RAGToolsMixin:
                 )
 
                 if not self.rag.chunks:
-                    return {"status": "error", "error": "No documents indexed."}
+                    return {"status": "error", "error": self._no_documents_message()}
 
                 # Search through chunks for pattern
                 matching_chunks = []
@@ -1461,7 +1568,7 @@ class RAGToolsMixin:
         )
         def index_document(file_path: str) -> Dict[str, Any]:
             """Index a document with path validation and detailed statistics."""
-            file_path = os.path.expanduser(file_path)
+            file_path = str(_resolve_target(file_path, None, _workspace_default(self)))
             try:
                 if not self.rag:
                     return {
@@ -1509,12 +1616,17 @@ class RAGToolsMixin:
 
                 if result.get("success"):
                     self.indexed_files.add(file_path)
+                    save_warning = ""
 
                     # Add to current session
                     if self.current_session:
                         if file_path not in self.current_session.indexed_documents:
                             self.current_session.indexed_documents.append(file_path)
-                            self.session_manager.save_session(self.current_session)
+                            if not self.session_manager.save_session(
+                                self.current_session
+                            ):
+                                save_warning = _SESSION_SAVE_WARNING
+                                logger.warning(save_warning)
 
                     # Update system prompt to include the new document
                     self.rebuild_system_prompt()
@@ -1531,7 +1643,8 @@ class RAGToolsMixin:
                         msg = f"Successfully indexed: {file_name}"
                     return {
                         "status": "success",
-                        "message": msg,
+                        "message": f"{msg}. {save_warning}" if save_warning else msg,
+                        **({"warning": save_warning} if save_warning else {}),
                         "file_name": result.get("file_name"),
                         "file_type": result.get("file_type"),
                         "file_size_mb": result.get("file_size_mb"),
@@ -1549,6 +1662,8 @@ class RAGToolsMixin:
                             **_index_embedding_error(result),
                             "file_name": result.get("file_name", Path(file_path).name),
                         }
+                    if result.get("error_type") in _CACHE_LOCK_HINTS:
+                        return _index_cache_error(result, file_path)
                     err = result.get("error", f"Failed to index: {file_path}")
                     hint = (
                         "The file is empty (0 bytes) — tell the user there is no content to read."
@@ -1585,6 +1700,7 @@ class RAGToolsMixin:
                         "count": 0,
                         "total_chunks": 0,
                         "total_size_mb": 0,
+                        "message": self._no_documents_message(),
                     }
                 docs = list(self.rag.indexed_files)
 
@@ -1632,7 +1748,7 @@ class RAGToolsMixin:
                         doc_info["pages"] = num_pages
                     doc_details.append(doc_info)
 
-                return {
+                listing = {
                     "status": "success",
                     "documents": doc_details,
                     "count": len(docs),
@@ -1640,6 +1756,9 @@ class RAGToolsMixin:
                     "total_size_mb": round(total_size_bytes / (1024 * 1024), 2),
                     "document_types": type_counts,
                 }
+                if not docs:
+                    listing["message"] = self._no_documents_message()
+                return listing
             except Exception as e:
                 logger.error(f"Error in list_indexed_documents: {e}")
                 return {
@@ -1735,14 +1854,35 @@ class RAGToolsMixin:
                         "error": f"Invalid summary_type '{summary_type}'. Valid types: {', '.join(valid_types)}",
                     }
 
-                # Get type-specific instruction
+                # Keep the tool's real styles aligned with summarize/SKILL.md.
+                # The caller may reshape this draft for other named styles.
                 type_instructions = {
-                    "brief": "Create a concise 2-3 paragraph summary highlighting the most important points and main themes.",
-                    "detailed": "Create a comprehensive summary covering all major topics, key points, and important details. Organize by sections if applicable.",
-                    "bullets": "Create a bullet-point summary of the key points, organizing related items together. Use sub-bullets for details.",
+                    "brief": (
+                        "Write at most three complete sentences with only two or "
+                        "three essential, concrete takeaways. Use no headings or "
+                        "Markdown bullets, and do not begin with filler such as "
+                        "'Overall' or 'In summary'."
+                    ),
+                    "detailed": (
+                        "Write a comprehensive summary of at least 250 words covering "
+                        "every major topic, key point, and important detail in full "
+                        "paragraphs. Keep every number, percentage, dollar amount, "
+                        "date, and metric. Do not use bullets."
+                    ),
+                    "bullets": (
+                        "Write only a flat Markdown bullet list with at most three "
+                        "top-level bullets. Keep each bullet under 20 words and to "
+                        "one idea; use no headings, numbering, paragraphs, or nested "
+                        "sub-bullets."
+                    ),
                 }
 
                 summary_instruction = type_instructions[summary_type]
+                section_instruction = (
+                    "Extract the key facts, numbers, decisions, and [Page N] markers "
+                    "from this section for a later final synthesis. Do not apply the "
+                    "requested final output style yet."
+                )
 
                 # Get all chunks from the RAG index
                 # Since we can't directly filter chunks by document, we'll use a workaround:
@@ -1844,11 +1984,6 @@ class RAGToolsMixin:
                     f"Document has {total_words} words, {len(pages)} pages, grouped into {len(sections)} sections"
                 )
 
-                # Get document metadata for enhanced summary
-                file_metadata = self.rag.file_metadata.get(target_file, {})
-                num_pages = file_metadata.get("num_pages", len(pages))
-                _vlm_pages = file_metadata.get("vlm_pages", 0)
-
                 # If document is small enough (single section), summarize in one pass
                 if len(sections) <= 1:
                     prompt = f"""{summary_instruction}
@@ -1860,25 +1995,10 @@ Document content:
 
 CRITICAL GROUNDING RULE: Only include information that is explicitly present in the document content above. Do NOT add, infer, or extrapolate any facts, figures, or details that do not appear verbatim or near-verbatim in the document text. If a metric (e.g., net income, cash flow, retention rate) is not mentioned in the document, do not include it.
 
-Generate a well-structured summary with the following format:
+Return only the requested summary body; do not add document metadata or a generic
+heading/template that conflicts with the requested style.
 
-# Document Summary: {Path(target_file).name}
-
-## Document Information
-- **File**: {Path(target_file).name}
-- **Pages**: {num_pages}
-- **Total Words**: ~{total_words:,}
-
-## Overview
-[2-3 sentence overview of what this document is — only from document content]
-
-## Key Content
-[Main content organized by topics/sections — only facts from the document, reference page numbers where applicable]
-
-## Key Takeaways
-[Bullet points of the most important points — only from the document, no extrapolation]
-
-Use the {summary_type} style for the content sections."""
+{summary_instruction}"""
 
                     # Use chat SDK to generate summary
                     try:
@@ -1891,7 +2011,11 @@ Use the {summary_type} style for the content sections."""
                             "document": str(Path(target_file).name),
                             "total_words": total_words,
                             "sections_processed": 1,
-                            "instruction": "Present the summary to the user. The summary includes document metadata, structured sections, and page references.",
+                            "instruction": (
+                                "Present this as a draft in the requested summary style. "
+                                "If the user asked for an unsupported shape such as executive "
+                                "or action items, reshape the draft before replying."
+                            ),
                         }
                     except Exception as e:
                         logger.error(f"Error generating summary: {e}")
@@ -1916,7 +2040,7 @@ Use the {summary_type} style for the content sections."""
 
                     # Generate summary for this section
                     section_prompt = f"""This is section {section_num} of {num_sections} from the document.
-{summary_instruction}
+{section_instruction}
 
 Section content:
 {section_text}
@@ -1955,26 +2079,11 @@ Section summaries:
 
 CRITICAL GROUNDING RULE: Only synthesize information that appears in the section summaries above. Do NOT add, infer, or extrapolate any facts, figures, or details not present in the summaries. Every claim in your output must be traceable to one of the section summaries.
 
-Synthesize these into a single, well-structured summary using this format:
+Return only the requested summary body; do not add document metadata or a generic
+heading/template that conflicts with the requested style. Preserve any useful page
+references from the section summaries.
 
-# Document Summary: {Path(target_file).name}
-
-## Document Information
-- **File**: {Path(target_file).name}
-- **Pages**: {num_pages}
-- **Total Words**: ~{total_words:,}
-- **Sections Processed**: {len(section_summaries)}
-
-## Overview
-[2-3 sentence overview synthesizing all sections]
-
-## Key Content
-[Main content organized by topics - consolidate from all section summaries, reference page numbers]
-
-## Key Takeaways
-[Bullet points of the most important points from across all sections]
-
-Use the {summary_type} style. Ensure page references from section summaries are preserved."""
+{summary_instruction}"""
 
                 try:
                     final_summary = _summary_text(self.rag.chat, final_prompt)
@@ -1987,7 +2096,11 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         "total_words": total_words,
                         "sections_processed": len(section_summaries),
                         "section_summaries": section_summaries,
-                        "instruction": "Present the formatted summary to the user. The summary includes document metadata, organized sections with page references, and key takeaways.",
+                        "instruction": (
+                            "Present this as a draft in the requested summary style. "
+                            "If the user asked for an unsupported shape such as executive "
+                            "or action items, reshape the draft before replying."
+                        ),
                     }
                 except Exception as e:
                     logger.error(f"Error synthesizing final summary: {e}")
@@ -2070,7 +2183,9 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         self.rag.config.cache_dir, output_filename
                     )
                 else:
-                    output_path = str(Path(output_path).expanduser().resolve())
+                    output_path = str(
+                        _resolve_target(output_path, None, _workspace_default(self))
+                    )
                     denied = write_access_error(self, output_path)
                     if denied:
                         return denied
@@ -2143,7 +2258,9 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         "error": _rag_not_available(),
                     }
 
-                dir_path = Path(directory_path).expanduser().resolve()
+                dir_path = _resolve_target(
+                    directory_path, None, _workspace_default(self)
+                )
 
                 # Before the existence probe, as in read_file.
                 denied = read_access_error(self, dir_path)

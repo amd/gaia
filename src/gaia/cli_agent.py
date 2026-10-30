@@ -7,7 +7,7 @@ scaffolding a new agent package, bumping its version, and running the quality
 gates that publishing requires:
 
 * ``gaia agent init <name> --language python|cpp`` — scaffold a package that
-  mirrors ``hub/agents/hello-world/python/`` (the canonical reference layout).
+  mirrors ``tests/fixtures/agents/hello-world/`` (the SDK reference package).
 * ``gaia agent version <patch|minor|major>`` — bump the SemVer in
   ``gaia-agent.yaml`` (and keep ``pyproject.toml`` / ``__init__.py`` in sync).
 * ``gaia agent test`` — quality gates in two modes:
@@ -379,7 +379,7 @@ def cmd_init(args) -> None:
 
 
 def _scaffold_python(pkg_dir: Path, names: _Names) -> None:
-    """Write the Python package layout (mirrors hub/agents/hello-world/python)."""
+    """Write the Python package layout (mirrors tests/fixtures/agents/hello-world)."""
     description = f"{names.display_name} — a GAIA agent (edit this description)"
     code_dir = pkg_dir / names.package
     tests_dir = pkg_dir / "tests"
@@ -1118,9 +1118,7 @@ def _instantiate_agent(pkg_dir: Path, parsed):
 
 
 def _starters_from_init(pkg_dir: Path, module_name: str) -> List[str]:
-    # Best-effort: if the manifest omits conversation_starters we try the
-    # package's build_registration(). Any failure here just yields [], and the
-    # caller raises a loud "no conversation_starters" error — no silent success.
+    # Raise load failures so they aren't misreported as missing starters.
     import importlib
 
     try:
@@ -1130,8 +1128,11 @@ def _starters_from_init(pkg_dir: Path, module_name: str) -> List[str]:
         if reg is None:
             return []
         return list(reg().conversation_starters or [])
-    except Exception:  # pylint: disable=broad-exception-caught
-        return []
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        raise AgentWorkflowError(
+            f"could not load {module_name}: {exc}. Fix the package so it imports "
+            f"and build_registration() runs, then re-run 'gaia agent test --live'."
+        ) from exc
 
 
 def _nonempty_response(result) -> bool:

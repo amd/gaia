@@ -14,14 +14,20 @@ import {
 // ── Pure utility tests ─────────────────────────────────────────────────
 
 describe('getUnsupportedCategory', () => {
-    it('returns "Image" for .png', () => {
-        const cat = getUnsupportedCategory('.png');
+    it('returns "Image" for .heic', () => {
+        const cat = getUnsupportedCategory('.heic');
         expect(cat).not.toBeNull();
         expect(cat!.label).toBe('Image');
     });
 
     it('is case-insensitive', () => {
-        expect(getUnsupportedCategory('.JPG')?.label).toBe('Image');
+        expect(getUnsupportedCategory('.HEIC')?.label).toBe('Image');
+    });
+
+    it('returns null for raster images — the vision model reads them', () => {
+        for (const ext of ['.png', '.jpg', '.jpeg', '.webp']) {
+            expect(getUnsupportedCategory(ext)).toBeNull();
+        }
     });
 
     it('works without leading dot', () => {
@@ -62,6 +68,11 @@ describe('isExtensionSupported', () => {
 
     it('returns true for .docx — modern Word is indexable', () => {
         expect(isExtensionSupported('.docx')).toBe(true);
+    });
+
+    it('returns true for .png and .JPG — images are indexable', () => {
+        expect(isExtensionSupported('.png')).toBe(true);
+        expect(isExtensionSupported('.JPG')).toBe(true);
     });
 
     it('returns false for .exe', () => {
@@ -123,7 +134,7 @@ describe('UploadErrorToast', () => {
 
         render(
             <UploadErrorToast
-                filename="photo.png"
+                filename="photo.heic"
                 error="Unsupported file type"
                 onDismiss={onDismiss}
                 timeout={0}
@@ -162,5 +173,71 @@ describe('UploadErrorToast', () => {
 
         expect(screen.getByText(/failed to index/i)).toBeInTheDocument();
         expect(screen.getByRole('link', { name: /report this issue/i })).toBeInTheDocument();
+    });
+
+    it('says a missing file does not exist, with no bug report link', () => {
+        render(
+            <UploadErrorToast
+                filename="missing.pdf"
+                error="File not found: there is no file at C:\Users\me\missing.pdf. Check the path for typos."
+                status={404}
+                onDismiss={() => {}}
+                timeout={0}
+            />
+        );
+
+        expect(screen.getByText(`"missing.pdf" doesn't exist`)).toBeInTheDocument();
+        expect(screen.getByText(/there is no file at .*Check the path/)).toBeInTheDocument();
+        expect(screen.queryByRole('link')).toBeNull();
+    });
+
+    it('explains the readable folders without claiming the file exists', () => {
+        render(
+            <UploadErrorToast
+                filename="missing.pdf"
+                error="GAIA can only read documents under C:\Users\me, and C:\nope\missing.pdf is outside them. Check the path is right."
+                status={403}
+                onDismiss={() => {}}
+                timeout={0}
+            />
+        );
+
+        expect(screen.getByText("GAIA can't read files in that location")).toBeInTheDocument();
+        expect(screen.getByText(/can only read documents under.*drop the file here instead \(up to 20 MB\)/)).toBeInTheDocument();
+        expect(screen.queryByText(/Access denied/)).toBeNull();
+        expect(screen.queryByRole('link')).toBeNull();
+    });
+
+    it('names a file with no extension plainly', () => {
+        render(
+            <UploadErrorToast
+                filename="README"
+                error="File type not allowed: 'README' has no file extension, so GAIA can't tell what kind of document it is."
+                status={400}
+                onDismiss={() => {}}
+                timeout={0}
+            />
+        );
+
+        expect(screen.getByText('"README" has no file extension')).toBeInTheDocument();
+        expect(screen.queryByText(/File type not supported: $/)).toBeNull();
+        expect(screen.queryByRole('link')).toBeNull();
+    });
+
+    it('tells the user to re-save a legacy or password-protected workbook, with no bug report link', () => {
+        render(
+            <UploadErrorToast
+                filename="labs.xlsx"
+                error="Could not read labs.xlsx: it is a legacy .xls workbook or is protected with a password."
+                status={422}
+                kind="unsupported_workbook"
+                onDismiss={() => {}}
+                timeout={0}
+            />
+        );
+
+        expect(screen.getByText(`"labs.xlsx" can't be read`)).toBeInTheDocument();
+        expect(screen.getByText(/save a copy as \.xlsx without a password/)).toBeInTheDocument();
+        expect(screen.queryByRole('link')).toBeNull();
     });
 });

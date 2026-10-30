@@ -104,7 +104,8 @@ describe("backend port selection fails loudly", () => {
 
   test("a rejected startup routes to the fatal error dialog", () => {
     const body = whenReadyBody();
-    expect(body).toContain("await startBackend()");
+    expect(body).toContain("backendStarting = startBackend();");
+    expect(body).toContain("backendProcess = await backendStarting;");
     expect(body).toMatch(/\}\)\.catch\(\(err\) => \{[^}]*_fatalHandler\(err\);/);
   });
 });

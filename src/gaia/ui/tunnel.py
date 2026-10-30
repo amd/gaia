@@ -405,6 +405,25 @@ class _StaleNgrokError(RuntimeError):
     """A stale GAIA ngrok agent is running and cannot be stopped."""
 
 
+_DEVICE_HINTS = (
+    ("iphone", "iPhone"),
+    ("ipad", "iPad"),
+    ("android", "Android phone"),
+    ("windows", "Windows PC"),
+    ("macintosh", "Mac"),
+    ("linux", "Linux PC"),
+)
+
+
+def describe_device(user_agent: str) -> str:
+    """A plain name for the device a browser user agent belongs to."""
+    lowered = (user_agent or "").lower()
+    for hint, name in _DEVICE_HINTS:
+        if hint in lowered:
+            return name
+    return "Unknown device"
+
+
 class TunnelManager:
     """Manages an ngrok tunnel for mobile access.
 
@@ -434,6 +453,7 @@ class TunnelManager:
         self._started_at: Optional[str] = None
         self._error: Optional[str] = None
         self._public_ip: Optional[str] = None
+        self._device: Optional[dict] = None
         self._start_lock = asyncio.Lock()
         # ngrok's log lines, read as they arrive: a full pipe would stall it.
         self._output: deque = deque(maxlen=2000)
@@ -465,6 +485,14 @@ class TunnelManager:
             "startedAt": self._started_at,
             "error": self._error,
             "publicIp": self._public_ip,
+            "device": self._device if self.active else None,
+        }
+
+    def note_device(self, user_agent: str) -> None:
+        """Remember the device behind the latest authenticated remote request."""
+        self._device = {
+            "name": describe_device(user_agent),
+            "lastSeen": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
 
     def validate_token(self, token: str) -> bool:
@@ -624,6 +652,7 @@ class TunnelManager:
         self._url = None
         self._started_at = None
         self._error = None
+        self._device = None
         logger.info("Tunnel stopped")
 
     def _find_ngrok(self) -> Optional[str]:
