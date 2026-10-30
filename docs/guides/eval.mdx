@@ -290,9 +290,11 @@ This reads the session from the Agent UI database, extracts turns and indexed do
 Run only scenarios with specific tags:
 
 ```bash
-# Run scenarios tagged with "healthcare" OR "critical"
-gaia eval agent --tag healthcare --tag critical
+# Run scenarios tagged with "security" OR "t4_adversarial"
+gaia eval agent --tag security --tag t4_adversarial
 ```
+
+A scenario matches when its `tags:` field contains at least one of the given tags. The shipped scenarios use the difficulty tiers `t1_basic`, `t2_compound`, `t3_stress` and `t4_adversarial`, plus `security`, `usability` and `tui`; scenarios you author can carry any tags you like. `--exclude-tag` drops scenarios carrying a tag, after the include filters are applied.
 
 ### Output Formats
 

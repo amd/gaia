@@ -78,32 +78,17 @@ yet. Track progress and request priorities at
 - **Developer tools** — Postgres, Playwright
 - **Web** — Brave Search, Context7
 
-## Try it: the Connectors Demo agent
+## Check your setup
 
-GAIA ships a built-in **Connectors Demo** agent that exercises the
-full grant flow against your real Google account and GitHub PAT —
-useful for verifying your setup or seeing the per-agent grants flow
-in action.
+Run `gaia connectors test <id>` (for example `gaia connectors test google`)
+to run a connector's health check. Every agent that needs a connector
+declares it, so the connector's **Per-agent grants** section in Settings →
+Connectors lists each one with the scopes it asks for — the GAIA agent, for
+example, appears under Google with its mailbox scopes.
 
-After connecting Google + GitHub:
-
-1. In the AgentUI agent dropdown (top of the chat panel), pick
-   **Connectors Demo**.
-2. Settings → Connectors → Google → **Per-agent grants** → grant
-   the demo agent the `gmail.readonly`, `calendar.readonly`, and
-   `drive.readonly` scopes. Same for GitHub (`use`).
-3. Ask: *"What's in my inbox?"*, *"What's on my calendar today?"*,
-   *"List my recent Drive files"*, or *"List my GitHub repos"*. The
-   agent calls the matching tool and surfaces the result.
-
-If you skip a grant, the demo will surface an actionable error like
-`AGENT_NOT_GRANTED: open Settings → Connectors → google → Per-agent
-grants and grant <scope>`.
-
-The agent's source —
-[`hub/agents/connectors-demo/python/gaia_agent_connectors_demo/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/connectors-demo/python/gaia_agent_connectors_demo/agent.py)
-— is a working reference for any custom agent that needs to call
-external services.
+To give your own agent the same access, declare `REQUIRED_CONNECTORS` and
+fetch the credential from inside a tool — see
+[Building agents that use connectors](/sdk/infrastructure/connectors#agent-author-guide).
 
 ## Per-agent grants
 

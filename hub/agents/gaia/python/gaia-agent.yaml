@@ -1,6 +1,6 @@
 id: gaia
 name: GAIA
-version: 0.3.2
+version: 0.3.3
 description: "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills"
 author: AMD
 license: MIT
@@ -21,7 +21,7 @@ icon: sparkles
 # and the persistent shell session's get_shell_state / reset_shell_session)
 # + 8 skill-library tools
 # (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES) + 4 code-index tools
-# + 5 read-only email tools (gaia.agents.tools.email_tools)
+# + 8 read-only email tools (gaia.agents.tools.email_tools)
 # + 3 Stable Diffusion tools (enable_sd_tools is on for this agent)
 # + 8 live-browser tools, which register only with the `browser` extra
 #   installed (gaia.agents.tools.browser_use_tools)
@@ -32,7 +32,7 @@ icon: sparkles
 # load_tools escape hatch is not counted: it registers only when
 # GAIA_DYNAMIC_TOOLS=1 turns per-turn selection on.
 # This is the REGISTERED size — what the agent can do.
-tools_count: 105
+tools_count: 108
 
 language: python
 # The chat agent this one subclasses imports gaia.agents.tools.reasoning_tools;

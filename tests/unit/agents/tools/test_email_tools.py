@@ -854,6 +854,9 @@ def test_skill_tools_required_match_the_registered_tools():
         "search_email",
         "read_email",
         "list_mail_folders",
+        "get_thread",
+        "list_connected_mailboxes",
+        "list_waiting_on_you",
     }
     assert registered <= set(_TOOL_REGISTRY)
     assert set(_inbox_triage_skill().gaia.tools_required) == registered
@@ -879,17 +882,15 @@ def test_email_tools_are_bundled_for_the_loader():
     pytest.importorskip("gaia_agent_chat")
     from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 
-    bundles = PROFILE_TOOL_CONFIGS["full"].bundles
-    email = next(
-        (b for b in bundles if b.name == "email"),
-        None,
-    )
-    assert email is not None, (
-        "the 'email' bundle is missing from the full profile: add it to "
+    bundles = {b.name: b for b in PROFILE_TOOL_CONFIGS["full"].bundles}
+    missing = {"email", "email_threads"} - set(bundles)
+    assert not missing, (
+        f"bundle(s) {missing} missing from the full profile: add them to "
         "gaia_agent_chat.tool_bundles.FULL_BUNDLES or the loader can never "
         "pull the email tools in as a cohort"
     )
-    assert email.members == set(_inbox_triage_skill().gaia.tools_required)
+    members = bundles["email"].members | bundles["email_threads"].members
+    assert members == set(_inbox_triage_skill().gaia.tools_required)
 
 
 # --------------------------------------------------------------------------

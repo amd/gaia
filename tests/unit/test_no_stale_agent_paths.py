@@ -50,8 +50,6 @@ MIGRATED_AGENTS = (
     # the guard exhaustive against hub/agents/ (see the coverage test below).
     "doc-search",
     "gaia",
-    "hello-world",
-    "word-count",
 )
 
 # Trailing slash keeps `code/` from matching the in-core `code_index/`.
@@ -105,7 +103,7 @@ def test_migrated_agents_list_covers_every_hub_agent():
         pytest.skip("hub/agents/ not present")
 
     # A hub agent is only *migrated* if it once lived in-core; ids that were born in
-    # hub/ (hello-world, word-count, …) never had a src/gaia/agents/<id>/ path to go
+    # hub/ (gaia, doc-search, …) never had a src/gaia/agents/<id>/ path to go
     # stale. Treat a still-existing in-core dir as proof it has not migrated.
     guarded = {a.replace("_", "-") for a in MIGRATED_AGENTS}
     in_core = REPO_ROOT / "src" / "gaia" / "agents"
