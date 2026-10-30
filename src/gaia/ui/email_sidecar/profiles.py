@@ -504,6 +504,9 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "read_email": "Reading message",
     "list_mail_folders": "Listing mail folders",
     "check_mailbox_access": "Checking mailbox access",
+    "get_thread": "Reading conversation",
+    "list_connected_mailboxes": "Checking connected mailboxes",
+    "list_waiting_on_you": "Finding mail waiting on you",
     # Memory — the agent's own long-term store
     "remember": "Saving to memory",
     "forget": "Deleting from memory",
