@@ -3,9 +3,13 @@
 
 """Unit tests for GAIA Agent UI database layer."""
 
+import os
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -929,6 +933,143 @@ class TestUpgradeFromFirstRelease:
             database.delete_session("s1")
             count = database._conn.execute("SELECT COUNT(*) FROM messages")
             assert count.fetchone()[0] == 0
+        finally:
+            database.close()
+
+
+class TestSchemaCurrentCheck:
+    """Reopening skips migrations only when the schema really is complete."""
+
+    def test_the_current_check_lists_every_object_and_migrated_column(
+        self, tmp_path, monkeypatch
+    ):
+        from gaia.ui import database as database_module
+
+        added = set()
+        original = ChatDatabase._add_column
+
+        def record(self, table, column, *args, **kwargs):
+            added.add((table, column))
+            return original(self, table, column, *args, **kwargs)
+
+        monkeypatch.setattr(ChatDatabase, "_add_column", record)
+        database = ChatDatabase(str(tmp_path / "chat.db"))
+        try:
+            names = {
+                row[0]
+                for row in database._conn.execute(
+                    "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"
+                )
+            }
+        finally:
+            database.close()
+        listed = {
+            (table, column)
+            for table, columns in database_module._CHAT_SCHEMA_COLUMNS.items()
+            for column in columns
+        }
+        # A migration missing here would be skipped on every reopen.
+        assert added - listed == set()
+        assert names == set(database_module._CHAT_SCHEMA_OBJECTS)
+
+    @pytest.mark.parametrize(
+        "table, column",
+        [
+            ("sessions", "device"),
+            ("messages", "search_text"),
+            ("documents", "error_kind"),
+        ],
+    )
+    def test_a_database_missing_one_column_is_upgraded_on_reopen(
+        self, tmp_path, table, column
+    ):
+        path = str(tmp_path / "chat.db")
+        ChatDatabase(path).close()
+        conn = sqlite3.connect(path)
+        conn.execute("DROP TRIGGER IF EXISTS messages_search_stale")
+        conn.execute("DROP INDEX IF EXISTS idx_messages_unfolded")
+        conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+        conn.commit()
+        conn.close()
+
+        database = ChatDatabase(path)
+        try:
+            columns = {
+                row[1] for row in database._conn.execute(f"PRAGMA table_info({table})")
+            }
+            assert column in columns
+            assert database._schema_is_current()
+        finally:
+            database.close()
+
+    def test_a_failed_upgrade_leaves_the_old_schema_untouched(self, tmp_path):
+        path = str(tmp_path / "clash.db")
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, Private INTEGER)")
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(RuntimeError):
+            ChatDatabase(path)
+        conn = sqlite3.connect(path)
+        try:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+        finally:
+            conn.close()
+        # The whole upgrade is one transaction, so nothing half-applied is left.
+        assert tables == {"sessions"}
+
+
+_V1_OPENER = """
+import sys, time
+from gaia.ui.database import ChatDatabase
+path, start = sys.argv[1], float(sys.argv[2])
+while time.time() < start:
+    pass
+ChatDatabase(path).close()
+"""
+
+
+def test_processes_upgrading_one_old_database_at_once_all_succeed(tmp_path):
+    """Concurrent first launches against a first-release database (#6143)."""
+    src = str(Path(__file__).resolve().parents[4] / "src")
+    env = {**os.environ, "PYTHONPATH": src}
+    for trial in range(5):
+        path = str(tmp_path / f"v1-{trial}.db")
+        conn = sqlite3.connect(path)
+        conn.executescript(_V1_SCHEMA)
+        conn.execute("INSERT INTO sessions (id, title) VALUES ('s1', 'Trip plan')")
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content) "
+            "VALUES ('s1', 'user', 'm1')"
+        )
+        conn.commit()
+        conn.close()
+        start = str(time.time() + 1.5)
+        children = [
+            subprocess.Popen(
+                [sys.executable, "-c", _V1_OPENER, path, start],
+                env=env,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for _ in range(3)
+        ]
+        errors = []
+        for child in children:
+            _, stderr = child.communicate(timeout=60)
+            if child.returncode != 0:
+                errors.append(stderr.strip().splitlines()[-1])
+        assert not errors, f"trial {trial}: {errors}"
+        database = ChatDatabase(path)
+        try:
+            assert database._schema_is_current()
+            assert [m["content"] for m in database.get_messages("s1")] == ["m1"]
         finally:
             database.close()
 

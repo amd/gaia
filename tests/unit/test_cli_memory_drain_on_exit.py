@@ -41,15 +41,12 @@ def chat_agent_stubs(monkeypatch):
     agent_module.GaiaAgent = MagicMock(return_value=agent)
     agent_module.GaiaAgentConfig = MagicMock()
 
-    app_module = types.ModuleType("gaia_agent_chat.app")
+    app_module = types.ModuleType("gaia_agent.interactive")
     app_module.interactive_mode = MagicMock()
 
     monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", agent_module)
-    monkeypatch.setitem(
-        sys.modules, "gaia_agent_chat", types.ModuleType("gaia_agent_chat")
-    )
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat.app", app_module)
+    monkeypatch.setitem(sys.modules, "gaia_agent.interactive", app_module)
 
     return types.SimpleNamespace(agent=agent, app=app_module, module=agent_module)
 
@@ -140,10 +137,10 @@ def test_missing_flagship_fails_loudly_and_never_runs_chat_agent(
     from gaia.cli import _launch_interactive_cli
 
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)  # import fails
-    chat_module = types.ModuleType("gaia_agent_chat.agent")
+    chat_module = types.ModuleType("gaia_agent.chat_agent")
     chat_module.ChatAgent = MagicMock()
     chat_module.ChatAgentConfig = MagicMock()
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat.agent", chat_module)
+    monkeypatch.setitem(sys.modules, "gaia_agent.chat_agent", chat_module)
 
     with pytest.raises(SystemExit) as exc:
         _launch_interactive_cli()

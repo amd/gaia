@@ -5,7 +5,7 @@ icon: "book-open-reader"
 ---
 
 <Info>
-  **Source Code:** [`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
+  **Source Code:** [`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
 </Info>
 
 <Badge text="development" color="orange" />
@@ -92,20 +92,24 @@ Get a working agent running to understand the basic flow.
 
     <Tabs>
       <Tab title="Core + ChatAgent Source">
-        Create a new project folder. Install GAIA core from PyPI and ChatAgent from GitHub (requires Git):
+        Create a new project folder. Install GAIA core from PyPI and ChatAgent from GitHub (requires Git). Replace `<version>` with the GAIA release you use:
 
         ```bash
         mkdir my-chat-agent
         cd my-chat-agent
         uv venv .venv
         source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
-        uv pip install "amd-gaia[rag]==0.24.1"
-        uv pip install "gaia-agent-chat @ git+https://github.com/amd/gaia.git@v0.24.1#subdirectory=hub/agents/chat/python"
+        uv pip install "amd-gaia[rag]==<version>"
+        uv pip install "gaia-agent-gaia @ git+https://github.com/amd/gaia.git@v<version>#subdirectory=hub/agents/gaia/python"
         ```
 
         <Info>
-        Create your agent scripts in this folder. The standalone `gaia-agent-chat` wheel provides `ChatAgent`; its PyPI publishing is paused ([#2240](https://github.com/amd/gaia/issues/2240)), so install it from the repository subdirectory. GAIA has no `agent-chat` extra. The `rag` extra adds document-processing dependencies (faiss, PyMuPDF).
+        Create your agent scripts in this folder. `ChatAgent` ships in the flagship `gaia-agent-gaia` package (`gaia_agent.chat_agent`); its PyPI publishing is paused ([#2240](https://github.com/amd/gaia/issues/2240)), so install it from the repository subdirectory. The `rag` extra adds document-processing dependencies (faiss, PyMuPDF).
         </Info>
+
+        <Note>
+        Releases up to 0.25.3 ship `ChatAgent` in the separate `gaia-agent-chat` package instead: install `hub/agents/chat/python` from the tag and import it with `from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig`.
+        </Note>
 
         <Warning>
         Pin both lines to the same release — the `amd-gaia` version and the matching `v<version>` tag (a release candidate `0.25.0rc12` is tagged `v0.25.0-rc12`). Without the tag the URL installs `main`, which can require a newer `amd-gaia` than the one you installed.
@@ -121,11 +125,11 @@ Get a working agent running to understand the basic flow.
         uv venv .venv
         source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
         uv pip install -e ".[rag]"
-        uv pip install -e hub/agents/chat/python   # ChatAgent ships as a separate hub wheel
+        uv pip install -e hub/agents/gaia/python   # ChatAgent ships in the flagship hub wheel
         ```
 
         <Info>
-        Use this path if you want to modify GAIA source code or contribute to the project. `ChatAgent` lives in the standalone `gaia-agent-chat` package under `hub/agents/chat/python/`, so install it as a second editable wheel.
+        Use this path if you want to modify GAIA source code or contribute to the project. `ChatAgent` lives in the flagship `gaia-agent-gaia` package under `hub/agents/gaia/python/`, so install it as a second editable wheel.
         </Info>
       </Tab>
     </Tabs>
@@ -147,7 +151,7 @@ Get a working agent running to understand the basic flow.
 
     ```python title="my_chat_agent.py"
     import json
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
     # Create agent with a document
     config = ChatAgentConfig(

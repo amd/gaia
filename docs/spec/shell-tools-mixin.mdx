@@ -427,8 +427,9 @@ if cmd_base not in ALLOWED_COMMANDS:
 ### Bypass Permissions
 
 Off by default. Turned on only by the flagship sidecar's `--full-access`
-launch flag or the TUI's `/full-access`, both of which set `full_access` on
-the session's output handler. `full_access_active()` reads that attribute live,
+launch flag or the TUI's `/full-access confirm` (a bare `/full-access` only
+explains the mode), both of which set `full_access` on the session's output
+handler. `full_access_active()` reads that attribute live,
 so a mid-session toggle takes effect on the next command.
 
 When on, `_validate_command` short-circuits the whole read-only policy above and

@@ -43,6 +43,7 @@ from gaia.agents.base.checks import (
 )
 from gaia.agents.base.checks import summary_reports_failure as summary_counts_failure
 from gaia.agents.base.claims import passing_test_claim, reports_test_failure
+from gaia.agents.base.tools import bare_tool_name
 
 #: How the note opens. Fixed, so a model's echo of it can be found and removed.
 VERIFICATION_NOTE_OPENER = "I haven't confirmed this works"
@@ -611,8 +612,12 @@ def has_test_run_summary(output: str) -> bool:
 
 
 def is_mutating_tool(tool_name: str) -> bool:
-    """True when *tool_name* is a file write/edit tool, judged by name."""
-    name = (tool_name or "").strip()
+    """True when *tool_name* is a file write/edit tool, judged by name.
+
+    A skill tool is judged by its bare name, so ``office-docs/write_docx``
+    counts the way a core ``write_docx`` would.
+    """
+    name = bare_tool_name((tool_name or "").strip())
     return name in _MUTATING_TOOLS or name.startswith(_MUTATING_PREFIXES)
 
 
@@ -631,7 +636,7 @@ def _changed_paths(execution: Dict[str, Any]) -> Optional[List[str]]:
         if isinstance((value := args.get(key)), str) and value.strip()
     ]
     if not paths:
-        return [] if name in _MUTATING_TOOLS else None
+        return [] if bare_tool_name(name) in _MUTATING_TOOLS else None
     return paths
 
 

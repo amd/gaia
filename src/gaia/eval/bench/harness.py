@@ -103,7 +103,7 @@ def toolchain_dir() -> str:
 def import_roots() -> List[str]:
     """Where this process imports GAIA and the flagship from, so the child runs the same code."""
     roots = [str(Path(gaia.__file__).resolve().parents[1])]
-    for name in ("gaia_agent", "gaia_agent_chat"):
+    for name in ("gaia_agent",):
         spec = importlib.util.find_spec(name)
         if spec and spec.origin:
             roots.append(str(Path(spec.origin).resolve().parents[1]))

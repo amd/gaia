@@ -9,11 +9,11 @@ from __future__ import annotations
 # Standard library imports
 import abc
 import ast
+import contextlib
 import contextvars
 import datetime
 import inspect
 import json
-import logging
 import math
 import os
 import queue
@@ -129,7 +129,11 @@ from gaia.agents.base.tool_outcome import (
     tool_result_error_fields,
     tool_result_failed,
 )
-from gaia.agents.base.tools import _TOOL_REGISTRY, tool_call_progress_message
+from gaia.agents.base.tools import (
+    _TOOL_REGISTRY,
+    bare_tool_name,
+    tool_call_progress_message,
+)
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
     POST_ANSWER_CLOSING_PROMPT,
@@ -174,6 +178,7 @@ from gaia.llm.retry import (
     model_retry_notices,
     retry_state_of,
 )
+from gaia.logger import get_logger
 from gaia.utils import awake_clock
 from gaia.utils.json_string import extract_json_string_field
 from gaia.utils.power import stay_awake
@@ -185,9 +190,9 @@ if TYPE_CHECKING:
     from gaia.skills import Skill, SkillManager, SkillSetResolution, SkillSets
     from gaia.skills.binaries import BinaryGrants
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Set up logging via the project logger; importing this module must not
+# reconfigure the root logger.
+logger = get_logger(__name__)
 
 
 def _skill_validation_error(message: str) -> Exception:
@@ -722,6 +727,26 @@ _SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
 
 def _is_image_tool(tool_name: str) -> bool:
     return tool_name.lower().startswith(_SD_CAPABILITY_TOOLS)
+
+
+def _loaded_context_is_too_small(loaded_ctx: Any, requested_ctx: Any) -> bool:
+    """Return whether the backend's loaded window is below the requested one.
+
+    The requested value is the agent's effective window, including an explicit
+    client pin such as ``GAIA_CTX_SIZE=16384``.  Comparing those two values is
+    deliberately independent of the error wording: llama.cpp reports the
+    same context size in both a genuine bad-load error and an intentional
+    small-window overflow.
+    """
+    return (
+        isinstance(loaded_ctx, int)
+        and not isinstance(loaded_ctx, bool)
+        and loaded_ctx > 0
+        and isinstance(requested_ctx, int)
+        and not isinstance(requested_ctx, bool)
+        and requested_ctx > 0
+        and loaded_ctx < requested_ctx
+    )
 
 
 # Final answer when a turn still overflows the model's context window after
@@ -6522,8 +6547,14 @@ Do NOT wrap conversational replies in JSON.
                 )
                 return True
 
-        if tool_name in self.confirmation_required_tools():
+        gated = self.confirmation_required_tools()
+        if tool_name in gated:
             return not self._call_is_pre_authorized(tool_name, tool_args)
+        if bare_tool_name(tool_name) in gated:
+            # A skill tool named like a gated core tool (``x/run_python``) is
+            # gated like it. No grant pre-authorizes it: grants describe what
+            # the core tool does with its arguments, not what skill code does.
+            return True
         entry = self._tools_registry.get(tool_name) or {}
         flag = entry.get("requires_confirmation")
         if flag is not None:
@@ -6994,8 +7025,29 @@ Do NOT wrap conversational replies in JSON.
         if tool_name not in TOOLS_WITHOUT_EXTERNAL_CONTENT:
             self._turn_saw_external_content = True
 
+        # A skill's own tool runs bound to this agent, so gaia.skills.context
+        # can check its paths and declared capabilities against this agent's
+        # scope; a path-named argument outside that scope never reaches it.
+        skill_name = (self._tools_registry.get(tool_name) or {}).get("skill")
+        skill = self.loaded_skills.get(skill_name) if skill_name else None
+        skill_scope: Any = contextlib.nullcontext()
+        skill_refusals: tuple = ()
+        if skill is not None:
+            from gaia.skills.context import bind, path_argument_refusal
+            from gaia.skills.errors import SkillPermissionError
+
+            skill_refusals = (SkillPermissionError,)
+
+            refusal = path_argument_refusal(self, tool_args)
+            if refusal is not None:
+                logger.info("Skill tool %s refused: %s", tool_name, refusal["error"])
+                return refusal
+            skill_scope = bind(self, skill)
+
         try:
-            result = self._call_tool_bounded(tool, tool_args, tool_name)
+            with skill_scope as skill_call:
+                body = skill_call.wrap(tool) if skill_call is not None else tool
+                result = self._call_tool_bounded(body, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
             self._fold_tool_usage(tool_name, result)
             return result
@@ -7031,6 +7083,11 @@ Do NOT wrap conversational replies in JSON.
                 "timeout": True,
                 "tool_name": tool_name,
             }
+        except skill_refusals as e:
+            # A skill tool asked gaia.skills.context for something outside its
+            # declaration or this agent's scope. The message says what to do.
+            logger.warning("Skill tool %s refused: %s", tool_name, e)
+            return {"status": "error", "error": str(e), "tool_name": tool_name}
         except subprocess.TimeoutExpired as e:
             # Handle subprocess timeout specifically
             error_msg = f"Tool {tool_name} timed out: {str(e)}"
@@ -7789,16 +7846,23 @@ Do NOT wrap conversational replies in JSON.
                     continue
 
                 ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                # Clamp like the load path: a model at its max can't reload larger.
-                expected_ctx = resolve_effective_ctx_size(
-                    resolve_ctx_size(
-                        model=m.get("model_name") or own_model,
-                        device=self.device,
-                        base_url=base_url,
-                    ),
-                    m.get("max_context_window"),
-                )
-                if 0 < ctx < expected_ctx:
+                # An exact client pin is the requested window; otherwise clamp
+                # like the load path (a model at its max can't reload larger).
+                backend = getattr(getattr(self, "chat", None), "llm_client", None)
+                backend = getattr(backend, "_backend", backend)
+                pin = getattr(backend, "ctx_size_override", None)
+                if isinstance(pin, int) and not isinstance(pin, bool) and pin > 0:
+                    expected_ctx = pin
+                else:
+                    expected_ctx = resolve_effective_ctx_size(
+                        resolve_ctx_size(
+                            model=m.get("model_name") or own_model,
+                            device=self.device,
+                            base_url=base_url,
+                        ),
+                        m.get("max_context_window"),
+                    )
+                if _loaded_context_is_too_small(ctx, expected_ctx):
                     return True
             return False
         except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
@@ -10181,19 +10245,11 @@ Do NOT wrap conversational replies in JSON.
                         logger.error(f"Unexpected error during streaming: {e}")
                         err_text = str(e).lower()
                         is_ctx_overflow = is_context_overflow_error(err_text)
-                        # See non-streaming branch for explanation: re-raise
-                        # if model was loaded with the wrong (small) ctx so
-                        # the chat helper can reload it at 32K.
-                        is_wrong_ctx_loaded = is_ctx_overflow and (
-                            "context size (4096" in err_text
-                            or "context size (8192" in err_text
-                            or "context size (16384" in err_text
-                            or "n_ctx': 4096" in err_text
-                            or "n_ctx': 8192" in err_text
-                            or "n_ctx': 16384" in err_text
+                        # Same rule as the non-streaming branch: only the probe
+                        # decides a bad load, never the window in the error.
+                        is_wrong_ctx_loaded = (
+                            is_ctx_overflow and self._is_loaded_ctx_too_small()
                         )
-                        if is_ctx_overflow and not is_wrong_ctx_loaded:
-                            is_wrong_ctx_loaded = self._is_loaded_ctx_too_small()
                         if is_wrong_ctx_loaded:
                             self.error_history.append(
                                 {
@@ -10380,21 +10436,12 @@ Do NOT wrap conversational replies in JSON.
                         # varies (llama.cpp vs. FastFlowLM, #2513).
                         err_text = str(e).lower()
                         is_ctx_overflow = is_context_overflow_error(err_text)
-                        # Detect "wrong ctx size loaded" — substring match on
-                        # error text first (when raw payload is preserved),
-                        # then probe Lemonade health if substring missed
-                        # (typical: AgentSDK stringifies typed exception to
-                        # user_message, dropping n_ctx detail).
-                        is_wrong_ctx_loaded = is_ctx_overflow and (
-                            "context size (4096" in err_text
-                            or "context size (8192" in err_text
-                            or "context size (16384" in err_text
-                            or "n_ctx': 4096" in err_text
-                            or "n_ctx': 8192" in err_text
-                            or "n_ctx': 16384" in err_text
+                        # Only the loaded-vs-requested probe decides a bad
+                        # load: the window named in the error is equally valid
+                        # for a deliberately small pin.
+                        is_wrong_ctx_loaded = (
+                            is_ctx_overflow and self._is_loaded_ctx_too_small()
                         )
-                        if is_ctx_overflow and not is_wrong_ctx_loaded:
-                            is_wrong_ctx_loaded = self._is_loaded_ctx_too_small()
                         if is_wrong_ctx_loaded:
                             self.error_history.append(
                                 {

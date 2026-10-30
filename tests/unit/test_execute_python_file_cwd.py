@@ -20,9 +20,9 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import (  # noqa: E402
+from gaia_agent.chat_agent import (  # noqa: E402
     ChatAgent,
     ChatAgentConfig,
     _python_script_run_context,
@@ -63,8 +63,8 @@ def project(tmp_path):
 
 def _build_agent(config):
     with (
-        patch("gaia_agent_chat.agent.RAGSDK"),
-        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
     ):
         return ChatAgent(config)
 

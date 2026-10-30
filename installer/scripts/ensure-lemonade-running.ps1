@@ -48,7 +48,7 @@ param(
 if ($env:GITHUB_ACTIONS -eq "true") {
     $env:LEMONADE_BASE_URL = "http://localhost:$Port/api/v1"
     if ($env:GITHUB_ENV) {
-        "LEMONADE_BASE_URL=http://localhost:$Port/api/v1" >> $env:GITHUB_ENV
+        Add-Content -Path $env:GITHUB_ENV -Value "LEMONADE_BASE_URL=http://localhost:$Port/api/v1"
     }
 }
 

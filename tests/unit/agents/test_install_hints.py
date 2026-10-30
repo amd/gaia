@@ -382,18 +382,17 @@ class TestAgentImportErrorMessage:
         assert source_install_command("gaia-agent-gaia") in message
         assert "--no-deps" not in message
 
-    def test_gaia_agent_gaia_missing_sibling_chat_reports_not_installed(self):
-        """A missing required sibling should reinstall the primary wheel with
-        dependencies enabled, restoring gaia-agent-chat."""
+    def test_the_flagship_no_longer_treats_the_chat_package_as_its_own(self):
+        """ChatAgent moved into gaia-agent-gaia (#6099): a missing
+        gaia_agent_chat is some other package's broken import, not the
+        flagship being absent."""
         error = ModuleNotFoundError("No module named 'gaia_agent_chat'")
         error.name = "gaia_agent_chat"
         message = agent_import_error_message(
             error, "The GAIA agent is not installed", "gaia-agent-gaia"
         )
-        assert "is not installed" in message
-        assert source_install_command("gaia-agent-gaia") in message
-        assert "subdirectory=hub/agents/gaia/python" in message
-        assert "--no-deps" not in message
+        assert "is installed, but it could not be imported" in message
+        assert "gaia_agent_chat" in message
 
 
 class TestGaiaExtraRequirements:

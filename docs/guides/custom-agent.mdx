@@ -73,14 +73,22 @@ class MyPythonAgent(Agent):
         def greet(name: str) -> str:
             """Greet a person by name."""
             return f"Hello, {name}! Welcome to GAIA."
+
+        self._snapshot_tools()
 ```
+
+Tools register into a registry that every agent in the process shares, so
+`_register_tools()` brackets its own tools: `_TOOL_REGISTRY.clear()` first, so
+this agent doesn't inherit tools another agent registered, and
+`self._snapshot_tools()` last, so the next agent's `clear()` can't wipe this
+agent's tools in a shared Agent UI process.
 
 The only method a subclass **must** implement is `_register_tools()` (it's abstract
 on the base `Agent`); the other two have sensible defaults you can override:
 
 | Method | Required? | Purpose |
 |--------|-----------|---------|
-| `_register_tools()` | **Yes** | Registers tools into `_TOOL_REGISTRY` |
+| `_register_tools()` | **Yes** | Registers this agent's tools, then freezes them with `self._snapshot_tools()` |
 | `_get_system_prompt()` | Optional | Returns the system prompt string (defaults to `""`, i.e. mixin prompts only) |
 | `_create_console()` | Optional | Returns the console handler (defaults to `AgentConsole`, or a silent console in silent mode) |
 
@@ -212,6 +220,7 @@ Bundles are validated on import. The receiving end enforces conservative limits 
     ```python
     from gaia.agents.base.agent import Agent
     from gaia.agents.base.console import AgentConsole
+    from gaia.agents.base.tools import _TOOL_REGISTRY
 
 
     class GreeterAgent(Agent):
@@ -234,7 +243,8 @@ Bundles are validated on import. The receiving end enforces conservative limits 
             return AgentConsole()
 
         def _register_tools(self) -> None:
-            pass
+            _TOOL_REGISTRY.clear()
+            self._snapshot_tools()
     ```
   </Accordion>
 
@@ -292,6 +302,7 @@ Bundles are validated on import. The receiving end enforces conservative limits 
             _TOOL_REGISTRY.clear()
             self.register_rag_tools()
             self.register_file_search_tools()
+            self._snapshot_tools()
     ```
   </Accordion>
 
@@ -339,6 +350,7 @@ Bundles are validated on import. The receiving end enforces conservative limits 
             _TOOL_REGISTRY.clear()
             self.register_file_io_tools()
             self.register_shell_tools()
+            self._snapshot_tools()
     ```
   </Accordion>
 </AccordionGroup>
