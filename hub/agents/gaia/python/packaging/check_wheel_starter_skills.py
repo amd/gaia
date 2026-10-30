@@ -6,7 +6,18 @@ import argparse
 import zipfile
 from pathlib import Path
 
-from stage_starter_skills import starter_skill_names
+STARTER_SKILLS = Path(__file__).resolve().parents[4] / "skills"
+
+
+def starter_skill_names() -> set[str]:
+    """Starter skills in the checkout: every hub/skills/<name>/SKILL.md."""
+    if not STARTER_SKILLS.is_dir():
+        raise FileNotFoundError(f"starter skill directory is missing: {STARTER_SKILLS}")
+    return {
+        path.name
+        for path in STARTER_SKILLS.iterdir()
+        if path.is_dir() and (path / "SKILL.md").is_file()
+    }
 
 
 def wheel_skill_names(wheel: Path) -> set[str]:
