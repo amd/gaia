@@ -117,23 +117,34 @@ class FakeBridge:
         if body.get("script") != _LIVE_LABEL_JS:
             return self.snapshot
         selector = body["args"]
-        if selector in self.labels:
-            label = self.labels[selector]
-        else:
-            label = next(
+
+        def label_in(frame):
+            if selector in self.labels:
+                return self.labels[selector]
+            return next(
                 (
                     el.get("name") or ""
-                    for f in self.snapshot["frames"]
-                    if f.get("ok")
-                    for el in (f.get("value") or {}).get("elements") or []
+                    for el in (frame.get("value") or {}).get("elements") or []
                     if f'"{el["ref"]}"' in selector
                 ),
                 None,
             )
+
+        frames = [f for f in self.snapshot["frames"] if f.get("ok")]
+        if body.get("frames") == "main":
+            frames = frames[:1]
         return {
             "tabId": "tab-1",
             "url": self.snapshot.get("url"),
-            "frames": [{"frameId": None, "url": "", "ok": True, "value": label}],
+            "frames": [
+                {
+                    "frameId": f["frameId"],
+                    "url": f["url"],
+                    "ok": True,
+                    "value": label_in(f),
+                }
+                for f in frames
+            ],
         }
 
     def ops(self) -> List[str]:

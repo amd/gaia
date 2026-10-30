@@ -109,7 +109,8 @@ _SNAPSHOT_JS = """
     if (wrapping) { const t = clean(wrapping.innerText); if (t) return t; }
     const text = clean(el.innerText || el.textContent);
     if (text) return text;
-    for (const a of ['placeholder', 'title', 'alt', 'name', 'value']) {
+    // Not the name attribute: a form field name ("commit") is not what the control says.
+    for (const a of ['placeholder', 'title', 'alt', 'value']) {
       const v = clean(el.getAttribute(a));
       if (v) return v;
     }
@@ -170,6 +171,9 @@ _SNAPSHOT_JS = """
     const ref = 'g' + gen + 'e' + (++n);
     el.setAttribute(attr, ref);
     const rec = { ref, role: roleOf(el), name: nameOf(el) };
+    // What the control shows, when its accessible name says something else.
+    const shown = clean(el.innerText || el.textContent) || clean(el.getAttribute('value'));
+    if (shown && shown !== rec.name) rec.shown = shown;
     // Three buttons all labelled "Select" are indistinguishable to the model.
     // Carry the row's own text so it can tell which account it is choosing.
     const holder = el.closest('li,tr,[role=row],[role=listitem],div');

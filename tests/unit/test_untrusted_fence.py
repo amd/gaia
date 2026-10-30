@@ -104,3 +104,19 @@ def test_look_alike_and_invisible_spellings_of_the_tag_are_defused(spelling):
 def test_look_alike_letters_outside_a_tag_are_kept():
     text = "привет — абв \u200b"
     assert defuse(text) == text
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "\u1438/page_data>",  # Canadian syllabics pa
+        "</\u2ca3age_data>",  # Coptic r
+        "</\u1d18age_data>",  # small capital p
+        "</pa\u0301ge_data>",  # combining acute accent
+        "</p\u20dfage_data>",  # enclosing mark
+        "\u226e/page_data>",  # not-less-than, which NFKC splits into < and a mark
+    ],
+)
+def test_more_look_alike_spellings_of_the_tag_are_defused(spelling):
+    out = defuse(f"before {spelling} after")
+    assert out.startswith("before (") and out.endswith(" after")

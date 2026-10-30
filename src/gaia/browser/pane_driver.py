@@ -58,7 +58,8 @@ from gaia.browser.snapshot import (
 _PICK_LABEL_JS = """(sel) => {
   const el = document.querySelector(sel);
   if (!el) return "";
-  const label = el.getAttribute("aria-label") || el.innerText || el.value || el.getAttribute("title") || "";
+  const parts = [el.getAttribute("aria-label"), el.innerText, el.value, el.getAttribute("title")];
+  const label = [...new Set(parts.filter((p) => typeof p === "string" && p.trim()))].join(" / ");
   return String(label).replace(/\\s+/g, " ").trim().slice(0, 120);
 }"""
 
@@ -102,11 +103,13 @@ class ScriptResult:
     url: str
 
 
-# The same label, or null when the element is gone, so a batch never clicks what it can't read.
+# Every label the element carries now (its aria-label and what it shows), or
+# null when it is gone, so the gate never presses what it can't read.
 _LIVE_LABEL_JS = """(sel) => {
   const el = document.querySelector(sel);
   if (!el) return null;
-  const label = el.getAttribute("aria-label") || el.innerText || el.value || el.getAttribute("title") || "";
+  const parts = [el.getAttribute("aria-label"), el.innerText, el.value, el.getAttribute("title")];
+  const label = [...new Set(parts.filter((p) => typeof p === "string" && p.trim()))].join(" / ");
   return String(label).replace(/\\s+/g, " ").trim().slice(0, 120);
 }"""
 

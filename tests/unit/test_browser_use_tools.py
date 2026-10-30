@@ -463,7 +463,8 @@ BENIGN_LABELS = [
     "Approve order",
     "Learn more",
     "Go now",
-    "Reset",
+    "Order history",
+    "Pay later options",
 ]
 
 IRREVERSIBLE_LABELS = [
@@ -480,6 +481,25 @@ IRREVERSIBLE_LABELS = [
     "Cancel subscription",
     "Erase all data",
     "Send money",
+    "Reset",
+    "Reset all settings",
+    "Revoke access",
+    "Remove account",
+    "Close account",
+    "Leave organization",
+    "Leave team",
+    "Discard changes",
+    "Pay $49.99",
+    "Pay USD 49",
+    "Purchase for 12.00",
+    "Buy 3 for 20",
+    # Spelled to slip past a plain word match.
+    "Dеlеtе account",  # Cyrillic e
+    "Del\u00adete account",  # soft hyphen
+    "Del\u200bete account",  # zero-width space
+    "ᴅᴇʟᴇᴛᴇ account",  # small capitals
+    "De\u0301lete account",  # combining mark
+    "ＤＥＬＥＴＥ ＡＣＣＯＵＮＴ",  # fullwidth
 ]
 
 

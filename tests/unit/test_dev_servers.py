@@ -876,3 +876,15 @@ def test_a_static_server_whose_ipv6_half_is_taken_fails_loudly(tmp_path):
             static_server.serve_loopback(str(tmp_path), port)
         # And GAIA never picks such a port in the first place.
         assert dev_servers._free_loopback_port(port) is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/NUL", "/nul.txt", "/COM1", "/sub/CON", "/%00", "/index.html%00.txt", "/a%00b"],
+)
+def test_static_server_answers_device_and_nul_names_with_404_and_keeps_serving(
+    static_site, path
+):
+    _root, port = static_site
+    assert fetch(port, path)[0] == 404
+    assert fetch(port, "/") == (200, b"<h1>Home</h1>")

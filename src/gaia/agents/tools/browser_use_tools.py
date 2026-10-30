@@ -94,6 +94,20 @@ _IRREVERSIBLE_PHRASES = (
     "publish",
     "send invite",
     "create account",
+    # access and data
+    "remove account",
+    "revoke",
+    "leave organization",
+    "leave organisation",
+    "leave team",
+    "leave workspace",
+    "reset",
+    "discard",
+)
+
+#: Paying or buying with an amount on the button: "Pay $49.99", "Purchase 3 for 12".
+_PAY_AMOUNT_RE = re.compile(
+    r" (pay|purchase|buy|subscribe)( (usd|eur|gbp|cad|aud|inr|jpy|now|for))* \d"
 )
 
 
@@ -577,7 +591,9 @@ class BrowserUseToolsMixin:
         that produced it.
         """
         self._browser_last_elements = {
-            e.get("ref"): e.get("name") or ""
+            e.get("ref"): " / ".join(
+                dict.fromkeys(str(e[k]) for k in ("name", "shown", "value") if e.get(k))
+            )
             for e in (snap or {}).get("elements") or []
             if e.get("ref")
         }
@@ -637,7 +653,13 @@ class BrowserUseToolsMixin:
             elif ref not in (getattr(self, "_browser_last_elements", None) or {}):
                 return _UNKNOWN_REF_LABEL
             else:
-                label = self._element_label(ref)
+                # The page may have changed since the last read: check what it says now too.
+                live = self._live_label(ref)
+                if live is None:
+                    return "an element whose label could not be read just now"
+                label = " / ".join(
+                    dict.fromkeys(x for x in (self._element_label(ref), live) if x)
+                )
             if self._looks_irreversible(label):
                 return label
         if tool_name == "browser_click":
@@ -654,6 +676,21 @@ class BrowserUseToolsMixin:
             ),
             "",
         )
+
+    def _live_label(self, ref: str) -> Optional[str]:
+        """The label ``ref`` shows in the pane now; "" with no pane, None when it can't be read."""
+        try:
+            pane = self._pane()
+        except BrowserError:
+            return None
+        live = getattr(pane, "live_label", None)
+        if pane is None or not callable(live):
+            return ""
+        try:
+            return live(ref)
+        except BrowserError as e:
+            logger.warning("Could not re-read the label of %s: %s", ref, e)
+            return None
 
     def _label_changed(self, driver, ref: str) -> bool:
         """Whether a batch step that presses a control must stop: its live label names an irreversible action, or can't be read.
@@ -686,11 +723,20 @@ class BrowserUseToolsMixin:
 
     @staticmethod
     def _looks_irreversible(label: str) -> bool:
-        """Whether a control's own label names an action that cannot be undone."""
+        """Whether a control's own label names an action that cannot be undone.
+
+        Read as it reads on screen: look-alike letters, soft hyphens and
+        invisible characters can't hide a word from the check.
+        """
         if not label:
             return False
-        text = " " + re.sub(r"[^a-z0-9]+", " ", label.lower()).strip() + " "
-        return any(f" {p} " in text for p in _IRREVERSIBLE_PHRASES)
+        from gaia.browser.untrusted import fold_text
+
+        words = re.sub(r"[^a-z0-9]+", " ", fold_text(label).lower()).strip()
+        text = f" {words} "
+        if any(f" {p} " in text for p in _IRREVERSIBLE_PHRASES):
+            return True
+        return _PAY_AMOUNT_RE.search(text) is not None
 
     def browser_call_needs_confirmation(
         self, tool_name: str, tool_args: Optional[dict] = None
@@ -1234,10 +1280,14 @@ class BrowserUseToolsMixin:
                     f'"{text}" does not appear on this page '
                     f'({res.get("page_chars", 0):,} characters searched).'
                 )
-            lines = [driver.where, f'Found "{text}" {len(hits)} time(s):']
-            for h in hits:
-                lines.append(f"  … {h} …")
-            return "\n".join(lines)
+            body = "\n".join(f"  … {h} …" for h in hits)
+            return "\n".join(
+                [
+                    driver.where,
+                    f'Found "{text}" {len(hits)} time(s):',
+                    fence("web page", "The text around each match.", body),
+                ]
+            )
 
         @tool(atomic=True, registry=shared)
         def browser_sessions() -> str:
@@ -1283,7 +1333,7 @@ class BrowserUseToolsMixin:
             return {
                 "browser": driver.where,
                 "status": "success",
-                "message": f"Took a picture of {what} at {shot.url}.",
+                "message": f"Took a picture of {what} at {site_words(shot.url)}.",
                 "image_path": path,
                 "width": shot.width,
                 "height": shot.height,
@@ -1495,7 +1545,7 @@ class BrowserUseToolsMixin:
             if name == "browser_click":
                 driver.click(ref, read=False)
             elif name == "browser_type":
-                enter = bool(args.get("press_enter"))
+                enter = args.get("press_enter") is True
                 driver.type_text(ref, str(args["text"]), press_enter=enter, read=False)
             else:
                 driver.press(str(args["key"]), ref or None, read=False)
@@ -1511,7 +1561,7 @@ class BrowserUseToolsMixin:
                     else f"Clicked {ref}."
                 )
             if name == "browser_type":
-                enter = bool(args.get("press_enter"))
+                enter = args.get("press_enter") is True
                 return f"Typed into {ref}" + (" and pressed Enter." if enter else ".")
             return f"Pressed {args['key']}" + (f" on {ref}." if ref else ".")
 
@@ -1784,8 +1834,32 @@ def _activates(tool_name: str, args: Dict[str, Any]) -> bool:
     if tool_name == "browser_press":
         return str(args.get("key") or "") in _ACTIVATING_KEYS
     if tool_name == "browser_type":
-        return _truthy(args.get("press_enter", False))
+        # Anything not plainly false may press Enter, so it counts as pressing.
+        return _flag(args.get("press_enter", False)) is not False
     return False
+
+
+def _flag(value: Any) -> Optional[bool]:
+    """A yes/no argument read strictly: True, False, or None when it is neither.
+
+    The same words the agent's own argument check takes, so a batch step and
+    a single call read a flag alike, and the gate and the step can't disagree.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("true", "yes", "1"):
+            return True
+        if text in ("false", "no", "0"):
+            return False
+    return None
+
+
+#: Batch step arguments that are yes/no; each is read with ``_flag``.
+_BATCH_FLAGS = ("press_enter",)
 
 
 def _truthy(value: Any) -> bool:
@@ -1846,6 +1920,15 @@ def _parse_batch(steps: Any) -> List[Tuple[str, Dict[str, Any]]]:
         missing = [k for k in needed if k not in args]
         if missing:
             raise ValueError(f"step {n} ({name}) needs {', '.join(missing)}.")
+        for key in _BATCH_FLAGS:
+            if key in args:
+                flag = _flag(args[key])
+                if flag is None:
+                    raise ValueError(
+                        f"step {n} ({name}): {key} must be true or false, not "
+                        f"{args[key]!r}."
+                    )
+                args[key] = flag
         plan.append((name, args))
     return plan
 

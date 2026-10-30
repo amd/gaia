@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import errno
 import os
+import re
 import socket
 import sys
 import threading
@@ -24,6 +25,9 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import List, Optional, Sequence
+
+#: Windows device names, with or without an extension; never a file there, so never served.
+_DEVICE_RE = re.compile(r"^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$", re.IGNORECASE)
 
 #: What binding ::1 fails with on a machine that has no IPv6.
 _NO_IPV6 = {
@@ -47,7 +51,13 @@ class StaticHandler(SimpleHTTPRequestHandler):
         if host not in self.hosts:
             self.send_error(HTTPStatus.FORBIDDEN, "Unknown host")
             return None
-        if not self._servable(self.translate_path(self.path)):
+        try:
+            servable = self._servable(self.translate_path(self.path))
+        except (OSError, ValueError):
+            servable = (
+                False  # a name the file system can't take, such as one holding NUL
+            )
+        if not servable:
             self.send_error(HTTPStatus.NOT_FOUND, "File not found")
             return None
         return super().send_head()
@@ -59,8 +69,10 @@ class StaticHandler(SimpleHTTPRequestHandler):
         (a Windows short name like ``ENV~1``, a link) can't get round them.
         """
         requested = os.path.relpath(path, self.directory)
-        if ":" in requested:
-            return False  # a Windows stream or drive name, never a web file
+        if ":" in requested or "\0" in requested:
+            return False  # a Windows stream or drive name, or a NUL, never a web file
+        if any(_DEVICE_RE.match(part) for part in Path(requested).parts):
+            return False  # NUL, CON, COM1 ... name a device on Windows, not a file
         real = os.path.normcase(os.path.realpath(path))
         if real != self.root and not real.startswith(self.root + os.sep):
             return False
