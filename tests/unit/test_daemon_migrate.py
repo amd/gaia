@@ -37,6 +37,8 @@ def homes(tmp_path, monkeypatch):
     """
     legacy = tmp_path / "gaia"
     host = tmp_path / "gaia" / "host"
+    # GAIA_HOME outranks GAIA_CONFIG_DIR, so an exported one would escape tmp.
+    monkeypatch.delenv("GAIA_HOME", raising=False)
     monkeypatch.setenv("GAIA_CONFIG_DIR", str(legacy))
     monkeypatch.setenv("GAIA_DAEMON_HOME", str(host))
     return legacy, host
