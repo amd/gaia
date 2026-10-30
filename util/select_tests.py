@@ -3,7 +3,18 @@
 
 """Pick the unit-test files a change can affect, so a PR runs those and not all.
 
-Two sources say which tests a file reaches:
+**Narrowing is an allowlist.** A PR runs a subset only when every changed file
+is either a unit-test file or shipped ``.py`` code under a root the coverage map
+measures (``src/gaia``, and ``hub/agents`` when the map includes it) with an
+entry in the map. Everything else runs the whole suite: data files, ``util/``
+scripts, test helpers and fixtures, ``eval/``, configs, workflows, any
+``conftest.py``, a deleted or renamed file, a missing or stale map, this script
+and the workflow that runs it. Tests load such files by path
+(``spec_from_file_location``, ``runpy``, ``open``), and neither imports nor
+coverage can follow what those scripts import or read. A selection over
+``FULL_FRACTION`` of the suite also runs everything, since the saving is gone.
+
+For a change that passes the allowlist, two sources say which tests it reaches:
 
 **The coverage map** (``build-map``), from a full run with per-test coverage
 contexts on main. It lists, for each source file, the test files that executed
@@ -11,36 +22,24 @@ it. This is what makes the selection tight: most of ``src/gaia`` imports most of
 the rest inside function bodies, so static reading alone would run nearly
 everything for nearly any change.
 
-**Static rules**, for what coverage can't see:
+**Static rules**, added on top for what coverage can't see:
 
 - Module-level imports, followed transitively. Lines that run at import time
   (constants, class bodies, decorators) carry no test context in coverage.
 - Every import and module-naming string in tests and repo tooling, transitively:
-  ``mocker.patch("gaia.llm.lemonade_client.X")``, ``python -c "import gaia.cli"``,
-  ``import check_test_lane_coverage`` after a ``sys.path`` insert.
-- A file named by a string (``"ci_tiers.json"``) is read by whoever names it. A
-  path is matched whole, including one built with ``/`` or ``os.path.join``, so
-  ``root / "hub" / "skills" / "x" / "SKILL.md"`` means that file. A non-Python
-  name with no folder means every file of that name, however common.
+  ``mocker.patch("gaia.llm.lemonade_client.X")``, ``python -c "import gaia.cli"``.
+- A file named by a string is read by whoever names it, matched by its whole
+  path where one is spelled out.
 - Tests and tooling that list a directory (``rglob``, ``os.walk``) are affected
   by any file under a directory whose name they spell out.
 - A ``conftest.py`` below the suite root reaches every file beneath it.
 - A package ``__init__`` reaches everything under it when it changes, but the
   walk never continues *through* one: ``gaia/__init__`` imports the agent base
   eagerly, and following that would make every test depend on everything.
-
-Without a map, imports inside functions are followed too: more tests, never
-fewer, and the summary says so. Where a map exists but can't speak for a file,
-the same wider rule applies to that file: a changed source file the map never
-saw, a test file it never saw (added since the nightly run), and every file once
-the map is older than ``MAX_MAP_AGE``.
-
-Some changes run the whole suite, because their reach can't be read at all: a
-top-level ``conftest.py``, packaging or pytest config, a deleted or renamed
-file, a non-Python file that no string names exactly (only a common name like
-``SKILL.md``, or only a directory scan), this script, or the workflow that runs
-it. So does a selection over ``FULL_FRACTION`` of the suite, where the saving
-is gone anyway.
+- Code run in a child process (``python -m gaia.daemon``), by a test or by
+  shipped code, counts with all its imports, since coverage can't see inside.
+- A test the map never ran (added since the nightly build) follows imports
+  inside functions too.
 
 This is a speed-up for pull requests, not the coverage of record: test_unit.yml
 runs the full suite on every push to main and nightly on all three operating
@@ -138,8 +137,6 @@ class Graph:
     init_deps: Dict[str, Set[str]] = field(default_factory=_edges)
     # Files named by a string: followed one hop, from the changed file.
     read_deps: Dict[str, Set[str]] = field(default_factory=_edges)
-    # Files some string names so that it can mean only that one file.
-    named_exactly: Set[str] = field(default_factory=set)
     scanner_tokens: Dict[str, Set[str]] = field(default_factory=dict)
     # Modules a test runs in a child process (`python -m gaia.cli`): coverage
     # can't see inside it, so their function-level imports always count.
@@ -468,8 +465,6 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
             tokens.update(p for p in pieces if "\n" not in p and len(p) < 80)
             targets = read_targets(pieces, package_code)
             graph.read_deps[path].update(t for t in targets if t != path)
-            if len(targets) == 1:
-                graph.named_exactly.update(targets)
         # Shipped code that lists a directory is linked by the names it reads.
         if not package_code and _SCANNER_RE.search(source):
             graph.scanner_tokens[path] = tokens
@@ -585,9 +580,8 @@ def load_map(path: Path) -> Tuple[Dict[str, Set[str]], bool]:
     if stale:
         print(
             f"::warning::select_tests: the coverage map is {age.days} days old "
-            "(built by the nightly unit run), so imports inside functions are "
-            "followed too, which runs more tests. Check why the nightly stopped "
-            "saving it.",
+            "(built by the nightly unit run), so the full suite runs. Check why "
+            "the nightly stopped saving it.",
             file=sys.stderr,
         )
     tests = data["tests"]
@@ -629,7 +623,6 @@ def affected_files(
     graph: Graph,
     changed: Iterable[str],
     coverage: Optional[Dict[str, Set[str]]],
-    stale: bool = False,
 ) -> Set[str]:
     changed = set(changed)
     affected: Set[str] = set(changed)
@@ -672,8 +665,6 @@ def affected_files(
     # Where the map can't speak, follow every import, as with no map at all:
     # tests it never ran (added since it was built) and source it never saw.
     loose = _closure(rev_every, seeds)
-    if stale:
-        return affected | loose
     mapped_tests = set().union(*coverage.values())
     affected.update(f for f in loose if f not in mapped_tests)
     unmapped = {f for f in changed if f.endswith(".py") and f not in coverage}
@@ -702,23 +693,52 @@ def _forward(edges: Dict[str, Set[str]], start: str) -> Set[str]:
     return seen
 
 
+def is_measured(path: str, coverage: Dict[str, Set[str]]) -> bool:
+    """Shipped .py code under a root the coverage map measures."""
+    if not path.endswith(".py") or "/tests/" in f"/{path}":
+        return False
+    if path.startswith("src/gaia/"):
+        return True
+    # hub/agents is measured only when the map was built with it.
+    return path.startswith("hub/agents/") and any(
+        f.startswith("hub/agents/") for f in coverage
+    )
+
+
 def full_run_reason(
-    changed: Iterable[str], graph: Graph, repo: Path = REPO_ROOT
+    changed: Iterable[str],
+    graph: Graph,
+    repo: Path = REPO_ROOT,
+    coverage: Optional[Dict[str, Set[str]]] = None,
+    stale: bool = False,
+    test_root: str = DEFAULT_TEST_ROOT,
 ) -> Optional[str]:
+    """Why the whole suite must run, or None if the selection can narrow.
+
+    Narrowing is an allowlist: every changed file must be a unit-test file, or
+    shipped .py code the coverage map measures and has an entry for. Anything
+    else (data files, util/ scripts, test helpers and fixtures, eval/, configs,
+    workflows) can be loaded by path or read by a script, which neither imports
+    nor coverage can follow, so it runs everything.
+    """
+    if coverage is None:
+        return "no coverage map"
+    if stale:
+        return "the coverage map is stale"
     for path in sorted(changed):
         if path in FULL_RUN_FILES or PurePosixPath(path).name in FULL_RUN_BASENAMES:
             return f"{path} changed"
         # A test may still name the old path or module; nothing on disk does.
         if not (repo / path).exists():
             return f"{path} was deleted or renamed"
-        if path.endswith(".py") and path not in graph.files:
+        if path not in graph.files:
             return f"{path} is not tracked by git, so its imports were not read"
-        # Coverage records only .py files, so a data file's readers are known
-        # only from a string that names it and nothing else.
-        if not path.endswith(".py") and path not in graph.named_exactly:
-            return (
-                f"{path} is not named exactly by any file, so its readers are unknown"
-            )
+        if is_test_file(path, test_root):
+            continue
+        if not is_measured(path, coverage):
+            return f"{path} is outside the code the coverage map measures"
+        if path not in coverage:
+            return f"{path} has no entry in the coverage map"
     return None
 
 
@@ -742,10 +762,10 @@ def select(
 ) -> Selection:
     changed = sorted(set(changed))
     all_tests = sorted(p for p in graph.files if is_test_file(p, test_root))
-    reason = full_run_reason(changed, graph, graph.repo)
+    reason = full_run_reason(changed, graph, graph.repo, coverage, stale, test_root)
     tests = all_tests
     if reason is None:
-        hit = affected_files(graph, changed, coverage, stale)
+        hit = affected_files(graph, changed, coverage)
         tests = [p for p in all_tests if p in hit]
         if len(tests) > FULL_FRACTION * len(all_tests):
             reason = f"{len(tests)} of {len(all_tests)} test files affected"
@@ -753,9 +773,6 @@ def select(
     if platform_only:
         tests = [p for p in tests if is_platform_sensitive(graph, p)]
     detail = reason or f"{len(changed)} changed file(s)"
-    if reason is None and (coverage is None or stale):
-        why = "no coverage map" if coverage is None else "the coverage map is stale"
-        detail += f"; {why}, so imports inside functions were followed too"
     return Selection(
         full=reason is not None and not platform_only,
         reason=detail,
@@ -791,7 +808,7 @@ def _cmd_select(args: argparse.Namespace) -> int:
         else:
             print(
                 f"::warning::select_tests: no coverage map at {args.map}; "
-                "selecting from imports alone, which runs more tests.",
+                "running the full suite.",
                 file=sys.stderr,
             )
     graph = build_graph()

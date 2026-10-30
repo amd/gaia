@@ -132,6 +132,39 @@ FILES = {
         "BASIC = ROOT / 'eval' / 'scenarios' / 'rag' / 'basic.yaml'\n"
         "ALL = list((ROOT / 'eval' / 'scenarios').rglob('*.yaml'))\n"
     ),
+    # Scripts and data that tests load by path, where neither imports nor
+    # coverage can follow what the script imports or reads.
+    "eval/ci_lanes.json": "{}",
+    "util/eval_lane_matrix.py": "import json\n",
+    "util/eval_gaia_home.py": "import os\n",
+    "util/run_eval_lane.py": (
+        "import eval_lane_matrix, eval_gaia_home\n" "LANES = 'eval/ci_lanes.json'\n"
+    ),
+    "tests/unit/eval/test_run_eval_lane.py": (
+        "import importlib.util\n"
+        "SPEC = importlib.util.spec_from_file_location(\n"
+        "    'run_eval_lane', ROOT / 'util' / 'run_eval_lane.py'\n"
+        ")\n"
+    ),
+    "tests/fixtures/email/phishing_fixture.json": "[]",
+    "tests/fixtures/email/drafting_gate_thresholds.json": "{}",
+    "tests/fixtures/email/perf_gate_thresholds.json": "{}",
+    "tests/fixtures/gaia/email/build_mailbox.py": (
+        "FIXTURE = ROOT / 'tests/fixtures/email/phishing_fixture.json'\n"
+    ),
+    "tests/unit/agents/tools/test_email_eval_fixture.py": (
+        "import importlib.util\n"
+        "SPEC = importlib.util.spec_from_file_location(\n"
+        "    'build_mailbox', ROOT / 'tests/fixtures/gaia/email/build_mailbox.py'\n"
+        ")\n"
+    ),
+    "tests/unit/helpers.py": "from gaia.core.base import VALUE\n",
+    "tests/integration/test_live.py": "def test_l():\n    pass\n",
+    "hub/agents/mail/python/gaia_agent_mail/__init__.py": "",
+    "hub/agents/mail/python/gaia_agent_mail/agent.py": "X = 1\n",
+    "hub/agents/mail/python/tests/test_agent.py": "def test_a():\n    pass\n",
+    "tests/unit/test_mail_agent.py": "from gaia_agent_mail.agent import X\n",
+    "tests/unit/test_map_anchor.py": "def test_a():\n    pass\n",
     "tests/unit/test_proc.py": "import subprocess\nfrom gaia.tools.sinks import go\n",
     "tests/unit/test_chain.py": "def test_c(app):\n    pass\n",
     "tests/unit/test_daemon_start.py": "def test_s():\n    pass\n",
@@ -151,10 +184,28 @@ def graph(tmp_path):
     return st.build_graph(repo=tmp_path, files=sorted(FILES))
 
 
+# A map with an entry for every shipped .py file, crediting only an anchor
+# test: every other test is one the map never ran, so its imports are read
+# statically, as the rule tests below expect.
+ANCHOR = "tests/unit/test_map_anchor.py"
+FULL_MAP = {f: {ANCHOR} for f in FILES if f.endswith(".py") and st.is_measured(f, {})}
+
+
 def _selected(graph, *changed, coverage=None):
-    sel = st.select(graph, changed, coverage)
+    sel = st.select(graph, changed, FULL_MAP if coverage is None else coverage)
     assert not sel.full, sel.reason
     return set(sel.tests)
+
+
+def _reach(graph, *changed):
+    """The tests the static rules link to a change, before the allowlist."""
+    return {f for f in st.affected_files(graph, changed, None) if "/test_" in f}
+
+
+def _full(graph, *changed, coverage=FULL_MAP, stale=False):
+    sel = st.select(graph, changed, coverage, stale=stale)
+    assert sel.full and len(sel.tests) == sel.total, sel.reason
+    return sel.reason
 
 
 def test_a_direct_import_selects_its_test(graph):
@@ -179,15 +230,13 @@ def test_a_module_named_inside_code_in_a_string_is_a_dependency(graph):
 
 
 def test_a_file_named_by_a_string_is_read_by_its_namer(graph):
-    assert "tests/unit/test_reads_json.py" in _selected(
-        graph, "src/gaia/tools/tiers.json"
-    )
+    assert "tests/unit/test_reads_json.py" in _reach(graph, "src/gaia/tools/tiers.json")
 
 
 def test_a_directory_scan_selects_tests_of_the_scanner(graph):
     # chat.mdx is named by a test, so the selection is precise, and the
     # scanner that lists docs/ comes along.
-    hit = _selected(graph, "docs/guides/chat.mdx")
+    hit = _reach(graph, "docs/guides/chat.mdx")
     assert {"tests/unit/test_docs_tool.py", "tests/unit/test_chat_doc.py"} <= hit
 
 
@@ -208,7 +257,7 @@ def test_a_fixture_requested_through_another_fixture_is_followed(graph):
 
 
 def test_a_module_an_autouse_fixture_imports_reaches_every_test(graph):
-    sel = st.select(graph, ["src/gaia/core/home.py"])
+    sel = st.select(graph, ["src/gaia/core/home.py"], FULL_MAP)
     assert "tests/unit/test_unrelated.py" in sel.tests
 
 
@@ -221,7 +270,8 @@ def test_an_autouse_fixture_reaches_only_one_hop(graph):
 
 def test_a_cli_run_in_a_child_process_follows_the_clis_lazy_imports(graph):
     # Coverage can't see inside the child, so the map alone would miss this.
-    mapped = _selected(graph, "src/gaia/tools/sinks.py", coverage={})
+    coverage = {"src/gaia/tools/sinks.py": {"tests/unit/test_patch.py"}}
+    mapped = _selected(graph, "src/gaia/tools/sinks.py", coverage=coverage)
     assert "tests/unit/test_cli_proc.py" in mapped
 
 
@@ -263,23 +313,19 @@ def test_a_test_the_map_never_ran_follows_lazy_imports(graph):
     assert "tests/unit/test_cli.py" in hit
 
 
-def test_a_source_file_the_map_never_saw_follows_lazy_imports(graph):
-    # sinks.py is new since the map (or never ran): cli imports it lazily, and
-    # the map's test of cli can't have been credited with it.
+def test_a_source_file_the_map_never_saw_runs_the_full_suite(graph):
+    # sinks.py is new since the map (or never ran): nothing vouches for it.
     coverage = {"src/gaia/cli.py": {"tests/unit/test_cli.py"}}
-    hit = _selected(graph, "src/gaia/tools/sinks.py", coverage=coverage)
-    assert "tests/unit/test_cli.py" in hit
+    reason = _full(graph, "src/gaia/tools/sinks.py", coverage=coverage)
+    assert "no entry in the coverage map" in reason
 
 
-def test_a_stale_map_follows_lazy_imports_everywhere(graph):
-    coverage = {
-        "src/gaia/cli.py": {"tests/unit/test_cli.py"},
-        "src/gaia/tools/sinks.py": {"tests/unit/test_patch.py"},
-    }
-    sel = st.select(graph, ["src/gaia/tools/sinks.py"], coverage, stale=True)
-    assert not sel.full
-    assert "tests/unit/test_cli.py" in sel.tests
-    assert "stale" in sel.reason
+def test_a_stale_map_runs_the_full_suite(graph):
+    assert "stale" in _full(graph, "src/gaia/tools/sinks.py", stale=True)
+
+
+def test_no_map_runs_the_full_suite(graph):
+    assert "no coverage map" in _full(graph, "src/gaia/tools/sinks.py", coverage=None)
 
 
 def test_a_child_module_shipped_code_spawns_selects_the_tests_that_ran_it(graph):
@@ -337,7 +383,10 @@ def test_load_map_flags_a_map_the_nightly_stopped_refreshing(tmp_path, days, sta
 
 
 def test_the_coverage_map_adds_tests_that_executed_an_affected_file(graph):
-    coverage = {"src/gaia/core/uses_consts.py": {"tests/unit/test_unrelated.py"}}
+    coverage = {
+        "src/gaia/core/consts.py": {"tests/unit/test_consts.py"},
+        "src/gaia/core/uses_consts.py": {"tests/unit/test_unrelated.py"},
+    }
     # consts -> uses_consts (module level) -> the map's test of uses_consts.
     hit = _selected(graph, "src/gaia/core/consts.py", coverage=coverage)
     assert "tests/unit/test_unrelated.py" in hit
@@ -352,16 +401,16 @@ def test_the_coverage_map_adds_tests_that_executed_an_affected_file(graph):
     ],
 )
 def test_a_common_file_name_is_selected_by_its_full_path(graph, test):
-    assert test in _selected(graph, "hub/skills/triage/SKILL.md")
-    assert test not in _selected(graph, "hub/skills/s1/SKILL.md")
+    assert test in _reach(graph, "hub/skills/triage/SKILL.md")
+    assert test not in _reach(graph, "hub/skills/s1/SKILL.md")
 
 
 def test_a_common_name_with_an_unknown_folder_reads_every_file_of_that_name(graph):
-    assert "tests/unit/test_any_skill.py" in _selected(graph, "hub/skills/s1/SKILL.md")
+    assert "tests/unit/test_any_skill.py" in _reach(graph, "hub/skills/s1/SKILL.md")
 
 
 def test_an_ignored_name_is_still_a_read_when_its_path_is_spelled_out(graph):
-    assert "tests/unit/test_docs_readme.py" in _selected(graph, "docs/README.md")
+    assert "tests/unit/test_docs_readme.py" in _reach(graph, "docs/README.md")
 
 
 @pytest.mark.parametrize(
@@ -369,7 +418,7 @@ def test_an_ignored_name_is_still_a_read_when_its_path_is_spelled_out(graph):
 )
 def test_the_inbox_triage_skill_selects_the_email_tests_that_read_it(graph, test):
     # The regression: these two were skipped when only SKILL.md was edited.
-    hit = _selected(graph, "hub/skills/inbox-triage/SKILL.md")
+    hit = _reach(graph, "hub/skills/inbox-triage/SKILL.md")
     assert test in hit
     assert "tests/unit/test_unrelated.py" not in hit
 
@@ -384,41 +433,91 @@ def test_the_inbox_triage_skill_selects_the_email_tests_that_read_it(graph, test
     ],
 )
 def test_a_data_file_named_by_its_path_selects_its_reader(graph, changed, reader):
-    assert f"tests/unit/{reader}" in _selected(graph, changed)
+    assert f"tests/unit/{reader}" in _reach(graph, changed)
 
 
-# Coverage records only .py files, so a data file nothing names exactly could be
-# read by anything: run everything rather than guess.
+# Narrowing is an allowlist: only unit tests and mapped shipped .py code may
+# narrow. Anything a test can load by path, or a script can read, runs it all.
 @pytest.mark.parametrize(
     "changed",
     [
+        # The verifier's cases: each reaches a test only through a script that
+        # a test loads with spec_from_file_location.
+        "eval/ci_lanes.json",
+        "util/eval_lane_matrix.py",
+        "util/eval_gaia_home.py",
+        "tests/fixtures/email/phishing_fixture.json",
+        "tests/fixtures/email/drafting_gate_thresholds.json",
+        "tests/fixtures/email/perf_gate_thresholds.json",
+        # A util/ script, a test helper and a fixture script that aren't tests.
+        "util/run_eval_lane.py",
+        "tests/unit/helpers.py",
+        "tests/fixtures/gaia/email/build_mailbox.py",
+        # Data files, named exactly or not.
         "README.md",
+        "hub/skills/inbox-triage/SKILL.md",
         "hub/skills/s2/SKILL.md",
-        "hub/skills/inbox-triage/references/unread.md",
-        "tests/fixtures/other/cases.json",
-        "eval/scenarios/rag/other.yaml",
-        "docs/guides/talk.mdx",
+        "hub/skills/inbox-triage/references/guide.md",
+        "tests/fixtures/data/cases.json",
+        "eval/scenarios/rag/basic.yaml",
+        "docs/guides/chat.mdx",
+        "src/gaia/tools/tiers.json",
+        # .py files outside what the map measures.
+        "tests/integration/test_live.py",
+        "hub/agents/mail/python/tests/test_agent.py",
     ],
 )
-def test_a_data_file_no_string_names_exactly_runs_the_full_suite(graph, changed):
-    sel = st.select(graph, [changed])
-    assert sel.full and len(sel.tests) == sel.total
-    assert "not named exactly" in sel.reason
+def test_a_change_outside_the_allowlist_runs_the_full_suite(graph, changed):
+    _full(graph, changed)
 
 
-def test_one_unattributed_data_file_among_precise_ones_runs_everything(graph):
-    sel = st.select(
-        graph, ["hub/skills/inbox-triage/SKILL.md", "hub/skills/s2/SKILL.md"]
+def test_the_verifiers_cases_reach_their_tests_only_through_the_full_suite(graph):
+    # Static reading misses these tests: proof the allowlist, not a path
+    # rule, is what keeps them.
+    assert "tests/unit/eval/test_run_eval_lane.py" not in _reach(
+        graph, "eval/ci_lanes.json"
     )
-    assert sel.full
+    for changed, test in [
+        ("eval/ci_lanes.json", "tests/unit/eval/test_run_eval_lane.py"),
+        (
+            "tests/fixtures/email/phishing_fixture.json",
+            "tests/unit/agents/tools/test_email_eval_fixture.py",
+        ),
+    ]:
+        assert test in st.select(graph, [changed], FULL_MAP).tests
+
+
+def test_one_change_outside_the_allowlist_runs_everything(graph):
+    # A mapped source file and a test pass; the util script beside them doesn't.
+    sel = st.select(
+        graph,
+        ["src/gaia/core/base.py", "tests/unit/test_base.py", "util/eval_gaia_home.py"],
+        FULL_MAP,
+    )
+    assert sel.full and "util/eval_gaia_home.py" in sel.reason
+
+
+def test_mapped_source_and_unit_tests_together_narrow(graph):
+    hit = _selected(graph, "src/gaia/core/base.py", "tests/unit/test_unrelated.py")
+    assert {"tests/unit/test_base.py", "tests/unit/test_unrelated.py"} <= hit
+
+
+def test_a_hub_agent_narrows_only_when_the_map_measured_hub_agents(graph):
+    agent = "hub/agents/mail/python/gaia_agent_mail/agent.py"
+    src_only = {k: v for k, v in FULL_MAP.items() if k.startswith("src/")}
+    assert "outside" in _full(graph, agent, coverage=src_only)
+    with_hub = {**src_only, agent: {"tests/unit/test_mail_agent.py"}}
+    assert "tests/unit/test_mail_agent.py" in _selected(graph, agent, coverage=with_hub)
 
 
 def test_a_renamed_data_file_runs_the_full_suite(graph):
     # --no-renames: the old path shows as deleted, whatever its new name.
-    sel = st.select(
-        graph, ["tests/fixtures/data/old_cases.json", "tests/fixtures/data/cases.json"]
-    )
-    assert sel.full and "deleted or renamed" in sel.reason
+    _full(graph, "tests/fixtures/data/old_cases.json", "tests/fixtures/data/cases.json")
+
+
+def test_a_renamed_source_file_runs_the_full_suite(graph):
+    reason = _full(graph, "src/gaia/tools/old_sinks.py", "src/gaia/tools/sinks.py")
+    assert "deleted or renamed" in reason
 
 
 @pytest.mark.parametrize(
@@ -434,11 +533,10 @@ def test_a_renamed_data_file_runs_the_full_suite(graph):
     ],
 )
 def test_changes_whose_reach_cannot_be_read_run_the_full_suite(graph, changed):
-    sel = st.select(graph, [changed])
-    assert sel.full and len(sel.tests) == sel.total
+    _full(graph, changed)
 
 
 def test_platform_only_keeps_tests_that_touch_the_os(graph):
-    sel = st.select(graph, ["src/gaia/tools/sinks.py"], platform_only=True)
+    sel = st.select(graph, ["src/gaia/tools/sinks.py"], FULL_MAP, platform_only=True)
     assert "tests/unit/test_proc.py" in sel.tests
     assert "tests/unit/test_patch.py" not in sel.tests
