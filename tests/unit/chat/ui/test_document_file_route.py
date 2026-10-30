@@ -95,3 +95,47 @@ def test_a_symlinked_library_file_is_not_served(home, client, tmp_path):
         pytest.skip("creating symlinks needs privileges on this machine")
 
     assert client.get(f"/api/documents/{doc_id}/file").status_code == 403
+
+
+def test_a_pdf_is_not_sniffed_and_still_opens_in_the_viewer(home, client):
+    pdf = home / "Report.PDF"
+    pdf.write_bytes(b"%PDF-1.4\n%fake\n")
+    doc_id = _add(client, pdf)
+
+    resp = client.get(f"/api/documents/{doc_id}/file")
+
+    assert resp.status_code == 200
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert "content-security-policy" not in resp.headers
+
+
+@pytest.mark.parametrize(
+    "name, body",
+    [
+        ("notes.md", "# Notes"),
+        ("page.html", "<script>fetch('/api/sessions')</script>"),
+        ("logo.svg", "<svg onload=\"fetch('/api/sessions')\"></svg>"),
+    ],
+)
+def test_a_non_pdf_document_is_sandboxed_and_not_sniffed(home, client, name, body):
+    doc = home / name
+    doc.write_text(body, encoding="utf-8")
+    doc_id = _add(client, doc)
+
+    resp = client.get(f"/api/documents/{doc_id}/file")
+
+    assert resp.status_code == 200
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["content-security-policy"] == "sandbox"
+    assert "text/html" not in resp.headers["content-type"]
+
+
+def test_a_page_renamed_to_pdf_is_typed_as_pdf_and_not_sniffed(home, client):
+    disguised = home / "invoice.pdf"
+    disguised.write_text("<script>fetch('/api/sessions')</script>", encoding="utf-8")
+    doc_id = _add(client, disguised)
+
+    resp = client.get(f"/api/documents/{doc_id}/file")
+
+    assert resp.headers["content-type"] == "application/pdf"
+    assert resp.headers["x-content-type-options"] == "nosniff"

@@ -43,6 +43,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Questions in one language find answers in a document written in another**
+  (#6165). When an indexed document is in a non-Latin script, the agent's
+  per-turn list of indexed documents names it (`report.pdf (...) [Arabic]`)
+  and adds a note: search the document with the question translated into its
+  language, answer in the language of the user's latest message, and cite
+  every fact with its document and page. Latin-only documents get no note, so
+  their prompt is unchanged.
+- **Needs core 0.25.4.** That per-turn list calls `RAGSDK.document_scripts`,
+  which first ships in core 0.25.4; on an older core every turn with an
+  indexed document fails with `AttributeError`. The `amd-gaia` floor and
+  `min_gaia_version` rise to 0.25.4 in that release, and
+  `tests/test_chat_dependency_floor.py` fails the release until they do.
 - **Mail: whole conversations, what's waiting on you, and which account.**
   Three read-only tools join the mail set, for Gmail and Outlook alike.
   `get_thread` reads a whole conversation, oldest first, clipping long bodies

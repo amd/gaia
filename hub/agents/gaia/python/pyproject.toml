@@ -19,6 +19,9 @@ requires-python = ">=3.10"
 #   (0.25.0 added gaia.agents.tools.path_access, #4656; 0.24.1 was the first
 #   core whose daemon can supervise this sidecar, #2932.) Raise it in step
 #   with min_gaia_version, never ahead of a real release.
+# - Next: 0.25.4, the first core with RAGSDK.document_scripts, which ChatAgent
+#   calls on any turn with an indexed document (#6165). The floor rises in
+#   that release; tests/test_chat_dependency_floor.py fails it until it does.
 #
 # ChatAgent lives in this package (#6099); it no longer depends on
 # gaia-agent-chat, which is now a deprecated re-export shim of this one.

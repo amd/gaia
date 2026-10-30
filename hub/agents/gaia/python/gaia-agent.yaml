@@ -35,6 +35,8 @@ language: python
 # ChatAgent (gaia_agent.chat_agent) imports gaia.agents.tools.reasoning_tools;
 # 0.25.1 is the first core that ships it. (0.25.0 added the allowed-folders
 # check, #4656; 0.24.1 was the first whose daemon can supervise this, #2932.)
+# Rises to 0.25.4 when that core ships RAGSDK.document_scripts,
+# which ChatAgent calls (#6165).
 min_gaia_version: "0.25.3"
 models: [Gemma-4-E4B-it-GGUF]
 
