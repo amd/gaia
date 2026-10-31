@@ -140,6 +140,40 @@ def test_damaged_saved_vectors_are_re_embedded(tmp_path, document):
     assert reopened.encoded_with, "unreadable vectors were used"
 
 
+def test_a_copy_of_the_same_bytes_is_not_read_twice(tmp_path, document):
+    """The library indexes a temp copy of an upload; chats index the original."""
+    sdk = _make(tmp_path)
+    temp_copy = tmp_path / "gaia_upload_abc.txt"
+    shutil.copy(document, temp_copy)
+    assert sdk.index_document(str(temp_copy))["success"]
+
+    chat = _make(tmp_path)
+    with patch.object(chat, "_extract_text_from_file") as extract:
+        result = chat.index_document(document)
+
+    extract.assert_not_called()
+    assert result["success"] and result["from_cache"]
+    assert document in chat.indexed_files
+
+
+def test_a_copy_with_other_bytes_is_read(tmp_path, document):
+    sdk = _make(tmp_path)
+    assert sdk.index_document(document)["success"]
+    other = tmp_path / "other.txt"
+    other.write_text("Entirely different notes about something else.", encoding="utf-8")
+
+    assert not sdk.index_document(str(other)).get("from_cache")
+
+
+def test_a_copy_chunked_differently_is_read(tmp_path, document):
+    sdk = _make(tmp_path, chunk_size=400)
+    temp_copy = tmp_path / "gaia_upload_abc.txt"
+    shutil.copy(document, temp_copy)
+    assert sdk.index_document(str(temp_copy))["success"]
+
+    assert not _make(tmp_path, chunk_size=300).index_document(document).get("from_cache")
+
+
 def test_chunk_cache_and_markdown_share_one_content_key(tmp_path, document):
     sdk = _make(tmp_path)
     assert sdk.index_document(document)["success"]
