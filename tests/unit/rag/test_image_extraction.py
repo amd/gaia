@@ -87,7 +87,7 @@ def test_the_vlm_is_built_and_called_the_way_the_pdf_path_calls_it(tmp_path):
     (images,), kwargs = vlm.extract_from_page_images.call_args
     assert kwargs == {"page_num": 1}
     assert len(images) == 1
-    # The keys extract_images_from_page_pymupdf hands the PDF path.
+    # The keys extract_images_from_page_pdfium hands the PDF path.
     assert set(images[0]) == {"image_bytes", "width", "height", "format", "size_kb"}
     assert images[0]["image_bytes"].startswith(PNG_SIGNATURE)
     assert (images[0]["width"], images[0]["height"]) == (320, 120)

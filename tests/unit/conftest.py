@@ -34,6 +34,8 @@ def mock_home(tmp_path, monkeypatch):
     real_expanduser = os.path.expanduser
 
     def fake_expanduser(path):
+        # Like the real one, accept any path-like (matplotlib passes a Path).
+        path = os.fspath(path)
         if path == "~":
             return str(tmp_path)
         if path.startswith(("~/", "~\\")):

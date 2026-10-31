@@ -9,11 +9,16 @@ document conversion, and field change detection.
 """
 
 import json
-import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-logger = logging.getLogger(__name__)
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class PdfRenderError(RuntimeError):
+    """A PDF page could not be rendered to an image."""
 
 
 def _extract_balanced_json(
@@ -118,13 +123,13 @@ def pdf_page_to_image(
     path: Union[str, Path],
     page: int = 0,
     scale: float = 2.0,
-) -> Optional[bytes]:
+) -> bytes:
     """
     Convert a PDF page to PNG image bytes.
 
-    Uses PyMuPDF (fitz) for high-quality rendering. The scale parameter
-    controls resolution - higher values produce larger, sharper images
-    suitable for OCR or VLM processing.
+    Renders with PDFium (pypdfium2). The scale parameter controls resolution:
+    1.0 is 72 DPI (one pixel per PDF point); higher values produce larger,
+    sharper images suitable for OCR or VLM processing.
 
     Args:
         path: Path to the PDF file.
@@ -132,10 +137,13 @@ def pdf_page_to_image(
         scale: Resolution multiplier (default: 2.0 for 2x resolution).
 
     Returns:
-        PNG image as bytes, or None if conversion failed.
+        PNG image as bytes.
 
     Raises:
-        ImportError hint if PyMuPDF is not installed.
+        FileNotFoundError: *path* does not exist.
+        PdfRenderError: the file could not be opened (damaged, encrypted), the
+            page does not exist, or rendering failed.
+        ImportError: pypdfium2 is not installed.
 
     Example:
         from gaia.utils import pdf_page_to_image
@@ -146,30 +154,37 @@ def pdf_page_to_image(
         # Convert third page at 3x resolution for better OCR
         image_bytes = pdf_page_to_image("document.pdf", page=2, scale=3.0)
     """
-    doc = None
+    import io
+
     try:
-        import fitz  # PyMuPDF
+        import pypdfium2 as pdfium
+    except ImportError as e:
+        raise ImportError(
+            "pypdfium2 is required to render PDF pages. Install it with: "
+            'pip install "amd-gaia[rag]"'
+        ) from e
 
-        doc = fitz.open(str(path))
-        if page >= len(doc):
-            logger.warning(f"Page {page} not in PDF (has {len(doc)} pages)")
-            return None
-
-        pdf_page = doc[page]
-        # Render at specified scale for better quality
-        mat = fitz.Matrix(scale, scale)
-        pix = pdf_page.get_pixmap(matrix=mat)
-        return pix.tobytes("png")  # type: ignore[no-any-return]
-
-    except ImportError:
-        logger.error("PyMuPDF required for PDF processing: pip install pymupdf")
-        return None
-    except Exception as e:
-        logger.error(f"Failed to convert PDF to image: {e}")
-        return None
+    try:
+        pdf = pdfium.PdfDocument(str(path))
+    except pdfium.PdfiumError as e:
+        raise PdfRenderError(
+            f"could not open {path}: {e}. The file may be damaged or "
+            "password-protected; re-save it from a PDF viewer and try again."
+        ) from e
+    try:
+        if not 0 <= page < len(pdf):
+            raise PdfRenderError(
+                f"page {page} is not in {path} (it has {len(pdf)} pages)"
+            )
+        try:
+            image = pdf[page].render(scale=scale).to_pil()
+        except pdfium.PdfiumError as e:
+            raise PdfRenderError(f"could not render page {page} of {path}: {e}") from e
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
     finally:
-        if doc:
-            doc.close()
+        pdf.close()
 
 
 def detect_field_changes(
