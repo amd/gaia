@@ -1,6 +1,5 @@
 {
   "redirects": [
-    { "source": "/hub", "destination": "/#install", "type": 301 },
-    { "source": "/hub/**", "destination": "/#install", "type": 301 }
+    { "source": "/roadmap", "destination": "/docs/roadmap", "type": 301 }
   ]
 }
