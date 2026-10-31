@@ -8030,6 +8030,7 @@ Do NOT wrap conversational replies in JSON.
         getter = getattr(client, "get_last_retry_count", None)
         if not callable(getter):
             return 0
+        # pylint: disable-next=assignment-from-none
         count = getter()
         if isinstance(count, int) and not isinstance(count, bool):
             return count

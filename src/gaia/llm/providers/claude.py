@@ -1224,8 +1224,8 @@ class GatewayClaudeProvider(ClaudeProvider):
         where = f"the AMD LLM gateway at {self._base_url}"
         if isinstance(exc, sdk.APIConnectionError):
             raise RuntimeError(
-                f"Could not reach {where}: {exc}. It needs AMD's network or VPN; "
-                "connect, then retry."
+                f"Could not reach {where}: {str(exc).rstrip('.')}. It needs "
+                "AMD's network or VPN; connect, then retry."
             ) from exc
         if not isinstance(exc, sdk.APIStatusError):
             raise exc

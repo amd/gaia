@@ -10,6 +10,7 @@ call), cached-token accounting, the actionable error path, and that every
 other model keeps the Lemonade path unchanged.
 """
 
+import importlib
 import json
 import types
 from types import SimpleNamespace
@@ -274,7 +275,10 @@ def test_a_non_gateway_model_kwarg_keeps_the_client_model(fake_sdk):
 def test_real_sdk_wire_request(gateway_env, monkeypatch):
     """The actual HTTP request the anthropic SDK builds, captured in-process."""
     anthropic = pytest.importorskip("anthropic")
-    httpx = pytest.importorskip("httpx")
+    # The SDK's own HTTP package: httpx before anthropic 2.0, httpx2 from it.
+    httpx = importlib.import_module(
+        anthropic.DefaultHttpxClient.__mro__[1].__module__.split(".")[0]
+    )
     seen = []
 
     def handler(request):
@@ -454,7 +458,7 @@ def test_gateway_errors_are_actionable(fake_sdk, status, message, expected):
     with patch("gaia.llm.providers.lemonade.LemonadeClient") as lemonade:
         with pytest.raises(RuntimeError, match=expected) as raised:
             client.chat([{"role": "user", "content": "hi"}])
-    assert "llm-api.amd.com" in str(raised.value)
+    assert f"the AMD LLM gateway at {ANTHROPIC_BASE} " in str(raised.value)
     assert GATEWAY_TOKEN not in str(raised.value)
     assert raised.value.__cause__ is error
     lemonade.assert_not_called()

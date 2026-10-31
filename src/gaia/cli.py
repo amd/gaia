@@ -7050,6 +7050,10 @@ def _test_gateway_claude(model, source, prompt):
             f"({usage.get('cached_tokens', 0)} from cache) + "
             f"{usage.get('completion_tokens', '?')} completion tokens]"
         )
+    print(
+        "\nThis checked the gateway only. Agents also need Lemonade running; "
+        "`gaia gateway status` checks it."
+    )
 
 
 def handle_gateway_command(args):

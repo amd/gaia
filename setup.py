@@ -166,7 +166,7 @@ setup(
         # Gateway Claude models (amd.Claude-*) call the gateway's Anthropic
         # route through this SDK, so a base install can pick one. 0.49 is the
         # first to export Omit, which keeps Anthropic credentials off that wire.
-        "anthropic>=0.49.0",
+        "anthropic>=0.49.0,<3.0.0",
         # Ed25519 signature verification for `gaia skill install` (#2467). Core,
         # not an extra: a skill's security tier rests on its signature, and a
         # build that cannot verify one would have to either refuse every signed
@@ -294,7 +294,6 @@ setup(
             "jsonschema>=4.0.0,<5.0.0",
         ],
         "eval": [
-            "anthropic",
             "bs4",
             "numpy>=2.0,<2.3.0",
             "pypdf>=6.20.0",
