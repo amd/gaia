@@ -4,11 +4,16 @@
 name: 'Setup FFmpeg'
 description: 'Put a pinned, SHA-256-verified FFmpeg (gyan.dev full static build) on PATH. Windows only.'
 
-# Replaces FedericoCarboni/setup-ffmpeg, which resolves the release through the
-# GitHub REST API on the repo's shared installation token and failed CI whenever
-# that token ran out (#6251). This fetches the same build from a fixed
-# release-asset URL, which is not a REST API call, and caches the archive.
-# The archive is re-hashed on every run, so a cache hit is verified too.
+# A release-asset URL is not a REST API call, so a rate-limited repo token
+# cannot fail this. The archive is re-hashed on every run, cache hit included.
+
+inputs:
+  version:
+    description: 'gyan.dev release (a GyanD/codexffmpeg tag). Bump together with sha256.'
+    default: '8.1.2'
+  sha256:
+    description: 'SHA-256 of ffmpeg-<version>-full_build.zip.'
+    default: 'b8cdefab5f50590a076c27c2b56b0294a0e6154faded28ba1ba05ebc4f801f57'
 
 runs:
   using: 'composite'
@@ -24,41 +29,48 @@ runs:
       id: cache
       uses: actions/cache/restore@v6
       with:
-        path: ${{ runner.temp }}/ffmpeg-8.1.2-full_build.zip
-        key: ffmpeg-8.1.2-full_build-b8cdefab-${{ runner.os }}-${{ runner.arch }}
+        path: ${{ runner.temp }}/ffmpeg-${{ inputs.version }}-full_build.zip
+        key: ffmpeg-${{ inputs.version }}-full_build-${{ inputs.sha256 }}-${{ runner.os }}-${{ runner.arch }}
 
     - name: Download the FFmpeg archive
       if: steps.cache.outputs.cache-hit != 'true'
       shell: pwsh
+      env:
+        FFMPEG_VERSION: ${{ inputs.version }}
       run: |
         $ErrorActionPreference = 'Stop'
         $ProgressPreference = 'SilentlyContinue'
-        $url = 'https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-full_build.zip'
-        Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\ffmpeg-8.1.2-full_build.zip" -MaximumRetryCount 3 -RetryIntervalSec 10
+        $name = "ffmpeg-$env:FFMPEG_VERSION-full_build.zip"
+        $url = "https://github.com/GyanD/codexffmpeg/releases/download/$env:FFMPEG_VERSION/$name"
+        Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\$name" -MaximumRetryCount 3 -RetryIntervalSec 10
 
     - name: Verify and install FFmpeg
       shell: pwsh
+      env:
+        FFMPEG_VERSION: ${{ inputs.version }}
+        FFMPEG_SHA256: ${{ inputs.sha256 }}
       run: |
         $ErrorActionPreference = 'Stop'
-        $zip = "$env:RUNNER_TEMP\ffmpeg-8.1.2-full_build.zip"
-        $expected = 'b8cdefab5f50590a076c27c2b56b0294a0e6154faded28ba1ba05ebc4f801f57'
+        $v = $env:FFMPEG_VERSION
+        $zip = "$env:RUNNER_TEMP\ffmpeg-$v-full_build.zip"
+        $expected = $env:FFMPEG_SHA256.ToLower()
         $actual = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
         if ($actual -ne $expected) {
           Remove-Item $zip
-          throw "FFmpeg archive SHA-256 is $actual, expected $expected. Re-run the job; if it repeats, the release asset changed -- re-pin it in .github/actions/setup-ffmpeg/action.yml."
+          throw "FFmpeg $v archive SHA-256 is $actual, expected $expected. Re-run the job; if it repeats, the release asset changed -- re-pin sha256 in .github/actions/setup-ffmpeg/action.yml."
         }
-        $dest = "$env:RUNNER_TEMP\ffmpeg-8.1.2"
+        $dest = "$env:RUNNER_TEMP\ffmpeg-$v"
         if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
         New-Item -ItemType Directory -Path $dest | Out-Null
         # System32 tar reads zip; Git's GNU tar, often first on PATH, does not.
         & "$env:SystemRoot\System32\tar.exe" -xf $zip -C $dest `
-          ffmpeg-8.1.2-full_build/bin/ffmpeg.exe ffmpeg-8.1.2-full_build/bin/ffprobe.exe
+          "ffmpeg-$v-full_build/bin/ffmpeg.exe" "ffmpeg-$v-full_build/bin/ffprobe.exe"
         if ($LASTEXITCODE -ne 0) { throw "Extracting $zip failed (tar exit $LASTEXITCODE)" }
-        $bin = "$dest\ffmpeg-8.1.2-full_build\bin"
+        $bin = "$dest\ffmpeg-$v-full_build\bin"
         $line = (& "$bin\ffmpeg.exe" -version | Select-Object -First 1)
         Write-Host $line
-        if ($line -notmatch '^ffmpeg version 8\.1\.2-full_build-www\.gyan\.dev ') {
-          throw "Installed ffmpeg reports '$line', not 8.1.2-full_build"
+        if ($line -notmatch "^ffmpeg version $([regex]::Escape($v))-full_build-www\.gyan\.dev ") {
+          throw "Installed ffmpeg reports '$line', not $v-full_build"
         }
         Add-Content -Path $env:GITHUB_PATH -Value $bin
 
@@ -66,5 +78,5 @@ runs:
       if: steps.cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v6
       with:
-        path: ${{ runner.temp }}/ffmpeg-8.1.2-full_build.zip
+        path: ${{ runner.temp }}/ffmpeg-${{ inputs.version }}-full_build.zip
         key: ${{ steps.cache.outputs.cache-primary-key }}

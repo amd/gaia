@@ -298,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.sha256 and not args.release:
         ap.error("--sha256 only applies to --release")
     if args.release:
-        path = from_release(args.repo, args.release, args.out, args.sha256)
+        path = from_release(args.repo, args.release, args.out, args.sha256 or None)
     else:
         if not args.version:
             ap.error("--publish-run-sha needs --version")
