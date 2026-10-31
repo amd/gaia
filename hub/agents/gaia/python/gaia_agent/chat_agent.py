@@ -209,13 +209,18 @@ def _project_import_paths(project: os.PathLike | str) -> List[str]:
     root = Path(project)
     paths = [str(root)]
     src = root / "src"
+    if not src.is_dir():
+        return paths
     try:
-        if src.is_dir() and any(
-            (child / "__init__.py").is_file() for child in src.iterdir()
-        ):
-            paths.append(str(src))
+        children = list(src.iterdir())
     except OSError as e:
-        logger.warning("Could not inspect %s for a src/ layout: %s", src, e)
+        # Running anyway would import an installed copy in place of the project.
+        raise OSError(
+            f"Could not list {src} to put the project's src/ layout on the import "
+            f"path: {e}. Check the folder's permissions."
+        ) from e
+    if any((child / "__init__.py").is_file() for child in children):
+        paths.append(str(src))
     return paths
 
 

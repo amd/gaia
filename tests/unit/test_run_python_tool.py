@@ -516,3 +516,20 @@ def test_a_snippet_that_is_not_a_test_run_declares_no_check(
     result = run_python(code="print('5 passed')")
 
     assert result[CHECK_RESULT_KEY] is None
+
+
+def test_an_unreadable_src_folder_fails_loudly(project, monkeypatch):
+    """Guessing would run the installed copy while reporting on the project."""
+    from gaia_agent.chat_agent import _project_import_paths
+
+    real_iterdir = Path.iterdir
+
+    def _denied(self):
+        if self.name == "src":
+            raise PermissionError("access denied")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", _denied)
+
+    with pytest.raises(OSError, match="src"):
+        _project_import_paths(project)
