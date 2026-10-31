@@ -328,6 +328,23 @@ def test_a_json_protocol_model_gets_the_write_step_too(agent, tmp_path):
     assert result["completion_gaps"] == []
 
 
+def test_running_out_of_steps_gets_the_write_step_too(agent, tmp_path):
+    agent.max_steps = 2
+    _stub_chat(
+        agent,
+        _native(("s1", _LOOKUP, {"path": "a/"})),
+        _native(("s2", _LOOKUP, {"path": "b/"})),
+        _native(_write()),
+        _answer("Out of steps; the findings are in the file."),
+    )
+
+    result = agent.process_query(_REQUEST)
+
+    assert (tmp_path / _TARGET).exists()
+    assert result["max_steps_reached"] is True
+    assert _UNWRITTEN not in result["result"]
+
+
 def test_the_same_file_is_written_once(agent, tmp_path):
     """Bypass attempt: the second write to the same file is not run."""
     _stub_chat(

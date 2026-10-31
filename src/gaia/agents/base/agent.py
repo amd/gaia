@@ -770,6 +770,24 @@ _STEP_CAP_ANSWER_PROMPT = (
     "you found, what you couldn't finish and why, and what they can do next."
 )
 
+# The time-limit counterparts: one notice, then a stop that leaves room for
+# the write-only step and the closing answer before the caller's hard limit.
+_TIME_LIMIT_ANSWER_PROMPT = (
+    "The {seconds}-second time limit for this request is nearly up and no more "
+    "tools can run. Give the user your final answer now, using only what the "
+    "tool results above show: what you found, what you couldn't finish and "
+    "why, and what they can do next."
+)
+_TIME_NOTICE = (
+    "Time budget: {used} of {total} seconds used. Stop gathering context. If "
+    "the task asks for files or other deliverables, write them now from what "
+    "you already have, marking any value you could not verify as unverified; "
+    "refine afterwards if there is time. When the time is up no tool can run "
+    "and anything not already written is lost."
+)
+_TIME_NOTICE_AT = 0.7
+_TIME_STOP_AT = 0.9
+
 # How much of the step budget must be gone before each notice is sent, and
 # what it says. Until these existed the only thing the model ever heard about
 # the budget was _STEP_CAP_ANSWER_PROMPT above — which arrives after the last
@@ -870,6 +888,8 @@ _WRITE_BEFORE_STOP_PROMPT = (
     "run in this one step; your final answer comes after it."
 )
 _STOP_REASON_REPEATS = "The turn is ending because `{tool}` kept repeating."
+_STOP_REASON_STEPS = "The turn is ending: all {steps} steps are used."
+_STOP_REASON_TIME = "The turn is ending: its {seconds}-second time limit is nearly up."
 _DELIVERABLE_WRITE_TOOLS = ("write_file", "write_markdown_file", "write_python_file")
 _NOT_A_DELIVERABLE_WRITE = (
     "Not run — only the requested files could be written at this point."
@@ -2495,6 +2515,13 @@ Do NOT wrap conversational replies in JSON.
         self._budget_notices_sent: set = set()
         # The model that wrote its own tool-call markup in this session, if any.
         self._own_markup_model: Optional[str] = None
+        # Wall-clock seconds a turn may take, when the caller set one
+        # (``gaia -p --time-limit``). None: no time limit is known.
+        self.time_limit_s: Optional[float] = None
+        self._turn_started_at: Optional[float] = None
+        self._last_boundary_at = 0.0
+        self._slowest_step_s = 0.0
+        self._time_notice_sent = False
         self._budget_notices_on = budget_notices_enabled()
         self.conversation_history = (
             []
@@ -9530,6 +9557,56 @@ Do NOT wrap conversational replies in JSON.
             return notice
         return None
 
+    def _time_limit_passed(self) -> bool:
+        """True once the turn is past its time limit's stop point.
+
+        The stop point leaves room for the write-only step and the closing
+        answer: a tenth of the limit, or two of the turn's slowest steps so
+        far when that is more. It is also why a stop the caller's own timer
+        forces at the limit counts as reaching it.
+        """
+        limit = getattr(self, "time_limit_s", None)
+        started = getattr(self, "_turn_started_at", None)
+        if not limit or limit <= 0 or started is None:
+            return False
+        reserve = max(limit * (1 - _TIME_STOP_AT), 2 * self._slowest_step_s)
+        return time.monotonic() - started >= limit - reserve
+
+    def _time_is_up(self, messages: List[Dict], conversation: List[Dict]) -> bool:
+        """Warn once near the turn's time limit; True once it is time to stop.
+
+        Only a limit the caller set counts (``time_limit_s``); nothing here
+        guesses one. Called at each step boundary, which is also where the
+        slowest step is measured.
+        """
+        limit = getattr(self, "time_limit_s", None)
+        started = getattr(self, "_turn_started_at", None)
+        if not limit or limit <= 0 or started is None:
+            return False
+        now = time.monotonic()
+        self._slowest_step_s = max(self._slowest_step_s, now - self._last_boundary_at)
+        self._last_boundary_at = now
+        used = now - started
+        if self._time_limit_passed():
+            logger.warning("Stopping the turn at %.0fs of its %ss limit", used, limit)
+            return True
+        if (
+            used >= limit * _TIME_NOTICE_AT
+            and not self._time_notice_sent
+            and getattr(self, "_budget_notices_on", False)
+        ):
+            self._time_notice_sent = True
+            notice = _TIME_NOTICE.format(used=int(used), total=int(limit))
+            pending = self._pending_deliverables()
+            if pending:
+                named = ", ".join(f"`{path}`" for path in pending)
+                notice += f" Requested but not written yet: {named}."
+            # Per-turn, like the step notices: never carried into saved history.
+            transient = getattr(messages, "append_transient", messages.append)
+            transient({"role": "user", "content": notice})
+            conversation.append({"role": "user", "content": notice})
+        return False
+
     def _drain_followups(self, messages: List[Dict], conversation: List[Dict]) -> int:
         """Fold any queued mid-turn follow-ups into this turn's context.
 
@@ -9740,6 +9817,11 @@ Do NOT wrap conversational replies in JSON.
         # between turns takes effect.
         self._budget_notices_sent = set()
         self._budget_notices_on = budget_notices_enabled()
+        self._turn_started_at = time.monotonic()
+        self._last_boundary_at = self._turn_started_at
+        self._slowest_step_s = 0.0
+        self._time_notice_sent = False
+        time_limit_reached = False
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
@@ -9811,6 +9893,7 @@ Do NOT wrap conversational replies in JSON.
                     "The request was stopped before it finished. Try again, or "
                     "break it into smaller steps if it was taking too long."
                 )
+                time_limit_reached = self._time_limit_passed()
                 break
 
             # Anything the user sent mid-turn joins the context here, where the
@@ -9825,6 +9908,9 @@ Do NOT wrap conversational replies in JSON.
             # as the drain above: appended at the step boundary so the next
             # model call sees it.
             self._announce_step_budget(messages, conversation, steps_taken, steps_limit)
+            if self._time_is_up(messages, conversation):
+                time_limit_reached = True
+                break
 
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
@@ -12345,13 +12431,26 @@ Do NOT wrap conversational replies in JSON.
         # Before any footer below sums the conversation.
         self._record_unrecorded_step(conversation)
 
-        # Out of steps with no answer: one more call, tools withheld, so the
-        # user hears what was found rather than only the canned note.
-        max_steps_reached = (
+        # Out of steps or time with no answer: a write-only step if a requested
+        # file is missing, then one more call, tools withheld, so the user
+        # hears what was found rather than only the canned note.
+        budget_ran_out = (
             final_answer is None and not cancelled_by_console and not user_stopped
         )
-        if max_steps_reached:
+        max_steps_reached = budget_ran_out and not time_limit_reached
+        if budget_ran_out:
             tool_steps = steps_taken
+            seconds = int(self.time_limit_s or 0)
+            steps_taken = self._write_deliverables_before_stop(
+                messages,
+                conversation,
+                steps_taken,
+                (
+                    _STOP_REASON_TIME.format(seconds=seconds)
+                    if time_limit_reached
+                    else _STOP_REASON_STEPS.format(steps=steps_limit)
+                ),
+            )
             steps_taken += 1
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
@@ -12360,16 +12459,28 @@ Do NOT wrap conversational replies in JSON.
                 cap_answer = self._closing_answer(
                     messages,
                     conversation,
-                    _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
+                    self._with_unwritten_note(
+                        _TIME_LIMIT_ANSWER_PROMPT.format(seconds=seconds)
+                        if time_limit_reached
+                        else _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit)
+                    ),
                     steps_taken,
                 )
             except Exception as e:  # noqa: BLE001 - the reason goes in the answer
-                logger.warning("Could not write the step-limit summary: %s", e)
-                final_answer = (
-                    self._generate_max_steps_message(
+                logger.warning("Could not write the closing summary: %s", e)
+                if time_limit_reached:
+                    latest = self._latest_findings(conversation)
+                    final_answer = (
+                        f"I reached the {seconds}-second time limit for this "
+                        "request before I could finish."
+                        + (f"\n\nWhat I had found so far:\n{latest}" if latest else "")
+                    )
+                else:
+                    final_answer = self._generate_max_steps_message(
                         conversation, tool_steps, steps_limit, findings=True
                     ).rstrip()
-                    + f"\n\nThe summary of what I found couldn't be written: {e}"
+                final_answer += (
+                    f"\n\nThe summary of what I found couldn't be written: {e}"
                 )
             else:
                 if cap_answer is None:
@@ -12507,6 +12618,7 @@ Do NOT wrap conversational replies in JSON.
                     if has_valid_answer
                     and not completion_gaps
                     and not max_steps_reached
+                    and not time_limit_reached
                     else "incomplete"
                 )
             ),
@@ -12530,6 +12642,7 @@ Do NOT wrap conversational replies in JSON.
             # Where the time went: llm/tool/overhead totals and slowest steps.
             "timing_summary": timing_summary,
             "max_steps_reached": max_steps_reached,
+            "time_limit_reached": time_limit_reached,
             "duration": total_duration,  # Total query processing time in seconds
             "input_tokens": total_input_tokens,  # Total input tokens across all steps
             "output_tokens": total_output_tokens,  # Total output tokens across all steps

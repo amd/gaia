@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -85,6 +86,8 @@ def summarize(
         "duration_s": round(duration_s, 2),
         "error_count": int(result.get("error_count") or 0),
     }
+    if result.get("time_limit_reached"):
+        record["time_limit_reached"] = True
     if record["is_error"]:
         record["error"] = _turn_error(result)
     if verbose:
@@ -129,6 +132,7 @@ def run(
     skip_permissions: bool = False,
     full_access: bool = False,
     base_url: Optional[str] = None,
+    time_limit: Optional[int] = None,
 ) -> int:
     """Run one headless turn and print its result. Returns the exit code."""
     if output_format not in OUTPUT_FORMATS:
@@ -146,6 +150,7 @@ def run(
             skip_permissions=skip_permissions,
             full_access=full_access,
             base_url=base_url,
+            time_limit=time_limit,
         )
     except KeyboardInterrupt:
         return _emit_failure(output_format, "interrupted", code=130)
@@ -177,6 +182,7 @@ def _run_turn(
     skip_permissions: bool,
     full_access: bool,
     base_url: Optional[str],
+    time_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     from gaia.cli import initialize_lemonade_for_agent
     from gaia.llm.lemonade_client import resolve_lemonade_base_url
@@ -234,13 +240,42 @@ def _run_turn(
         )
     agent._ensure_tool_loader_reset()  # pylint: disable=protected-access
 
+    timer = _arm_time_limit(agent, time_limit) if time_limit else None
     started = time.time()
     try:
         result = agent.process_query(text) or {}
     finally:
+        if timer is not None:
+            timer.cancel()
         from gaia.agents.base.memory import drain_memory_extraction
 
         drain_memory_extraction(agent)
     return summarize(
         result, agent.model_id or model, time.time() - started, verbose=verbose
     )
+
+
+def _arm_time_limit(agent: Any, seconds: int) -> threading.Timer:
+    """Give the turn *seconds*: the agent wraps up before, a stop enforces it.
+
+    The agent warns the model and stops its loop short of the limit so the
+    requested files and the answer still get written. A turn still busy at the
+    limit is stopped: a shell or Python run ends there, a model call already
+    sent is waited for, and the turn ends at its next step.
+    """
+    from gaia.agents.base.agent import TurnCancel
+
+    agent.time_limit_s = seconds
+    cancel = TurnCancel()
+    agent._cancel_event = cancel  # pylint: disable=protected-access
+    timer = threading.Timer(
+        seconds,
+        cancel.cancel,
+        args=[
+            f"Stopped at the {seconds}-second time limit (--time-limit) before "
+            "the turn finished."
+        ],
+    )
+    timer.daemon = True
+    timer.start()
+    return timer

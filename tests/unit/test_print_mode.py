@@ -9,7 +9,7 @@ import logging
 import os
 import sys
 import types
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -178,6 +178,7 @@ def test_main_forwards_flags_and_exits_with_runs_code(monkeypatch):
         skip_permissions=True,
         full_access=False,
         base_url="http://h:1/api/v1",
+        time_limit=None,
     )
 
 
@@ -196,6 +197,7 @@ def test_main_defaults_output_format_to_text(monkeypatch):
         ["--output-format", "json"],
         ["--verbose"],
         ["--max-steps", "3"],
+        ["--time-limit", "600"],
         ["--dangerously-skip-permissions"],
         ["--full-access"],
         ["--model", "m", "chat"],
@@ -847,3 +849,76 @@ def test_an_unexpected_failure_does_not_log_its_traceback_at_info(
     with caplog.at_level(logging.INFO):
         assert print_mode.run("q", model="m") == 1
     assert not [r for r in caplog.records if r.exc_info]
+
+
+# ---------------------------------------------------------------------------
+# --time-limit
+# ---------------------------------------------------------------------------
+
+
+def test_time_limit_parses_and_defaults_to_none(parser):
+    assert parser.parse_args(["-p", "x"]).print_time_limit is None
+    assert parser.parse_args(["-p", "x", "--time-limit", "600"]).print_time_limit == 600
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "ten", "1.5"])
+def test_time_limit_must_be_a_positive_integer(parser, capsys, value):
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["-p", "x", "--time-limit", value])
+    assert exc.value.code == 2
+    assert "--time-limit" in capsys.readouterr().err
+
+
+def test_main_forwards_time_limit(monkeypatch):
+    run = MagicMock(return_value=0)
+    monkeypatch.setattr(print_mode, "run", run)
+    _run_main(monkeypatch, ["-p", "hi", "--time-limit", "900"])
+    assert run.call_args.kwargs["time_limit"] == 900
+
+
+def test_no_time_limit_arms_nothing(stub_env):
+    print_mode.run("q", model="m1")
+    agent = _agent()
+    assert not hasattr(agent, "time_limit_s")
+    assert not hasattr(agent, "_cancel_event")
+
+
+def test_a_time_limit_reaches_the_agent_and_is_disarmed_after(stub_env):
+    from gaia.agents.base.agent import TurnCancel
+
+    print_mode.run("q", model="m1", time_limit=60)
+
+    agent = _agent()
+    assert agent.time_limit_s == 60
+    assert isinstance(agent._cancel_event, TurnCancel)
+    # The turn finished in time: the stop never fired.
+    assert not agent._cancel_event.is_set()
+
+
+def test_a_turn_still_running_at_the_limit_is_stopped_and_reported(stub_env, capsys):
+    """The hard stop: a tool outlived the wrap-up, so the limit ends the turn."""
+
+    def _slow_turn(self, text):
+        self.queries.append(text)
+        stopped = self._cancel_event.wait(10)
+        return {
+            "status": "incomplete",
+            "result": self._cancel_event.message if stopped else "never stopped",
+            "time_limit_reached": stopped,
+        }
+
+    with patch.object(_StubAgent, "process_query", _slow_turn):
+        code = print_mode.run("q", model="m1", output_format="json", time_limit=1)
+
+    record = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert code == 1
+    assert "1-second time limit" in record["result"]
+    assert record["time_limit_reached"] is True
+
+
+def test_summarize_reports_a_time_limit_stop():
+    record = print_mode.summarize(
+        {"status": "incomplete", "result": "x", "time_limit_reached": True}, "m", 1.0
+    )
+    assert record["time_limit_reached"] is True
+    assert record["is_error"] is True
