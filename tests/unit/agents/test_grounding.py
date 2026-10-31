@@ -1047,7 +1047,7 @@ def test_a_claimed_check_of_a_candidate_never_opened_is_still_caught():
 def test_the_correction_keeps_the_answer_addressed_to_the_user():
     """A reply to the check, not the user, once reached an Arabic speaker in English."""
     correction = grounding_correction(
-        [Finding(CONTENT, "These values appear in no tool output.", "note")]
+        ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
     )
 
     assert "language of their question" in correction
