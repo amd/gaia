@@ -575,12 +575,16 @@ _CRASHED_LOADS: Dict[Tuple[str, str, str], Tuple[float, str]] = {}
 _CRASHED_LOADS_LOCK = threading.Lock()
 
 
-def _crashed_load_key(base_url: str, request_data: Dict[str, Any]) -> tuple:
-    """Identify a load by everything that decides how llama-server starts."""
+def _crashed_load_key(
+    base_url: str, request_data: Dict[str, Any], users_args: Optional[str]
+) -> tuple:
+    """Identify a load by everything that decides how llama-server starts,
+    including the args saved in Lemonade that a request without its own uses."""
     model = (request_data.get("model_name") or "").lower().removeprefix("user.")
     options = {
         k: v for k, v in request_data.items() if k not in ("model_name", "save_options")
     }
+    options["saved_llamacpp_args"] = users_args
     return (base_url, model, json.dumps(options, sort_keys=True))
 
 
@@ -610,7 +614,7 @@ def _recent_crash(key: tuple) -> Optional[Tuple[float, str]]:
         return ago, seen[1]
 
 
-def _load_args_hint(sent_args: Optional[str], users_args: bool) -> str:
+def _load_args_hint(sent_args: Optional[str], users_args: Optional[str]) -> str:
     """Which llama.cpp args the failed load used, and how the user changes them."""
     if sent_args == CHAT_LLAMACPP_ARGS:
         return (
@@ -624,7 +628,7 @@ def _load_args_hint(sent_args: Optional[str], users_args: bool) -> str:
     if users_args:
         return (
             " It was started with the llama.cpp arguments saved for it in "
-            f"Lemonade ('{sent_args}'); change them in the model's settings "
+            f"Lemonade ('{users_args}'); change them in the model's settings "
             "in Lemonade."
         )
     return ""
@@ -7994,8 +7998,11 @@ class LemonadeClient:
                         f"for it in Lemonade ('{users_args}') instead of GAIA's "
                         "chat flags."
                     )
-                llamacpp_args = users_args or CHAT_LLAMACPP_ARGS
-        if llamacpp_args is None and model_name in EMBEDDER_MODELS:
+                else:
+                    llamacpp_args = CHAT_LLAMACPP_ARGS
+        # Saved args are left for Lemonade to apply, exactly as a load the user
+        # runs: request args would replace them and the architecture defaults.
+        if llamacpp_args is None and not users_args and model_name in EMBEDDER_MODELS:
             llamacpp_args = EMBEDDER_LLAMACPP_ARGS
 
         request_data = {"model_name": model_name}
@@ -8028,12 +8035,12 @@ class LemonadeClient:
             save_options = not self.is_users_server()
         elif save_options is None:
             # Lemonade's auto-load after an eviction would otherwise auto-tune
-            # the window, to 4096 for a model with no saved options. A save
-            # replaces the model's whole entry, so one the user configured is
-            # left alone.
-            save_options = (
-                ctx_size is not None and not users_args and not self.is_users_server()
-            )
+            # the window, to 4096 for a model with no saved options.
+            save_options = ctx_size is not None and not self.is_users_server()
+        if users_args:
+            # A save replaces the model's whole entry, so one the user
+            # configured is left alone whatever the caller asked for.
+            save_options = False
         if llamacpp_args:
             request_data["llamacpp_args"] = llamacpp_args
         if ctx_size is not None:
@@ -8042,7 +8049,7 @@ class LemonadeClient:
             request_data["save_options"] = save_options
         url = f"{self.base_url}/load"
 
-        crash_key = _crashed_load_key(self.base_url, request_data)
+        crash_key = _crashed_load_key(self.base_url, request_data, users_args)
         crashed = _recent_crash(crash_key)
         if crashed is not None:
             ago, message = crashed
@@ -8202,10 +8209,14 @@ class LemonadeClient:
                     message = (
                         f"Failed to load {model_name}: {original_error}. "
                         f"{backend_crash_remedy(model_name)}"
-                        f"{_load_args_hint(llamacpp_args, bool(users_args))}"
+                        f"{_load_args_hint(llamacpp_args, users_args)}"
                         f"{_chosen_backend_hint(chosen_backend)}"
                     )
-                    _remember_crashed_load(crash_key, message)
+                    # Re-keyed: an embedder's CPU fallback changes the backend.
+                    _remember_crashed_load(
+                        _crashed_load_key(self.base_url, request_data, users_args),
+                        message,
+                    )
                     raise LemonadeClientError(message) from e
                 if chosen_backend and not isinstance(e, LemonadeAuthError):
                     raise LemonadeClientError(

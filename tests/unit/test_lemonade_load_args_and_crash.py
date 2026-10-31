@@ -91,10 +91,9 @@ def test_a_model_with_saved_args_loads_with_them_not_the_chat_flags(client):
     assert error is None
     assert len(bodies) == 1
     sent = bodies[0]
-    # Sent back explicitly: a request without them plus save_options would
-    # erase them from recipe_options.json.
-    assert sent["llamacpp_args"] == USER_ARGS
-    assert "--kv-unified" not in sent["llamacpp_args"]
+    # Left for Lemonade to apply, as in the user's own load: request args
+    # would replace them and the architecture defaults.
+    assert "llamacpp_args" not in sent
     assert sent["ctx_size"] == 65536
     # A save replaces the model's whole entry in recipe_options.json.
     assert "save_options" not in sent
@@ -106,11 +105,49 @@ def test_a_model_without_user_args_still_saves_its_window(client):
 
 
 def test_args_saved_since_the_last_load_are_read_fresh(client):
-    _load(client, STOCK, [_entry(STOCK, llamacpp_args="-np 1")], ctx_size=65536)
+    _, bodies = _load(client, STOCK, [_entry(STOCK)], ctx_size=65536)
+    assert bodies[0]["llamacpp_args"] == CHAT_LLAMACPP_ARGS
     _, bodies = _load(
         client, STOCK, [_entry(STOCK, llamacpp_args="-np 1 -fa 1")], ctx_size=65536
     )
-    assert bodies[0]["llamacpp_args"] == "-np 1 -fa 1"
+    assert "llamacpp_args" not in bodies[0]
+    assert "save_options" not in bodies[0]
+
+
+def test_an_explicit_save_never_overwrites_the_users_options(client):
+    """gaia init passes save_options=True itself."""
+    _, bodies = _load(
+        client,
+        USER_MODEL,
+        [_entry(LISTED_AS, llamacpp_args=USER_ARGS, llamacpp_backend="vulkan")],
+        ctx_size=65536,
+        save_options=True,
+        auto_download=False,
+    )
+    assert "save_options" not in bodies[0]
+    assert "llamacpp_args" not in bodies[0]
+
+
+def test_gaia_init_leaves_a_configured_models_options_alone(monkeypatch):
+    from gaia.installer.init_command import InitCommand
+
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    cmd = InitCommand(profile="chat", yes=True)
+    monkeypatch.setattr(cmd, "_uses_saved_server", lambda: True)
+    model = lc.DEFAULT_MODEL_NAME
+    monkeypatch.setattr(lc.LemonadeClient, "_check_free_memory", lambda *a: None)
+    client = LemonadeClient(base_url=BASE, verbose=False)
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(
+            responses.GET,
+            f"{BASE}/models",
+            json={"data": [_entry(model, llamacpp_args=USER_ARGS)]},
+        )
+        rsps.add(responses.POST, f"{BASE}/load", json={"status": "success"})
+        cmd._test_model_inference(client, model)
+        bodies = _load_bodies(rsps)
+    assert bodies, "init never reached its load"
+    assert all("save_options" not in b and "llamacpp_args" not in b for b in bodies)
 
 
 def test_an_unreadable_catalog_fails_the_load_loudly(client, monkeypatch):
@@ -129,7 +166,8 @@ def test_the_user_prefix_matches_either_way_round(client):
         [_entry(USER_MODEL, llamacpp_args=USER_ARGS)],
         ctx_size=32768,
     )
-    assert bodies[0]["llamacpp_args"] == USER_ARGS
+    assert "llamacpp_args" not in bodies[0]
+    assert "save_options" not in bodies[0]
 
 
 @pytest.mark.parametrize(
@@ -279,7 +317,18 @@ def test_saving_args_for_the_model_lets_the_load_through_at_once(client, model, 
         client, model, [_entry(listed, llamacpp_args=USER_ARGS)], ctx_size=65536
     )
     assert error is None
-    assert [b["llamacpp_args"] for b in bodies] == [USER_ARGS]
+    assert len(bodies) == 1 and "llamacpp_args" not in bodies[0]
+
+
+def test_args_saved_anew_after_a_crash_let_the_load_through(client):
+    catalog = [_entry(STOCK, llamacpp_args="-np 1")]
+    _load(client, STOCK, catalog, status=500, body=CRASH, ctx_size=65536)
+    _, bodies = _load(client, STOCK, catalog, ctx_size=65536)
+    assert bodies == [], "unchanged saved args: still refused"
+    _, bodies = _load(
+        client, STOCK, [_entry(STOCK, llamacpp_args="-np 1 -fa 1")], ctx_size=65536
+    )
+    assert len(bodies) == 1
 
 
 def test_each_turns_ensure_load_crashes_llama_server_only_once(client, monkeypatch):

@@ -533,8 +533,9 @@ error. To run the chat model in the cloud instead, see
     ([#6221](https://github.com/amd/gaia/issues/6221)).
 
     To load a model with your own llama.cpp arguments, save them for it in Lemonade, in the
-    model's settings or with Lemonade's CLI. GAIA then loads the model with them instead of
-    its flags, and leaves the options you saved for it unchanged:
+    model's settings or with Lemonade's CLI. GAIA then sends no flags of its own, so Lemonade
+    loads the model with your saved options as it would for your own load, and GAIA doesn't
+    save over them:
     ```bash
     lemonade load <model> --llamacpp-args "<your args>" --save-options
     ```
