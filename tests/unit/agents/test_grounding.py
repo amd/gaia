@@ -1042,3 +1042,13 @@ def test_a_claimed_check_of_a_candidate_never_opened_is_still_caught():
 
     assert [f.gate for f in findings] == [LOOK]
     assert "`resize/lanczos.c`" in findings[0].correction
+
+
+def test_the_correction_keeps_the_answer_addressed_to_the_user():
+    """A reply to the check, not the user, once reached an Arabic speaker in English."""
+    correction = grounding_correction(
+        [Finding(CONTENT, "These values appear in no tool output.", "note")]
+    )
+
+    assert "language of their question" in correction
+    assert "don't mention this check" in correction
