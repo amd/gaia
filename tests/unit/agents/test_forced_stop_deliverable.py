@@ -148,7 +148,9 @@ def test_a_loop_break_gets_one_write_only_step_for_the_missing_file(agent, tmp_p
 
     assert (tmp_path / _TARGET).read_text(encoding="utf-8").startswith("# Findings")
     write_step = chat.send_messages.call_args_list[_CALLS]
-    assert _tool_names(write_step) == ["write_file"]
+    # The loop's own tools, so the cached prompt prefix still matches.
+    assert _tool_names(write_step) == _tool_names(chat.send_messages.call_args_list[0])
+    assert "write_file" in _tool_names(write_step)
     assert _TARGET in chat.sent[_CALLS][-1]["content"]
     assert _UNWRITTEN not in result["result"]
     assert result["completion_gaps"] == []
@@ -231,7 +233,8 @@ def test_the_write_step_is_bounded_to_one_write_per_missing_file(agent, tmp_path
     assert not (tmp_path / "out/more.md").exists()
 
 
-def test_writing_some_other_file_does_not_satisfy_the_request(agent, tmp_path):
+def test_the_write_step_cannot_write_some_other_file(agent, tmp_path):
+    """Bypass attempt: spend the step on a file nobody asked for."""
     _stub_chat(
         agent,
         *_repeats(),
@@ -241,7 +244,8 @@ def test_writing_some_other_file_does_not_satisfy_the_request(agent, tmp_path):
 
     result = agent.process_query(_REQUEST)
 
-    assert (tmp_path / "out/notes.md").exists()
+    assert not (tmp_path / "out/notes.md").exists()
+    assert "only the requested files" in json.dumps(result["conversation"])
     assert result["status"] == "incomplete"
     assert any(_TARGET in gap for gap in result["completion_gaps"])
 
@@ -322,3 +326,45 @@ def test_a_json_protocol_model_gets_the_write_step_too(agent, tmp_path):
     assert chat.send_messages.call_args_list[_CALLS].kwargs["tools"] is None
     assert (tmp_path / _TARGET).read_text(encoding="utf-8") == "# Findings\n"
     assert result["completion_gaps"] == []
+
+
+def test_the_same_file_is_written_once(agent, tmp_path):
+    """Bypass attempt: the second write to the same file is not run."""
+    _stub_chat(
+        agent,
+        *_repeats(),
+        _native(_write(content="first\n"), _write(call_id="w2", content="second\n")),
+        _answer("Done."),
+    )
+
+    agent.process_query(_REQUEST)
+
+    assert (tmp_path / _TARGET).read_text(encoding="utf-8") == "first\n"
+
+
+def test_the_write_step_keeps_the_models_reasoning(agent):
+    """A thinking model's tool-call turn must carry its reasoning back."""
+    chat = _stub_chat(agent, *_repeats())
+    replies = iter(
+        [
+            SimpleNamespace(
+                text=_native(_write()), stats=dict(_STATS), reasoning="plan the file"
+            ),
+            SimpleNamespace(text=_answer("Done."), stats=dict(_STATS)),
+        ]
+    )
+    scripted = chat.send_messages.side_effect
+
+    def _send(*args, **kwargs):
+        if chat.send_messages.call_count <= _CALLS:
+            return scripted(*args, **kwargs)
+        chat.sent.append([dict(m) for m in kwargs.get("messages") or []])
+        return next(replies)
+
+    chat.send_messages.side_effect = _send
+
+    agent.process_query(_REQUEST)
+
+    closing_request = chat.sent[-1]
+    write_turn = [m for m in closing_request if m.get("tool_calls")][-1]
+    assert write_turn.get("reasoning_content") == "plan the file"

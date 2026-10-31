@@ -862,12 +862,12 @@ _FAILED_CALL_ANSWER_PROMPT = (
 )
 
 # Sent once when a forced stop would leave a requested file unwritten; only
-# file-writing tools are offered for that one step.
+# writes to those files run in that one step.
 _WRITE_BEFORE_STOP_PROMPT = (
     "{reason} Before it does, write the requested files that do not exist "
     "yet: {files}. Write them now from what you already have, marking "
-    "anything you could not confirm as unverified. Only file-writing tools "
-    "are available for this one step; your final answer comes after it."
+    "anything you could not confirm as unverified. Only writes to those files "
+    "run in this one step; your final answer comes after it."
 )
 _STOP_REASON_REPEATS = "The turn is ending because `{tool}` kept repeating."
 _DELIVERABLE_WRITE_TOOLS = ("write_file", "write_markdown_file", "write_python_file")
@@ -12804,10 +12804,11 @@ Do NOT wrap conversational replies in JSON.
     ) -> int:
         """One write-only step before a forced stop, when a requested file is missing.
 
-        Bounded: a single model call, offered only the file-writing tools, and
-        at most one write per missing file; any other call is answered "not
-        run". Returns the step count. If the call fails, the stop goes ahead and
-        the completion gate on the closing answer names the unwritten file.
+        Bounded: a single model call, and only one write to each missing file
+        runs; any other call is answered "not run". The loop's own tool list is
+        sent so the prompt cache still holds. Returns the step count. If the
+        call fails, the stop goes ahead and the completion gate on the closing
+        answer names the unwritten file.
         """
         pending = self._pending_deliverables()
         allowed = [n for n in _DELIVERABLE_WRITE_TOOLS if n in self._tools_registry]
@@ -12831,22 +12832,16 @@ Do NOT wrap conversational replies in JSON.
         )
         messages.append({"role": "user", "content": instruction})
         conversation.append({"role": "user", "content": instruction})
-        tools = (
-            self._build_openai_tool_schemas(filter_to=allowed)
-            if self._uses_native_tool_calls()
-            else None
-        )
         self.console.start_progress(self._progress_label())
         try:
             reply = self.chat.send_messages(
                 messages=messages,
                 system_prompt=self.system_prompt,
-                tools=tools,
+                tools=self._openai_tools,
                 **self._reasoning_request_kwargs(),
             )
-            response = re.sub(
-                r"<think>.*?</think>", "", reply.text or "", flags=re.DOTALL
-            ).strip()
+            response, inline_reasoning = _split_reasoning(reply.text or "")
+            reasoning = _response_reasoning(reply) or inline_reasoning
             parsed = self._parse_llm_response(response) if response else {}
         except Exception as e:  # noqa: BLE001 - the closing gate names the gap
             logger.warning("Could not write the requested files before stopping: %s", e)
@@ -12867,8 +12862,11 @@ Do NOT wrap conversational replies in JSON.
             )
         if not parsed:
             return steps_taken
-        conversation.append({"role": "assistant", "content": parsed})
-        messages.append(self._build_assistant_message(response, parsed))
+        conversation.append(
+            {"role": "assistant", "content": parsed}
+            | ({"reasoning": reasoning} if reasoning else {})
+        )
+        messages.append(self._build_assistant_message(response, parsed, reasoning))
 
         native = bool(parsed.get("tool_calls"))
         calls = parsed.get("tool_calls") or (
@@ -12876,7 +12874,7 @@ Do NOT wrap conversational replies in JSON.
             if parsed.get("tool")
             else []
         )
-        writes_left = len(pending)
+        evidence = self._completion_evidence
         for call in calls:
             name = call.get("name")
             args = (
@@ -12884,8 +12882,15 @@ Do NOT wrap conversational replies in JSON.
             )
             self.console.print_tool_usage(name)
             self.console.pretty_print_json(args, "Arguments")
-            if name in allowed and writes_left > 0:
-                writes_left -= 1
+            target = (
+                evidence.output_written_by(
+                    args.get("file_path") or args.get("path"), pending
+                )
+                if name in allowed
+                else None
+            )
+            if target is not None:
+                pending.remove(target)
                 self.console.start_progress(f"Executing {name}")
                 try:
                     result = self._execute_tool_timed(name, args)

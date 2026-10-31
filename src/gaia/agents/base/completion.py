@@ -701,14 +701,27 @@ class CompletionEvidence:
     def unwritten_outputs(self) -> list[str]:
         """Every file the request asks to produce that nothing has written yet.
 
-        A write the user's side turned down is left out: asking again would
-        re-ask a "no".
+        A write that was turned down, or whose approval expired, is left out:
+        the completion check already tells the model not to retry those.
         """
         return [
             path
             for path in self._unwritten(self.outputs)
             if self.key(path) not in self.refused
         ]
+
+    def output_written_by(self, path: Any, pending: list[str]) -> str | None:
+        """The entry of *pending* a write to *path* would produce, if any."""
+        if not isinstance(path, str) or not path.strip() or "\x00" in path:
+            return None
+        key = self.key(path)
+        name = os.path.normcase(ntpath.basename(key))
+        for wanted in pending:
+            if self.key(wanted) == key:
+                return wanted
+            if ntpath.basename(wanted) == wanted and os.path.normcase(wanted) == name:
+                return wanted
+        return None
 
     def _unwritten(self, paths: list[str]) -> list[str]:
         # A script or shell command that produced the file counts as its write.
