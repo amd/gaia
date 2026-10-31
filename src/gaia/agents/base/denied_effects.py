@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import ntpath
 import os
 import re
 import shlex
@@ -805,12 +806,35 @@ def render_call(tool_name: str, tool_args: Optional[Dict[str, Any]]) -> str:
 
 @dataclass
 class Denial:
-    """One declined call and the effects it covered."""
+    """One declined call and the effects it covered.
+
+    *by_user* is False for a refusal no person made: a policy, or a console
+    that had no one to ask. The model must never be told the user said no.
+    """
 
     tool_name: str
     rendered: str
     reason: str
     effects: Set[Effect] = field(default_factory=set)
+    by_user: bool = True
+
+    def who(self) -> str:
+        """Who said no, as the model and the user are told."""
+        return "the user declined" if self.by_user else "was refused"
+
+
+def _names_path(text: str, target: str) -> bool:
+    """True when *text* names the file or folder *target*."""
+    lowered = (text or "").lower().replace("/", "\\")
+    path = target.lower().replace("/", "\\").rstrip("\\")
+    if path and path in lowered:
+        return True
+    name = ntpath.basename(path)
+    if not name:
+        return False
+    return (
+        re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w-]|\.\w)", lowered) is not None
+    )
 
 
 class DeniedEffects:
@@ -829,18 +853,28 @@ class DeniedEffects:
         tool_args: Optional[Dict[str, Any]],
         reason: str,
         kinds: Optional[Set[str]] = None,
+        by_user: bool = True,
+        named_paths_only: bool = False,
     ) -> Optional[Denial]:
         """Remember what this declined call would have done.
 
         *kinds* narrows what is kept: a policy refusal of one command shape
         records the host or path it targeted, not the whole command family.
+        *named_paths_only* keeps a path only when *reason* names it: refusing
+        ``copy`` as a program says nothing about the files it was given.
         """
         effects = effects_of_call(tool_name, tool_args, self.cwd)
         if kinds is not None:
             effects = {e for e in effects if e.kind in kinds}
+        if named_paths_only:
+            effects = {
+                e for e in effects if e.kind != PATH or _names_path(reason, e.target)
+            }
         if not effects:
             return None
-        denial = Denial(tool_name, render_call(tool_name, tool_args), reason, effects)
+        denial = Denial(
+            tool_name, render_call(tool_name, tool_args), reason, effects, by_user
+        )
         self.denials.append(denial)
         return denial
 

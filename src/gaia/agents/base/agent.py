@@ -6446,7 +6446,13 @@ Do NOT wrap conversational replies in JSON.
             logger.info("User allowed %s after declining %s", command, denial.rendered)
             return None, True
 
-        if answer is None:
+        if answer is None and not denial.by_user:
+            asked = (
+                "This is a limit on what may run here, not a decision anyone "
+                "made. Do not route around it; if the work needs it, say which "
+                f"command (`{command}`) and why in your answer."
+            )
+        elif answer is None:
             asked = (
                 "Stop and ask the user: name the exact command you need "
                 f"(`{command}`) and why you need it, or tell them what you can "
@@ -6460,9 +6466,10 @@ Do NOT wrap conversational replies in JSON.
         else:
             asked = f"The user was asked about this exact call and replied: {answer!r}."
         logger.info(
-            "Refused %s: it %s, declined earlier as %s",
+            "Refused %s: it %s, which %s earlier as %s",
             tool_name,
             effect.describe(),
+            denial.who(),
             denial.rendered,
         )
         return (
@@ -6472,7 +6479,7 @@ Do NOT wrap conversational replies in JSON.
                 "blocked_effect": effect.describe(),
                 "declined_call": denial.rendered,
                 "error": (
-                    f"Not run: this {effect.describe()}, which the user declined "
+                    f"Not run: this {effect.describe()}, which {denial.who()} "
                     f"earlier in this request (`{denial.rendered}` — "
                     f"{denial.reason}). A denial covers the effect, not only the "
                     "tool it was asked through, so do not reach it with another "
@@ -6505,8 +6512,13 @@ Do NOT wrap conversational replies in JSON.
         )
         request = " ".join(str(raw or "").split())
         purpose = f" to finish “{request[:160]}”" if request else ""
+        earlier = (
+            f"You declined `{denial.rendered}`"
+            if denial.by_user
+            else f"`{denial.rendered}` was refused"
+        )
         question = (
-            f"You declined `{denial.rendered}` earlier in this request. My next "
+            f"{earlier} earlier in this request. My next "
             f"step{purpose} {effect.describe()} another way:\n\n{command}\n\n"
             "I stopped instead of running it. Allow it once?"
         )
@@ -6908,6 +6920,8 @@ Do NOT wrap conversational replies in JSON.
                     tool_args,
                     str(refusal.get("error") if isinstance(refusal, dict) else refusal),
                     kinds={NETWORK, PATH},
+                    by_user=False,
+                    named_paths_only=True,
                 )
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
@@ -6997,11 +7011,14 @@ Do NOT wrap conversational replies in JSON.
                     # Nobody said no, so this is not a refusal to route around.
                     denied["timed_out"] = True
                 else:
-                    if denied_error == user_denial_message(tool_name):
+                    by_user = denied_error == user_denial_message(tool_name)
+                    if by_user:
                         denied["hint"] = DECLINED_HINT
                     ledger = getattr(self, "_denied_effects", None)
                     if ledger is not None:
-                        ledger.record(tool_name, tool_args, denied_error)
+                        ledger.record(
+                            tool_name, tool_args, denied_error, by_user=by_user
+                        )
                 return denied
             # A call approved once runs against this record, and only once.
             noted = getattr(self, "note_confirmed_call", None)

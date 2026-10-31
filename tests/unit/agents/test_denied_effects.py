@@ -847,3 +847,138 @@ def test_an_ordinary_error_keeps_the_fix_it_prompt():
 def test_cwd_default_is_the_process_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert DeniedEffects().cwd == os.getcwd()
+
+
+# ---------------------------------------------------------------------------
+# A refusal no person made is never reported as the user's decision
+# ---------------------------------------------------------------------------
+
+_NOT_IN_SET = (
+    "Command 'copy' is not in the developer command set, even with full access "
+    "active."
+)
+
+
+class _ApproveAllConsole(AgentConsole):
+    """A full-access run: every prompt answers yes, nobody is asked."""
+
+    def confirm_tool_execution(self, tool_name, tool_args):
+        return True
+
+
+def _refuse_program(program: str, reason: str):
+    def _policy(tool_name, tool_args):
+        command = str((tool_args or {}).get("command", ""))
+        if tool_name == "run_shell_command" and command.split()[:1] == [program]:
+            return {"status": "error", "error": reason}
+        return None
+
+    return _policy
+
+
+def test_refusing_a_program_does_not_block_the_files_it_named(tmp_path):
+    """A refused ``copy`` says nothing about the files; ``cp`` to them must run."""
+    agent = _agent(_ApproveAllConsole(), tmp_path)
+    agent.policy_refusal_for_call = _refuse_program("copy", _NOT_IN_SET)
+
+    first = agent._execute_tool(
+        "run_shell_command",
+        _shell(r'copy /Y "src\a.py" "out\a.bak" && git checkout -- src/a.py'),
+    )
+    retry = agent._execute_tool("run_shell_command", _shell("cp src/a.py out/a.bak"))
+    revert = agent._execute_tool(
+        "run_shell_command", _shell("git checkout -- src/a.py")
+    )
+
+    assert first["executed"] is False
+    assert retry["status"] == "success"
+    assert revert["status"] == "success"
+    assert not agent._denied_effects
+
+
+def test_a_policy_refusal_naming_the_file_blocks_it_without_blaming_the_user(
+    tmp_path,
+):
+    target = tmp_path / "notes.md"
+    reason = f"Refused: rm would delete {target}, which is outside the project."
+    agent = _agent(_ApproveAllConsole(), tmp_path)
+    agent.policy_refusal_for_call = _refuse_program("rm", reason)
+
+    agent._execute_tool("run_shell_command", _shell(f"rm {target}"))
+    rerouted = agent._execute_tool("run_shell_command", _shell(f"mv {target} x.md"))
+
+    assert rerouted["status"] == "denied"
+    assert "was refused earlier" in rerouted["error"]
+    assert "declined" not in rerouted["error"]
+    assert "the user" not in rerouted["error"]
+    assert "not a decision anyone made" in rerouted["error"]
+    assert agent.ran == []
+
+
+def test_a_users_no_is_still_reported_as_theirs(tmp_path, script):
+    agent = _agent(_DenyShellConsole(), tmp_path)
+
+    agent._execute_tool("run_shell_command", _shell("pytest -q"))
+    rerouted = agent._execute_tool("execute_python_file", {"file_path": script})
+
+    assert "the user declined" in rerouted["error"]
+    assert "ask the user" in rerouted["error"]
+
+
+class _UnattendedConsole(_DenyShellConsole):
+    """Nothing can ask a person, and the denial reason says so."""
+
+    def confirmation_denied_reason(self, tool_name):
+        return (
+            f"'{tool_name}' requires explicit user approval and cannot run "
+            "unattended."
+        )
+
+
+def test_an_unattended_denial_is_not_called_the_users(tmp_path, script):
+    agent = _agent(_UnattendedConsole(), tmp_path)
+
+    first = agent._execute_tool("run_shell_command", _shell("pytest -q"))
+    rerouted = agent._execute_tool("execute_python_file", {"file_path": script})
+
+    assert "hint" not in first
+    # Still a reroute of the same effect, so it stays blocked.
+    assert rerouted["status"] == "denied"
+    assert "the user declined" not in rerouted["error"]
+    assert "cannot run unattended" in rerouted["error"]
+
+
+def test_the_lift_question_names_who_refused(tmp_path):
+    target = tmp_path / "notes.md"
+    console = _AskingConsole(Agent.KEEP_DENIED_EFFECT)
+    console.confirm_tool_execution = lambda name, args: True
+    agent = _agent(console, tmp_path)
+    agent.policy_refusal_for_call = _refuse_program("rm", f"rm may not delete {target}")
+
+    agent._execute_tool("run_shell_command", _shell(f"rm {target}"))
+    agent._execute_tool("run_shell_command", _shell(f"mv {target} x.md"))
+
+    question = console.questions[-1][0]
+    assert "was refused earlier" in question
+    assert "You declined" not in question
+
+
+@pytest.mark.parametrize(
+    "reason,target,named",
+    [
+        (r"would delete C:\Work\Notes.md", r"c:\work\notes.md", True),
+        ("would delete /home/u/notes.md", "/home/u/notes.md", True),
+        ("notes.md is outside the project", r"c:\work\notes.md", True),
+        # Boundaries: a longer name that contains it is a different file.
+        ("notes.md.bak is outside the project", r"c:\work\notes.md", False),
+        ("mynotes.md is outside the project", r"c:\work\notes.md", False),
+        ("Command 'copy' is not allowed", r"c:\work\notes.md", False),
+        ("", r"c:\work\notes.md", False),
+        # A sentence that ends on the name still names it.
+        ("could not delete notes.md.", r"c:\work\notes.md", True),
+    ],
+)
+def test_names_path_matches_the_file_not_a_lookalike(reason, target, named):
+    from gaia.agents.base.denied_effects import _names_path
+
+    assert _names_path(reason, target) is named
