@@ -376,6 +376,28 @@ python -m gaia.mcp.mcp_bridge
 
 **#1655 is the canonical case for both:** the model-pull sent `recipe=` for a *built-in* Lemonade model, which Lemonade 400s — but only on a *fresh* pull. Every unit test mocked the client, every manual check ran on a box that already had `gemma4-it-e2b-FLM` cached, and the PR's `gaia init --profile npu` test-plan item was checked off against that warm cache. `test_pull_model` (now in `tests/unit/test_lemonade_client_http.py`) even documented the correct `user.`-prefix-with-`recipe` pattern, but stubbed the HTTP layer, so it couldn't catch the profile that violated it.
 
+### IMPORTANT: A UI change isn't done until someone has looked at it
+
+**Passing tests say the code runs; they don't say the screen looks right.** Before
+calling a change to the Agent UI, the Electron shell, or a user-facing backend string
+done, follow the [`reviewing-agent-ui`](.claude/skills/reviewing-agent-ui/SKILL.md)
+skill: run `npm run test:rtl`, then open the screenshots and read them.
+
+- **Check every screen you touched in English and Arabic, in its real states:** empty,
+  running, failed, long content, and with a modal open.
+- **Shell work needs the packaged app.** The browser preview has no window controls,
+  tray or installer. Say which one you tested.
+- **A bug a person finds is a gap in the checks.** Add a rule to
+  `visual/rtl.visual.ts` or the skill, watch it fail, then fix the bug, all in the same
+  change.
+- **New user-facing text goes through `useT`,** including strings from the backend.
+  Use logical CSS properties (`margin-inline-start`), and wrap numbers with units in
+  `<bdi dir="ltr">`.
+
+v0.25.4's Arabic UI is the canonical miss: it passed 2,100 component tests and a DOM audit
+with filenames floating mid-row, `MB 9.7` backwards and model names cut at the wrong
+end, all visible at a glance. The audit only looked for overflow and leftover English.
+
 ### Tests always run against THIS checkout
 
 The root `conftest.py` puts this repo's `src/` and `hub/agents/*/python` at the
@@ -524,6 +546,9 @@ cd src/gaia/apps/webui && npm install && npm run build
 # Development with hot reload (two terminals)
 uv run python -m gaia.ui.server --debug   # Terminal 1: backend (port 4200)
 cd src/gaia/apps/webui && npm run dev      # Terminal 2: frontend (port 5174)
+
+# Checks to run before calling a UI change done
+cd src/gaia/apps/webui && npm test && npm run test:rtl
 ```
 
 ## Project Structure

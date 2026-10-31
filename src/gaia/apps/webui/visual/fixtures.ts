@@ -195,3 +195,9 @@ export async function useTheme(page: Page, theme: 'light' | 'dark'): Promise<voi
         window.localStorage.setItem('gaia-chat-theme', t);
     }, theme);
 }
+
+export async function useLocale(page: Page, locale: string): Promise<void> {
+    await page.addInitScript((code) => {
+        window.localStorage.setItem('gaia-chat-locale', code);
+    }, locale);
+}

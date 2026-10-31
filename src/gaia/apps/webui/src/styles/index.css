@@ -729,6 +729,12 @@ textarea:focus-visible {
     .settings-overlay) {
     -webkit-app-region: no-drag;
 }
+/* A Latin name in a right-to-left UI: dir="auto" makes it truncate at its end,
+   and this keeps it on the label's own edge. */
+:root[dir="rtl"] :is(.doc-name, .sb-location-name, .composer-chip-label,
+    .new-chat-folder-name, .sp-item-name, .connection-banner__text)[dir="auto"] {
+    text-align: right;
+}
 /* Windows: minimize, maximize and close sit at the top right. */
 :root[data-titlebar="overlay"] .task-header {
     min-height: var(--titlebar-h);

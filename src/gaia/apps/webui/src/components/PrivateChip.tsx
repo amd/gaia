@@ -49,7 +49,7 @@ export function PrivateChip({ disabled }: { disabled?: boolean }) {
                 title="Memory is off in Settings, so no chat is saved to memory"
             >
                 <EyeOff size={13} aria-hidden="true" />
-                <span className="composer-chip-label">Memory off</span>
+                <span className="composer-chip-label" dir="auto">Memory off</span>
             </button>
         );
     }
@@ -68,7 +68,7 @@ export function PrivateChip({ disabled }: { disabled?: boolean }) {
                     : "Turn on private chat. It won't be saved to memory."}
         >
             {on ? <EyeOff size={13} aria-hidden="true" /> : <Eye size={13} aria-hidden="true" />}
-            <span className="composer-chip-label">{on ? 'Private' : readFailed ? 'Memory unknown' : 'Memory on'}</span>
+            <span className="composer-chip-label" dir="auto">{on ? 'Private' : readFailed ? 'Memory unknown' : 'Memory on'}</span>
         </button>
     );
 }
