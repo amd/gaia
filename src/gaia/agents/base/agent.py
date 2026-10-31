@@ -3039,9 +3039,9 @@ Do NOT wrap conversational replies in JSON.
         read by both the tool-block gate and the response-format gate in
         :meth:`_compose_system_prompt`.
         """
-        from gaia.llm.lemonade_client import is_tool_calling_model
+        from gaia.llm.lemonade_client import uses_native_tool_calls
 
-        return bool(getattr(self, "_use_claude", False)) or is_tool_calling_model(
+        return bool(getattr(self, "_use_claude", False)) or uses_native_tool_calls(
             getattr(self, "model_id", None)
         )
 
@@ -4849,6 +4849,8 @@ Do NOT wrap conversational replies in JSON.
         markup = parse_text_tool_calls(response)
         if markup is None:
             return None
+        if any(call.name in self._tools_registry for call in markup.calls):
+            self._switch_to_native_tool_calls()
         calls = []
         thought = markup.prose
         for call in markup.calls:
@@ -4887,6 +4889,31 @@ Do NOT wrap conversational replies in JSON.
             "tool_calls": calls,
             "content": thought or None,
         }
+
+    def _switch_to_native_tool_calls(self) -> None:
+        """Move a hosted model writing its own tool markup onto native tool calls."""
+        from gaia.llm.lemonade_client import (
+            cloud_model_info,
+            is_tool_calling_model,
+            record_own_tool_markup,
+        )
+
+        model_id = getattr(self, "model_id", None)
+        if (
+            self._uses_native_tool_calls()
+            or cloud_model_info(model_id) is None
+            or not is_tool_calling_model(model_id)
+        ):
+            return
+        record_own_tool_markup(model_id)
+        logger.info(
+            "%s wrote its own tool-call markup; it gets native tool calls from "
+            "now on",
+            model_id,
+        )
+        # The text tool list and JSON format template leave the prompt.
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
 
     @staticmethod
     def _regex_tool_args(response: str, tool: str) -> Dict[str, Any]:
