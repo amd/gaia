@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
+
 ### Changed
 
 - **The agent ships as one Python package.** `ChatAgent`, the class the agent

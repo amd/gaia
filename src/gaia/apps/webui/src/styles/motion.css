@@ -42,15 +42,23 @@
 .side-rail {
     animation: railIn var(--duration-slow) var(--ease);
 }
+.side-rail:dir(rtl) {
+    animation-name: railInRtl;
+}
 
 .task-view > .messages-scroll,
 .task-view > .input-area,
 .task-view > .doc-context-bar {
-    transition: margin-right var(--duration-slow) var(--ease);
+    transition: margin-inline-end var(--duration-slow) var(--ease);
 }
 
 @keyframes railIn {
     from { opacity: 0; transform: translateX(24px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+/* Right to left the panel is on the left, so it slides in from that side. */
+@keyframes railInRtl {
+    from { opacity: 0; transform: translateX(-24px); }
     to { opacity: 1; transform: translateX(0); }
 }
 

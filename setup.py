@@ -218,7 +218,7 @@ setup(
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
             "pymupdf>=1.24.0,<2",
-            "pypdf",
+            "pypdf>=6.20.0",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
             "openpyxl>=3.1.0",
@@ -290,7 +290,7 @@ setup(
             "anthropic",
             "bs4",
             "numpy>=2.0,<2.3.0",
-            "pypdf",
+            "pypdf>=6.20.0",
             "reportlab",
             # Tool-prompt cost measurement (#1448): tiktoken cl100k_base proxy.
             "tiktoken>=0.7.0,<1.0.0",
@@ -317,7 +317,7 @@ setup(
             # 2.x ships no macOS x86_64 wheel and its sdist doesn't build. No
             # platform marker: `gaia init` refuses to evaluate one (install_hints).
             "pymupdf>=1.24.0,<2",
-            "pypdf",
+            "pypdf>=6.20.0",
             # Reading AND writing the common office formats. The read half is
             # what RAG needs; the write half is what the document skills need,
             # and this is the extra `gaia init --profile chat` installs. Without
