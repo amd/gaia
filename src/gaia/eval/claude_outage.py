@@ -88,15 +88,50 @@ class ClaudeOutage:
         }
 
 
+#: The other subscription account's token, used once when the active one is
+#: out of quota. CI sets it to whichever account the job did not start on.
+BACKUP_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN_BACKUP"
+#: Label of the account behind ``CLAUDE_CODE_OAUTH_TOKEN`` (primary/secondary).
+ACCOUNT_LABEL_VAR = "GAIA_CLAUDE_ACCOUNT"
+
+_OTHER_LABEL = {"primary": "secondary", "secondary": "primary"}
+
+
 def claude_account() -> str:
     """Which credential the driver used, without revealing it."""
-    label = os.environ.get("CLAUDE_ACCOUNT", "").strip()
-    suffix = f" (CLAUDE_ACCOUNT={label})" if label else ""
+    label = os.environ.get(ACCOUNT_LABEL_VAR, "").strip()
+    suffix = f" (the {label} account)" if label else ""
     if os.environ.get("ANTHROPIC_API_KEY"):
         return f"the API key in ANTHROPIC_API_KEY{suffix}"
     if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
         return f"the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN{suffix}"
     return f"the account the `claude` CLI is logged in to{suffix}"
+
+
+def switch_to_backup_account(outage: dict) -> Optional[dict]:
+    """Move every later ``claude -p`` call to the backup token, at most once.
+
+    Called only for a quota outage. Returns what was switched (labels and the
+    exhausted account's reset time, never a token), or ``None`` when there is
+    no backup: no backup token, it is the token already in use, or an API key
+    is set, which the CLI prefers over any token.
+    """
+    backup = os.environ.get(BACKUP_TOKEN_VAR, "").strip()
+    active = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if not backup or backup == active or os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    was = os.environ.get(ACCOUNT_LABEL_VAR, "").strip() or "first"
+    now = _OTHER_LABEL.get(was, "backup")
+    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = backup
+    # Popped, so a second quota refusal stops the run instead of switching back.
+    os.environ.pop(BACKUP_TOKEN_VAR, None)
+    os.environ[ACCOUNT_LABEL_VAR] = now
+    return {
+        "from": was,
+        "to": now,
+        "from_resets": outage.get("resets"),
+        "detail": outage.get("detail"),
+    }
 
 
 def _reset_time(text: str) -> Optional[str]:

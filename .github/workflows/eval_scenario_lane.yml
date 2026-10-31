@@ -121,7 +121,7 @@ on:
         description: 'Driver and judge credential. This or ANTHROPIC_API_KEY is required; the preflight fails without one.'
         required: false
       CLAUDE_CODE_OAUTH_TOKEN_SECONDARY:
-        description: 'Used instead while the repo variable CLAUDE_ACCOUNT is "secondary".'
+        description: 'Backup account. Used when the primary is out of quota, at the start or mid-run.'
         required: false
       ANTHROPIC_API_KEY:
         description: 'Fallback credential, used only when no OAuth token is set.'
@@ -179,8 +179,6 @@ jobs:
       GAIA_MEMORY_MCP_ALWAYS: ${{ inputs.memory-mcp }}
       GAIA_FIXTURES: ${{ inputs.gaia-fixtures }}
     steps:
-      - name: Show which Claude account this job uses
-        run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -287,6 +285,18 @@ jobs:
           claude --version
           if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
 
+      # The account this job starts on: the primary, or the secondary if the
+      # primary is out of quota. Both out fails here, naming both reset times.
+      - name: Pick the Claude account
+        id: claude_account
+        uses: ./.github/actions/claude-credential
+        with:
+          primary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          secondary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
+          model: ${{ env.EVAL_MODEL }}
+          what: "Eval lane ${{ inputs.lane }}"
+          python: ${{ env.VENV_PY }}
+
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
@@ -302,10 +312,10 @@ jobs:
       - name: Preflight - judge credential, baselines, Lemonade, models
         timeout-minutes: 30
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Blank when the OAuth token is present: `--bare` (added only with a
           # key) restricts auth to the key and would ignore the token.
-          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
@@ -422,8 +432,12 @@ jobs:
         # collect, gate, compare and upload steps still run.
         timeout-minutes: ${{ inputs.eval-timeout-minutes }}
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
-          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+          # The other account. The eval moves to it once if the first runs out of
+          # quota mid-run, and stops with a partial scorecard if both are out.
+          CLAUDE_CODE_OAUTH_TOKEN_BACKUP: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN || (steps.claude_account.outputs.account == 'primary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || '') }}
+          GAIA_CLAUDE_ACCOUNT: ${{ steps.claude_account.outputs.account }}
         run: |
           # Not "Stop": the first stderr line of a native command would become a
           # terminating error. Every failure is checked explicitly.
@@ -449,7 +463,7 @@ jobs:
           # The agent under test runs shell commands; only `claude -p` gets the
           # judge's credentials.
           $judgeCredentials = @{}
-          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")) {
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_BACKUP", "ANTHROPIC_API_KEY")) {
             $judgeCredentials[$name] = [Environment]::GetEnvironmentVariable($name)
           }
           function Start-Isolated($argList, $cwd, $out, $err) {
@@ -532,6 +546,7 @@ jobs:
                 [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$line`r`n", $summaryEnc)
               }
             }
+            $stoppedAt = $null
             $swTotal = [Diagnostics.Stopwatch]::StartNew()
             Add-Summary "## Eval wall clock - lane ``$env:EVAL_LANE``, ``$env:AGENT_MODEL`` on $env:COMPUTERNAME"
             Add-Summary ""
@@ -701,6 +716,14 @@ jobs:
               Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min)"
               Add-Summary "| ``$category`` | $mins |"
 
+              if ($code -eq 3) {
+                # Claude stopped answering on every account. The runner already
+                # wrote this category's partial scorecard; keep it, start no more,
+                # and let the collect, compare and upload steps report what ran.
+                Write-Host "::error title=Eval stopped - Claude unavailable::$category stopped part-way because Claude was unavailable on every configured account (the log above names the cause and reset times). Its partial scorecard is kept; later categories were not started."
+                $stoppedAt = $category
+                break
+              }
               if ($code -ne 0) {
                 # Never `exit $LASTEXITCODE`: a launch failure leaves it $null,
                 # which PowerShell turns into a green exit 0.
@@ -709,6 +732,17 @@ jobs:
               }
             }
 
+            if ($stoppedAt) {
+              $after = $false
+              $notStarted = @()
+              foreach ($c in $categories) {
+                if ($after) { $notStarted += $c }
+                if ($c -eq $stoppedAt) { $after = $true }
+              }
+              $shownRest = if ($notStarted.Count -gt 0) { $notStarted -join ', ' } else { 'none' }
+              Add-Summary ""
+              Add-Summary "**INCOMPLETE:** ``$stoppedAt`` stopped part-way because Claude was unavailable on every account; not started: $shownRest. The partial scorecard is uploaded and only what ran is compared."
+            }
             $swTotal.Stop()
             $totalMins = [math]::Round($swTotal.Elapsed.TotalMinutes, 1)
             Write-Host "[TIMING] lane $env:EVAL_LANE, all $($categories.Count) categories: $totalMins min"
@@ -724,6 +758,10 @@ jobs:
             if ($fixture -and -not $fixture.HasExited) {
               Stop-Process -Id $fixture.Id -Force -ErrorAction SilentlyContinue
             }
+          }
+          if ($stoppedAt) {
+            Write-Host "::error::This lane is INCOMPLETE: $stoppedAt stopped part-way and the categories after it never started. Failing so it is never read as a full run."
+            exit 1
           }
 
       # Its own always() step, so a step timeout still cleans up.
@@ -773,6 +811,12 @@ jobs:
             }
             New-Item -ItemType Directory -Force -Path "eval-out\$category" | Out-Null
             Copy-Item $scorecard "eval-out\$category\scorecard.json"
+            $partial = (Get-Content -Raw -Encoding UTF8 "eval-out\$category\scorecard.json" | ConvertFrom-Json).partial
+            if ($partial) {
+              Write-Host "::error title=Partial scorecard - ${category}::$($partial.summary). The scenarios that ran are kept and uploaded; the rest are NOT_RUN and excluded from the comparison."
+              $line = "`r`n**INCOMPLETE - ${category}:** $($partial.summary). Only the scenarios that ran are compared; this job fails so it is never read as a full run.`r`n"
+              [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, $line, (New-Object System.Text.UTF8Encoding($false)))
+            }
             foreach ($name in @("summary.md", "results.xml")) {
               $src = Join-Path $runDir $name
               if (Test-Path $src) { Copy-Item $src "eval-out\$category\$name" }
@@ -815,6 +859,7 @@ jobs:
           $regressed = @()
           $notComparable = @()
           $noBaseline = @()
+          $incomplete = @()
           $failedCompare = $false
           $summaryEnc = New-Object System.Text.UTF8Encoding($false)
           function Add-Summary($line) {
@@ -839,6 +884,8 @@ jobs:
               $noBaseline += $category
               continue
             }
+            $partial = (Get-Content -Raw -Encoding UTF8 $current | ConvertFrom-Json).partial
+            if ($partial) { $incomplete += $category }
             # 0 no regression, 2 regression, 3 measured with another model.
             $global:LASTEXITCODE = 0
             & $env:VENV_GAIA eval agent --compare "$baseline" "$current"
@@ -869,7 +916,8 @@ jobs:
           }
           if ($regressed.Count -gt 0) { Add-Summary "Regressed: $($regressed -join ', ')" }
           if ($notComparable.Count -gt 0) { Add-Summary "Not comparable (different model): $($notComparable -join ', ')" }
-          $compared = @($categories | Where-Object { $noBaseline -notcontains $_ -and $notComparable -notcontains $_ -and (Test-Path "eval-out\$_\scorecard.json") })
+          if ($incomplete.Count -gt 0) { Add-Summary "INCOMPLETE - partial run, only what ran was compared, not a pass: $($incomplete -join ', ')" }
+          $compared = @($categories | Where-Object { $noBaseline -notcontains $_ -and $notComparable -notcontains $_ -and $incomplete -notcontains $_ -and (Test-Path "eval-out\$_\scorecard.json") })
           if ($compared.Count -gt 0 -and $regressed.Count -eq 0) { Add-Summary "No regression in: $($compared -join ', ')" }
 
           # A refused or failed compare is never a verdict; fatal regardless of enforce.
@@ -888,14 +936,15 @@ jobs:
       - name: Refuse to upload a credential
         if: always()
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN_SECONDARY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
           $ErrorActionPreference = "Stop"
           $files = @(Get-ChildItem eval-out -Recurse -File -ErrorAction SilentlyContinue)
           $secrets = @()
-          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "HF_TOKEN")) {
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_SECONDARY", "ANTHROPIC_API_KEY", "HF_TOKEN")) {
             $value = [Environment]::GetEnvironmentVariable($name)
             if ($value) { $secrets += $value }
           }
