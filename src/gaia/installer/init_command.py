@@ -43,6 +43,7 @@ from gaia.agents.install_hints import (
     gaia_extra_requirements,
     resolve_pip_frontend,
 )
+from gaia.installer import model_choice
 from gaia.installer._stdin import stdin_is_tty
 from gaia.llm.model_fit import MachineCapacity, format_gb
 from gaia.logger import get_logger
@@ -700,6 +701,8 @@ def check_setup_status(
 
     if skip_chat_model:
         model_ids = [m for m in model_ids if is_embedding_model_id(m)]
+    # The user chose not to have these; setup is not waiting on them.
+    model_ids, _ = model_choice.split_skipped(model_ids, model_choice.skipped_models())
 
     reasons = []
     downloaded: Dict[str, bool] = {}
@@ -993,6 +996,9 @@ class InitCommand:
         lemonade_url: Optional[str] = None,
         gaia_lemonade: bool = False,
         progress_json: bool = False,
+        allow_low_disk: bool = False,
+        keep_trying: bool = False,
+        extra_models: Optional[list] = None,
     ):
         """
         Initialize the init command.
@@ -1022,6 +1028,12 @@ class InitCommand:
             gaia_lemonade: Use GAIA's own Lemonade, and save that choice.
             progress_json: Also print step and download progress as JSON
                 lines (see InitEvents), for the desktop installer.
+            allow_low_disk: Download even when the models need more disk than
+                the model store has free, instead of stopping.
+            keep_trying: When a download's connection drops, retry it for up
+                to two minutes before failing.
+            extra_models: Models to download beside the profile's, e.g. the
+                vision model when ``default_model`` replaced it.
         """
         if lemonade_url and gaia_lemonade:
             raise ValueError(
@@ -1049,6 +1061,11 @@ class InitCommand:
         self.verbose = verbose
         self.remote = remote
         self.skip_chat_model = skip_chat_model
+        self.allow_low_disk = allow_low_disk
+        self.keep_trying = keep_trying
+        self.extra_models = list(extra_models or [])
+        # Models in skipped_models that this run left out.
+        self._skipped_now: list = []
         self.progress_callback = progress_callback
         self.events = InitEvents(progress_json)
 
@@ -1960,6 +1977,82 @@ class InitCommand:
                 )
         return self._chat_choice.model_id
 
+    def _models_to_ensure(self, client) -> list:
+        """The profile's models plus this PC's chat model, minus the user's skips."""
+        profile_config = INIT_PROFILES[self.profile]
+        if profile_config["models"]:
+            model_ids = list(profile_config["models"])
+        else:
+            model_ids = client.get_required_models(profile_config["agent"])
+
+        # SD brings its own LLM; NPU uses FLM models only, never the GGUF one.
+        if not self.skip_chat_model:
+            model_ids = with_chat_model(
+                self.profile, model_ids, lambda: self._chat_model_choice(client)
+            )
+            if skipped_gemma(self.profile, model_ids):
+                from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+                self._print(
+                    f"   Not downloading {DEFAULT_MODEL_NAME}: your "
+                    f"default_model is {self._chat_choice.model_id}. To ask "
+                    "about images, download it (~6 GB) with "
+                    "`gaia download --agent vlm`."
+                )
+
+        # A Claude-backed session never calls the local chat LLM — only
+        # RAG/memory/code-index embeddings still need Lemonade (Anthropic has
+        # no embeddings API). Drop every non-embedding model rather than
+        # pulling several GB that will sit unused.
+        if self.skip_chat_model:
+            model_ids = [m for m in model_ids if is_embedding_model_id(m)]
+
+        for model_id in self.extra_models:
+            if not any(model_choice.ids_match(model_id, m) for m in model_ids):
+                model_ids.append(model_id)
+
+        model_ids, self._skipped_now = model_choice.split_skipped(
+            model_ids, self._skip_list()
+        )
+        chat = self._chat_choice.model_id if self._chat_choice else None
+        for model_id in self._skipped_now:
+            caveat = model_choice.if_skipped(
+                model_id, model_choice.roles_for(model_id, chat)
+            )
+            self._print(f"   Skipping {model_id} (in skipped_models). {caveat or ''}")
+        return model_ids
+
+    @staticmethod
+    def _skip_list() -> list:
+        return model_choice.skipped_models()
+
+    def _show_plan(self, model_ids, sizes) -> None:
+        notes = {m: _size_note(sizes.get(m)) for m in model_ids}
+        total_gb = sum(s for s in sizes.values() if s)
+        if RICH_AVAILABLE and self.console:
+            self.console.print(
+                f"   [bold]Ensuring {len(model_ids)} model(s) are downloaded:[/bold]"
+            )
+            for model_id in model_ids:
+                self.console.print(
+                    f"   [cyan]•[/cyan] {model_id}[dim]{notes[model_id]}[/dim]"
+                )
+        else:
+            self._print(f"   Ensuring {len(model_ids)} model(s) are downloaded:")
+            for model_id in model_ids:
+                self._print(f"   • {model_id}{notes[model_id]}")
+        if total_gb:
+            self._print(f"   Total download: about {total_gb:.1f} GB")
+        self._print("")
+
+    def _say_retrying(self, model_id: str, until: float) -> None:
+        left = max(0, int(until - time.time()))
+        self._print_warning(
+            f"The connection dropped while downloading {model_id}. Trying again "
+            f"for up to {left} more seconds (--keep-trying)."
+        )
+        self.events.emit("retrying", model=model_id, until=int(until))
+
     def _download_models(self) -> bool:
         """
         Download models for the selected profile.
@@ -1983,62 +2076,16 @@ class InitCommand:
 
             client = LemonadeClient(verbose=self.verbose)
 
-            # Get profile config
             profile_config = INIT_PROFILES[self.profile]
-
-            # Get models to download
-            if profile_config["models"]:
-                model_ids = list(profile_config["models"])
-            else:
-                model_ids = client.get_required_models(profile_config["agent"])
-
-            # Include this machine's chat model for profiles that use llamacpp.
-            # SD profile has its own LLM and doesn't need the default model.
-            # NPU profile uses FLM models exclusively — don't append GGUF model.
-            if not self.skip_chat_model:
-                model_ids = with_chat_model(
-                    self.profile, model_ids, lambda: self._chat_model_choice(client)
-                )
-                if skipped_gemma(self.profile, model_ids):
-                    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-
-                    self._print(
-                        f"   Not downloading {DEFAULT_MODEL_NAME}: your "
-                        f"default_model is {self._chat_choice.model_id}. To ask "
-                        "about images, download it (~6 GB) with "
-                        "`gaia download --agent vlm`."
-                    )
-
-            # A Claude-backed session never calls the local chat LLM — only
-            # RAG/memory/code-index embeddings still need Lemonade (Anthropic has
-            # no embeddings API). Drop every non-embedding model rather than
-            # pulling several GB that will sit unused.
-            if self.skip_chat_model:
-                model_ids = [m for m in model_ids if is_embedding_model_id(m)]
-
+            model_ids = self._models_to_ensure(client)
             if not model_ids:
                 self._print_success("No models required for this profile")
                 return True
 
             # Show which models will be ensured, and what they cost to download
             sizes = pending_download_sizes(client, model_ids)
-            notes = {m: _size_note(sizes.get(m)) for m in model_ids}
+            self._show_plan(model_ids, sizes)
             total_gb = sum(s for s in sizes.values() if s)
-            if RICH_AVAILABLE and self.console:
-                self.console.print(
-                    f"   [bold]Ensuring {len(model_ids)} model(s) are downloaded:[/bold]"
-                )
-                for model_id in model_ids:
-                    self.console.print(
-                        f"   [cyan]•[/cyan] {model_id}[dim]{notes[model_id]}[/dim]"
-                    )
-            else:
-                self._print(f"   Ensuring {len(model_ids)} model(s) are downloaded:")
-                for model_id in model_ids:
-                    self._print(f"   • {model_id}{notes[model_id]}")
-            if total_gb:
-                self._print(f"   Total download: about {total_gb:.1f} GB")
-            self._print("")
 
             disk_free_gb = None
             if total_gb:
@@ -2076,8 +2123,17 @@ class InitCommand:
                             "not read what an earlier download left there, so it "
                             "downloads anyway; Lemonade stops if the disk fills."
                         )
+                    elif self.allow_low_disk:
+                        self._print_warning(
+                            f"Not enough disk space: {fits.reason}. Downloading "
+                            "anyway (--allow-low-disk); Lemonade stops if the "
+                            "disk fills."
+                        )
                     else:
-                        message = f"Not enough disk space: {fits.reason}."
+                        message = (
+                            f"Not enough disk space: {fits.reason}. Or pass "
+                            "--allow-low-disk to download anyway."
+                        )
                         self._print_error(message)
                         self.events.emit("error", message=message)
                         return False
@@ -2091,11 +2147,14 @@ class InitCommand:
                     }
                     for m in model_ids
                 ],
+                skipped=self._skipped_now,
                 bytes_total=_gb_to_bytes(total_gb) or 0,
                 disk_free_bytes=_gb_to_bytes(disk_free_gb),
             )
 
-            if not self._prompt_yes_no("Continue?", default=True):
+            # Nothing to download is nothing to ask about.
+            to_pull = any(sizes.get(m) != 0.0 for m in model_ids)
+            if to_pull and not self._prompt_yes_no("Continue?", default=True):
                 self._print("   Skipping model downloads")
                 return True
 
@@ -2129,26 +2188,14 @@ class InitCommand:
             # with checkpoint + recipe + the embedding label. Look those up from
             # the model registry so the pull request is valid (#1745 auto-label bug
             # is avoided by passing ``embedding=True`` explicitly).
-            from gaia.llm.lemonade_client import find_model_requirement
-
             recipe = profile_config.get("recipe")
             success = True
             for index, model_id in enumerate(model_ids, start=1):
                 self._print("")
-                mr = find_model_requirement(model_id)
                 label = f"{model_id} (recipe={recipe})" if recipe else model_id
                 self.agent_console.print(
                     f"   [bold cyan]Downloading:[/bold cyan] {label}"
                 )
-                # Built-in models are pulled by name only. Passing recipe (even
-                # =None) can make Lemonade treat the call as a custom-model
-                # registration, which 400s on built-in names (#1655). Only
-                # user.-namespaced models carry their registration fields.
-                pull_kwargs = mr.pull_kwargs() if mr else {}
-                # Two hours covers a few GB on any link; an 80 GB model needs
-                # time proportional to its size (~5 MB/s floor).
-                if mr and mr.size_gb:
-                    pull_kwargs["timeout"] = max(7200, int(mr.size_gb * 200))
                 if self.events.enabled:
                     progress = _JsonDownloadProgress(
                         self.agent_console,
@@ -2160,8 +2207,13 @@ class InitCommand:
                     )
                 else:
                     progress = _DownloadProgress(self.agent_console, model_id)
-                if client.ensure_model_downloaded(
-                    model_id, on_progress=progress, **pull_kwargs
+                if model_choice.pull_model(
+                    client,
+                    model_id,
+                    progress,
+                    keep_trying_s=model_choice.KEEP_TRYING_S if self.keep_trying else 0,
+                    on_retry=lambda until, m=model_id: self._say_retrying(m, until),
+                    **model_choice.pull_kwargs_for(model_id),
                 ):
                     if progress.events:
                         self._print_success(f"Downloaded {model_id}")
@@ -2384,7 +2436,14 @@ class InitCommand:
             profile_config = INIT_PROFILES[self.profile]
             min_ctx = profile_config.get("min_context_size")
             # Loading an undownloaded model makes Lemonade pull it, unannounced.
-            if min_ctx and not self.skip_chat_model and not self.skip_models:
+            if (
+                min_ctx
+                and not self.skip_chat_model
+                and not self.skip_models
+                and not model_choice.is_skipped(
+                    self._chat_model(client), self._skip_list()
+                )
+            ):
                 from gaia.llm.lemonade_client import (
                     fit_ctx_to_free_memory,
                     resolve_ctx_size,
@@ -2432,6 +2491,7 @@ class InitCommand:
 
             if self.skip_chat_model:
                 model_ids = [m for m in model_ids if is_embedding_model_id(m)]
+            model_ids, _ = model_choice.split_skipped(model_ids, self._skip_list())
 
             if not model_ids or self.skip_models:
                 return True
@@ -3108,6 +3168,9 @@ def run_init(
     lemonade_url: Optional[str] = None,
     gaia_lemonade: bool = False,
     progress_json: bool = False,
+    allow_low_disk: bool = False,
+    keep_trying: bool = False,
+    extra_models: Optional[list] = None,
 ) -> int:
     """
     Entry point for `gaia init` command.
@@ -3126,6 +3189,9 @@ def run_init(
         lemonade_url: Use (and save) the Lemonade Server the user runs here
         gaia_lemonade: Use (and save) GAIA's own Lemonade Server
         progress_json: Also print progress as JSON lines (see InitEvents)
+        allow_low_disk: Download even when the model store looks too small
+        keep_trying: Retry a dropped download for up to two minutes
+        extra_models: Models to download beside the profile's
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -3144,6 +3210,9 @@ def run_init(
             lemonade_url=lemonade_url,
             gaia_lemonade=gaia_lemonade,
             progress_json=progress_json,
+            allow_low_disk=allow_low_disk,
+            keep_trying=keep_trying,
+            extra_models=extra_models,
         )
         return cmd.run()
     except ValueError as e:

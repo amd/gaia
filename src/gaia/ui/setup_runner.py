@@ -124,10 +124,27 @@ def check_args(skip_chat_model: bool, load: bool) -> List[str]:
     return args
 
 
-def run_args(skip_chat_model: bool, gaia_lemonade: bool = False) -> List[str]:
+def run_args(
+    skip_chat_model: bool,
+    gaia_lemonade: bool = False,
+    allow_low_disk: bool = False,
+    keep_trying: bool = False,
+) -> List[str]:
     # --yes: nobody can answer a prompt on a pipe. --skip-webui-build: a source
     # checkout would otherwise rebuild the very UI that is running this.
-    args = ["init", "--profile", PROFILE, "--yes", "--skip-webui-build"]
+    # --progress-json: per-model bytes and states for the progress rows.
+    args = [
+        "init",
+        "--profile",
+        PROFILE,
+        "--yes",
+        "--skip-webui-build",
+        "--progress-json",
+    ]
+    if allow_low_disk:
+        args.append("--allow-low-disk")
+    if keep_trying:
+        args.append("--keep-trying")
     if skip_chat_model:
         args.append("--skip-chat-model")
     if gaia_lemonade:
@@ -374,6 +391,90 @@ def step_labels(
     ]
 
 
+#: Per-model states, in the order a model moves through them.
+MODEL_STATES = (
+    "queued",
+    "downloading",
+    "verifying",
+    "ready",
+    "failed",
+    "skipped",
+    "cancelled",
+)
+
+
+@dataclass
+class ModelProgress:
+    """One model's download, as the progress rows show it."""
+
+    id: str
+    state: str = "queued"
+    bytes_done: int = 0
+    bytes_total: int = 0
+    speed_bps: int = 0
+    error: Optional[str] = None
+    error_kind: Optional[str] = None
+    retrying_until: Optional[int] = None
+    #: Bytes already on disk when this pull started (a resumed download).
+    bytes_before: Optional[int] = None
+
+    def view(self, chat_model: Optional[str] = None) -> Dict[str, Any]:
+        from gaia.installer.model_choice import roles_for
+
+        left = max(0, self.bytes_total - self.bytes_done)
+        return {
+            "id": self.id,
+            "roles": roles_for(self.id, chat_model),
+            "state": self.state,
+            "bytes_done": self.bytes_done,
+            "bytes_total": self.bytes_total,
+            "speed_bps": self.speed_bps,
+            "eta_s": (
+                round(left / self.speed_bps)
+                if self.state == "downloading" and self.speed_bps > 0
+                else None
+            ),
+            "error": self.error,
+            "error_kind": self.error_kind,
+            "can_retry": self.state in ("failed", "cancelled"),
+            "retrying_until": self.retrying_until,
+            "downloaded_before_gb": (
+                round(self.bytes_before / 1e9, 2) if self.bytes_before else None
+            ),
+        }
+
+
+def overall(models: List[ModelProgress]) -> Dict[str, Any]:
+    """Bytes-weighted progress across the models being set up."""
+    counted = [m for m in models if m.state != "skipped"]
+    done = sum(min(m.bytes_done, m.bytes_total) for m in counted)
+    total = sum(m.bytes_total for m in counted)
+    speed = sum(m.speed_bps for m in counted if m.state == "downloading")
+    return {
+        "bytes_done": done,
+        "bytes_total": total,
+        "speed_bps": speed,
+        "eta_s": round((total - done) / speed) if speed > 0 else None,
+        "percent": int(done * 100 / total) if total else None,
+        "failed": sum(1 for m in counted if m.state == "failed"),
+    }
+
+
+def _failure_text(model_id: str, message: str, kind: Optional[str]) -> str:
+    if kind == "disk_full":
+        return (
+            f"Ran out of disk space while downloading {model_id}. Free some space "
+            "on the model drive and press Retry; the download continues from "
+            f"where it stopped. Lemonade said: {message}"
+        )
+    if kind == "network":
+        return (
+            f"The connection dropped while downloading {model_id}. Press Retry "
+            f"to continue from where it stopped. Lemonade said: {message}"
+        )
+    return message
+
+
 @dataclass
 class SetupRun:
     """One ``gaia init`` run and what it has reported so far."""
@@ -392,6 +493,8 @@ class SetupRun:
     problem: Optional[Dict[str, Any]] = None
     log: List[str] = field(default_factory=list)
     status: Optional[Dict[str, Any]] = None
+    allow_low_disk: bool = False
+    keep_trying: bool = False
 
     def view(self) -> Dict[str, Any]:
         reached = PHASES.index(self.phase) if self.phase in PHASES else -1
@@ -425,20 +528,60 @@ class SetupRun:
         }
 
 
+class _QuietConsole:
+    """What ``_JsonDownloadProgress`` prints to, for a pull with no terminal."""
+
+    def print_download_error(self, message: str, model_id: str) -> None:
+        logger.warning("Download of %s failed: %s", model_id, message)
+
+
+class _Events:
+    """Feeds an in-process pull's events to the runner, as JSON lines would."""
+
+    enabled = True
+
+    def __init__(self, runner: "SetupRunner") -> None:
+        self._runner = runner
+
+    def emit(self, event: str, **fields) -> None:
+        self._runner._on_event({"event": event, **fields})
+
+
 class SetupRunner:
-    """Runs at most one ``gaia init`` at a time for this backend."""
+    """Runs at most one ``gaia init`` at a time for this backend, plus the
+    single-model downloads Settings and Retry start between runs."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._run: Optional[SetupRun] = None
         self._proc: Optional[subprocess.Popen] = None
+        self._models: Dict[str, ModelProgress] = {}
+        #: model id -> Stop flag of an in-process pull.
+        self._pulls: Dict[str, threading.Event] = {}
 
     def status(self) -> Optional[Dict[str, Any]]:
         with self._lock:
-            return self._run.view() if self._run else None
+            if self._run is None and not self._models:
+                return None
+            view = self._run.view() if self._run else {"state": "idle"}
+            models = list(self._models.values())
+            chat = self._run.chat_model if self._run else None
+            view["models"] = [m.view(chat) for m in models]
+            view["overall"] = overall(models)
+            return view
+
+    def busy_with(self, model_id: str) -> bool:
+        """Whether *model_id* is downloading right now."""
+        with self._lock:
+            entry = self._models.get(model_id)
+            return entry is not None and entry.state == "downloading"
 
     def start(
-        self, skip_chat_model: bool, gaia_lemonade: bool = False
+        self,
+        skip_chat_model: bool,
+        gaia_lemonade: bool = False,
+        allow_low_disk: bool = False,
+        keep_trying: bool = False,
     ) -> Dict[str, Any]:
         """Start setup; *gaia_lemonade* sets up and saves GAIA's own server."""
         if gaia_lemonade:
@@ -452,15 +595,26 @@ class SetupRunner:
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
                 raise SetupError("Setup is already running.")
+            if self._pulls:
+                raise SetupError(
+                    f"{', '.join(self._pulls)} is still downloading. Wait for it "
+                    "or cancel it, then start setup."
+                )
             run = SetupRun(
                 skip_chat_model=skip_chat_model,
                 users_server=None if gaia_lemonade else users_lemonade_url(),
                 gaia_lemonade=gaia_lemonade,
+                allow_low_disk=allow_low_disk,
+                keep_trying=keep_trying,
             )
             command = run_command(skip_chat_model, gaia_lemonade)
             try:
                 self._proc = subprocess.Popen(
-                    _gaia_argv(*run_args(skip_chat_model, gaia_lemonade)),
+                    _gaia_argv(
+                        *run_args(
+                            skip_chat_model, gaia_lemonade, allow_low_disk, keep_trying
+                        )
+                    ),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
@@ -480,19 +634,167 @@ class SetupRunner:
                     f"Could not start `{command}`: {e}. Run it in a terminal instead."
                 ) from e
             self._run = run
+            self._models = {}
             proc = self._proc
             view = run.view()
         threading.Thread(target=self._watch, args=(run, proc), daemon=True).start()
         return view
 
-    def cancel(self) -> bool:
+    def download_model(
+        self, client, model_id: str, keep_trying: bool = False
+    ) -> Dict[str, Any]:
+        """Pull one model now, in this process: Retry, Resume, or a model the
+        user skipped at setup and now wants. Lemonade resumes a partial file."""
         with self._lock:
+            if self._run is not None and self._run.state in ("running", "verifying"):
+                raise SetupError(
+                    "Setup is running and downloads its models itself. Retry this "
+                    "model once it finishes."
+                )
+            if model_id in self._pulls:
+                raise SetupError(f"{model_id} is already downloading.")
+            stop = threading.Event()
+            self._pulls[model_id] = stop
+            self._models[model_id] = ModelProgress(id=model_id, state="downloading")
+        threading.Thread(
+            target=self._pull_one,
+            args=(client, model_id, keep_trying, stop),
+            daemon=True,
+        ).start()
+        return self.status() or {"state": "idle"}
+
+    def cancel(self, model_id: Optional[str] = None) -> bool:
+        """Stop the run, or one model's download. Finished models and partial
+        files are kept, so Resume continues from where it stopped."""
+        with self._lock:
+            stopped = False
+            for pulling, stop in self._pulls.items():
+                if model_id is None or pulling == model_id:
+                    stop.set()
+                    stopped = True
+            if model_id is not None:
+                return stopped
             if self._proc is None or self._run is None or self._run.state != "running":
-                return False
+                return stopped
             self._run.state = "cancelled"
             self._run.text = "Setup stopped"
+            for entry in self._models.values():
+                if entry.state in ("queued", "downloading"):
+                    entry.state, entry.speed_bps = "cancelled", 0
             self._proc.kill()
             return True
+
+    def _pull_one(
+        self, client, model_id: str, keep_trying: bool, stop: threading.Event
+    ) -> None:
+        from gaia.installer import model_choice
+        from gaia.installer.init_command import _JsonDownloadProgress
+        from gaia.llm.lemonade_client import (
+            LemonadeClientError,
+            ModelDownloadCancelledError,
+        )
+        from gaia.llm.retry import model_retry_notices
+
+        progress = _JsonDownloadProgress(
+            _QuietConsole(), _Events(self), model_id, 1, 1, None
+        )
+
+        def retrying(until: float) -> None:
+            self._on_event({"event": "retrying", "model": model_id, "until": until})
+
+        try:
+            with model_retry_notices(lambda _notice: None, is_cancelled=stop.is_set):
+                ok = model_choice.pull_model(
+                    client,
+                    model_id,
+                    progress,
+                    keep_trying_s=model_choice.KEEP_TRYING_S if keep_trying else 0,
+                    on_retry=retrying,
+                    **model_choice.pull_kwargs_for(model_id),
+                )
+            outcome = "ready" if ok else "failed"
+            message = None if ok else f"Lemonade did not finish downloading {model_id}."
+        except ModelDownloadCancelledError:
+            outcome, message = "cancelled", None
+        except LemonadeClientError as e:
+            outcome, message = "failed", str(e)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.exception("Download of %s stopped on an unexpected error", model_id)
+            outcome, message = "failed", f"Download stopped on an unexpected error: {e}"
+        with self._lock:
+            self._pulls.pop(model_id, None)
+            entry = self._models.setdefault(model_id, ModelProgress(id=model_id))
+            entry.speed_bps, entry.retrying_until = 0, None
+            if stop.is_set():
+                outcome = "cancelled"
+            if outcome == "ready":
+                entry.state, entry.bytes_done = "ready", max(
+                    entry.bytes_done, entry.bytes_total
+                )
+            elif outcome == "cancelled":
+                entry.state = "cancelled"
+            elif entry.state != "failed":
+                kind = model_choice.error_kind(message)
+                entry.state, entry.error_kind = "failed", kind
+                entry.error = _failure_text(model_id, message or "", kind)
+
+    def _on_event(self, event: Dict[str, Any]) -> None:
+        """One ``gaia init --progress-json`` event (or an in-process pull's)."""
+        from gaia.installer.model_choice import error_kind
+
+        kind = event.get("event")
+        with self._lock:
+            if kind == "plan":
+                for planned in event.get("models") or []:
+                    entry = ModelProgress(
+                        id=planned["id"],
+                        state="verifying" if planned.get("downloaded") else "queued",
+                        bytes_total=planned.get("bytes_total") or 0,
+                    )
+                    if planned.get("downloaded"):
+                        entry.bytes_done = entry.bytes_total
+                    self._models[planned["id"]] = entry
+                for skipped in event.get("skipped") or []:
+                    self._models[skipped] = ModelProgress(id=skipped, state="skipped")
+                return
+            model_id = event.get("model")
+            if not model_id:
+                if kind == "error" and self._run is not None:
+                    self._run.error = event.get("message") or self._run.error
+                return
+            entry = self._models.setdefault(model_id, ModelProgress(id=model_id))
+            if kind == "progress":
+                if entry.state in ("queued", "cancelled", "failed", "downloading"):
+                    if entry.bytes_before is None:
+                        entry.bytes_before = int(event.get("bytes_done") or 0)
+                    entry.state = "downloading"
+                entry.bytes_done = int(event.get("bytes_done") or 0)
+                entry.bytes_total = int(event.get("bytes_total") or entry.bytes_total)
+                entry.speed_bps = int(event.get("speed_bps") or 0)
+                entry.retrying_until = None
+            elif kind == "model_done":
+                entry.state, entry.speed_bps = "verifying", 0
+                entry.bytes_done = max(entry.bytes_done, entry.bytes_total)
+            elif kind == "retrying":
+                # The opted-in wait for a dropped connection: still downloading.
+                entry.state, entry.speed_bps = "downloading", 0
+                entry.error = entry.error_kind = None
+                entry.retrying_until = int(event.get("until") or 0)
+            elif kind == "error":
+                message = str(event.get("message") or "")
+                entry.error_kind = error_kind(message)
+                entry.state, entry.speed_bps = "failed", 0
+                entry.error = _failure_text(model_id, message, entry.error_kind)
+
+    def _settle_models(self, ready: Optional[set], failed: Dict[str, str]) -> None:
+        """After a run: downloaded models become ready, or failed when their
+        load check failed. Caller holds the lock."""
+        for entry in self._models.values():
+            if entry.id in failed:
+                entry.state, entry.error_kind = "failed", "verify"
+                entry.error = failed[entry.id]
+            elif entry.state == "verifying" and (ready is None or entry.id in ready):
+                entry.state = "ready"
 
     def _watch(self, run: SetupRun, proc: subprocess.Popen) -> None:
         """Run the setup thread; an unexpected error fails the run, never strands it."""
@@ -545,6 +847,8 @@ class SetupRunner:
                 return
             if code != 0:
                 run.state = "failed"
+                # What finished downloading stays downloaded.
+                self._settle_models(None, {})
                 if problem is not None:
                     # The raw exception stays in the log, behind "Details".
                     run.problem, run.error = problem, problem["message"]
@@ -567,9 +871,19 @@ class SetupRunner:
         except SetupError as e:
             with self._lock:
                 run.state, run.error = "failed", str(e)
+                self._settle_models(None, {})
             return
+        loads = status.get("models") or []
+        failed = {
+            m["id"]: f"{m['id']} is downloaded but would not load: {m.get('error')}"
+            for m in loads
+            if not m.get("loaded")
+        }
         with self._lock:
             run.status = status
+            self._settle_models(
+                {m["id"] for m in loads if m.get("loaded")} if loads else None, failed
+            )
             if status.get("ready"):
                 run.state, run.text = "ready", "GAIA is ready"
             else:
@@ -583,6 +897,14 @@ class SetupRunner:
         line = _ANSI_RE.sub("", line).strip()
         if not line:
             return
+        if line.startswith("{"):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                event = None
+            if isinstance(event, dict) and "event" in event:
+                self._on_event(event)
+                return
         progress = describe(line)
         with self._lock:
             run.log.append(line)

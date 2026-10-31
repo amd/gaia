@@ -829,6 +829,8 @@ def test_gaias_own_server_is_never_probed(users_server):
 def client(monkeypatch):
     runner = sr.SetupRunner()
     monkeypatch.setattr(setup_router, "runner", runner)
+    # The disk pre-flight has its own tests; here the drive always has room.
+    monkeypatch.setattr(setup_router.plan_api, "check_disk", lambda **_k: {})
     app = FastAPI()
     app.include_router(setup_router.router)
     return TestClient(app, headers={"X-Gaia-UI": "1"}), runner
@@ -923,7 +925,7 @@ def test_run_route_passes_the_switch_to_gaias_own(client, monkeypatch):
     test_client, runner = client
     seen = []
     monkeypatch.setattr(
-        runner, "start", lambda skip, gaia: seen.append((skip, gaia)) or {}
+        runner, "start", lambda skip, gaia, **_k: seen.append((skip, gaia)) or {}
     )
     test_client.post("/api/setup/run", json={"gaia_lemonade": True})
     test_client.post("/api/setup/run", json={})
@@ -975,3 +977,183 @@ def test_progress_is_still_read_through_colour_codes():
     )
 
     assert progress is not None and progress.percent == 45
+
+
+# ── per-model progress (#6226) ─────────────────────────────────────────────
+
+GEMMA = "Gemma-4-E4B-it-GGUF"
+EMBED = "user.embeddinggemma-300m-GGUF"
+QWEN = "Qwen3.6-35B-A3B-GGUF"
+
+
+def _plan_event(**extra):
+    return json.dumps(
+        {
+            "event": "plan",
+            "models": [
+                {"id": EMBED, "bytes_total": 330_000_000, "downloaded": True},
+                {"id": QWEN, "bytes_total": 23_300_000_000, "downloaded": False},
+            ],
+            "skipped": [GEMMA],
+            **extra,
+        }
+    )
+
+
+def _models(runner):
+    return {m["id"]: m for m in runner.status()["models"]}
+
+
+def test_run_args_ask_for_json_progress_and_pass_the_users_confirmations():
+    args = sr.run_args(False, allow_low_disk=True, keep_trying=True)
+    assert "--progress-json" in args
+    assert "--allow-low-disk" in args and "--keep-trying" in args
+    assert "--allow-low-disk" not in sr.run_args(False)
+    assert "--keep-trying" not in sr.run_args(False)
+
+
+def test_progress_json_lines_become_per_model_rows_not_log_lines():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._consume(run, _plan_event())
+    rows = _models(runner)
+    assert rows[EMBED]["state"] == "verifying"
+    assert rows[QWEN]["state"] == "queued"
+    assert rows[GEMMA]["state"] == "skipped"
+    runner._consume(
+        run,
+        json.dumps(
+            {
+                "event": "progress",
+                "model": QWEN,
+                "bytes_done": 3_300_000_000,
+                "bytes_total": 23_300_000_000,
+                "speed_bps": 20_000_000,
+            }
+        ),
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "downloading"
+    assert qwen["eta_s"] == 1000
+    assert qwen["downloaded_before_gb"] == 3.3
+    overall = runner.status()["overall"]
+    assert overall["bytes_total"] == 23_630_000_000
+    assert overall["speed_bps"] == 20_000_000
+    assert overall["percent"] == 15
+    assert run.log == []
+
+
+def test_a_full_disk_fails_the_model_with_what_to_do():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event(
+        {"event": "error", "model": QWEN, "message": "No space left on device"}
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "failed" and qwen["error_kind"] == "disk_full"
+    assert "Free some space" in qwen["error"] and qwen["can_retry"]
+    assert runner.status()["overall"]["failed"] == 1
+
+
+def test_keep_trying_shows_the_wait_not_a_failure():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event({"event": "error", "model": QWEN, "message": "Connection reset"})
+    runner._on_event({"event": "retrying", "model": QWEN, "until": 1_900_000_000})
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "downloading" and qwen["error"] is None
+    assert qwen["retrying_until"] == 1_900_000_000
+
+
+def test_a_finished_run_marks_what_loaded_ready_and_what_did_not_failed():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event({"event": "model_done", "model": QWEN, "downloaded": True})
+    with runner._lock:
+        runner._settle_models({EMBED}, {QWEN: "would not load"})
+    rows = _models(runner)
+    assert rows[EMBED]["state"] == "ready"
+    assert rows[QWEN]["state"] == "failed" and rows[QWEN]["error_kind"] == "verify"
+    assert rows[GEMMA]["state"] == "skipped"
+
+
+class _PullClient:
+    """Lemonade for one in-process pull: *events* streamed, then *ok*."""
+
+    def __init__(self, events, ok=True, gate=None):
+        self.events, self.ok, self.gate = events, ok, gate
+        self.calls = []
+
+    def ensure_model_downloaded(self, model_id, on_progress=None, **kwargs):
+        self.calls.append((model_id, kwargs))
+        if self.gate is not None:
+            self.gate.wait(5)
+        for event in self.events:
+            on_progress(event)
+        return self.ok
+
+
+def _wait_until(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_retry_downloads_one_model_in_process_with_a_valid_pull():
+    runner = sr.SetupRunner()
+    client = _PullClient(
+        [
+            {
+                "event": "progress",
+                "file": "m.gguf",
+                "bytes_downloaded": 5,
+                "bytes_total": 5,
+            },
+            {"event": "complete"},
+        ]
+    )
+    runner.download_model(client, GEMMA)
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "ready")
+    # A built-in pulls by name only; a recipe here 400s (#1655).
+    assert client.calls == [(GEMMA, {"timeout": 7200})]
+
+
+def test_a_failed_single_download_says_why_and_can_retry():
+    runner = sr.SetupRunner()
+    client = _PullClient(
+        [{"event": "error", "error": "Connection reset by peer"}], ok=False
+    )
+    runner.download_model(client, GEMMA)
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "failed")
+    row = _models(runner)[GEMMA]
+    assert row["error_kind"] == "network" and row["can_retry"]
+
+
+def test_one_model_cannot_download_twice_or_during_a_run():
+    runner = sr.SetupRunner()
+    gate = threading.Event()
+    runner.download_model(_PullClient([], gate=gate), GEMMA)
+    with pytest.raises(sr.SetupError, match="already downloading"):
+        runner.download_model(_PullClient([]), GEMMA)
+    with pytest.raises(sr.SetupError, match="still downloading"):
+        runner.start(False)
+    gate.set()
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "ready")
+    runner._run = sr.SetupRun(skip_chat_model=False)
+    with pytest.raises(sr.SetupError, match="Setup is running"):
+        runner.download_model(_PullClient([]), EMBED)
+
+
+def test_cancelling_one_download_marks_it_cancelled_and_resumable():
+    runner = sr.SetupRunner()
+    gate = threading.Event()
+    runner.download_model(_PullClient([], ok=False, gate=gate), GEMMA)
+    assert runner.cancel(GEMMA) is True
+    gate.set()
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "cancelled")
+    assert _models(runner)[GEMMA]["can_retry"]
+    assert runner.cancel("not-downloading") is False

@@ -175,6 +175,8 @@ class GaiaConfig:
             undone for this many days.
         undo_max_mb: Keep at most this many megabytes of those copies; the
             oldest turns go first. The size limit never removes the newest turn.
+        skipped_models: Models the user chose not to download. ``gaia init``
+            and first-run setup leave them out until the user asks for one.
     """
 
     profile: str = "chat"
@@ -191,6 +193,7 @@ class GaiaConfig:
     context_sizes: Dict[str, int] = field(default_factory=dict)
     undo_retention_days: int = 7
     undo_max_mb: int = 500
+    skipped_models: List[str] = field(default_factory=list)
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None
@@ -233,6 +236,8 @@ class GaiaConfig:
             return cls._coerce_lemonade_mode(value)
         if key == "lemonade_base_url":
             return cls._coerce_lemonade_url(value)
+        if key == "skipped_models":
+            return cls._coerce_model_list(value)
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
@@ -273,6 +278,19 @@ class GaiaConfig:
             return normalize_external_url(str(value))
         except LemonadeChoiceError as e:
             raise GaiaConfigError(f"lemonade_base_url: {e}") from e
+
+    @staticmethod
+    def _coerce_model_list(value: Any) -> List[str]:
+        """A list of model ids; the CLI passes them comma-separated."""
+        if isinstance(value, str):
+            value = [v for v in (p.strip() for p in value.split(",")) if v]
+        if not isinstance(value, list) or not all(
+            isinstance(v, str) and v.strip() for v in value
+        ):
+            raise GaiaConfigError(
+                f"skipped_models takes model ids, comma-separated, but got {value!r}."
+            )
+        return list(dict.fromkeys(v.strip() for v in value))
 
     @staticmethod
     def _whole_number(key: str, value: Any) -> int:
@@ -437,6 +455,16 @@ class GaiaConfig:
             )
         if "context_sizes" in data:
             cls._check_context_sizes(data["context_sizes"], config_file)
+        if "skipped_models" in data:
+            skipped = data["skipped_models"]
+            if not isinstance(skipped, list) or not all(
+                isinstance(v, str) for v in skipped
+            ):
+                raise GaiaConfigError(
+                    f"GAIA config at {config_file}: 'skipped_models' must be a "
+                    f"list of model ids, but it is {skipped!r}. Fix it by hand, "
+                    "or delete the key to download every model setup needs."
+                )
         if "custom_models" in data:
             from gaia.llm.custom_models import validate_entries
 
