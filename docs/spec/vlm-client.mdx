@@ -35,7 +35,7 @@ VLMClient provides Vision-Language Model capabilities for extracting text from i
 
 1. **Model Management**
    - Load VLM model (Gemma-4-E4B-it-GGUF)
-   - Missing-model guidance via Settings → Models or `gaia download --agent vlm`
+   - Missing-model guidance via Settings → Model or `gaia download --agent vlm`
    - Model availability checking
    - Every request re-checks the model is loaded at its required context size
 
@@ -131,11 +131,12 @@ class VLMClient:
             vlm_model: Vision model to use for image extraction
             base_url: Lemonade server API URL (defaults to LEMONADE_BASE_URL env var)
             auto_load: Load the VLM on each request when needed, at the
-                context size GAIA requires for it. A missing model is reported
-                before the request instead of being silently downloaded.
+                context size GAIA requires for it. A model the catalog lists as
+                missing is reported before the request instead of being silently
+                downloaded; an unlisted or unreachable catalog does not block.
 
         Note:
-            - A missing model is reported with Settings and CLI download guidance
+            - A catalog-known missing model is reported with Settings and CLI download guidance
             - base_url defaults to LEMONADE_BASE_URL, else GAIA's own Lemonade
 
         Environment Variables:
@@ -305,8 +306,8 @@ model-slot lease, then runs the request. The catalog precheck prevents a
 catalog-known missing model from starting a download. A load failure propagates
 and is re-raised as `VLMExtractionError` with the original error text and the
 cause attached. Because every request re-checks the load, a model evicted
-mid-batch is reloaded on the next page; a catalog-known missing model always
-gets the actionable download guidance above.
+mid-batch is reloaded on the next page; a model the catalog listed as missing
+at the first check gets the actionable download guidance above.
 
 ### Image Extraction
 

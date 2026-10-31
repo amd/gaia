@@ -433,8 +433,8 @@ smaller PC gets Gemma alone. A `default_model` you set yourself always wins and 
 downloaded instead of Gemma; if Lemonade explicitly reports the configured
 vision model as missing, image questions ask you to download it first (for the
 built-in VLM, use `gaia download --agent vlm`) instead of silently starting the
-download during image analysis. `--check`
-asks for the same models `gaia init` would download.
+download during image analysis. Gemma is about 6 GB, and `gaia init` also warns
+when it is missing. `--check` asks for the same models `gaia init` would download.
 </Note>
 
 <Note>
