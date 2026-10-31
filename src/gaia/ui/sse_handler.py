@@ -626,6 +626,10 @@ class SSEOutputHandler(OutputHandler):
         # email-relay turn, in lockstep with active_relay_response.
         self.active_relay_proxy: Optional[Any] = None
         self.active_relay_run_id: Optional[str] = None
+        # True only while an in-process agent is executing its query. A handler
+        # is registered before it contacts the daemon, so counting every
+        # handler would make the request that asks for a restart block itself.
+        self.in_process_turn_active = False
         # Only this id may be answered, so a late click cannot approve a newer one.
         self._relay_confirm_id = None
         self._relay_always_scope = None

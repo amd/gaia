@@ -132,16 +132,18 @@ _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 _background_tasks: set = set()
 
 
-def relayed_turns_in_flight() -> Optional[str]:
-    """Why restarting the daemon now would cut off a chat's agent turn, or None.
+def active_turns_in_flight() -> Optional[str]:
+    """Why restarting the daemon now would cut off an Agent UI turn, or None.
 
-    These turns go straight to the agent, so the daemon cannot count them. A
-    chat still starting its turn has no relayed run yet and does not count.
+    The daemon cannot see turns this backend runs in-process or relays straight
+    to an agent. A chat still starting its turn, such as the one asking the
+    daemon whether it may restart, has neither and does not count.
     """
     running = sum(
         1
         for handler in list(_active_sse_handlers.values())
-        if getattr(handler, "active_relay_run_id", None) is not None
+        if getattr(handler, "in_process_turn_active", False)
+        or getattr(handler, "active_relay_run_id", None) is not None
     )
     if not running:
         return None
@@ -4417,7 +4419,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # and the next turn's pre-flight reloads an evicted model.
                 t_query = _time.monotonic()
                 result_holder["agent"] = agent
-                result = agent.process_query(query)
+                sse_handler.in_process_turn_active = True
+                try:
+                    result = agent.process_query(query)
+                finally:
+                    sse_handler.in_process_turn_active = False
                 logger.info(
                     "PERF process_query session=%s took=%.3fs",
                     session_id[:8],
