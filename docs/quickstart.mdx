@@ -342,7 +342,11 @@ Choose your platform and installation type:
     ```
 
     <Tip>
-      **With all extras:** `uv pip install -e ".[dev,talk,rag]"` for voice and document Q&A features.
+      **Following a guide next?** The [Agent Memory](/guides/memory), [Document Q&A](/guides/chat) and [Agent UI](/guides/agent-ui) guides need the `rag` and `ui` extras, which `[dev]` leaves out to keep the test install light:
+      ```powershell
+      uv pip install -e ".[dev,rag,ui]"
+      ```
+      Add `talk` for voice features.
     </Tip>
 
     ### Step 5: Verify Installation
@@ -409,10 +413,11 @@ Choose your platform and installation type:
     ```
 
     <Tip>
-      **With all extras:** Add `[talk,rag]` for voice and document Q&A features:
+      **Following a guide next?** The [Agent Memory](/guides/memory), [Document Q&A](/guides/chat) and [Agent UI](/guides/agent-ui) guides need the `rag` and `ui` extras, which `[dev]` leaves out to keep the test install light:
       ```bash
-      uv pip install -e ".[dev,talk,rag]"
+      uv pip install -e ".[dev,rag,ui]"
       ```
+      Add `talk` for voice features.
     </Tip>
 
     ### Step 5: Verify Installation
