@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -471,6 +472,12 @@ class RAGConfig:
     vlm_model: str = DEFAULT_MODEL_NAME
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
+    # Optional second-stage retrieval. Reranking is off until the user downloads
+    # a reranker in Settings → Models and turns it on explicitly.
+    enable_reranking: bool = False
+    reranking_model: Optional[str] = None
+    reranking_candidate_multiplier: int = 3
+    reranking_timeout: int = 30
     # Security settings
     allowed_paths: Optional[List[str]] = None
 
@@ -578,6 +585,8 @@ class RAGSDK:
         self.llm_client = None
         self.use_lemonade_embeddings = False
         self._embedding_cache = None  # content-keyed query-embed cache (lazy)
+        self._reranking_model: Optional[str] = None
+        self._reranking_checked = False
         self.index = None
         self.chunks = []
         self.indexed_files = set()
@@ -4238,13 +4247,102 @@ These positions indicate where to split the text."""
         snapshot = self._search_chunks(query)
         return snapshot["retrieved_chunks"], snapshot["scores"]
 
+    def _resolve_reranking_model(self) -> Optional[str]:
+        if not self.config.enable_reranking:
+            return None
+        if self._reranking_checked:
+            return self._reranking_model
+        try:
+            if self.llm_client is None:
+                from gaia.llm.lemonade_client import LemonadeClient
+
+                self.llm_client = LemonadeClient(base_url=self.config.base_url)
+            models = self.llm_client.list_models(show_all=False).get("data", [])
+        except Exception as error:
+            raise RuntimeError(
+                "Unable to inspect downloaded Lemonade rerankers. Ensure Lemonade Server is running and try again."
+            ) from error
+        requested = self.config.reranking_model
+        candidates = [
+            item
+            for item in models
+            if item.get("downloaded") is not False
+            and "reranking" in {str(label).lower() for label in item.get("labels", [])}
+        ]
+        if requested:
+            self._reranking_model = next(
+                (item.get("id") for item in candidates if item.get("id") == requested),
+                None,
+            )
+            if not self._reranking_model:
+                raise RuntimeError(
+                    f"Reranker {requested!r} is not downloaded. Download it in Settings -> Models, or clear reranking_model."
+                )
+        elif candidates:
+            self._reranking_model = candidates[0].get("id")
+        else:
+            raise RuntimeError(
+                "Reranking is enabled, but no downloaded model has the reranking label. Download a reranker in Settings -> Models, or disable enable_reranking."
+            )
+        self._reranking_checked = True
+        return self._reranking_model
+
+    def _rerank_candidates(
+        self, query: str, candidate_chunks: List[str], model: str
+    ) -> Tuple[List[int], List[float]]:
+        if len(candidate_chunks) < 2:
+            return list(range(len(candidate_chunks))), [1.0] * len(candidate_chunks)
+        try:
+            response = self.llm_client.rerank(
+                query,
+                candidate_chunks,
+                model=model,
+                timeout=self.config.reranking_timeout,
+            )
+            results = response.get("results")
+            if not isinstance(results, list):
+                raise ValueError("response has no results list")
+            order: List[int] = []
+            scores: List[float] = []
+            seen = set()
+            for item in results:
+                index = item.get("index") if isinstance(item, dict) else None
+                score = item.get("relevance_score") if isinstance(item, dict) else None
+                if (
+                    isinstance(index, bool)
+                    or not isinstance(index, int)
+                    or index < 0
+                    or index >= len(candidate_chunks)
+                    or index in seen
+                    or isinstance(score, bool)
+                    or not isinstance(score, (int, float))
+                    or not math.isfinite(float(score))
+                ):
+                    raise ValueError("response contains an invalid rerank result")
+                seen.add(index)
+                order.append(index)
+                # Stable sigmoid: math.exp overflows on large negative logits.
+                logit = float(score)
+                if logit >= 0:
+                    scores.append(1.0 / (1.0 + math.exp(-logit)))
+                else:
+                    scores.append(math.exp(logit) / (1.0 + math.exp(logit)))
+            if len(order) != len(candidate_chunks):
+                raise ValueError("response does not score every candidate")
+            return order, scores
+        except Exception as error:
+            raise RuntimeError(
+                f"Lemonade rerank failed for model {model}: {error}"
+            ) from error
+
     def _search_chunks(self, query: str) -> Dict[str, Any]:
-        """Retrieve relevant chunks and indices from a consistent snapshot."""
+        """Retrieve chunks from a snapshot, optionally reranking FAISS candidates."""
         snapshot = self._snapshot_query_state()
         chunks_snapshot = snapshot["chunks"]
         index_snapshot = snapshot["index"]
 
         self._load_embedder()
+        reranking_model = self._resolve_reranking_model()
 
         # Generate query embedding
         if self.config.show_stats:
@@ -4252,12 +4350,20 @@ These positions indicate where to split the text."""
         self.log.debug(f"Encoding query: {query[:50]}...")
         query_embedding = self._encode_query(query)
 
-        # Search for similar chunks
-        k = min(self.config.max_chunks, len(chunks_snapshot))
+        # Search for similar chunks; reranking widens the candidate pool
+        result_limit = min(self.config.max_chunks, len(chunks_snapshot))
+        multiplier = max(1, int(self.config.reranking_candidate_multiplier))
+        candidate_limit = (
+            min(len(chunks_snapshot), result_limit * multiplier)
+            if reranking_model
+            else result_limit
+        )
         if self.config.show_stats:
-            print(f"  🎯 Finding {k} most relevant chunks...")
+            print(f"  🎯 Finding {candidate_limit} most relevant chunks...")
         # pylint: disable=no-value-for-parameter
-        distances, indices = index_snapshot.search(query_embedding.astype("float32"), k)
+        distances, indices = index_snapshot.search(
+            query_embedding.astype("float32"), candidate_limit
+        )
 
         retrieved_indices = []
         retrieved_chunks = []
@@ -4271,6 +4377,18 @@ These positions indicate where to split the text."""
             retrieved_indices.append(idx)
             retrieved_chunks.append(chunks_snapshot[idx])
             scores.append(1.0 / (1.0 + float(dist)))
+
+        # A lone candidate keeps its vector score; there is nothing to reorder.
+        if reranking_model and len(retrieved_chunks) > 1:
+            order, rerank_scores = self._rerank_candidates(
+                query, retrieved_chunks, reranking_model
+            )
+            retrieved_indices = [retrieved_indices[i] for i in order]
+            retrieved_chunks = [retrieved_chunks[i] for i in order]
+            scores = rerank_scores
+        retrieved_indices = retrieved_indices[:result_limit]
+        retrieved_chunks = retrieved_chunks[:result_limit]
+        scores = scores[:result_limit]
 
         if self.config.show_stats:
             avg_relevance = sum(scores) / len(scores) if scores else 0.0
