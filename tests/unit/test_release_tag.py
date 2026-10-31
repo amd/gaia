@@ -384,20 +384,29 @@ def test_every_release_requests_the_website_redeploy_from_publish(publish):
     assert IS_RC not in job["if"]
     assert "!cancelled()" in job["if"]
     assert "needs.github-release.result == 'success'" in job["if"]
+    # After the installers attach, so the rebuild sees the final asset set --
+    # waited for, not required, so a failed attach never hides the release.
+    assert "github-release-installers" in job["needs"]
+    assert "github-release-installers" not in job["if"]
 
 
-def test_an_rc_builds_the_windows_setup_for_its_own_prerelease_only(publish):
-    tui = publish["rc-tui"]
-    assert IS_RC in tui["if"]
+def test_every_tag_builds_the_windows_setup_for_its_own_release(publish):
+    tui = publish["tui-installers"]
+    assert IS_RC not in tui["if"]
     assert tui["uses"] == "./.github/workflows/tui_installers.yml"
     # The macOS/Linux packages too (tests/unit/test_rc_terminal_installers.py).
     assert tui["with"].get("installers", True) is True
 
-    setup = publish["rc-windows-setup"]
-    assert IS_RC in setup["if"] and "!cancelled()" in setup["if"]
+    setup = publish["windows-setup"]
+    assert IS_RC not in setup["if"] and "!cancelled()" in setup["if"]
+    assert "environment" not in setup
     assert setup["uses"] == "./.github/workflows/windows_setup.yml"
-    # The flagship this RC run froze, not the lock's published build.
-    assert setup["with"]["sidecar"] == "artifact"
+    # An RC bundles the flagship its run froze; a final the lock's, which
+    # validate checked was released from this commit.
+    assert setup["with"]["sidecar"] == (
+        "${{ needs.validate.outputs.is_rc == 'true' && 'artifact' || 'pinned' }}"
+    )
+    assert f"({NOT_RC} || needs.rc-flagship.result == 'success')" in setup["if"]
     # This run's own desktop app build, never a published release.
     assert setup["with"]["agent_ui_publish_run_sha"] == "${{ github.sha }}"
     assert "agent_ui_release" not in setup["with"]
@@ -406,25 +415,26 @@ def test_an_rc_builds_the_windows_setup_for_its_own_prerelease_only(publish):
         assert job["with"]["version"] == "${{ needs.validate.outputs.npm_version }}"
 
     # A failed setup turns the run red instead of quietly shipping without it.
-    missing = publish["rc-windows-setup-missing"]
-    assert IS_RC in missing["if"]
-    assert "needs.rc-windows-setup.outputs.ok != 'true'" in missing["if"]
+    missing = publish["windows-setup-missing"]
+    assert IS_RC not in missing["if"]
+    assert "needs.windows-setup.outputs.ok != 'true'" in missing["if"]
     assert "exit 1" in missing["steps"][0]["run"]
 
 
 def test_the_windows_setup_attaches_only_after_its_smoke_test(publish):
     release = publish["github-release"]
-    assert "rc-windows-setup" in release["needs"]
-    # Waited for, never required: a final skips it and must still release.
-    assert "rc-windows-setup" not in release["if"]
-    gated = [s for s in release["steps"] if "rc-windows-setup" in s.get("if", "")]
+    assert "windows-setup" in release["needs"]
+    # Waited for, never required: a failed setup must not hold the release.
+    assert "windows-setup" not in release["if"]
+    gated = [s for s in release["steps"] if "windows-setup" in s.get("if", "")]
     assert gated, "the setup is attached without checking its smoke test"
     for step in gated:
-        assert step["if"] == f"{IS_RC} && needs.rc-windows-setup.outputs.ok == 'true'"
+        # For a final as well as an RC.
+        assert step["if"] == "needs.windows-setup.outputs.ok == 'true'"
 
 
 def test_terminal_binaries_on_the_release_exclude_the_setups_input(publish):
-    # rc-tui uploads `tui-binaries`; on the release it would duplicate
+    # tui-installers uploads `tui-binaries`; on the release it would duplicate
     # the six raw binaries under other names and enter their checksum file.
     (step,) = _steps(publish["github-release"], "Download TUI binaries")
     assert step["with"]["pattern"] == "tui-{linux,darwin,windows}-*"
