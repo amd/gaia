@@ -9,10 +9,10 @@ future C++ build both conform to it. This module both *produces* that artifact
 and lets CI *diff* it, so a route or schema change that isn't regenerated fails
 loudly instead of silently drifting from the published contract.
 
-The spec is built from a minimal FastAPI app that mounts ONLY the email router —
-the same ``gaia_agent_email.api_routes.router`` the product server
-(``gaia.api.openai_server``) and the freeze server mount — so the exported spec
-is byte-for-byte what a host serves, with none of the unrelated ``gaia api``
+The spec is built from a minimal FastAPI app that mounts the email routers —
+the same stateless, stateful-agent, and connection-intake routers the product
+server (``gaia.api.openai_server``) and the freeze server mount — so the exported
+spec is byte-for-byte what a host serves, with none of the unrelated ``gaia api``
 routes.
 
 Usage::
@@ -54,6 +54,7 @@ def build_app():
     """
     from fastapi import FastAPI
     from gaia_agent_email import caller_auth
+    from gaia_agent_email.agent_routes import router as agent_router
     from gaia_agent_email.api_routes import router as email_router
     from gaia_agent_email.connection_intake_routes import (
         router as connection_intake_router,
@@ -65,6 +66,9 @@ def build_app():
         description=OPENAPI_DESCRIPTION,
     )
     app.include_router(email_router)
+    # Stateful Agent UI surface (/v1/email/agent/*) is part of the published
+    # sidecar contract, not merely an internal server route.
+    app.include_router(agent_router)
     # OAuth forward-out intake (#2154) — part of the frozen sidecar contract
     # (schema 2.5), so it belongs in the published artifact, unlike the
     # playground-only connector routes (include_in_schema=False).
