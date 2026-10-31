@@ -40,6 +40,7 @@ from gaia.eval.claude_outage import (
     QUOTA,
     UNREACHABLE,
     classify_driver_failure,
+    switch_to_backup_account,
 )
 from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
 from gaia.eval.config import DEFAULT_AGENT_TYPE
@@ -275,13 +276,49 @@ def _write_trace(run_dir, result: dict) -> None:
     )
 
 
+def _stop_reason(stopped: dict, switches: list) -> str:
+    """Why a stopped run stopped, in one clause, naming every reset time."""
+    resets = stopped.get("resets") or "not stated"
+    if stopped["kind"] == QUOTA and switches:
+        last = switches[-1]
+        return (
+            "both Claude accounts are out of quota (the "
+            f"{last['from']} account resets {last.get('from_resets') or 'not stated'}; "
+            f"the {last['to']} account resets {resets})"
+        )
+    if stopped["kind"] == QUOTA:
+        return (
+            f"the Claude account is out of quota (resets {resets}) and there was no "
+            "backup account to switch to"
+        )
+    if stopped["kind"] == CREDENTIAL:
+        return "the Claude credential was rejected"
+    return "Claude never answered"
+
+
+def _partial(stopped: dict, total: int, switches: list) -> dict:
+    """The ``partial`` block: how much of a stopped run produced results, and why."""
+    not_run = len(stopped["not_run"])
+    ran = total - not_run
+    reason = _stop_reason(stopped, switches)
+    return {
+        "ran": ran,
+        "total": total,
+        "not_run": not_run,
+        "reason": reason,
+        "summary": f"partial: {ran} of {total} ran, stopped because {reason}",
+    }
+
+
 def _outage_report(stopped: dict, total: int) -> str:
     """The multi-line stop message: what failed, for whom, and how to resume."""
     not_run = stopped["not_run"]
     done = total - len(not_run)
+    partial = stopped.get("partial") or {}
     lines = [
         f"{stopped['headline']} during {stopped['after_scenario']} (scenario "
         f"{stopped['position']} of {total}). Stopped; nothing after it was started.",
+        *([f"  INCOMPLETE: {partial['summary']}."] if partial else []),
         f"  Account: {stopped.get('account')}",
         f"  Resets:  {stopped.get('resets') or 'not stated in the error'}",
         f"  Claude:  {stopped.get('detail')}",
@@ -292,6 +329,20 @@ def _outage_report(stopped: dict, total: int) -> str:
         f"  In CI, re-dispatch them instead: -f scenarios={','.join(not_run)}",
     ]
     return "\n".join(lines)
+
+
+def _announce_switch(switch: dict) -> None:
+    """Say loudly that the rest of the run uses the other Claude account."""
+    message = (
+        f"The {switch['from']} Claude account is out of quota during "
+        f"{switch['during_scenario']} (resets "
+        f"{switch.get('from_resets') or 'not stated'}). Switching to the "
+        f"{switch['to']} account and re-running {switch['during_scenario']}; "
+        "the run stops if that account is out of quota too."
+    )
+    print(f"\n[ACCOUNT SWITCH] {message}", flush=True)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::warning title=Claude account switched mid-run::{message}", flush=True)
 
 
 def _cli_payload(stdout):
@@ -2496,6 +2547,8 @@ def aggregate_scorecard(
     scorecard = build_scorecard(run_id, results, config)
     if stopped is not None:
         scorecard["stopped"] = stopped
+        if stopped.get("partial"):
+            scorecard["partial"] = stopped["partial"]
     scorecard_path = run_dir / f"{filename_prefix}.json"
     scorecard_path.write_text(
         json.dumps(scorecard, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -3012,7 +3065,12 @@ def compare_scorecards(baseline_path, current_path):
                 f"    {e['scenario_id']:<40} {e['baseline_status']} → {e['current_status']}"
             )
 
+    partial = current.get("partial") or {}
     print(f"\n{'='*70}")
+    if partial:
+        # The run stopped part-way; its NOT_RUN scenarios are excluded above,
+        # so whatever follows describes only the part that ran.
+        print(f"[INCOMPLETE] {partial.get('summary')}.")
     if unmeasured:
         # Loud on purpose: this verdict is silent about these scenarios, and a
         # clean verdict over an incomplete run is the one way this comparison can
@@ -3033,7 +3091,7 @@ def compare_scorecards(baseline_path, current_path):
         )
     # An [OK] over an incomplete run is the misleading line; the WARN above says
     # what is missing, so do not follow it with a clean bill of health.
-    if not regressed and not score_regressed and not unmeasured:
+    if not regressed and not score_regressed and not unmeasured and not partial:
         if improved:
             print(
                 f"[OK]   Net improvement: {len(improved)} scenario(s) fixed, 0 regressions."
@@ -3053,6 +3111,7 @@ def compare_scorecards(baseline_path, current_path):
         "corpus_changed": corpus_changed,
         "unmeasured": unmeasured,
         "not_run": not_run,
+        "incomplete": partial or None,
     }
 
 
@@ -3082,6 +3141,8 @@ class AgentEvalRunner:
         self.results_dir = Path(results_dir) if results_dir else RESULTS_DIR
         self.extra_scenario_dirs = extra_scenario_dirs or []
         self.extra_corpus_dirs = extra_corpus_dirs or []
+        # Claude account switches made by the current _execute call (labels only).
+        self._account_switches = []
         self.tags = tags or []
         self.exclude_tags = exclude_tags or []
         if iterations is None:
@@ -3220,6 +3281,44 @@ class AgentEvalRunner:
                 print(f"  - {e}", file=sys.stderr)
             sys.exit(1)
 
+    def _attempts(self, scenario_path, scenario_data, run_dir, timeout, keep_sessions):
+        """Run one scenario ``self.iterations`` times; stops early on an outage."""
+        sid = scenario_data["id"]
+        # Repeat the scenario N times so a flaky result is distinguishable
+        # from a hard failure — at N=1 they are indistinguishable.
+        attempts = []
+        for attempt_idx in range(1, self.iterations + 1):
+            if self.iterations > 1:
+                print(
+                    f"[RUN] {sid} — iteration {attempt_idx}/{self.iterations}",
+                    flush=True,
+                )
+            attempts.append(
+                run_scripted_scenario(
+                    scenario_path,
+                    scenario_data,
+                    run_dir,
+                    self.backend_url,
+                    self.model,
+                    self.budget,
+                    timeout,
+                    keep_sessions=keep_sessions,
+                    extra_corpus_dirs=(
+                        self.extra_corpus_dirs if self.extra_corpus_dirs else None
+                    ),
+                    # One run scores one agent (#4096) -- a scenario's own
+                    # agent_type is rejected at load time, never honoured.
+                    agent_type=self.agent_type,
+                    attempt=(attempt_idx if self.iterations > 1 else None),
+                    agent_model=self.agent_model,
+                )
+            )
+            if attempts[-1].get("backend_not_idle") or attempts[-1].get(
+                "claude_outage"
+            ):
+                break
+        return attempts
+
     def _execute(self, scenarios, run_dir, downloaded_models, keep_sessions, kept=None):
         """Run *scenarios* in order; returns ``(results, aborted, outage)``.
 
@@ -3228,6 +3327,7 @@ class AgentEvalRunner:
         once and records every scenario after it as ``NOT_RUN``.
         """
         kept = kept or {}
+        self._account_switches = []
         results = []
         infra_streak = []
         unexplained = 0
@@ -3263,49 +3363,45 @@ class AgentEvalRunner:
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
-            # Repeat the scenario N times so a flaky result is distinguishable
-            # from a hard failure — at N=1 they are indistinguishable.
-            attempts = []
-            for attempt_idx in range(1, self.iterations + 1):
-                if self.iterations > 1:
-                    print(
-                        f"[RUN] {sid} — iteration {attempt_idx}/{self.iterations}",
-                        flush=True,
-                    )
-                attempts.append(
-                    run_scripted_scenario(
-                        scenario_path,
-                        scenario_data,
-                        run_dir,
-                        self.backend_url,
-                        self.model,
-                        self.budget,
-                        effective_timeout,
-                        keep_sessions=keep_sessions,
-                        extra_corpus_dirs=(
-                            self.extra_corpus_dirs if self.extra_corpus_dirs else None
-                        ),
-                        # One run scores one agent (#4096) -- a scenario's own
-                        # agent_type is rejected at load time, never honoured.
-                        agent_type=self.agent_type,
-                        attempt=(attempt_idx if self.iterations > 1 else None),
-                        agent_model=self.agent_model,
-                    )
+            # Attempts refused on an account the run then switched away from:
+            # they measured nothing, but their usage is still reported.
+            refused = []
+            while True:
+                attempts = self._attempts(
+                    scenario_path,
+                    scenario_data,
+                    run_dir,
+                    effective_timeout,
+                    keep_sessions,
                 )
-                if attempts[-1].get("backend_not_idle") or attempts[-1].get(
-                    "claude_outage"
-                ):
+                tripped = next((a for a in attempts if a.get("claude_outage")), None)
+                if tripped is None or tripped["claude_outage"]["kind"] != QUOTA:
                     break
-            tripped = next((a for a in attempts if a.get("claude_outage")), None)
+                switch = switch_to_backup_account(tripped["claude_outage"])
+                if switch is None:
+                    break
+                switch["during_scenario"] = sid
+                self._account_switches.append(switch)
+                refused.extend(attempts)
+                _announce_switch(switch)
             if tripped is not None:
                 # Earlier attempts measured something, but the scenario as a
                 # whole did not finish; resume re-runs every attempt.
                 result = dict(tripped)
-                usage = merge_scenario_usage(a.get("claude_usage") for a in attempts)
+                usage = merge_scenario_usage(
+                    a.get("claude_usage") for a in refused + attempts
+                )
                 if usage is not None:
                     result["claude_usage"] = usage
             else:
                 result = summarize_attempts(attempts)
+                if refused:
+                    usage = merge_scenario_usage(
+                        [u for u in [result.get("claude_usage")] if u]
+                        + [a.get("claude_usage") for a in refused]
+                    )
+                    if usage is not None:
+                        result["claude_usage"] = usage
             # The trace is what --resume and the artifacts read, so it carries
             # the summarized, stamped result -- never one attempt.
             _stamp_run_info(result, self._commit)
@@ -3369,6 +3465,7 @@ class AgentEvalRunner:
     def _finish(self, results, run_id, run_dir, config, aborted, outage):
         """Write the scorecard, print the summary, and exit on a stopped run."""
         stopped = None
+        switches = self._account_switches
         if outage is not None:
             not_run = [r["scenario_id"] for r in results if _needs_resume(r)]
             stopped = {
@@ -3377,8 +3474,14 @@ class AgentEvalRunner:
                 "not_run": not_run,
                 "resume": f'gaia eval agent --resume "{run_dir}"',
             }
+            stopped["partial"] = _partial(stopped, len(results), switches)
         # The one local model this run may claim; --compare checks it.
         config = {**config, "agent_model": run_agent_model(results, self.agent_model)}
+        if switches:
+            config["claude_account_switches"] = [
+                *(config.get("claude_account_switches") or []),
+                *switches,
+            ]
         scorecard = aggregate_scorecard(
             results, run_id, run_dir, config, stopped=stopped
         )

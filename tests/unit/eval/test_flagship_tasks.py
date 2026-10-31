@@ -874,9 +874,12 @@ def fake_agent(monkeypatch, tmp_path):
 def test_the_agent_never_sees_the_judges_credentials(fake_agent, tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-secret")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key-secret")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN_BACKUP", "backup-secret")
     ft.run_suite("one", "some-model", tmp_path / "out", tasks_file=fake_agent)
     assert _FakeAgent.seen[0]["credentials"] == {
         "CLAUDE_CODE_OAUTH_TOKEN": None,
+        "CLAUDE_CODE_OAUTH_TOKEN_BACKUP": None,
+        "CLAUDE_CODE_OAUTH_TOKEN_SECONDARY": None,
         "ANTHROPIC_API_KEY": None,
     }
 
