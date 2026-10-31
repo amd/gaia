@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). This client pins `SCHEMA_VERSION` **2.14**, matching
+[`SKILL.md`](./SKILL.md). This client pins `SCHEMA_VERSION` **2.15**, matching
 the sidecar's current contract — every schema bump since 2.4 has been additive
 (see `contract.py`'s own per-version changelog for the full log), so nothing
 here is a breaking upgrade for an existing integration.
@@ -903,10 +903,11 @@ instead of a throwaway per-call agent (2.12, #2829),
 `EmailPreScanResult.suspicious`/`suspicious_total`: the phishing/spam-flagged
 subset of `actionable`, captured before its own cap so a flagged message
 ranked past it is never silently dropped from the count (2.13, #2900), and —
-current, `SCHEMA_VERSION = "2.14"` — a third mailbox provider value,
-`microsoft_work` (work Microsoft 365 / Entra, distinct from the personal
-`microsoft` Outlook.com connector), now valid wherever a provider string is
-accepted or returned (#2629).
+a third mailbox provider value, `microsoft_work` (work Microsoft 365 / Entra,
+distinct from the personal `microsoft` Outlook.com connector), now valid
+wherever a provider string is accepted or returned (2.14, #2629), and —
+current, `SCHEMA_VERSION = "2.15"` — the stateful `/v1/email/agent/*` routes
+listed in the published OpenAPI document; no shape changed (#6043).
 
 They are hand-written (vs. generated from `/openapi.json`) because the contract is
 small and version-gated, keeping the published package free of a typegen build
