@@ -1874,6 +1874,50 @@
     "title": "GoalStatusUpdate",
     "type": "object"
   },
+  "GpuMemoryApplyRequest": {
+    "properties": {
+      "confirm": {
+        "default": false,
+        "title": "Confirm",
+        "type": "boolean"
+      },
+      "setting_gb": {
+        "description": "GPU memory to set, in decimal GB (10**9 bytes).",
+        "title": "Setting Gb",
+        "type": "number"
+      }
+    },
+    "required": [
+      "setting_gb"
+    ],
+    "title": "GpuMemoryApplyRequest",
+    "type": "object"
+  },
+  "GpuMemoryPendingRequest": {
+    "properties": {
+      "setting_gb": {
+        "description": "GPU memory to set, in decimal GB (10**9 bytes).",
+        "title": "Setting Gb",
+        "type": "number"
+      }
+    },
+    "required": [
+      "setting_gb"
+    ],
+    "title": "GpuMemoryPendingRequest",
+    "type": "object"
+  },
+  "GpuMemoryRevertRequest": {
+    "properties": {
+      "confirm": {
+        "default": false,
+        "title": "Confirm",
+        "type": "boolean"
+      }
+    },
+    "title": "GpuMemoryRevertRequest",
+    "type": "object"
+  },
   "GrantRequest": {
     "properties": {
       "scopes": {
