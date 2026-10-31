@@ -95,8 +95,9 @@ class VLMClient:
         Args:
             vlm_model: Vision model to use for image extraction
             base_url: Lemonade server API URL (defaults to LEMONADE_BASE_URL env var)
-            auto_load: Load (and download if missing) the VLM on each request,
-                at the context size GAIA requires for it
+            auto_load: Load the VLM on each request when needed. A missing
+                model is reported before the request instead of being silently
+                downloaded during image analysis.
             api_key: API key for an authenticated Lemonade server. Forwarded
                 AS-IS to the inner ``LemonadeClient``, which handles the
                 ``LEMONADE_API_KEY`` env-var fallback. VLMClient does NOT
@@ -224,6 +225,31 @@ Output format: Clean markdown with the ACTUAL text from the image."""
         ]
 
         try:
+            # Do not hide a multi-GB first-use download inside an image tool.
+            # This is especially important for gateway-only installs, where
+            # the chat model may be remote and ``gaia init`` deliberately did
+            # not pull the local vision model.  ``get_model_info`` is a
+            # best-effort preflight: non-Lemonade/OpenAI-compatible endpoints
+            # may not expose the catalog, so their normal request error remains
+            # authoritative.
+            try:
+                model_info = self.client.get_model_info(self.vlm_model)
+            except Exception:  # noqa: BLE001 - preserve the request's error
+                model_info = None
+            if isinstance(model_info, dict) and model_info.get("downloaded") is False:
+                size = model_info.get("size_gb")
+                size_hint = (
+                    f" (about {size:g} GB)" if isinstance(size, (int, float)) else ""
+                )
+                raise VLMExtractionError(
+                    f"Vision model '{self.vlm_model}' is not downloaded{size_hint}. "
+                    "Download it from Settings → Model or run `gaia init`, then "
+                    "retry the image request. GAIA will not download it during "
+                    "image analysis.",
+                    page_num,
+                    image_num,
+                )
+
             import time
 
             start_time = time.time()

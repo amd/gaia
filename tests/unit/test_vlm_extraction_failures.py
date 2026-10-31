@@ -57,6 +57,28 @@ class TestTheThreeFailureSites:
         with pytest.raises(VLMExtractionError):
             vlm.extract_from_image(b"fake-png")
 
+    def test_a_missing_model_is_reported_before_image_analysis_starts(self, vlm):
+        vlm.client.get_model_info.return_value = {
+            "id": "Gemma-4-E4B-it-GGUF",
+            "downloaded": False,
+            "size_gb": 5.56,
+        }
+
+        with pytest.raises(VLMExtractionError, match="Settings → Model") as excinfo:
+            vlm.extract_from_image(b"fake-png")
+
+        assert "5.56 GB" in str(excinfo.value)
+        vlm.client.chat_completions.assert_not_called()
+
+    def test_a_catalog_failure_does_not_hide_the_request_error(self, vlm):
+        vlm.client.get_model_info.side_effect = ConnectionError("catalog unavailable")
+        vlm.client.chat_completions.return_value = {
+            "choices": [{"message": {"content": "text"}}]
+        }
+
+        assert vlm.extract_from_image(b"fake-png") == "text"
+        vlm.client.chat_completions.assert_called_once()
+
     def test_a_cancelled_wait_for_the_model_is_a_stop_not_a_failed_page(self, vlm):
         from gaia.daemon.broker_client import LeaseWaitCancelled
 
