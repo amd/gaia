@@ -64,6 +64,12 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   tool schemas (~12K more tokens per call) for every later session, so a single
   DeepSeek reply in its own format cost every run after it. The switch now
   lasts only for the session that wrote the markup.
+- **`run_python` can check a project's own code.** Any `import gaia…` was
+  refused, so inside a GAIA checkout the agent copied code into the snippet by
+  hand and reported the copy's output as proof. Only reaching for one of its
+  tools through `gaia` (`from gaia import write_file`) is refused now, and a
+  `src/`-layout project has `src/` on the path so its modules import from the
+  checkout, not an installed copy. `execute_python_file` gets the same path.
 - **The doc profile names a search tool it has.** Its discovery rules told the
   model to start with `find_files`, which that profile does not register, so the
   first discovery step failed. They now name `search_file`, which it does

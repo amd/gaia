@@ -315,19 +315,25 @@ def test_importing_a_gaia_tool_is_refused_with_the_tool_call_path(
     assert "ImportError" not in result["error"]
 
 
+_TOOLS = {"transcribe_media", "write_file", "read_file", "install_skill"}
+
+
 @pytest.mark.parametrize(
     "code",
     [
         "from gaia import transcribe_media",
-        "from gaia.agents.base.tools import tool",
-        "import gaia",
-        "import gaia.agents",
         "print(1)\nfrom gaia import write_file",
-        "    from gaia import write_file",
+        "if True:\n    from gaia import write_file",
+        "from gaia import cli, write_file",
+        "from gaia import write_file as save",
+        "import gaia\ngaia.write_file('a.txt', 'x')",
+        "import gaia as g\ng.read_file('a.txt')",
+        # ``import gaia.x`` binds ``gaia`` too.
+        "import gaia.agents\ngaia.transcribe_media('a.mp4')",
     ],
 )
-def test_gaia_imports_are_detected(code):
-    assert _imports_gaia_tools(code) is not None
+def test_importing_a_tool_through_gaia_is_detected(code):
+    assert _imports_gaia_tools(code, _TOOLS) is not None
 
 
 @pytest.mark.parametrize(
@@ -338,13 +344,33 @@ def test_gaia_imports_are_detected(code):
         "from pathlib import Path\nprint(Path('.').resolve())",
         # A different package whose name merely starts with the same letters.
         "import gaiatools",
-        "from gaiatools import helper",
+        "from gaiatools import write_file",
         # Only a mention, not an import.
-        "print('run from gaia import x to see it fail')",
+        "print('run from gaia import write_file to see it fail')",
+        "# from gaia import write_file\nprint(1)",
+        # The project's own modules, in a GAIA checkout.
+        "import gaia",
+        "import gaia.agents",
+        "from gaia.agents.base.tools import tool",
+        "from gaia.agents.base.claims import action_claims, claims_success",
+        "from gaia import cli",
+        # A module function that shares a tool's name is real code, not the tool.
+        "from gaia.skills.install import install_skill",
+        "import gaia.skills.install as m\nm.install_skill",
+        "import gaia.agents\ngaia.agents.write_file",
+        # Relative imports are the project's own.
+        "from .gaia import write_file",
+        # Not Python: the interpreter reports it, with the line.
+        "from gaia import write_file(",
+        "    from gaia import write_file",
     ],
 )
-def test_ordinary_snippets_are_not_flagged(code):
-    assert _imports_gaia_tools(code) is None
+def test_ordinary_and_project_imports_are_not_flagged(code):
+    assert _imports_gaia_tools(code, _TOOLS) is None
+
+
+def test_with_no_tools_known_nothing_is_flagged():
+    assert _imports_gaia_tools("from gaia import write_file", set()) is None
 
 
 def test_a_flagged_snippet_never_reaches_a_subprocess(
@@ -359,6 +385,71 @@ def test_a_flagged_snippet_never_reaches_a_subprocess(
 
     assert result["status"] == "error"
     spawn.assert_not_called()
+
+
+@pytest.fixture
+def src_checkout(tmp_path):
+    """A ``src/``-layout checkout of a package named ``gaia``, like this repo."""
+    root = tmp_path / "checkout"
+    package = root / "src" / "gaia"
+    (package / "agents").mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "agents" / "__init__.py").write_text("", encoding="utf-8")
+    (package / "marker.py").write_text("WHERE = 'this checkout'\n", encoding="utf-8")
+    (root / "pyproject.toml").write_text("[project]\nname = 'gaia'\n")
+    return root.resolve()
+
+
+def test_a_src_layout_checkout_imports_its_own_code(
+    make_run_python, src_checkout, monkeypatch
+):
+    """Inside the project's own repo, its modules import from the checkout.
+
+    Refusing every ``gaia`` import here, or resolving it to the installed copy,
+    left the model hand-copying code and reporting the copy's output as proof.
+    """
+    monkeypatch.chdir(src_checkout)
+    _agent, run_python = make_run_python(src_checkout)
+
+    result = run_python(
+        code="from gaia.marker import WHERE\nimport gaia\nprint(WHERE, gaia.__file__)"
+    )
+
+    assert result["status"] == "success", result
+    assert "this checkout" in result["stdout"]
+    assert str(src_checkout / "src") in result["stdout"]
+
+
+def test_an_empty_src_folder_is_not_put_on_the_path(make_run_python, project):
+    """``src/`` with no package (a JS app's, say) adds nothing to the path."""
+    from gaia_agent.chat_agent import _project_import_paths
+
+    assert _project_import_paths(project) == [str(project)]
+
+
+def test_a_tool_imported_from_a_submodule_gets_the_tool_hint(
+    make_run_python, src_checkout, monkeypatch
+):
+    """Not refused up front (a module may define that name); explained if it fails."""
+    monkeypatch.chdir(src_checkout)
+    _agent, run_python = make_run_python(src_checkout)
+
+    result = run_python(code="from gaia.agents import run_python")
+
+    assert result["status"] == "error"
+    assert "call it directly as a tool" in result.get("note", "")
+
+
+def test_an_unrelated_import_error_gets_no_tool_hint(
+    make_run_python, src_checkout, monkeypatch
+):
+    monkeypatch.chdir(src_checkout)
+    _agent, run_python = make_run_python(src_checkout)
+
+    result = run_python(code="from gaia.agents import not_a_tool_name")
+
+    assert result["status"] == "error"
+    assert "directly as a tool" not in result.get("note", "")
 
 
 def test_the_docstring_warns_against_importing_tools(make_run_python, project):
