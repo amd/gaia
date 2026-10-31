@@ -67,14 +67,34 @@ FAILED_RUN_ENDINGS = [
         id="issue-turn1-full-ending",
     ),
     pytest.param(
-        "**Step 2/3:** read each report.\n\nThe third report is next.",
+        "The totals need every report.\n\n### Execution Step 1/3",
         "narration",
-        id="stopped-before-the-last-step",
+        id="ends-on-a-bare-step-heading",
     ),
     pytest.param(
         "Starting with the Central region report now!",
         "narration",
         id="starting-with-now-exclaimed",
+    ),
+    pytest.param(
+        "Starting on the Central report now.",
+        "narration",
+        id="starting-on-now",
+    ),
+    pytest.param(
+        "I'm starting with the West region report now.",
+        "narration",
+        id="im-starting-with-now",
+    ),
+    pytest.param(
+        "I’m starting by reading the first report now.",
+        "narration",
+        id="im-starting-curly-apostrophe",
+    ),
+    pytest.param(
+        "Starting with the first file now...",
+        "narration",
+        id="starting-with-now-ellipsis",
     ),
     pytest.param(
         "`duplicate` is on #5. Second write:",
@@ -243,12 +263,93 @@ COMPLETED_ANSWERS = [
         "Step 3/3 done.\n\nRevenue is $41.2M.",
         id="last-step-reached",
     ),
+    # Finished answers an earlier draft of the "starting now" / step rules
+    # sent back to work.
+    pytest.param(
+        "Step 1/3: install. Step 2/3: configure. Step 3/3: run.",
+        id="steps-on-one-line",
+    ),
+    pytest.param(
+        "Step 10/12 is where most users fail, so read it carefully. "
+        "Everything else is fine.",
+        id="step-named-in-a-sentence",
+    ),
+    pytest.param(
+        "Step 1/3: download.\nStep 2/3: unzip.\nStep 3 (optional): run gaia init.",
+        id="last-step-unnumbered",
+    ),
+    pytest.param(
+        "Starting with Windows 11 24H2 you can do this now.",
+        id="starting-with-a-release-then-a-clause",
+    ),
+    pytest.param(
+        "Step 2/5: you're configuring the network. Click Next when ready.",
+        id="step-with-instructions",
+    ),
+    pytest.param(
+        "Step 1/2 of the migration is done; step 2 runs tonight at 2am.",
+        id="step-status-report",
+    ),
+    pytest.param(
+        "Starting with the basics is the best approach for now.",
+        id="starting-with-as-a-subject",
+    ),
 ]
 
 
 @pytest.mark.parametrize("answer", COMPLETED_ANSWERS)
 def test_completed_answers_are_not_caught(answer):
     assert _unfinished_answer_kind(answer) is None
+
+
+# Realistic finished answers that mention steps, plans, "starting" or "now".
+# A wrong re-prompt costs the user a whole turn, so none of these may trip.
+FINISHED_CORPUS = [
+    "Your laptop is ready now.",
+    "The build passes now.",
+    "Starting today, the office opens at 8am.",
+    "Starting in 2027, the API requires a key.",
+    "Starting with GAIA 0.25, the daemon restarts itself after an update.",
+    "Starting from scratch is usually faster than fixing that config.",
+    "Starting with the basics is the best approach for now.",
+    "Starting with Windows 11 24H2 you can do this now.",
+    "Starting by the river, the trail climbs 300 m to the ridge.",
+    "I'm starting to see why: the cache key ignores the model id.",
+    "I'm starting with good news: all 26 tests pass.",
+    "Starting on Monday, standups move to 9:30.",
+    "Starting with version 2.0, uploads are faster now.",
+    "It's working now. Let me know if anything else breaks.",
+    "Right now there are 14 open issues and 3 open PRs.",
+    "For now, keep the default model; the larger one needs 64 GB.",
+    "Done. The report is saved to C:/reports/q2_summary.md.",
+    "Step 1/3: install. Step 2/3: configure. Step 3/3: run.",
+    "Step 10/12 is where most users fail, so read it carefully. "
+    "Everything else is fine.",
+    "Step 2/5: you're configuring the network. Click Next when ready.",
+    "Step 1/2 of the migration is done; step 2 runs tonight at 2am.",
+    "Steps:\n1. Open Settings.\n2. Pick a model.\n3. Click Save.\n\n"
+    "That's it; the new model loads on your next message.",
+    "## Step 1/2\nInstall the driver.\n\n## Step 2/2\nReboot.",
+    "### Step 1/3\nDownload the installer.\n\n### Step 2/3\nRun it.\n\n"
+    "### Step 3/3\nSign in.",
+    "Step 3 of 3 is complete, so the migration is finished.",
+    "The plan is approved and the team starts Monday.",
+    "Your new plan costs $30/month and starts on the 1st.",
+    "We're now on step 4 of 4: everything is deployed.",
+    "Total revenue across the eight reports is $41.2M. Central and West "
+    "missed target; the other six met it.",
+    "I listed the folder: 8 reports, all from Q2 2026.",
+    "Now the totals match: $41.2M in both the sheet and the summary.",
+    "Starting with Python 3.12, f-strings support nested quotes, so your "
+    "snippet is valid now.",
+    "The fix is in. Starting now, failed uploads retry three times.",
+]
+
+
+def test_a_corpus_of_finished_answers_is_never_flagged():
+    flagged = [a for a in FINISHED_CORPUS if _unfinished_answer_kind(a) is not None]
+    assert len(FINISHED_CORPUS) >= 30
+    assert flagged == []
 
 
 # ---------------------------------------------------------------------------

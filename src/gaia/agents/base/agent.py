@@ -1340,7 +1340,13 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
     r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+)?"
     r"(?:executing step|first step|(?:my|our) next step"
     r"|now,? i need to|now,? i'll|now,? i will|i'll now|i will now"
-    r"|starting\s+(?:with|by)\b[^,;]*\bnow(?::|[.!]?$)"
+    # "Starting with X now." where X is a short object, never a clause:
+    # "Starting with Windows 11 you can do this now." is a finished answer.
+    r"|(?:i'm |i am )?starting\s+(?:with|by|on)\s+"
+    r"(?:(?!(?:you|we|they|it|this|that|there|is|are|was|were|can|could|will"
+    r"|would|should|may|might|must|has|have|had|do|does|did|for|until|from"
+    r"|then)\b)[^\s,;:.!?]+\s+){1,8}"
+    r"now(?::|(?:[.!]|\.\.\.|…)?$)"
     r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)"
     r"|fetching\b(?!.*\b(?:failed|returned|timed out)\b)"
     r"|(?:now,? )?(?:i|we) (?:still |just )?need to)",
@@ -1349,8 +1355,8 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
 _PLAN_HEADING_PATTERN = re.compile(
     r"^(?:corrected|new|updated|revised) plan\b", re.IGNORECASE
 )
-_STEP_OF_PATTERN = re.compile(
-    r"^(?:execution\s+)?step\s+(\d+)\s*/\s*(\d+)\b", re.IGNORECASE
+_STEP_HEADING_PATTERN = re.compile(
+    r"(?:execution\s+)?step\s+(\d+)\s*/\s*(\d+)\s*:?", re.IGNORECASE
 )
 
 
@@ -1418,14 +1424,9 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
         for line in heading_lines
     ):
         return "narration"
-    # Stopping at "Step 1/3" is unfinished; a report that reaches "Step 3/3" is not.
-    steps = [
-        match
-        for paragraph in paragraphs[-3:]
-        for line in paragraph.splitlines()
-        if (match := _STEP_OF_PATTERN.match(re.sub(r"[*_`#>]", "", line).strip()))
-    ]
-    if steps and int(steps[-1].group(1)) < int(steps[-1].group(2)):
+    # Only a bare "Step 1/3" heading with nothing under it; any step text is content.
+    step = _STEP_HEADING_PATTERN.fullmatch(last_line)
+    if step and int(step.group(1)) < int(step.group(2)):
         return "narration"
     return None
 
