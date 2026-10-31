@@ -248,9 +248,15 @@ with `gaia config set network_policy cloud_allowed`. Details and limits:
   TUI and every restarted Lemonade gets it back without asking. Lemonade itself
   holds the key in memory only; GAIA hands it over again when a chat starts on a
   cloud model, when you open `/provider`, and when GAIA's Lemonade restarts while
-  a cloud chat is open. A key that discovers no models is not
-  kept. GAIA never writes a key to config files, transcripts, control logs,
+  a cloud chat is open. A key Fireworks AI or the gateway rejects is not kept.
+  GAIA never writes a key to config files, transcripts, control logs,
   traces, or command-line arguments.
+- If Fireworks AI's model list fails but your key was not rejected, the Agent UI
+  says so and keeps the key. GAIA's own Lemonade then restarts with the Fireworks
+  models GAIA already knows, and any model loaded at that moment is unloaded. A
+  note in Settings says the list may be out of date, and the next time GAIA's
+  Lemonade starts after the list recovers, it goes back to the live list. While
+  this is active, the key is in the environment of GAIA's Lemonade process.
 - A key only goes to GAIA's own running Lemonade, to the server named in
   `LEMONADE_BASE_URL`, or to the system Lemonade when GAIA's own isn't installed.
   It never goes to whatever answers on port 13305 or 8000. If GAIA's Lemonade is

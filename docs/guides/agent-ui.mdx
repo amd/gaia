@@ -458,9 +458,10 @@ Open **Settings → Model** (or the model chip in the message box):
   with a message saying so, and a saved cloud model isn't restored. Settings has no
   switch for it yet; use the command.
 - Keys are masked, go only to GAIA's local model server and your OS credential
-  store, and are refused over mobile access. When a key is already set (in the
-  environment or from the TUI) the screen says so; leave the field blank to keep
-  using it. **Forget key** removes it here and for future sessions.
+  store, and are refused over mobile access. A saved key shows as a read-only row with
+  its last four characters and whether it's connected. **Replace** swaps it, and
+  the trash button removes it here and for future sessions. A key set in the
+  environment shows where it's set and can only be changed there.
 - On macOS, the first read of a saved key after reinstalling GAIA opens a
   Keychain dialog. Until you answer it, the model list says macOS is asking for
   keychain access instead of offering to add a key. Click **Always Allow** and

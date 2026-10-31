@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
+
 ### Changed
 
 - **The agent ships as one Python package.** `ChatAgent`, the class the agent
@@ -29,6 +31,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The doc profile names a search tool it has.** Its discovery rules told the
+  model to start with `find_files`, which that profile does not register, so the
+  first discovery step failed. They now name `search_file`, which it does
+  register. Profiles with the filesystem tools keep `find_files` (#6070).
 - **A repository indexed with `index_codebase` stays the code-search folder**
   (#6055). In the Agent UI, each new turn reset code search to the session's
   starting folder, so the next `search_code_index` looked in the wrong place
@@ -50,11 +56,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   language, answer in the language of the user's latest message, and cite
   every fact with its document and page. Latin-only documents get no note, so
   their prompt is unchanged.
-- **Needs core 0.25.4.** That per-turn list calls `RAGSDK.document_scripts`,
-  which first ships in core 0.25.4; on an older core every turn with an
-  indexed document fails with `AttributeError`. The `amd-gaia` floor and
-  `min_gaia_version` rise to 0.25.4 in that release, and
-  `tests/test_chat_dependency_floor.py` fails the release until they do.
+- **The minimum core is now 0.25.4.** That per-turn list calls
+  `RAGSDK.document_scripts`, which first ships in core 0.25.4; on an older
+  core every turn with an indexed document would fail with `AttributeError`.
+  The `amd-gaia` floor and `min_gaia_version` are both 0.25.4, and
+  `tests/test_chat_dependency_floor.py` fails any release that lowers them.
 - **Mail: whole conversations, what's waiting on you, and which account.**
   Three read-only tools join the mail set, for Gmail and Outlook alike.
   `get_thread` reads a whole conversation, oldest first, clipping long bodies

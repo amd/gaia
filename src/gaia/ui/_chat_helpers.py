@@ -3780,15 +3780,9 @@ async def _get_chat_response(
                 # Agent factories that don't recognise a field filter it out
                 # via ``dataclasses.fields``/``AgentManifest`` validation.
                 #
-                # Non-streaming vs streaming asymmetry — read before refactoring:
-                # This path forwards ``rag_file_paths`` (the real list) because
-                # non-streaming has no SSE handler, so ChatAgent's silent
-                # ``_index_documents`` in __init__ is the only indexer and must
-                # see the paths. The STREAMING registered-agent path, by
-                # contrast, passes ``rag_file_paths=[]`` and does the indexing
-                # in ``_index_rag_with_progress`` so the user sees progress
-                # events; forwarding the real list there would double-index
-                # (see the regression test in test_chat_helpers.py).
+                # Documents are indexed after the build, as the streaming path
+                # does: indexing takes minutes and the build holds the lock
+                # every other chat needs to start.
                 with writing_tool_registry():
                     agent = registry.create_agent(
                         agent_type,
@@ -3799,7 +3793,7 @@ async def _get_chat_response(
                             min_context_size=device_ctx,
                         ),
                         **_session_agent_kwargs(
-                            rag_file_paths=rag_file_paths,
+                            rag_file_paths=[],
                             library_paths=library_paths,
                             allowed=allowed,
                             session_id=session_id,
@@ -3813,6 +3807,8 @@ async def _get_chat_response(
                         # connected mailbox (#1596).
                         mail_provider=_session_mail_provider(session),
                     )
+                if rag_file_paths and hasattr(agent, "_index_documents") and agent.rag:
+                    agent._index_documents(rag_file_paths)
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
                     agent_type,

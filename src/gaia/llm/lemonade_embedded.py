@@ -1882,7 +1882,15 @@ class EmbeddedLemonade:
         """
         api_key = secrets.token_urlsafe(32)
 
-        env = child_env({"LEMONADE_API_KEY": api_key, **vulkan_workarounds()})
+        from gaia.llm.fireworks_known_models import start_env
+
+        env = child_env(
+            {
+                "LEMONADE_API_KEY": api_key,
+                **vulkan_workarounds(),
+                **start_env(self.config_dir),
+            }
+        )
 
         argv = [
             str(self.daemon_path),

@@ -183,6 +183,31 @@
     gap: 8px;
 }
 
+.settings-key-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.settings-key-status::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.settings-key-masked {
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    cursor: default;
+}
+
+.settings-key-remove {
+    display: inline-flex;
+    align-items: center;
+}
+
 .settings-row-between {
     justify-content: space-between;
 }

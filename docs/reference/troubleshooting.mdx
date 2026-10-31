@@ -129,6 +129,14 @@ icon: "bug"
     back to GAIA's own server with `gaia config set lemonade_mode gaia`.
   </Accordion>
 
+  <Accordion title="Fireworks AI can't list its models" icon="cloud-exclamation">
+    Your key was not rejected, so there is no need to replace it. On GAIA's own
+    Lemonade server, the Agent UI restarts it with the Fireworks models GAIA already
+    knows, so chat keeps working. The list shown may be out of date, and a model
+    Fireworks no longer serves returns Fireworks' own error. On a system Lemonade,
+    GAIA keeps the key and you connect again once Fireworks recovers.
+  </Accordion>
+
   <Accordion title="The model list says macOS is asking for keychain access" icon="key">
     A saved Fireworks AI or AMD LLM Gateway key from an earlier install is in your
     login keychain, and the reinstalled GAIA is not yet on its access list, so macOS
