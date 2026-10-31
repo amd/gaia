@@ -33,8 +33,8 @@ def _missing_deps_msg() -> str:
 def _check_dependencies() -> None:
     """Fail before embedding when the code-index runtime is incomplete."""
     try:
-        import faiss  # noqa: F401
-        import numpy  # noqa: F401
+        import faiss  # noqa: F401  # pylint: disable=unused-import
+        import numpy  # noqa: F401  # pylint: disable=unused-import
     except ImportError as exc:
         raise ImportError(_missing_deps_msg()) from exc
 
@@ -217,9 +217,7 @@ class CodeIndexSDK:
 
         self.log.info(f"Indexing repository: {self._repo_root}")
 
-        # Check optional code-index dependencies before walking or embedding
-        # anything. Otherwise a missing FAISS install can spend minutes
-        # embedding the repository before failing at index construction.
+        # Fail before the embedding pass, not after it at index construction.
         _check_dependencies()
 
         # Load existing metadata (for incremental indexing)
