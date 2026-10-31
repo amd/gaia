@@ -101,6 +101,10 @@ LINUX_BIOS_STEP = (
 _CMDLINE_KEYS = ("ttm.pages_limit", "amdttm.pages_limit", "amdgpu.gttsize")
 _OPTIONS_LINE = re.compile(r"^\s*options\s+(amd)?ttm\b.*\bpages_limit=", re.M)
 _CONF_NAME = "ttm.conf"
+#: The only lines GAIA writes to the conf as root: blanks, comments, ttm options.
+_SAFE_CONF_LINE = re.compile(
+    r"^\s*(#.*)?$|^\s*options\s+(amd)?ttm(\s+[a-z_]+=\d+)+\s*$"
+)
 _CONF_HEADER = "# GPU memory limit set by GAIA. Undo it in GAIA Settings > GPU memory."
 
 # Runs as root: writes (or with empty content removes) the conf, then rebuilds
@@ -122,8 +126,9 @@ case "$tool" in
   *) echo "unknown initramfs tool: $tool" >&2; exit 2 ;;
 esac
 """
-#: pkexec's exit codes for a dismissed or refused authentication.
-_PKEXEC_DENIED = (126, 127)
+#: pkexec: the user dismissed the prompt / no prompt could be shown or allowed.
+_PKEXEC_DISMISSED = 126
+_PKEXEC_NOT_AUTHORIZED = 127
 _ELEVATED_TIMEOUT_S = 900
 
 
@@ -256,6 +261,15 @@ def _linux_setup() -> _LinuxSetup:
                 "the setting GAIA writes. Change it there instead.",
                 "cmdline",
             )
+    try:
+        own = _read_conf()
+    except GpuMemoryError as e:
+        return guided(str(e))
+    if own is not None and not _is_safe_conf(own):
+        return guided(
+            f"{_conf_path()} holds settings GAIA doesn't manage, so GAIA "
+            "couldn't put it back exactly. Edit it yourself."
+        )
     for conf in sorted(PATHS.modprobe_d.glob("*.conf")):
         if conf.name == _CONF_NAME:
             continue
@@ -310,6 +324,11 @@ def _read_conf() -> Optional[str]:
         ) from e
 
 
+def _is_safe_conf(text: str) -> bool:
+    lines = text.splitlines()
+    return "\x00" not in text and all(_SAFE_CONF_LINE.match(x) for x in lines)
+
+
 def _run_elevated(argv: List[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         argv,
@@ -321,7 +340,16 @@ def _run_elevated(argv: List[str]) -> subprocess.CompletedProcess:
 
 
 def _write_conf_as_root(content: Optional[str]) -> None:
-    """Write (or with None remove) the ttm conf as root and rebuild the initramfs."""
+    """Write (or with None remove) the ttm conf as root and rebuild the initramfs.
+
+    Refuses anything but ttm options and comments: undo's content comes back
+    from a file in the user's home, which any of their processes can edit.
+    """
+    if content is not None and not _is_safe_conf(content):
+        raise NotPossible(
+            f"GAIA won't write this to {_conf_path()}: it holds more than GPU "
+            f"memory settings. Edit {_conf_path()} yourself, then restart."
+        )
     argv = ["/bin/sh", "-c", _ELEVATED_SCRIPT, "gaia-gpu-memory"]
     argv += [str(_conf_path()), content or "", _initramfs_tool()]
     if not _is_root():
@@ -333,9 +361,15 @@ def _write_conf_as_root(content: Optional[str]) -> None:
             f"Couldn't run the administrator step: {e}. Check {_conf_path()} "
             "before restarting."
         ) from e
-    if done.returncode in _PKEXEC_DENIED and not _is_root():
+    if not _is_root() and done.returncode == _PKEXEC_DISMISSED:
         raise PermissionNotGiven(
             "Administrator permission wasn't given, so nothing changed."
+        )
+    if not _is_root() and done.returncode == _PKEXEC_NOT_AUTHORIZED:
+        raise PermissionNotGiven(
+            "GAIA couldn't get administrator permission: no password prompt "
+            "could be shown, or this account isn't allowed to give it. Nothing "
+            "changed. Follow the steps under 'Show me how' instead."
         )
     if done.returncode != 0:
         detail = (done.stderr or done.stdout or "").strip()[-400:]

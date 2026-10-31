@@ -9,6 +9,7 @@ reach pkexec, reg, bcdedit or the real system config.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -361,6 +362,14 @@ class TestLinuxGuidedWhenGaiaCantApply:
         )
         assert gm.describe(box.info, LOCAL)["method"] == gm.METHOD_APPLY
 
+    def test_an_existing_conf_gaia_cant_restore_exactly(self, box):
+        box.conf.write_text(
+            "options ttm pages_limit=1000\ninstall ttm /bin/true\n", encoding="utf-8"
+        )
+        result = gm.describe(box.info, LOCAL)
+        assert result["method"] == gm.METHOD_GUIDED
+        assert "doesn't manage" in result["method_reason"]
+
     def test_builtin_ttm(self, box):
         box.set_module("ttm", pages=gm.pages_for(62.5), builtin=True)
         result = gm.describe(box.info, LOCAL)
@@ -408,6 +417,12 @@ class TestLinuxApply:
         box.tools = {"pkexec", "dracut"}
         gm.apply(96, confirm=True)
         assert box.calls[0][7] == "dracut"
+
+    def test_no_password_prompt_is_not_called_a_refusal(self, box):
+        box.returncode = 127
+        with pytest.raises(gm.PermissionNotGiven, match="no password prompt"):
+            gm.apply(96, confirm=True)
+        assert not box.conf.exists()
 
     def test_needs_explicit_confirmation(self, box):
         with pytest.raises(gm.NotConfirmed) as err:
@@ -515,6 +530,30 @@ class TestRevert:
         gm.apply(96, confirm=True)
         gm.revert(confirm=True)
         assert box.conf.read_text(encoding="utf-8") == mine
+
+    @pytest.mark.parametrize(
+        "tampered",
+        [
+            "install ttm /bin/sh -c 'id > /tmp/pwned'",
+            "options ttm pages_limit=1\ninstall ttm /tmp/x",
+            "# looks like a comment\x0binstall ttm /tmp/x",
+            "# carriage\rinstall ttm /tmp/x",
+            "options ttm pages_limit=1; rm -rf /",
+            "softdep ttm pre: evil",
+            "# null\x00byte",
+        ],
+    )
+    def test_undo_refuses_a_tampered_record(self, box, tampered):
+        """The record lives in the user's home; undo must not write it as root."""
+        gm.apply(96, confirm=True)
+        path = gm._state_path()
+        state = json.loads(path.read_text(encoding="utf-8"))
+        state["linux"]["previous_conf"] = tampered
+        path.write_text(json.dumps(state), encoding="utf-8")
+        calls = len(box.calls)
+        with pytest.raises(gm.NotPossible, match="won't write"):
+            gm.revert(confirm=True)
+        assert len(box.calls) == calls
 
     def test_two_applies_still_undo_to_the_original(self, box):
         gm.apply(80, confirm=True)
@@ -665,7 +704,7 @@ def ui(box):
 
     app = FastAPI()
     app.include_router(router.router)
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 class TestUiRoutes:
@@ -707,6 +746,20 @@ class TestUiRoutes:
             "/api/gpu-memory/apply",
             json={"setting_gb": 96, "confirm": True},
             headers={**UI, "X-Forwarded-For": "1.2.3.4"},
+        )
+        assert r.status_code == 403 and box.calls == []
+
+    @pytest.mark.parametrize("route", ["apply", "revert"])
+    def test_root_steps_are_refused_from_another_computer(self, box, route):
+        from gaia.ui.routers import gpu_memory as router
+
+        app = FastAPI()
+        app.include_router(router.router)
+        remote = TestClient(app, client=("192.168.1.20", 50000))
+        r = remote.post(
+            f"/api/gpu-memory/{route}",
+            json={"setting_gb": 96, "confirm": True},
+            headers=UI,
         )
         assert r.status_code == 403 and box.calls == []
 

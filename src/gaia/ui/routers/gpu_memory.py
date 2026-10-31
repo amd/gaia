@@ -10,14 +10,17 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from gaia.llm import gpu_memory
 
-from ..security import require_ui_header, via_tunnel
+from ..security import require_local_pc, require_ui_header
 
 router = APIRouter(tags=["gpu-memory"])
+
+# Starts a root step on this PC, so only someone at this PC may ask for it.
+_AT_THIS_PC = [Depends(require_ui_header), Depends(require_local_pc)]
 
 
 class ApplyRequest(BaseModel):
@@ -40,14 +43,6 @@ def _answer(call: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
         raise HTTPException(status_code=e.status, detail=str(e)) from e
 
 
-def _on_this_pc(request: Request) -> None:
-    if via_tunnel(request):
-        raise HTTPException(
-            status_code=403,
-            detail="Change GPU memory on the PC running GAIA, not over mobile access.",
-        )
-
-
 # Reads this PC's memory through Lemonade, so a cross-site GET must not reach it.
 @router.get("/api/gpu-memory", dependencies=[Depends(require_ui_header)])
 def get_gpu_memory(setting_gb: Optional[float] = None) -> Dict[str, Any]:
@@ -55,17 +50,15 @@ def get_gpu_memory(setting_gb: Optional[float] = None) -> Dict[str, Any]:
     return _answer(lambda: gpu_memory.status(setting_gb))
 
 
-@router.post("/api/gpu-memory/apply", dependencies=[Depends(require_ui_header)])
-def apply_gpu_memory(body: ApplyRequest, request: Request) -> Dict[str, Any]:
+@router.post("/api/gpu-memory/apply", dependencies=_AT_THIS_PC)
+def apply_gpu_memory(body: ApplyRequest) -> Dict[str, Any]:
     """Set the GPU's share after admin permission; takes effect after a restart."""
-    _on_this_pc(request)
     return _answer(lambda: gpu_memory.apply(body.setting_gb, body.confirm))
 
 
-@router.post("/api/gpu-memory/revert", dependencies=[Depends(require_ui_header)])
-def revert_gpu_memory(body: RevertRequest, request: Request) -> Dict[str, Any]:
+@router.post("/api/gpu-memory/revert", dependencies=_AT_THIS_PC)
+def revert_gpu_memory(body: RevertRequest) -> Dict[str, Any]:
     """Put back the setting GAIA replaced; takes effect after a restart."""
-    _on_this_pc(request)
     return _answer(lambda: gpu_memory.revert(body.confirm))
 
 
