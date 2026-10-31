@@ -70,7 +70,7 @@ each binary, for the release you have installed.
 
 ## Image tools (when the flagship SD profile is enabled)
 
-The flagship can generate, edit, and upscale local PNG/JPEG images through Lemonade.
+Explicit SDToolsMixin profiles can generate, edit, and upscale local PNG/JPEG images through Lemonade. The flagship currently exposes generation only; edit/upscale remain opt-in pending maintainer approval.
 `edit_image(image_path, prompt, model?, size?, n?)` uses the image-edit multipart
 contract; `upscale_image(image_path, model?)` sends base64 JSON to Lemonade's
 upscale endpoint. Both honor the agent's allowed-folder policy and return saved

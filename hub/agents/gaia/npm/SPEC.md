@@ -265,7 +265,7 @@ the header.
 
 #### Image tool behavior
 
-When the flagship exposes its SD tools, `edit_image` accepts a local PNG/JPEG
+When an explicitly enabled SD profile exposes its edit tools, `edit_image` accepts a local PNG/JPEG
 source, prompt, optional model/size, and `n` from 1 through 10. `upscale_image`
 accepts a local PNG/JPEG source and optional model. The agent applies its
 allowed-folder check before reading either source; edit requests use multipart

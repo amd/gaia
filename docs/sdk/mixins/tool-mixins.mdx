@@ -191,6 +191,8 @@ class MyImageAgent(Agent, SDToolsMixin):
         )
 
         # Initialize SD tools (auto-registers generate_image, edit_image, upscale_image, list_sd_models, etc.)
+        # Edit/upscale are available here because this is an explicit SDToolsMixin profile;
+        # the flagship keeps them opt-in pending maintainer approval.
         # Images save to ~/.gaia/cache/sd/images unless you pass output_dir=.
         self.init_sd(
             default_model="SDXL-Turbo",  # Fast, good quality

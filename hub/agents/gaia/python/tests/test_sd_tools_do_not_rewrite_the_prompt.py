@@ -24,6 +24,7 @@ from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 SD_TOOLS = {"generate_image", "list_sd_models", "get_generation_history"}
+SD_EDIT_TOOLS = {"edit_image", "upscale_image"}
 
 
 @contextlib.contextmanager
@@ -80,6 +81,7 @@ def test_image_generation_is_reachable_out_of_the_box(flagship):
     """
     assert GaiaAgentConfig().enable_sd_tools is True
     assert SD_TOOLS <= set(flagship._registry_snapshot)
+    assert SD_EDIT_TOOLS.isdisjoint(flagship._registry_snapshot)
 
 
 def test_the_sd_persona_stays_out_of_the_system_prompt(flagship):
