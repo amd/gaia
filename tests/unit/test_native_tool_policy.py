@@ -10,7 +10,8 @@ there instead (Claude's ``<invoke>`` XML) is moved to native calls.
 """
 
 import json
-from unittest.mock import patch
+from copy import deepcopy
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -140,6 +141,19 @@ def test_a_record_keeps_what_another_process_saved_meanwhile(gateway):
     ]
 
 
+def test_an_unwritable_gateway_file_keeps_the_switch_for_this_session(caplog):
+    with patch("gaia.llm.gateway.GatewayState.save", side_effect=OSError("denied")):
+        lc.record_own_tool_markup("amd.Opus")
+    assert lc.uses_native_tool_calls("amd.Opus") is True
+    assert "Could not persist the tool-call markup of amd.Opus" in caplog.text
+
+
+def test_a_bug_while_saving_is_not_swallowed():
+    with patch("gaia.llm.gateway.GatewayState.save", side_effect=TypeError("bug")):
+        with pytest.raises(TypeError):
+            lc.record_own_tool_markup("amd.Opus")
+
+
 def test_a_model_the_probe_found_not_native_never_goes_native():
     lc.record_own_tool_markup("amd.Plain")
     assert lc.uses_native_tool_calls("amd.Plain") is False
@@ -161,6 +175,46 @@ def test_a_gateway_file_without_the_new_field_loads(gateway):
     _forget_in_memory()
     assert lc.is_tool_calling_model("amd.Flash") is True
     assert lc.uses_native_tool_calls("amd.Flash") is False
+
+
+# --- before this process has read the catalog --------------------------------
+
+
+@pytest.fixture
+def cold_catalog():
+    # A sidecar that never listed models: only gateway.json is known.
+    lc._CLOUD_MODELS = {}
+
+
+def test_a_cold_gateway_model_starts_in_text(cold_catalog):
+    assert lc.uses_native_tool_calls("amd.Flash") is False
+    assert lc.uses_native_tool_calls("amd.Never-Probed") is False
+    assert _text_shape(_agent("amd.Flash"))
+
+
+def test_a_cold_gateway_model_that_wrote_markup_is_native(cold_catalog):
+    lc.record_own_tool_markup("amd.Opus")
+    assert lc.uses_native_tool_calls("amd.Opus") is True
+
+
+def test_a_cold_model_the_probe_found_not_native_never_goes_native(
+    cold_catalog, gateway
+):
+    agent = _agent("amd.Plain")
+    agent._parse_llm_response(INVOKE)
+    _stays_text(agent, gateway)
+
+
+def test_a_cold_gateway_model_switches_on_its_own_markup(cold_catalog, gateway):
+    agent = _agent("amd.Opus")
+    agent._parse_llm_response(INVOKE)
+    assert agent._uses_native_tool_calls() is True
+    assert json.loads(gateway.read_text())["own_tool_markup_models"] == ["amd.Opus"]
+
+
+def test_a_cold_local_model_is_still_native(cold_catalog):
+    assert lc.uses_native_tool_calls("Gemma-4-E4B-it-GGUF") is True
+    assert lc.uses_native_tool_calls("some-future-model-GGUF") is True
 
 
 # --- what a DeepSeek-like model is sent ---------------------------------------
@@ -193,7 +247,7 @@ def test_the_tool_result_budget_ignores_the_advertised_window(model_id):
 def test_own_markup_runs_and_switches_the_model_to_native(gateway):
     agent = _agent("amd.Opus")
     assert _text_shape(agent)
-    parsed = agent._parse_markup_tool_calls(INVOKE)
+    parsed = agent._parse_llm_response(INVOKE)
     assert parsed["tool"] == "read_file"
     assert parsed["tool_args"] == {"file_path": "a.py"}
     assert agent._uses_native_tool_calls() is True
@@ -202,8 +256,45 @@ def test_own_markup_runs_and_switches_the_model_to_native(gateway):
     assert json.loads(gateway.read_text())["own_tool_markup_models"] == ["amd.Opus"]
 
 
+def test_the_markup_parser_itself_never_switches(gateway):
+    agent = _agent("amd.Opus")
+    assert agent._parse_markup_tool_calls(INVOKE)["tool"] == "read_file"
+    _stays_text(agent, gateway)
+
+
+def test_the_request_after_a_mid_turn_switch_goes_out_native(gateway):
+    agent = _agent("amd.Opus")
+    agent.streaming = False
+    replies = iter([INVOKE, "a.py holds one print call."])
+    sent = []
+
+    def send(messages, system_prompt, tools=None, **_):
+        sent.append((deepcopy(messages), system_prompt, tools))
+        reply = MagicMock()
+        reply.text, reply.stats = next(replies), {}
+        return reply
+
+    agent.chat = MagicMock()
+    agent.chat.send_messages.side_effect = send
+    with patch.object(agent, "_tool_requires_confirmation", return_value=False):
+        agent.process_query("What is in a.py?", max_steps=4)
+
+    (_, first_prompt, first_tools), (messages, prompt, tools) = sent[:2]
+    assert first_tools is None
+    assert "==== AVAILABLE TOOLS ====" in first_prompt
+    assert [t["function"]["name"] for t in tools] == ["read_file"]
+    assert "==== AVAILABLE TOOLS ====" not in prompt
+    assert agent._response_format_template not in prompt
+    # The text-format step stays text: its markup reply, then its result. The
+    # gateway takes this under tools=; no native call is left without a result.
+    assistant, result = messages[-2:]
+    assert assistant["role"] == "assistant" and assistant["content"] == INVOKE
+    assert result["role"] == "tool" and result["name"] == "read_file"
+    assert not any(m.get("tool_calls") for m in messages)
+
+
 def test_a_new_session_starts_native_after_the_switch():
-    _agent("amd.Opus")._parse_markup_tool_calls(INVOKE)
+    _agent("amd.Opus")._parse_llm_response(INVOKE)
     _forget_in_memory()
     agent = _agent("amd.Opus")
     assert agent._openai_tools is not None
@@ -235,27 +326,27 @@ def test_markup_inside_a_code_fence_is_an_example_not_a_switch(gateway):
 
 def test_markup_for_a_tool_the_agent_lacks_does_not_switch(gateway):
     agent = _agent("amd.Flash")
-    agent._parse_markup_tool_calls(INVOKE.replace("read_file", "rm_rf"))
+    agent._parse_llm_response(INVOKE.replace("read_file", "rm_rf"))
     _stays_text(agent, gateway)
 
 
 def test_malformed_markup_is_retried_without_switching(gateway):
     agent = _agent("amd.Flash")
     with pytest.raises(MalformedToolMarkup):
-        agent._parse_markup_tool_calls('<invoke name="read_file">\n<parameter')
+        agent._parse_llm_response('<invoke name="read_file">\n<parameter')
     _stays_text(agent, gateway)
 
 
 def test_a_model_without_native_support_still_runs_its_markup_in_text(gateway):
     agent = _agent("amd.Plain")
-    assert agent._parse_markup_tool_calls(INVOKE)["tool"] == "read_file"
+    assert agent._parse_llm_response(INVOKE)["tool"] == "read_file"
     _stays_text(agent, gateway)
 
 
 @pytest.mark.parametrize("model_id", ["amd.Labelled", "Gemma-4-E4B-it-GGUF"])
 def test_an_already_native_or_local_model_records_nothing(gateway, model_id):
     agent = _agent(model_id)
-    agent._parse_markup_tool_calls(INVOKE)
+    agent._parse_llm_response(INVOKE)
     assert agent._uses_native_tool_calls() is True
     assert json.loads(gateway.read_text()).get("own_tool_markup_models") == []
 

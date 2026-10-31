@@ -37,6 +37,7 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Set,
     Tuple,
     Union,
 )
@@ -2173,7 +2174,7 @@ _CLOUD_TOOL_CALLING: Dict[str, bool] = {}
 # When each model's probe last failed, as epoch seconds.
 _CLOUD_PROBE_FAILURES: Dict[str, float] = {}
 # Models seen writing their own tool-call markup on GAIA's in-text format.
-_CLOUD_OWN_MARKUP: set = set()
+_CLOUD_OWN_MARKUP: Set[str] = set()
 _TOOL_CALLING_LOADED = False
 
 
@@ -2262,16 +2263,17 @@ def record_own_tool_markup(model_id: str) -> None:
             return
         _CLOUD_OWN_MARKUP.add(model_id)
         models = set(_CLOUD_OWN_MARKUP)
-    try:
-        from gaia.llm.gateway import GatewayState
+    from gaia.llm.gateway import GatewayError, GatewayState
 
+    try:
         state = GatewayState.load()
         # Union: another GAIA process may have recorded a model since we loaded.
         state.own_tool_markup_models = sorted(
             models | set(state.own_tool_markup_models)
         )
         state.save()
-    except Exception as e:  # noqa: BLE001 - the in-memory set still holds
+    # The in-memory set still holds; only the next session pays one markup turn.
+    except (GatewayError, OSError) as e:
         log.warning(f"Could not persist the tool-call markup of {model_id}: {e}")
 
 
@@ -2645,16 +2647,21 @@ def uses_native_tool_calls(model_id: Optional[str]) -> bool:
     """Whether an agent should hand *model_id* its tools as ``tools=`` schemas.
 
     Local models and catalog-labelled cloud models: whenever they take tools.
-    A cloud model only a probe found native stays on the in-text format (~12K
-    fewer tokens per call, calls batched in a plan) until it writes its own
-    tool-call markup there instead of GAIA's JSON.
+    Any other cloud model stays on the in-text format (~12K fewer tokens per
+    call, calls batched in a plan) until it writes its own tool-call markup
+    there instead of GAIA's JSON.
     """
     if not is_tool_calling_model(model_id):
         return False
     cloud = _CLOUD_MODELS.get(model_id)
-    if cloud is None or cloud["tool_calling"]:
+    if cloud is not None and cloud["tool_calling"]:
         return True
-    return wrote_own_tool_markup(model_id)
+    # A gateway id is cloud before this process has read the catalog, too.
+    if cloud is None and cloud_model_provider(model_id) is None:
+        return True
+    return learned_tool_calling(model_id) is not False and wrote_own_tool_markup(
+        model_id
+    )
 
 
 def _usage_dict(usage: Any) -> Dict[str, Any]:

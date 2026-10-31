@@ -4849,8 +4849,6 @@ Do NOT wrap conversational replies in JSON.
         markup = parse_text_tool_calls(response)
         if markup is None:
             return None
-        if any(call.name in self._tools_registry for call in markup.calls):
-            self._switch_to_native_tool_calls()
         calls = []
         thought = markup.prose
         for call in markup.calls:
@@ -4894,15 +4892,21 @@ Do NOT wrap conversational replies in JSON.
         """Move a hosted model writing its own tool markup onto native tool calls."""
         from gaia.llm.lemonade_client import (
             cloud_model_info,
+            cloud_model_provider,
             is_tool_calling_model,
+            learned_tool_calling,
             record_own_tool_markup,
         )
 
         model_id = getattr(self, "model_id", None)
+        hosted = cloud_model_info(model_id) is not None or bool(
+            cloud_model_provider(model_id)
+        )
         if (
             self._uses_native_tool_calls()
-            or cloud_model_info(model_id) is None
+            or not hosted
             or not is_tool_calling_model(model_id)
+            or learned_tool_calling(model_id) is False
         ):
             return
         record_own_tool_markup(model_id)
@@ -5828,6 +5832,10 @@ Do NOT wrap conversational replies in JSON.
         if not _is_json(response):
             markup_call = self._parse_markup_tool_calls(response)
             if markup_call is not None:
+                names = [c["name"] for c in markup_call.get("tool_calls", [])]
+                names.append(markup_call.get("tool"))
+                if any(name in self._tools_registry for name in names):
+                    self._switch_to_native_tool_calls()
                 return markup_call
 
         # Log what we received for debugging (show more to see full JSON)
