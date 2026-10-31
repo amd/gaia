@@ -74,6 +74,14 @@ def _isolate_gaia_config(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
 
 
+@pytest.fixture(autouse=True)
+def _forget_crashed_loads(monkeypatch):
+    """A load one test crashed must not be refused, unsent, in the next."""
+    from gaia.llm import lemonade_client
+
+    monkeypatch.setattr(lemonade_client, "_CRASHED_LOADS", {})
+
+
 #: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
 _RUN_HOME = Path.home()
 
