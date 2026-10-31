@@ -448,7 +448,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -473,7 +473,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -572,7 +572,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -759,7 +759,7 @@
             "title": "Location"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -799,7 +799,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -837,7 +837,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -879,7 +879,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -919,7 +919,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1085,7 +1085,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1198,7 +1198,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1228,7 +1228,7 @@
             "description": "The attention-view envelope."
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1308,7 +1308,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1515,7 +1515,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1533,7 +1533,7 @@
             "description": "The pre-scan envelope."
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1804,7 +1804,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1876,7 +1876,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1927,7 +1927,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2148,7 +2148,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -2178,7 +2178,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2344,7 +2344,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2412,7 +2412,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2552,7 +2552,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.14",
+            "default": "2.15",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -3673,7 +3673,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.14"
+    "version": "2.15"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3897,6 +3897,12 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "description": "Mailbox authentication is missing, revoked, or needs renewal."
+          },
+          "403": {
+            "description": "The mailbox connection lacks the required permission."
+          },
           "404": {
             "description": "No such email-agent session."
           },
@@ -3913,11 +3919,22 @@
             },
             "description": "Validation Error"
           },
+          "500": {
+            "description": "The mailbox connector failed unexpectedly."
+          },
           "501": {
             "description": "This agent build has no autonomy surface."
           },
           "503": {
-            "description": "Mailbox configuration is unavailable."
+            "description": "Mailbox configuration is unavailable or the connection is busy.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying a busy connection.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -3960,13 +3977,19 @@
             "description": "Successful Response"
           },
           "400": {
-            "description": "The action id is invalid."
+            "description": "This action type has no reversal implemented."
+          },
+          "401": {
+            "description": "Mailbox authentication is missing, revoked, or needs renewal."
+          },
+          "403": {
+            "description": "The mailbox connection lacks the required permission."
           },
           "404": {
             "description": "No such email-agent session."
           },
           "409": {
-            "description": "The undo window has expired."
+            "description": "Unknown, expired, or already-undone action id."
           },
           "422": {
             "content": {
@@ -3978,8 +4001,22 @@
             },
             "description": "Validation Error"
           },
+          "500": {
+            "description": "The mailbox connector failed unexpectedly."
+          },
           "501": {
             "description": "This agent build has no autonomy undo."
+          },
+          "503": {
+            "description": "Mailbox configuration is unavailable or the connection is busy.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying a busy connection.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [

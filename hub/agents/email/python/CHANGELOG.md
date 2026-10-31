@@ -14,6 +14,13 @@ contract version is tracked separately as
   anything older. GAIA updates its own Lemonade Server itself; the `hint` for
   a user-run server points at https://lemonade-server.ai instead of a command.
   `gaia-agent.yaml`'s `requirements.min_lemonade_version` moves with it.
+### Added
+
+- **The published OpenAPI contract now includes the sidecar's stateful Agent UI
+  routes (#6043, schema 2.15).** Session creation/deletion/history, memory and
+  autonomy controls, pending-tool confirmation, cancellation, and the SSE query
+  route were already served but absent from `openapi.email.json`; generated
+  clients can now discover and negotiate the complete supported surface.
 
 ### Fixed
 
