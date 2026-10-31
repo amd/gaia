@@ -7,6 +7,14 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+### Added
+
+- **The published OpenAPI contract now includes the sidecar's stateful Agent UI
+  routes (#6043, schema 2.15).** Session creation/deletion/history, memory and
+  autonomy controls, pending-tool confirmation, cancellation, and the SSE query
+  route were already served but absent from `openapi.email.json`; generated
+  clients can now discover and negotiate the complete supported surface.
+
 ### Fixed
 
 - **Concurrent startup no longer fails to open the email state database
