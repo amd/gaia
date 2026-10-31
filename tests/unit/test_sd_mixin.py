@@ -239,6 +239,7 @@ class TestSDToolsMixinGeneration:
         mock_lemonade_client.load_model.assert_called()
         call_args = mock_lemonade_client.load_model.call_args
         assert call_args[0][0] == "SDXL-Turbo"  # Default model
+        assert call_args.kwargs["auto_download"] is True
 
 
 class TestSDToolsMixinHealthCheck:

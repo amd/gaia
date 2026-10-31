@@ -1,9 +1,8 @@
 """
-SDToolsMixin - Stable Diffusion image generation tools for GAIA agents.
+SDToolsMixin - Lemonade image generation tools for GAIA agents.
 
-Provides tools to generate images using the Lemonade Server SD endpoint.
-Supports 4 SD models: SDXL-Turbo (the default), SD-Turbo (faster), SD-1.5, and
-SDXL-Base-1.0 (photorealistic) running on Ryzen AI.
+Supports the four legacy Stable Diffusion models and downloaded TheNoise
+image models through the same Lemonade Server endpoint.
 
 Example:
     from gaia.agents.base import Agent
@@ -40,11 +39,11 @@ logger = get_logger(__name__)
 
 class SDToolsMixin:
     """
-    Mixin providing Stable Diffusion image generation tools.
+    Mixin providing Lemonade image generation tools.
 
     Tools provided:
     - generate_image: Generate an image from a text prompt
-    - list_sd_models: List available SD models
+    - list_sd_models: List downloaded image models
     - get_generation_history: Get recent generations from this session
 
     Attributes:
@@ -154,17 +153,16 @@ class SDToolsMixin:
             cfg_scale: Optional[float] = None,
             seed: Optional[int] = None,
         ) -> Dict[str, Any]:
-            """Generate an image from a text prompt using Stable Diffusion.
+            """Generate an image with a downloaded Lemonade image model.
 
             Args:
-                prompt: Text description of the image. Be detailed for best results.
-                model: SDXL-Turbo (default), SD-Turbo (faster, lower quality),
-                    SDXL-Base-1.0 (photorealistic, slow), or SD-1.5. Omit to use
-                    the default.
-                size: Image dimensions: 512x512, 768x768, or 1024x1024.
-                steps: Inference steps (4 recommended for Turbo models).
-                cfg_scale: CFG scale (1.0 for Turbo, 7.5 for Base).
-                seed: Random seed for reproducibility.
+                prompt: Text description of the image.
+                model: Exact image model ID from list_sd_models(), including
+                    TheNoise models. Omit to use the legacy SDXL-Turbo default.
+                size: Optional WIDTHxHEIGHT; otherwise model defaults apply.
+                steps: Optional steps; otherwise model defaults apply.
+                cfg_scale: Optional guidance; otherwise model defaults apply.
+                seed: Optional seed for reproducibility.
 
             Returns:
                 {"status": "success", "image_path": str, ...} or
@@ -172,42 +170,34 @@ class SDToolsMixin:
             """
             return self._generate_image(prompt, model, size, steps, cfg_scale, seed)
 
-        @tool(
-            atomic=True,
-        )
+        @tool(atomic=True)
         def list_sd_models() -> Dict[str, Any]:
-            """List available SD models."""
+            """List downloaded image models (SD.cpp and TheNoise) from Lemonade."""
+            try:
+                models = self.sd_client.list_sd_models()
+            except LemonadeClientError as e:
+                return {"status": "error", "error": str(e)}
+            listed = []
+            for model in models:
+                name = model.get("id")
+                if not name:
+                    continue
+                entry = {
+                    "name": name,
+                    "recipe": model.get("recipe"),
+                    "image_defaults": model.get("image_defaults", {}),
+                }
+                if name in self.SD_MODELS:
+                    defaults = LemonadeClient.SD_MODEL_DEFAULTS[name]
+                    entry.update(
+                        recommended_size=defaults["size"],
+                        recommended_steps=defaults["steps"],
+                        speed=self._estimate_generation_time(name, defaults["size"]),
+                    )
+                listed.append(entry)
             return {
-                "models": [
-                    {
-                        "name": "SD-Turbo",
-                        "description": "Very fast, 512x512, 4 steps",
-                        "recommended_steps": 4,
-                        "recommended_size": "512x512",
-                        "speed": "~13s",
-                    },
-                    {
-                        "name": "SDXL-Turbo",
-                        "description": "Fast stylized, 512x512, 4 steps",
-                        "recommended_steps": 4,
-                        "recommended_size": "512x512",
-                        "speed": "~17s",
-                    },
-                    {
-                        "name": "SD-1.5",
-                        "description": "Legacy general purpose, 512x512, 20 steps",
-                        "recommended_steps": 20,
-                        "recommended_size": "512x512",
-                        "speed": "~88s",
-                    },
-                    {
-                        "name": "SDXL-Base-1.0",
-                        "description": "Photorealistic, 1024x1024, 20 steps (slow)",
-                        "recommended_steps": 20,
-                        "recommended_size": "1024x1024",
-                        "speed": "~9min",
-                    },
-                ],
+                "status": "success",
+                "models": listed,
                 "default_model": self.sd_default_model,
             }
 
@@ -257,27 +247,39 @@ class SDToolsMixin:
         steps = steps if steps is not None else self.sd_default_steps
         cfg_scale = cfg_scale if cfg_scale is not None else self.sd_default_cfg
 
-        # Validate model
-        if model not in self.SD_MODELS:
+        # Require downloaded models for newer backends, while preserving
+        # the legacy SD on-demand download behavior.
+        legacy_sd = model in self.SD_MODELS
+        if not legacy_sd:
+            try:
+                models = self.sd_client.list_sd_models()
+                if not any(m.get("id") == model for m in models):
+                    return {
+                        "status": "error",
+                        "error": f"Invalid model '{model}' or model not downloaded. "
+                        "Call list_sd_models() to choose one.",
+                    }
+            except LemonadeClientError as e:
+                return {"status": "error", "error": str(e)}
+        if legacy_sd:
+            model_defaults = LemonadeClient.SD_MODEL_DEFAULTS[model]
+            size = size or model_defaults["size"]
+            steps = steps if steps is not None else model_defaults["steps"]
+            cfg_scale = (
+                cfg_scale if cfg_scale is not None else model_defaults["cfg_scale"]
+            )
+            if size not in self.SD_SIZES:
+                return {
+                    "status": "error",
+                    "error": f"Invalid size '{size}'. Choose from: {self.SD_SIZES}",
+                }
+        elif size is not None and not re.fullmatch(r"[1-9]\d{1,4}x[1-9]\d{1,4}", size):
             return {
                 "status": "error",
-                "error": f"Invalid model '{model}'. Choose from: {self.SD_MODELS}",
+                "error": f"Invalid size '{size}'. Expected WIDTHxHEIGHT.",
             }
 
-        # Apply model-specific defaults if still None
-        model_defaults = LemonadeClient.SD_MODEL_DEFAULTS.get(model, {})
-        size = size or model_defaults.get("size", "512x512")
-        steps = steps if steps is not None else model_defaults.get("steps", 20)
-        cfg_scale = (
-            cfg_scale if cfg_scale is not None else model_defaults.get("cfg_scale", 7.5)
-        )
-
-        # Validate size
-        if size not in self.SD_SIZES:
-            return {
-                "status": "error",
-                "error": f"Invalid size '{size}'. Choose from: {self.SD_SIZES}",
-            }
+        steps_label = f"{steps} steps" if steps is not None else "default steps"
 
         # Use console for user-facing messages if available
         console = getattr(self, "console", None)
@@ -288,8 +290,9 @@ class SDToolsMixin:
             display_prompt = prompt if len(prompt) <= 80 else prompt[:77] + "..."
             console.print_info(
                 f"Prompt: {display_prompt}\n"
-                f"Model: {model} • Size: {size}\n"
-                f"Settings: {steps} steps, CFG {cfg_scale}\n"
+                f"Model: {model} • Size: {size or 'model default'}\n"
+                f"Settings: {steps if steps is not None else 'model default'} steps, "
+                f"CFG {cfg_scale if cfg_scale is not None else 'model default'}\n"
                 f"Estimated time: {self._estimate_generation_time(model, size)}"
             )
 
@@ -305,7 +308,7 @@ class SDToolsMixin:
             logger.debug(f"Loading SD model: {model}")
             try:
                 self.sd_client.load_model(
-                    model, auto_download=True, prompt=False, timeout=600
+                    model, auto_download=legacy_sd, prompt=False, timeout=600
                 )
                 if console and hasattr(console, "stop_progress"):
                     console.stop_progress()
@@ -330,16 +333,19 @@ class SDToolsMixin:
                 _sp_params = inspect.signature(console.start_progress).parameters
                 if "show_timer" in _sp_params:
                     console.start_progress(
-                        f"Generating image ({steps} steps)...", show_timer=True
+                        f"Generating image ({steps_label})...", show_timer=True
                     )
                 else:
-                    console.start_progress(f"Generating image ({steps} steps)...")
+                    console.start_progress(f"Generating image ({steps_label})...")
 
             start_time = time.time()
 
-            # Use LemonadeClient to generate image with appropriate timeout
-            # SDXL-Base-1.0 at 1024px takes ~9 minutes, so use 15 min timeout
-            timeout = 900 if "Base" in model and size == "1024x1024" else 300
+            # Heavy image backends can take minutes and load large models.
+            timeout = (
+                900
+                if not legacy_sd or ("Base" in model and size == "1024x1024")
+                else 300
+            )
 
             response = self.sd_client.generate_image(
                 prompt=prompt,
@@ -391,7 +397,7 @@ class SDToolsMixin:
             if console and hasattr(console, "print_image"):
                 console.print_image(
                     str(image_path),
-                    caption=f"{model} • {size} • {steps} steps",
+                    caption=f"{model} • {size or 'default size'} • {steps_label}",
                     prompt_to_open=False,  # Don't prompt yet
                 )
 
@@ -487,7 +493,7 @@ class SDToolsMixin:
             ("SDXL-Base-1.0", "512x512"): "~2 minutes",
             ("SDXL-Base-1.0", "1024x1024"): "~9 minutes",
         }
-        return estimates.get((model, size), "~1-5 minutes")
+        return estimates.get((model, size), "depends on model and hardware")
 
     def _save_image(self, prompt: str, image_bytes: bytes, model: str) -> Path:
         """
@@ -506,7 +512,8 @@ class SDToolsMixin:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # Content hash: two fast Turbo runs of one prompt land in the same second.
         digest = hashlib.sha256(image_bytes).hexdigest()[:8]
-        filename = f"{safe_prompt}_{model}_{timestamp}_{digest}.png"
+        safe_model = re.sub(r"[^A-Za-z0-9_.-]", "_", model)
+        filename = f"{safe_prompt}_{safe_model}_{timestamp}_{digest}.png"
 
         image_path = self.sd_output_dir / filename
         before_change(image_path, "generate_image")
