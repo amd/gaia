@@ -202,6 +202,9 @@ def _find_all_words_spans(text: str, term: str) -> List[Tuple[int, int]]:
     it gives the agent a passage to inspect when a page separates a query such
     as ``Sunday Pier 9`` across a table or sentence.
     """
+    # Only a phrase splits: "$1,299" must not match "1" and "299" separately.
+    if len(term.split()) < 2:
+        return []
     words = list(dict.fromkeys(re.findall(r"\w+", term.lower())))
     if len(words) < 2:
         return []
