@@ -31,10 +31,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.file_snapshots import before_change
-from gaia.agents.tools.path_access import read_access_error
+from gaia.agents.tools.path_access import image_file_error, read_access_error
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
-from gaia.vlm.mixin import _image_file_error
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -47,6 +46,7 @@ class SDToolsMixin:
     Tools provided:
     - generate_image: Generate an image from a text prompt
     - edit_image: Edit an existing image with a text prompt
+    - upscale_image: Upscale an existing image
     - list_sd_models: List available SD models
     - get_generation_history: Get recent generations from this session
 
@@ -199,7 +199,7 @@ class SDToolsMixin:
             denied = read_access_error(self, path)
             if denied:
                 return denied
-            not_a_file = _image_file_error(path, image_path)
+            not_a_file = image_file_error(path, image_path)
             if not_a_file:
                 return not_a_file
             try:
@@ -261,13 +261,12 @@ class SDToolsMixin:
             Args:
                 image_path: Local source image path.
                 model: Upscale model; defaults to RealESRGAN-x4plus.
-                size: Optional output size accepted by the server.
             """
             path = Path(image_path).expanduser()
             denied = read_access_error(self, path)
             if denied:
                 return denied
-            not_a_file = _image_file_error(path, image_path)
+            not_a_file = image_file_error(path, image_path)
             if not_a_file:
                 return not_a_file
             try:

@@ -6272,6 +6272,7 @@ class LemonadeClient:
         except requests.RequestException as exc:
             raise LemonadeClientError(f"Lemonade image request failed: {exc}") from exc
 
+    @guard_inference()
     def edit_image(
         self,
         image_path: Union[str, Path],
@@ -6287,7 +6288,9 @@ class LemonadeClient:
         if not 1 <= n <= 10:
             raise LemonadeClientError("Image editing requires n between 1 and 10.")
         if size and not re.fullmatch(r"\d+x\d+", size):
-            raise LemonadeClientError("Image editing size must use WIDTHxHEIGHT, e.g. 1024x1024.")
+            raise LemonadeClientError(
+                "Image editing size must use WIDTHxHEIGHT, e.g. 1024x1024."
+            )
         fields: Dict[str, Any] = {
             "model": model,
             "prompt": prompt,

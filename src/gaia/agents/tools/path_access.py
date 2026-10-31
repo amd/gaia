@@ -17,6 +17,23 @@ from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.search_scope import path_validator_of
 
 
+def image_file_error(path: Any, image_path: str) -> Optional[Dict[str, Any]]:
+    """Return a tool error for a missing/non-file image, or None when valid."""
+    from pathlib import Path
+
+    path = Path(path)
+    if path.is_file():
+        return None
+    if path.is_dir():
+        return {
+            "status": "error",
+            "error": f"Not an image file: {image_path} is a directory",
+        }
+    if path.exists():
+        return {"status": "error", "error": f"Not an image file: {image_path}"}
+    return {"status": "error", "error": f"Image not found: {image_path}"}
+
+
 def read_access_error(
     host: Any, path: Any, *, prompt_user: bool = True
 ) -> Optional[Dict[str, Any]]:
