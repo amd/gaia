@@ -3141,6 +3141,8 @@ class AgentEvalRunner:
         self.results_dir = Path(results_dir) if results_dir else RESULTS_DIR
         self.extra_scenario_dirs = extra_scenario_dirs or []
         self.extra_corpus_dirs = extra_corpus_dirs or []
+        # Claude account switches made by the current _execute call (labels only).
+        self._account_switches = []
         self.tags = tags or []
         self.exclude_tags = exclude_tags or []
         if iterations is None:
@@ -3463,7 +3465,7 @@ class AgentEvalRunner:
     def _finish(self, results, run_id, run_dir, config, aborted, outage):
         """Write the scorecard, print the summary, and exit on a stopped run."""
         stopped = None
-        switches = getattr(self, "_account_switches", [])
+        switches = self._account_switches
         if outage is not None:
             not_run = [r["scenario_id"] for r in results if _needs_resume(r)]
             stopped = {

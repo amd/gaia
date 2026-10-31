@@ -184,6 +184,34 @@ def test_no_token_at_all_leaves_the_api_key_path(sel):
             "credential",
             None,
         ),
+        # The bare subscription refusal: no "weekly", no "usage".
+        (
+            json.dumps(
+                {
+                    "type": "result",
+                    "is_error": True,
+                    "result": "You've hit your limit · resets 3pm (UTC)",
+                }
+            ),
+            "",
+            1,
+            "quota",
+            "3pm (UTC)",
+        ),
+        # A per-minute throttle is not an empty account: never a failover.
+        (
+            json.dumps(
+                {
+                    "type": "result",
+                    "is_error": True,
+                    "result": "API Error: 429 rate_limit_error",
+                }
+            ),
+            "",
+            1,
+            "unknown",
+            None,
+        ),
         ("", "Error: something unexpected", 1, "unknown", None),
         # Answered, but not with the word asked for.
         (
@@ -194,7 +222,16 @@ def test_no_token_at_all_leaves_the_api_key_path(sel):
             None,
         ),
     ],
-    ids=["ok", "weekly-limit", "limit-as-completion", "credential", "crash", "no-ok"],
+    ids=[
+        "ok",
+        "weekly-limit",
+        "limit-as-completion",
+        "credential",
+        "bare-limit",
+        "per-minute-429",
+        "crash",
+        "no-ok",
+    ],
 )
 def test_classify_reply(sel, stdout, stderr, code, kind, resets):
     probe = sel.classify_reply(stdout, stderr, code)

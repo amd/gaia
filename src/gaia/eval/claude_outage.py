@@ -14,9 +14,9 @@ payload, or the raw output when there is no JSON. A scenario's transcript is
 never scanned, because the agent's own tool descriptions contain phrases such
 as "until a rate limit resets".
 
-The phrase lists extend :mod:`gaia.eval.judge_outage`'s with the wording the
-subscription CLI prints ("You've hit your limit", "session limit"), which the
-CI preflight probe (``util/classify_claude_probe.py``) also matches.
+The phrases come from :mod:`gaia.eval.claude_refusal`, which the CI account
+picker and ``claude-run.yml`` also read. A bare per-minute 429 is throttling,
+not quota: only wording or a 402 makes this a quota outage.
 """
 
 from __future__ import annotations
@@ -27,23 +27,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from gaia.eval.judge_outage import (
-    CREDENTIAL_PHRASES,
-    CREDENTIAL_STATUS,
-    QUOTA_PHRASES,
-    QUOTA_STATUS,
-)
-
-CLI_QUOTA_PHRASES: tuple[str, ...] = QUOTA_PHRASES + (
-    "session limit",
-    "hit your limit",
-    "limit reached",
-    "admin-settings/usage",
-)
-CLI_CREDENTIAL_PHRASES: tuple[str, ...] = CREDENTIAL_PHRASES + (
-    "oauth token",
-    "please run /login",
-    "no credential",
+from gaia.eval.claude_refusal import (
+    CREDENTIAL_CODES,
+    QUOTA_CODES,
+    credential_hits,
+    quota_hits,
 )
 
 # The runner already reports these as BUDGET_EXCEEDED / a capped run; they are
@@ -182,13 +170,10 @@ def classify_driver_failure(
         text = f"{payload.get('result') or ''} {stderr or ''}"
     else:
         text = f"{stderr or ''} {stdout or ''}"
-    lowered = text.lower()
     detail = " ".join(text.split())[:400] or f"exit {returncode}, no output"
 
-    quota = status in QUOTA_STATUS or any(p in lowered for p in CLI_QUOTA_PHRASES)
-    credential = status in CREDENTIAL_STATUS or any(
-        p in lowered for p in CLI_CREDENTIAL_PHRASES
-    )
+    quota = status in QUOTA_CODES or bool(quota_hits(text))
+    credential = status in CREDENTIAL_CODES or bool(credential_hits(text))
     # Both signatures, or a failure before Claude answered anything: every later
     # scenario would fail the same way, whatever the exact cause.
     if (quota and credential) or (

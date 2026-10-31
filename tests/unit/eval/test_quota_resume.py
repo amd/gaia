@@ -497,7 +497,11 @@ def _failed(result, status=None, tokens=0, **extra):
             QUOTA,
             "2025-10-21 16:00 UTC",
         ),
-        (_failed("API Error: 429 rate_limit_error", 429, tokens=5000), QUOTA, None),
+        (_failed("You've hit your limit · resets 3pm (UTC)"), QUOTA, "3pm (UTC)"),
+        (_failed("API Error: 429 You've hit your weekly limit", 429), QUOTA, None),
+        # A bare per-minute 429 is throttling: it never reached Claude, so the run
+        # treats it as unreachable (stops after two in a row), never as quota.
+        (_failed("API Error: 429 rate_limit_error", 429), UNREACHABLE, None),
         (_failed("Credit balance is too low", 400), QUOTA, None),
         (_failed("Invalid API key · Please run /login", 401), CREDENTIAL, None),
         (_failed("OAuth token has expired"), CREDENTIAL, None),
@@ -517,6 +521,8 @@ def test_outage_signatures(payload, kind, resets):
         (_ok("x") | {"result": "waited until a rate limit resets"}, 0),
         # The scenario's own budget cap is BUDGET_EXCEEDED, not the account's.
         (_failed("budget exceeded", subtype="error_max_budget_usd", tokens=900), 1),
+        # Throttled after real work: the scenario's own error, not the account's.
+        (_failed("API Error: 429 rate_limit_error", 429, tokens=5000), 1),
         # Claude answered for a while, then the run broke for its own reasons.
         (_failed("Tool call failed: CONNECTION_CLOSED", tokens=40000), 1),
     ],

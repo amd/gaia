@@ -111,13 +111,20 @@ job asks:
 
 Moving back to the primary needs nothing: the next job probes it first.
 
+"Out of quota" means the refusal says so ("You've hit your limit", "usage limit
+reached", "weekly limit", a 402, and so on). The phrases live in one list,
+[`src/gaia/eval/claude_refusal.py`](https://github.com/amd/gaia/blob/main/src/gaia/eval/claude_refusal.py),
+which the picker, the eval runner and `claude-run.yml` all use; a unit test fails if
+`claude-run.yml`'s copy drifts. A bare per-minute 429 (`rate_limit_error`) is throttling
+on an account that still has quota, so it never moves a job to the other account.
+
 How each workflow asks:
 
 | Where | How |
 |-------|-----|
 | Single-job workflows (auto-fix, release notes, Lemonade bump, patch release, skill review, the evals) | The [`claude-credential`](https://github.com/amd/gaia/blob/main/.github/actions/claude-credential/action.yml) action probes with a one-word prompt and reports a label (`primary`, `secondary`, or `none` when neither token is set and `ANTHROPIC_API_KEY` is used). The workflow picks the secret by that label, so no token is written to an output. |
 | The three audits | Their gate job runs the action once and exports the label; every lens and synthesis job reads it. |
-| `claude-run.yml` (reviews, replies, triage) | Inline: it runs on the primary and, if refused with quota wording, once more on the secondary. It cannot use the action, because it checks out fork code and a local action would be read from that checkout. |
+| `claude-run.yml` (reviews, replies, triage) | Inline: it runs on the primary and, if refused with quota wording before reaching a model, once more on the secondary. A run that reached the model is never retried, because replies post through `gh` mid-run and could post twice. It cannot use the action, because it checks out fork code and a local action would be read from that checkout. |
 | `gaia eval agent` (long eval lanes) | Starts on the probed account with the other as `CLAUDE_CODE_OAUTH_TOKEN_BACKUP`. If the first runs out mid-run, the runner switches once, re-runs the scenario that was cut off, and prints `[ACCOUNT SWITCH]`. |
 
 **When both accounts run out mid-eval,** the runner stops starting scenarios and keeps what

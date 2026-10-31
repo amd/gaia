@@ -612,8 +612,9 @@ jobs:
           what: "The flagship task judge"
           python: ${{ env.VENV_PY }}
 
+      # Not after a failed pick: it would judge on an account that cannot answer.
       - name: Judge quality
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.claude_account.outcome == 'success' }}
         timeout-minutes: ${{ github.event_name != 'pull_request' && 60 || 30 }}
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}

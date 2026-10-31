@@ -200,9 +200,12 @@ def test_claude_run_fails_over_only_on_quota_wording():
     assert retry["with"]["claude_code_oauth_token"] == (
         "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}"
     )
-    assert "steps.quota.outputs.quota == 'true'" in retry["if"]
+    assert "steps.quota.outputs.retry == 'true'" in retry["if"]
     assert "anthropic_api_key" not in retry["with"]
     assert "CREDENTIAL_RE" in by_id["quota"]["run"]
+    # Never after model work: replies post through `gh` mid-run.
+    assert ".modelUsage" in by_id["quota"]["run"]
+    assert "total_cost_usd" in by_id["quota"]["run"]
 
 
 def _quota_script() -> tuple[str, dict]:
@@ -304,3 +307,18 @@ def test_claude_run_quota_step(tmp_path, result, has_secondary, quota, warning):
         assert warning in run.stdout
     else:
         assert "::warning" not in run.stdout
+
+
+def test_claude_run_uses_the_shared_refusal_phrases():
+    """claude-run.yml cannot import the list (it may hold a fork's checkout), so it
+    carries a copy; this keeps the copy from drifting from the picker and runner."""
+    from gaia.eval import claude_refusal
+
+    env = _load(WORKFLOWS / "claude-run.yml")["jobs"]["run"]["env"]
+    assert env["QUOTA_RE"] == claude_refusal.grep_pattern(claude_refusal.QUOTA_PHRASES)
+    assert env["CREDENTIAL_RE"] == claude_refusal.grep_pattern(
+        claude_refusal.CREDENTIAL_PHRASES
+    )
+    # The per-minute 429 rule: throttling wording never reads as quota.
+    for phrase in claude_refusal.THROTTLE_PHRASES:
+        assert not re.search(env["QUOTA_RE"], phrase, re.IGNORECASE), phrase

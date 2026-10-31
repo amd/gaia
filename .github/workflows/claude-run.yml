@@ -36,9 +36,9 @@
 #   5. model check: a run that completes on a model other than the one `--model` asked
 #      for fails, so a substituted model shows up red rather than as a weaker review.
 #   6. account failover: every call runs on CLAUDE_CODE_OAUTH_TOKEN first. Refused for
-#      QUOTA (by wording, never by a bare refusal, which a bad token produces too), it
-#      runs once more on CLAUDE_CODE_OAUTH_TOKEN_SECONDARY, with a warning. A rejected
-#      token never fails over. Inline rather than the claude-credential action, because
+#      QUOTA before reaching a model (quota wording, $0, no model usage), it runs once
+#      more on CLAUDE_CODE_OAUTH_TOKEN_SECONDARY, with a warning. A run that reached the
+#      model may have posted already, so it is never retried; nor is a rejected token. Inline rather than the claude-credential action, because
 #      this job checks out fork code and a local action would be read from it.
 #
 # WHY a reusable workflow and not a local composite action: for pull_request_target
@@ -94,12 +94,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HAS_SECONDARY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' }}
-      # Exhaustion wording only, in ASCII (the real text carries U+00B7). A transient
-      # 429 "rate limit" is throttling, not an empty account. The authoritative lists
-      # are in util/classify_claude_probe.py, which this job cannot run: it may hold a
-      # fork's checkout.
-      QUOTA_RE: 'spend limit|usage limit|weekly limit|session limit|limit resets|hit your limit|limit reached|quota|credit balance|out of credit|billing|upgrade your plan'
-      CREDENTIAL_RE: 'authentication|invalid api key|invalid x-api-key|invalid bearer|unauthorized|oauth token|token has expired|/login|not logged in|no credential'
+      # Copies of src/gaia/eval/claude_refusal.py, which this job cannot import: it may
+      # hold a fork's checkout. A unit test fails if they drift. A bare per-minute 429
+      # ("rate limit") is throttling, not quota, so it is in neither.
+      QUOTA_RE: 'hit your limit|limit reached|limit resets|spend limit|usage limit|weekly limit|session limit|quota|credit balance|purchase credits|out of credit|insufficient credit|billing|upgrade your plan|admin-settings/usage'
+      CREDENTIAL_RE: 'authentication_error|authentication failed|invalid api key|invalid x-api-key|invalid bearer token|invalid_token|unauthorized|oauth token|token has expired|please run /login|not logged in|no credential'
     steps:
       # --- PR events (pull_request_target = review, pull_request_review_comment = reply):
       #     checkout the PR head and diff it against base. ---
@@ -415,9 +414,14 @@ jobs:
           claude_args: ${{ inputs.claude_args }}
 
       # --- Fail over to the secondary account, on quota only ---
-      # Reads the CLI's own result record, like the classification below. Quota
-      # WORDING is required: a refusal with no text, or one naming the credential,
-      # never fails over, because the other account would hide a token to rotate.
+      # Reads the CLI's own result record, like the classification below. Two
+      # conditions, both required:
+      #   - the call never reached a model (is_error, empty modelUsage, $0). A run
+      #     that did may already have posted through `gh` (pr-comment,
+      #     issue-handler, issue-triage), and a retry would post twice;
+      #   - quota WORDING (QUOTA_RE, never a bare per-minute 429). A refusal with no
+      #     text, or one naming the credential, never fails over: the other account
+      #     would hide a token to rotate.
       - name: Check whether Claude was refused for quota
         id: quota
         if: "!cancelled()"
@@ -426,11 +430,15 @@ jobs:
         run: |
           set -uo pipefail
           quota=false
+          early=false
           detail=""
           if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
             result=$(jq -s -c '[.. | objects | select(.type == "result")] | last // empty' \
               "$EXEC_FILE" 2>/dev/null || true)
             if [ -n "$result" ] && [ "$(printf '%s' "$result" | jq -r '.is_error')" = "true" ]; then
+              early=$(printf '%s' "$result" | jq -r '
+                if (((.modelUsage // {}) | length) == 0) and ((.total_cost_usd // 0) == 0)
+                then "true" else "false" end')
               detail=$(printf '%s' "$result" \
                 | jq -r '[.result, .error] | map(select(type == "string")) | join(" ")' \
                 | tr -d '\r\n' | cut -c1-300)
@@ -439,23 +447,23 @@ jobs:
               fi
             fi
           fi
-          echo "quota=$quota" >> "$GITHUB_OUTPUT"
-          if [ "$quota" = "true" ] && [ "$HAS_SECONDARY" = "true" ]; then
+          retry=false
+          if [ "$quota" = "true" ] && [ "$early" != "true" ]; then
+            echo "::warning title=Claude ran out of quota mid-run::The primary Claude account ran out of quota after reaching the model (${detail:-no text}). It is not retried on the secondary: this run may already have posted, and a retry could post twice."
+          elif [ "$quota" = "true" ] && [ "$HAS_SECONDARY" = "true" ]; then
+            retry=true
             echo "::warning title=Claude account: using the backup::The primary Claude account is out of quota (${detail:-no text}), so this run is retried once on the secondary account (CLAUDE_CODE_OAUTH_TOKEN_SECONDARY)."
           elif [ "$quota" = "true" ]; then
             echo "::warning title=No backup Claude account::The primary Claude account is out of quota and CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so there is nothing to retry on."
           fi
-
-      # A comment attempt 1 left half-written must not be posted under attempt 2's.
-      - name: Discard attempt 1's comment before the retry
-        if: "!cancelled() && steps.quota.outputs.quota == 'true' && env.HAS_SECONDARY == 'true' && inputs.comment_file != ''"
-        env:
-          COMMENT_FILE: ${{ inputs.comment_file }}
-        run: rm -f "$COMMENT_FILE"
+          {
+            echo "quota=$quota"
+            echo "retry=$retry"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Run Claude on the secondary account (primary out of quota)
         id: b1
-        if: "!cancelled() && steps.quota.outputs.quota == 'true' && env.HAS_SECONDARY == 'true'"
+        if: "!cancelled() && steps.quota.outputs.retry == 'true'"
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
         continue-on-error: true
         with:
@@ -629,10 +637,10 @@ jobs:
           fi
           # Wording only NARROWS an outage the numbers already established; it can never
           # create or suppress one. ASCII substrings only — the real text carries U+00B7.
-          # The authoritative phrase list lives in util/classify_claude_probe.py.
+          # QUOTA_RE is the shared list (src/gaia/eval/claude_refusal.py).
           cause="an exhausted Anthropic spend/rate limit (amd/gaia#4080) or a rejected credential"
           todo="check the org budget at https://claude.ai/admin-settings/usage first, then CLAUDE_CODE_OAUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN_SECONDARY"
-          if printf '%s' "$said" | grep -qiE 'spend limit|usage limit|weekly limit|rate limit|quota|credit balance|billing|upgrade your plan'; then
+          if printf '%s' "$said" | grep -qiE "$QUOTA_RE"; then
             cause="every configured Claude account is out of BUDGET (amd/gaia#4080) — the credentials are fine, do not rotate them"
             todo="raise the org spend limit at https://claude.ai/admin-settings/usage, or wait for the reset the CLI quoted"
           fi
