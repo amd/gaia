@@ -1715,6 +1715,11 @@ does. `LEMONADE_AMD_API_KEY` in **Lemonade's** environment still takes
 precedence over a stored token; if both are set, Lemonade says so rather than
 silently choosing.
 
+Chat with Claude models (`amd.Claude-*`) skips Lemonade for the gateway's Anthropic route,
+which caches prompts; `test` uses that route for them too. Set
+`GAIA_GATEWAY_ANTHROPIC_BASE_URL` if your gateway isn't AMD's. See
+[Claude models and prompt caching](/guides/llm-gateway#claude-models-and-prompt-caching).
+
 When a gateway model answers HTTP 404, GAIA records it. `status` and `models` then
 mark it unavailable, and `chat`, `llm`, and `prompt` warn when it is your saved
 default. GAIA never switches models for you; pick another with `gaia gateway use <id>`.
