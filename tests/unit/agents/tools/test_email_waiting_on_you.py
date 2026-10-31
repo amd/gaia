@@ -184,12 +184,48 @@ def test_a_cc_only_request_is_not_assigned_to_the_user(api):
     mails = _thread(
         "Could you please confirm?",
         to="Owner <owner@example.com>",
+        cc=f"Me <{USER}>",
     )
-    # The helper's default user is only in CC for this adversarial shape.
-    latest = mails[-1]
-    latest.to = "Owner <owner@example.com>"
-    latest.cc = f"Me <{USER}>"
     assert _scan(api, mails)["waiting_on_you"] == []
+
+
+_GMAIL_HTML_QUOTE = (
+    '<div dir="ltr">Thanks for the update.</div><br><div class="gmail_quote">'
+    '<div dir="ltr" class="gmail_attr">On Mon, Alice wrote:<br></div>'
+    "<blockquote>Could you please confirm the numbers?</blockquote></div>"
+)
+_OUTLOOK_HTML_QUOTE = (
+    "<html><body><div>Thanks for the update.</div>"
+    '<div id="appendonsend"></div><hr style="display:inline-block;width:98%">'
+    '<div id="divRplyFwdMsg" dir="ltr"><b>From:</b> Alice<br><b>Sent:</b> Monday'
+    "</div><div>Could you please confirm the numbers?</div></body></html>"
+)
+
+
+@pytest.mark.parametrize("body", [_GMAIL_HTML_QUOTE, _OUTLOOK_HTML_QUOTE])
+def test_an_html_quoted_old_ask_is_not_a_new_request(api, body):
+    assert _scan(api, _thread(body, html=True))["waiting_on_you"] == []
+
+
+@pytest.mark.parametrize("body", [_GMAIL_HTML_QUOTE, _OUTLOOK_HTML_QUOTE])
+def test_an_html_new_ask_above_a_quote_still_qualifies(api, body):
+    body = body.replace("Thanks for the update.", "Could you send the deck?")
+    out = _scan(api, _thread(body, html=True))
+    assert [i["message_id"] for i in out["waiting_on_you"]] == ["r1"]
+
+
+def test_an_outlook_plain_text_header_block_is_not_a_new_request(api):
+    body = (
+        "Thanks, noted.\n\n________________________________\nFrom: Alice\n"
+        "Sent: Monday, October 26, 2026 9:00 AM\nTo: Me\n"
+        "Could you please confirm the numbers?"
+    )
+    assert _scan(api, _thread(body))["waiting_on_you"] == []
+
+
+def test_a_from_line_without_a_sent_line_is_not_a_quote(api):
+    body = "From: the finance team side, could you please confirm the numbers?"
+    assert len(_scan(api, _thread(body))["waiting_on_you"]) == 1
 
 
 def test_quote_stripping_keeps_the_new_text_line_breaks():

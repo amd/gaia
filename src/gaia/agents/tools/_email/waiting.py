@@ -429,6 +429,17 @@ _ATTRIBUTION_RE = re.compile(r"^On\b.*wrote:\s*$", re.IGNORECASE)
 _ORIGINAL_MESSAGE_RE = re.compile(
     r"^-{2,}\s*(Original|Forwarded) Message\s*-{2,}", re.IGNORECASE
 )
+# Outlook's plain-text reply header: "From: ..." directly followed by "Sent: ...".
+_HEADER_FROM_RE = re.compile(r"^From:\s*\S", re.IGNORECASE)
+_HEADER_SENT_RE = re.compile(r"^(Sent|Date):\s*\S", re.IGNORECASE)
+# Where an HTML reply's quoted history starts: Gmail's gmail_quote, Outlook's
+# divRplyFwdMsg / appendonsend, Yahoo and Thunderbird markers, or a blockquote.
+# Tag stripping flattens HTML onto one line, so the line markers above miss it.
+_HTML_QUOTE_RE = re.compile(
+    r"<blockquote\b|<[^>]*\b(?:gmail_quote|divRplyFwdMsg|appendonsend"
+    r"|yahoo_quoted|moz-cite-prefix)\b",
+    re.IGNORECASE,
+)
 
 
 def strip_quoted_text(body: str) -> str:
@@ -437,15 +448,30 @@ def strip_quoted_text(body: str) -> str:
     Waiting-on-you signals must not inspect the whole rendered body: a reply
     that only quotes an earlier ``Could you...?`` is not a new request.
     """
+    lines = (body or "").splitlines()
     kept: List[str] = []
-    for line in (body or "").splitlines():
+    for index, line in enumerate(lines):
         stripped = line.strip()
         if _ATTRIBUTION_RE.match(stripped) or _ORIGINAL_MESSAGE_RE.match(stripped):
             break
+        if _HEADER_FROM_RE.match(stripped):
+            following = next((x.strip() for x in lines[index + 1 :] if x.strip()), "")
+            if _HEADER_SENT_RE.match(following):
+                break
         if stripped.startswith(">"):
             continue
         kept.append(line)
     return "\n".join(kept).strip()
+
+
+def new_text(message: Dict[str, Any]) -> str:
+    """The latest message's own words as text, quoted history removed."""
+    body = message.get("body") or ""
+    if (message.get("body_content_type") or "text").lower() == "html":
+        quote = _HTML_QUOTE_RE.search(body)
+        if quote:
+            body = body[: quote.start()]
+    return strip_quoted_text(plain_body({**message, "body": body}))
 
 
 def is_auto_reply(message: Dict[str, Any]) -> bool:
@@ -557,7 +583,7 @@ def _qualify(
         return None  # The ask is addressed to someone else, not the user.
 
     subject = latest.get("subject", "")
-    body = strip_quoted_text(plain_body(latest))
+    body = new_text(latest)
     if is_confidently_promotional(subject, body, latest.get("_label_ids") or ()):
         return None
 
