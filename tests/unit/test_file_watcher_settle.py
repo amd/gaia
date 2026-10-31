@@ -170,6 +170,24 @@ def test_a_slow_callback_does_not_block_the_observer_thread(tmp_path):
         handler.close()
 
 
+def test_an_attribute_event_uses_the_modified_settle_path(tmp_path):
+    target = tmp_path / "edited.txt"
+    target.write_text("updated")
+    seen = []
+    handler = FileChangeHandler(
+        on_modified=lambda path: seen.append(Path(path).read_text()),
+        extensions=[".txt"],
+        debounce_seconds=0,
+    )
+    try:
+        handler.on_attrib(_event(target))
+        assert handler.wait_idle(10)
+        assert seen == ["updated"]
+        assert handler.telemetry["files_modified"] == 1
+    finally:
+        handler.close()
+
+
 def test_a_file_deleted_before_it_settles_is_not_reported(tmp_path):
     target = tmp_path / "tmp.txt"
     target.write_text("x")
