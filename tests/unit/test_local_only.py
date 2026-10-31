@@ -353,7 +353,9 @@ def test_generate_image_checks_its_default_model(
         client.generate_image("a cat")
 
 
-def test_edit_image_checks_the_requested_model(local_only_on, client, no_network, tmp_path):
+def test_edit_image_checks_the_requested_model(
+    local_only_on, client, no_network, tmp_path
+):
     source = tmp_path / "source.png"
     source.write_bytes(b"png")
 

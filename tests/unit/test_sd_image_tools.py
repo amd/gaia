@@ -10,8 +10,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.security import PathValidator
 from gaia.sd.mixin import SDToolsMixin
+from gaia.security import PathValidator
 
 
 @pytest.fixture
@@ -71,7 +71,9 @@ def test_registered_edit_and_upscale_refuse_out_of_scope_without_call(
     host.sd_client.upscale_image.assert_not_called()
 
 
-def test_registered_tools_allow_in_scope_image_and_save_result(tmp_path, registered_tools):
+def test_registered_tools_allow_in_scope_image_and_save_result(
+    tmp_path, registered_tools
+):
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     source = allowed / "source.png"
@@ -92,16 +94,16 @@ def test_registered_tools_allow_in_scope_image_and_save_result(tmp_path, registe
     host.sd_client.upscale_image.assert_called_once()
 
 
-def test_registered_tools_report_empty_or_invalid_image_response(tmp_path, registered_tools):
+def test_registered_tools_report_empty_or_invalid_image_response(
+    tmp_path, registered_tools
+):
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     source = allowed / "source.png"
     source.write_bytes(b"png")
     host = _scoped_host(registered_tools, allowed)
     host.sd_client.edit_image.return_value = {"data": []}
-    host.sd_client.upscale_image.return_value = {
-        "data": [{"b64_json": 42}]
-    }
+    host.sd_client.upscale_image.return_value = {"data": [{"b64_json": 42}]}
 
     edit = _TOOL_REGISTRY["edit_image"]["function"]
     upscale = _TOOL_REGISTRY["upscale_image"]["function"]
