@@ -4597,6 +4597,11 @@ def _handle_schedule(args):
 
 #: `gaia init --plan` / a model choice that needs the user to confirm it.
 INIT_NEEDS_ACK_EXIT = 4
+#: The `gaia init` flag that confirms each acknowledgement the plan can ask for.
+_INIT_ACK_FLAGS = {
+    "acknowledge_no_fit": "--acknowledge-no-fit",
+    "acknowledge_low_disk": "--allow-low-disk",
+}
 
 
 def _print_init_plan(plan: dict) -> None:
@@ -4656,14 +4661,16 @@ def _init_model_choices(args, profile: str):
             setup_plan.choose_chat_model(args.use_model, args.acknowledge_no_fit)
         if not args.plan:
             return None
-        plan = setup_plan.build_plan(profile, args.skip_chat_model)
+        plan = setup_plan.build_plan(
+            profile, args.skip_chat_model, extra_models=args.download_model
+        )
     except setup_plan.NeedsAcknowledgement as e:
         if args.json:
             print(json.dumps({"needs_acknowledgement": e.detail}))
         else:
             print(
-                f"{e.detail['message']} Re-run with --{e.detail['acknowledge'].replace('_', '-')} "
-                "to use it anyway.",
+                f"{e.detail['message']} Re-run with "
+                f"{_INIT_ACK_FLAGS[e.detail['acknowledge']]} to go ahead anyway.",
                 file=sys.stderr,
             )
         return INIT_NEEDS_ACK_EXIT

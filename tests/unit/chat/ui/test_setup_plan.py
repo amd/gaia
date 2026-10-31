@@ -652,3 +652,18 @@ def test_run_endpoint_asks_before_downloading_past_the_free_space(
     r = client.post("/api/setup/run", json={"acknowledge_low_disk": True}, headers=UI)
     assert r.status_code == 200
     assert seen == [{"allow_low_disk": True, "keep_trying": False}]
+
+
+def test_plan_counts_a_model_downloaded_beside_the_profile(flm_box):
+    flm_box(capacity=BIG_GPU, downloaded=(FLM,))
+    sp.choose_chat_model(FLM)
+    plan = sp.build_plan(extra_models=[DEFAULT_MODEL_NAME])
+    assert DEFAULT_MODEL_NAME in [m["id"] for m in plan["models"]]
+    assert plan["download_gb"] == pytest.approx(5.6 + 0.3)
+
+
+def test_without_a_server_each_action_says_what_it_could_not_do(no_server):
+    with pytest.raises(sp.SetupPlanError, match="can't remove Gemma"):
+        sp.remove_model(DEFAULT_MODEL_NAME)
+    with pytest.raises(sp.SetupPlanError, match="can't download"):
+        sp.prepare_download(DEFAULT_MODEL_NAME)

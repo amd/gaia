@@ -283,14 +283,19 @@ def _catalog(
     return catalog
 
 
-def build_plan(profile: str = PROFILE, skip_chat_model: bool = False) -> Dict[str, Any]:
+def build_plan(
+    profile: str = PROFILE,
+    skip_chat_model: bool = False,
+    extra_models: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """The Lemonade, models and downloads ``gaia init --profile <profile>`` will use.
 
     Until the server setup will use answers, the hardware cannot be read, so the
     chat model is the one setup starts from and ``decided_after_server`` says
     the final pick comes once the server answers. ``catalog`` is every model
     the user can pick from; ``models`` is what setup will download, without
-    the ones in ``skipped_models``.
+    the ones in ``skipped_models``. *extra_models* are downloaded beside the
+    profile's, as ``gaia init --download-model`` does.
     """
     from gaia.config import GaiaConfigError
     from gaia.installer.init_command import (
@@ -324,6 +329,9 @@ def build_plan(profile: str = PROFILE, skip_chat_model: bool = False) -> Dict[st
         )
         if skip_chat_model:
             planned = [m for m in planned if is_embedding_model_id(m)]
+        for model_id in extra_models or []:
+            if not any(model_choice.ids_match(model_id, m) for m in planned):
+                planned.append(model_id)
         skipped = model_choice.skipped_models()
         selected, _ = model_choice.split_skipped(planned, skipped)
         system_info = None
@@ -406,12 +414,13 @@ def check_disk(
     return plan
 
 
-def _require_client():
+def _require_client(action: str):
+    """A client for the server setup uses; raises when it isn't running yet."""
     client = _client(_lemonade()["url"])
     if client is None:
         raise SetupPlanError(
-            "The model server is not running yet, so this PC's memory can't be "
-            "checked. Start setup; you can change the chat model once it is up."
+            f"The model server is not running yet, so GAIA can't {action}. "
+            "Start setup first; this works once the server is up."
         )
     return client
 
@@ -432,7 +441,7 @@ def choose_chat_model(model_id: str, acknowledge_no_fit: bool = False) -> None:
         recommend_default_chat_model,
     )
 
-    client = _require_client()
+    client = _require_client("check this PC's memory for that model")
     try:
         recommended, _, capacity = recommend_default_chat_model(
             client, judge_free_memory=False
@@ -507,7 +516,7 @@ def remove_model(model_id: str) -> float:
     from gaia.config import GaiaConfigError
     from gaia.llm.lemonade_client import LemonadeClientError
 
-    client = _require_client()
+    client = _require_client(f"remove {model_id}")
     try:
         entry = next(
             (
@@ -556,7 +565,7 @@ def prepare_download(model_id: str, acknowledge_low_disk: bool = False):
     )
     if shortfall and not acknowledge_low_disk:
         raise NeedsAcknowledgement(shortfall)
-    client = _require_client()
+    client = _require_client(f"download {entry['id']}")
     try:
         model_choice.set_skipped(entry["id"], False)
     except GaiaConfigError as e:

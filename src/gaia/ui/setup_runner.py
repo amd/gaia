@@ -772,6 +772,8 @@ class SetupRunner:
                 entry.bytes_total = int(event.get("bytes_total") or entry.bytes_total)
                 entry.speed_bps = int(event.get("speed_bps") or 0)
                 entry.retrying_until = None
+                if self._run is not None:
+                    self._mirror_totals(self._run)
             elif kind == "model_done":
                 entry.state, entry.speed_bps = "verifying", 0
                 entry.bytes_done = max(entry.bytes_done, entry.bytes_total)
@@ -785,6 +787,14 @@ class SetupRunner:
                 entry.error_kind = error_kind(message)
                 entry.state, entry.speed_bps = "failed", 0
                 entry.error = _failure_text(model_id, message, entry.error_kind)
+
+    def _mirror_totals(self, run: SetupRun) -> None:
+        """Fill the run's single bar from the per-model totals. Caller holds the lock."""
+        totals = overall(list(self._models.values()))
+        if totals["percent"] is None:
+            return
+        run.percent = totals["percent"]
+        run.size = f"{totals['bytes_done'] / 1e9:.2f} GB of {totals['bytes_total'] / 1e9:.2f} GB"
 
     def _settle_models(self, ready: Optional[set], failed: Dict[str, str]) -> None:
         """After a run: downloaded models become ready, or failed when their

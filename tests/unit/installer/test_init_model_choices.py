@@ -361,13 +361,35 @@ def test_a_hand_broken_skip_list_stops_init_before_any_download(lemonade, home):
 
 
 def test_check_does_not_count_a_skipped_model_as_missing(lemonade, home, monkeypatch):
+    """Gemma only does vision beside a user-chosen chat model; skipping it is fine."""
+    from gaia.installer.init_command import check_setup_status
+
+    lemonade(downloaded=[EMBEDDER, FLM])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+    home.write_text(json.dumps({"default_model": FLM}))
+    assert check_setup_status("gaia").ready
+    lemonade(downloaded=[EMBEDDER])
+    home.write_text(json.dumps({"skipped_models": [DEFAULT_EMBEDDING_MODEL]}))
+    assert not check_setup_status("gaia").ready
+
+
+def test_check_says_there_is_no_chat_model_when_the_chat_model_is_skipped(
+    lemonade, home, monkeypatch
+):
+    """Ready here would let the first chat make Lemonade pull the skipped model."""
     from gaia.installer.init_command import check_setup_status
 
     lemonade(downloaded=[EMBEDDER])
     monkeypatch.setenv("LEMONADE_BASE_URL", URL)
-    assert not check_setup_status("gaia").ready
     home.write_text(json.dumps({"skipped_models": [DEFAULT_MODEL_NAME]}))
-    assert check_setup_status("gaia").ready
+    status = check_setup_status("gaia")
+    assert not status.ready
+    assert status.reasons == [
+        f"No local chat model: {DEFAULT_MODEL_NAME} is skipped. Pick another chat "
+        "model (`gaia init --use-model`) or a cloud provider"
+    ]
+    # A cloud-backed session needs no local chat model.
+    assert check_setup_status("gaia", skip_chat_model=True).ready
 
 
 def test_verify_never_loads_a_skipped_chat_model(lemonade, home, monkeypatch):

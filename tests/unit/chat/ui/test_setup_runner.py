@@ -1157,3 +1157,27 @@ def test_cancelling_one_download_marks_it_cancelled_and_resumable():
     assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "cancelled")
     assert _models(runner)[GEMMA]["can_retry"]
     assert runner.cancel("not-downloading") is False
+
+
+def test_the_run_bar_still_moves_when_init_reports_progress_as_json():
+    """The setup screen draws run.percent; --progress-json must keep it filled."""
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._consume(run, _plan_event())
+    assert run.view()["percent"] is None
+    runner._consume(
+        run,
+        json.dumps(
+            {
+                "event": "progress",
+                "model": QWEN,
+                "bytes_done": 11_650_000_000,
+                "bytes_total": 23_300_000_000,
+                "speed_bps": 1,
+            }
+        ),
+    )
+    view = run.view()
+    assert view["percent"] == 50
+    assert view["size"] == "11.98 GB of 23.63 GB"

@@ -690,21 +690,38 @@ def check_setup_status(
                 stage="server",
             )
 
+    chat_choice = None
     if not skip_chat_model:
-        model_ids = with_chat_model(
-            profile,
-            model_ids,
-            lambda: resolve_init_chat_model(
-                client, reset_corrupt=False, enforce_fit=False
-            ),
-        )
+        resolved = []
+
+        def resolve_chat():
+            resolved.append(
+                resolve_init_chat_model(client, reset_corrupt=False, enforce_fit=False)
+            )
+            return resolved[-1]
+
+        model_ids = with_chat_model(profile, model_ids, resolve_chat)
+        if resolved:
+            chat_choice = resolved[-1].model_id
+        elif profile not in ("sd", "npu"):
+            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+            chat_choice = DEFAULT_MODEL_NAME
 
     if skip_chat_model:
         model_ids = [m for m in model_ids if is_embedding_model_id(m)]
     # The user chose not to have these; setup is not waiting on them.
-    model_ids, _ = model_choice.split_skipped(model_ids, model_choice.skipped_models())
+    model_ids, dropped = model_choice.split_skipped(
+        model_ids, model_choice.skipped_models()
+    )
 
     reasons = []
+    if chat_choice and any(model_choice.ids_match(chat_choice, m) for m in dropped):
+        # Loading it on the first chat would make Lemonade pull it unasked.
+        reasons.append(
+            f"No local chat model: {chat_choice} is skipped. Pick another chat "
+            "model (`gaia init --use-model`) or a cloud provider"
+        )
     downloaded: Dict[str, bool] = {}
     for model_id in model_ids:
         try:
