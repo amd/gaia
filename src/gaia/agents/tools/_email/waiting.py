@@ -31,7 +31,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from email.utils import getaddresses, parseaddr
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Collection, Dict, List, Optional, Sequence, Set, Tuple
 
 from gaia.agents.tools._email.errors import MailboxError
 
@@ -304,7 +304,7 @@ _PROMO_LABELS = frozenset({"CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL"})
 # A tab that confidently says "not promotional" short-circuits the subject check.
 _NON_PROMO_LABELS = frozenset({"CATEGORY_UPDATES", "CATEGORY_PERSONAL"})
 
-_TAG_RE = re.compile(r"<[^>]+>")
+_TAG_RE = re.compile(r"<[^<>]+>")
 _FRACTION_RE = re.compile(r"(\.\d{6})\d+")
 
 
@@ -432,46 +432,104 @@ _ORIGINAL_MESSAGE_RE = re.compile(
 # Outlook's plain-text reply header: "From: ..." directly followed by "Sent: ...".
 _HEADER_FROM_RE = re.compile(r"^From:\s*\S", re.IGNORECASE)
 _HEADER_SENT_RE = re.compile(r"^(Sent|Date):\s*\S", re.IGNORECASE)
-# Where an HTML reply's quoted history starts: Gmail's gmail_quote, Outlook's
-# divRplyFwdMsg / appendonsend, Yahoo and Thunderbird markers, or a blockquote.
-# Tag stripping flattens HTML onto one line, so the line markers above miss it.
-_HTML_QUOTE_RE = re.compile(
-    r"<blockquote\b|<[^>]*\b(?:gmail_quote|divRplyFwdMsg|appendonsend"
-    r"|yahoo_quoted|moz-cite-prefix)\b",
+_HEADER_FIELD_RE = re.compile(r"^(Sent|Date|To|Cc|Subject):", re.IGNORECASE)
+_BLOCKQUOTE_TAG_RE = re.compile(r"<(/?)blockquote\b[^<>]*>", re.IGNORECASE)
+# Outlook, Yahoo and Thunderbird start quoted history with these markers rather
+# than a blockquote. `[^<>]` keeps each match attempt inside a single tag.
+_HTML_QUOTE_MARKER_RE = re.compile(
+    r"<[^<>]*\b(?:divRplyFwdMsg|appendonsend|yahoo_quoted|moz-cite-prefix)\b[^<>]*>",
     re.IGNORECASE,
 )
+_HTML_BREAK_RE = re.compile(
+    r"<(?:br|/?(?:div|p|li|tr|hr|h[1-6]|table|ul|ol))\b[^<>]*>", re.IGNORECASE
+)
+_QUOTE_MARKER_LINE = "\n-----Original Message-----\n"
 
 
-def strip_quoted_text(body: str) -> str:
+def _drop_blockquotes(body: str) -> str:
+    """``body`` without the contents of its (possibly nested) blockquotes."""
+    kept: List[str] = []
+    depth, at = 0, 0
+    for tag in _BLOCKQUOTE_TAG_RE.finditer(body):
+        if depth == 0:
+            kept.append(body[at : tag.start()])
+        depth = max(0, depth - 1) if tag.group(1) else depth + 1
+        at = tag.end()
+        if depth == 0:
+            kept.append("\n")
+    if depth == 0:
+        kept.append(body[at:])
+    return "".join(kept)
+
+
+def _text_lines(message: Dict[str, Any], *, drop_blockquotes: bool) -> List[str]:
+    """The body as text lines, HTML block tags turned into line breaks."""
+    body = message.get("body") or ""
+    if (message.get("body_content_type") or "text").lower() == "html":
+        if drop_blockquotes:
+            body = _drop_blockquotes(body)
+        body = _HTML_QUOTE_MARKER_RE.sub(_QUOTE_MARKER_LINE, body)
+        body = html.unescape(_TAG_RE.sub(" ", _HTML_BREAK_RE.sub("\n", body)))
+    return body.splitlines()
+
+
+def _norm(line: str) -> str:
+    return " ".join(line.lstrip("> ").lower().split())
+
+
+def quoted_lines(messages: Sequence[Dict[str, Any]]) -> Set[str]:
+    """Normalized lines of earlier messages, to recognise them when re-quoted."""
+    seen: Set[str] = set()
+    for message in messages:
+        for line in _text_lines(message, drop_blockquotes=False):
+            normalized = _norm(line)
+            if normalized:
+                seen.add(normalized)
+    return seen
+
+
+def strip_quoted_text(body: str, earlier: Collection[str] = ()) -> str:
     """Keep the sender's new text, not an older quoted ask.
 
-    Waiting-on-you signals must not inspect the whole rendered body: a reply
-    that only quotes an earlier ``Could you...?`` is not a new request.
+    Drops ``>`` lines, attribution lines ("On ... wrote:", "Original
+    Message", an Outlook From/Sent header) and, below such a marker, lines that
+    repeat an *earlier* message, since Outlook quotes without ``>``. Anything
+    else stays, so a bottom-posted or inline answer still counts.
     """
     lines = (body or "").splitlines()
+    following = [""] * len(lines)
+    upcoming = ""
+    for index in range(len(lines) - 1, -1, -1):
+        following[index] = upcoming
+        if lines[index].strip():
+            upcoming = lines[index].strip()
+
     kept: List[str] = []
+    below_marker = in_header = False
     for index, line in enumerate(lines):
         stripped = line.strip()
-        if _ATTRIBUTION_RE.match(stripped) or _ORIGINAL_MESSAGE_RE.match(stripped):
-            break
-        if _HEADER_FROM_RE.match(stripped):
-            following = next((x.strip() for x in lines[index + 1 :] if x.strip()), "")
-            if _HEADER_SENT_RE.match(following):
-                break
         if stripped.startswith(">"):
+            continue
+        if _ATTRIBUTION_RE.match(stripped) or _ORIGINAL_MESSAGE_RE.match(stripped):
+            below_marker, in_header = True, False
+            continue
+        if _HEADER_FROM_RE.match(stripped) and _HEADER_SENT_RE.match(following[index]):
+            below_marker, in_header = True, True
+            continue
+        if in_header:
+            if _HEADER_FIELD_RE.match(stripped):
+                continue
+            in_header = False
+        if below_marker and stripped and _norm(stripped) in earlier:
             continue
         kept.append(line)
     return "\n".join(kept).strip()
 
 
-def new_text(message: Dict[str, Any]) -> str:
+def new_text(message: Dict[str, Any], earlier: Collection[str] = ()) -> str:
     """The latest message's own words as text, quoted history removed."""
-    body = message.get("body") or ""
-    if (message.get("body_content_type") or "text").lower() == "html":
-        quote = _HTML_QUOTE_RE.search(body)
-        if quote:
-            body = body[: quote.start()]
-    return strip_quoted_text(plain_body({**message, "body": body}))
+    lines = _text_lines(message, drop_blockquotes=True)
+    return strip_quoted_text("\n".join(lines), earlier)
 
 
 def is_auto_reply(message: Dict[str, Any]) -> bool:
@@ -583,7 +641,7 @@ def _qualify(
         return None  # The ask is addressed to someone else, not the user.
 
     subject = latest.get("subject", "")
-    body = new_text(latest)
+    body = new_text(latest, quoted_lines(messages[:-1]))
     if is_confidently_promotional(subject, body, latest.get("_label_ids") or ()):
         return None
 
