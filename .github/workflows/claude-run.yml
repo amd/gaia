@@ -378,6 +378,58 @@ jobs:
           prompt: ${{ inputs.prompt }}
           claude_args: ${{ inputs.claude_args }}
 
+      # --- Attempt 3 (the other account, when this one refused) ---
+      # A spent account refuses the call before any model work, so nothing was posted
+      # or billed and the same job can run again on the other account. Without this a
+      # refused review was simply lost: the account switch only moves later runs.
+      - name: Did this account refuse before reaching a model?
+        id: refused
+        if: "!cancelled()"
+        env:
+          EXEC_FILE: ${{ steps.a1.outputs.execution_file || steps.a2.outputs.execution_file }}
+          ACCOUNT: ${{ vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'secondary' || 'primary' }}
+          OTHER_SET: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY) != '' }}
+        run: |
+          set -uo pipefail
+          refused=false
+          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
+            # The classifier's not_started rule: an error that billed nothing.
+            refused=$(jq -s -r '
+              ([.. | objects | select(.type == "result")] | last) as $r
+              | if $r == null then "false"
+                elif $r.is_error == true
+                  and ((($r.modelUsage // {}) | length) == 0)
+                  and (($r.total_cost_usd // 0) == 0)
+                then "true" else "false" end' "$EXEC_FILE" 2>/dev/null || echo false)
+          fi
+          other=secondary
+          if [ "$ACCOUNT" = "secondary" ]; then other=primary; fi
+          retry=false
+          if [ "$refused" = "true" ]; then
+            if [ "$OTHER_SET" = "true" ]; then
+              retry=true
+              echo "::notice title=Claude account failover::The $ACCOUNT Claude account refused this call before it reached a model, so it runs again on the $other account."
+            else
+              echo "::warning title=No other Claude account::The $ACCOUNT Claude account refused this call, and no $other account token is set, so nothing can take over."
+            fi
+          fi
+          {
+            echo "refused=$refused"
+            echo "retry=$retry"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run Claude (attempt 3 — the other account)
+        id: a3
+        if: "!cancelled() && steps.refused.outputs.retry == 'true'"
+        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        continue-on-error: true
+        with:
+          claude_code_oauth_token: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY) }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
+          prompt: ${{ inputs.prompt }}
+          claude_args: ${{ inputs.claude_args }}
+
       # --- Tell "the bot never ran" apart from "the bot found problems" ---
       # An outage used to render exactly like a failed review: no comment, a posting
       # step that said "Claude produced no review", and a verification warning blaming
@@ -389,7 +441,9 @@ jobs:
         id: harness
         if: "!cancelled()"
         env:
-          EXEC_FILE: ${{ steps.a1.outputs.execution_file || steps.a2.outputs.execution_file }}
+          # The last attempt decides: after a failover that is the other account's run.
+          EXEC_FILE: ${{ steps.a3.outputs.execution_file || steps.a1.outputs.execution_file || steps.a2.outputs.execution_file }}
+          FIRST_REFUSED: ${{ steps.refused.outputs.refused }}
         run: |
           set -uo pipefail
           status=no_output
@@ -427,6 +481,11 @@ jobs:
             quota_suspected=true
           # Exhaustion wording only: a transient 429 "rate limit" is not an empty account.
           elif [ "$status" = "errored" ] && printf '%s' "$detail" | grep -qiE 'spend limit|usage limit|weekly limit|session limit|limit resets|quota|credit balance|billing|upgrade your plan'; then
+            quota_suspected=true
+          fi
+          # A failover that then succeeded still means the first account is spent:
+          # ask the switch to move later runs off it.
+          if [ "${FIRST_REFUSED:-false}" = "true" ]; then
             quota_suspected=true
           fi
           {

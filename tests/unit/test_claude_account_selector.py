@@ -19,6 +19,13 @@ SELECTOR = (
     " || secrets.CLAUDE_CODE_OAUTH_TOKEN)"
 )
 
+#: The account the job did NOT select: claude-run.yml retries a refused call on it.
+OTHER_SELECTOR = (
+    "(vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN"
+    " || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY)"
+)
+FAILOVER_WORKFLOWS = {"claude-run.yml"}
+
 # The switch job probes each account by name; reading the primary directly is its job.
 EXEMPT = {"claude-account-switch.yml"}
 
@@ -29,7 +36,7 @@ def _direct_reads(text: str) -> list[int]:
     """Line numbers that read the primary token outside the selector."""
     lines = []
     for number, line in enumerate(text.splitlines(), 1):
-        remainder = line.replace(SELECTOR, "")
+        remainder = line.replace(SELECTOR, "").replace(OTHER_SELECTOR, "")
         if _PRIMARY.search(remainder):
             lines.append(number)
     return lines
@@ -64,3 +71,13 @@ def test_a_direct_read_is_caught():
     assert (
         _direct_reads("token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}") == []
     )
+
+
+def test_only_the_failover_reads_the_other_account():
+    """The other account is for retrying a refused call, not for picking a token."""
+    readers = {
+        path.name
+        for path in WORKFLOWS.glob("*.yml")
+        if OTHER_SELECTOR in path.read_text(encoding="utf-8")
+    }
+    assert readers == FAILOVER_WORKFLOWS, readers

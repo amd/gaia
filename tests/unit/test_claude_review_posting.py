@@ -428,3 +428,129 @@ def test_the_ok_verdict_requires_the_pinned_model(runner, tmp_path, args, models
     assert (proc.returncode == 0) is ok, proc.stdout + proc.stderr
     if not ok:
         assert "::error" in proc.stdout
+
+
+# --- a refused account hands the job to the other account, in the same run ---
+
+OTHER_SELECTOR = (
+    "(vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN"
+    " || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY)"
+)
+
+
+def _by_id(runner, step_id):
+    return next(s for s in runner["jobs"]["run"]["steps"] if s.get("id") == step_id)
+
+
+def test_a_refused_call_runs_again_on_the_other_account(runner):
+    a1, a3 = _by_id(runner, "a1"), _by_id(runner, "a3")
+    assert a3["if"] == "!cancelled() && steps.refused.outputs.retry == 'true'"
+    assert OTHER_SELECTOR in a3["with"]["claude_code_oauth_token"]
+    # The same action, prompt and model as the first attempt — only the account moves.
+    assert a3["uses"] == a1["uses"]
+    for key in ("prompt", "claude_args", "allowed_non_write_users"):
+        assert a3["with"][key] == a1["with"][key], key
+    ids = [s.get("id") for s in runner["jobs"]["run"]["steps"]]
+    assert (
+        ids.index("a2") < ids.index("refused") < ids.index("a3") < ids.index("harness")
+    )
+
+
+def test_the_verdict_reads_the_failover_run_first(classify):
+    exec_file = classify["env"]["EXEC_FILE"]
+    assert exec_file.index("steps.a3.") < exec_file.index("steps.a1.")
+    assert "steps.refused.outputs.refused" in classify["env"]["FIRST_REFUSED"]
+
+
+def _run_refused(runner, tmp_path, records, account="primary", other_set="true"):
+    step = _by_id(runner, "refused")
+    log = tmp_path / "execution.json"
+    if records is not None:
+        log.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+    script = tmp_path / "refused.sh"
+    script.write_text(step["run"], encoding="utf-8", newline="\n")
+    out = tmp_path / "gh_output"
+    out.touch()
+    proc = subprocess.run(
+        [BASH, script.as_posix()],
+        env={
+            "PATH": os.environ["PATH"],
+            "EXEC_FILE": log.as_posix() if log.exists() else "",
+            "ACCOUNT": account,
+            "OTHER_SET": other_set,
+            "GITHUB_OUTPUT": out.as_posix(),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    values = dict(
+        line.split("=", 1)
+        for line in out.read_text(encoding="utf-8").splitlines()
+        if "=" in line
+    )
+    return values, proc.stdout
+
+
+@needs_shell
+def test_a_refusal_with_another_account_fails_over(runner, tmp_path):
+    values, stdout = _run_refused(
+        runner, tmp_path, [OUTAGE_RESULT], account="secondary"
+    )
+    assert values == {"refused": "true", "retry": "true"}
+    assert "runs again on the primary account" in stdout
+
+
+@needs_shell
+def test_a_refusal_with_no_other_account_says_so_and_does_not_retry(runner, tmp_path):
+    values, stdout = _run_refused(runner, tmp_path, [OUTAGE_RESULT], other_set="false")
+    assert values == {"refused": "true", "retry": "false"}
+    assert "no secondary account token is set" in stdout
+
+
+@needs_shell
+@pytest.mark.parametrize(
+    "records",
+    [
+        None,  # crashed before writing a log: attempt 2 owns that
+        [{"type": "result", "is_error": False, "modelUsage": {"m": {}}}],
+        # Reached the model, then failed: tokens were spent and a comment may exist.
+        [
+            {
+                "type": "result",
+                "is_error": True,
+                "total_cost_usd": 0.4,
+                "modelUsage": {"m": {}},
+            }
+        ],
+    ],
+)
+def test_only_a_refusal_before_any_model_work_fails_over(runner, tmp_path, records):
+    values, _ = _run_refused(runner, tmp_path, records)
+    assert values == {"refused": "false", "retry": "false"}
+
+
+@needs_shell
+def test_a_successful_failover_still_asks_to_switch_accounts(classify, tmp_path):
+    log = tmp_path / "execution.json"
+    log.write_text(
+        json.dumps({"type": "result", "is_error": False, "modelUsage": {"m": {}}}),
+        encoding="utf-8",
+    )
+    script = tmp_path / "classify.sh"
+    script.write_text(classify["run"], encoding="utf-8", newline="\n")
+    out = tmp_path / "gh_output"
+    out.touch()
+    subprocess.run(
+        [BASH, script.as_posix()],
+        env={
+            "PATH": os.environ["PATH"],
+            "EXEC_FILE": log.as_posix(),
+            "FIRST_REFUSED": "true",
+            "GITHUB_OUTPUT": out.as_posix(),
+        },
+        check=True,
+        capture_output=True,
+    )
+    assert "quota_suspected=true" in out.read_text(encoding="utf-8")

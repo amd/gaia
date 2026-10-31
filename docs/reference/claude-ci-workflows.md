@@ -110,6 +110,13 @@ account with the canary's probe:
 - **Answering again** (the weekly limit reset): it sets `CLAUDE_ACCOUNT=primary`.
 - **Bad credential:** it fails and switches nothing — rotate the token instead.
 
+**A refused call doesn't wait for the switch.** The jobs that run through `claude-run.yml`
+(PR review, re-review, PR comments, issue handling and triage) retry a call refused before it
+reached a model once, in the same job, on the other account, and post a "Claude account
+failover" notice naming both. Nothing was posted or billed by the refused attempt, so the retry
+can't double-post. The switch is still requested, so later runs start on the working account.
+A run that reached the model and then failed is never retried on the other account.
+
 Each run's summary shows the primary probe's verdict, when its limit resets, the plan, and
 what actually happened. Every Claude job also posts a "Claude account" notice naming the account
 it ran on — including when `CLAUDE_ACCOUNT` asks for the secondary but its secret is missing, so
