@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 )
 
 // Full access as a persistent preference.
@@ -84,31 +83,37 @@ func writeConfigKeys(keys map[string]any) (string, error) {
 		return "", fmt.Errorf("cannot locate ~/.gaia/config.json (no home directory)")
 	}
 
-	doc := map[string]any{}
-	raw, err := os.ReadFile(path)
-	if err == nil {
-		if err := json.Unmarshal(raw, &doc); err != nil {
-			// Refuse rather than overwrite: this file holds settings the user
-			// put there, and replacing it wholesale would lose them.
-			return path, fmt.Errorf(
-				"%s is not valid JSON (%v) — fix or delete it, then try again", path, err)
+	var writeErr error
+	if err := withConfigFileLock(path, func() error {
+		doc := map[string]any{}
+		raw, err := os.ReadFile(path)
+		if err == nil {
+			if err := json.Unmarshal(raw, &doc); err != nil {
+				// Refuse rather than overwrite: this file holds settings the user
+				// put there, and replacing it wholesale would lose them.
+				return fmt.Errorf(
+					"%s is not valid JSON (%v) — fix or delete it, then try again", path, err)
+			}
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("cannot read %s: %w", path, err)
 		}
-	} else if !os.IsNotExist(err) {
-		return path, fmt.Errorf("cannot read %s: %w", path, err)
-	}
 
-	for k, v := range keys {
-		doc[k] = v
+		for k, v := range keys {
+			doc[k] = v
+		}
+		body, err := json.MarshalIndent(doc, "", "  ")
+		if err != nil {
+			return fmt.Errorf("cannot encode %s: %w", path, err)
+		}
+		if err := writeConfigFileAtomic(path, append(body, '\n')); err != nil {
+			return fmt.Errorf("cannot write %s: %w", path, err)
+		}
+		return nil
+	}); err != nil {
+		writeErr = err
 	}
-	body, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return path, fmt.Errorf("cannot encode %s: %w", path, err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return path, fmt.Errorf("cannot create %s: %w", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, append(body, '\n'), 0o600); err != nil {
-		return path, fmt.Errorf("cannot write %s: %w", path, err)
+	if writeErr != nil {
+		return path, writeErr
 	}
 	return path, nil
 }
