@@ -128,6 +128,7 @@ class VLMClient:
         # Base server URL (without the /api/vN suffix) for user-facing messages.
         self.server_url = self.client.base_url.rsplit("/api/", 1)[0]
         self.auto_load = auto_load
+        self._vlm_catalog_checked = False
 
         logger.debug(f"VLM Client initialized: {self.vlm_model} at {self.server_url}")
 
@@ -225,30 +226,7 @@ Output format: Clean markdown with the ACTUAL text from the image."""
         ]
 
         try:
-            # Do not hide a multi-GB first-use download inside an image tool.
-            # This is especially important for gateway-only installs, where
-            # the chat model may be remote and ``gaia init`` deliberately did
-            # not pull the local vision model.  ``get_model_info`` is a
-            # best-effort preflight: non-Lemonade/OpenAI-compatible endpoints
-            # may not expose the catalog, so their normal request error remains
-            # authoritative.
-            try:
-                model_info = self.client.get_model_info(self.vlm_model)
-            except Exception:  # noqa: BLE001 - preserve the request's error
-                model_info = None
-            if isinstance(model_info, dict) and model_info.get("downloaded") is False:
-                size = model_info.get("size_gb")
-                size_hint = (
-                    f" (about {size:g} GB)" if isinstance(size, (int, float)) else ""
-                )
-                raise VLMExtractionError(
-                    f"Vision model '{self.vlm_model}' is not downloaded{size_hint}. "
-                    "Download it from Settings → Model or run `gaia init`, then "
-                    "retry the image request. GAIA will not download it during "
-                    "image analysis.",
-                    page_num,
-                    image_num,
-                )
+            self._refuse_missing_vlm(page_num, image_num)
 
             import time
 
@@ -303,6 +281,63 @@ Output format: Clean markdown with the ACTUAL text from the image."""
 
             logger.debug(traceback.format_exc())
             raise VLMExtractionError(str(e), page_num, image_num) from e
+
+    def _refuse_missing_vlm(self, page_num: int, image_num: int) -> None:
+        """Raise when the catalog explicitly says the VLM isn't downloaded.
+
+        Only an entry that matches the model and reports ``downloaded: false``
+        blocks; an absent entry, a missing field or an unreachable catalog
+        leaves the request path to decide. A non-blocking check is cached.
+        """
+        if self._vlm_catalog_checked:
+            return
+        from gaia.llm.lemonade_client import (
+            AGENT_PROFILES,
+            MODELS,
+            LemonadeClientError,
+            _model_ids_match,
+            cloud_model_provider,
+        )
+
+        try:
+            catalog = self.client.list_models(show_all=True)
+        except LemonadeClientError as e:
+            logger.debug(f"VLM catalog check skipped: {e}")
+            self._vlm_catalog_checked = True
+            return
+
+        entries = catalog.get("data", []) if isinstance(catalog, dict) else []
+        entry = next(
+            (
+                m
+                for m in entries
+                if isinstance(m, dict) and _model_ids_match(m.get("id"), self.vlm_model)
+            ),
+            None,
+        )
+        if (
+            entry is None
+            or entry.get("downloaded") is not False
+            or cloud_model_provider(self.vlm_model, entry)
+        ):
+            self._vlm_catalog_checked = True
+            return
+
+        size = entry.get("size")
+        size_hint = f" (about {size:g} GB)" if isinstance(size, (int, float)) else ""
+        vlm_agent_models = {MODELS[k].model_id for k in AGENT_PROFILES["vlm"].models}
+        cli_hint = (
+            ", or run `gaia download --agent vlm`"
+            if any(_model_ids_match(m, self.vlm_model) for m in vlm_agent_models)
+            else ""
+        )
+        raise VLMExtractionError(
+            f"Vision model '{self.vlm_model}' is not downloaded{size_hint}. "
+            f"Download it from Settings → Model in the Agent UI{cli_hint}, then "
+            "retry. GAIA will not download it during image analysis.",
+            page_num,
+            image_num,
+        )
 
     def _parse_vlm_error(self, response: dict) -> str:
         """Parse VLM error response and return a helpful error message."""

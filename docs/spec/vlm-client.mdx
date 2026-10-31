@@ -289,6 +289,13 @@ class VLMClient:
 
 ### Model Loading
 
+Before the first request, `extract_from_image()` reads Lemonade's catalog. When
+the catalog lists the model with `downloaded: false`, it raises
+`VLMExtractionError` naming the model and how to download it, instead of starting a
+multi-GB download inside an image tool. An unlisted model, a missing `downloaded`
+field, a cloud model or an unreachable catalog doesn't block; any check that doesn't
+block is cached on the client.
+
 There is no separate pre-load. `extract_from_image()` passes
 `auto_download=self.auto_load` to `LemonadeClient.chat_completions()`, which
 loads the model at its required context size (and downloads it if missing)

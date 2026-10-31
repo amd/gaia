@@ -57,28 +57,6 @@ class TestTheThreeFailureSites:
         with pytest.raises(VLMExtractionError):
             vlm.extract_from_image(b"fake-png")
 
-    def test_a_missing_model_is_reported_before_image_analysis_starts(self, vlm):
-        vlm.client.get_model_info.return_value = {
-            "id": "Gemma-4-E4B-it-GGUF",
-            "downloaded": False,
-            "size_gb": 5.56,
-        }
-
-        with pytest.raises(VLMExtractionError, match="Settings → Model") as excinfo:
-            vlm.extract_from_image(b"fake-png")
-
-        assert "5.56 GB" in str(excinfo.value)
-        vlm.client.chat_completions.assert_not_called()
-
-    def test_a_catalog_failure_does_not_hide_the_request_error(self, vlm):
-        vlm.client.get_model_info.side_effect = ConnectionError("catalog unavailable")
-        vlm.client.chat_completions.return_value = {
-            "choices": [{"message": {"content": "text"}}]
-        }
-
-        assert vlm.extract_from_image(b"fake-png") == "text"
-        vlm.client.chat_completions.assert_called_once()
-
     def test_a_cancelled_wait_for_the_model_is_a_stop_not_a_failed_page(self, vlm):
         from gaia.daemon.broker_client import LeaseWaitCancelled
 
@@ -286,3 +264,131 @@ class TestIngestReportsAnError:
 
         assert result["status"] == "error"
         assert "text" not in result
+
+
+# ============================================================================
+# A vision model the catalog says isn't downloaded is reported, not fetched
+# ============================================================================
+
+_OK = {"choices": [{"message": {"content": "text"}}]}
+_GEMMA = "Gemma-4-E4B-it-GGUF"
+
+
+def _catalog(*entries):
+    return {"data": list(entries)}
+
+
+class TestMissingVisionModelPreflight:
+    def test_an_explicitly_missing_model_is_reported_before_the_request(self, vlm):
+        vlm.client.list_models.return_value = _catalog(
+            {"id": _GEMMA, "downloaded": False, "size": 5.56}
+        )
+
+        with pytest.raises(VLMExtractionError) as excinfo:
+            vlm.extract_from_image(b"fake-png", page_num=3, image_num=2)
+
+        message = str(excinfo.value)
+        assert "5.56 GB" in message
+        assert "Settings → Model" in message
+        assert "`gaia download --agent vlm`" in message
+        assert "gaia init" not in message
+        assert (excinfo.value.page_num, excinfo.value.image_num) == (3, 2)
+        vlm.client.list_models.assert_called_once_with(show_all=True)
+        vlm.client.chat_completions.assert_not_called()
+
+    def test_the_cli_hint_is_only_offered_for_a_model_it_downloads(self, vlm):
+        vlm.vlm_model = "Qwen3-VL-4B-Instruct-GGUF"
+        vlm.client.list_models.return_value = _catalog(
+            {"id": "Qwen3-VL-4B-Instruct-GGUF", "downloaded": False}
+        )
+
+        with pytest.raises(VLMExtractionError) as excinfo:
+            vlm.extract_from_image(b"fake-png")
+
+        assert "gaia download" not in str(excinfo.value)
+        assert "GB)" not in str(excinfo.value)
+        vlm.client.chat_completions.assert_not_called()
+
+    def test_ids_match_case_insensitively_like_the_rest_of_the_client(self, vlm):
+        vlm.client.list_models.return_value = _catalog(
+            {"id": _GEMMA.lower(), "downloaded": False}
+        )
+
+        with pytest.raises(VLMExtractionError):
+            vlm.extract_from_image(b"fake-png")
+
+    @pytest.mark.parametrize(
+        "catalog",
+        [
+            pytest.param(_catalog(), id="model-not-listed"),
+            pytest.param(
+                _catalog({"id": "Other-GGUF", "downloaded": False}),
+                id="only-another-model-missing",
+            ),
+            pytest.param(_catalog({"id": _GEMMA}), id="no-downloaded-field"),
+            pytest.param(
+                _catalog({"id": _GEMMA, "downloaded": None}), id="downloaded-null"
+            ),
+            pytest.param(_catalog({"id": _GEMMA, "downloaded": True}), id="downloaded"),
+            pytest.param({"object": "list"}, id="no-data-key"),
+            pytest.param(["not", "a", "dict"], id="not-a-dict"),
+        ],
+    )
+    def test_only_an_explicit_downloaded_false_blocks(self, vlm, catalog):
+        vlm.client.list_models.return_value = catalog
+        vlm.client.chat_completions.return_value = _OK
+
+        assert vlm.extract_from_image(b"fake-png") == "text"
+        vlm.client.chat_completions.assert_called_once()
+
+    def test_a_cloud_model_is_never_blocked(self, vlm):
+        vlm.vlm_model = "openai.gpt-vision"
+        vlm.client.list_models.return_value = _catalog(
+            {
+                "id": "openai.gpt-vision",
+                "downloaded": False,
+                "recipe": "cloud",
+                "cloud_provider": "openai",
+            }
+        )
+        vlm.client.chat_completions.return_value = _OK
+
+        assert vlm.extract_from_image(b"fake-png") == "text"
+
+    def test_an_unreachable_catalog_leaves_the_request_authoritative(self, vlm):
+        vlm.client.list_models.side_effect = LemonadeClientError("catalog unavailable")
+        vlm.client.chat_completions.return_value = _OK
+
+        assert vlm.extract_from_image(b"fake-png") == "text"
+        vlm.client.chat_completions.assert_called_once()
+
+    def test_a_bug_in_the_check_is_not_swallowed(self, vlm):
+        vlm.client.list_models.side_effect = AttributeError("broken")
+
+        with pytest.raises(VLMExtractionError, match="broken"):
+            vlm.extract_from_image(b"fake-png")
+        vlm.client.chat_completions.assert_not_called()
+
+    def test_a_multi_image_document_reads_the_catalog_once(self, vlm):
+        vlm.client.list_models.return_value = _catalog(
+            {"id": _GEMMA, "downloaded": True}
+        )
+        vlm.client.chat_completions.return_value = _OK
+
+        for page in range(1, 6):
+            vlm.extract_from_image(b"fake-png", page_num=page)
+
+        vlm.client.list_models.assert_called_once()
+        assert vlm.client.chat_completions.call_count == 5
+
+    def test_a_missing_model_is_rechecked_so_a_download_unblocks_it(self, vlm):
+        vlm.client.list_models.side_effect = [
+            _catalog({"id": _GEMMA, "downloaded": False}),
+            _catalog({"id": _GEMMA, "downloaded": True}),
+        ]
+        vlm.client.chat_completions.return_value = _OK
+
+        with pytest.raises(VLMExtractionError):
+            vlm.extract_from_image(b"fake-png")
+        assert vlm.extract_from_image(b"fake-png") == "text"
+        assert vlm.client.list_models.call_count == 2
