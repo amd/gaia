@@ -91,7 +91,6 @@ from gaia.agents.base.denied_effects import (
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.extraction import MAX_SECONDS as EXTRACTION_MAX_SECONDS
 from gaia.agents.base.extraction import MAX_TOKENS as EXTRACTION_MAX_TOKENS
-from gaia.agents.base.extraction import REASONING as EXTRACTION_REASONING
 from gaia.agents.base.extraction import (
     ExtractionLedger,
     extraction_response_format,
@@ -246,6 +245,27 @@ LOCAL_MAX_OUTPUT_TOKENS = 8192
 CLOUD_MAX_OUTPUT_TOKENS = 32768
 # Share of a local window one reply may take: 8K of 32K, 16K of 64K.
 LOCAL_OUTPUT_CTX_FRACTION = 4
+
+
+def _extraction_sampling(model_id: Optional[str]) -> Dict[str, Any]:
+    """Return sampling overrides safe for document extraction.
+
+    Cloud gateways do not share one ``reasoning_effort`` vocabulary: some
+    reject ``"none"`` while others use a provider default.  Omitting the field
+    lets the gateway select a supported default instead of turning every first
+    extraction request into a guaranteed HTTP 400 on models such as Qwen3.8
+    Flash Next and gpt-5.3-chat.  Local models retain the anti-repetition
+    overrides used for verbatim quote copying.
+    """
+    from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
+
+    if cloud_model_provider(model_id) or is_cloud_model(model_id):
+        return {}
+    return {
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "repeat_penalty": 1.0,
+    }
 
 
 def local_max_output_tokens(ctx_size: int) -> int:
@@ -3421,20 +3441,10 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     raise ValueError("Extraction cancelled or superseded")
 
-            from gaia.llm.lemonade_client import cloud_model_provider
-
-            # A cloud reasoning model can spend its whole budget thinking about
-            # one dense page; copying quotes out of it needs little reasoning.
-            # Local anti-repetition penalties fight verbatim quote copying.
-            sampling = (
-                {"reasoning_effort": EXTRACTION_REASONING}
-                if cloud_model_provider(getattr(self, "model_id", None))
-                else {
-                    "frequency_penalty": 0.0,
-                    "presence_penalty": 0.0,
-                    "repeat_penalty": 1.0,
-                }
-            )
+            # Cloud gateways do not share a portable "reasoning_effort=none"
+            # value.  Omit it and let the selected model/provider choose its
+            # supported default; local models keep quote-copying penalties.
+            sampling = _extraction_sampling(getattr(self, "model_id", None))
 
             def send(system, prompt, options):
                 check()
@@ -3463,10 +3473,12 @@ Do NOT wrap conversational replies in JSON.
             def ask(system, prompt):
                 response, exhausted = send(system, prompt, sampling)
                 if exhausted and sampling.get("reasoning_effort") not in (None, "none"):
-                    # Copying quotes needs no reasoning; retry this page without it.
+                    # A local reasoning model may support an explicit lower
+                    # effort on a retry; cloud requests intentionally never
+                    # enter this branch because their field was omitted.
                     logger.warning(
-                        "Extraction page used its %d-token budget reasoning; "
-                        "retrying the page with reasoning_effort=none",
+                        "Extraction page used its %d-token reasoning budget; "
+                        "retrying with reasoning_effort=none",
                         EXTRACTION_MAX_TOKENS,
                     )
                     response, exhausted = send(

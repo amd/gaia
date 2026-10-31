@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, _extraction_sampling
 from gaia.agents.base.extraction import (
     PAGE_CHARS,
     Entry,
@@ -35,6 +35,25 @@ def reply(*items):
     return json.dumps(
         {"complete": True, "items": [{"text": x, "quote": x} for x in items]}
     )
+
+
+def test_extraction_sampling_omits_unsupported_cloud_reasoning_effort(monkeypatch):
+    import gaia.llm.lemonade_client as lemonade_client
+
+    monkeypatch.setattr(lemonade_client, "cloud_model_provider", lambda _model: "amd")
+    assert _extraction_sampling("amd.Qwen3.8-Flash-Next") == {}
+
+
+def test_extraction_sampling_keeps_local_quote_copying_penalties(monkeypatch):
+    import gaia.llm.lemonade_client as lemonade_client
+
+    monkeypatch.setattr(lemonade_client, "cloud_model_provider", lambda _model: None)
+    monkeypatch.setattr(lemonade_client, "is_cloud_model", lambda _model: False)
+    assert _extraction_sampling("Gemma-4-E4B-it-GGUF") == {
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "repeat_penalty": 1.0,
+    }
 
 
 def test_page_mapping_visits_every_core_and_preserves_boundary_items():
