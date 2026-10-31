@@ -177,3 +177,80 @@ def test_indexing_past_the_cap_names_the_evicted_document(rag, tmp_path):
     result = rag.index_document(str(paths[3]))
     assert result["success"]
     assert result["evicted"] == [str(paths[0])]
+
+
+def _write_docs(tmp_path, count):
+    paths = []
+    for n in range(count):
+        doc = tmp_path / f"doc{n}.txt"
+        doc.write_text(f"Document number {n}.", encoding="utf-8")
+        paths.append(doc)
+    return paths
+
+
+def test_one_index_that_evicts_several_documents_names_them_all_oldest_first(
+    rag, tmp_path
+):
+    paths = _write_docs(tmp_path, 4)
+    for doc in paths[:3]:
+        assert "evicted" not in rag.index_document(str(doc))
+    rag.config.max_indexed_files = 1
+
+    result = rag.index_document(str(paths[3]))
+
+    assert result["success"]
+    assert result["evicted"] == [str(p) for p in paths[:3]]
+    assert rag.indexed_files == {str(paths[3])}
+
+
+def test_the_document_being_indexed_is_never_the_one_evicted(rag, tmp_path):
+    rag.config.max_indexed_files = 1
+    paths = _write_docs(tmp_path, 2)
+    assert "evicted" not in rag.index_document(str(paths[0]))
+
+    result = rag.index_document(str(paths[1]))
+
+    assert result["evicted"] == [str(paths[0])]
+    assert str(paths[1]) not in result["evicted"]
+    assert rag.indexed_files == {str(paths[1])}
+
+
+def test_re_indexing_an_evicted_document_from_cache_names_the_next_eviction(
+    rag, tmp_path
+):
+    rag.config.max_indexed_files = 2
+    paths = _write_docs(tmp_path, 3)
+    for doc in paths:
+        rag.index_document(str(doc))
+    assert str(paths[0]) not in rag.indexed_files
+
+    result = rag.index_document(str(paths[0]))
+
+    assert result["success"]
+    assert result.get("from_cache")
+    assert result["evicted"] == [str(paths[1])]
+
+
+def test_a_failed_eviction_is_not_reported_as_evicted(rag, tmp_path):
+    rag.config.max_indexed_files = 1
+    paths = _write_docs(tmp_path, 2)
+    rag.index_document(str(paths[0]))
+
+    with patch.object(rag, "remove_document", return_value=False):
+        result = rag.index_document(str(paths[1]))
+
+    assert "evicted" not in result
+    assert result["memory_limit_warning"]
+
+
+def test_eviction_disabled_refuses_instead_of_evicting(rag, tmp_path):
+    rag.config.max_indexed_files = 1
+    rag.config.enable_lru_eviction = False
+    paths = _write_docs(tmp_path, 2)
+    rag.index_document(str(paths[0]))
+
+    result = rag.index_document(str(paths[1]))
+
+    assert not result["success"]
+    assert "evicted" not in result
+    assert rag.indexed_files == {str(paths[0])}
