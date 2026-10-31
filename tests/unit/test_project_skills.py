@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""A project's ``.claude/skills`` are listed and loadable, as in Claude Code.
+"""A project's ``.claude/skills`` are loadable, and listed for a model that gets them.
 
 The repository the agent is started in says how to work on it through these
 skills. They were discovered but hidden from the catalogue, so the model never
@@ -60,9 +60,11 @@ def test_project_skills_are_listed_and_user_claude_skills_are_not(dirs):
     skills = _manager(project, home).discover()
     assert skills["repo-rules"].root == ROOT_CLAUDE_PROJECT
     assert skills["personal"].root == ROOT_CLAUDE_IMPORT
-    catalog = render_catalog(skills)
+    catalog = render_catalog(skills, list_project=True)
     assert "- repo-rules: How to work here." in catalog
     assert "personal" not in catalog
+    # Listing them is the model's call (gaia.project_context); off by default.
+    assert render_catalog(skills) == ""
 
 
 def test_without_a_project_dir_cwd_skills_stay_unlisted(dirs, monkeypatch):
@@ -72,7 +74,7 @@ def test_without_a_project_dir_cwd_skills_stay_unlisted(dirs, monkeypatch):
     monkeypatch.chdir(project)
     skills = SkillManager(user_skills_root=home / "gaia-skills").discover()
     assert skills["repo-rules"].root == ROOT_CLAUDE_IMPORT
-    assert render_catalog(skills) == ""
+    assert render_catalog(skills, list_project=True) == ""
 
 
 def test_an_explicit_claude_dir_override_keeps_the_import_label(dirs):
@@ -139,7 +141,7 @@ def test_claude_code_skills_load_despite_gaia_schema(
     assert expected in skills, manager.discovery_errors
     assert manager.discovery_errors == {}
     assert manager.load(expected).body == "Body."
-    assert expected in render_catalog(skills)
+    assert expected in render_catalog(skills, list_project=True)
 
 
 def test_a_long_description_is_kept_and_trimmed_only_in_the_catalogue(dirs):
@@ -147,7 +149,7 @@ def test_a_long_description_is_kept_and_trimmed_only_in_the_catalogue(dirs):
     _skill(project, "wordy", f"name: wordy\ndescription: {'w' * 1500}\n")
     skills = _manager(project, home).discover()
     assert len(skills["wordy"].description) == 1500
-    rendered = render_catalog(skills)
+    rendered = render_catalog(skills, list_project=True)
     assert "w" * CATALOG_DESCRIPTION_CHARS + "…" in rendered
     assert "w" * (CATALOG_DESCRIPTION_CHARS + 1) not in rendered
 
@@ -224,7 +226,7 @@ def test_this_repos_skills_all_load_as_project_skills(tmp_path, monkeypatch):
     skill = manager.load("github-issue-response")
     assert skill.root == ROOT_CLAUDE_PROJECT
     assert "Responding on GitHub" in skill.body
-    assert "- github-issue-response: " in render_catalog(skills)
+    assert "- github-issue-response: " in render_catalog(skills, list_project=True)
 
 
 def test_a_repo_skill_never_gets_executable_reach_on_load():

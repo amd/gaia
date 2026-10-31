@@ -154,6 +154,10 @@ class GaiaConfig:
             undone for this many days.
         undo_max_mb: Keep at most this many megabytes of those copies; the
             oldest turns go first. The size limit never removes the newest turn.
+        project_context: How much of a repository's CLAUDE.md, AGENTS.md and
+            ``.claude/skills`` the agent puts in its prompt: ``full``, ``off``,
+            or ``None`` (set it to ``auto``) to decide per model. See
+            :mod:`gaia.project_context`.
     """
 
     profile: str = "chat"
@@ -170,6 +174,7 @@ class GaiaConfig:
     context_sizes: Dict[str, int] = field(default_factory=dict)
     undo_retention_days: int = 7
     undo_max_mb: int = 500
+    project_context: Optional[str] = None
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None
@@ -212,6 +217,8 @@ class GaiaConfig:
             return cls._coerce_lemonade_mode(value)
         if key == "lemonade_base_url":
             return cls._coerce_lemonade_url(value)
+        if key == "project_context":
+            return cls._check_project_context(value, "gaia config", "Use one of those.")
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
@@ -290,6 +297,21 @@ class GaiaConfig:
                 "Run `gaia config set llamacpp_backend auto` to let Lemonade choose."
             )
         return word
+
+    @staticmethod
+    def _check_project_context(value: Any, where: str, remedy: str) -> Optional[str]:
+        """``full`` or ``off``; ``auto`` (or empty) is stored as None."""
+        from gaia.project_context import (
+            AUTO,
+            ProjectContextError,
+            normalize_project_context,
+        )
+
+        try:
+            word = normalize_project_context(value, where, remedy)
+        except ProjectContextError as e:
+            raise GaiaConfigError(str(e)) from e
+        return None if word == AUTO else word
 
     @staticmethod
     def _check_context_sizes(value: Any, config_file: Path) -> None:
@@ -424,6 +446,12 @@ class GaiaConfig:
         if "llamacpp_backend" in kwargs:
             kwargs["llamacpp_backend"] = cls._check_llamacpp_backend(
                 kwargs["llamacpp_backend"], f"GAIA config at {config_file}"
+            )
+        if "project_context" in kwargs:
+            kwargs["project_context"] = cls._check_project_context(
+                kwargs["project_context"],
+                f"GAIA config at {config_file}",
+                "Fix or delete that key in the file, then retry.",
             )
         return cls(**kwargs)._snapshot()
 

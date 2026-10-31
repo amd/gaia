@@ -71,6 +71,7 @@ from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
+from gaia.project_context import project_context_setting
 from gaia.skills.errors import SkillSetError
 
 logger = get_logger(__name__)
@@ -80,9 +81,9 @@ logger = get_logger(__name__)
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
-# Rendered when the session starts inside a code repository. General software
-# practice, not any one repo's rules: those come from its CLAUDE.md/AGENTS.md
-# and its .claude/skills, which the project-instructions and skill catalog load.
+# Rendered in a code repository for a model that gets the full project context
+# (gaia.project_context). General software practice, not any one repo's rules:
+# those come from its CLAUDE.md/AGENTS.md and its .claude/skills.
 REPOSITORY_WORK_PROMPT = """**WORKING IN A CODE REPOSITORY**
 You are working in the code repository at the current directory. Work like a careful senior engineer:
 - Follow the project's own instructions (CLAUDE.md / AGENTS.md) over your habits. They are already in this prompt under PROJECT INSTRUCTIONS: do not read those files again. Before a task one of the project's skills covers (code review, issue replies, releases, testing...), load that skill and follow it.
@@ -322,6 +323,11 @@ class GaiaAgentConfig(ChatAgentConfig):
     # tell a fast session from one that happens to be narrow.
     fast: bool = False
 
+    # How much of the repository's CLAUDE.md, AGENTS.md and .claude/skills the
+    # prompt carries: "full", "off", or "auto" to decide per model. None reads
+    # GAIA_PROJECT_CONTEXT, then ``project_context`` in ~/.gaia/config.json.
+    project_context: Optional[str] = None
+
 
 def _code_search_start(allowed: List[str]) -> str:
     """Where code search starts when the session is not inside a project.
@@ -421,6 +427,8 @@ class GaiaAgent(
         # field so ``config.fast`` never disagrees with how the agent was built.
         override = fast_env_override()
         resolved.fast = override if override is not None else bool(resolved.fast)
+        # Resolved now so a bad value fails at startup, not mid-prompt.
+        resolved.project_context = project_context_setting(resolved.project_context)
         if resolved.fast:
             _apply_fast_mode(resolved)
             logger.info(
@@ -455,7 +463,7 @@ class GaiaAgent(
         return super().load_skill(name, manager=manager)
 
     def get_repository_work_system_prompt(self) -> str:
-        """How to work inside a code repository, when the session has a project.
+        """How to work inside a code repository, for a model that gets it.
 
         Keyed on the mapped project root, which already excludes GAIA's own
         source (the dev sidecar's cwd) and folders outside GAIA_ALLOWED_PATHS.
@@ -463,6 +471,8 @@ class GaiaAgent(
         """
         # Fast mode is the conversational path with no tools to work a repo with.
         if self.config.fast or not self._project_map_root():
+            return ""
+        if not self._full_project_context():
             return ""
         return REPOSITORY_WORK_PROMPT
 

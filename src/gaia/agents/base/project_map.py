@@ -851,10 +851,13 @@ class ProjectMapMixin:
     def get_project_instructions_system_prompt(self) -> str:
         """The project's AGENTS.md / CLAUDE.md, read once per session.
 
-        Auto-discovered by ``Agent._get_mixin_prompts`` and not in
-        ``VOLATILE_PROMPT_FRAGMENTS``: cached on first render so an edit to the
-        file mid-session never rewrites the cached prompt prefix.
+        Only for a model that gets the full project context. Auto-discovered by
+        ``Agent._get_mixin_prompts`` and not in ``VOLATILE_PROMPT_FRAGMENTS``:
+        cached on first render so an edit to the file mid-session never
+        rewrites the cached prompt prefix.
         """
+        if not self._full_project_context():
+            return ""
         if not hasattr(self, "_project_instructions_cache"):
             root = self._project_instructions_root()
             self._project_instructions_cache = (
@@ -864,12 +867,46 @@ class ProjectMapMixin:
             )
         return self._project_instructions_cache
 
+    def _full_project_context(self) -> bool:
+        """Whether the current model is shown the repository's own guidance.
+
+        Re-decided on every render, so a mid-session model switch (which
+        rebuilds the prompt) takes the new model's level.
+        """
+        from gaia.project_context import (
+            project_context_setting,
+            wants_full_project_context,
+        )
+
+        setting = getattr(getattr(self, "config", None), "project_context", None)
+        return wants_full_project_context(
+            project_context_setting(setting),
+            getattr(self, "model_id", None),
+            bool(getattr(self, "_use_claude", False)),
+        )
+
+    def _lists_project_skills(self) -> bool:
+        return self._full_project_context()
+
+    def turn_content_provenance(self) -> str:
+        """Repository text in the prompt taints every turn for skill learning.
+
+        A stored lesson outlives the repository, and a CLAUDE.md in the system
+        prompt never passes through a tool call that would taint the turn.
+        """
+        if getattr(self, "_project_instructions_cache", "") and (
+            self._full_project_context()
+        ):
+            return "project_instructions"
+        return super().turn_content_provenance()
+
     def _project_instructions_cap(self) -> int:
         """Instruction characters this model can afford in every prompt.
 
-        A hosted model gets the full cap. A local one gets half of what it allows
-        a single tool result, so a long CLAUDE.md cannot crowd a 32K or 64K
-        window; the rest is a read_file away.
+        Sizes the text once the model is getting it, never decides that. A
+        hosted model gets the full cap. A local one (``project_context`` set to
+        ``full``) gets half of what it allows a single tool result, so a long
+        CLAUDE.md cannot crowd a 32K or 64K window; the rest is a read_file away.
         """
         from gaia.llm.lemonade_client import cloud_model_provider
 

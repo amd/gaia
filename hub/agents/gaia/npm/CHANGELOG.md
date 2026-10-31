@@ -22,6 +22,13 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   gets a labelled passage holding all its words instead of "no occurrence". A
   page with several links says how to list them, and `open_url` defers to the
   enforced network policy rather than having the model refuse on its own.
+- **With Claude, the agent follows a repository's own instructions.** Started in
+  a repository, a Claude model gets the project's `CLAUDE.md` / `AGENTS.md` in
+  its prompt and its `.claude/skills` in the skill list, as in Claude Code. Other
+  models get the prompt they had before, because they scored no better with it
+  and paid for it in tokens. `gaia config set project_context full|off|auto`
+  changes the choice.
+
 ### For integrators: contract 2.26
 
 - **"Always" answers can be listed and revoked** (contract **2.26**).

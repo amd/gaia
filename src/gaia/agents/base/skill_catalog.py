@@ -21,7 +21,7 @@ import os
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 from gaia.logger import get_logger
-from gaia.skills.manager import ROOT_CLAUDE_IMPORT
+from gaia.skills.manager import ROOT_CLAUDE_IMPORT, ROOT_CLAUDE_PROJECT
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from gaia.skills.format import Skill
@@ -78,11 +78,15 @@ def _catalog_description(description: str) -> str:
     return text[:CATALOG_DESCRIPTION_CHARS].rstrip() + "…"
 
 
-def _listed(skill: "Skill") -> bool:
-    return skill.root != ROOT_CLAUDE_IMPORT
+def _listed(skill: "Skill", list_project: bool = False) -> bool:
+    if skill.root == ROOT_CLAUDE_IMPORT:
+        return False
+    return list_project or skill.root != ROOT_CLAUDE_PROJECT
 
 
-def companions(skills: Dict[str, "Skill"], name: str) -> List[str]:
+def companions(
+    skills: Dict[str, "Skill"], name: str, list_project: bool = False
+) -> List[str]:
     """Listed skills that pair with *name*: its own declared order, then the rest.
 
     Pairing is mutual: a skill pairs with every name in its own
@@ -98,7 +102,7 @@ def companions(skills: Dict[str, "Skill"], name: str) -> List[str]:
     found: List[str] = []
     for other in skill.gaia.pairs_with:
         target = skills.get(other)
-        if target is None or not _listed(target):
+        if target is None or not _listed(target, list_project):
             log.debug(
                 "Skill '%s' pairs with '%s', which is not installed; ignoring.",
                 name,
@@ -111,7 +115,7 @@ def companions(skills: Dict[str, "Skill"], name: str) -> List[str]:
         sorted(
             other.name
             for other in skills.values()
-            if _listed(other)
+            if _listed(other, list_project)
             and name in other.gaia.pairs_with
             and other.name != name
             and other.name not in found
@@ -129,24 +133,27 @@ def _pairs_note(paired: List[str]) -> str:
     return f" (pairs with: {shown}{more})"
 
 
-def _catalog_line(skills: Dict[str, "Skill"], skill: "Skill") -> str:
+def _catalog_line(
+    skills: Dict[str, "Skill"], skill: "Skill", list_project: bool
+) -> str:
     """``- name: description (pairs with: a, b, c, +N more)``."""
-    note = _pairs_note(companions(skills, skill.name))
+    note = _pairs_note(companions(skills, skill.name, list_project))
     return f"- {skill.name}: {_catalog_description(skill.description)}{note}"
 
 
-def render_catalog(skills: Dict[str, "Skill"]) -> str:
+def render_catalog(skills: Dict[str, "Skill"], list_project: bool = False) -> str:
     """One line per listed skill, sorted by name; ``""`` when there are none.
 
-    The project's own ``.claude/skills`` are listed, as Claude Code lists them:
-    they say how to work on the repo the agent was started in. Other
-    ``.claude/skills`` imports (``~/.claude/skills``, or a working directory
-    that is not a project) stay loadable by name but are not listed.
+    With *list_project*, the project's own ``.claude/skills`` are listed, as
+    Claude Code lists them; the agent sets it only for a model that gets the
+    full project context (:mod:`gaia.project_context`). Other ``.claude/skills``
+    imports (``~/.claude/skills``, or a working directory that is not a project)
+    stay loadable by name but are never listed.
     """
     lines = [
-        _catalog_line(skills, skill)
+        _catalog_line(skills, skill, list_project)
         for skill in sorted(skills.values(), key=lambda s: s.name)
-        if _listed(skill)
+        if _listed(skill, list_project)
     ]
     if not lines:
         return ""

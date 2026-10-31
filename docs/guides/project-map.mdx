@@ -139,7 +139,25 @@ quietly ignored.
 
 ## Project instructions and skills
 
-The agent reads the project's own instructions the way Claude Code does:
+With a model that gets the full project context, the agent reads the project's
+own instructions the way Claude Code does. Which models get it is a per-model
+choice, because the payoff is: on repository work Claude scores higher with
+them, while a smaller model such as DeepSeek V4.1 Flash scores the same and
+spends about half again as many input tokens.
+
+| `project_context` | What the model gets |
+|-------------------|---------------------|
+| `auto` (default) | Claude models (through Anthropic or a gateway, such as `amd.Claude-Opus-5-5`) get everything below. Every other model, including any GAIA does not recognise, gets none of it: its prompt is the same as in a folder with no `CLAUDE.md`, `AGENTS.md` or `.claude/skills` |
+| `full` | Every model gets everything below |
+| `off` | No model gets any of it |
+
+```bash
+gaia config set project_context full     # or off, or auto
+```
+
+`GAIA_PROJECT_CONTEXT` set in the agent's environment overrides the config
+value. A value other than these three fails at startup. Switching models mid-session
+applies the new model's level. With the full context:
 
 - **`AGENTS.md` and `CLAUDE.md`** at the project root go into the system prompt
   whole, under `==== PROJECT INSTRUCTIONS ====`, as the project's rules for how
@@ -147,8 +165,9 @@ The agent reads the project's own instructions the way Claude Code does:
   they never override the user's request, the agent's safety rules, or when a
   tool must ask before it runs. Both are read when both exist (`AGENTS.md`
   first); an identical copy is shown once. A hosted model gets up to 60,000
-  characters; a local model gets half of what it allows one tool result (about
-  15,000 on NPU, 30,000 on GPU), so a long file cannot crowd a small window.
+  characters; a local model you set to `full` gets half of what it allows one
+  tool result (about 15,000 on NPU, 30,000 on GPU), so a long file cannot crowd
+  a small window.
   Past the cap, the agent gets the first whole lines and the line to continue
   from with `read_file`.
 - **`.claude/skills/<name>/SKILL.md`** under the project root are listed in the
@@ -156,7 +175,8 @@ The agent reads the project's own instructions the way Claude Code does:
   Claude Code skill GAIA's own format would reject — an uppercase or underscored
   name, a name that differs from its folder, a missing or very long description
   — still loads, with a warning in the log saying what was relaxed. Skills in
-  `~/.claude/skills` stay loadable by name but unlisted.
+  `~/.claude/skills` stay loadable by name but unlisted. Without the full
+  context, project skills are loadable by name but unlisted too.
 
 Both come from the root chosen below. Outside a project, a working directory
 that holds an `AGENTS.md` or `CLAUDE.md` still has it read, but the agent never
@@ -164,7 +184,9 @@ searches upward for one, and never reads one from the home directory or from
 GAIA's own source tree. An `AGENTS.md` or `CLAUDE.md` that is a link to a file
 outside the project is named in the prompt but not read. The instructions are
 read once per session, so editing the file mid-session takes effect in the next
-session.
+session. A session whose prompt carries the instructions stores no skill lessons: a lesson
+outlives the repository, and nothing else would mark repository text as content
+the user did not write.
 
 A project skill never grants itself anything when loaded: a `.claude/skills`
 folder arrives with a clone, so its tools and shell-binary permissions stay
@@ -177,8 +199,8 @@ gaia skill import .claude/skills/<name>   # add --allow-experimental if it ships
 gaia skill promote <name>
 ```
 
-When the session has a mapped project (its root, found from any subfolder; never
-GAIA's own source), the flagship also gets a short
+With the full context, when the session has a mapped project (its root, found
+from any subfolder; never GAIA's own source), the flagship also gets a short
 **working in a code repository** section: ground every claim in code read this
 session and search the whole repository before saying something is missing or
 counting it; follow a change across callers, tests, docs and its inverse path; verify

@@ -548,8 +548,10 @@ external state must come from a tool call, never from memory. A description is
 cut at 480 characters in the list, so put the "use when" triggers early. A skill
 already under LOADED SKILLS stays listed, and the model is told not to load it
 again — dropping it would change the block from turn to turn. The project's own
-`.claude/skills` (`claude-project`) are listed, as Claude Code lists them: they
-say how to work on the repo the agent was started in. Other `.claude/skills`
+`.claude/skills` (`claude-project`) are listed, as Claude Code lists them, for a
+model that gets the full project context (Claude by default; see
+[Project instructions and skills](/guides/project-map#project-instructions-and-skills)).
+Other models get them loadable by name but unlisted. Other `.claude/skills`
 imports (`claude-import`: `~/.claude/skills`, or a working directory that is
 not a known project) are loadable by name but not listed.
 

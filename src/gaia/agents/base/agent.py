@@ -3775,8 +3775,18 @@ Do NOT wrap conversational replies in JSON.
             return ""
         from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        catalog = render_catalog(self.skill_manager.discover())
+        catalog = render_catalog(
+            self.skill_manager.discover(), list_project=self._lists_project_skills()
+        )
         return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
+
+    def _lists_project_skills(self) -> bool:
+        """Whether the catalogue lists the project's ``.claude/skills``.
+
+        Off here; ``ProjectMapMixin`` turns it on for a model that gets the full
+        project context (:mod:`gaia.project_context`).
+        """
+        return False
 
     def _pin_skill_body(self, name: str, turns: Optional[int] = None) -> None:
         """Keep *name*'s body rendered for the next few filter refreshes.

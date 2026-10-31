@@ -3,7 +3,9 @@
 """A project's AGENTS.md / CLAUDE.md reach the system prompt whole, once.
 
 Claude Code reads CLAUDE.md in full at session start; an agent that sees a
-fraction of it breaks the project's conventions it was never shown.
+fraction of it breaks the project's conventions it was never shown. Only a
+model that gets the full project context sees them (gaia.project_context), so
+most tests here force ``full``; the tier tests at the end cover the choice.
 """
 
 from __future__ import annotations
@@ -46,8 +48,16 @@ class _Base:
 
 
 class _FakeAgent(ProjectMapMixin, _Base):
-    def __init__(self, root=None, in_scope=None):
-        self.config = type("C", (), {"project_root": root, "auto_index": False})()
+    def __init__(self, root=None, in_scope=None, project_context="full"):
+        self.config = type(
+            "C",
+            (),
+            {
+                "project_root": root,
+                "auto_index": False,
+                "project_context": project_context,
+            },
+        )()
         self._tools_registry = {}
         if in_scope is not None:
             self.path_validator = type(
@@ -381,3 +391,131 @@ def test_an_instruction_file_resolving_outside_the_project_is_not_read(
     text = render_project_instructions(project)
     assert "SECRETBYTES" not in text
     assert "links to a file outside the project" in text
+
+
+# ── which models see them ─────────────────────────────────────────────────
+
+
+class _ModelAgent(_FakeAgent):
+    def __init__(self, root, model, use_claude=False, project_context=None):
+        super().__init__(root, project_context=project_context)
+        self.model_id = model
+        self._use_claude = use_claude
+
+
+@pytest.fixture
+def ruled_repo(repo, monkeypatch):
+    monkeypatch.delenv("GAIA_PROJECT_CONTEXT", raising=False)
+    (repo / "CLAUDE.md").write_text("Run make check.\n", encoding="utf-8")
+    return repo
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "amd.DeepSeek-V4.1-Flash",
+        "fireworks.deepseek-v4p1-flash",
+        "Gemma-4-E4B-it-GGUF",
+        "Qwen3.6-35B-A3B-GGUF",
+        "some-unknown-model",
+        None,
+    ],
+)
+def test_other_models_get_no_instructions_by_default(ruled_repo, model):
+    agent = _ModelAgent(str(ruled_repo), model)
+    assert agent.get_project_instructions_system_prompt() == ""
+    assert not hasattr(agent, "_project_instructions_cache")
+
+
+@pytest.mark.parametrize(
+    "model, use_claude",
+    [("claude-opus-5", True), ("amd.Claude-Opus-5-5", False)],
+)
+def test_claude_gets_them_on_any_client_path(ruled_repo, model, use_claude):
+    agent = _ModelAgent(str(ruled_repo), model, use_claude)
+    assert "Run make check." in agent.get_project_instructions_system_prompt()
+
+
+def test_the_user_can_force_them_on_or_off(ruled_repo, monkeypatch):
+    on = _ModelAgent(str(ruled_repo), "amd.DeepSeek-V4.1-Flash", project_context="full")
+    assert "Run make check." in on.get_project_instructions_system_prompt()
+    off = _ModelAgent(str(ruled_repo), "claude-opus-5", True, project_context="off")
+    assert off.get_project_instructions_system_prompt() == ""
+    monkeypatch.setenv("GAIA_PROJECT_CONTEXT", "off")
+    env = _ModelAgent(str(ruled_repo), "amd.Claude-Opus-5-5")
+    assert env.get_project_instructions_system_prompt() == ""
+
+
+def test_a_model_switch_takes_the_new_models_level(ruled_repo):
+    agent = _ModelAgent(str(ruled_repo), "amd.DeepSeek-V4.1-Flash")
+    assert agent.get_project_instructions_system_prompt() == ""
+    agent.model_id = "amd.Claude-Opus-5-5"
+    assert "Run make check." in agent.get_project_instructions_system_prompt()
+    agent.model_id = "amd.DeepSeek-V4.1-Flash"
+    assert agent.get_project_instructions_system_prompt() == ""
+
+
+class _ProvenanceBase(_Base):
+    def turn_content_provenance(self):
+        return "user_instruction"
+
+
+class _LearningAgent(_ModelAgent, _ProvenanceBase):
+    pass
+
+
+def test_instructions_in_the_prompt_taint_skill_learning(ruled_repo):
+    """Repo text never passes a tool call, so it must not become a stored lesson."""
+    agent = _LearningAgent(str(ruled_repo), "amd.Claude-Opus-5-5")
+    assert agent.turn_content_provenance() == "user_instruction"  # not rendered yet
+    agent.get_project_instructions_system_prompt()
+    assert agent.turn_content_provenance() == "project_instructions"
+
+
+def test_a_model_without_instructions_learns_as_before(ruled_repo):
+    agent = _LearningAgent(str(ruled_repo), "amd.DeepSeek-V4.1-Flash")
+    agent.get_project_instructions_system_prompt()
+    assert agent.turn_content_provenance() == "user_instruction"
+
+
+def test_a_model_without_instructions_never_reads_the_file(ruled_repo, monkeypatch):
+    """Not read at all, so an unreadable or hostile file cannot cost it anything."""
+    reads = []
+    real = pathlib.Path.read_text
+
+    def _spy(self, *a, **k):
+        reads.append(self.name)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", _spy)
+    agent = _ModelAgent(str(ruled_repo), "amd.DeepSeek-V4.1-Flash")
+    assert agent.get_project_instructions_system_prompt() == ""
+    assert "CLAUDE.md" not in reads
+
+
+def test_claude_with_no_project_gets_nothing(tmp_path, monkeypatch):
+    monkeypatch.delenv("GAIA_PROJECT_CONTEXT", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert (
+        _ModelAgent(
+            None, "amd.Claude-Opus-5-5"
+        ).get_project_instructions_system_prompt()
+        == ""
+    )
+
+
+def test_a_nested_repo_reads_only_its_own_instructions(tmp_path, monkeypatch):
+    monkeypatch.delenv("GAIA_PROJECT_CONTEXT", raising=False)
+    outer = tmp_path / "outer"
+    (outer / ".git").mkdir(parents=True)
+    (outer / "CLAUDE.md").write_text("Outer rule.\n", encoding="utf-8")
+    inner = outer / "vendor" / "inner"
+    (inner / ".git").mkdir(parents=True)
+    monkeypatch.chdir(inner)
+    agent = _ModelAgent(None, "amd.Claude-Opus-5-5")
+    assert agent.get_project_instructions_system_prompt() == ""
+    (inner / "CLAUDE.md").write_text("Inner rule.\n", encoding="utf-8")
+    text = _ModelAgent(
+        None, "amd.Claude-Opus-5-5"
+    ).get_project_instructions_system_prompt()
+    assert "Inner rule." in text and "Outer rule." not in text

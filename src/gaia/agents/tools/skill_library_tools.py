@@ -629,7 +629,11 @@ class SkillLibraryToolsMixin:
 
             unloaded_companions = [
                 other
-                for other in companions(agent.skill_manager.discover(), skill.name)
+                for other in companions(
+                    agent.skill_manager.discover(),
+                    skill.name,
+                    agent._lists_project_skills(),
+                )
                 if other not in agent.loaded_skills
             ]
             if unloaded_companions:
