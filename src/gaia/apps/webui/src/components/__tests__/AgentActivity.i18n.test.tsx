@@ -8,6 +8,7 @@ import { act, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentActivity, stepsSummary, thoughtLabel, toolRowText, type ActivityRow } from '../AgentActivity';
 import { stripIsolates } from '../../i18n/registry';
+import { readsAs } from '../../test/readsAs';
 import { translator } from '../../i18n/useT';
 import { useChatStore } from '../../stores/chatStore';
 import type { AgentStep } from '../../types';
@@ -84,7 +85,6 @@ describe('tool rows', () => {
     it('renders the folded summary in Arabic in the timeline', () => {
         act(() => useChatStore.getState().setLocale('ar'));
         render(<AgentActivity steps={[tool(1, 'index_documents'), tool(2, 'query_specific_file')]} isActive={false} />);
-        expect(screen.getByText((content) => plain(content) === 'فهرس المستندات، استعلم في ملف (Indexed documents, queried file)'))
-            .toBeInTheDocument();
+        expect(screen.getByText(readsAs('فهرس المستندات، استعلم في ملف (Indexed documents, queried file)'))).toBeInTheDocument();
     });
 });
