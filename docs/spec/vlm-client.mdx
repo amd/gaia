@@ -17,11 +17,11 @@ icon: "eye"
 
 ## Overview
 
-VLMClient provides Vision-Language Model capabilities for extracting text from images using Lemonade server. It handles image-to-markdown conversion with on-demand model loading and downloading, and context manager support.
+VLMClient provides Vision-Language Model capabilities for extracting text from images using Lemonade server. It handles image-to-markdown conversion with explicit model loading and context manager support. Models that Lemonade explicitly reports as missing are reported before image analysis instead of being downloaded silently.
 
 **Key Features:**
 - Image-to-text extraction via VLM
-- Automatic model loading and downloading
+- Explicit model availability checks and loading
 - Base64 image encoding
 - Batch processing for multiple images
 - Context manager for resource cleanup
@@ -35,7 +35,7 @@ VLMClient provides Vision-Language Model capabilities for extracting text from i
 
 1. **Model Management**
    - Load VLM model (Gemma-4-E4B-it-GGUF)
-   - Automatic model download via Lemonade
+   - Missing-model guidance via Settings → Models or `gaia download --agent vlm`
    - Model availability checking
    - Every request re-checks the model is loaded at its required context size
 
@@ -71,7 +71,7 @@ VLMClient provides Vision-Language Model capabilities for extracting text from i
    - Progress logging for user feedback
 
 2. **Reliability**
-   - Automatic model download (may take hours)
+   - Explicitly missing models produce actionable guidance instead of a silent download
    - Graceful error handling
    - Helpful error messages
    - Connection retry via LemonadeClient
@@ -130,11 +130,12 @@ class VLMClient:
         Args:
             vlm_model: Vision model to use for image extraction
             base_url: Lemonade server API URL (defaults to LEMONADE_BASE_URL env var)
-            auto_load: Load (and download if missing) the VLM on each request,
-                at the context size GAIA requires for it
+            auto_load: Load the VLM on each request when needed, at the
+                context size GAIA requires for it. A missing model is reported
+                before the request instead of being silently downloaded.
 
         Note:
-            - Model will be auto-downloaded if not available (may take hours)
+            - A missing model is reported with Settings and CLI download guidance
             - base_url defaults to LEMONADE_BASE_URL, else GAIA's own Lemonade
 
         Environment Variables:
@@ -190,9 +191,10 @@ class VLMClient:
                 index the error as the page's content (#3555).
 
         Note:
-            - The request itself loads the VLM at its required context size
+            - The request loads the VLM at its required context size
               (when auto_load=True); a load failure raises VLMExtractionError
-              carrying the real error text
+              carrying the real error text. Missing catalog entries are reported
+              before this step rather than downloaded silently.
             - Uses default OCR prompt if none provided
 
         Default Prompt:
@@ -296,13 +298,15 @@ multi-GB download inside an image tool. An unlisted model, a missing `downloaded
 field, a cloud model or an unreachable catalog doesn't block; any check that doesn't
 block is cached on the client.
 
-There is no separate pre-load. `extract_from_image()` passes
-`auto_download=self.auto_load` to `LemonadeClient.chat_completions()`, which
-loads the model at its required context size (and downloads it if missing)
-while holding the model-slot lease, then runs the request. A load failure
-propagates and is re-raised as `VLMExtractionError` with the original error
-text and the cause attached. Because every request re-checks the load, a model
-evicted mid-batch is reloaded on the next page.
+There is no separate pre-load. After the catalog check, `extract_from_image()`
+passes `auto_download=self.auto_load` to `LemonadeClient.chat_completions()`,
+which loads the model at its required context size while holding the
+model-slot lease, then runs the request. The catalog precheck prevents a
+catalog-known missing model from starting a download. A load failure propagates
+and is re-raised as `VLMExtractionError` with the original error text and the
+cause attached. Because every request re-checks the load, a model evicted
+mid-batch is reloaded on the next page; a catalog-known missing model always
+gets the actionable download guidance above.
 
 ### Image Extraction
 
@@ -360,7 +364,7 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             temperature=0.1,  # Low temp for accurate extraction
             max_completion_tokens=2048,  # Allow detailed extraction
             timeout=60,  # VLM may be slower than text models
-            auto_download=self.auto_load,  # ctx-aware load under the lease
+            auto_download=self.auto_load,  # load an available model under the lease
         )
 
         elapsed = time.time() - start_time
