@@ -60,6 +60,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:visual": "vite build && playwright test -c visual/playwright.config.ts",
+    "test:rtl": "vite build && playwright test -c visual/playwright.config.ts rtl --project=light",
     "gen:api-types": "node scripts/gen-api-types.mjs"
   },
   "dependencies": {
