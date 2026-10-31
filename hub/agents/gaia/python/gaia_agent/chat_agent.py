@@ -280,6 +280,9 @@ class ChatAgentConfig:
     claude_model: str = "claude-sonnet-5"
     base_url: Optional[str] = None
     model_id: Optional[str] = None  # None = use default model (Gemma)
+    # Optional Lemonade TTS model role. Empty uses the local Kokoro default;
+    # speech tools never download it implicitly.
+    tts_model: Optional[str] = None
 
     # Execution settings
     max_steps: int = field(default_factory=default_max_steps)
@@ -2781,60 +2784,100 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     "error": "Window listing not available. Install pywinauto (Windows) or wmctrl (Linux).",
                 }
 
-        # ── Phase 5b: TTS (voice output) ─────────────────────────────────────────
+        # ── TTS (voice output) ──────────────────────────────────────────────────
 
-        @tool
+        @tool(timeout=900)
         def text_to_speech(
-            text: str, output_path: str = "", voice: str = "af_alloy"
+            text: str,
+            output_path: str = "",
+            voice: str = "af_bella",
+            speed: float = 1.0,
         ) -> dict:
-            """Convert text to speech with a Kokoro voice (served by Lemonade) and save it as a WAV file.
+            """Turn text into one WAV audio file with an installed local TTS model.
+
+            Use this when the user asks to hear, narrate, or save text as audio.
+            It never downloads a model. Empty output_path writes a WAV under
+            ~/.gaia/tts/. Use a listed Kokoro voice; unknown voices are refused
+            before Lemonade can return a server error. Long text is split at
+            sentence boundaries and joined into one file.
 
             Args:
-                text: Text to convert to speech
-                output_path: File path to save audio (WAV). If empty, saves to ~/.gaia/tts/
-                voice: Kokoro voice, e.g. af_alloy (American female, default), af_bella, am_michael, bf_emma, bm_george
+                text: Text to speak.
+                output_path: Optional WAV destination. Empty uses ~/.gaia/tts/.
+                voice: Kokoro voice, such as af_bella, am_michael, bf_emma, or
+                    bm_george.
+                speed: Speech rate from 0.5 to 2.0; 1.0 is normal.
 
             Returns:
-                Dictionary with status, file_path, duration_seconds and voice
+                status, output_path, duration_seconds, voice, model, chunks.
             """
             import time
 
-            from gaia.audio.lemonade_tts import KOKORO_VOICES, LemonadeTTSClient
+            from gaia.audio.lemonade_tts import (
+                DEFAULT_TTS_MODEL,
+                KOKORO_VOICES,
+                LemonadeTTSClient,
+                LemonadeTTSError,
+            )
 
             if voice not in KOKORO_VOICES:
                 return {
                     "status": "error",
                     "error": (
-                        f"Unknown voice '{voice}'. Choose one of: "
+                        f"Unknown Kokoro voice '{voice}'. Choose one of: "
                         f"{', '.join(KOKORO_VOICES)}."
                     ),
                 }
+            if not 0.5 <= speed <= 2.0:
+                return {
+                    "status": "error",
+                    "error": "speed must be between 0.5 and 2.0.",
+                }
+            if not text or not text.strip():
+                return {"status": "error", "error": "text to speak must not be empty."}
             if not output_path:
                 # GAIA's own output folder, not the user's files.
                 tts_dir = Path.home() / ".gaia" / "tts"
                 tts_dir.mkdir(parents=True, exist_ok=True)
                 ts = time.strftime("%Y%m%d_%H%M%S")
-                output_path = str(tts_dir / f"speech_{ts}.wav")
+                destination = tts_dir / f"speech_{ts}.wav"
             else:
-                output_path = str(_workspace_target(self, output_path))
-                denied = write_access_error(self, output_path)
+                destination = _workspace_target(self, output_path)
+                denied = write_access_error(self, destination)
                 if denied:
                     return denied
+            if destination.suffix.lower() != ".wav":
+                return {
+                    "status": "error",
+                    "error": "output_path must end in .wav for local speech output.",
+                }
 
+            model = getattr(self.config, "tts_model", None) or DEFAULT_TTS_MODEL
             try:
                 client = LemonadeTTSClient(
-                    base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None))
+                    base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None)),
+                    model=model,
                 )
-                client.ensure_model()
-                before_change(output_path, "text_to_speech")
-                duration = client.synthesize_to_wav(text, output_path, voice=voice)
-            except Exception as e:
-                return {"status": "error", "error": str(e)}
+                client.check_model_available()
+                before_change(destination, "text_to_speech")
+                duration = client.synthesize_to_wav_long(
+                    text, destination, voice=voice, speed=speed
+                )
+            except (ConnectionError, LemonadeTTSError, OSError, ValueError) as exc:
+                return {"status": "error", "error": str(exc)}
+            if not destination.is_file() or destination.stat().st_size == 0:
+                return {
+                    "status": "error",
+                    "error": f"Speech synthesis did not create a non-empty WAV at {destination}.",
+                }
             return {
                 "status": "success",
-                "file_path": output_path,
+                "output_path": str(destination),
+                "file_path": str(destination),
                 "duration_seconds": round(duration, 2),
                 "voice": voice,
+                "model": model,
+                "chunks": max(1, (len(text) + 1799) // 1800),
             }
 
         # MCP tools — load from <gaia_home>/mcp_servers.json if configured.
