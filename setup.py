@@ -146,7 +146,10 @@ setup(
         # honours CA files loaded on top (certifi), so nothing stops verifying.
         "truststore>=0.10.0",
         "beautifulsoup4",
-        "watchdog>=2.1.0",
+        # watchdog 7.0.0 starves Windows change delivery while a neighbouring
+        # file is written continuously; stay on the known-good 6.x line until
+        # upstream fixes its DirectoryChangeReader.
+        "watchdog>=2.1.0,<7",
         "pillow>=9.0.0",
         # Cron-based scheduler (issue #892): apscheduler drives the daemon;
         # tomli/tomli-w read+write ~/.gaia/schedules.toml (tomllib is stdlib on 3.11+).
