@@ -2554,6 +2554,7 @@ Do NOT wrap conversational replies in JSON.
                 else:
                     # Before the prompt is composed: it decides the tool format.
                     LemonadeManager.learn_tool_calling(probe_client, model_id)
+                    LemonadeManager.learn_reasoning(probe_client, model_id)
             else:
                 # Unpinned, the manager checks the device profile's floor. This
                 # model's own (possibly memory-sized) window is applied when it

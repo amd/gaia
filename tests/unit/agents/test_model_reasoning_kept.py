@@ -27,6 +27,7 @@ from gaia.llm.providers.lemonade import LemonadeProvider
 def _provider(backend_response):
     with patch("gaia.llm.providers.lemonade.LemonadeClient") as backend:
         backend.return_value.chat_completions.return_value = backend_response
+        backend.return_value.cloud_model_provider.return_value = None
         return LemonadeProvider(model="Gemma-4-E4B-it-GGUF")
 
 

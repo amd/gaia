@@ -168,6 +168,10 @@ class GaiaConfig:
             or ``cpu``) GAIA asks Lemonade for when it loads a local chat
             model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
             Takes effect on the next load; the embedding model keeps its own.
+        cloud_reasoning_effort: How hard a cloud model reasons: ``low``,
+            ``medium`` or ``high`` (the default). Sent as ``reasoning_effort``
+            only to a cloud model a probe saw reason when asked; ``off`` sends
+            nothing, leaving every model at its provider's default.
         context_sizes: Context window, in tokens, the user chose per local
             model in the Agent UI (model id -> tokens). Every load of that
             model uses it; a model not listed gets GAIA's automatic size.
@@ -190,6 +194,7 @@ class GaiaConfig:
     lemonade_api_key_stored: bool = False
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
+    cloud_reasoning_effort: str = "high"
     context_sizes: Dict[str, int] = field(default_factory=dict)
     undo_retention_days: int = 7
     undo_max_mb: int = 500
@@ -327,6 +332,22 @@ class GaiaConfig:
                 f"{where}: 'llamacpp_backend' must be one of "
                 f"{', '.join(cls.LLAMACPP_BACKEND_CHOICES)}, but it is {value!r}. "
                 "Run `gaia config set llamacpp_backend auto` to let Lemonade choose."
+            )
+        return word
+
+    #: Values ``cloud_reasoning_effort`` accepts; ``off`` sends no effort.
+    CLOUD_REASONING_EFFORT_CHOICES = ("off", "low", "medium", "high")
+
+    @classmethod
+    def _check_cloud_reasoning_effort(cls, value: Any, where: str) -> str:
+        """Normalise a ``cloud_reasoning_effort`` value, raising on anything else."""
+        word = str(value).strip().lower() if isinstance(value, str) else value
+        if word not in cls.CLOUD_REASONING_EFFORT_CHOICES:
+            raise GaiaConfigError(
+                f"{where}: 'cloud_reasoning_effort' must be one of "
+                f"{', '.join(cls.CLOUD_REASONING_EFFORT_CHOICES)}, but it is "
+                f"{value!r}. Run `gaia config set cloud_reasoning_effort high` to "
+                "restore the default, or `off` to stop asking cloud models to reason."
             )
         return word
 
@@ -474,6 +495,10 @@ class GaiaConfig:
             kwargs["llamacpp_backend"] = cls._check_llamacpp_backend(
                 kwargs["llamacpp_backend"], f"GAIA config at {config_file}"
             )
+        if "cloud_reasoning_effort" in kwargs:
+            kwargs["cloud_reasoning_effort"] = cls._check_cloud_reasoning_effort(
+                kwargs["cloud_reasoning_effort"], f"GAIA config at {config_file}"
+            )
         return cls(**kwargs)._snapshot()
 
     def _snapshot(self) -> "GaiaConfig":
@@ -612,6 +637,9 @@ class GaiaConfig:
             )
         if key == "llamacpp_backend":
             setattr(self, key, self._check_llamacpp_backend(value, "gaia config"))
+            return
+        if key == "cloud_reasoning_effort":
+            setattr(self, key, self._check_cloud_reasoning_effort(value, "gaia config"))
             return
         if key == "context_sizes":
             raise GaiaConfigError(

@@ -1930,11 +1930,15 @@ def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
 
     A thinking model bills its reasoning against ``max_tokens``, so a side call
     that wants a few hundred tokens of JSON instead reasons until the cap and
-    returns nothing. Empty for cloud models and for local models whose template
-    has no thinking switch (``requested_thinking`` is None), which send nothing.
+    returns nothing. A cloud model gets ``reasoning_effort=None``: no default
+    effort is added, so it runs in its provider's own mode. Empty for local
+    models whose template has no thinking switch (``requested_thinking`` is
+    None), which send nothing.
     """
-    if not isinstance(model_id, str) or cloud_model_provider(model_id):
+    if not isinstance(model_id, str):
         return {}
+    if cloud_model_provider(model_id):
+        return {"reasoning_effort": None}
     mr = find_model_requirement(model_id)
     if mr is not None and mr.reasoning_effort:
         # Reasoning cannot be switched off here; "low" is the least there is.
@@ -2457,17 +2461,14 @@ _QUIET_STALL: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
 )
 
 
-def probe_cloud_tool_calling(client: "LemonadeClient", model_id: str) -> Optional[bool]:
-    """Ask *model_id* to call a trivial tool once; record and return whether it did.
+def _bounded_probe_request(
+    client: "LemonadeClient", model_id: str, what: str, **request: Any
+) -> Dict[str, Any]:
+    """One non-streaming probe request to *model_id*, bounded in time.
 
-    ``None`` when the reply proves nothing (cut off at the token limit, or
-    empty, as a reasoning model can be): no answer is recorded. Raises
-    ``LemonadeClientError`` when the request itself fails, so a network error
-    is never recorded as "no tool calling".
-
-    The whole probe ends within ``PROBE_DEADLINE_S``, however the gateway
-    behaves: no retry starts after ``PROBE_TIMEOUT_S``, and a request still
-    open at the deadline is abandoned.
+    The whole call ends within ``PROBE_DEADLINE_S``, however the gateway
+    behaves: no retry starts after ``PROBE_TIMEOUT_S``, and a request still open
+    at the deadline is abandoned. *what* names the probe in every error.
     """
     started = _probe_clock()
     outer_cancel = current_cancel_check()
@@ -2493,17 +2494,10 @@ def probe_cloud_tool_calling(client: "LemonadeClient", model_id: str) -> Optiona
             with model_retry_notices(listener, is_cancelled=out_of_time):
                 outcome["response"] = client.chat_completions(
                     model=model_id,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": "Call the report_ready tool with ready=true.",
-                        }
-                    ],
-                    tools=[_PROBE_TOOL],
-                    max_tokens=1024,
                     stream=False,
                     auto_download=False,
                     timeout=PROBE_TIMEOUT_S,
+                    **request,
                 )
         except BaseException as e:  # pylint: disable=broad-except
             outcome["error"] = e  # re-raised on the caller's thread below
@@ -2512,32 +2506,26 @@ def probe_cloud_tool_calling(client: "LemonadeClient", model_id: str) -> Optiona
 
     context = contextvars.copy_context()
     threading.Thread(
-        target=context.run, args=(run,), name="gaia-tool-calling-probe", daemon=True
+        target=context.run, args=(run,), name="gaia-cloud-probe", daemon=True
     ).start()
     deadline = time.monotonic() + PROBE_DEADLINE_S
     while not done.wait(_PROBE_POLL_S):
         if stopped() or time.monotonic() >= deadline:
             abandoned.set()  # the worker starts no further attempt
             if stopped():
-                raise ToolCallingProbeStopped(
-                    f"Native tool-calling probe for {model_id} was stopped"
-                )
+                raise CloudProbeStopped(f"{what} for {model_id} was stopped")
             raise LemonadeClientError(
-                f"Native tool-calling probe for {model_id} got no answer within "
-                f"{PROBE_DEADLINE_S} s"
+                f"{what} for {model_id} got no answer within {PROBE_DEADLINE_S} s"
             )
 
     error = outcome.get("error")
     if error is not None:
         if stopped():
-            raise ToolCallingProbeStopped(
-                f"Native tool-calling probe for {model_id} was stopped"
-            ) from error
+            raise CloudProbeStopped(f"{what} for {model_id} was stopped") from error
         stall = error if isinstance(error, StreamStalledError) else error.__cause__
         if isinstance(stall, StreamStalledError):
             raise LemonadeClientError(
-                f"Native tool-calling probe for {model_id} got no answer within "
-                f"{PROBE_TIMEOUT_S} s"
+                f"{what} for {model_id} got no answer within {PROBE_TIMEOUT_S} s"
             ) from error
         if isinstance(error, LemonadeClientError):
             raise error
@@ -2545,11 +2533,33 @@ def probe_cloud_tool_calling(client: "LemonadeClient", model_id: str) -> Optiona
             error, (requests.exceptions.RequestException, StreamCancelledError)
         ):
             raise LemonadeClientError(
-                f"Native tool-calling probe for {model_id} failed after "
+                f"{what} for {model_id} failed after "
                 f"{_probe_clock() - started:.0f}s: {error}"
             ) from error
         raise error
-    response = outcome["response"]
+    return outcome["response"]
+
+
+def probe_cloud_tool_calling(client: "LemonadeClient", model_id: str) -> Optional[bool]:
+    """Ask *model_id* to call a trivial tool once; record and return whether it did.
+
+    ``None`` when the reply proves nothing (cut off at the token limit, or
+    empty, as a reasoning model can be): no answer is recorded. Raises
+    ``LemonadeClientError`` when the request itself fails, so a network error
+    is never recorded as "no tool calling". Bounded by ``PROBE_DEADLINE_S``.
+    """
+    response = _bounded_probe_request(
+        client,
+        model_id,
+        "Native tool-calling probe",
+        messages=[
+            {"role": "user", "content": "Call the report_ready tool with ready=true."}
+        ],
+        tools=[_PROBE_TOOL],
+        max_tokens=1024,
+        # The provider's own mode: this asks about tools, not reasoning.
+        reasoning_effort=None,
+    )
     choice = (response.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     calls = message.get("tool_calls") or []
@@ -2566,6 +2576,198 @@ def probe_cloud_tool_calling(client: "LemonadeClient", model_id: str) -> Optiona
     record_tool_calling(model_id, supported)
     log.info(f"Native tool calling for {model_id}: {supported} (probed)")
     return supported
+
+
+class _LearnedCapability:
+    """A yes/no a probe learns per cloud model, kept in ``gateway.json``.
+
+    *yes_field*, *no_field* and *failures_field* name the ``GatewayState``
+    fields holding the models found capable, not capable, and when each
+    model's probe last failed (UTC ISO time).
+    """
+
+    def __init__(
+        self, name: str, yes_field: str, no_field: str, failures_field: str
+    ) -> None:
+        self.name = name
+        self._fields = (yes_field, no_field, failures_field)
+        self._known: Dict[str, bool] = {}
+        self._failures: Dict[str, float] = {}
+        self._loaded = False
+        self._lock = threading.Lock()
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        yes_field, no_field, failures_field = self._fields
+        try:
+            from gaia.llm.gateway import GatewayState
+
+            state = GatewayState.load()
+        except Exception as e:  # noqa: BLE001 - a learned preference, never fatal
+            log.warning(f"Could not read learned {self.name} support: {e}")
+            self._loaded = True  # an unreadable file is not retried per call
+            return
+        with self._lock:
+            loaded = {m: True for m in getattr(state, yes_field)}
+            loaded.update({m: False for m in getattr(state, no_field)})
+            loaded.update(self._known)  # this process's answers are newer
+            self._known.update(loaded)
+            for model, at in getattr(state, failures_field).items():
+                when = _parse_utc(at)
+                if when is not None and model not in self._failures:
+                    self._failures[model] = when
+            self._loaded = True
+
+    def get(self, model_id: Optional[str]) -> Optional[bool]:
+        """What a probe found about *model_id*, or None when nothing was found."""
+        if not model_id:
+            return None
+        self._load()
+        return self._known.get(model_id)
+
+    def _save(self, mutate: Callable[[Any], None], what: str) -> None:
+        try:
+            from gaia.llm.gateway import GatewayState
+
+            state = GatewayState.load()
+            mutate(state)
+            state.save()
+        except Exception as e:  # noqa: BLE001 - the in-memory record still holds
+            log.warning(f"Could not persist {what}: {e}")
+
+    def record(self, model_id: str, supported: bool) -> None:
+        """Remember a probe's answer, in memory and in ``gateway.json``."""
+        self._load()
+        yes_field, no_field, failures_field = self._fields
+        with self._lock:
+            self._known[model_id] = supported
+            self._failures.pop(model_id, None)
+
+        def mutate(state: Any) -> None:
+            # Only this model's entry: another process may have probed others.
+            yes = set(getattr(state, yes_field)) - {model_id}
+            no = set(getattr(state, no_field)) - {model_id}
+            (yes if supported else no).add(model_id)
+            setattr(state, yes_field, sorted(yes))
+            setattr(state, no_field, sorted(no))
+            getattr(state, failures_field).pop(model_id, None)
+
+        self._save(mutate, f"{self.name} support for {model_id}")
+
+    def record_failure(self, model_id: str) -> None:
+        """Remember that *model_id*'s probe failed, so it is not re-run at once."""
+        self._load()
+        now = time.time()
+        with self._lock:
+            self._failures[model_id] = now
+        stamp = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        def mutate(state: Any) -> None:
+            getattr(state, self._fields[2])[model_id] = stamp
+
+        self._save(mutate, f"the failed {self.name} probe of {model_id}")
+
+    def recently_failed(self, model_id: Optional[str]) -> bool:
+        """Whether *model_id*'s probe failed within ``PROBE_RETRY_AFTER_S``."""
+        if not model_id:
+            return False
+        self._load()
+        with self._lock:
+            at = self._failures.get(model_id)
+        return at is not None and time.time() - at < PROBE_RETRY_AFTER_S
+
+
+#: Whether a cloud model reasons when sent ``reasoning_effort``.
+_CLOUD_REASONING = _LearnedCapability(
+    "reasoning", "reasoning_models", "no_reasoning_models", "reasoning_probe_failures"
+)
+
+#: Effort the reasoning probe asks for; any effort shows whether it reasons.
+_REASONING_PROBE_EFFORT = "high"
+
+
+def learned_reasoning(model_id: Optional[str]) -> Optional[bool]:
+    """Whether a probe saw *model_id* reason when asked, or None if not probed."""
+    return _CLOUD_REASONING.get(model_id)
+
+
+def probe_cloud_reasoning(client: "LemonadeClient", model_id: str) -> Optional[bool]:
+    """Ask *model_id* to reason once; record and return whether it did.
+
+    True when the reply carries ``reasoning_content``. False when it answers
+    cleanly without any, or the provider rejects the request (HTTP 400/422):
+    ``reasoning_effort`` is the only field in it a provider could object to.
+    ``None`` when the reply proves nothing, and nothing is recorded. Any other
+    failure is raised, never recorded as "no reasoning".
+    """
+    try:
+        response = _bounded_probe_request(
+            client,
+            model_id,
+            "Reasoning probe",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is 17 * 23? Reply with the number only.",
+                }
+            ],
+            max_tokens=1024,
+            reasoning_effort=_REASONING_PROBE_EFFORT,
+        )
+    except CloudProbeStopped:
+        raise
+    except LemonadeClientError as e:
+        status = getattr(e, "http_status", None)
+        if status not in (400, 422):
+            raise
+        log.warning(
+            f"{model_id} rejected reasoning_effort (HTTP {status}), so GAIA will "
+            "not ask it to reason. Remove it from no_reasoning_models in "
+            "~/.gaia/gateway.json to probe it again."
+        )
+        _CLOUD_REASONING.record(model_id, False)
+        return False
+    choice = (response.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning.strip():
+        supported = True
+    elif choice.get("finish_reason") == "stop" and message.get("content"):
+        supported = False  # answered, cleanly, without reasoning
+    else:
+        log.info(
+            f"Reasoning probe for {model_id} was inconclusive "
+            f"(finish_reason={choice.get('finish_reason')!r}); not recorded"
+        )
+        return None
+    _CLOUD_REASONING.record(model_id, supported)
+    log.info(f"Reasoning on request for {model_id}: {supported} (probed)")
+    return supported
+
+
+def reasoning_probe_recently_failed(model_id: Optional[str]) -> bool:
+    """Whether *model_id*'s reasoning probe failed within ``PROBE_RETRY_AFTER_S``."""
+    return _CLOUD_REASONING.recently_failed(model_id)
+
+
+def record_reasoning_probe_failure(model_id: str) -> None:
+    """Remember that *model_id*'s reasoning probe failed."""
+    _CLOUD_REASONING.record_failure(model_id)
+
+
+def cloud_reasoning_effort(model_id: Optional[str]) -> Optional[str]:
+    """The ``reasoning_effort`` GAIA sends *model_id* by default, or None.
+
+    Only a cloud model a probe saw reason gets one, at the user's
+    ``cloud_reasoning_effort`` (``gaia config``); ``off`` sends none.
+    """
+    if learned_reasoning(model_id) is not True:
+        return None
+    from gaia.config import GaiaConfig
+
+    effort = GaiaConfig.load().cloud_reasoning_effort
+    return None if effort == "off" else effort
 
 
 def _load_non_streaming() -> None:
@@ -2900,8 +3102,11 @@ class LemonadeClientError(Exception):
     """Base exception for Lemonade client errors."""
 
 
-class ToolCallingProbeStopped(LemonadeClientError):
-    """The user pressed Stop during the probe: it proved nothing about the model."""
+class CloudProbeStopped(LemonadeClientError):
+    """The user pressed Stop during a probe: it proved nothing about the model."""
+
+
+ToolCallingProbeStopped = CloudProbeStopped
 
 
 class LemonadeAuthError(LemonadeClientError):
@@ -5277,6 +5482,14 @@ class LemonadeClient:
             kwargs.pop("repeat_penalty", None)
             kwargs.pop("repeat_last_n", None)
             kwargs.pop("id_slot", None)
+            # An explicit None asks for the provider's own mode: send nothing.
+            if "reasoning_effort" in kwargs:
+                if kwargs["reasoning_effort"] is None:
+                    del kwargs["reasoning_effort"]
+            else:
+                effort = cloud_reasoning_effort(model)
+                if effort is not None:
+                    kwargs["reasoning_effort"] = effort
         else:
             thinking = requested_thinking(model, kwargs.get("chat_template_kwargs"))
             if thinking is not None:
@@ -5403,7 +5616,11 @@ class LemonadeClient:
                 # cloud branch drops it (provider bodies are never reflected).
                 if self.cloud_model_provider(model):
                     raise tag_http_failure(
-                        self._cloud_failure(response.status_code, model),
+                        self._cloud_failure(
+                            response.status_code,
+                            model,
+                            reasoning_effort=data.get("reasoning_effort"),
+                        ),
                         response.status_code,
                         body,
                         response.headers,
@@ -5620,6 +5837,7 @@ class LemonadeClient:
         delta = {
             "role": message.get("role", "assistant"),
             "content": message.get("content") or "",
+            "reasoning_content": message.get("reasoning_content") or None,
         }
         # Without this a tool call on a non-streaming model reaches the agent as
         # an empty turn. The index is required, not cosmetic: consumers key
@@ -5868,7 +6086,10 @@ class LemonadeClient:
             if self.cloud_model_provider(model):
                 raise attach_retry_state(
                     self._cloud_failure(
-                        _cloud_error_status(e), model, classify_exception(e)
+                        _cloud_error_status(e),
+                        model,
+                        classify_exception(e),
+                        reasoning_effort=extra_body.get("reasoning_effort"),
                     ),
                     state,
                 ) from None
@@ -6444,9 +6665,17 @@ class LemonadeClient:
         return f" from the model server at {label}" if label else ""
 
     def _cloud_failure(
-        self, status: Optional[int], model: str, reason: Optional[str] = None
+        self,
+        status: Optional[int],
+        model: str,
+        reason: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> LemonadeClientError:
-        """The error for a failed cloud call; a 404 is also recorded per model."""
+        """The error for a failed cloud call; a 404 is also recorded per model.
+
+        *reasoning_effort* is the effort the request sent, if any: a 400 then
+        names it, since the provider body that would say why is not shown.
+        """
         error = _cloud_request_error(
             status,
             self.cloud_model_provider(model),
@@ -6454,8 +6683,16 @@ class LemonadeClient:
             model,
             endpoint=_endpoint_label(self.base_url),
         )
+        if status == 400 and reasoning_effort is not None:
+            error = LemonadeClientError(
+                f"{error} The request asked {model} to reason "
+                f"(reasoning_effort={reasoning_effort}), which it may not accept "
+                "at that level. Try `gaia config set cloud_reasoning_effort` with "
+                "another level, or `off` to stop sending it."
+            )
         if isinstance(error, CloudModelUnavailableError):
             _remember_cloud_availability(model, ok=False)
+        error.http_status = status
         return error
 
     def refresh_cloud_models(self) -> Dict[str, Dict[str, Any]]:

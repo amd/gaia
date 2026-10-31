@@ -1031,6 +1031,7 @@ class LemonadeManager:
                     if client._replay_cloud_key(chat_model):
                         # After the key replay: without a key it can only fail.
                         cls.learn_tool_calling(client, chat_model, key_replayed=True)
+                        cls.learn_reasoning(client, chat_model, key_replayed=True)
                     cls._ready_for_cloud = True
                     cls._remember_server(client)
                     cls._log.debug(
@@ -1340,6 +1341,72 @@ class LemonadeManager:
             cls._log.warning(
                 "The native tool-calling probe for %s was inconclusive; it runs "
                 "on the in-text tool format, and the probe is retried in %s.",
+                model,
+                retry_in,
+            )
+
+    @classmethod
+    def learn_reasoning(
+        cls, client: "LemonadeClient", model: str, key_replayed: bool = False
+    ) -> None:
+        """Probe once whether a cloud model reasons when sent ``reasoning_effort``.
+
+        Until a probe says yes the model is sent no effort and runs in its
+        provider's default mode. A failed or inconclusive probe is logged and
+        not repeated for ``PROBE_RETRY_AFTER_S``.
+        """
+        from gaia.llm.lemonade_client import (
+            PROBE_RETRY_AFTER_S,
+            CloudProbeStopped,
+            cloud_model_info,
+            learned_reasoning,
+            probe_cloud_reasoning,
+            reasoning_probe_recently_failed,
+            record_reasoning_probe_failure,
+        )
+
+        if cloud_model_info(model) is None or learned_reasoning(model) is not None:
+            return
+        retry_in = f"{PROBE_RETRY_AFTER_S // 60} minutes"
+        if reasoning_probe_recently_failed(model):
+            if ("reasoning", model) not in cls._probe_skip_reported:
+                cls._probe_skip_reported.add(("reasoning", model))
+                cls._log.warning(
+                    "The reasoning probe for %s failed within the last %s; it "
+                    "runs without reasoning_effort until the next try. Remove it "
+                    "from reasoning_probe_failures in ~/.gaia/gateway.json to "
+                    "probe it now.",
+                    model,
+                    retry_in,
+                )
+            return
+        if not key_replayed and not client._replay_cloud_key(model):
+            cls._log.warning(
+                "Skipped the reasoning probe for %s: its cloud provider has no "
+                "usable key on this server yet.",
+                model,
+            )
+            return
+        try:
+            supported = probe_cloud_reasoning(client, model)
+        except CloudProbeStopped as e:
+            cls._log.info("%s; it is probed again at the next start.", e)
+            return
+        except LemonadeClientError as e:
+            record_reasoning_probe_failure(model)
+            cls._log.warning(
+                "Could not probe reasoning for %s (%s); it runs without "
+                "reasoning_effort, and the probe is retried in %s.",
+                model,
+                e,
+                retry_in,
+            )
+            return
+        if supported is None:
+            record_reasoning_probe_failure(model)
+            cls._log.warning(
+                "The reasoning probe for %s was inconclusive; it runs without "
+                "reasoning_effort, and the probe is retried in %s.",
                 model,
                 retry_in,
             )
