@@ -423,6 +423,11 @@ class CanonicalTranslator:
             for key in SUMMARY_VIEW_KEYS:
                 if key in event:
                     data[key] = event[key]
+        if not isinstance(data, dict):
+            data = {"summary": str(data)}
+        for key in ("status", "file_path", "image_path", "audio_path"):
+            if key in event:
+                data[key] = event[key]
         tool = self._last_tool or "unknown"
         canonical: Dict[str, Any] = {
             "type": "tool_result",
