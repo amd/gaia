@@ -200,6 +200,37 @@ class TestToolCallersReportAnError:
         assert result["status"] == "error"
         assert "description" not in result
 
+    @pytest.mark.parametrize(
+        "focus",
+        ["composition", "colors", "mood", "details", "all"],
+    )
+    def test_analyze_image_accepts_each_documented_focus(self, tmp_path, focus):
+        image = tmp_path / "chart.png"
+        image.write_bytes(b"not-really-a-png")
+        host = self._mixin("description")
+
+        result = host._analyze_image(str(image), focus=focus)
+
+        assert result["status"] == "success"
+        assert result["focus"] == focus
+        host.vlm_client.extract_from_image.assert_called_once()
+
+    def test_analyze_image_rejects_unknown_focus_before_reading_the_file(self, tmp_path):
+        missing = tmp_path / "missing.png"
+        host = self._mixin("description")
+
+        result = host._analyze_image(str(missing), focus="faces")
+
+        assert result == {
+            "status": "error",
+            "error": (
+                "Unknown focus 'faces'. Use one of: all, colors, composition, "
+                "details, mood; for a specific question about text, faces, or "
+                "an object, call answer_question_about_image."
+            ),
+        }
+        host.vlm_client.extract_from_image.assert_not_called()
+
     def test_answer_question_reports_an_error_envelope(self, tmp_path):
         image = tmp_path / "chart.png"
         image.write_bytes(b"not-really-a-png")
