@@ -9,13 +9,16 @@ import json
 import pytest
 
 import gaia.config
-from gaia.config import GaiaConfig, GaiaConfigError
 from gaia.installer import model_choice as mc
 from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL_NAME
 from gaia.llm.model_fit import MachineCapacity
 
 QWEN = "Qwen3.6-35B-A3B-GGUF"
 FLM = "gemma4-it-e2b-FLM"
+
+
+# Looked up through ``gaia.config`` at call time: another test may reload that
+# module, and a class imported here first would no longer match what it raises.
 
 
 @pytest.fixture(autouse=True)
@@ -95,15 +98,17 @@ def test_user_namespace_matches_when_splitting():
 @pytest.mark.parametrize("bad", ["Gemma", [1, 2], {"a": 1}, [None]])
 def test_a_hand_edited_skip_list_of_the_wrong_type_fails_loudly(config_file, bad):
     config_file.write_text(json.dumps({"skipped_models": bad}))
-    with pytest.raises(GaiaConfigError, match="skipped_models"):
-        GaiaConfig.load()
+    with pytest.raises(gaia.config.GaiaConfigError, match="skipped_models"):
+        gaia.config.GaiaConfig.load()
 
 
 def test_config_set_takes_a_comma_list(config_file):
-    GaiaConfig.save_key("skipped_models", f" {DEFAULT_MODEL_NAME}, ,{QWEN},{QWEN}")
-    assert GaiaConfig.load().skipped_models == [DEFAULT_MODEL_NAME, QWEN]
-    GaiaConfig.save_key("skipped_models", "")
-    assert GaiaConfig.load().skipped_models == []
+    gaia.config.GaiaConfig.save_key(
+        "skipped_models", f" {DEFAULT_MODEL_NAME}, ,{QWEN},{QWEN}"
+    )
+    assert gaia.config.GaiaConfig.load().skipped_models == [DEFAULT_MODEL_NAME, QWEN]
+    gaia.config.GaiaConfig.save_key("skipped_models", "")
+    assert gaia.config.GaiaConfig.load().skipped_models == []
 
 
 # ── fit and disk ───────────────────────────────────────────────────────────
