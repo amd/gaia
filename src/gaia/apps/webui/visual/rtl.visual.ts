@@ -238,6 +238,37 @@ test.describe('English', () => {
     });
 });
 
+for (const locale of ['ar', 'en']) {
+    test(`settings close button stays pinned while the pane scrolls (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const dialog = page.getByRole('dialog');
+        await dialog.locator('[data-section="advanced"]').click();
+        const title = dialog.locator('.settings-pane-title');
+        await expect(title).toBeVisible();
+
+        const close = dialog.locator('.settings-close');
+        const before = await close.boundingBox();
+        const titleBefore = await title.boundingBox();
+        const dialogBox = await dialog.boundingBox();
+        if (!before || !titleBefore || !dialogBox) throw new Error('settings dialog did not lay out');
+
+        // Wheel over the pane, the way a person scrolls, so the rule doesn't name the scroller.
+        await page.mouse.move(dialogBox.x + dialogBox.width / 2, dialogBox.y + dialogBox.height / 2);
+        await page.mouse.wheel(0, 10_000);
+        await expect.poll(async () => (await title.boundingBox())?.y ?? 0).toBeLessThan(titleBefore.y - 100);
+
+        const after = await close.boundingBox();
+        if (!after) throw new Error('close button left the layout after scrolling');
+        expect(Math.abs(after.x - before.x)).toBeLessThanOrEqual(1);
+        expect(Math.abs(after.y - before.y)).toBeLessThanOrEqual(1);
+        expect(after.y - dialogBox.y).toBeLessThan(40);
+        const onTop = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-close'),
+            [after.x + after.width / 2, after.y + after.height / 2]);
+        expect(onTop, 'the close button is covered by scrolled content').toBe(true);
+    });
+}
+
 test('window controls take the color of the sidebar beneath them', async ({ page }) => {
     await page.addInitScript(() => {
         const calls: unknown[] = [];
