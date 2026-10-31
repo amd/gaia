@@ -2073,7 +2073,7 @@ Examples:
   gaia eval agent --save-baseline
 
   # Compare current run against saved baseline (auto-detects eval/results/baseline.json)
-  gaia eval agent --compare eval/results/latest/scorecard.json
+  gaia eval agent --compare eval/results/eval-20261021-141300/scorecard.json
 
   # Convert a real Agent UI conversation into a scenario YAML
   gaia eval agent --capture-session 29c211c7-31b5-4084-bb3f-1825c0210942
