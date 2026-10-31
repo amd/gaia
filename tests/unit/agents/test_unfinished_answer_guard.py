@@ -60,6 +60,23 @@ FAILED_RUN_ENDINGS = [
         id="issue-execution-step-heading",
     ),
     pytest.param(
+        "### Corrected Plan Update\n\nThe totals need every report.\n\n"
+        "### Execution Step 1/3\n\n"
+        "Starting by listing everything in the target directory now.",
+        "narration",
+        id="issue-turn1-full-ending",
+    ),
+    pytest.param(
+        "**Step 2/3:** read each report.\n\nThe third report is next.",
+        "narration",
+        id="stopped-before-the-last-step",
+    ),
+    pytest.param(
+        "Starting with the Central region report now!",
+        "narration",
+        id="starting-with-now-exclaimed",
+    ),
+    pytest.param(
         "`duplicate` is on #5. Second write:",
         "narration",
         id="row4-trailing-colon",
@@ -200,6 +217,32 @@ COMPLETED_ANSWERS = [
         id="need-to-mid-sentence",
     ),
     pytest.param("", id="empty"),
+    pytest.param(
+        "Yes. Starting with Python 3.12, f-strings now support nested quotes.",
+        id="starting-with-a-version-is-a-fact",
+    ),
+    pytest.param(
+        "Starting with version 2.0, uploads are faster now.",
+        id="starting-with-clause-ending-in-now",
+    ),
+    pytest.param(
+        "Starting with the Central report, now every region is counted.",
+        id="starting-with-then-now-in-the-result",
+    ),
+    pytest.param(
+        "## Results\n\nStep 1/3: listed the 8 reports.\nStep 2/3: read each "
+        "one.\nStep 3/3: summed revenue.\n\nTotal revenue is $41.2M.",
+        id="completed-step-report",
+    ),
+    pytest.param(
+        "Revised plan\n\nWe moved the review to Friday.\n\n"
+        "All three files are updated.",
+        id="plan-heading-three-paragraphs-back",
+    ),
+    pytest.param(
+        "Step 3/3 done.\n\nRevenue is $41.2M.",
+        id="last-step-reached",
+    ),
 ]
 
 
@@ -305,6 +348,32 @@ def test_completed_answer_is_not_reprompted(agent):
 
     assert len(sent) == 1
     assert _final_text(result) == "Done. Let me know if you want changes."
+
+
+def test_starting_now_ending_is_reprompted_then_answer_accepted(agent):
+    sent = _stub_chat(
+        agent,
+        "Starting with the Central region report now: `central_q2_2026.md`.",
+        "Total revenue is $41.2M; Central and West missed target.",
+    )
+
+    result = agent.process_query("Roll up the eight reports", max_steps=10)
+
+    assert len(sent) == 2
+    assert "described your next step instead of doing it" in sent[1][-1]["content"]
+    assert _final_text(result) == (
+        "Total revenue is $41.2M; Central and West missed target."
+    )
+
+
+def test_a_starting_with_fact_is_not_reprompted(agent):
+    answer = "Yes. Starting with Python 3.12, f-strings now support nested quotes."
+    sent = _stub_chat(agent, answer)
+
+    result = agent.process_query("Can f-strings nest quotes?", max_steps=10)
+
+    assert len(sent) == 1
+    assert _final_text(result) == answer
 
 
 @pytest.mark.parametrize(
