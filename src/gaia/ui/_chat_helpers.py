@@ -774,7 +774,8 @@ async def _generate_session_title(
     )
     prompt = (
         "Summarise the user's task in 3 to 6 plain words for a tab/window "
-        "title.  Reply with ONLY the title, no quotes, no trailing "
+        "title, in the language the user wrote in.  Reply with ONLY the "
+        "title, no quotes, no trailing "
         "punctuation, no leading verbs like 'Task:' or 'Title:'.  If the "
         "user has not asked for anything yet (only a greeting or small "
         "talk), reply with only: none\n\n"
@@ -928,11 +929,16 @@ def _first_exchange(
     return user_msg, assistant_msg
 
 
-def _cancel_pending_title(session_id: str) -> None:
-    """Cancel *session_id*'s after-turn title, if one is still waiting or running."""
+async def _cancel_pending_title(session_id: str) -> None:
+    """Cancel *session_id*'s after-turn title and wait until it has stopped.
+
+    ``task.cancel()`` only schedules the cancel; awaiting the task means its
+    cleanup (releasing the chat's title slot) is done before the turn goes on.
+    """
     task = _AUTO_TITLE_PENDING.pop(session_id, None)
     if task is not None and not task.done():
         task.cancel()
+        await asyncio.wait({task})
         logger.info(
             "Auto-title: a new turn in session %s cancelled its pending title",
             session_id[:8],
@@ -3774,15 +3780,9 @@ async def _get_chat_response(
                 # Agent factories that don't recognise a field filter it out
                 # via ``dataclasses.fields``/``AgentManifest`` validation.
                 #
-                # Non-streaming vs streaming asymmetry — read before refactoring:
-                # This path forwards ``rag_file_paths`` (the real list) because
-                # non-streaming has no SSE handler, so ChatAgent's silent
-                # ``_index_documents`` in __init__ is the only indexer and must
-                # see the paths. The STREAMING registered-agent path, by
-                # contrast, passes ``rag_file_paths=[]`` and does the indexing
-                # in ``_index_rag_with_progress`` so the user sees progress
-                # events; forwarding the real list there would double-index
-                # (see the regression test in test_chat_helpers.py).
+                # Documents are indexed after the build, as the streaming path
+                # does: indexing takes minutes and the build holds the lock
+                # every other chat needs to start.
                 with writing_tool_registry():
                     agent = registry.create_agent(
                         agent_type,
@@ -3793,7 +3793,7 @@ async def _get_chat_response(
                             min_context_size=device_ctx,
                         ),
                         **_session_agent_kwargs(
-                            rag_file_paths=rag_file_paths,
+                            rag_file_paths=[],
                             library_paths=library_paths,
                             allowed=allowed,
                             session_id=session_id,
@@ -3807,6 +3807,8 @@ async def _get_chat_response(
                         # connected mailbox (#1596).
                         mail_provider=_session_mail_provider(session),
                     )
+                if rag_file_paths and hasattr(agent, "_index_documents") and agent.rag:
+                    agent._index_documents(rag_file_paths)
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
                     agent_type,
@@ -4134,7 +4136,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             yield f"data: {json.dumps({'type': 'answer', 'content': refusal})}\n\n"
             yield f"data: {json.dumps(_done_event(msg_id, refusal, False))}\n\n"
             return
-        _cancel_pending_title(session_id)
+        await _cancel_pending_title(session_id)
         _spawn_background(
             _maybe_update_session_title(
                 db=db,
@@ -5466,11 +5468,44 @@ class UnreadableDocumentError(RuntimeError):
         self.kind = kind
 
 
-async def _index_document(filepath: Path, display_name: Optional[str] = None) -> int:
+# Live progress of running indexes, keyed by the ``progress_key`` the caller
+# passed (the document id). Written by the indexing thread, read by the status
+# endpoint; each value is replaced whole, never mutated in place.
+INDEX_PROGRESS: dict = {}
+
+
+def index_progress(key: str) -> Optional[dict]:
+    """``{"phase", "done", "total"}`` for a running index, or None."""
+    return INDEX_PROGRESS.get(key)
+
+
+def _page_total(filepath: Path) -> Optional[int]:
+    """Pages a PDF will be read in, or None when the count isn't known upfront."""
+    if filepath.suffix.lower() != ".pdf":
+        return None
+    from pypdf import PdfReader
+    from pypdf.errors import PdfReadError
+
+    try:
+        return len(PdfReader(str(filepath)).pages)
+    except (PdfReadError, OSError, ValueError) as e:
+        # Indexing reads the file again and reports the failure properly.
+        logger.info("No page count for %s: %s", filepath.name, e)
+        return None
+
+
+async def _index_document(
+    filepath: Path,
+    display_name: Optional[str] = None,
+    progress_key: Optional[str] = None,
+) -> int:
     """Index a document using RAG SDK. Returns chunk count.
 
     ``display_name`` is the user's name for the file when *filepath* is a
     copy; every error message names it instead of the copy.
+
+    With ``progress_key``, ``INDEX_PROGRESS[progress_key]`` tracks pages read
+    and then chunks embedded until the index ends.
 
     Runs on an indexing pool (``_INDEX_MAX_PARALLEL`` at once per pool; small
     files have their own, and the rest wait their turn). Cancelling the
@@ -5501,6 +5536,25 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
         if stop.is_set():
             raise IndexingStopped(name)
 
+    def _report(phase: str, done: int, total: Optional[int]) -> None:
+        if progress_key is not None:
+            INDEX_PROGRESS[progress_key] = {
+                "phase": phase,
+                "done": done,
+                "total": total,
+            }
+
+    pages = {"done": 0, "total": None}
+
+    def _page_read() -> None:
+        _step()
+        pages["done"] += 1
+        _report("reading", pages["done"], pages["total"])
+
+    def _embedded(done: int, total: int) -> None:
+        _step()
+        _report("embedding", done, total)
+
     def _queue_update(_event: dict) -> None:
         # Waiting in line for the embedder or vision model is not a stall.
         # Runs on the waiting thread, so it only notes the time.
@@ -5511,6 +5565,9 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
         _step()
+        if progress_key is not None:
+            pages["total"] = _page_total(filepath)
+            _report("reading", 0, pages["total"])
         # Allow access to the file's directory (and user home) since the UI
         # explicitly selected this file via the file browser.
         allowed = [str(filepath.parent), str(Path.home())]
@@ -5521,8 +5578,8 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
             with lease_wait_listener(_queue_update), lease_cancel_scope(stop):
                 result = rag.index_document(
                     str(filepath),
-                    progress_callback=lambda _done, _total: _step(),
-                    heartbeat=_step,
+                    progress_callback=_embedded,
+                    heartbeat=_page_read,
                     **({"display_name": display_name} if display_name else {}),
                 )
         except LeaseWaitCancelled as e:
@@ -5563,6 +5620,8 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
     pool = _INDEX_SMALL_EXECUTOR if small else _INDEX_EXECUTOR
     future = asyncio.get_running_loop().run_in_executor(pool, _do_index)
     future.add_done_callback(_settled_quietly)
+    if progress_key is not None:
+        future.add_done_callback(lambda _f: INDEX_PROGRESS.pop(progress_key, None))
     try:
         while True:
             done, _ = await asyncio.wait({future}, timeout=_INDEX_POLL_S)

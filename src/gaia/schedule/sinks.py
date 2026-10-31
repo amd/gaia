@@ -102,9 +102,9 @@ def _to_notification(output: str, sink_args: Dict[str, Any]) -> None:
     try:
         if system == "Darwin":
             script = f"display notification {_osa(output)} with title {_osa(title)}"
-            subprocess.run(["osascript", "-e", script], check=True)
+            subprocess.run(["osascript", "-e", script], check=True, timeout=30)
         elif system == "Linux":
-            subprocess.run(["notify-send", title, output], check=True)
+            subprocess.run(["notify-send", title, output], check=True, timeout=30)
         else:
             raise NotImplementedError(
                 f"notification sink is not implemented for {system!r}; "
@@ -115,6 +115,11 @@ def _to_notification(output: str, sink_args: Dict[str, Any]) -> None:
         raise FileNotFoundError(
             f"notification sink needs {tool!r} on PATH ({system}): {e}. "
             f"Install it or choose a different --sink."
+        ) from e
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"notification sink did not finish posting within {e.timeout:g}s. "
+            f"Choose a different --sink or check the desktop notification daemon."
         ) from e
     except subprocess.CalledProcessError as e:
         raise RuntimeError(
