@@ -523,6 +523,31 @@ error. To run the chat model in the cloud instead, see
     gaia init --force-models --yes
     ```
   </Accordion>
+
+  <Accordion title="A chat model fails with 'llama-server failed to start'" icon="triangle-exclamation">
+    llama.cpp exited while loading the model. GAIA starts a llama.cpp chat model with two
+    slots over one shared KV cache (`--parallel 2 --kv-unified --cache-ram 0
+    --slot-prompt-similarity 0.5`), so side work such as titles and memory doesn't evict the
+    conversation. Some models and llama.cpp builds can't start with those flags: Gemma 4 with
+    an MTP draft model aborts on llama.cpp b12020, for example
+    ([#6221](https://github.com/amd/gaia/issues/6221)).
+
+    To load a model with your own llama.cpp arguments, save them for it in Lemonade, in the
+    model's settings or with Lemonade's CLI. GAIA then loads the model with them instead of
+    its flags, and leaves the options you saved for it unchanged:
+    ```bash
+    lemonade load <model> --llamacpp-args "<your args>" --save-options
+    ```
+    With one slot (`-np 1`), side work evicts the conversation's cache, so the turn after a
+    title or memory update can be slower in a long chat.
+
+    GAIA retries the failed start 3 times, because the AMD Vulkan driver sometimes fails a
+    start and then recovers. If it still fails, GAIA won't send that same load again for 2
+    minutes. Until then each message gets the same error straight away, instead of
+    crashing llama.cpp again. A load with different options, such as newly saved arguments
+    or another llama.cpp backend, goes through at once. Lemonade's server log has
+    llama-server's own output.
+  </Accordion>
 </AccordionGroup>
 
 ---
