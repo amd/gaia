@@ -276,10 +276,28 @@ def test_an_unclosed_blockquote_hides_the_rest(api):
     assert _asks(api, body, html=True) == []
 
 
-def test_large_malformed_html_and_header_lines_stay_fast():
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<" * 300_000 + "\nFrom: x" * 25_000,
+        "<" + "appendonsend " * 40_000,
+        "<" + "divRplyFwdMsg moz-cite-prefix " * 17_000,
+        "<blockquote " * 40_000,
+        "<br " * 120_000,
+        ("<div id=appendonsend>" + "<" * 20) * 12_000,
+    ],
+    ids=[
+        "unclosed-and-headers",
+        "marker-run",
+        "mixed-markers",
+        "blockquote-run",
+        "break-run",
+        "marker-tags-and-unclosed",
+    ],
+)
+def test_large_malformed_html_and_header_lines_stay_fast(body):
     import time
 
-    body = "<" * 300_000 + "\nFrom: x" * 25_000
     message = {"body": body, "body_content_type": "html"}
     started = time.perf_counter()
     waiting.new_text(message, waiting.quoted_lines([message]))

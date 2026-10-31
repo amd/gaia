@@ -435,10 +435,14 @@ _HEADER_SENT_RE = re.compile(r"^(Sent|Date):\s*\S", re.IGNORECASE)
 _HEADER_FIELD_RE = re.compile(r"^(Sent|Date|To|Cc|Subject):", re.IGNORECASE)
 _BLOCKQUOTE_TAG_RE = re.compile(r"<(/?)blockquote\b[^<>]*>", re.IGNORECASE)
 # Outlook, Yahoo and Thunderbird start quoted history with these markers rather
-# than a blockquote. `[^<>]` keeps each match attempt inside a single tag.
-_HTML_QUOTE_MARKER_RE = re.compile(
-    r"<[^<>]*\b(?:divRplyFwdMsg|appendonsend|yahoo_quoted|moz-cite-prefix)\b[^<>]*>",
-    re.IGNORECASE,
+# than a blockquote. Tags are found with one bounded run and checked with a
+# substring test: a pattern with two unbounded runs backtracks quadratically.
+_HTML_TAG_RE = re.compile(r"<[^<>]*>")
+_HTML_QUOTE_MARKERS = (
+    "divrplyfwdmsg",
+    "appendonsend",
+    "yahoo_quoted",
+    "moz-cite-prefix",
 )
 _HTML_BREAK_RE = re.compile(
     r"<(?:br|/?(?:div|p|li|tr|hr|h[1-6]|table|ul|ol))\b[^<>]*>", re.IGNORECASE
@@ -462,13 +466,21 @@ def _drop_blockquotes(body: str) -> str:
     return "".join(kept)
 
 
+def _mark_quote_start(tag: "re.Match[str]") -> str:
+    """A marker tag becomes a quote-marker line; any other tag is kept."""
+    text = tag.group(0).lower()
+    if any(marker in text for marker in _HTML_QUOTE_MARKERS):
+        return _QUOTE_MARKER_LINE
+    return tag.group(0)
+
+
 def _text_lines(message: Dict[str, Any], *, drop_blockquotes: bool) -> List[str]:
     """The body as text lines, HTML block tags turned into line breaks."""
     body = message.get("body") or ""
     if (message.get("body_content_type") or "text").lower() == "html":
         if drop_blockquotes:
             body = _drop_blockquotes(body)
-        body = _HTML_QUOTE_MARKER_RE.sub(_QUOTE_MARKER_LINE, body)
+        body = _HTML_TAG_RE.sub(_mark_quote_start, body)
         body = html.unescape(_TAG_RE.sub(" ", _HTML_BREAK_RE.sub("\n", body)))
     return body.splitlines()
 
