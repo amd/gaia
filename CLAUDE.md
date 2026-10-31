@@ -787,7 +787,8 @@ Hub:** GAIA is one agent (the flagship) reached through two apps, the TUI and th
 Agent UI. Don't propose catalog, browse or publish-your-agent features, and don't
 name `gaia hub` in user-facing fix hints — a missing flagship is fixed by `gaia init`.
 `hub.amd-gaia.ai` remains the download server behind `gaia init`, the daemon and
-the installers.
+the installers. **Skills are the one exception:** each final release publishes
+`hub/skills/` there (`release_skills.yml`), and amd-gaia.ai/hub lists them.
 
 **Evaluation & analysis** (see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)):
 - `gaia eval agent` - Run the agent eval benchmark (`--fix` auto-fixes failures)

@@ -265,20 +265,25 @@ def main(
         if not args.dry_run:
             print(f"Signing with built-in AMD key {require_amd_key(args.key_name)}")
         directories = discover(args.skills_dir, args.only)
-        outcomes = [
-            process_skill(
-                d,
-                hub_url=hub_url,
-                key_name=args.key_name,
-                dry_run=args.dry_run,
-                fetch=fetch,
-                run=run,
-            )
-            for d in directories
-        ]
     except PublishSkillsError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
+
+    outcomes = []
+    for d in directories:
+        try:
+            outcomes.append(
+                process_skill(
+                    d,
+                    hub_url=hub_url,
+                    key_name=args.key_name,
+                    dry_run=args.dry_run,
+                    fetch=fetch,
+                    run=run,
+                )
+            )
+        except PublishSkillsError as exc:
+            outcomes.append(SkillOutcome(d.name, "?", STATUS_FAILED, str(exc)))
 
     print(f"\n{'SKILL':<22} {'VERSION':<10} STATUS")
     for o in outcomes:

@@ -193,6 +193,26 @@ def test_an_identical_version_signed_by_another_key_stops_the_run(
     assert runner.calls == []
 
 
+def test_one_bad_skill_fails_the_run_but_the_others_still_publish(
+    tmp_path, skills_dir, hub, fetch, monkeypatch, capsys
+):
+    _key, publish = _publisher(tmp_path, hub, "someone-else")
+    publish(skills_dir / "summarize")
+    monkeypatch.setattr(ps, "require_amd_key", lambda _name: "id")
+    runner = Runner()
+
+    rc = ps.main(
+        ["--skills-dir", str(skills_dir), "--hub-url", hub.BASE_URL],
+        fetch=fetch,
+        run=runner,
+    )
+
+    assert rc == 1
+    assert [cmd[3] for cmd in runner.calls] == [str(skills_dir / "rss-digest")]
+    out = capsys.readouterr().out
+    assert "rss-digest" in out and "summarize" in out
+
+
 def test_a_listed_version_whose_artifact_is_gone_stops_the_run(
     skills_dir, hub, fetch, publish_to_hub
 ):
