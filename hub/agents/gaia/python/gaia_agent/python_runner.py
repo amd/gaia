@@ -36,7 +36,7 @@ RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
 #: The run_python / execute_python_file descriptions name the same set.
 BUNDLED_LIBRARIES: Dict[str, str] = {
     "pypdf": "pypdf",
-    "pymupdf": "pymupdf",
+    "pypdfium2": "pypdfium2",
     "python-docx": "docx",
     "python-pptx": "pptx",
     "openpyxl": "openpyxl",
