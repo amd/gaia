@@ -353,6 +353,14 @@ _MARKER_NOTE = (
 )
 
 
+_SEARCH_AGAIN_NOTE = (
+    "\n\nIf these chunks do not answer the question, do not say so yet: search once "
+    "more with different words (other terms for the same thing, and the question's "
+    "words in the document's language). Say it is not in the documents only after "
+    "that search misses too."
+)
+
+
 def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     """How query_documents asks the model to cite: the full path, plus pages if any."""
     instruction = (
@@ -383,7 +391,7 @@ def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
         )
     return instruction + (
         "IMPORTANT: Always use the full path exactly as given in source_file. "
-        "Do NOT shorten it to just the filename."
+        "Do NOT shorten it to just the filename." + _SEARCH_AGAIN_NOTE
     )
 
 
@@ -397,6 +405,7 @@ def _file_instruction(file_name: str, num_chunks: int, has_pages: bool) -> str:
         return instruction + (
             f"Your answer MUST start with: 'According to {file_name}:'. These chunks have "
             "no page numbers, so cite none and don't mention pages."
+            + _SEARCH_AGAIN_NOTE
         )
     return instruction + (
         f"Your answer MUST start with: 'According to {file_name}, page X:' where X is the "
@@ -404,6 +413,7 @@ def _file_instruction(file_name: str, num_chunks: int, has_pages: bool) -> str:
         f"Example: If chunk has 'page': 2, say 'According to {file_name}, page 2:'\n"
         f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'\n"
         + _MARKER_NOTE
+        + _SEARCH_AGAIN_NOTE
     )
 
 
