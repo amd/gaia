@@ -2413,6 +2413,65 @@ so the two can never disagree about whether GAIA is set up.
   </Accordion>
 </AccordionGroup>
 
+### GPU memory
+
+How an AMD integrated GPU (Strix Halo, Ryzen AI) shares memory with the CPU,
+which models a bigger share would fit, and changing it. See
+[Give the GPU more memory](/guides/ai-providers#give-the-gpu-more-memory). The
+TUI reads the same answers from the daemon at `/daemon/v1/gpu-memory`. Every
+route needs the `X-Gaia-UI: 1` header (**403** without it) and returns the
+status below, read fresh. **503** when the model server doesn't answer, since
+the split is read from it. Every `*_gb` field, in requests and responses, is
+decimal GB (10^9 bytes), converted from the GiB Lemonade reports. Only the
+`guided_steps` text converts, to the 4 KiB pages of `ttm.pages_limit` and to
+the GiB that AMD Software and `amd-ttm` count in.
+
+<AccordionGroup>
+  <Accordion title="GET /api/gpu-memory">
+    `applies` (an integrated AMD GPU on a local server; else only
+    `hidden_reason`, `os`, `method: "unsupported"` and `method_reason`),
+    `show_in_setup` (a bigger share fits a default chat model), `total_gb`,
+    `gpu_gb`, `cpu_gb`, `setting` (`name`, `current_gb`, `min_gb`, `max_gb`;
+    the GPU memory limit on Linux, Variable Graphics Memory on Windows),
+    `reserve_gb` (16, kept for the CPU), `method` (`apply` or `guided`) with
+    `method_reason`, `presets` (`setting_gb`, `gpu_gb`, `unlocks`),
+    `recommended_setting_gb`, `models` (`id`, `need_gb`, `default`,
+    `fits_now`, `fits_at_setting_gb`), `pending` (`setting_gb`,
+    `previous_setting_gb`, `source`, `state`: `restart_required`,
+    `took_effect` or `not_applied`), `revert` (`available`,
+    `previous_setting_gb`) and `guided_steps`. **Query:** `setting_gb` renders
+    `guided_steps` for that value (**422** outside `min_gb`–`max_gb`).
+  </Accordion>
+
+  <Accordion title="POST /api/gpu-memory/apply">
+    Linux only. Body: `{"setting_gb": 96, "confirm": true}`. Asks for
+    administrator permission through pkexec, writes the limit, and records the
+    previous one for undo. Takes effect after a restart; GAIA never restarts
+    the PC. **400** without `confirm`; **403** from another computer or over
+    mobile access, or when permission isn't given; **409** when the method
+    is `guided` or the value is already set; **422** when it would leave the
+    CPU less than 16 GB; **500** when the root step fails.
+  </Accordion>
+
+  <Accordion title="POST /api/gpu-memory/revert">
+    Body: `{"confirm": true}`. Puts back the setting GAIA replaced, after a
+    restart. **409** when GAIA has no record of a change, or the record holds
+    anything but GPU memory settings. Same **400**/**403** as apply.
+  </Accordion>
+
+  <Accordion title="POST /api/gpu-memory/pending">
+    Body: `{"setting_gb": 64}`. Records a value the user is setting by hand
+    (`guided`), so after the restart `pending.state` says whether it took
+    effect, judged from a fresh reading. **409** where GAIA can apply it
+    itself; **422** out of range.
+  </Accordion>
+
+  <Accordion title="DELETE /api/gpu-memory/pending">
+    Stops reporting the pending change ("Keep current"). Changes nothing on
+    the PC, and keeps what undo needs.
+  </Accordion>
+</AccordionGroup>
+
 ### Lemonade server
 
 Which Lemonade Server GAIA uses: its own, or one the user already runs. Same
