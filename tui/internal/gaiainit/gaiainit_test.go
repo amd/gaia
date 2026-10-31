@@ -126,11 +126,6 @@ func processAlive(pid int) bool {
 	return exec.Command("kill", "-0", strconv.Itoa(pid)).Run() == nil
 }
 
-// The TUI never loads the browser Agent UI, and that build step only runs in a
-// source checkout — where it failed on a missing type package and took the
-// whole run's exit code with it, AFTER Lemonade and both models had installed.
-// Setup launched from the terminal UI must not fail on a component it does not
-// use.
 func TestMissingCLIIsClassifiedSeparately(t *testing.T) {
 	oldBinary := Binary
 	Binary = func() (string, error) { return "", fmt.Errorf("%w: lookup failed", ErrNoCLI) }
@@ -145,6 +140,11 @@ func TestMissingCLIIsClassifiedSeparately(t *testing.T) {
 	}
 }
 
+// The TUI never loads the browser Agent UI, and that build step only runs in a
+// source checkout — where it failed on a missing type package and took the
+// whole run's exit code with it, AFTER Lemonade and both models had installed.
+// Setup launched from the terminal UI must not fail on a component it does not
+// use.
 func TestRunArgsSkipTheBrowserUIBuild(t *testing.T) {
 	for _, claude := range []bool{false, true} {
 		args := RunArgs(claude)
