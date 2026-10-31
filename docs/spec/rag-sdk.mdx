@@ -127,6 +127,8 @@ class RAGSDK:
                 "total_chunks": int,
                 "vlm_pages": int (pages enhanced with VLM),
                 "total_images": int (images processed),
+                "evicted": List[str] (only when the library hit max_indexed_files
+                    or max_total_chunks; paths removed to make room, oldest first),
                 "error": str (if failed),
                 "error_type": str (some failures, see below)
             }
