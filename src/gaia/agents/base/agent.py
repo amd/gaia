@@ -2209,7 +2209,7 @@ class Agent(abc.ABC):
     # Set by a host (the Agent UI's session panel); checked on every tool call.
     internet_off: bool = False
 
-    # T-X2: declarative external-OAuth scope requirement.
+    # Declarative external-OAuth scope requirement.
     # Subclasses override this to declare which provider+scopes their tool
     # bodies need. The registry surfaces these to AgentUI's consent dialog and
     # the CLI ``gaia connectors grants`` command, and the runtime gates each
@@ -2227,7 +2227,7 @@ class Agent(abc.ABC):
     SKILL_DIRS: ClassVar[List[str]] = []
 
     # Path to the ``gaia-agent.yaml`` whose ``skills:`` / ``skill_sets:`` blocks
-    # this agent composes (scope D). The base ``__init__`` reads it
+    # this agent composes. The base ``__init__`` reads it
     # and loads the resolved set at startup. ``None`` auto-detects the manifest
     # beside the agent's own module — which is why a custom harness needs no code
     # change to consume an installed hub skill. Relative paths resolve against
@@ -2269,7 +2269,7 @@ class Agent(abc.ABC):
     VOLATILE_PROMPT_FRAGMENTS: ClassVar[frozenset] = frozenset(
         {
             "get_memory_system_prompt",  # re-rendered on forget/update of a shown item
-            "get_skills_system_prompt",  # per-turn body selection (#2848)
+            "get_skills_system_prompt",  # per-turn body selection
             # Mostly static, but the index line flips as a background index
             # lands and the shape line changes if the project does.
             "get_project_map_system_prompt",
@@ -2636,7 +2636,7 @@ Do NOT wrap conversational replies in JSON.
         self._extraction_ledger: Optional[ExtractionLedger] = None
         self._completion_evidence: Optional[CompletionEvidence] = None
 
-        # Declarative skills (scope D): compose whatever this
+        # Declarative skills: compose whatever this
         # agent's gaia-agent.yaml declares. After _register_tools so a skill's
         # tools land on top of the agent's own registry (and survive a subclass's
         # ``_snapshot_tools()``), and before the system prompt is first composed
@@ -3761,7 +3761,7 @@ Do NOT wrap conversational replies in JSON.
         (legacy behavior, unchanged for every agent that doesn't opt in).
         GaiaAgent overrides this with a per-turn semantic selector so an
         unrelated skill's body doesn't ride along on every subsequent turn
-        for the life of the session (#2848).
+        for the life of the session.
         """
         return None
 
@@ -3799,7 +3799,7 @@ Do NOT wrap conversational replies in JSON.
 
         Mirrors :meth:`_refresh_active_tool_filter`. Recomputed fresh every
         turn rather than accumulated: a skill body is large enough (measured
-        15-19KB, #2848) that letting a stale match stick around reproduces the
+        15-19KB) that letting a stale match stick around reproduces the
         exact permanent-inlining bug this exists to fix.
         """
         # pylint: disable-next=assignment-from-none
@@ -4635,7 +4635,7 @@ Do NOT wrap conversational replies in JSON.
         ``_active_skill_filter is None`` (the default, every agent that hasn't
         opted into per-turn selection) renders every loaded skill's full body
         every turn — the original, byte-identical behavior. When a subclass
-        has set the filter (GaiaAgent, #2848 follow-up), a loaded skill whose
+        has set the filter (GaiaAgent), a loaded skill whose
         name is not in the filter — and is not in the manifest's always-on
         ``skills:`` list — collapses to a one-line menu entry instead of its
         full body, so a loaded-but-irrelevant skill costs a menu line, not a
@@ -8401,7 +8401,7 @@ Do NOT wrap conversational replies in JSON.
             threshold, _ = self._truncation_budget()
             # Prose call site: text_content is spliced into a message's text
             # field, never json.loads'd -- stays on the default prose path,
-            # not the JSON-safe envelope (reflection C2).
+            # not the JSON-safe envelope.
             text_content = self._truncate_large_content(
                 tool_output, max_chars=threshold
             )
@@ -8543,8 +8543,7 @@ Do NOT wrap conversational replies in JSON.
         always parses. Prose callers (spliced directly into an LLM prompt
         string, e.g. ``_create_tool_message``) get the plain slice they
         always got: wrapping prose in an escaped JSON blob would waste an
-        already-tight budget on punctuation the reader never needed
-        (reflection C2).
+        already-tight budget on punctuation the reader never needed.
         """
 
         # If we have test_results in the output we don't want to
@@ -8627,7 +8626,7 @@ Do NOT wrap conversational replies in JSON.
 
         ``as_json`` callers get a JSON envelope (``json.dumps`` escapes the
         slice, so the result always parses); prose callers get the plain
-        mid-slice they always got (#2620, reflection C2).
+        mid-slice they always got.
         """
         if as_json:
             envelope_overhead = len(
@@ -9917,8 +9916,7 @@ Do NOT wrap conversational replies in JSON.
                             )
                             if len(plan_context_raw) > 20000:
                                 # Prose call site: spliced into an f-string
-                                # prompt below, never json.loads'd
-                                # (reflection C2).
+                                # prompt below, never json.loads'd.
                                 plan_context_str = self._truncate_large_content(
                                     plan_context, max_chars=20000
                                 )
@@ -10001,7 +9999,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Truncate previous outputs if too large to avoid overwhelming the LLM.
                     # Prose call site: spliced into the recovery prompt below,
-                    # never json.loads'd (reflection C2).
+                    # never json.loads'd.
                     truncated_outputs = (
                         self._truncate_large_content(previous_outputs, max_chars=500)
                         if previous_outputs
@@ -11332,7 +11330,7 @@ Do NOT wrap conversational replies in JSON.
                         tool_result, FAILED_STATUSES
                     )
 
-                # Mirror the plan-execution branch (L2330) so
+                # Mirror the plan-execution branch so
                 # ``step_results`` is consistent regardless of whether the
                 # LLM emitted a multi-step plan or a series of single-tool
                 # responses.  Downstream consumers (parse-error recovery

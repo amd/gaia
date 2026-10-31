@@ -1936,7 +1936,7 @@ class FileSearchToolsMixin:
                     # Validate write access (skip overwrite prompt since we're editing).
                     # Pass the *actual* size of the replacement string so
                     # MAX_WRITE_SIZE_BYTES is enforced — passing 0 here would
-                    # silently bypass the size guardrail (review feedback).
+                    # silently bypass the size guardrail.
                     is_allowed, reason = path_validator.validate_write(
                         str(resolved_path),
                         content_size=len(new_content.encode("utf-8")),

@@ -2999,13 +2999,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools
-    # - FileToolsMixin (file_tools.py): Directory monitoring
+    # - FileToolsMixin (file_monitor_tools.py): Directory monitoring
     # - ShellToolsMixin (shell_tools.py): Shell command execution
     # - FileSystemToolsMixin (shared): File system browsing, search, tree, bookmarks
     # - ScratchpadToolsMixin (shared): SQLite working memory for data analysis
     # - BrowserToolsMixin (shared): Web browsing, content extraction, download
     # - FileSearchToolsMixin (shared): File and directory search across drives
-    # - FileIOToolsMixin (code/tools/file_io.py): read_file, write_file, edit_file (3 generic tools only)
+    # - FileIOToolsMixin (file_io_tools.py): read_file, write_file, edit_file (3 generic tools only)
     # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from <gaia_home>/mcp_servers.json)
 
