@@ -724,13 +724,17 @@ def test_run_program_interrupt_kills_its_process_tree(monkeypatch):
         parsed_permissions=lambda: [Permission.parse("program:run:python")],
     )
     monkeypatch.setattr(skill_context, "find_program", lambda _name: sys.executable)
-    monkeypatch.setattr(skill_context.subprocess, "Popen", lambda *_args, **_kwargs: proc)
+    monkeypatch.setattr(
+        skill_context.subprocess, "Popen", lambda *_args, **_kwargs: proc
+    )
     monkeypatch.setattr(
         skill_context, "_terminate_program_tree", lambda process: killed.append(process)
     )
 
     with skill_context.bind(object(), skill), pytest.raises(KeyboardInterrupt):
-        skill_context.run_program("python", ["-c", "import time; time.sleep(60)"], timeout=60)
+        skill_context.run_program(
+            "python", ["-c", "import time; time.sleep(60)"], timeout=60
+        )
 
     assert killed == [proc]
 
