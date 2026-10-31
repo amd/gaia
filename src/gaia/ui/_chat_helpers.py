@@ -132,11 +132,26 @@ _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 _background_tasks: set = set()
 
 
-def relayed_turns_in_flight() -> Optional[str]:
-    """Why restarting the daemon now would cut off a chat's agent turn, or None.
+def active_turns_in_flight() -> Optional[str]:
+    """Why restarting the daemon now would cut off an Agent UI turn, or None.
 
-    These turns go straight to the agent, so the daemon cannot count them. A
-    chat still starting its turn has no relayed run yet and does not count.
+    The Agent UI backend owns both in-process and relayed turns, while the
+    daemon can only see the latter.  Every handler is registered after a turn
+    has started and removed during stream cleanup, so the mapping is the
+    backend's authoritative in-progress-turn set.
+    """
+    running = len(_active_sse_handlers)
+    if not running:
+        return None
+    return f"{running} Agent UI chat(s) are still answering"
+
+
+def relayed_turns_in_flight() -> Optional[str]:
+    """Why restarting the daemon now would cut off a relayed Agent UI turn.
+
+    Kept as a narrower helper for callers that specifically need to distinguish
+    sidecar-backed turns.  Daemon update protection uses
+    :func:`active_turns_in_flight` because in-process turns also hold the model.
     """
     running = sum(
         1

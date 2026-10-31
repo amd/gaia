@@ -604,6 +604,21 @@ def test_removed_local_work_no_longer_keeps_it(daemon_reports):
 # itself from the front ends it sees: its own turns must be counted here.
 
 
+def test_an_in_process_agent_ui_turn_keeps_the_daemon_from_restarting(
+    daemon_reports, monkeypatch
+):
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    monkeypatch.setattr(helpers, "_active_sse_handlers", {})
+    client.add_local_work(helpers.active_turns_in_flight)
+    helpers._active_sse_handlers["chat-a"] = SSEOutputHandler()
+
+    assert "1 Agent UI chat(s) are still answering" in (
+        client.outdated_daemon_busy(_inst())
+    )
+
+
 class _ParkedProxy:
     """A flagship whose run parks on *event* until released."""
 
