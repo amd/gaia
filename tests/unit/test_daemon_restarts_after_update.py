@@ -612,8 +612,17 @@ def test_an_in_process_agent_ui_turn_keeps_the_daemon_from_restarting(
 
     monkeypatch.setattr(helpers, "_active_sse_handlers", {})
     client.add_local_work(helpers.active_turns_in_flight)
-    helpers._active_sse_handlers["chat-a"] = SSEOutputHandler()
 
+    # The caller registers its handler before it contacts the daemon; that
+    # starting turn must not make its own restart check busy.
+    helpers._active_sse_handlers["chat-starting"] = SSEOutputHandler()
+    assert client.outdated_daemon_busy(_inst()) is None
+
+    # A second in-process turn that has reached the agent query must keep the
+    # daemon alive while the model/tool loop is still running.
+    running = SSEOutputHandler()
+    running.in_process_turn_active = True
+    helpers._active_sse_handlers["chat-running"] = running
     assert "1 Agent UI chat(s) are still answering" in (
         client.outdated_daemon_busy(_inst())
     )

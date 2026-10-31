@@ -140,7 +140,12 @@ def active_turns_in_flight() -> Optional[str]:
     has started and removed during stream cleanup, so the mapping is the
     backend's authoritative in-progress-turn set.
     """
-    running = len(_active_sse_handlers)
+    running = sum(
+        1
+        for handler in list(_active_sse_handlers.values())
+        if getattr(handler, "in_process_turn_active", False)
+        or getattr(handler, "active_relay_run_id", None) is not None
+    )
     if not running:
         return None
     return f"{running} Agent UI chat(s) are still answering"
@@ -4432,7 +4437,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # and the next turn's pre-flight reloads an evicted model.
                 t_query = _time.monotonic()
                 result_holder["agent"] = agent
-                result = agent.process_query(query)
+                sse_handler.in_process_turn_active = True
+                try:
+                    result = agent.process_query(query)
+                finally:
+                    sse_handler.in_process_turn_active = False
                 logger.info(
                     "PERF process_query session=%s took=%.3fs",
                     session_id[:8],
