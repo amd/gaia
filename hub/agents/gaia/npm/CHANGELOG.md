@@ -17,6 +17,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   `chat`, `doc` or `file` agents get this agent instead; Agent UI chats saved
   under them stay read-only. MCP settings saved for `installed:chat` no
   longer apply (#6099).
+- **Reading a web page no longer dead-ends as early.** When a page splits a
+  multi-word `fetch_page(find=...)` phrase across a table or sentence, the agent
+  gets a labelled passage holding all its words instead of "no occurrence". A
+  page with several links says how to list them, and `open_url` defers to the
+  enforced network policy rather than having the model refuse on its own.
 ### For integrators: contract 2.26
 
 - **"Always" answers can be listed and revoked** (contract **2.26**).

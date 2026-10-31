@@ -10,6 +10,7 @@ Provides lightweight web browsing tools using requests + BeautifulSoup
 search the web, and download files for local analysis.
 """
 
+import bisect
 import json
 import logging
 import os
@@ -204,29 +205,39 @@ def _find_all_words_spans(text: str, term: str) -> List[Tuple[int, int]]:
     words = list(dict.fromkeys(re.findall(r"\w+", term.lower())))
     if len(words) < 2:
         return []
+    # One named group per word: a case-folded match ("ſ" for "s") need not
+    # lower() back to the word it matched.
     pattern = re.compile(
-        r"\b(?:" + "|".join(map(re.escape, words)) + r")\b", re.IGNORECASE
+        r"\b(?:"
+        + "|".join(f"(?P<w{i}>{re.escape(word)})" for i, word in enumerate(words))
+        + r")\b",
+        re.IGNORECASE,
     )
-    positions = {word: [] for word in words}
+    starts: List[List[int]] = [[] for _ in words]
+    ends: List[List[int]] = [[] for _ in words]
     for match in pattern.finditer(text):
-        positions[match.group(0).lower()].append(match.start())
-    if any(not starts for starts in positions.values()):
+        index = int(match.lastgroup[1:])
+        starts[index].append(match.start())
+        ends[index].append(match.end())
+    if any(not found for found in starts):
         return []
 
+    # Bisect, not a scan per anchor: common words on a long page would make
+    # this quadratic and stall the tool call.
     spans = []
-    for start in positions[words[0]]:
+    for start in starts[0]:
         window_end = start + FIND_CONTEXT_CHARS * 2
-        ends = []
-        for word in words:
-            candidates = [at for at in positions[word] if start <= at <= window_end]
-            if not candidates:
+        last_end = start
+        for word_starts, word_ends in zip(starts, ends):
+            at = bisect.bisect_left(word_starts, start)
+            if at == len(word_starts) or word_starts[at] > window_end:
                 break
-            ends.append(candidates[0] + len(word))
+            last_end = max(last_end, word_ends[at])
         else:
             spans.append(
                 (
                     max(0, start - FIND_CONTEXT_CHARS),
-                    min(len(text), max(ends) + FIND_CONTEXT_CHARS),
+                    min(len(text), last_end + FIND_CONTEXT_CHARS),
                 )
             )
     return _merge_spans(spans)

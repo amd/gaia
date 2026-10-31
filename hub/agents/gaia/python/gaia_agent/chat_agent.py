@@ -2348,7 +2348,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             def open_url(url: str) -> dict:
                 """Open a public URL in the system's default web browser.
 
-                Refuses private, loopback, and link-local addresses.
+                Screens every address against GAIA's network policy. Private,
+                loopback, and link-local addresses are blocked by default, but an
+                operator can explicitly allow a loopback host for a local fixture
+                or service. Call this tool for a URL the user supplied and report
+                its policy result; do not refuse it based on this description alone.
 
                 Args:
                     url: Public http:// or https:// URL to open

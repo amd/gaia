@@ -820,6 +820,52 @@ class TestBrowserToolsMixin:
         assert "3 links on this page" in out
         assert "extract='links'" in out
 
+    def test_two_incidental_links_get_no_hint(self):
+        fetch = self._serve(
+            "<p>"
+            + "An article body. " * 20
+            + "</p><a href='/a'>A</a><a href='/b'>B</a>"
+        )
+        assert "extract='links'" not in fetch("https://example.com")
+
+    def test_all_words_fallback_needs_the_words_near_each_other(self):
+        fetch = self._serve(
+            "<p>Sunday is busy. " + "filler " * 400 + "Pier 9 is open.</p>"
+        )
+        out = fetch("https://example.com", find="Sunday Pier 9")
+        assert "No exact occurrence of 'Sunday Pier 9'" in out
+        assert "Exact phrase" not in out
+
+    def test_a_single_word_miss_gets_no_all_words_fallback(self):
+        fetch = self._serve("<p>" + "nothing to see here " * 20 + "</p>")
+        out = fetch("https://example.com", find="harbour")
+        assert "No exact occurrence of 'harbour'" in out
+
+    def test_an_exact_match_is_preferred_over_the_all_words_fallback(self):
+        fetch = self._serve(
+            "<p>Sunday Pier 9 departs early. " + "filler " * 30 + "</p>"
+        )
+        out = fetch("https://example.com", find="Sunday Pier 9")
+        assert "Exact phrase" not in out
+        assert "Sunday Pier 9 departs" in out
+
+    def test_all_words_fallback_survives_case_folded_letters(self):
+        from gaia.agents.tools.browser_tools import _find_all_words_spans
+
+        # "ſ" (long s) matches "s" case-insensitively but never lowers to it.
+        assert _find_all_words_spans("ſ then x", "s x")
+
+    def test_all_words_fallback_stays_fast_on_a_long_page_of_common_words(self):
+        import time
+
+        from gaia.agents.tools.browser_tools import _find_all_words_spans
+
+        text = "the cat sat " * 40000
+        started = time.perf_counter()
+        spans = _find_all_words_spans(text, "the sat cat")
+        assert spans == [(0, len(text))]
+        assert time.perf_counter() - started < 5
+
     def test_find_marks_matches_it_could_not_fit(self):
         fetch = self._serve(
             "".join(f"<p>{'pad ' * 200} price {i} {'pad ' * 200}</p>" for i in range(6))
