@@ -1979,7 +1979,7 @@ Examples:
   # Delete all downloaded GAIA models (free up disk space)
   gaia download --clear-cache
 
-Available agents: chat, talk, rag, vlm, minimal, mcp
+Available agents: chat, bash, talk, rag, vlm, minimal, mcp, sd
         """,
     )
     download_parser.add_argument(
