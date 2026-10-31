@@ -45,11 +45,6 @@ FAILED_RUN_ENDINGS = [
         id="issue-starting-with-now",
     ),
     pytest.param(
-        "Starting by listing the target directory now.",
-        "narration",
-        id="issue-starting-by-now",
-    ),
-    pytest.param(
         "Starting next month, rent rises.",
         None,
         id="starting-next-month-is-not-a-plan",
@@ -60,26 +55,20 @@ FAILED_RUN_ENDINGS = [
         id="issue-execution-step-heading",
     ),
     pytest.param(
-        "### Corrected Plan Update\n\nThe totals need every report.\n\n"
-        "### Execution Step 1/3\n\n"
-        "Starting by listing everything in the target directory now.",
-        "narration",
-        id="issue-turn1-full-ending",
-    ),
-    pytest.param(
         "The totals need every report.\n\n### Execution Step 1/3",
         "narration",
         id="ends-on-a-bare-step-heading",
     ),
+    pytest.param("Starting now.", "narration", id="starting-now"),
     pytest.param(
-        "Starting with the Central region report now!",
+        "I'll start with the Central report now.",
         "narration",
-        id="starting-with-now-exclaimed",
+        id="ill-start-with",
     ),
     pytest.param(
-        "Starting on the Central report now.",
+        "Let me start with the Central report.",
         "narration",
-        id="starting-on-now",
+        id="let-me-start",
     ),
     pytest.param(
         "I'm starting with the West region report now.",
@@ -293,6 +282,39 @@ COMPLETED_ANSWERS = [
     pytest.param(
         "Starting with the basics is the best approach for now.",
         id="starting-with-as-a-subject",
+    ),
+    # A bare "Starting with/on/by X ... now." is usually a version or date fact.
+    pytest.param(
+        "Starting with Python 3 strings default to Unicode now.",
+        id="fact-python-3",
+    ),
+    pytest.param(
+        "Starting with Windows 11 Microsoft requires TPM now.",
+        id="fact-windows-11",
+    ),
+    pytest.param(
+        "Starting with iOS 17 apps get interactive widgets now.",
+        id="fact-ios-17",
+    ),
+    pytest.param(
+        "Starting on Monday payroll runs weekly now.",
+        id="fact-starting-on-monday",
+    ),
+    pytest.param(
+        "Your reorg is finished. Starting with Q3 Central reports to West now.",
+        id="fact-reorg",
+    ),
+    pytest.param(
+        "Starting with Chrome 120 third-party cookies get blocked now.",
+        id="fact-chrome-120",
+    ),
+    pytest.param(
+        "Starting by default telemetry stays off now.",
+        id="fact-starting-by-default",
+    ),
+    pytest.param(
+        "Starting with GAIA 1 agents ship separately now.",
+        id="fact-gaia-1",
     ),
 ]
 

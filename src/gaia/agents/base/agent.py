@@ -1340,13 +1340,11 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
     r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+)?"
     r"(?:executing step|first step|(?:my|our) next step"
     r"|now,? i need to|now,? i'll|now,? i will|i'll now|i will now"
-    # "Starting with X now." where X is a short object, never a clause:
-    # "Starting with Windows 11 you can do this now." is a finished answer.
-    r"|(?:i'm |i am )?starting\s+(?:with|by|on)\s+"
-    r"(?:(?!(?:you|we|they|it|this|that|there|is|are|was|were|can|could|will"
-    r"|would|should|may|might|must|has|have|had|do|does|did|for|until|from"
-    r"|then)\b)[^\s,;:.!?]+\s+){1,8}"
-    r"now(?::|(?:[.!]|\.\.\.|…)?$)"
+    # Bare "Starting with X now." is often a fact ("Starting with iOS 17 apps
+    # get widgets now."), so only first person, "now:" or "now..." count.
+    r"|(?:i'm|i am|i'll|i will) start(?:ing)?\s+(?:with|by|on|now)\b[^:]*$"
+    r"|starting now(?:[.!:]|\.\.\.|…)?$"
+    r"|starting\s+(?:with|by|on)\b[^,;:]*?\bnow(?::|\.\.\.|…)"
     r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)"
     r"|fetching\b(?!.*\b(?:failed|returned|timed out)\b)"
     r"|(?:now,? )?(?:i|we) (?:still |just )?need to)",
