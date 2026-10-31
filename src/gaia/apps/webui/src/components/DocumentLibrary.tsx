@@ -14,6 +14,8 @@ import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isEx
 import type { Document, IndexFolderResponse } from '../types';
 import { useT, type Translate } from '../i18n/useT';
 import { IndexingProgress } from './IndexingProgress';
+import { IndexingSummary } from './IndexingOverview';
+import { refreshIndexing } from '../services/indexingPoll';
 import './DocumentLibrary.css';
 
 /** Split a stored indexing error into a one-line summary and the rest. */
@@ -24,22 +26,25 @@ function splitFailureReason(lastError: string): { summary: string; more: string 
 }
 
 /** One sentence on what folder indexing added, skipped and couldn't read. */
-function describeFolderResult(folderName: string, result: IndexFolderResponse): string {
+function describeFolderResult(folderName: string, result: IndexFolderResponse, t: Translate): string {
     const skipped = result.skipped ?? 0;
+    const queued = result.queued ?? 0;
     const parts: string[] = [];
-    if (result.indexed > 0) {
-        parts.push(`Indexed ${result.indexed} file${result.indexed !== 1 ? 's' : ''} from "${folderName}".`);
+    if (queued > 0) {
+        parts.push(t.plural('docs.folder.queued', queued, { name: folderName }));
+    } else if (result.indexed > 0) {
+        parts.push(t.plural('docs.folder.indexed', result.indexed, { name: folderName }));
+    } else if (result.failed === 0 && result.documents.length === 0) {
+        parts.push(t('docs.folder.empty', { name: folderName }));
     } else if (result.failed === 0) {
-        parts.push(`"${folderName}" has no documents GAIA can index.`);
+        parts.push(t.plural('docs.folder.indexed', result.documents.length, { name: folderName }));
     }
-    if (skipped > 0) {
-        parts.push(`Skipped ${skipped} file${skipped !== 1 ? 's' : ''} of a type GAIA doesn't index.`);
-    }
+    if (skipped > 0) parts.push(t.plural('docs.folder.skipped', skipped));
     if (result.failed > 0) {
         const first = result.errors[0] ? ` ${result.errors[0].split('\n')[0]}` : '';
-        parts.push(`${result.failed} file${result.failed !== 1 ? 's' : ''} couldn't be indexed.${first}`);
+        parts.push(`${t.plural('docs.folder.failed', result.failed)}${first}`);
     }
-    parts.push('Subfolders aren\'t included.');
+    parts.push(t('docs.folder.noSubfolders'));
     return parts.join(' ');
 }
 
@@ -113,6 +118,7 @@ function formatFullTimestamp(isoString: string): string {
 
 export function DocumentLibrary() {
     const t = useT();
+    const batch = useChatStore((s) => s.indexing);
     const { documents, setDocuments, setShowDocLibrary, setShowFileBrowser,
             currentSessionId, sessions, updateSessionInList,
             draftDocumentIds, addDraftDocuments, removeDraftDocument } = useChatStore();
@@ -378,7 +384,7 @@ export function DocumentLibrary() {
             // Top level only: a typed path like a home folder would otherwise index everything below it.
             const result = await api.indexFolder(folder, false);
             await attachIndexed(result.documents.map((d) => d.id).filter(Boolean), folderName);
-            setFolderNotice(describeFolderResult(folderName, result));
+            setFolderNotice(describeFolderResult(folderName, result, t));
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
         } catch (err) {
@@ -454,6 +460,7 @@ export function DocumentLibrary() {
             // Refresh
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
+            await refreshIndexing();
             log.doc.info(`Cancelled indexing for: ${doc?.filename || id}`);
         } catch (err) {
             log.doc.error(`Failed to cancel indexing: ${doc?.filename || id}`, err);
@@ -521,7 +528,8 @@ export function DocumentLibrary() {
         switch (status) {
             case 'indexing':
             case 'pending': {
-                const progress = progressById[doc.id];
+                // The overview already knows, so reopening never starts from nothing.
+                const progress = progressById[doc.id] ?? batch?.documents?.find((d) => d.id === doc.id)?.progress;
                 return (
                     <div className="doc-indexing-status">
                         {progress ? <IndexingProgress progress={progress} /> : (
@@ -624,6 +632,7 @@ export function DocumentLibrary() {
                 </div>
 
                 <div className="modal-body">
+                    <IndexingSummary />
                     <div className="doc-target">
                         {currentSessionId ? (
                             <label className="doc-target-choice">

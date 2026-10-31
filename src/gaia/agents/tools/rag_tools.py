@@ -29,6 +29,7 @@ from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
 from gaia.rag.sdk import EmbeddingUnavailableError
 from gaia.tool_cancellation import raise_if_cancelled
+from gaia.utils.index_tracker import index_tracker
 
 logger = get_logger(__name__)
 
@@ -70,6 +71,10 @@ _INDEX_JOBS_LOCK = threading.Lock()
 _INDEX_JOBS: "weakref.WeakKeyDictionary[Any, Dict[str, Any]]" = (
     weakref.WeakKeyDictionary()
 )
+#: RAGSDK -> paths the app is indexing itself, attached to that agent's chat.
+_WATCHED_PATHS: "weakref.WeakKeyDictionary[Any, List[str]]" = (
+    weakref.WeakKeyDictionary()
+)
 
 
 class _IndexJob:
@@ -102,6 +107,20 @@ class _IndexJob:
         return int((self.total - self.embedded) / rate)
 
 
+class _TrackedIndexJob(_IndexJob):
+    """A document the app is indexing on its own; reported here, never started."""
+
+    def __init__(self, path: str, progress: Dict[str, Any]):
+        super().__init__(path)
+        self.started -= progress["elapsed_seconds"]
+        if progress["phase"] == "embedding":
+            self.embedded, self.total = progress["done"], progress["total"]
+        self._seconds_left = progress["seconds_left"]
+
+    def seconds_remaining(self) -> Optional[int]:
+        return self._seconds_left
+
+
 def _index_within_budget(
     rag: Any, path: str, budget: Optional[float] = None
 ) -> Tuple[Optional[Dict[str, Any]], _IndexJob]:
@@ -110,7 +129,13 @@ def _index_within_budget(
     Returns ``(result, job)``: ``result`` is ``rag.index_document``'s dict when
     it finished in time, else ``None`` while the job keeps running. A second
     call for the same path waits on the running job instead of starting another.
+    A file the app is already indexing is reported at once: reading it a second
+    time here would take as long again and finish no sooner.
     """
+    key = index_tracker.key_for(path)
+    progress = index_tracker.progress(key) if key else None
+    if progress:
+        return None, _TrackedIndexJob(path, progress)
     budget = INDEX_FOREGROUND_BUDGET_S if budget is None else budget
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.setdefault(rag, {})
@@ -151,13 +176,22 @@ def _index_within_budget(
     return job.result, job
 
 
+def watch_documents_indexing(rag: Any, paths: List[str]) -> None:
+    """Count *paths*, which the app is indexing itself, as still indexing for *rag*."""
+    with _INDEX_JOBS_LOCK:
+        _WATCHED_PATHS[rag] = list(paths)
+
+
 def documents_still_indexing(rag: Any) -> List[str]:
     """Paths *rag* is still indexing in the background; not searchable yet."""
     if rag is None:
         return []
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.get(rag) or {}
-        return sorted(path for path, job in jobs.items() if not job.done.is_set())
+        running = {path for path, job in jobs.items() if not job.done.is_set()}
+        watched = list(_WATCHED_PATHS.get(rag) or [])
+    running.update(path for path in watched if index_tracker.key_for(path))
+    return sorted(running)
 
 
 def _forget_evicted(indexed_files: set, evicted: List[str]) -> None:

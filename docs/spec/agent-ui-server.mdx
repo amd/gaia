@@ -192,6 +192,8 @@ The server exposes **two** document upload endpoints, each for a different sourc
 
 The blob endpoint exists because browser `File` objects never expose a filesystem path, and since Electron 32 `File.path` has been removed as well (see issue [#728](https://github.com/amd/gaia/issues/728)). It streams the upload with a running size check (capped at 20 MB), computes a SHA-256 hash, short-circuits on dedup by hash, and only then promotes the file into the managed directory via an atomic `os.replace`. On failure, partial and orphan files are cleaned up.
 
+Both take a `background` option (a JSON field and a query parameter) that returns once the document has a row, whatever its size, and indexes it on its own. The Agent UI always sets it; `GET /api/documents/indexing` reports the batch and its measured time left. A chat turn never indexes a document that is indexing, cancelled or failed: it leaves it out of the turn and says so.
+
 When a server-owned document is deleted (`DELETE /api/documents/{id}`), the on-disk file under `$GAIA_HOME/documents/` is also unlinked as a best-effort cleanup. User-owned files from `upload-path` are left untouched.
 
 ### Cascade Deletes
@@ -221,6 +223,8 @@ All 14 Pydantic models:
 | `DocumentListResponse` | Response | `GET /api/documents` |
 | `DocumentUploadRequest` | Request | `POST /api/documents/upload-path` |
 | `UploadFile` (multipart) | Request | `POST /api/documents/upload` (blob) |
+| `DocumentStatusResponse`, `IndexProgress` | Response | `GET /api/documents/{doc_id}/status` |
+| `IndexingOverview`, `IndexingDocument` | Response | `GET /api/documents/indexing` |
 | `AttachDocumentRequest` | Request | `POST /api/sessions/{session_id}/documents` |
 
 ---

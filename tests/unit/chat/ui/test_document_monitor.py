@@ -40,7 +40,7 @@ def temp_file():
         pass
 
 
-async def _dummy_index(filepath) -> int:
+async def _dummy_index(filepath, progress_key=None) -> int:
     """Dummy index function that returns a fixed chunk count."""
     return 5
 
@@ -181,7 +181,7 @@ class TestDocumentMonitor:
         index_called = asyncio.Event()
         original_count = [0]
 
-        async def tracking_index(filepath) -> int:
+        async def tracking_index(filepath, progress_key=None) -> int:
             original_count[0] += 1
             index_called.set()
             return 10
@@ -193,6 +193,9 @@ class TestDocumentMonitor:
             # Wait for the monitor to detect the change
             await asyncio.wait_for(index_called.wait(), timeout=10.0)
             assert original_count[0] >= 1
+            await asyncio.sleep(
+                0.05
+            )  # the monitor records it after the index task ends
 
             # Verify the document was updated
             updated = db.get_document(doc_id)
@@ -218,7 +221,7 @@ class TestDocumentMonitor:
 
         call_count = [0]
 
-        async def tracking_index(filepath) -> int:
+        async def tracking_index(filepath, progress_key=None) -> int:
             call_count[0] += 1
             return 10
 
@@ -273,7 +276,7 @@ class TestDocumentMonitor:
 
         call_count = [0]
 
-        async def tracking_index(filepath) -> int:
+        async def tracking_index(filepath, progress_key=None) -> int:
             call_count[0] += 1
             return 10
 
@@ -314,7 +317,7 @@ class TestDocumentMonitor:
 
         index_called = asyncio.Event()
 
-        async def zero_chunk_index(filepath) -> int:
+        async def zero_chunk_index(filepath, progress_key=None) -> int:
             index_called.set()
             return 0
 
@@ -382,7 +385,7 @@ class TestAReconnectedDriveIsRepaired:
 
         calls = [0]
 
-        async def tracking_index(filepath) -> int:
+        async def tracking_index(filepath, progress_key=None) -> int:
             calls[0] += 1
             return 10
 
@@ -445,7 +448,7 @@ class TestAReconnectedDriveIsRepaired:
 
         index_called = asyncio.Event()
 
-        async def tracking_index(filepath) -> int:
+        async def tracking_index(filepath, progress_key=None) -> int:
             index_called.set()
             return 10
 
@@ -455,6 +458,9 @@ class TestAReconnectedDriveIsRepaired:
         await monitor.start()
         try:
             await asyncio.wait_for(index_called.wait(), timeout=10.0)
+            await asyncio.sleep(
+                0.05
+            )  # the monitor records it after the index task ends
         finally:
             await monitor.stop()
 
@@ -481,7 +487,7 @@ class TestAReconnectedDriveIsRepaired:
 
         index_called = asyncio.Event()
 
-        async def tracking_index(filepath) -> int:
+        async def tracking_index(filepath, progress_key=None) -> int:
             index_called.set()
             return 7
 
@@ -491,7 +497,43 @@ class TestAReconnectedDriveIsRepaired:
         await monitor.start()
         try:
             await asyncio.wait_for(index_called.wait(), timeout=10.0)
+            await asyncio.sleep(
+                0.05
+            )  # the monitor records it after the index task ends
         finally:
             await monitor.stop()
 
         assert db.get_document(doc_id)["chunk_count"] == 7
+
+
+class TestCancellingAReindex:
+    @pytest.mark.asyncio
+    async def test_cancel_ends_the_index_and_not_the_monitor(self, db, temp_file):
+        file_stat = os.stat(temp_file)
+        doc = db.add_document(
+            filename=os.path.basename(temp_file),
+            filepath=temp_file,
+            file_hash="old",
+            file_size=file_stat.st_size,
+            chunk_count=3,
+            file_mtime=file_stat.st_mtime,
+        )
+        started = asyncio.Event()
+
+        async def endless(filepath, progress_key=None) -> int:
+            assert progress_key == doc["id"]
+            started.set()
+            await asyncio.sleep(60)
+            return 1
+
+        # Starts empty, as the server's does: it must still be the caller's dict.
+        active: dict = {}
+        monitor = DocumentMonitor(db=db, index_fn=endless, active_tasks=active)
+        run = asyncio.create_task(monitor._reindex_document(doc, "new", 1.0, 1))
+        await asyncio.wait_for(started.wait(), 5)
+
+        active[doc["id"]].cancel()
+        await asyncio.wait_for(run, 5)
+
+        assert db.get_document(doc["id"])["indexing_status"] == "cancelled"
+        assert active == {}

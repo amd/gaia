@@ -665,6 +665,8 @@ export interface IndexFolderResponse {
     failed: number;
     /** Files in the folder of a type GAIA doesn't index. */
     skipped?: number;
+    /** Files now indexing on their own. */
+    queued?: number;
     documents: Document[];
     errors: string[];
 }
@@ -872,6 +874,10 @@ export interface StreamEvent {
     message?: string;
     /** Model phase on a status event: reading, loading_model, reasoning, tool_call, … */
     phase?: string;
+    /** On `status`: documents this turn can't search, and why. */
+    notice?: { kind: 'still_indexing' | 'not_indexed'; names: string[] };
+    /** On `status`: how far an index running inside this turn has got. */
+    index?: { name: string; phase: string; done: number; total?: number | null; seconds_left?: number | null; estimate?: string };
     step?: number;
     total?: number;
     tool?: string;

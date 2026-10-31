@@ -1265,9 +1265,53 @@
     "title": "DocumentResponse",
     "type": "object"
   },
+  "DocumentStatusResponse": {
+    "description": "One document's indexing status.",
+    "properties": {
+      "chunk_count": {
+        "title": "Chunk Count",
+        "type": "integer"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "indexing_status": {
+        "title": "Indexing Status",
+        "type": "string"
+      },
+      "is_active": {
+        "title": "Is Active",
+        "type": "boolean"
+      },
+      "progress": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/IndexProgress"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "indexing_status",
+      "chunk_count",
+      "is_active"
+    ],
+    "title": "DocumentStatusResponse",
+    "type": "object"
+  },
   "DocumentUploadRequest": {
     "description": "Request to index a document by path.",
     "properties": {
+      "background": {
+        "default": false,
+        "title": "Background",
+        "type": "boolean"
+      },
       "filepath": {
         "title": "Filepath",
         "type": "string"
@@ -1943,6 +1987,11 @@
   "IndexFolderRequest": {
     "description": "Request to index all supported documents in a folder.",
     "properties": {
+      "background": {
+        "default": false,
+        "title": "Background",
+        "type": "boolean"
+      },
       "folder_path": {
         "title": "Folder Path",
         "type": "string"
@@ -1986,6 +2035,11 @@
         "title": "Indexed",
         "type": "integer"
       },
+      "queued": {
+        "default": 0,
+        "title": "Queued",
+        "type": "integer"
+      },
       "skipped": {
         "default": 0,
         "title": "Skipped",
@@ -1993,6 +2047,201 @@
       }
     },
     "title": "IndexFolderResponse",
+    "type": "object"
+  },
+  "IndexProgress": {
+    "description": "How far one document's index has got, and how long is left.",
+    "properties": {
+      "done": {
+        "title": "Done",
+        "type": "integer"
+      },
+      "elapsed_seconds": {
+        "default": 0,
+        "title": "Elapsed Seconds",
+        "type": "integer"
+      },
+      "estimate": {
+        "title": "Estimate",
+        "type": "string"
+      },
+      "phase": {
+        "title": "Phase",
+        "type": "string"
+      },
+      "seconds_left": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Seconds Left"
+      },
+      "total": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Total"
+      }
+    },
+    "required": [
+      "phase",
+      "done",
+      "estimate"
+    ],
+    "title": "IndexProgress",
+    "type": "object"
+  },
+  "IndexingDocument": {
+    "description": "A document in the batch being indexed.",
+    "properties": {
+      "error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error"
+      },
+      "filename": {
+        "title": "Filename",
+        "type": "string"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "progress": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/IndexProgress"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "state": {
+        "title": "State",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "filename",
+      "state"
+    ],
+    "title": "IndexingDocument",
+    "type": "object"
+  },
+  "IndexingOverview": {
+    "description": "All documents indexing now, or the last batch until it is dismissed.",
+    "properties": {
+      "active": {
+        "default": false,
+        "title": "Active",
+        "type": "boolean"
+      },
+      "batch_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Batch Id"
+      },
+      "cancelled": {
+        "default": 0,
+        "title": "Cancelled",
+        "type": "integer"
+      },
+      "current": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Current"
+      },
+      "current_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Current Id"
+      },
+      "documents": {
+        "items": {
+          "$ref": "#/components/schemas/IndexingDocument"
+        },
+        "title": "Documents",
+        "type": "array"
+      },
+      "done": {
+        "default": 0,
+        "title": "Done",
+        "type": "integer"
+      },
+      "estimate": {
+        "default": "estimating",
+        "title": "Estimate",
+        "type": "string"
+      },
+      "failed": {
+        "default": 0,
+        "title": "Failed",
+        "type": "integer"
+      },
+      "percent": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Percent"
+      },
+      "seconds_left": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Seconds Left"
+      },
+      "total": {
+        "default": 0,
+        "title": "Total",
+        "type": "integer"
+      }
+    },
+    "title": "IndexingOverview",
     "type": "object"
   },
   "InferenceCommit": {

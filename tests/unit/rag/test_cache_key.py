@@ -171,7 +171,9 @@ def test_a_copy_chunked_differently_is_read(tmp_path, document):
     shutil.copy(document, temp_copy)
     assert sdk.index_document(str(temp_copy))["success"]
 
-    assert not _make(tmp_path, chunk_size=300).index_document(document).get("from_cache")
+    assert (
+        not _make(tmp_path, chunk_size=300).index_document(document).get("from_cache")
+    )
 
 
 def test_chunk_cache_and_markdown_share_one_content_key(tmp_path, document):

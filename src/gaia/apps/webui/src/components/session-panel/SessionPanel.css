@@ -29,7 +29,8 @@
    reading column re-centres in the space left rather than sliding under it. */
 .task-view:has(> .session-panel.is-docked) > .messages-scroll,
 .task-view:has(> .session-panel.is-docked) > .input-area,
-.task-view:has(> .session-panel.is-docked) > .doc-context-bar {
+.task-view:has(> .session-panel.is-docked) > .doc-context-bar,
+.task-view:has(> .session-panel.is-docked) > .index-chat-notice {
     margin-inline-end: var(--session-panel-w);
 }
 

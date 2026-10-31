@@ -12,6 +12,7 @@ import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { NotificationCenter } from './components/NotificationCenter';
 import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
+import { IndexingIndicator } from './components/IndexingOverview';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
@@ -19,6 +20,7 @@ import { useScheduleStore } from './stores/scheduleStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { startActiveRunsPoll } from './services/activeRuns';
+import { startIndexingPoll } from './services/indexingPoll';
 import { startQueueDispatcher } from './services/queueDispatch';
 import * as api from './services/api';
 import { createStatusPoller, type StatusOutcome } from './services/statusPoll';
@@ -324,6 +326,7 @@ function App() {
     }, [setSessions]);
 
     useEffect(() => startActiveRunsPoll(), []);
+    useEffect(() => runWhileVisible(startIndexingPoll), []);
     // Schedules run unattended: a failed run raises a notification even with the panel closed.
     useEffect(() => {
         const load = () => { void useScheduleStore.getState().loadSchedules(); };
@@ -683,6 +686,7 @@ function App() {
                         </button>
                     </div>
                 )}
+                <IndexingIndicator />
                 {main}
             </div>
 

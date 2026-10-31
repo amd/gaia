@@ -84,7 +84,8 @@ class DocumentMonitor:
         self._index_fn = index_fn
         self._interval = interval
         self._startup_delay = startup_delay
-        self._active_tasks = active_tasks or {}
+        # The caller's dict, even while it is still empty.
+        self._active_tasks = {} if active_tasks is None else active_tasks
         self._task: Optional[asyncio.Task] = None
         self._reindexing: Set[str] = set()  # doc IDs currently being re-indexed
         self._stop_event = asyncio.Event()
@@ -237,8 +238,16 @@ class DocumentMonitor:
         self._reindexing.add(doc_id)
         self._db.update_document_status(doc_id, "indexing")
 
+        # Its own task, so Cancel ends this index and not the monitor.
+        task = asyncio.create_task(self._index_fn(Path(filepath), progress_key=doc_id))
+        self._active_tasks[doc_id] = task
         try:
-            chunk_count = await self._index_fn(Path(filepath))
+            await asyncio.wait({task})
+            if task.cancelled():
+                self._db.update_document_status(doc_id, "cancelled")
+                logger.info("Re-indexing cancelled for %s", filepath)
+                return
+            chunk_count = task.result()
             if chunk_count == 0:
                 self._db.update_document_status(doc_id, "failed")
                 logger.warning(
@@ -260,3 +269,6 @@ class DocumentMonitor:
             logger.exception("Re-indexing failed for %s", filepath)
         finally:
             self._reindexing.discard(doc_id)
+            if self._active_tasks.get(doc_id) is task:
+                del self._active_tasks[doc_id]
+            task.cancel()
