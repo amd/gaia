@@ -260,10 +260,10 @@ class SDToolsMixin:
                 image_path: str,
                 model: Optional[str] = None,
             ) -> Dict[str, Any]:
-                """Upscale an existing image with Lemonade's image-upscale endpoint.
+                """Upscale a PNG image with Lemonade's image-upscale endpoint.
 
                 Args:
-                    image_path: Local source image path.
+                    image_path: Local PNG source image path.
                     model: Upscale model; defaults to RealESRGAN-x4plus.
                 """
                 path = Path(image_path).expanduser()

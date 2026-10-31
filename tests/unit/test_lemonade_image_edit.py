@@ -141,6 +141,15 @@ def test_upscale_image_sends_json_base64_request(tmp_path):
     assert captured["has_files"] is False
 
 
+def test_upscale_rejects_jpeg_input(tmp_path):
+    source = tmp_path / "source.jpeg"
+    source.write_bytes(b"jpeg")
+    client = lc.LemonadeClient(base_url="http://127.0.0.1:13305/api/v1", verbose=False)
+
+    with pytest.raises(lc.LemonadeClientError, match="requires a PNG"):
+        client.upscale_image(source)
+
+
 def test_image_edit_defaults_are_exposed():
     assert lc.LemonadeClient.IMAGE_EDIT_DEFAULT_MODEL == "Flux-2-Klein-4B"
     assert lc.LemonadeClient.IMAGE_UPSCALE_DEFAULT_MODEL == "RealESRGAN-x4plus"

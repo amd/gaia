@@ -6310,8 +6310,13 @@ class LemonadeClient:
         model: str = IMAGE_UPSCALE_DEFAULT_MODEL,
         timeout: int = 900,
     ) -> Dict[str, Any]:
-        """Upscale a PNG or JPEG with Lemonade's JSON image-upscale endpoint."""
+        """Upscale a PNG with Lemonade's JSON image-upscale endpoint."""
         path = self._image_path(image_path)
+        if path.suffix.lower() != ".png":
+            raise LemonadeClientError(
+                "Image upscaling requires a PNG input because Lemonade's "
+                "upscale endpoint accepts base64-encoded PNG data."
+            )
         payload = {
             "image": base64.b64encode(path.read_bytes()).decode("ascii"),
             "model": model,

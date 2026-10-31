@@ -191,8 +191,8 @@ class MyImageAgent(Agent, SDToolsMixin):
         )
 
         # Initialize SD tools (auto-registers generate_image, edit_image, upscale_image, list_sd_models, etc.)
-        # Edit/upscale are available here because this is an explicit SDToolsMixin profile;
-        # the flagship keeps them opt-in pending maintainer approval.
+        # Edit/upscale are registered by default for this explicit SDToolsMixin profile.
+        # Pass enable_edit_tools=False when an agent only needs generation.
         # Images save to ~/.gaia/cache/sd/images unless you pass output_dir=.
         self.init_sd(
             default_model="SDXL-Turbo",  # Fast, good quality
@@ -213,11 +213,11 @@ result = agent.process_query("create a sunset over mountains")
 **Available Tools:**
 - `generate_image(prompt, model, size, steps, cfg_scale, seed)` - Generate images with SD
 - `edit_image(image_path, prompt, model, size, n)` - Edit a PNG or JPEG with a text prompt
-- `upscale_image(image_path, model)` - Upscale a PNG or JPEG
+- `upscale_image(image_path, model)` - Upscale a PNG
 - `list_sd_models()` - Show available models
 - `get_generation_history(limit)` - See generated images from session
 
-**Image editing and upscaling accept local PNG/JPEG files, use the same allowed-folder check as vision tools, and save results under the configured SD output directory.**
+**Image editing accepts local PNG/JPEG files; upscaling accepts PNG because Lemonade's upscale endpoint takes base64 PNG data. Both use the same allowed-folder check as vision tools and save results under the configured SD output directory.**
 
 **Supported Models:**
 - **SDXL-Turbo** (default) - Fast, 512x512, ~17s

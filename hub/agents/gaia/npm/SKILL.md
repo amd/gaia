@@ -127,15 +127,6 @@ platform and the supported set. It is not silently skipped, and the TUI is never
 launched with no agent behind it. `npx @amd-gaia/gaia version` prints the matrix
 for the version you have.
 
-### Editing and upscaling images
-
-When an explicitly enabled SD profile exposes the edit tools, use `edit_image`
-for a requested change to a local PNG/JPEG and `upscale_image` for a larger or
-sharper copy. The flagship currently keeps these tools opt-in pending maintainer
-approval. Both tools respect the allowed-folder scope and return the saved output
-path. Do not invent an image or claim success unless the tool returns a successful
-result.
-
 ## 5. Prerequisite — a local Lemonade server
 
 The agent thinks with a model hosted by **Lemonade Server**, which this package

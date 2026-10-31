@@ -263,15 +263,6 @@ the header.
 
 ### 5.1 Endpoints
 
-#### Image tool behavior
-
-When an explicitly enabled SD profile exposes its edit tools, `edit_image` accepts a local PNG/JPEG
-source, prompt, optional model/size, and `n` from 1 through 10. `upscale_image`
-accepts a local PNG/JPEG source and optional model. The agent applies its
-allowed-folder check before reading either source; edit requests use multipart
-form data and upscale requests use JSON with a base64 `image` and `model`.
-
-
 | Method | Path                             | Purpose                                        |
 | ------ | -------------------------------- | ---------------------------------------------- |
 | `GET`  | `/health`                        | Liveness. `{ "status": "ok", "service": "gaia-agent-gaia" }` |
