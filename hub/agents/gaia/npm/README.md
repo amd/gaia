@@ -68,6 +68,15 @@ agent behind it.
 `npx @amd-gaia/gaia version` prints this matrix, plus the version and source URL of
 each binary, for the release you have installed.
 
+## Image tools (when the flagship SD profile is enabled)
+
+The flagship can generate, edit, and upscale local PNG/JPEG images through Lemonade.
+`edit_image(image_path, prompt, model?, size?, n?)` uses the image-edit multipart
+contract; `upscale_image(image_path, model?)` sends base64 JSON to Lemonade's
+upscale endpoint. Both honor the agent's allowed-folder policy and return saved
+image paths. These tools are capability-gated and may change the flagship tool
+set only after maintainer approval.
+
 ## Commands
 
 ```
