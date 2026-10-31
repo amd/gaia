@@ -209,7 +209,10 @@ def setup_remove_model(body: RemoveModelRequest) -> Dict[str, Any]:
     if runner.busy_with(body.model_id):
         raise HTTPException(
             status_code=409,
-            detail=f"{body.model_id} is downloading. Cancel it first.",
+            detail=(
+                "Setup or that model's download is running, so the model can't be "
+                "removed now. Wait for it or cancel it, then try again."
+            ),
         )
     try:
         freed = plan_api.remove_model(body.model_id)

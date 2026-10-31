@@ -2039,6 +2039,33 @@ class InitCommand:
             self._print(f"   Skipping {model_id} (in skipped_models). {caveat or ''}")
         return model_ids
 
+    def _skipped_chat_model(self) -> Optional[str]:
+        """The chat model when this run left it out; ``--check`` calls that not ready."""
+        if self.skip_chat_model:
+            return None
+        if self._chat_choice is not None:
+            chat = self._chat_choice.model_id
+        elif self.profile not in ("sd", "npu"):
+            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+            chat = DEFAULT_MODEL_NAME
+        else:
+            return None
+        if any(model_choice.ids_match(chat, m) for m in self._skipped_now):
+            return chat
+        return None
+
+    def _no_chat_model(self, chat: str) -> bool:
+        """Fail the way ``gaia init --check`` reports it: no local chat model."""
+        message = (
+            f"No local chat model: {chat} is skipped. Pick another chat model "
+            "(`gaia init --use-model <id>`) or a cloud provider, then re-run "
+            "`gaia init`."
+        )
+        self._print_error(message)
+        self.events.emit("error", message=message)
+        return False
+
     @staticmethod
     def _skip_list() -> list:
         return model_choice.skipped_models()
@@ -2096,6 +2123,16 @@ class InitCommand:
             profile_config = INIT_PROFILES[self.profile]
             model_ids = self._models_to_ensure(client)
             if not model_ids:
+                self.events.emit(
+                    "plan",
+                    models=[],
+                    skipped=self._skipped_now,
+                    bytes_total=0,
+                    disk_free_bytes=None,
+                )
+                skipped_chat = self._skipped_chat_model()
+                if skipped_chat:
+                    return self._no_chat_model(skipped_chat)
                 self._print_success("No models required for this profile")
                 return True
 
@@ -2252,6 +2289,9 @@ class InitCommand:
                     self._print(f"   {self._server_problem_hint()}")
                     success = False
 
+            skipped_chat = self._skipped_chat_model()
+            if success and skipped_chat:
+                success = self._no_chat_model(skipped_chat)
             self.events.emit("done", ok=success)
             return success
 

@@ -384,9 +384,10 @@ server), a shortfall is a warning and the download goes ahead.
 
 #### Choosing models
 
-The Agent UI and the terminal UI ask which models to download on first launch, and let
-you change it later in Settings. `gaia init` never asks; it downloads what you chose
-there, and these flags make the same choices from a script:
+These flags show which models setup will download and save which ones you want. Every
+later `gaia init`, including `--yes`, downloads what you chose, and the same plan and
+choices are available to apps through the Agent UI server's `/api/setup/*` routes (see
+[Setup](/sdk/sdks/agent-ui#setup)):
 
 ```bash
 gaia init --plan                              # what setup would download, and why
@@ -416,7 +417,8 @@ has `id`, `roles` (`chat`, `vision`, `embedding`), `purpose`, `if_skipped`,
 `size_gb` (what is left to download, partial files subtracted), `full_size_gb`,
 `downloaded`, `recommended` (for this PC), `selected` (setup will download it),
 `skipped`, `chat_choice`, and `fits` (`null` when unknown) with `need_gb`,
-`capacity_gb` and `fit_reason`. `disk` is the model drive's `path` and `free_gb`;
+`capacity_gb` and `fit_reason` (memory figures as Lemonade reports them, which are GiB).
+`disk` is the model drive's `path` and `free_gb` (decimal GB, like every size);
 `download_gb` and `disk_warning` cover the selected models. A choice that needs
 confirming exits `4` and prints `{"needs_acknowledgement": {...}}` with the `code`
 (`no_fit`), the numbers, and the flag that confirms it.

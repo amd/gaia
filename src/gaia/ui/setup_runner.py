@@ -583,10 +583,19 @@ class SetupRunner:
             return view
 
     def busy_with(self, model_id: str) -> bool:
-        """Whether *model_id* is downloading right now."""
+        """Whether setup is running, or *model_id* is downloading right now.
+
+        Either way a remove could delete a model setup is about to load.
+        """
+        from gaia.installer.model_choice import ids_match
+
         with self._lock:
-            entry = self._models.get(model_id)
-            return entry is not None and entry.state == "downloading"
+            if self._run is not None and self._run.state in ("running", "verifying"):
+                return True
+            return any(
+                ids_match(entry.id, model_id) and entry.state == "downloading"
+                for entry in self._models.values()
+            )
 
     def start(
         self,
@@ -755,6 +764,9 @@ class SetupRunner:
 
         kind = event.get("event")
         with self._lock:
+            # A killed run's last lines must not bring cancelled rows back.
+            if self._run is not None and self._run.state == "cancelled":
+                return
             if kind == "plan":
                 for planned in event.get("models") or []:
                     entry = ModelProgress(
@@ -808,14 +820,24 @@ class SetupRunner:
         run.percent = totals["percent"]
         run.size = f"{totals['bytes_done'] / 1e9:.2f} GB of {totals['bytes_total'] / 1e9:.2f} GB"
 
-    def _settle_models(self, ready: Optional[set], failed: Dict[str, str]) -> None:
+    def _settle_models(
+        self, ready: Optional[set], failed: Dict[str, str], run_failed: bool = False
+    ) -> None:
         """After a run: downloaded models become ready, or failed when their
-        load check failed. Caller holds the lock."""
+        load check failed or the run stopped before checking. Caller holds the lock."""
         for entry in self._models.values():
             if entry.id in failed:
                 entry.state, entry.error_kind = "failed", "verify"
                 entry.error = failed[entry.id]
-            elif entry.state == "verifying" and (ready is None or entry.id in ready):
+            elif entry.state != "verifying":
+                continue
+            elif run_failed:
+                entry.state, entry.error_kind = "failed", "verify"
+                entry.error = (
+                    f"Setup stopped before GAIA could check that {entry.id} loads. "
+                    "Fix the error above, then run setup again."
+                )
+            elif ready is None or entry.id in ready:
                 entry.state = "ready"
 
     def _watch(self, run: SetupRun, proc: subprocess.Popen) -> None:
@@ -869,8 +891,8 @@ class SetupRunner:
                 return
             if code != 0:
                 run.state = "failed"
-                # What finished downloading stays downloaded.
-                self._settle_models(None, {})
+                # Downloaded but never checked: not shown as ready.
+                self._settle_models(None, {}, run_failed=True)
                 if problem is not None:
                     # The raw exception stays in the log, behind "Details".
                     run.problem, run.error = problem, problem["message"]
@@ -893,7 +915,7 @@ class SetupRunner:
         except SetupError as e:
             with self._lock:
                 run.state, run.error = "failed", str(e)
-                self._settle_models(None, {})
+                self._settle_models(None, {}, run_failed=True)
             return
         loads = status.get("models") or []
         failed = {
@@ -904,7 +926,9 @@ class SetupRunner:
         with self._lock:
             run.status = status
             self._settle_models(
-                {m["id"] for m in loads if m.get("loaded")} if loads else None, failed
+                {m["id"] for m in loads if m.get("loaded")} if loads else None,
+                failed,
+                run_failed=not status.get("ready") and not loads,
             )
             if status.get("ready"):
                 run.state, run.text = "ready", "GAIA is ready"

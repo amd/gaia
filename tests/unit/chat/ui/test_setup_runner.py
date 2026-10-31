@@ -1220,3 +1220,43 @@ def test_a_failed_pull_shows_fixed_words_and_logs_lemonades(caplog):
     assert row["error_kind"] == "lemonade"
     assert "/secret/path" not in row["error"] and "server log" in row["error"]
     assert "/secret/path" in caplog.text
+
+
+def test_progress_after_cancel_does_not_revive_a_cancelled_row():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event(json.loads(_plan_event()))
+    run.state = "cancelled"
+    with runner._lock:
+        for entry in runner._models.values():
+            if entry.state == "queued":
+                entry.state = "cancelled"
+    runner._on_event(
+        {"event": "progress", "model": QWEN, "bytes_done": 5, "bytes_total": 9}
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "cancelled" and qwen["can_retry"]
+    assert not runner.busy_with(QWEN)
+
+
+def test_a_failed_run_never_shows_unchecked_models_as_ready():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    with runner._lock:
+        runner._settle_models(None, {}, run_failed=True)
+    embed = _models(runner)[EMBED]
+    assert embed["state"] == "failed" and embed["error_kind"] == "verify"
+    assert "before GAIA could check" in embed["error"]
+
+
+def test_remove_is_refused_while_setup_runs_or_under_another_spelling(client):
+    test_client, runner = client
+    runner._run = sr.SetupRun(skip_chat_model=False)
+    r = test_client.post("/api/setup/models/remove", json={"model_id": GEMMA})
+    assert r.status_code == 409
+    runner._run.state = "ready"
+    runner._models[EMBED] = sr.ModelProgress(id=EMBED, state="downloading")
+    for spelling in (EMBED.removeprefix("user."), EMBED.upper()):
+        r = test_client.post("/api/setup/models/remove", json={"model_id": spelling})
+        assert r.status_code == 409, spelling
