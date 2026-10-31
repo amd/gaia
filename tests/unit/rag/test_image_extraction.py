@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
+from gaia.llm.lemonade_client import LemonadeClientError, resident_vision_model
 from gaia.llm.vlm_client import VLMExtractionError
 from gaia.rag.sdk import IMAGE_EXTENSIONS, RAGSDK, ImageExtractionError, RAGConfig
 
@@ -501,3 +502,55 @@ def test_scans_use_a_vision_model_the_pc_has(
         )
 
     assert RAGConfig().vlm_model == expected
+
+
+def _loaded(*models):
+    return {"all_models_loaded": [{"model_name": m} for m in models]}
+
+
+@pytest.mark.parametrize(
+    "configured,loaded,expected",
+    [
+        # A tested vision model already resident is used, whichever one it is.
+        ("Gemma-4-E4B-it-GGUF", ["Qwen3.6-35B-A3B-GGUF"], "Qwen3.6-35B-A3B-GGUF"),
+        ("Qwen3.6-35B-A3B-GGUF", ["Gemma-4-E4B-it-GGUF"], "Gemma-4-E4B-it-GGUF"),
+        # A text-only chat model is passed over for the configured one.
+        ("Gemma-4-E4B-it-GGUF", ["LFM2-8B-A1B-GGUF"], "Gemma-4-E4B-it-GGUF"),
+        ("Gemma-4-E4B-it-GGUF", [], "Gemma-4-E4B-it-GGUF"),
+    ],
+)
+def test_scans_use_a_vision_model_already_loaded(configured, loaded, expected):
+    with patch(
+        "gaia.llm.lemonade_client.LemonadeClient.health_check",
+        return_value=_loaded(*loaded),
+    ):
+        assert resident_vision_model(configured) == expected
+
+
+def test_a_chosen_vision_model_is_not_replaced_by_a_loaded_one():
+    with patch("gaia.llm.lemonade_client.LemonadeClient.health_check") as health:
+        model = resident_vision_model("Qwen3-VL-4B-Instruct-GGUF")
+
+    assert model == "Qwen3-VL-4B-Instruct-GGUF"
+    health.assert_not_called()
+
+
+def test_an_unreachable_server_keeps_the_configured_model():
+    with patch(
+        "gaia.llm.lemonade_client.LemonadeClient.health_check",
+        side_effect=LemonadeClientError("not reachable"),
+    ):
+        assert resident_vision_model("Gemma-4-E4B-it-GGUF") == "Gemma-4-E4B-it-GGUF"
+
+
+def test_indexing_a_scan_asks_for_the_loaded_model(tmp_path):
+    with (
+        patch(
+            "gaia.llm.lemonade_client.LemonadeClient.health_check",
+            return_value=_loaded("Qwen3.6-35B-A3B-GGUF"),
+        ),
+        patch("gaia.llm.VLMClient", return_value=_vlm()) as client,
+    ):
+        _sdk(tmp_path)._extract_text_from_image(str(_image(tmp_path)))
+
+    assert client.call_args.kwargs["vlm_model"] == "Qwen3.6-35B-A3B-GGUF"

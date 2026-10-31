@@ -50,6 +50,7 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
+    resident_vision_model,
     resolve_default_vision_model,
 )
 from gaia.logger import get_logger
@@ -1386,7 +1387,10 @@ class RAGSDK:
                 )
 
                 vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                    vlm_model=resident_vision_model(
+                        self.config.vlm_model, self.config.base_url
+                    ),
+                    base_url=self.config.base_url,
                 )
                 vlm_available = self.config.use_vlm and vlm.check_availability()
 
@@ -1776,7 +1780,10 @@ class RAGSDK:
                 )
 
                 vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                    vlm_model=resident_vision_model(
+                        self.config.vlm_model, self.config.base_url
+                    ),
+                    base_url=self.config.base_url,
                 )
                 vlm_available = self.config.use_vlm and vlm.check_availability()
 
@@ -2456,7 +2463,11 @@ These positions indicate where to split the text."""
         )
 
         file_name = Path(image_path).name
-        model = self.config.vlm_model
+        model = (
+            resident_vision_model(self.config.vlm_model, self.config.base_url)
+            if self.config.use_vlm
+            else self.config.vlm_model
+        )
 
         if not self.config.use_vlm:
             raise ImageExtractionError(

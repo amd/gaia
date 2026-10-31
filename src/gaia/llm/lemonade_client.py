@@ -420,6 +420,27 @@ def resolve_default_vision_model() -> str:
     return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
 
+def resident_vision_model(configured: str, base_url: Optional[str] = None) -> str:
+    """The already-loaded vision model to read images with, else ``configured``.
+
+    Reading a scan with a model that is already resident spares a reload and
+    evicting chat. Only :data:`VISION_CHAT_MODELS` count, because those have
+    been tested; a model named outside that set was chosen on purpose and stays.
+    """
+    if configured not in VISION_CHAT_MODELS:
+        return configured
+    try:
+        loaded = LemonadeClient(base_url=base_url).health_check()
+    except LemonadeClientError as e:
+        # VLMClient.check_availability reports the unreachable server next.
+        logger.warning("Could not read the loaded models from Lemonade: %s", e)
+        return configured
+    for entry in loaded.get("all_models_loaded") or []:
+        if entry.get("model_name") in VISION_CHAT_MODELS:
+            return entry["model_name"]
+    return configured
+
+
 # Default embedding model: EmbeddingGemma 300M (768-dim). Not a Lemonade
 # built-in — registered as a ``user.`` custom model on first pull via
 # checkpoint + recipe + the ``embedding`` label (see MODELS entry).
