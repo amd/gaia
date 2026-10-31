@@ -6921,7 +6921,13 @@ Do NOT wrap conversational replies in JSON.
                     str(refusal.get("error") if isinstance(refusal, dict) else refusal),
                     kinds={NETWORK, PATH},
                     by_user=False,
-                    named_paths_only=True,
+                    scope_to_reason=True,
+                    refused_alone=lambda segment: (
+                        self._policy_refusal(
+                            tool_name, {**(tool_args or {}), "command": segment}
+                        )
+                        is not None
+                    ),
                 )
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 

@@ -982,3 +982,59 @@ def test_names_path_matches_the_file_not_a_lookalike(reason, target, named):
     from gaia.agents.base.denied_effects import _names_path
 
     assert _names_path(reason, target) is named
+
+
+_RM_NOT_IN_SET = (
+    "Command 'rm' is not in the developer command set, even with full access " "active."
+)
+
+
+def test_a_refused_delete_still_guards_its_target(tmp_path):
+    """Bypass attempt: ``rm`` is refused as a program, so delete it another way."""
+    agent = _agent(_ApproveAllConsole(), tmp_path)
+    agent.policy_refusal_for_call = _refuse_program("rm", _RM_NOT_IN_SET)
+
+    agent._execute_tool("run_shell_command", _shell("rm -rf build"))
+    moved = agent._execute_tool("run_shell_command", _shell("mv build old"))
+
+    assert moved["status"] == "denied"
+    assert "was refused earlier" in moved["error"]
+    assert agent.ran == []
+
+
+def test_a_delete_riding_on_a_refused_line_is_still_guarded(tmp_path):
+    """Bypass attempt: hide the delete beside the program that gets refused."""
+
+    def _policy(tool_name, tool_args):
+        command = str((tool_args or {}).get("command", ""))
+        if command.startswith("copy"):
+            return {"status": "error", "error": _NOT_IN_SET}
+        if "rm " in command:
+            return {"status": "error", "error": _RM_NOT_IN_SET}
+        return None
+
+    agent = _agent(_ApproveAllConsole(), tmp_path)
+    agent.policy_refusal_for_call = _policy
+
+    agent._execute_tool("run_shell_command", _shell("copy a.txt b.txt && rm c.txt"))
+    moved = agent._execute_tool("run_shell_command", _shell("mv c.txt d.txt"))
+    copied = agent._execute_tool("run_shell_command", _shell("cp a.txt b.txt"))
+
+    assert moved["status"] == "denied"
+    assert copied["status"] == "success"
+
+
+def test_with_no_way_to_ask_the_policy_every_delete_is_kept(tmp_path):
+    """Conservative default: the ledger alone keeps every destructive target."""
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record(
+        "run_shell_command",
+        _shell("copy a.txt b.txt && rm c.txt"),
+        _NOT_IN_SET,
+        kinds={NETWORK, PATH},
+        by_user=False,
+        scope_to_reason=True,
+    )
+
+    assert ledger.conflict("run_shell_command", _shell("mv c.txt d.txt"))
+    assert not ledger.conflict("run_shell_command", _shell("cp a.txt b.txt"))
