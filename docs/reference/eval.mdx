@@ -212,12 +212,23 @@ totals then say how many scenarios they are missing.
 
 ### When Claude runs out mid-run
 
-If the driver's `claude -p` call fails because the account is out of quota, its
-credential is rejected, or Claude never answered at all, the run stops at once
+With a second subscription token in `CLAUDE_CODE_OAUTH_TOKEN_BACKUP`, a quota
+refusal first moves the run to that account. The runner switches once, prints
+`[ACCOUNT SWITCH]`, re-runs the scenario that was cut off, and records the switch
+in the scorecard's `config.claude_account_switches`. CI sets the backup to
+whichever account the job did not start on. A rejected credential never switches.
+
+If the driver's `claude -p` call then fails because the account is out of quota,
+its credential is rejected, or Claude never answered at all, the run stops at once
 and starts nothing else. That scenario is recorded as `INFRA_ERROR` and every
 later one as `NOT_RUN`. Neither counts as a pass, an ordinary error or a
-regression. The run exits with code 3 and prints the account, when the limit
-resets, and the command to finish it:
+regression. The scorecard keeps every scenario that finished and gains a
+`partial` block, for example `partial: 3 of 5 ran, stopped because both Claude
+accounts are out of quota (...)`, naming both reset times. `--compare` prints
+`[INCOMPLETE]` and leaves the `NOT_RUN` scenarios out of regressions and
+progress, and the CI integrity gate fails the job whatever `enforce` says. The
+run exits with code 3 and prints the account, when the limit resets, and the
+command to finish it:
 
 ```bash
 gaia eval agent --resume eval/results/eval-20261021-141300
@@ -715,7 +726,7 @@ An abridged, illustrative file:
 - CI uploads a proposal with every scorecard. To set or move the bar, commit a proposal from a run of `main` on the CI runner. The limits change only through a reviewed commit, never automatically.
 
 <Warning>
-  The run step never holds the judge's credentials: `run` removes `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` from its own environment before the agent starts, because the agent runs shell commands. In CI they exist only in the judge step. The CI artifact is public and holds each task's transcript and diffs as well as the scores; every file is scanned for the CI credentials and redacted before upload, but that catches credentials only.
+  The run step never holds the judge's credentials: `run` removes `ANTHROPIC_API_KEY` and the `CLAUDE_CODE_OAUTH_TOKEN*` tokens from its own environment before the agent starts, because the agent runs shell commands. In CI they exist only in the judge step. The CI artifact is public and holds each task's transcript and diffs as well as the scores; every file is scanned for the CI credentials and redacted before upload, but that catches credentials only.
 </Warning>
 
 ## Code Retrieval Benchmark

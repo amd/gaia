@@ -1775,7 +1775,7 @@ def backup_file(path: str, cache_dir: Optional[Path] = None) -> Optional[str]:
     # ".bak" goes LAST. Keeping the original extension made a backup of
     # tests/test_x.py land as test_x.<stamp>.bak.py, which pytest
     # collects and cannot import, so editing a test file broke the whole
-    # suite (#3747). Nothing globs *.bak.
+    # suite. Nothing globs *.bak.
     def _backup_at(moment: datetime.datetime) -> Path:
         return mirror / f"{real_path.name}.{moment:%Y%m%d_%H%M%S_%f}.bak"
 

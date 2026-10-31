@@ -505,7 +505,7 @@ def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
     hardware-chosen profiles, so the others never probe Lemonade. A chat model
     the hardware picked is added beside Gemma, which the image tools load by
     name. A ``default_model`` the user chose replaces Gemma: the image tools
-    then download Gemma the first time they are used (:func:`skipped_gemma`).
+    then ask the user to download Gemma first (:func:`skipped_gemma`).
     """
     from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, _model_ids_match
 
@@ -2004,8 +2004,9 @@ class InitCommand:
 
                     self._print(
                         f"   Not downloading {DEFAULT_MODEL_NAME}: your "
-                        f"default_model is {self._chat_choice.model_id}. Questions "
-                        "about images download it (~6 GB) the first time you ask one."
+                        f"default_model is {self._chat_choice.model_id}. To ask "
+                        "about images, download it (~6 GB) with "
+                        "`gaia download --agent vlm`."
                     )
 
             # A Claude-backed session never calls the local chat LLM — only

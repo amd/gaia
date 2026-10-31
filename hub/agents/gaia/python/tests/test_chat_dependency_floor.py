@@ -36,6 +36,9 @@ REASONING_TOOLS_FLOOR = (0, 25, 1)
 # First core release shipping gaia.utils.file_lock.held_by_another_program.
 FILE_LOCK_HELD_FLOOR = (0, 25, 1)
 
+# First core release shipping gaia.rag.sdk.RAGSDK.document_scripts (#6165).
+DOCUMENT_SCRIPTS_FLOOR = (0, 25, 4)
+
 # Matches the version in "amd-gaia>=X.Y.Z" with or without an extras suffix
 # (e.g. "amd-gaia[api]>=X.Y.Z") — the extras are #1617's concern, not the floor's.
 _AMD_GAIA_FLOOR_RE = r'"amd-gaia(?:\[[^\]]*\])?>=([0-9.]+)"'
@@ -164,6 +167,47 @@ def test_held_by_another_program_guard_fails_a_release_that_forgets_the_bump(
     monkeypatch.setitem(globals(), "_core_release", lambda: (0, 25, 1))
     with pytest.raises(AssertionError, match="held_by_another_program"):
         test_chat_floor_rises_with_the_core_that_ships_held_by_another_program(stale)
+
+
+@pytest.mark.parametrize("pyproject", [FLAGSHIP_ROOT / "pyproject.toml"], ids=["gaia"])
+def test_floor_rises_with_the_core_that_ships_document_scripts(pyproject):
+    """ChatAgent calls RAGSDK.document_scripts on every turn with an indexed
+    document; on a core without it that turn raises AttributeError."""
+    from gaia.rag.sdk import RAGSDK
+
+    assert callable(getattr(RAGSDK, "document_scripts", None))
+    match = re.search(_AMD_GAIA_FLOOR_RE, pyproject.read_text(encoding="utf-8"))
+    assert match, f"{pyproject} must declare an amd-gaia>=X.Y.Z floor"
+    floor = _floor_tuple(match.group(1))
+    assert floor <= _core_release(), (
+        f"amd-gaia floor {match.group(1)} is above the in-tree core; nothing can "
+        "resolve it until that core is released"
+    )
+    if _core_release() >= DOCUMENT_SCRIPTS_FLOOR:
+        assert floor >= DOCUMENT_SCRIPTS_FLOOR, (
+            f"core is now {_core_release()}, but the flagship's amd-gaia floor "
+            f"is still {match.group(1)}; raise it (and min_gaia_version) to "
+            "0.25.4, the first core with RAGSDK.document_scripts"
+        )
+
+
+def test_document_scripts_guard_fails_a_release_that_forgets_the_bump(
+    monkeypatch, tmp_path
+):
+    stale = tmp_path / "pyproject.toml"
+    stale.write_text('dependencies = ["amd-gaia>=0.25.3"]', encoding="utf-8")
+    monkeypatch.setitem(globals(), "_core_release", lambda: (0, 25, 4))
+    with pytest.raises(AssertionError, match="RAGSDK.document_scripts"):
+        test_floor_rises_with_the_core_that_ships_document_scripts(stale)
+
+    bumped = tmp_path / "bumped.toml"
+    bumped.write_text('dependencies = ["amd-gaia>=0.25.4"]', encoding="utf-8")
+    test_floor_rises_with_the_core_that_ships_document_scripts(bumped)
+
+    ahead = tmp_path / "ahead.toml"
+    ahead.write_text('dependencies = ["amd-gaia>=0.25.5"]', encoding="utf-8")
+    with pytest.raises(AssertionError, match="above the in-tree core"):
+        test_floor_rises_with_the_core_that_ships_document_scripts(ahead)
 
 
 def test_manifest_floors_match_pyproject():

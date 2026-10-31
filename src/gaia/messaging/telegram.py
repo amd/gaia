@@ -1,5 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+
 """Telegram messaging adapter for GAIA.
 
 Wires Telegram updates into the `AgentSDK` and streams responses back via

@@ -24,6 +24,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   GNU Readline and GNU dbm; scripts that `import readline` now get an
   `ImportError`, and `shelve`/`dbm` keep working on `dbm.dumb`. The release
   build fails if any of them come back.
+- **Reading a web page no longer dead-ends as early.** When a page splits a
+  multi-word `fetch_page(find=...)` phrase across a table or sentence, the agent
+  gets a labelled passage holding all its words instead of "no occurrence". A
+  page with several links says how to list them, and `open_url` defers to the
+  enforced network policy rather than having the model refuse on its own.
 ### For integrators: contract 2.26
 
 - **"Always" answers can be listed and revoked** (contract **2.26**).
@@ -38,6 +43,10 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **The doc profile names a search tool it has.** Its discovery rules told the
+  model to start with `find_files`, which that profile does not register, so the
+  first discovery step failed. They now name `search_file`, which it does
+  register. Profiles with the filesystem tools keep `find_files` (#6070).
 - **A repository indexed with `index_codebase` stays the code-search folder**
   (#6055). In the Agent UI, each new turn reset code search to the session's
   starting folder, so the next `search_code_index` looked in the wrong place
@@ -52,6 +61,18 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Added
 
+- **Questions in one language find answers in a document written in another**
+  (#6165). When an indexed document is in a non-Latin script, the agent's
+  per-turn list of indexed documents names it (`report.pdf (...) [Arabic]`)
+  and adds a note: search the document with the question translated into its
+  language, answer in the language of the user's latest message, and cite
+  every fact with its document and page. Latin-only documents get no note, so
+  their prompt is unchanged.
+- **The minimum core is now 0.25.4.** That per-turn list calls
+  `RAGSDK.document_scripts`, which first ships in core 0.25.4; on an older
+  core every turn with an indexed document would fail with `AttributeError`.
+  The `amd-gaia` floor and `min_gaia_version` are both 0.25.4, and
+  `tests/test_chat_dependency_floor.py` fails any release that lowers them.
 - **Mail: whole conversations, what's waiting on you, and which account.**
   Three read-only tools join the mail set, for Gmail and Outlook alike.
   `get_thread` reads a whole conversation, oldest first, clipping long bodies

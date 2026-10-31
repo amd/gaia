@@ -374,16 +374,16 @@ def get_tool_display_name(tool_name: str) -> str:
     return tool.get("display_name", tool_name)  # type: ignore[no-any-return]
 
 
-def get_tool_display_label(tool_name: str) -> str:
-    """Return a user-facing label for the tool suitable for UI progress strips.
+def get_tool_display_label(tool_name: str) -> Optional[str]:
+    """Return the tool's ``display_label`` for UI progress strips, or None.
 
-    Prefers the explicit `display_label` provided on the decorator, falls
-    back to the registry `description`, then finally to the raw tool name.
+    None when the tool isn't registered or declares no ``display_label``;
+    callers pick their own fallback.
     """
     tool = _TOOL_REGISTRY.get(tool_name)
     if not tool:
-        return None  # type: ignore[return-value]
-    return tool.get("display_label")  # type: ignore[return-value]
+        return None
+    return tool.get("display_label")
 
 
 #: What a long tool call is doing, in the user's words, while it streams.
