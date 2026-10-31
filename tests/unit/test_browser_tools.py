@@ -828,6 +828,22 @@ class TestBrowserToolsMixin:
         )
         assert "extract='links'" not in fetch("https://example.com")
 
+    def test_all_words_fallback_ignores_word_order(self):
+        fetch = self._serve(
+            "<p>The Pier 9 shuttle runs on Sunday only. " + "filler " * 30 + "</p>"
+        )
+        out = fetch("https://example.com", find="Sunday Pier 9")
+        assert "Exact phrase 'Sunday Pier 9' was not found" in out
+        assert "Pier 9 shuttle runs on Sunday" in out
+
+    def test_all_words_fallback_window_reaches_back_but_not_too_far(self):
+        from gaia.agents.tools.browser_tools import FIND_CONTEXT_CHARS
+        from gaia.agents.tools.browser_tools import _find_all_words_spans as spans
+
+        gap = "x " * FIND_CONTEXT_CHARS  # 2 * FIND_CONTEXT_CHARS characters
+        assert spans("Pier " + gap[:-10] + "Sunday", "Sunday Pier")
+        assert not spans("Pier " + gap + "y " * 10 + "Sunday", "Sunday Pier")
+
     def test_all_words_fallback_needs_the_words_near_each_other(self):
         fetch = self._serve(
             "<p>Sunday is busy. " + "filler " * 400 + "Pier 9 is open.</p>"

@@ -226,21 +226,23 @@ def _find_all_words_spans(text: str, term: str) -> List[Tuple[int, int]]:
         return []
 
     # Bisect, not a scan per anchor: common words on a long page would make
-    # this quadratic and stall the tool call.
+    # this quadratic and stall the tool call. The window is two-sided, so the
+    # page may list the words in any order ("Pier 9 ... on Sunday").
+    window = FIND_CONTEXT_CHARS * 2
     spans = []
-    for start in starts[0]:
-        window_end = start + FIND_CONTEXT_CHARS * 2
-        last_end = start
+    for anchor in starts[0]:
+        first = last = anchor
         for word_starts, word_ends in zip(starts, ends):
-            at = bisect.bisect_left(word_starts, start)
-            if at == len(word_starts) or word_starts[at] > window_end:
+            at = bisect.bisect_left(word_starts, anchor - window)
+            if at == len(word_starts) or word_starts[at] > anchor + window:
                 break
-            last_end = max(last_end, word_ends[at])
+            first = min(first, word_starts[at])
+            last = max(last, word_ends[at])
         else:
             spans.append(
                 (
-                    max(0, start - FIND_CONTEXT_CHARS),
-                    min(len(text), last_end + FIND_CONTEXT_CHARS),
+                    max(0, first - FIND_CONTEXT_CHARS),
+                    min(len(text), last + FIND_CONTEXT_CHARS),
                 )
             )
     return _merge_spans(spans)
