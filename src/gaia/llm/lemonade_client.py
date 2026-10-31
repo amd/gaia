@@ -433,7 +433,7 @@ def resident_vision_model(configured: str, base_url: Optional[str] = None) -> st
         loaded = LemonadeClient(base_url=base_url).health_check()
     except LemonadeClientError as e:
         # VLMClient.check_availability reports the unreachable server next.
-        logger.warning("Could not read the loaded models from Lemonade: %s", e)
+        log.warning("Could not read the loaded models from Lemonade: %s", e)
         return configured
     for entry in loaded.get("all_models_loaded") or []:
         if entry.get("model_name") in VISION_CHAT_MODELS:
