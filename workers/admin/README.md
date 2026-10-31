@@ -93,11 +93,16 @@ npx wrangler secret put GITHUB_TOKEN        # paste the token when asked
 npx wrangler secret put MAINTAINER_LOGINS   # comma-separated, + joins one person's accounts: alice+alice-amd,bob
 ```
 
-`MAINTAINER_LOGINS` drives the Developers page's "Hide maintainers" button, so the
-team's own work can be set aside to see outside contributions, and defines the core team
-on the Growth page (with GitHub organisation members and collaborators). It is kept out of the
-repo on purpose; leave it unset and the button does not appear, and anyone outside the
+The core team drives the Developers page's "Hide maintainers" button, so the team's own work
+can be set aside to see outside contributions, and decides who counts as core (with GitHub
+organisation members and collaborators) on the Growth and Developers pages. It is kept out of
+the repo on purpose. With no team set, the button does not appear and anyone outside the
 organisation counts as an outside contributor.
+
+`MAINTAINER_LOGINS` is only the starting value. Once someone saves a team from the dashboard
+(Developers → **Core team…**), the saved list is used instead, with who changed it and when;
+no redeploy is needed. To go back to the secret, delete the saved row:
+`npx wrangler d1 execute gaia-admin --remote --command "DELETE FROM settings WHERE key = 'maintainers'"`.
 
 ### 4. Set up the email-code sign-in
 
@@ -173,6 +178,16 @@ done
 
 Each call returns `ok`, or the sources that failed and why. The footer of every page
 shows the last result of each source.
+
+Eval results need the same catch-up. GitHub deletes eval artifacts after 14 days and each
+collection reads at most 40 eval runs, so the first nights cannot reach the oldest ones on
+their own. Repeat this until the footer no longer says "evals still catching up":
+
+```bash
+curl -X POST -H "x-admin-action: collect"   -H "CF-Access-Client-Id: $ID" -H "CF-Access-Client-Secret: $SECRET"   "https://amd-gaia.ai/admin/api/collect?only=evals"
+```
+
+Source names with a space need `%20` in the URL, for example `only=code%20stats`.
 
 ### Day to day
 
