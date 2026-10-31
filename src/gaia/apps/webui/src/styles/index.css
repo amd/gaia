@@ -735,6 +735,11 @@ textarea:focus-visible {
     .new-chat-folder-name, .sp-item-name, .connection-banner__text)[dir="auto"] {
     text-align: right;
 }
+/* The mirror: an Arabic name in a left-to-right UI stays on the left. */
+:root:not([dir="rtl"]) :is(.doc-name, .sb-location-name, .composer-chip-label,
+    .new-chat-folder-name, .sp-item-name, .connection-banner__text)[dir="auto"] {
+    text-align: left;
+}
 /* Windows: minimize, maximize and close sit at the top right. */
 :root[data-titlebar="overlay"] .task-header {
     min-height: var(--titlebar-h);

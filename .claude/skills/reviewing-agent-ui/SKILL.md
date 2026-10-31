@@ -47,6 +47,10 @@ in Settings → General. Cover the states, not just the happy one:
 | Padding and position use logical properties | `margin-left` left behind in a component |
 | Window controls blend in | A pale block over the sidebar, or bright controls beside a dim modal |
 
+The mirror bites in English: a `dir="auto"` label holding an Arabic filename sits at
+the far right of its row unless it is pinned left. Check the English UI with an
+Arabic-named file too.
+
 Backend strings are a real source of English in Arabic mode: banners, step lines,
 chat titles and error messages. Check them, not just the labels in the locale file.
 
