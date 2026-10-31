@@ -188,6 +188,12 @@
 .empty-docs p { font-size: 14px; margin-top: 8px; }
 .empty-docs span { font-size: 12px; margin-top: 4px; }
 
+.btn-cancel {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
 /* Failed-doc status: badge + retry need breathing room between them */
 .doc-indexing-status {
     display: inline-flex;

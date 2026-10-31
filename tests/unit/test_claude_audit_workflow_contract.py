@@ -39,7 +39,6 @@ DOC_WALKTHROUGH = WORKFLOW_DIR / "claude-weekly-doc-walkthrough.yml"
 SECURITY_AUDIT = WORKFLOW_DIR / "claude-security-audit.yml"
 
 ROTATION = WORKFLOW_DIR / "claude-audit-rotation.yml"
-ACCOUNT_SWITCH = WORKFLOW_DIR / "claude-account-switch.yml"
 INSTALLER_SCRIPTS = REPO_ROOT / "installer" / "scripts"
 
 #: Every scheduled Claude workflow that files or publishes findings.
@@ -50,6 +49,9 @@ READ_ONLY_TOOLS = {"Read", "Grep", "Glob", "Bash"}
 
 #: The action whose actor gate rejects a bot-actored scheduled run.
 CLAUDE_ACTION = "anthropics/claude-code-action"
+
+#: The step that picks the run's Claude account, and stops the run if none answers.
+CREDENTIAL_ACTION = "./.github/actions/claude-credential"
 
 #: On a `schedule` event the actor is whoever last touched the default branch,
 #: which in this repo is one of these two bots. Both must be allowed or the run
@@ -76,6 +78,18 @@ def _steps(workflow: dict):
 
 def _claude_steps(workflow: dict):
     return [s for s in _steps(workflow) if CLAUDE_ACTION in str(s.get("uses", ""))]
+
+
+def _gate(workflow: dict) -> tuple[str, dict]:
+    """The one job that picks the run's Claude account, and its pick step."""
+    found = [
+        (name, step)
+        for name, job in workflow["jobs"].items()
+        for step in job.get("steps") or []
+        if step.get("uses") == CREDENTIAL_ACTION
+    ]
+    assert len(found) == 1, f"expected one account-picking gate job, found {found}"
+    return found[0]
 
 
 @pytest.fixture(scope="module")
@@ -125,15 +139,11 @@ def test_every_scheduled_claude_step_allows_the_bots_that_actor_it(path: Path):
         )
 
 
-def test_the_quota_probe_runs_the_same_claude_code_action_as_the_lenses():
-    """A probe on an older action pin proves a different CLI than the lenses run.
-
-    The pinned action bundles the CLI that resolves `--model`; a probe on another
-    pin can pass while every lens fails on the model, or refuse a model the lenses
-    accept, and the gate stops the night for the wrong reason.
-    """
+def test_every_audit_runs_one_claude_code_action_pin():
+    """The pinned action bundles the CLI that resolves `--model`; lenses on two pins
+    can disagree about which models exist, and only some of them fail."""
     pins = {}
-    for path in (*PROACTIVE_WORKFLOWS, ACCOUNT_SWITCH):
+    for path in PROACTIVE_WORKFLOWS:
         for step in _claude_steps(_load(path)):
             ref = str(step["uses"]).split("@", 1)[1]
             pins.setdefault(ref, []).append(
@@ -219,13 +229,7 @@ def test_synthesis_runs_only_after_the_quota_gate_passed(path: Path):
     `!cancelled()` and reported "the audit did not run" instead of the probe's reason.
     """
     workflow = _load(path)
-    gate = next(
-        name
-        for name, job in workflow["jobs"].items()
-        if any(
-            "require_claude.py" in str(s.get("run", "")) for s in job.get("steps") or []
-        )
-    )
+    gate, _step = _gate(workflow)
     condition = str(workflow["jobs"]["synthesize"]["if"])
     assert (
         f"needs.{gate}.result == 'success'" in condition
@@ -233,35 +237,28 @@ def test_synthesis_runs_only_after_the_quota_gate_passed(path: Path):
 
 
 @pytest.mark.parametrize("path", PROACTIVE_WORKFLOWS, ids=lambda p: p.name)
-def test_a_quota_refusal_dispatches_the_account_switch(path: Path):
-    """The rotation starts every audit with GITHUB_TOKEN. GitHub promises that only
-    workflow_dispatch/repository_dispatch from that token create runs, so the
-    switch's workflow_run hook is not a reliable trigger here; dispatch it."""
+def test_the_gate_hands_its_account_to_every_claude_job(path: Path):
+    """One probe picks the account for the whole run, at run time. The repo
+    variable it replaced needed a PAT nobody set to switch back, so the audits sat
+    on an exhausted account while the other had quota."""
     workflow = _load(path)
-    gate, gate_job = next(
-        (name, job)
-        for name, job in workflow["jobs"].items()
-        if any(
-            "require_claude.py" in str(s.get("run", "")) for s in job.get("steps") or []
-        )
+    gate, step = _gate(workflow)
+    assert step["id"] == "claude_account"
+    assert step["with"]["primary-token"] == "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"
+    assert step["with"]["secondary-token"] == (
+        "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}"
     )
-    gate_step = next(
-        s for s in gate_job["steps"] if "require_claude.py" in str(s.get("run", ""))
+    assert workflow["jobs"][gate]["outputs"]["claude_account"] == (
+        "${{ steps.claude_account.outputs.account }}"
     )
-    assert '--github-output "$GITHUB_OUTPUT"' in gate_step["run"]
-    assert gate_job["outputs"]["claude_verdict"] == (
-        "${{ steps." + gate_step["id"] + ".outputs.verdict }}"
-    )
-    job = workflow["jobs"]["request-account-switch"]
-    needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
-    assert gate in needs
-    assert f"needs.{gate}.outputs.claude_verdict == 'quota'" in job["if"]
-    assert "!cancelled()" in job["if"], "the gate job FAILED; the switch must still run"
-    assert job["permissions"] == {"actions": "write"}
-    assert any(
-        "gh workflow run claude-account-switch.yml" in str(s.get("run", ""))
-        for s in job["steps"]
-    )
+    label = f"needs.{gate}.outputs.claude_account"
+    for name, job in workflow["jobs"].items():
+        for claude in _claude_steps({"jobs": {name: job}}):
+            token = claude["with"]["claude_code_oauth_token"]
+            assert token.startswith(
+                "${{ " + label + " == 'secondary'"
+            ), f"{path.name}:{name} does not use the account the gate picked"
+    assert "request-account-switch" not in workflow["jobs"]
 
 
 def test_the_nightly_audit_refuses_to_synthesize_a_partial_sweep(nightly: dict):
@@ -432,14 +429,6 @@ def test_the_code_audit_keeps_its_filename_and_concurrency_group(nightly: dict):
     assert nightly["concurrency"]["group"] == "claude-nightly-audit"
 
 
-def test_the_account_switch_watches_every_proactive_audit_by_its_current_name():
-    """`workflow_run` matches the display name; a rename silently unhooks it."""
-    watched = _triggers(_load(ACCOUNT_SWITCH))["workflow_run"]["workflows"]
-    for path in PROACTIVE_WORKFLOWS:
-        name = _load(path)["name"]
-        assert name in watched, f"claude-account-switch.yml does not watch {name!r}"
-
-
 @pytest.mark.parametrize("path", PROACTIVE_WORKFLOWS, ids=lambda p: p.name)
 def test_claude_is_probed_before_any_lens_starts(path: Path):
     """On the usage limit the run stops once, before spending runner time.
@@ -449,16 +438,7 @@ def test_claude_is_probed_before_any_lens_starts(path: Path):
     Strix Point runner per guide being refused.
     """
     workflow = _load(path)
-    gate_jobs = [
-        name
-        for name, job in workflow["jobs"].items()
-        if any(
-            "require_claude.py" in str(step.get("run", ""))
-            for step in job.get("steps") or []
-        )
-    ]
-    assert len(gate_jobs) == 1, f"{path.name} has no single quota-gate job: {gate_jobs}"
-    gate = gate_jobs[0]
+    gate, _step = _gate(workflow)
     for name, job in workflow["jobs"].items():
         if name == gate or not _claude_steps({"jobs": {name: job}}):
             continue

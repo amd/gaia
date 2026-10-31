@@ -560,9 +560,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         # These chats talk to their agents directly, so the daemon cannot see
         # them; an update's daemon restart has to wait for them.
         from gaia.daemon.client import add_local_work, remove_local_work
-        from gaia.ui._chat_helpers import relayed_turns_in_flight
+        from gaia.ui._chat_helpers import active_turns_in_flight
 
-        add_local_work(relayed_turns_in_flight)
+        add_local_work(active_turns_in_flight)
 
         # ── Agent Registry ──────────────────────────────────────────────
         from gaia.agents.registry import AgentRegistry
@@ -856,7 +856,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         yield
 
         # Shutdown
-        remove_local_work(relayed_turns_in_flight)
+        remove_local_work(active_turns_in_flight)
         await scheduler.shutdown()
         logger.info("Task scheduler stopped")
         await agent_loop.stop()

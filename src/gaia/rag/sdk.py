@@ -20,7 +20,7 @@ import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -468,7 +468,7 @@ class RAGConfig:
         False  # Enable LLM-based intelligent chunking (requires LLM client)
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
-    vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
+    vlm_model: str = DEFAULT_MODEL_NAME
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
     # Security settings
@@ -2497,7 +2497,7 @@ These positions indicate where to split the text."""
                     f"{describe_start_hint().instruction}\n"
                     "Then index the image again."
                 ) from e
-            # Reachable, so the model is what's missing; `gaia init` skips it.
+            # Reachable, so the model is what's missing.
             pull = describe_client_hint("pull", model).instruction
             raise ImageExtractionError(
                 f"Cannot index image {file_name}: vision model {model} is not "
@@ -3366,20 +3366,20 @@ These positions indicate where to split the text."""
                         result["total_indexed_files"] = len(self.indexed_files)
                         result["total_chunks"] = len(self.chunks)
 
-    def _evict_lru_document(self) -> bool:
+    def _evict_lru_document(self) -> Optional[str]:
         """
         Evict the least recently used document to free memory.
 
         Returns:
-            True if a document was evicted, False otherwise
+            The path of the evicted document, or None if no document was evicted
         """
         if not self.config.enable_lru_eviction:
             self.log.warning("LRU eviction disabled, cannot free memory")
-            return False
+            return None
 
         if not self.file_access_times:
             self.log.warning("No tracked files available for LRU eviction")
-            return False
+            return None
 
         # Find LRU file (oldest access time)
         lru_file = min(self.file_access_times, key=self.file_access_times.get)
@@ -3395,27 +3395,34 @@ These positions indicate where to split the text."""
         result = self.remove_document(lru_file)
         if not result:
             self.log.error(f"Failed to evict LRU document: {Path(lru_file).name}")
-        return result
+            return None
+        return lru_file
 
-    def _check_memory_limits(self) -> bool:
+    def _check_memory_limits(self) -> Tuple[bool, List[str]]:
         """
         Check memory limits and evict documents if necessary.
 
         Returns:
-            True if limits are satisfied, False if still exceeded
+            A tuple containing:
+                - True if limits are satisfied, False if still exceeded
+                - A list of evicted document paths (if any)
         """
+        evicted_files: List[str] = []
+
         # Check total chunks limit
         while (
             self.config.max_total_chunks > 0
             and len(self.chunks) > self.config.max_total_chunks
             and len(self.indexed_files) > 1
         ):  # Keep at least one file
-            if not self._evict_lru_document():
+            path = self._evict_lru_document()
+            if path is None:
                 self.log.warning(
                     f"Cannot meet chunk limit: {len(self.chunks)} chunks "
                     f"exceeds max {self.config.max_total_chunks}, eviction failed"
                 )
                 break
+            evicted_files.append(path)
 
         # Check indexed files limit
         while (
@@ -3423,12 +3430,14 @@ These positions indicate where to split the text."""
             and len(self.indexed_files) > self.config.max_indexed_files
             and len(self.indexed_files) > 1
         ):  # Keep at least one file
-            if not self._evict_lru_document():
+            path = self._evict_lru_document()
+            if path is None:
                 self.log.warning(
                     f"Cannot meet file limit: {len(self.indexed_files)} files "
                     f"exceeds max {self.config.max_indexed_files}, eviction failed"
                 )
                 break
+            evicted_files.append(path)
 
         chunks_ok = (
             self.config.max_total_chunks <= 0
@@ -3438,7 +3447,7 @@ These positions indicate where to split the text."""
             self.config.max_indexed_files <= 0
             or len(self.indexed_files) <= self.config.max_indexed_files
         )
-        return chunks_ok and files_ok
+        return chunks_ok and files_ok, evicted_files
 
     def _has_indexing_capacity(self) -> bool:
         """Check if there is capacity to index another document.
@@ -3787,7 +3796,7 @@ These positions indicate where to split the text."""
                     print("  ✅ Successfully loaded from cache")
 
                 # Check memory limits after cache load
-                limits_ok = self._check_memory_limits()
+                limits_ok, evicted = self._check_memory_limits()
 
                 # Update stats for cache load
                 stats["success"] = True
@@ -3798,6 +3807,8 @@ These positions indicate where to split the text."""
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 stats["from_cache"] = True
+                if evicted:
+                    stats["evicted"] = evicted
                 if not limits_ok:
                     stats["memory_limit_warning"] = True
                 return stats
@@ -3971,7 +3982,9 @@ These positions indicate where to split the text."""
                 self.file_access_times[file_path] = self._access_counter
 
                 # Check memory limits and evict if necessary
-                limits_ok = self._check_memory_limits()
+                limits_ok, evicted = self._check_memory_limits()
+            if evicted:
+                stats["evicted"] = evicted
             if not limits_ok:
                 self.log.warning(
                     f"Memory limits exceeded after indexing {file_path}. "

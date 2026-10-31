@@ -3,13 +3,13 @@ package root
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/chat"
@@ -634,13 +634,13 @@ func clampInt(v, lo, hi int) int {
 	return v
 }
 
-// logf writes transport diagnostics to stderr in dev mode. It must never be
-// given a daemon token — daemon.Instance redacts its own token when formatted.
+// logf writes transport diagnostics to the session log in dev mode. It must
+// never be given a daemon token — daemon.Instance redacts its own token when formatted.
 func (m FlagshipModel) logf(format string, args ...any) {
 	if !m.dev {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+	control.DevLogf(format, args...)
 }
 
 func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea.Model, tea.Cmd) {

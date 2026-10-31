@@ -131,7 +131,7 @@ function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) 
                         <li key={item.id} className={`sp-output${item.state !== 'present' ? ' is-inactive' : ''}`}>
                             <Icon size={13} className="sp-item-icon" aria-hidden="true" />
                             <div className="sp-item-text">
-                                <span className="sp-item-name" title={item.path ?? item.name}>{item.name}</span>
+                                <span className="sp-item-name" dir="auto" title={item.path ?? item.name}>{item.name}</span>
                                 <span className="sp-meta">
                                     {meta}
                                 </span>

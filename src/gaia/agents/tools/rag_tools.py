@@ -160,6 +160,14 @@ def documents_still_indexing(rag: Any) -> List[str]:
         return sorted(path for path, job in jobs.items() if not job.done.is_set())
 
 
+def _forget_evicted(indexed_files: set, evicted: List[str]) -> None:
+    """Drop documents the library evicted, so asking for one again re-indexes it."""
+    gone = {os.path.realpath(path) for path in evicted}
+    for path in list(indexed_files):
+        if os.path.realpath(path) in gone:
+            indexed_files.discard(path)
+
+
 def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
     """Tool result for a document that is still indexing in the background."""
     name = Path(job.path).name
@@ -985,6 +993,9 @@ class RAGToolsMixin:
                             if idx_result is None:
                                 return _indexing_in_progress(job)
                             if idx_result.get("success"):
+                                _forget_evicted(
+                                    self.indexed_files, idx_result.get("evicted", [])
+                                )
                                 self.indexed_files.add(file_path)
                                 if (
                                     hasattr(self, "current_session")
@@ -1645,6 +1656,8 @@ class RAGToolsMixin:
                     return _indexing_in_progress(job)
 
                 if result.get("success"):
+                    evicted = result.get("evicted", [])
+                    _forget_evicted(self.indexed_files, evicted)
                     self.indexed_files.add(file_path)
                     save_warning = ""
 
@@ -1671,6 +1684,12 @@ class RAGToolsMixin:
                         msg = f"Re-indexed (updated): {file_name}"
                     else:
                         msg = f"Successfully indexed: {file_name}"
+                    if evicted:
+                        names = ", ".join(Path(path).name for path in evicted)
+                        msg += (
+                            f". The document library was full, so it removed {names}; "
+                            "questions about it will find nothing until it is indexed again"
+                        )
                     return {
                         "status": "success",
                         "message": f"{msg}. {save_warning}" if save_warning else msg,
@@ -1685,6 +1704,7 @@ class RAGToolsMixin:
                         "from_cache": result.get("from_cache", False),
                         "already_indexed": result.get("already_indexed", False),
                         "reindexed": result.get("reindexed", False),
+                        **({"evicted": evicted} if evicted else {}),
                     }
                 else:
                     if result.get("error_type") == "embedding_unavailable":

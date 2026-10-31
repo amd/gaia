@@ -376,6 +376,28 @@ python -m gaia.mcp.mcp_bridge
 
 **#1655 is the canonical case for both:** the model-pull sent `recipe=` for a *built-in* Lemonade model, which Lemonade 400s — but only on a *fresh* pull. Every unit test mocked the client, every manual check ran on a box that already had `gemma4-it-e2b-FLM` cached, and the PR's `gaia init --profile npu` test-plan item was checked off against that warm cache. `test_pull_model` (now in `tests/unit/test_lemonade_client_http.py`) even documented the correct `user.`-prefix-with-`recipe` pattern, but stubbed the HTTP layer, so it couldn't catch the profile that violated it.
 
+### IMPORTANT: A UI change isn't done until someone has looked at it
+
+**Passing tests say the code runs; they don't say the screen looks right.** Before
+calling a change to the Agent UI, the Electron shell, or a user-facing backend string
+done, follow the [`reviewing-agent-ui`](.claude/skills/reviewing-agent-ui/SKILL.md)
+skill: run `npm run test:rtl`, then open the screenshots and read them.
+
+- **Check every screen you touched in English and Arabic, in its real states:** empty,
+  running, failed, long content, and with a modal open.
+- **Shell work needs the packaged app.** The browser preview has no window controls,
+  tray or installer. Say which one you tested.
+- **A bug a person finds is a gap in the checks.** Add a rule to
+  `visual/rtl.visual.ts` or the skill, watch it fail, then fix the bug, all in the same
+  change.
+- **New user-facing text goes through `useT`,** including strings from the backend.
+  Use logical CSS properties (`margin-inline-start`), and wrap numbers with units in
+  `<bdi dir="ltr">`.
+
+v0.25.4's Arabic UI is the canonical miss: it passed 2,100 component tests and a DOM audit
+with filenames floating mid-row, `MB 9.7` backwards and model names cut at the wrong
+end, all visible at a glance. The audit only looked for overflow and leftover English.
+
 ### Tests always run against THIS checkout
 
 The root `conftest.py` puts this repo's `src/` and `hub/agents/*/python` at the
@@ -524,6 +546,9 @@ cd src/gaia/apps/webui && npm install && npm run build
 # Development with hot reload (two terminals)
 uv run python -m gaia.ui.server --debug   # Terminal 1: backend (port 4200)
 cd src/gaia/apps/webui && npm run dev      # Terminal 2: frontend (port 5174)
+
+# Checks to run before calling a UI change done
+cd src/gaia/apps/webui && npm test && npm run test:rtl
 ```
 
 ## Project Structure
@@ -679,11 +704,11 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
 ### Default Models
-- The default chat model follows the hardware. `gaia init` adds `Qwen3.6-35B-A3B-GGUF` (`LARGE_DEFAULT_MODEL_NAME`, a Lemonade built-in MoE with 3B active, listed since Lemonade v11.7.0, run with thinking on) where it fits — 23.3 GB of weights and vision projector plus its KV cache at the window it loads with (20 KiB/token, at least 64K, so ~27 GB for models), and only where a GPU holds it: a 64 GB+ Strix Halo or a 32 GB GPU, not a 24 GB card or a CPU-only PC — and records it as `default_model` in `~/.gaia/config.json` once downloaded; every smaller PC runs `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`). Gemma is also the vision model, so `gaia init` downloads it on every PC — except when the user has set `default_model`, which replaces it; the first image question then downloads Gemma. "Fits" is [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py), read off Lemonade's `/system-info` and `/health`; the TUI picker applies the same rule from `tui/internal/lemonade/recommended_models.json` (a drift test pins the two). `user.Qwen3.8-Flash-Next-GGUF` (`FLASH_OPTION_MODEL_NAME`, 82.86 GB plus its KV cache at 64K — 24 KiB/token, 1.6 GB — so ~90 GB, multimodal, thinking on, needs Lemonade v2026.39.1+) is opt-in only on a 128 GB Strix Halo — never in `DEFAULT_MODEL_LADDER` — chosen with `gaia config set default_model`; `util/compare_local_models.py` measures both on real hardware.
+- The default chat model follows the hardware. `gaia init` adds `Qwen3.6-35B-A3B-GGUF` (`LARGE_DEFAULT_MODEL_NAME`, a Lemonade built-in MoE with 3B active, listed since Lemonade v11.7.0, run with thinking on) where it fits — 23.3 GB of weights and vision projector plus its KV cache at the window it loads with (20 KiB/token, at least 64K, so ~27 GB for models), and only where a GPU holds it: a 64 GB+ Strix Halo or a 32 GB GPU, not a 24 GB card or a CPU-only PC — and records it as `default_model` in `~/.gaia/config.json` once downloaded; every smaller PC runs `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`). Gemma is also the vision model, so `gaia init` downloads it on every PC — except when the user has set `default_model`, which replaces it; image analysis then asks the user to download Gemma (`gaia download --agent vlm`) instead of downloading it inside the image tool. "Fits" is [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py), read off Lemonade's `/system-info` and `/health`; the TUI picker applies the same rule from `tui/internal/lemonade/recommended_models.json` (a drift test pins the two). `user.Qwen3.8-Flash-Next-GGUF` (`FLASH_OPTION_MODEL_NAME`, 82.86 GB plus its KV cache at 64K — 24 KiB/token, 1.6 GB — so ~90 GB, multimodal, thinking on, needs Lemonade v2026.39.1+) is opt-in only on a 128 GB Strix Halo — never in `DEFAULT_MODEL_LADDER` — chosen with `gaia config set default_model`; `util/compare_local_models.py` measures both on real hardware.
 - Agents that leave `model_id` unset call `resolve_default_chat_model()` — `default_model`, else `DEFAULT_MODEL_NAME`. That covers GaiaAgent and ChatAgent. Sharing one model id is what keeps switching agents from evicting and cold-reloading the resident model.
 - **EmailTriageAgent is the one exception.** With no explicit `model_id` it calls `resolve_default_email_model()` (`hub/agents/email/python/gaia_agent_email/model_select.py`), which returns `gemma4-it-e2b-FLM` when an NPU is present *and* that model is already servable, and `DEFAULT_MODEL_NAME` in every other case.
 - Context window: a model that declares `max_ctx_size` and `kv_bytes_per_token` in `MODELS` ([`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)) gets the largest window that fits the GPU memory Lemonade reports (`largest_context` in [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py)), and the fit check charges the KV cache at that same window. Every other model gets its `min_ctx_size`, else `GPU_CTX_SIZE` (65536). `NPU_CTX_SIZE` (32768, the FLM ceiling) applies only to models that run on the NPU, never to a GPU model on a machine whose `default_device` is `npu`. Gemma-4-E4B loads at 65536 (the eval baseline was captured there) when memory allows. Before every load, free memory is checked too (`check_free_memory` in `model_fit.py`): when it is short, the window drops in 8K steps to a 32K floor, and below that the load is refused with how much is needed and free.
-- Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported, and is the RAG SDK's `vlm_model` default (`src/gaia/rag/sdk.py`)
+- Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); it is also the RAG SDK's `vlm_model` default (`src/gaia/rag/sdk.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported
 - Image generation (SD): `SDXL-Turbo`
 
 ### IMPORTANT: Never hardcode how Lemonade is started — `lemonade-server serve` is dead
