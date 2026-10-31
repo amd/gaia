@@ -215,7 +215,9 @@ class TestToolCallersReportAnError:
         assert result["focus"] == focus
         host.vlm_client.extract_from_image.assert_called_once()
 
-    def test_analyze_image_rejects_unknown_focus_before_reading_the_file(self, tmp_path):
+    def test_analyze_image_rejects_unknown_focus_before_reading_the_file(
+        self, tmp_path
+    ):
         missing = tmp_path / "missing.png"
         host = self._mixin("description")
 
@@ -230,6 +232,38 @@ class TestToolCallersReportAnError:
             ),
         }
         host.vlm_client.extract_from_image.assert_not_called()
+
+    @pytest.mark.parametrize("focus", [" Colors ", "MOOD", "details	"])
+    def test_analyze_image_normalizes_case_and_whitespace(self, tmp_path, focus):
+        image = tmp_path / "chart.png"
+        image.write_bytes(b"not-really-a-png")
+        host = self._mixin("description")
+
+        result = host._analyze_image(str(image), focus=focus)
+
+        assert result["status"] == "success"
+        assert result["focus"] == focus.strip().lower()
+
+    @pytest.mark.parametrize(
+        "focus", ["", "   ", "text", "all colors", "colour", None, 3, ["all"]]
+    )
+    def test_analyze_image_rejects_near_misses_and_non_strings(self, tmp_path, focus):
+        image = tmp_path / "chart.png"
+        image.write_bytes(b"not-really-a-png")
+        host = self._mixin("description")
+
+        result = host._analyze_image(str(image), focus=focus)
+
+        assert result["status"] == "error"
+        assert "Unknown focus" in result["error"]
+        host.vlm_client.extract_from_image.assert_not_called()
+
+    def test_documented_focus_lists_match_the_accepted_set(self):
+        from gaia.vlm.mixin import IMAGE_ANALYSIS_FOCUSES, VLMToolsMixin
+
+        guidelines = VLMToolsMixin.get_base_vlm_guidelines()
+        for focus in IMAGE_ANALYSIS_FOCUSES:
+            assert focus in guidelines
 
     def test_answer_question_reports_an_error_envelope(self, tmp_path):
         image = tmp_path / "chart.png"

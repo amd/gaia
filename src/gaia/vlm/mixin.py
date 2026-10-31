@@ -35,12 +35,15 @@ logger = get_logger(__name__)
 
 DEFAULT_VLM_MODEL = "Gemma-4-E4B-it-GGUF"
 
-# ``analyze_image`` deliberately offers broad visual summaries.  Questions
-# about a particular subject (faces, text, an object) belong to the question
-# tool, which takes the user's question verbatim instead of guessing a focus.
-IMAGE_ANALYSIS_FOCUSES = frozenset(
-    {"composition", "colors", "mood", "details", "all"}
-)
+# Subject-specific asks (text, faces, objects) go to answer_question_about_image.
+_FOCUS_PROMPTS = {
+    "composition": "Analyze the composition, framing, and arrangement of elements in this image.",
+    "colors": "Describe the color palette, color relationships, and color mood in this image.",
+    "mood": "Describe the mood, atmosphere, and emotional tone conveyed by this image.",
+    "details": "Provide detailed observations about textures, materials, and fine details in this image.",
+    "all": "Provide a detailed description of this image including composition, colors, mood, style, and interesting elements.",
+}
+IMAGE_ANALYSIS_FOCUSES = frozenset(_FOCUS_PROMPTS)
 
 
 def _image_file_error(path: Path, image_path: str) -> Optional[Dict[str, Any]]:
@@ -147,7 +150,9 @@ class VLMToolsMixin:
         Returns:
             Dict with status, description, and metadata
         """
-        if focus not in IMAGE_ANALYSIS_FOCUSES:
+        if isinstance(focus, str):
+            focus = focus.strip().lower()
+        if not isinstance(focus, str) or focus not in IMAGE_ANALYSIS_FOCUSES:
             choices = ", ".join(sorted(IMAGE_ANALYSIS_FOCUSES))
             return {
                 "status": "error",
@@ -166,16 +171,7 @@ class VLMToolsMixin:
         if not_a_file:
             return not_a_file
 
-        # Build analysis prompt based on focus
-        focus_prompts = {
-            "composition": "Analyze the composition, framing, and arrangement of elements in this image.",
-            "colors": "Describe the color palette, color relationships, and color mood in this image.",
-            "mood": "Describe the mood, atmosphere, and emotional tone conveyed by this image.",
-            "details": "Provide detailed observations about textures, materials, and fine details in this image.",
-            "all": "Provide a detailed description of this image including composition, colors, mood, style, and interesting elements.",
-        }
-
-        prompt = focus_prompts.get(focus, focus_prompts["all"])
+        prompt = _FOCUS_PROMPTS[focus]
 
         try:
             # Read image file as bytes (VLMClient expects bytes, not path)
