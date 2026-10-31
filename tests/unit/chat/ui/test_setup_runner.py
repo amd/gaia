@@ -830,7 +830,7 @@ def client(monkeypatch):
     runner = sr.SetupRunner()
     monkeypatch.setattr(setup_router, "runner", runner)
     # The disk pre-flight has its own tests; here the drive always has room.
-    monkeypatch.setattr(setup_router.plan_api, "check_disk", lambda **_k: {})
+    monkeypatch.setattr(setup_router.plan_api, "run_disk_warning", lambda **_k: None)
     app = FastAPI()
     app.include_router(setup_router.router)
     return TestClient(app, headers={"X-Gaia-UI": "1"}), runner

@@ -555,11 +555,11 @@ def test_disk_short_for_the_selection_is_a_warning_to_confirm(flm_box):
     plan = sp.build_plan()
     assert plan["disk"] == {"path": "D:/hub", "free_gb": 2.0, "source": "lemonade"}
     assert "Free 3.9 GB" in plan["disk_warning"]
-    with pytest.raises(sp.NeedsAcknowledgement) as ask:
-        sp.check_disk()
-    assert ask.value.detail["drop"] == [DEFAULT_MODEL_NAME]
-    acknowledged = sp.check_disk(acknowledge_low_disk=True)
-    assert acknowledged["download_gb"] == plan["download_gb"]
+    warning = sp.run_disk_warning()
+    assert warning["drop"] == [DEFAULT_MODEL_NAME]
+    assert warning["need_gb"] == plan["download_gb"]
+    with pytest.raises(sp.NeedsAcknowledgement):
+        sp.prepare_download(DEFAULT_MODEL_NAME)
 
 
 def test_remove_deletes_only_on_request_and_keeps_it_from_coming_back(

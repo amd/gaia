@@ -16,12 +16,7 @@ from pydantic import BaseModel
 
 from .. import setup_plan as plan_api
 from ..security import require_ui_header
-from ..setup_plan import (
-    NeedsAcknowledgement,
-    SetupPlanError,
-    build_plan,
-    choose_chat_model,
-)
+from ..setup_plan import SetupPlanError, build_plan, choose_chat_model
 from ..setup_runner import SetupError, check, runner, step_labels, users_lemonade_url
 
 router = APIRouter(tags=["setup"])
@@ -54,9 +49,9 @@ def setup_plan() -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(e)) from e
 
 
-def _confirm(e: NeedsAcknowledgement) -> HTTPException:
+def _confirm(warning: Dict[str, Any]) -> HTTPException:
     """409 whose detail says what to confirm and which field confirms it."""
-    return HTTPException(status_code=409, detail=e.detail)
+    return HTTPException(status_code=409, detail=warning)
 
 
 class ChatModelRequest(BaseModel):
@@ -73,10 +68,11 @@ def setup_chat_model(body: ChatModelRequest) -> Dict[str, Any]:
     One that may not fit this PC answers 409 ``no_fit`` until it is confirmed.
     """
     try:
-        choose_chat_model(body.model_id, body.acknowledge_no_fit)
+        warning = plan_api.chat_model_warning(body.model_id)
+        if warning and not body.acknowledge_no_fit:
+            raise _confirm(warning)
+        choose_chat_model(body.model_id, acknowledge_no_fit=True)
         return build_plan()
-    except NeedsAcknowledgement as e:
-        raise _confirm(e) from e
     except SetupPlanError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
@@ -113,12 +109,13 @@ def setup_download_model(body: DownloadModelRequest) -> Dict[str, Any]:
     Takes it off ``skipped_models``. Follow it with ``/api/setup/status``.
     """
     try:
+        warning = plan_api.download_disk_warning(body.model_id)
+        if warning and not body.acknowledge_low_disk:
+            raise _confirm(warning)
         client, model_id = plan_api.prepare_download(
-            body.model_id, body.acknowledge_low_disk
+            body.model_id, acknowledge_low_disk=True
         )
         return runner.download_model(client, model_id, body.keep_trying)
-    except NeedsAcknowledgement as e:
-        raise _confirm(e) from e
     except SetupError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except SetupPlanError as e:
@@ -166,19 +163,16 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
     """
     try:
         # Switching to GAIA's own server: the user's server's disk is moot.
-        if not body.gaia_lemonade:
-            plan_api.check_disk(
-                skip_chat_model=body.skip_chat_model,
-                acknowledge_low_disk=body.acknowledge_low_disk,
-            )
+        if not body.gaia_lemonade and not body.acknowledge_low_disk:
+            warning = plan_api.run_disk_warning(skip_chat_model=body.skip_chat_model)
+            if warning:
+                raise _confirm(warning)
         return runner.start(
             body.skip_chat_model,
             body.gaia_lemonade,
             allow_low_disk=body.acknowledge_low_disk,
             keep_trying=body.keep_trying,
         )
-    except NeedsAcknowledgement as e:
-        raise _confirm(e) from e
     except SetupPlanError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except SetupError as e:

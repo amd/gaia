@@ -397,7 +397,9 @@ gaia init --download-model Gemma-4-E4B-it-GGUF --yes   # changed your mind
 
 Choices are saved in `~/.gaia/config.json` — the chat model as `default_model`, the
 models you don't want as `skipped_models` — and every later `gaia init`, including
-`--yes`, honors them. `gaia init --check` doesn't count a skipped model as missing.
+`--yes`, honors them. `gaia init --check` doesn't count a skipped model as missing, except
+the chat model: with that skipped it reports that there is no local chat model until you
+pick another one or a cloud provider.
 
 Skipping a model is allowed, and setup says what stops working:
 

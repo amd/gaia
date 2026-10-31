@@ -398,20 +398,14 @@ def build_plan(
     }
 
 
-def check_disk(
-    profile: str = PROFILE,
-    skip_chat_model: bool = False,
-    acknowledge_low_disk: bool = False,
-) -> Dict[str, Any]:
-    """The plan, after raising :class:`NeedsAcknowledgement` when the selected
-    downloads need more disk than the model drive has and nobody confirmed."""
+def run_disk_warning(
+    profile: str = PROFILE, skip_chat_model: bool = False
+) -> Optional[Dict[str, Any]]:
+    """The low-disk warning for the selected downloads, or None when they fit."""
     plan = build_plan(profile, skip_chat_model)
-    shortfall = model_choice.disk_shortfall(
+    return model_choice.disk_shortfall(
         [(m["id"], m["size_gb"]) for m in plan["models"]], plan["disk"]
     )
-    if shortfall and not acknowledge_low_disk:
-        raise NeedsAcknowledgement(shortfall)
-    return plan
 
 
 def _require_client(action: str):
@@ -425,14 +419,29 @@ def _require_client(action: str):
     return client
 
 
-def choose_chat_model(model_id: str, acknowledge_no_fit: bool = False) -> None:
+def chat_model_warning(model_id: str) -> Optional[Dict[str, Any]]:
+    """The ``no_fit`` warning for *model_id*, or None when nothing needs confirming.
+
+    Raises :class:`SetupPlanError` when it can't be the chat model at all.
+    """
+    try:
+        choose_chat_model(model_id, acknowledge_no_fit=False, save=False)
+    except NeedsAcknowledgement as e:
+        return dict(e.detail)
+    return None
+
+
+def choose_chat_model(
+    model_id: str, acknowledge_no_fit: bool = False, save: bool = True
+) -> None:
     """Make *model_id* the chat model setup uses, saved as ``default_model``.
 
     Any of GAIA's chat models, or any chat model this Lemonade has downloaded
     (FLM included). The hardware's own recommendation clears ``default_model``
     instead, which keeps setup's own behaviour for it. One that may not fit
     this PC raises :class:`NeedsAcknowledgement` until *acknowledge_no_fit*.
-    Choosing a model also takes it off ``skipped_models``.
+    Choosing a model also takes it off ``skipped_models``. ``save=False``
+    only checks.
     """
     from gaia.config import GaiaConfig, GaiaConfigError
     from gaia.llm.lemonade_client import (
@@ -481,6 +490,8 @@ def choose_chat_model(model_id: str, acknowledge_no_fit: bool = False) -> None:
                 "acknowledge": "acknowledge_no_fit",
             }
         )
+    if not save:
+        return
     try:
         GaiaConfig.save_key(
             "default_model", None if model_id == recommended else model_id
@@ -544,12 +555,7 @@ def remove_model(model_id: str) -> float:
     return round(float(size), 1) if isinstance(size, (int, float)) else 0.0
 
 
-def prepare_download(model_id: str, acknowledge_low_disk: bool = False):
-    """``(client, model id)`` for downloading one model now, taken off
-    ``skipped_models``. Raises :class:`NeedsAcknowledgement` when it needs more
-    disk than is free and nobody confirmed."""
-    from gaia.config import GaiaConfigError
-
+def _download_entry(model_id: str):
     plan = build_plan()
     entry = next(
         (e for e in plan["catalog"] if model_choice.ids_match(e["id"], model_id)),
@@ -560,11 +566,26 @@ def prepare_download(model_id: str, acknowledge_low_disk: bool = False):
             f"{model_id} is not a model GAIA knows or one in this Lemonade "
             "Server. Add it in Settings → Model first."
         )
-    shortfall = model_choice.disk_shortfall(
-        [(entry["id"], entry["size_gb"])], plan["disk"]
-    )
-    if shortfall and not acknowledge_low_disk:
-        raise NeedsAcknowledgement(shortfall)
+    return plan, entry
+
+
+def download_disk_warning(model_id: str) -> Optional[Dict[str, Any]]:
+    """The low-disk warning for downloading *model_id* now, or None."""
+    plan, entry = _download_entry(model_id)
+    return model_choice.disk_shortfall([(entry["id"], entry["size_gb"])], plan["disk"])
+
+
+def prepare_download(model_id: str, acknowledge_low_disk: bool = False):
+    """``(client, model id)`` for downloading one model now, taken off
+    ``skipped_models``. Raises :class:`NeedsAcknowledgement` when it needs more
+    disk than is free and nobody confirmed."""
+    from gaia.config import GaiaConfigError
+
+    _, entry = _download_entry(model_id)
+    if not acknowledge_low_disk:
+        shortfall = download_disk_warning(entry["id"])
+        if shortfall:
+            raise NeedsAcknowledgement(shortfall)
     client = _require_client(f"download {entry['id']}")
     try:
         model_choice.set_skipped(entry["id"], False)
