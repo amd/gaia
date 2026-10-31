@@ -31,6 +31,10 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **The doc profile names a search tool it has.** Its discovery rules told the
+  model to start with `find_files`, which that profile does not register, so the
+  first discovery step failed. They now name `search_file`, which it does
+  register. Profiles with the filesystem tools keep `find_files` (#6070).
 - **A repository indexed with `index_codebase` stays the code-search folder**
   (#6055). In the Agent UI, each new turn reset code search to the session's
   starting folder, so the next `search_code_index` looked in the wrong place
