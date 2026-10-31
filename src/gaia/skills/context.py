@@ -65,13 +65,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, Callable, Dict, Iterator, List, Optional, Sequence
 
+from gaia.agents.tools.command_timeouts import terminate_process_tree
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillPermissionError
-from gaia.skills.preferences import (
-    PreferenceWrite,
-    SkillPreferenceStore,
-    load_schema,
-)
+from gaia.skills.preferences import PreferenceWrite, SkillPreferenceStore, load_schema
 from gaia.tool_cancellation import ToolCancelled, current_cancel_event
 
 log = get_logger(__name__)
@@ -618,6 +615,13 @@ def run_program(
     argv = [executable, *args]
     cancel = current_cancel_event()
     # No shell: the executable is the declared program, resolved to a path.
+    # A new process group/session lets the timeout reach helpers such as
+    # LibreOffice's soffice.bin instead of hanging on pipes they keep open.
+    process_group = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        if os.name == "nt"
+        else {"start_new_session": True}
+    )
     with subprocess.Popen(
         argv,
         cwd=str(workdir) if workdir is not None else None,
@@ -626,6 +630,7 @@ def run_program(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        **process_group,
     ) as proc:
         deadline = time.monotonic() + timeout
         while True:
@@ -638,8 +643,7 @@ def run_program(
                 cancelled = cancel is not None and cancel.is_set()
                 if not cancelled and time.monotonic() < deadline:
                     continue
-                proc.kill()
-                proc.communicate()
+                terminate_process_tree(proc)
                 if cancelled:
                     raise ToolCancelled(
                         f"Skill '{call.skill_name}' stopped '{name}': the agent "

@@ -701,6 +701,28 @@ def test_run_program_still_times_out_on_its_own(
     assert time.monotonic() - started < 20
 
 
+def test_run_program_timeout_kills_a_child_holding_its_pipes(
+    agent, tmp_path, allowed, python_as_program
+):
+    body = (
+        "ctx.run_program('python', ['-c', "
+        "'import subprocess, sys, time; "
+        'subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"]); '
+        "time.sleep(60)'], timeout=0.5)\n"
+        "return {'status': 'success'}\n"
+    )
+    _load(agent, tmp_path, "child-timeout-probe", ["program:run:python"], body)
+
+    started = time.monotonic()
+    result = agent._execute_tool(
+        "child-timeout-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result["status"] == "error"
+    assert "timed out" in result["error"]
+    assert time.monotonic() - started < 10
+
+
 def test_run_program_returns_output_and_exit_code(
     agent, tmp_path, allowed, python_as_program
 ):
