@@ -1,6 +1,7 @@
 package gaiainit
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -130,6 +131,20 @@ func processAlive(pid int) bool {
 // whole run's exit code with it, AFTER Lemonade and both models had installed.
 // Setup launched from the terminal UI must not fail on a component it does not
 // use.
+func TestMissingCLIIsClassifiedSeparately(t *testing.T) {
+	oldBinary := Binary
+	Binary = func() (string, error) { return "", fmt.Errorf("%w: lookup failed", ErrNoCLI) }
+	t.Cleanup(func() { Binary = oldBinary })
+
+	_, _, err := Start(false)
+	if err == nil || !errors.Is(err, ErrNoCLI) {
+		t.Fatalf("Start error = %v, want ErrNoCLI", err)
+	}
+	if errors.Is(err, ErrUnanswered) {
+		t.Fatalf("Start error = %v, Start does not wrap readiness probes", err)
+	}
+}
+
 func TestRunArgsSkipTheBrowserUIBuild(t *testing.T) {
 	for _, claude := range []bool{false, true} {
 		args := RunArgs(claude)
