@@ -170,6 +170,28 @@ def test_an_html_body_is_read_as_text():
     assert len(out["waiting_on_you"]) == 1
 
 
+def test_an_auto_reply_header_is_not_a_waiting_request(api):
+    mails = _thread("Could you please confirm?", labels=["INBOX", "AUTO_REPLY"])
+    assert _scan(api, mails)["waiting_on_you"] == []
+
+
+def test_a_quoted_old_ask_is_not_a_new_request(api):
+    body = "Thanks for the update.\n\nOn Monday Alice wrote:\nCould you please confirm?"
+    assert _scan(api, _thread(body))["waiting_on_you"] == []
+
+
+def test_a_cc_only_request_is_not_assigned_to_the_user(api):
+    mails = _thread(
+        "Could you please confirm?",
+        to="Owner <owner@example.com>",
+    )
+    # The helper's default user is only in CC for this adversarial shape.
+    latest = mails[-1]
+    latest.to = "Owner <owner@example.com>"
+    latest.cc = f"Me <{USER}>"
+    assert _scan(api, mails)["waiting_on_you"] == []
+
+
 # --------------------------------------------------------------------------
 # precision — each way a thread must NOT qualify
 # --------------------------------------------------------------------------

@@ -425,6 +425,39 @@ def plain_body(message: Dict[str, Any]) -> str:
     return body
 
 
+_ATTRIBUTION_RE = re.compile(r"^On\b.*wrote:\s*$", re.IGNORECASE)
+_ORIGINAL_MESSAGE_RE = re.compile(
+    r"^-{2,}\s*(Original|Forwarded) Message\s*-{2,}", re.IGNORECASE
+)
+
+
+def strip_quoted_text(body: str) -> str:
+    """Keep the sender's new text, not an older quoted ask.
+
+    Waiting-on-you signals must not inspect the whole rendered body: a reply
+    that only quotes an earlier ``Could you...?`` is not a new request.
+    """
+    kept: List[str] = []
+    for line in (body or "").splitlines():
+        stripped = line.strip()
+        if _ATTRIBUTION_RE.match(stripped) or _ORIGINAL_MESSAGE_RE.match(stripped):
+            break
+        if stripped.startswith(">"):
+            continue
+        kept.append(line)
+    return "\\n".join(kept).strip()
+
+
+def is_auto_reply(message: Dict[str, Any]) -> bool:
+    """Whether provider headers identify the message as an automatic reply."""
+    auto_submitted = (message.get("auto_submitted") or "").strip().lower()
+    x_autoreply = (message.get("x_autoreply") or "").strip().lower()
+    return bool(auto_submitted and auto_submitted != "no") or x_autoreply in {
+        "yes",
+        "true",
+    }
+
+
 def received_ms(message: Dict[str, Any]) -> int:
     """``received`` (UTC ISO-8601) as epoch millis, or fail naming the message.
 
@@ -508,8 +541,23 @@ def _qualify(
     if normalize_for_suppression(sender) in opted_out:
         return None
 
+    if is_auto_reply(latest):
+        return None
+
+    to_addresses = {
+        normalize_for_suppression(address)
+        for address in recipient_addresses(latest.get("to", ""))
+    }
+    cc_addresses = {
+        normalize_for_suppression(address)
+        for address in recipient_addresses(latest.get("cc", ""))
+    }
+    user_address = normalize_for_suppression(user_email)
+    if user_address not in to_addresses and user_address in cc_addresses:
+        return None  # The ask is addressed to someone else, not the user.
+
     subject = latest.get("subject", "")
-    body = plain_body(latest)
+    body = strip_quoted_text(plain_body(latest))
     if is_confidently_promotional(subject, body, latest.get("_label_ids") or ()):
         return None
 
