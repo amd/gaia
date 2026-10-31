@@ -53,6 +53,9 @@ export interface ApiSchemas {
   ForwardConnectionRequest: ForwardConnectionRequest;
   GoalCreate: GoalCreate;
   GoalStatusUpdate: GoalStatusUpdate;
+  GpuMemoryApplyRequest: GpuMemoryApplyRequest;
+  GpuMemoryPendingRequest: GpuMemoryPendingRequest;
+  GpuMemoryRevertRequest: GpuMemoryRevertRequest;
   GrantRequest: GrantRequest;
   HTTPValidationError: HTTPValidationError;
   IndexFolderRequest: IndexFolderRequest;
@@ -602,6 +605,16 @@ export interface GoalCreate {
 export interface GoalStatusUpdate {
   progress_notes?: string | null;
   status: string;
+}
+export interface GpuMemoryApplyRequest {
+  confirm?: boolean;
+  setting_gb: number;
+}
+export interface GpuMemoryPendingRequest {
+  setting_gb: number;
+}
+export interface GpuMemoryRevertRequest {
+  confirm?: boolean;
 }
 export interface GrantRequest {
   scopes?: string[];

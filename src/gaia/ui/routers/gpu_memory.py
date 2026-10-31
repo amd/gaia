@@ -23,16 +23,16 @@ router = APIRouter(tags=["gpu-memory"])
 _AT_THIS_PC = [Depends(require_ui_header), Depends(require_local_pc)]
 
 
-class ApplyRequest(BaseModel):
+class GpuMemoryApplyRequest(BaseModel):
     setting_gb: float
     confirm: bool = False
 
 
-class RevertRequest(BaseModel):
+class GpuMemoryRevertRequest(BaseModel):
     confirm: bool = False
 
 
-class PendingRequest(BaseModel):
+class GpuMemoryPendingRequest(BaseModel):
     setting_gb: float
 
 
@@ -51,19 +51,19 @@ def get_gpu_memory(setting_gb: Optional[float] = None) -> Dict[str, Any]:
 
 
 @router.post("/api/gpu-memory/apply", dependencies=_AT_THIS_PC)
-def apply_gpu_memory(body: ApplyRequest) -> Dict[str, Any]:
+def apply_gpu_memory(body: GpuMemoryApplyRequest) -> Dict[str, Any]:
     """Set the GPU's share after admin permission; takes effect after a restart."""
     return _answer(lambda: gpu_memory.apply(body.setting_gb, body.confirm))
 
 
 @router.post("/api/gpu-memory/revert", dependencies=_AT_THIS_PC)
-def revert_gpu_memory(body: RevertRequest) -> Dict[str, Any]:
+def revert_gpu_memory(body: GpuMemoryRevertRequest) -> Dict[str, Any]:
     """Put back the setting GAIA replaced; takes effect after a restart."""
     return _answer(lambda: gpu_memory.revert(body.confirm))
 
 
 @router.post("/api/gpu-memory/pending", dependencies=[Depends(require_ui_header)])
-def record_gpu_memory_pending(body: PendingRequest) -> Dict[str, Any]:
+def record_gpu_memory_pending(body: GpuMemoryPendingRequest) -> Dict[str, Any]:
     """Remember a value the user sets by hand, to check it after the restart."""
     return _answer(lambda: gpu_memory.record_pending(body.setting_gb))
 

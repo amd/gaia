@@ -1870,6 +1870,48 @@
     "title": "GoalStatusUpdate",
     "type": "object"
   },
+  "GpuMemoryApplyRequest": {
+    "properties": {
+      "confirm": {
+        "default": false,
+        "title": "Confirm",
+        "type": "boolean"
+      },
+      "setting_gb": {
+        "title": "Setting Gb",
+        "type": "number"
+      }
+    },
+    "required": [
+      "setting_gb"
+    ],
+    "title": "GpuMemoryApplyRequest",
+    "type": "object"
+  },
+  "GpuMemoryPendingRequest": {
+    "properties": {
+      "setting_gb": {
+        "title": "Setting Gb",
+        "type": "number"
+      }
+    },
+    "required": [
+      "setting_gb"
+    ],
+    "title": "GpuMemoryPendingRequest",
+    "type": "object"
+  },
+  "GpuMemoryRevertRequest": {
+    "properties": {
+      "confirm": {
+        "default": false,
+        "title": "Confirm",
+        "type": "boolean"
+      }
+    },
+    "title": "GpuMemoryRevertRequest",
+    "type": "object"
+  },
   "GrantRequest": {
     "properties": {
       "scopes": {

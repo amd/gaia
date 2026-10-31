@@ -14,16 +14,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 
-class ApplyRequest(BaseModel):
+class GpuMemoryApplyRequest(BaseModel):
     setting_gb: float
     confirm: bool = False
 
 
-class RevertRequest(BaseModel):
+class GpuMemoryRevertRequest(BaseModel):
     confirm: bool = False
 
 
-class PendingRequest(BaseModel):
+class GpuMemoryPendingRequest(BaseModel):
     setting_gb: float
 
 
@@ -49,15 +49,15 @@ def build_gpu_memory_router(token: str) -> APIRouter:
         return answer(lambda: gpu_memory.status(setting_gb))
 
     @router.post("/apply")
-    def apply(body: ApplyRequest) -> Dict[str, Any]:
+    def apply(body: GpuMemoryApplyRequest) -> Dict[str, Any]:
         return answer(lambda: gpu_memory.apply(body.setting_gb, body.confirm))
 
     @router.post("/revert")
-    def revert(body: RevertRequest) -> Dict[str, Any]:
+    def revert(body: GpuMemoryRevertRequest) -> Dict[str, Any]:
         return answer(lambda: gpu_memory.revert(body.confirm))
 
     @router.post("/pending")
-    def record_pending(body: PendingRequest) -> Dict[str, Any]:
+    def record_pending(body: GpuMemoryPendingRequest) -> Dict[str, Any]:
         return answer(lambda: gpu_memory.record_pending(body.setting_gb))
 
     @router.delete("/pending")
