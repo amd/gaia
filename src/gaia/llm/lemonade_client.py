@@ -404,6 +404,22 @@ def resolve_default_chat_model() -> str:
     return GaiaConfig.load().resolve_model(None, DEFAULT_MODEL_NAME)
 
 
+#: Default chat models that also read images, so indexing a scan loads no second model.
+VISION_CHAT_MODELS = frozenset(
+    {DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME, FLASH_OPTION_MODEL_NAME}
+)
+
+
+def resolve_default_vision_model() -> str:
+    """The model that reads text in scans and images when nobody passed one.
+
+    The PC's chat model when it reads images, because that one is already
+    downloaded and resident; else :data:`DEFAULT_MODEL_NAME`.
+    """
+    model = resolve_default_chat_model()
+    return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
+
+
 # Default embedding model: EmbeddingGemma 300M (768-dim). Not a Lemonade
 # built-in — registered as a ``user.`` custom model on first pull via
 # checkpoint + recipe + the ``embedding`` label (see MODELS entry).

@@ -50,6 +50,7 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
+    resolve_default_vision_model,
 )
 from gaia.logger import get_logger
 from gaia.rag.arabic_text import normalize_arabic_pdf_text
@@ -468,7 +469,7 @@ class RAGConfig:
         False  # Enable LLM-based intelligent chunking (requires LLM client)
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
-    vlm_model: str = DEFAULT_MODEL_NAME
+    vlm_model: str = field(default_factory=resolve_default_vision_model)
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
     # Security settings
