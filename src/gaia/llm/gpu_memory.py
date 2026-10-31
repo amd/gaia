@@ -402,6 +402,8 @@ class _Machine:
     carve_out_gb: float
     shared_gb: float
     windows_shared: bool
+    #: RAM the OS sees (Linux MemTotal), which can be less than installed RAM.
+    os_visible_gb: Optional[float] = None
 
     @property
     def setting_gb(self) -> float:
@@ -416,6 +418,8 @@ class _Machine:
             )
         else:
             cap = self.total_gb - RESERVE_GB - self.carve_out_gb
+            if self.os_visible_gb is not None:
+                cap = min(cap, self.os_visible_gb - RESERVE_GB)
         return float(max(0, math.floor(cap)))
 
     def gpu_gb_at(self, setting_gb: float) -> float:
@@ -429,23 +433,28 @@ class _Machine:
         return self.carve_out_gb + setting_gb
 
 
+def _meminfo_total_gb() -> float:
+    """Linux MemTotal in decimal GB: the RAM the OS sees, without the carve-out."""
+    meminfo = PATHS.proc / "meminfo"
+    try:
+        text = meminfo.read_text(encoding="ascii")
+    except OSError as e:
+        raise GpuMemoryError(f"Couldn't read {meminfo}: {e}") from e
+    match = re.search(r"^MemTotal:\s+(\d+)\s+kB", text, re.M)
+    if not match:
+        raise GpuMemoryError(f"{meminfo} has no MemTotal line.")
+    return int(match.group(1)) * 1024 / GB
+
+
 def _total_ram_gb(info: Dict[str, Any], carve_out_gb: float) -> float:
     from gaia.llm.model_fit import physical_memory_gb
 
     reported = physical_memory_gb(info)
     if reported > 0:
         return reported * GB_PER_GIB
-    meminfo = PATHS.proc / "meminfo"
     if _platform() == "linux":
-        try:
-            match = re.search(
-                r"^MemTotal:\s+(\d+)\s+kB", meminfo.read_text(encoding="ascii"), re.M
-            )
-        except OSError as e:
-            raise GpuMemoryError(f"Couldn't read {meminfo}: {e}") from e
-        if match:
-            # The OS doesn't count the carve-out; installed RAM does.
-            return int(match.group(1)) * 1024 / GB + carve_out_gb
+        # The OS doesn't count the carve-out; installed RAM does.
+        return _meminfo_total_gb() + carve_out_gb
     raise GpuMemoryError(
         "Couldn't tell how much memory this PC has: Lemonade didn't report "
         "'Physical Memory'. Update Lemonade (`gaia init`) and retry."
@@ -487,7 +496,7 @@ def _fit(model_id: str, requirement, memory_gb: float) -> Tuple[bool, float]:
         kv = kv_cache_for(requirement, capacity)
     return (
         check_fit(requirement.size_gb, capacity, kv).fits,
-        required_memory_gb(requirement.size_gb, kv),
+        required_memory_gb(requirement.size_gb, kv) * GB_PER_GIB,
     )
 
 
@@ -625,10 +634,9 @@ def _pending(
             else PENDING_NOT_APPLIED
         )
     else:
-        reached = abs(machine.setting_gb - state["setting_gb"])
         result = (
             PENDING_TOOK_EFFECT
-            if reached <= TOOK_EFFECT_TOLERANCE_GB
+            if _reached(machine, state["setting_gb"], state.get("previous_setting_gb"))
             else PENDING_NOT_APPLIED
         )
     return {
@@ -638,6 +646,21 @@ def _pending(
         "recorded_at": state.get("recorded_at"),
         "state": result,
     }
+
+
+def _reached(machine: _Machine, target: float, previous: Optional[float]) -> bool:
+    """Whether the split now reads as *target*.
+
+    On Windows the steps round up to AMD Software's whole GiB, so a raise
+    counts once the reading is at or above the target, and a cut once it is
+    at or below that rounded-up value.
+    """
+    now, tol = machine.setting_gb, TOOK_EFFECT_TOLERANCE_GB
+    if machine.os != "windows":
+        return abs(now - target) <= tol
+    if previous is None or target >= previous:
+        return now >= target - tol
+    return now <= math.ceil(target * GB / GIB) * GB_PER_GIB + tol
 
 
 def _record(
@@ -705,6 +728,7 @@ def _machine(info: Dict[str, Any], os_name: str):
         _Machine(
             os=os_name,
             total_gb=_total_ram_gb(info, carve_out),
+            os_visible_gb=_meminfo_total_gb() if os_name == "linux" else None,
             carve_out_gb=carve_out,
             shared_gb=split.shared_gb * GB_PER_GIB,
             windows_shared=split.reported_by == "windows",

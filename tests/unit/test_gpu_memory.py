@@ -10,6 +10,7 @@ reach pkexec, reg, bcdedit or the real system config.
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from pathlib import Path
 
@@ -96,6 +97,7 @@ class Sandbox:
         self.os = "linux"
         self.set_module("ttm", pages=LIVE_PAGES)
         self.cmdline("BOOT_IMAGE=/vmlinuz root=UUID=abc ro quiet splash")
+        self.meminfo(127.5)  # 128 GiB installed less the 0.5 GiB carve-out
         monkeypatch.setattr(
             gm,
             "PATHS",
@@ -129,6 +131,12 @@ class Sandbox:
             initstate.unlink(missing_ok=True)
         else:
             initstate.write_text("live\n", encoding="ascii")
+
+    def meminfo(self, gib: float):
+        kb = int(gib * 1024 * 1024)
+        (self.proc / "meminfo").write_text(
+            f"MemTotal:       {kb} kB\nMemFree:  1 kB\n", encoding="ascii"
+        )
 
     def cmdline(self, text: str):
         (self.proc / "cmdline").write_text(text + "\n", encoding="utf-8")
@@ -327,6 +335,7 @@ class TestLinuxSplit:
     def test_no_total_ram_anywhere_is_loud(self, box):
         info = linux_igpu(128, 62.5)
         del info["Physical Memory"]
+        (box.proc / "meminfo").unlink()
         with pytest.raises(gm.GpuMemoryError, match="meminfo"):
             gm.describe(info, LOCAL)
 
@@ -526,6 +535,43 @@ class TestAfterRestart:
         assert result["revert"]["available"] is True
 
 
+class TestEveryNumberIsTheSameUnit:
+    @pytest.mark.parametrize(
+        "total,gtt", [(16, 7.75), (32, 15.5), (48, 23.75), (64, 31.5), (128, 62.5)]
+    )
+    def test_fits_now_agrees_with_the_numbers_shown(self, box, total, gtt):
+        result = gm.describe(linux_igpu(total, gtt), LOCAL)
+        for m in result["models"]:
+            if abs(m["need_gb"] - result["gpu_gb"]) < 0.1:
+                continue  # one-decimal rounding can't decide a tie
+            assert m["fits_now"] == (m["need_gb"] <= result["gpu_gb"]), m
+
+    def test_need_is_decimal_gb(self, box):
+        mr = lc.find_model_requirement(QWEN)
+        need = model(gm.describe(box.info, LOCAL), QWEN)["need_gb"]
+        floor = model_fit.required_memory_gb(mr.size_gb) * GB_PER_GIB
+        assert need >= round(floor, 1)
+
+
+class TestLinuxCapUsesVisibleRam:
+    def test_memtotal_below_installed_ram_caps_the_limit(self, box):
+        box.meminfo(100)  # the OS sees 107.4 GB of the 137.4 GB installed
+        result = gm.describe(box.info, LOCAL)
+        assert result["setting"]["max_gb"] == 91  # 107.4 - 16
+        with pytest.raises(gm.OutOfRange, match="16 GB"):
+            gm.apply(100, confirm=True)
+        assert box.calls == []
+
+    def test_installed_ram_still_caps_when_lower(self, box):
+        box.meminfo(500)
+        assert gm.describe(box.info, LOCAL)["setting"]["max_gb"] == 120
+
+    def test_unreadable_meminfo_is_loud(self, box):
+        (box.proc / "meminfo").write_text("garbage\n", encoding="ascii")
+        with pytest.raises(gm.GpuMemoryError, match="MemTotal"):
+            gm.describe(box.info, LOCAL)
+
+
 class TestUnitsRoundTrip:
     """Lemonade reports GiB; the API's decimal GB must survive apply and restart."""
 
@@ -719,6 +765,38 @@ class TestWindows:
         windows["gb"] = 60.0  # the GiB the steps told the user to pick
         assert (
             gm.describe(box.info, LOCAL)["pending"]["state"] == gm.PENDING_TOOK_EFFECT
+        )
+
+    @pytest.mark.parametrize("target", [29, 43, 58, 72, 87, 101])
+    def test_following_the_steps_exactly_counts(self, box, windows, target):
+        steps = gm.record_pending(target)["guided_steps"]
+        gib = math.ceil(target * 1e9 / 2**30)
+        assert any(f"set it to {gib} GiB" in s for s in steps)
+        box.reboot()
+        windows["gb"] = float(gib)  # what the driver reads after the restart
+        assert (
+            gm.describe(box.info, LOCAL)["pending"]["state"] == gm.PENDING_TOOK_EFFECT
+        )
+
+    def test_a_raise_short_of_the_target_is_not_applied(self, box, windows):
+        gm.record_pending(64)
+        box.reboot()
+        windows["gb"] = 48.0
+        assert (
+            gm.describe(box.info, LOCAL)["pending"]["state"] == gm.PENDING_NOT_APPLIED
+        )
+
+    def test_a_cut_counts_at_or_below_the_rounded_target(self, box, windows):
+        windows["gb"] = 96.0
+        gm.record_pending(43)
+        box.reboot()
+        windows["gb"] = 40.0  # 43 GB rounds up to 41 GiB; 40 GiB is below it
+        assert (
+            gm.describe(box.info, LOCAL)["pending"]["state"] == gm.PENDING_TOOK_EFFECT
+        )
+        windows["gb"] = 64.0
+        assert (
+            gm.describe(box.info, LOCAL)["pending"]["state"] == gm.PENDING_NOT_APPLIED
         )
 
     def test_guided_record_has_no_undo(self, box, windows):
