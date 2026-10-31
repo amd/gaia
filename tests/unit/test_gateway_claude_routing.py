@@ -18,6 +18,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gaia.llm.gateway import read_stored_token as _real_read_stored_token
+
 GATEWAY_TOKEN = "gw-unit-test-token"
 ANTHROPIC_BASE = "https://llm-api.amd.com/Anthropic"
 
@@ -47,6 +49,9 @@ def _fake_anthropic():
     class APIConnectionError(Exception):
         pass
 
+    class APITimeoutError(APIConnectionError):
+        pass
+
     class Anthropic:
         last_init = None
 
@@ -61,6 +66,7 @@ def _fake_anthropic():
     mod.NotFoundError = NotFoundError
     mod.RateLimitError = RateLimitError
     mod.APIConnectionError = APIConnectionError
+    mod.APITimeoutError = APITimeoutError
     return mod
 
 
@@ -77,7 +83,7 @@ def gateway_env(monkeypatch, tmp_path):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv(gateway.GATEWAY_ENV_VAR, GATEWAY_TOKEN)
     monkeypatch.setattr(gateway, "GATEWAY_STATE_FILE", tmp_path / "gateway.json")
-    monkeypatch.setattr(gateway, "recall_token", lambda: None)
+    monkeypatch.setattr(gateway, "read_stored_token", lambda: None)
     monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: False)
     return gateway
 
@@ -231,7 +237,7 @@ def test_token_sources_in_order(fake_sdk, monkeypatch, gateway_env):
         == "from-gaia-env"
     )
     monkeypatch.delenv("GAIA_GATEWAY_TOKEN")
-    monkeypatch.setattr(gateway_env, "recall_token", lambda: "from-keyring")
+    monkeypatch.setattr(gateway_env, "read_stored_token", lambda: "from-keyring")
     _gateway_client()
     assert (
         fake_sdk.Anthropic.last_init["default_headers"]["Ocp-Apim-Subscription-Key"]
@@ -406,6 +412,26 @@ def test_missing_token_raises_and_never_falls_back(fake_sdk, monkeypatch, gatewa
     lemonade.assert_not_called()
 
 
+def test_unreadable_credential_store_says_so(fake_sdk, monkeypatch, gateway_env):
+    monkeypatch.delenv(gateway_env.GATEWAY_ENV_VAR)
+    monkeypatch.setattr(gateway_env, "read_stored_token", _real_read_stored_token)
+
+    def locked(_name):
+        raise RuntimeError("keyring is locked")
+
+    monkeypatch.setattr("gaia.connectors.store.peek_secret", locked)
+    with pytest.raises(gateway_env.GatewayError) as raised:
+        _gateway_client()
+    message = str(raised.value)
+    assert "keyring is locked" in message
+    assert "unlock the credential store" in message
+    assert "LEMONADE_AMD_API_KEY" in message and "GAIA_GATEWAY_TOKEN" in message
+    assert "No AMD LLM gateway token found" not in message
+    assert fake_sdk.Anthropic.last_init is None
+    # Callers that can prompt instead still get "no token".
+    assert gateway_env.recall_token() is None
+
+
 def test_unknown_gateway_host_refuses_to_send_the_token(fake_sdk, gateway_env):
     gateway_env.GatewayState(base_url="https://gw.example.com/v1").save()
     with pytest.raises(gateway_env.GatewayError, match="GAIA_GATEWAY_ANTHROPIC"):
@@ -469,6 +495,15 @@ def test_unreachable_gateway_names_the_vpn(fake_sdk):
     client._client.messages.create.side_effect = fake_sdk.APIConnectionError("dns")
     with pytest.raises(RuntimeError, match="VPN"):
         client.chat([{"role": "user", "content": "hi"}])
+
+
+def test_slow_gateway_is_a_timeout_not_a_vpn_problem(fake_sdk):
+    client = _gateway_client()
+    client._client.messages.create.side_effect = fake_sdk.APITimeoutError("slow")
+    with pytest.raises(RuntimeError, match="timed out") as raised:
+        client.chat([{"role": "user", "content": "hi"}])
+    assert "VPN" not in str(raised.value)
+    assert "300s" in str(raised.value)
 
 
 def test_not_a_gateway_claude_model_is_rejected(fake_sdk):

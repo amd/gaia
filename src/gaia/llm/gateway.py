@@ -481,6 +481,25 @@ def _no_credential_store_message(platform: Optional[str] = None) -> str:
     )
 
 
+def read_stored_token() -> Optional[str]:
+    """The remembered token, or None when none is stored.
+
+    Raises ``GatewayError`` when the OS credential store can't be read, so a
+    caller that has no prompt to fall back on can say why.
+    """
+    try:
+        from gaia.connectors.store import peek_secret
+
+        return peek_secret(GATEWAY_SECRET_NAME)
+    except Exception as e:  # noqa: BLE001 - keyring backends raise anything
+        raise GatewayError(
+            f"Could not read the gateway token from the OS credential store: {e}. "
+            f"Fix or unlock the credential store, or set {GATEWAY_ENV_VAR} or "
+            f"GAIA_GATEWAY_TOKEN in GAIA's environment. "
+            f"See https://amd-gaia.ai/docs/guides/llm-gateway."
+        ) from e
+
+
 def recall_token() -> Optional[str]:
     """The remembered token, or None when there is none.
 
@@ -489,11 +508,9 @@ def recall_token() -> Optional[str]:
     outcome either way. The reason is logged.
     """
     try:
-        from gaia.connectors.store import peek_secret
-
-        return peek_secret(GATEWAY_SECRET_NAME)
-    except Exception as e:  # noqa: BLE001 - degraded to "prompt me", never fatal
-        log.debug(f"Could not read the stored gateway token: {e}")
+        return read_stored_token()
+    except GatewayError as e:
+        log.debug(str(e))
         return None
 
 
@@ -555,8 +572,11 @@ def resolve_gateway_token() -> str:
     Same sources as the rest of GAIA, in order: ``LEMONADE_AMD_API_KEY``,
     ``GAIA_GATEWAY_TOKEN``, then the OS credential store.
     """
+    # No prompt to fall back on here, so a broken store must say so.
     token = (
-        os.getenv(GATEWAY_ENV_VAR) or os.getenv("GAIA_GATEWAY_TOKEN") or recall_token()
+        os.getenv(GATEWAY_ENV_VAR)
+        or os.getenv("GAIA_GATEWAY_TOKEN")
+        or read_stored_token()
     )
     if not token or not token.strip():
         raise GatewayError(

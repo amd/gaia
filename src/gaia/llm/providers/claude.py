@@ -1159,6 +1159,7 @@ class GatewayClaudeProvider(ClaudeProvider):
         # Before the base URL, so Local only is what a blocked user is told.
         assert_provider_permitted(self._DESTINATION)
         self._gateway_model = model
+        self._timeout = timeout
         self._base_url = gateway.gateway_anthropic_base_url()
         super().__init__(
             model=model,
@@ -1222,6 +1223,13 @@ class GatewayClaudeProvider(ClaudeProvider):
     def _raise_actionable(self, exc: Exception) -> None:
         sdk = self._anthropic
         where = f"the AMD LLM gateway at {self._base_url}"
+        # APITimeoutError subclasses APIConnectionError; a slow gateway isn't off-VPN.
+        if isinstance(exc, sdk.APITimeoutError):
+            raise RuntimeError(
+                f"{where} did not answer within {self._timeout:g}s, so the request "
+                "timed out. The gateway was reached but is slow or overloaded; "
+                "retry in a minute, and check `gaia gateway status` if it persists."
+            ) from exc
         if isinstance(exc, sdk.APIConnectionError):
             raise RuntimeError(
                 f"Could not reach {where}: {str(exc).rstrip('.')}. It needs "

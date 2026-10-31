@@ -165,8 +165,9 @@ What that means in practice:
 - **AMD's gateway only, unless you say otherwise.** If you registered a different
   gateway, set `GAIA_GATEWAY_ANTHROPIC_BASE_URL` to its Anthropic base URL. GAIA won't
   guess one, so your token can't go to a host it wasn't issued for.
-- **No silent fallback.** If the Anthropic route fails (bad token, model not deployed,
-  off VPN), the turn fails with an error that says what to fix. GAIA does not retry
+- **No silent fallback.** If the Anthropic route fails (bad token, a credential store
+  GAIA can't read, model not deployed, off VPN, timeout), the turn fails with an error
+  that says what to fix. GAIA does not retry
   through Lemonade, and a missing deployment is not recorded as `(unavailable)`.
 - **Streaming works.** Claude streams on this route, so the
   [Models that cannot stream](#models-that-cannot-stream) workaround never applies.
