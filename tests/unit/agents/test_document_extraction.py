@@ -1695,3 +1695,39 @@ def test_extraction_tool_reports_a_missing_source_without_asking(
     assert result["status"] == "error"
     assert "not found" in result["error"].lower(), result
     assert asked == []
+
+
+@pytest.mark.parametrize(
+    "model_id, effort",
+    [
+        ("amd.Qwen3.8-Flash-Next", "low"),
+        # Rejects "none"; its accepted values are unknown, so none is sent.
+        ("amd.gpt-5.3-chat", None),
+        ("amd.Claude-Opus-5.5", "none"),
+        ("amd.DeepSeek-V4.1-Flash", "none"),
+        ("fireworks.gemma-4-31b-it", None),
+    ],
+)
+def test_cloud_extraction_sends_only_an_effort_the_model_accepts(
+    agent, tmp_path, model_id, effort
+):
+    (tmp_path / "minutes.txt").write_text("alpha")
+    agent.model_id = model_id
+    agent._extraction_ledger = ExtractionLedger(
+        "List every item in minutes.txt", str(tmp_path)
+    )
+    agent._tool_reported_usage = []
+    agent._register_extraction_tool()
+    sent = []
+    agent.chat.send_messages.side_effect = lambda **kw: sent.append(kw) or MagicMock(
+        text=reply("alpha"), usage={"total_tokens": 10}, stats={}
+    )
+
+    result = agent._tools_registry["extract_document_items"]["function"]("minutes.txt")
+
+    assert result.get("status") != "error", result
+    assert sent
+    for kwargs in sent:
+        assert kwargs.get("reasoning_effort") == effort
+        assert ("reasoning_effort" in kwargs) == (effort is not None)
+        assert "repeat_penalty" not in kwargs

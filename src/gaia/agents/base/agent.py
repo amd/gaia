@@ -91,7 +91,6 @@ from gaia.agents.base.denied_effects import (
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.extraction import MAX_SECONDS as EXTRACTION_MAX_SECONDS
 from gaia.agents.base.extraction import MAX_TOKENS as EXTRACTION_MAX_TOKENS
-from gaia.agents.base.extraction import REASONING as EXTRACTION_REASONING
 from gaia.agents.base.extraction import (
     ExtractionLedger,
     extraction_response_format,
@@ -3421,20 +3420,24 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     raise ValueError("Extraction cancelled or superseded")
 
-            from gaia.llm.lemonade_client import cloud_model_provider
+            from gaia.llm.lemonade_client import (
+                cloud_lowest_reasoning_effort,
+                cloud_model_provider,
+            )
 
-            # A cloud reasoning model can spend its whole budget thinking about
-            # one dense page; copying quotes out of it needs little reasoning.
-            # Local anti-repetition penalties fight verbatim quote copying.
-            sampling = (
-                {"reasoning_effort": EXTRACTION_REASONING}
-                if cloud_model_provider(getattr(self, "model_id", None))
-                else {
+            model_id = getattr(self, "model_id", None)
+            if cloud_model_provider(model_id):
+                # A cloud reasoning model can spend its whole budget thinking
+                # about one dense page; copying quotes needs little reasoning.
+                effort = cloud_lowest_reasoning_effort(model_id)
+                sampling = {"reasoning_effort": effort} if effort else {}
+            else:
+                # Local anti-repetition penalties fight verbatim quote copying.
+                sampling = {
                     "frequency_penalty": 0.0,
                     "presence_penalty": 0.0,
                     "repeat_penalty": 1.0,
                 }
-            )
 
             def send(system, prompt, options):
                 check()
@@ -3462,16 +3465,6 @@ Do NOT wrap conversational replies in JSON.
 
             def ask(system, prompt):
                 response, exhausted = send(system, prompt, sampling)
-                if exhausted and sampling.get("reasoning_effort") not in (None, "none"):
-                    # Copying quotes needs no reasoning; retry this page without it.
-                    logger.warning(
-                        "Extraction page used its %d-token budget reasoning; "
-                        "retrying the page with reasoning_effort=none",
-                        EXTRACTION_MAX_TOKENS,
-                    )
-                    response, exhausted = send(
-                        system, prompt, {**sampling, "reasoning_effort": "none"}
-                    )
                 if exhausted:
                     raise ValueError(
                         f"Extraction reply used its whole {EXTRACTION_MAX_TOKENS}-token "
