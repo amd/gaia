@@ -3002,9 +3002,10 @@ Skills are discovered from three roots, highest precedence first:
     | `publisher` | `community` | A publisher you trust |
     | `amd` | `verified` | The AMD signing root |
 
-    The trust store ships **empty** — no AMD key is bundled. Until an operator adds
-    one, every skill installs at `experimental`, which is the honest floor rather
-    than a placeholder that would make `verified` look anchored when it is not.
+    GAIA trusts one key out of the box: the AMD key that signs the skills GAIA
+    publishes (`hub/skills/`), listed as `AMD (built-in)`. It cannot be removed;
+    adding it yourself with `--role publisher` demotes it on your machine. Every
+    other key installs at `experimental` until you trust it.
   </Tab>
 </Tabs>
 
