@@ -403,13 +403,14 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 | GitHub Release | normal, becomes latest | pre-release, never latest |
 | PyPI | `<version>` | `<version>rcN` — `pip install amd-gaia` ignores it without `--pre` |
 | npm `@amd-gaia/agent-ui` | dist-tag `latest` | `<version>-rc.N` under dist-tag `next` |
-| `release_components.yml` | attaches the terminal installers to the release; publishes only the terminal's raw binaries to the Agent Hub (R2), where the flagship lock pins them | does not run — the catalog has no pre-release channel |
+| Installers (Windows setup, `.pkg`, `.deb`/`.rpm`) | built and attached by `publish.yml`, around the flagship the lock pins; no approval beyond `approve-publish` | built and attached by `publish.yml`, around the RC's own flagship |
+| `release_components.yml` | publishes only the terminal's raw binaries to the Agent Hub (R2), where the flagship lock pins them, behind the `agent-publish` approval; attaches nothing on a tag | does not run — the catalog has no pre-release channel |
 | Website | stable downloads | a collapsed "Try the release candidate" entry, hidden once the final ships |
 | Flagship agent (`gaia-agent`) | the hub's, from `release_agent_gaia.yml` | frozen from the RC's commit by `rc-flagship`, attached to the pre-release; the RC core installs it from there and never from the hub |
 | `release` branch, release-notes bot | run | skipped |
 | Release notes | `docs/releases/v<version>.mdx` | the same file — no RC-specific notes |
 
-`version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. The RC carries the terminal's `.pkg` (arm64 + x64) and `.deb`/`.rpm`, named `gaia-X.Y.Z-rc.N-darwin-<arch>.pkg`, `gaia_X.Y.Z-rc.N_amd64.deb` and `gaia-X.Y.Z-rc.N.x86_64.rpm` with `gaia-installers-SHA256SUMS.txt`: `publish.yml`'s `rc-tui` builds them around the RC's own flagship, `approve-publish` refuses to publish unless every leg installed cleanly, and `rc-github-release-installers` attaches them. Inside, the `.deb`/`.rpm` say `X.Y.Z~rc.N`, so the final upgrades over them (`installer/tui/linux/README.md`). It also carries the one-step Windows setup (`gaia-X.Y.Z-rc.N-win-x64-setup.exe`, built by `publish.yml`'s `rc-windows-setup` around that run's own desktop app build — never published to R2), the desktop app installers, the raw terminal binaries, and the wheel/sdist. A failed setup leaves it off the pre-release and turns the run red via `rc-windows-setup-missing`.
+`version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. Every tag, RC or final, carries the terminal's `.pkg` (arm64 + x64) and `.deb`/`.rpm` with `gaia-installers-SHA256SUMS.txt` — for an RC named `gaia-X.Y.Z-rc.N-darwin-<arch>.pkg`, `gaia_X.Y.Z-rc.N_amd64.deb` and `gaia-X.Y.Z-rc.N.x86_64.rpm`: `publish.yml`'s `tui-installers` builds them (around the RC's own flagship, or for a final the one the lock pins), `approve-publish` refuses to publish unless every leg installed cleanly, and `github-release-installers` attaches them. Inside, an RC's `.deb`/`.rpm` say `X.Y.Z~rc.N`, so the final upgrades over them (`installer/tui/linux/README.md`). Every tag also carries the one-step Windows setup (`gaia-<npm version>-win-x64-setup.exe`, built by `publish.yml`'s `windows-setup` around that run's own desktop app build — never published to R2), the desktop app installers, the raw terminal binaries, and the wheel/sdist. A failed setup leaves it off the release and turns the run red via `windows-setup-missing`. None of the installer jobs takes an environment, so a final's installers never wait on `release_components.yml`'s `agent-publish` approval.
 
 ### Steps
 
@@ -481,7 +482,7 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
    gh run list --repo amd/gaia --workflow publish.yml --limit 3
    ```
 
-   The flow is: `validate → build (build-pypi + build-npm + build-desktop-installers) + ci-green → approve-publish (manual gate for a final; none for an RC) → publish (publish-pypi + publish-npm) → post-publish-smoke → github-release`. Surface the run URL.
+   The flow is: `validate → build (build-pypi + build-npm + build-desktop-installers + tui-installers → windows-setup) + ci-green → approve-publish (manual gate for a final; none for an RC) → publish (publish-pypi + publish-npm) → post-publish-smoke → github-release (attaches the Windows setup) → github-release-installers (the .pkg/.deb/.rpm) → redeploy-website`. The installer jobs run for a final too and take no environment, so `approve-publish` is the final's only approval in this run. Surface the run URL.
 
    `ci-green` requires a passing run of `lint.yml`, `test_unit.yml` and `test_gaia_cli_linux.yml` on the tagged commit (`util/check_release_ci.py`). Most main commits have none (the next merge cancels their runs), so it dispatches the missing ones against the tag and waits up to ~80 min alongside the builds. A red one stops the release before anything publishes.
 
@@ -504,7 +505,7 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
 
 4. **Manual approval gate (finals only)** — when the run reaches the `approve-publish` job (gated on the `publish` GitHub environment), surface the URL to the user. Tell them: **"Manual approval required at <url>. Claude cannot click this — please approve in browser when ready."** Then wait.
 
-5. **After approval**, PyPI + npm + GitHub Release jobs run in parallel. Watch to completion.
+5. **After approval**, PyPI + npm + GitHub Release jobs run in parallel, then the terminal installers attach and the website redeploys. Watch to completion. `release_components.yml` runs separately on the same final tag and waits on its own `agent-publish` approval to publish the terminal's raw binaries to the Agent Hub; the release's installers and the website do not wait on it.
 
 6. **Context7 is not refreshed by the release.** GAIA's docs exceed the size Context7 refreshes automatically (its API answers HTTP 403 "exceeds the size limit for automatic refresh"), so the pipeline no longer asks. If Context7's copy of the docs is stale after a release, request a manual refresh with an issue on https://github.com/upstash/context7. It never blocks or reddens a release.
 
