@@ -99,7 +99,7 @@ STDIO_ARGV: list[str] = []
 #: runner must not read as a broken binary.
 STDIO_HANDSHAKE_DEADLINE_S = 300.0
 
-#: ``gaia_agent_chat.python_runner.RUN_PYTHON_FILE_FLAG``, copied because this
+#: ``gaia_agent.python_runner.RUN_PYTHON_FILE_FLAG``, copied because this
 #: harness imports nothing outside the stdlib (a unit test pins the two).
 RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
 

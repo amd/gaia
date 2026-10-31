@@ -422,8 +422,13 @@ def resolve_caller_dev_src_dir(
             capture_output=True,
             text=True,
             check=True,
+            timeout=30,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+    ) as exc:
         raise DevSrcDirResolutionError(
             f"could not determine your checkout root from {resolved_cwd} "
             f"({exc}). Run this command from inside a git work tree, or pass "

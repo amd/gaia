@@ -71,9 +71,10 @@ class TestFormatUserErrorFiltering:
         expected_paths = [
             "gaia/agents/base",
             "gaia/agents/tools",
-            # Hub agents: chat/gaia/email ship as wheels, filtered via
-            # gaia_agent_chat / site-packages / the hub editable path.
+            # Hub agents: gaia/email ship as wheels, filtered via the
+            # package name / site-packages / the hub editable path.
             "hub/agents/",
+            "gaia_agent/",
             "gaia_agent_chat",
             "site-packages/",
         ]

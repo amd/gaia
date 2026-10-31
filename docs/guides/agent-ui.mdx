@@ -109,7 +109,8 @@ queue above the message box, then goes out as its own turn as soon as the reply
 ends, in the order you typed. To add a detail to the work already running, press
 **Add to this reply** on a queued message: GAIA reads it at its next step
 without starting over, though it may not answer it separately. If the reply
-ends before reading it, it goes back in the queue. Press Stop and anything still
+ends before reading it, it goes back in the queue. If the reply can't take it,
+the message says so and waits to go out when the reply ends. Press Stop and anything still
 queued goes back into the message box.
 
 Each chat keeps its own queue. Switch to another chat and the queued messages
@@ -151,6 +152,15 @@ library, so one chat's files don't leak into another's answers. The library
 says where the documents you add go: the open chat, or your next new chat. A
 new chat lists the library's documents and offers to attach them; picking
 **Ask about your documents** attaches them all.
+
+While a large document indexes, its row in the library shows how far it has
+got: "Reading page 37 of 229" for a PDF, then "Embedding 412 of 1,180", each
+with a percent. Formats without a page count show a moving bar and the count
+so far.
+
+When an answer names a document from your library, the name is a link that
+opens the document, and each page it cites ("pages 175 and 205", "الصفحتان
+6–7") opens that page. In the desktop app they open in your web browser.
 
 ---
 
@@ -443,10 +453,15 @@ Open **Settings → Model** (or the model chip in the message box):
 | **Fireworks AI** | An API key | Sent to Fireworks AI (usage may be charged) |
 | **AMD LLM Gateway** | A gateway key (and URL, if not the default) | Sent to your gateway |
 
+- With [Local only](/reference/cli#local-only) on (`gaia config set network_policy local_ai_only`),
+  connecting Fireworks AI or the gateway and selecting a cloud model are refused
+  with a message saying so, and a saved cloud model isn't restored. Settings has no
+  switch for it yet; use the command.
 - Keys are masked, go only to GAIA's local model server and your OS credential
-  store, and are refused over mobile access. When a key is already set (in the
-  environment or from the TUI) the screen says so; leave the field blank to keep
-  using it. **Forget key** removes it here and for future sessions.
+  store, and are refused over mobile access. A saved key shows as a read-only row with
+  its last four characters and whether it's connected. **Replace** swaps it, and
+  the trash button removes it here and for future sessions. A key set in the
+  environment shows where it's set and can only be changed there.
 - On macOS, the first read of a saved key after reinstalling GAIA opens a
   Keychain dialog. Until you answer it, the model list says macOS is asking for
   keychain access instead of offering to add a key. Click **Always Allow** and
@@ -548,11 +563,22 @@ delete, `git add` — still asks, and runs only when you allow it.
 **Settings → Permissions** lists every chat with full access or "always allow"
 answers and lets you revoke them. Grants end when GAIA restarts.
 
+The same pane has **Start new chats in full access**, off by default. Turning
+it on asks you to confirm a plain warning first; turning it off takes one
+click. It sets the same `full_access` option as the TUI's `/full-access always`.
+The next new chat follows it right away, unless you already picked a mode on
+the message box's shield for that chat. Chats already open keep their mode. It
+can only be changed on the PC running GAIA, not from a phone over mobile access.
+
 A Hub-installed GAIA, which runs as its own process, follows the chat's mode
 too, from agent contract 2.14. It stops asking, but its shell guardrails stay
 on, so those commands still reach you as a confirmation. If the mode can't be
 passed on when a turn starts, that turn stops with an error, so it never runs
 with full access you turned off.
+
+From agent contract 2.26 it offers **Always allow** as well. Its grants are
+listed and revoked with the chat's own, and one the chat doesn't list (say,
+from before the Agent UI restarted) is revoked before the next reply runs.
 
 ## The session panel
 
@@ -606,7 +632,8 @@ reads nothing.
   - **Phone access:** turns mobile access on or off, shows the QR code, and
     names the phone that connected.
   - **Permission mode:** Ask or Full access, the same setting as the shield in
-    the message box.
+    the message box. It covers this chat only; new chats follow **Settings →
+    Permissions**.
 
   A Hub-installed GAIA, which runs as its own process, is held to the
   internet setting. It can be given another folder, but a folder can't be
@@ -688,7 +715,7 @@ much they use now.
 
 ## Settings
 
-One window with General (appearance: Light, Dark, Match system; colors; the
+One window with General (language; appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
 Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, or your Claude Code skill folders, with **Use** to try one),
 Connectors, Memory, Notifications, Privacy and Advanced (model server and
@@ -733,6 +760,14 @@ instead (Stone and ink, Blue marble, Glacier, Forest floor, Sage and mist,
 Basalt and lichen, Graphite and gold, Dusk), or **Custom** to choose your own
 accent and background tint. Each works in light and dark, and with custom
 colors the text shades adjust on their own so everything stays readable.
+
+**Language** switches the app's labels between **English** and **العربية
+(Arabic)**. In Arabic the whole layout reads right to left, with the sidebar on
+the right, and each label keeps its English in brackets, such as "محادثة جديدة
+(New chat)". It changes the app, not the language GAIA answers in, and this
+device remembers it. In either language, each paragraph of an answer runs in
+its own direction, so an answer mixing Arabic and English shows each part the
+right way round, and code always reads left to right.
 
 Before you pick a cloud model, setup and **Settings → Model** show what it
 costs per million tokens at the provider's list price; a model with no

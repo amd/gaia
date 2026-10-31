@@ -7,7 +7,8 @@ GAIA's terminal UI offers **Local**, **Fireworks AI**, and **AMD LLM Gateway**.
 Lemonade runs local models and routes cloud chat requests. The header names the
 active provider and marks remote inference; document and memory embeddings stay
 on your Lemonade server. With a cloud chat model selected, GAIA does not load a
-local chat model when it starts.
+local chat model when it starts. [Local only](#keep-every-ai-request-off-the-cloud)
+turns the cloud choices off.
 
 ## Connect from the TUI
 
@@ -226,6 +227,20 @@ published, and an unpublished number is not a citable measurement. Fireworks cha
 still sends conversation history to Fireworks and incurs usage charges — see
 [`/cost`](/guides/tui#what-a-session-costs) for what a session has spent.
 
+## Keep every AI request off the cloud
+
+To guarantee that no AI request reaches a cloud model, turn on **Local only**:
+
+```bash
+gaia config set network_policy local_ai_only
+```
+
+GAIA then refuses Fireworks AI, the AMD LLM Gateway and Claude models, stops
+handing your saved keys to Lemonade, and says why when you try. `/provider` and
+the Agent UI won't connect a cloud provider or switch to a cloud model. Undo it
+with `gaia config set network_policy cloud_allowed`. Details and limits:
+[Local only](/reference/cli#local-only).
+
 ## Keys and settings
 
 - A pasted key that connects is **kept in your OS credential store** (Windows
@@ -233,9 +248,15 @@ still sends conversation history to Fireworks and incurs usage charges — see
   TUI and every restarted Lemonade gets it back without asking. Lemonade itself
   holds the key in memory only; GAIA hands it over again when a chat starts on a
   cloud model, when you open `/provider`, and when GAIA's Lemonade restarts while
-  a cloud chat is open. A key that discovers no models is not
-  kept. GAIA never writes a key to config files, transcripts, control logs,
+  a cloud chat is open. A key Fireworks AI or the gateway rejects is not kept.
+  GAIA never writes a key to config files, transcripts, control logs,
   traces, or command-line arguments.
+- If Fireworks AI's model list fails but your key was not rejected, the Agent UI
+  says so and keeps the key. GAIA's own Lemonade then restarts with the Fireworks
+  models GAIA already knows, and any model loaded at that moment is unloaded. A
+  note in Settings says the list may be out of date, and the next time GAIA's
+  Lemonade starts after the list recovers, it goes back to the live list. While
+  this is active, the key is in the environment of GAIA's Lemonade process.
 - A key only goes to GAIA's own running Lemonade, to the server named in
   `LEMONADE_BASE_URL`, or to the system Lemonade when GAIA's own isn't installed.
   It never goes to whatever answers on port 13305 or 8000. If GAIA's Lemonade is

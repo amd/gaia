@@ -31,6 +31,7 @@ from gaia.config import (
     unsafe_gaia_home_reason,
 )
 from gaia.llm.lemonade_embedded import gaia_home
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
 from gaia.utils.user_folders import documents_dir
 
 from .models import (
@@ -62,8 +63,10 @@ logger = logging.getLogger(__name__)
 #   .xls (legacy BIFF) — openpyxl only handles .xlsx; would raise on open
 # NOTE: .pptx and .docx ARE supported — python-pptx and python-docx ship with
 # GAIA. See ``_UNSUPPORTED_CATEGORIES`` below for the user-facing rejection hint.
-# Image formats are tracked by issue #730 (VLM-based indexing).
-ALLOWED_EXTENSIONS = frozenset(
+#
+# FOLDER_INDEX_EXTENSIONS is what a folder walk indexes. Images are indexable
+# only when the user picks the file (see ``gaia.utils.image_formats``).
+FOLDER_INDEX_EXTENSIONS = frozenset(
     {
         ".pdf",
         ".pptx",
@@ -102,6 +105,8 @@ ALLOWED_EXTENSIONS = frozenset(
         ".toml",
     }
 )
+
+ALLOWED_EXTENSIONS = FOLDER_INDEX_EXTENSIONS | IMAGE_EXTENSIONS
 
 # Text file extensions for preview endpoint
 TEXT_EXTENSIONS = frozenset(
@@ -333,20 +338,9 @@ def sanitize_document_path(user_path: str) -> Path:
         # Provide categorized feedback for common unsupported types
         _UNSUPPORTED_CATEGORIES = {
             "image": (
-                {
-                    ".jpg",
-                    ".jpeg",
-                    ".png",
-                    ".gif",
-                    ".bmp",
-                    ".tiff",
-                    ".webp",
-                    ".ico",
-                    ".heic",
-                    ".heif",
-                },
-                "Image files cannot be indexed for text search. "
-                "Tip: If your images contain text, convert them to PDF first — GAIA can extract text from PDFs.",
+                {".ico", ".heic", ".heif"},
+                "This image format cannot be indexed. "
+                "Tip: Convert it to PNG or JPEG — GAIA reads the text in those images.",
             ),
             "video": (
                 {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
@@ -395,7 +389,7 @@ def sanitize_document_path(user_path: str) -> Path:
         detail = (
             f"{hint} "
             f"Supported formats: PDF, DOCX, PPTX, XLSX, EPUB, TXT, MD, CSV, JSON, "
-            f"HTML, XML, YAML, and 30+ code file formats. "
+            f"HTML, XML, YAML, images (PNG, JPG, WEBP, ...), and 30+ code file formats. "
             f"Want support for {category + ' files' if category else 'this file type'}? "
             f"Request it at https://github.com/amd/gaia/issues/new?title=[Feature]%20Support%20{ext}%20file%20indexing"
         )
@@ -537,7 +531,7 @@ class UploadStaticFiles(StaticFiles):
         return response
 
 
-_UPLOAD_LINK_RE = re.compile(
+UPLOAD_LINK_RE = re.compile(
     r"(?P<bang>!?)\[(?P<label>[^\]\n]*)\]\("
     + re.escape(UPLOAD_URL_PREFIX)
     + r"(?P<name>[^)\s]+)\)"
@@ -567,7 +561,7 @@ def resolve_upload_links(message: str) -> str:
             return match.group(0)
         return f"{match.group('bang')}[{match.group('label')}]({path})"
 
-    return _UPLOAD_LINK_RE.sub(_sub, message)
+    return UPLOAD_LINK_RE.sub(_sub, message)
 
 
 def attached_upload_paths(message: str) -> List[str]:

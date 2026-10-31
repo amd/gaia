@@ -14,24 +14,20 @@ license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
 # Floors:
-# - amd-gaia>=0.25.1: the chat agent this one subclasses imports
+# - amd-gaia>=0.25.1: ChatAgent (gaia_agent.chat_agent) imports
 #   gaia.agents.tools.reasoning_tools, which 0.25.1 is the first core to ship.
 #   (0.25.0 added gaia.agents.tools.path_access, #4656; 0.24.1 was the first
 #   core whose daemon can supervise this sidecar, #2932.) Raise it in step
 #   with min_gaia_version, never ahead of a real release.
-# - gaia-agent-chat>=0.2.0: the first chat release with that floor.
-# - gaia-agent-chat is a HARD dependency, not an extra: GaiaAgent subclasses
-#   ChatAgent to inherit the doc prompt profile, RAG discovery, and session
-#   persistence rather than forking them. Importing this package without it is
-#   not a degraded mode, it is an ImportError.
 #
-# Intentionally bare `amd-gaia` (no `[rag]` marker), same reasoning as
-# gaia-agent-chat: a plain pip install must not drag faiss/pymupdf in just to
-# import the class. RAG's real dependencies come from `gaia init` into the
-# active interpreter (#2358).
+# ChatAgent lives in this package (#6099); it no longer depends on
+# gaia-agent-chat, which is now a deprecated re-export shim of this one.
+#
+# Intentionally bare `amd-gaia` (no `[rag]` marker): a plain pip install must
+# not drag faiss/pymupdf in just to import the class. RAG's real dependencies
+# come from `gaia init` into the active interpreter (#2358).
 dependencies = [
-  "amd-gaia>=0.25.3",
-  "gaia-agent-chat>=0.2.0",
+  "amd-gaia>=0.25.4",
 ]
 
 [project.scripts]
@@ -48,10 +44,15 @@ gaia-agent = "gaia_agent.entry:main"
 gaia = "gaia_agent:build_gaia"
 
 [project.optional-dependencies]
-test = ["pytest"]
+# setuptools: tests/test_starter_skill_build.py runs the real build hooks.
+test = ["pytest", "setuptools>=70.0"]
 
 [tool.setuptools.packages.find]
 include = ["gaia_agent*"]
+
+[tool.setuptools.cmdclass]
+build_py = "gaia_agent.build.build_py"
+sdist = "gaia_agent.build.sdist"
 
 [tool.setuptools.package-data]
 # The manifest and bundled skills must land inside the package so they survive

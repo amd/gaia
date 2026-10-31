@@ -58,6 +58,14 @@ def selects_http(argv: List[str]) -> bool:
     )
 
 
+def _configure_logging() -> None:
+    try:
+        from gaia.logger import configure
+    except ImportError:  # older amd-gaia sets up logging on import; the pin allows it
+        return
+    configure()
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Dispatch this process onto one of the agent's two transports.
 
@@ -94,6 +102,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if selects_http(args):
         # Imported here, not at module scope: this is the branch that may use
         # FastAPI, and it is the only one that should have to have it.
+        _configure_logging()
         from gaia_agent.server import serve_http
 
         return serve_http(args)
@@ -106,6 +115,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # log to it — a stray line reaches the reader as a malformed event.
     from gaia.logger import route_console_logging_to_stderr
 
+    # This transport owns the process too, so install GAIA's handlers before
+    # moving them: route_console_logging_to_stderr() only moves handlers that
+    # configure() created.
+    _configure_logging()
     route_console_logging_to_stderr()
 
     from gaia_agent.stdio import main as stdio_main

@@ -25,6 +25,7 @@ import re as _re
 import sqlite3
 import threading
 import time as _time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Optional, Tuple
@@ -32,8 +33,7 @@ from typing import Any, Callable, ContextManager, Optional, Tuple
 from fastapi import HTTPException
 
 from gaia.agents.install_hints import (
-    CHAT_WHEEL_AGENT_IDS,
-    agent_import_error_message,
+    LEGACY_FLAGSHIP_AGENT_IDS,
     agent_not_installed_message,
 )
 from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
@@ -63,6 +63,8 @@ from gaia.ui.email_sidecar.profiles import (
     confirmations_supported,
     context_supported,
     documents_supported,
+    followups_supported,
+    grants_supported,
     internet_supported,
     memory_supported,
     profile_for,
@@ -94,38 +96,10 @@ from .session_environment import (
 )
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
-from .utils import attached_upload_paths, managed_documents_dir
+from .utils import UPLOAD_LINK_RE, attached_upload_paths, managed_documents_dir
 from .warmup import wait_for_warm_up
 
 logger = logging.getLogger(__name__)
-
-
-def _stamp_chat_identity(config) -> None:
-    """Inject ``namespaced_agent_id="installed:chat"`` into a ``ChatAgentConfig``
-    BEFORE ``ChatAgent(config)`` is constructed.
-
-    Must be applied to the *config*, not to the instance after construction.
-    The connectors activation filter (``Agent._active_mcp_servers`` →
-    ``MCPClientManager.servers_for_agent``) is consulted inside
-    ``ChatAgent.__init__`` → ``super().__init__`` → ``_register_tools``,
-    so the agent must already know its namespaced id by the time
-    ``_register_tools`` runs. A post-construction stamp on the instance
-    is too late — ``_register_tools`` has already loaded the unfiltered
-    MCP-tool set.
-
-    ``ChatAgent.__init__`` reads ``config.namespaced_agent_id`` at its top
-    and sets ``self._gaia_namespaced_agent_id`` from it before invoking
-    ``super().__init__``. This helper just centralises the
-    ``"installed:chat"`` literal so every direct-construction site in this
-    module uses the same value the registry assigns the gaia-agent-chat wheel
-    (#1102) and a fifth caller can't forget.
-
-    Idempotent — only sets the field if it is still its default ``None``,
-    so callers that already set a custom namespaced id (e.g. a future
-    custom-Chat wrapper) are not clobbered.
-    """
-    if getattr(config, "namespaced_agent_id", None) is None:
-        config.namespaced_agent_id = "installed:chat"
 
 
 def _register_agent_memory_ops(agent) -> None:
@@ -594,26 +568,57 @@ _classify_chat_exception = classify_lemonade_exception
 #
 # When the server takes a chat's first message, the chat is named after that
 # question at once (_set_provisional_title), so it has a name even if nobody
-# is watching when the answer finishes. After the agent finishes a turn, a
-# background task asks the model the turn ran on (the default chat model if
-# that one is a safety classifier) for a 3-6 word title, then updates the
-# session. It fires only while the title is a placeholder ("New Chat" /
-# "New Task" / "Untitled") or still the provisional one: once named, a chat
-# keeps its name, so the sidebar never drifts to the latest question. The
-# title is always drawn from the chat's first question, even if that turn was
-# stopped.
+# is watching when the answer finishes. A background task then asks the model
+# the turn runs on (the default chat model if that one is a safety classifier)
+# for a 3-6 word title and updates the session. A cloud model is asked as the
+# turn starts, from the question alone; a local one only after the turn ends,
+# because a local title could take the model before the answer's first call
+# and delay its first token. It fires only while the title is a placeholder
+# ("New Chat" / "New Task" / "Untitled") or still the provisional one: once
+# named, a chat keeps its name, so the sidebar never drifts to the latest
+# question. The title is always drawn from the chat's first question, even if
+# that turn was stopped.
 #
 # Skipped when:
 #   * The session's title_is_custom flag is set — an explicit user/API title
 #     is pinned forever (#2165)
 #   * Title starts with "Eval:" — those are owned by the eval framework
-#   * A title request already ran for the session in this server run — a
-#     failed one is not retried, so a cloud chat is not billed every turn,
-#     and concurrent fire-and-forget tasks don't pile up
+#   * A title request is already running for the session, so concurrent
+#     fire-and-forget tasks don't pile up
+#   * The model already titled it, or replied with the name it has
+#     (_AUTO_TITLE_SETTLED)
+#   * Its title requests failed _AUTO_TITLE_MAX_TRIES times in this server
+#     run, so a cloud chat is not billed every turn
+#   * It was asked for a title _AUTO_TITLE_MAX_ATTEMPTS times in this server
+#     run, whatever came of them, so no reply (small talk, a busy model) can
+#     bill a chat every turn
 #   * No agent / no Lemonade base URL available
+#
+# A new turn cancels the chat's pending after-turn title: that turn's own
+# after-turn title replaces it, and it can't wait into the turn's steps.
 _AUTO_TITLE_DEFAULTS = PLACEHOLDER_TITLES
 _AUTO_TITLE_LOCK = threading.Lock()
-_AUTO_TITLE_TRIED: set[str] = set()  # sessions that had their title request
+_AUTO_TITLE_RUNNING: set[str] = set()
+_AUTO_TITLE_FAILURES: dict[str, int] = {}
+_AUTO_TITLE_MAX_TRIES = 3
+_AUTO_TITLE_ATTEMPTS: dict[str, int] = {}
+_AUTO_TITLE_MAX_ATTEMPTS = 10
+_AUTO_TITLE_SETTLED: set[str] = set()
+_AUTO_TITLE_PENDING: dict[str, asyncio.Task] = {}
+#: While another request holds the model, a title waits this many times (30 s
+#: each), this many seconds apart (~6 min in all), then leaves it to the chat's
+#: next turn. A one-slot local model waits once: a later title could land
+#: between steps of the next turn and evict the conversation's cache.
+_TITLE_BUSY_TRIES = 8
+_TITLE_BUSY_RETRY_S = 15
+
+
+class _TitleModelBusy(Exception):
+    """The title's wait for the model slot hit its limit: the model is in use."""
+
+
+class _NoTopicYet(Exception):
+    """The chat so far is a greeting or small talk, with nothing to name it by."""
 
 
 #: Safety-classifier model families. They answer any prompt with a verdict
@@ -634,8 +639,8 @@ _CLASSIFIER_VERDICT_RE = _re.compile(
     r"^(safe|unsafe|yes|no)([\s,:]+s\d+)*$", _re.IGNORECASE
 )
 _QUESTION_TITLE_MAX_CHARS = 60
-#: An attachment link the composer appends: ``[name](target)``.
-_MARKDOWN_LINK_RE = _re.compile(r"\[([^\]]*)\]\([^)]*\)")
+#: A link or image the user typed: ``[text](target)`` / ``![alt](target)``.
+_MARKDOWN_LINK_RE = _re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
 #: A cloud model may reason before it answers, and only some providers let a
 #: request turn that off; this leaves room for the reasoning and the title.
 _CLOUD_TITLE_MAX_TOKENS = 512
@@ -678,8 +683,16 @@ def _title_model_for(session_model: str) -> Optional[str]:
 
 
 def _title_from_question(user_msg: str) -> Optional[str]:
-    """The first question itself, cut at a word boundary, as a title."""
-    text = " ".join(_MARKDOWN_LINK_RE.sub(r"\1", user_msg or "").split())
+    """The first question itself, cut at a word boundary, as a title.
+
+    Only the user's own words count: the attachment links the composer appends
+    are dropped, and a message of attachments alone is named by its first file.
+    """
+    user_msg = user_msg or ""
+    words = UPLOAD_LINK_RE.sub(" ", user_msg)
+    text = " ".join(_MARKDOWN_LINK_RE.sub(r"\1", words).split())
+    if not text and (first := UPLOAD_LINK_RE.search(user_msg)):
+        text = first.group("label").strip() or first.group("name")
     if len(text) > _QUESTION_TITLE_MAX_CHARS:
         cut = text[:_QUESTION_TITLE_MAX_CHARS]
         text = (cut.rsplit(" ", 1)[0] or cut) + "…"
@@ -703,6 +716,15 @@ def _should_retitle(
     return not title or title.lower() in _AUTO_TITLE_DEFAULTS
 
 
+def _same_title(a: str, b: str) -> bool:
+    """True when two titles differ only in case, spacing, quotes or end punctuation."""
+
+    def _norm(title: str) -> str:
+        return " ".join(title.split()).strip("\"'`*.!?;:,").strip().casefold()
+
+    return _norm(a or "") == _norm(b or "")
+
+
 def _set_provisional_title(db: ChatDatabase, session_id: str, user_msg: str) -> None:
     """Name a still-untitled chat after the question the server just took."""
     title = _title_from_question(user_msg)
@@ -715,6 +737,7 @@ async def _generate_session_title(
     model_id: str,
     user_msg: str,
     assistant_msg: str,
+    latest_msg: str = "",
 ) -> Optional[str]:
     """Ask the chat's model for a short tab-style title.
 
@@ -725,10 +748,11 @@ async def _generate_session_title(
     model: when *model_id* is not loaded, the first question is the title.
 
     Returns the cleaned title (≤ 64 chars, no quotes, no trailing
-    punctuation), the first question for an empty reply or a classifier
-    verdict ("safe", "unsafe S1"), or None when the request fails. The
-    request itself times out at 30 s; the wait for the model slot before it
-    is the broker's.
+    punctuation), the first question when the model is not loaded, or None
+    when the request fails or its reply is no title (empty, or a classifier
+    verdict like "safe"). Raises :class:`_TitleModelBusy` when the model slot
+    stays taken through the 30 s wait, and :class:`_NoTopicYet` when the user
+    has asked for nothing yet. The request itself times out at 30 s.
     """
     from contextlib import nullcontext
 
@@ -743,12 +767,21 @@ async def _generate_session_title(
         no_thinking_kwargs,
     )
 
+    # As the turn starts there is no answer yet: the question alone names it.
+    answer = f"Assistant: {assistant_msg[:200]}\n" if assistant_msg else ""
+    latest = (
+        f"User: {latest_msg[:400]}\n" if latest_msg and latest_msg != user_msg else ""
+    )
     prompt = (
         "Summarise the user's task in 3 to 6 plain words for a tab/window "
-        "title.  Reply with ONLY the title, no quotes, no trailing "
-        "punctuation, no leading verbs like 'Task:' or 'Title:'.\n\n"
+        "title, in the language the user wrote in.  Reply with ONLY the "
+        "title, no quotes, no trailing "
+        "punctuation, no leading verbs like 'Task:' or 'Title:'.  If the "
+        "user has not asked for anything yet (only a greeting or small "
+        "talk), reply with only: none\n\n"
         f"User: {user_msg[:400]}\n"
-        f"Assistant: {(assistant_msg or '')[:200]}\n"
+        f"{answer}"
+        f"{latest}"
         "Title:"
     )
 
@@ -760,6 +793,10 @@ async def _generate_session_title(
         kwargs = dict(no_thinking_kwargs(model_id))
         mr = find_model_requirement(model_id)
         local = not cloud_model_provider(model_id)
+        if local and not kwargs and model_id.upper().endswith("GGUF"):
+            # Gemma 4 registers no switch, yet reasons on a short question ("hi");
+            # llama.cpp ignores the field in a template that has no such switch.
+            kwargs = {"chat_template_kwargs": {"enable_thinking": False}}
         if not local:
             max_tokens = _CLOUD_TITLE_MAX_TOKENS
         elif mr is not None and mr.reasoning_effort:
@@ -795,6 +832,8 @@ async def _generate_session_title(
     try:
         data = await asyncio.to_thread(_ask)
     except (LemonadeClientError, BrokerUnavailableError, OSError) as exc:
+        if isinstance(exc, BrokerUnavailableError) and exc.status_code == 504:
+            raise _TitleModelBusy(str(exc)) from exc
         logger.warning("Auto-title request to %s failed: %s", model_id, exc)
         return None
     if data is None:
@@ -818,14 +857,59 @@ async def _generate_session_title(
             title = title[len(prefix) :].strip()
     if not title or _CLASSIFIER_VERDICT_RE.match(title):
         logger.warning(
-            "Auto-title: %s replied %r (finish_reason=%s), not a title; "
-            "titling from the first question instead",
+            "Auto-title: %s replied %r (finish_reason=%s), not a title",
             model_id,
             content[:80],
             choice.get("finish_reason"),
         )
-        return _title_from_question(user_msg)
+        return None
+    # Exact match: a real title can start with "None" ("None values in pandas").
+    if title.lower() == "none":
+        raise _NoTopicYet
     return title[:64]
+
+
+async def _has_side_slot(base_url: str, model_id: str) -> bool:
+    """True when local *model_id* is loaded with a slot beside the conversation's."""
+    from gaia.llm.lemonade_client import SIDE_SLOT, LemonadeClient, LemonadeClientError
+
+    try:
+        client = LemonadeClient(base_url=base_url, verbose=False)
+        slots = await asyncio.to_thread(client.slot_count, model_id)
+    except (LemonadeClientError, OSError) as exc:
+        logger.info(
+            "Auto-title: could not read %s's slots (%s); waiting for it once",
+            model_id,
+            exc,
+        )
+        return False
+    return slots > SIDE_SLOT
+
+
+async def _title_when_model_free(
+    base_url: str, model_id: str, user_msg: str, assistant_msg: str, latest_msg: str
+) -> Optional[str]:
+    """:func:`_generate_session_title`, waiting out a model another request holds."""
+    from gaia.llm.lemonade_client import cloud_model_provider
+
+    request = dict(
+        base_url=base_url,
+        model_id=model_id,
+        user_msg=user_msg,
+        assistant_msg=assistant_msg,
+        latest_msg=latest_msg,
+    )
+    tries = _TITLE_BUSY_TRIES
+    if not cloud_model_provider(model_id) and not await _has_side_slot(
+        base_url, model_id
+    ):
+        tries = 1
+    for _ in range(tries - 1):
+        try:
+            return await _generate_session_title(**request)
+        except _TitleModelBusy:
+            await asyncio.sleep(_TITLE_BUSY_RETRY_S)
+    return await _generate_session_title(**request)
 
 
 def _first_exchange(
@@ -845,19 +929,51 @@ def _first_exchange(
     return user_msg, assistant_msg
 
 
+async def _cancel_pending_title(session_id: str) -> None:
+    """Cancel *session_id*'s after-turn title and wait until it has stopped.
+
+    ``task.cancel()`` only schedules the cancel; awaiting the task means its
+    cleanup (releasing the chat's title slot) is done before the turn goes on.
+    """
+    task = _AUTO_TITLE_PENDING.pop(session_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+        await asyncio.wait({task})
+        logger.info(
+            "Auto-title: a new turn in session %s cancelled its pending title",
+            session_id[:8],
+        )
+
+
+def _spawn_after_turn_title(coro, session_id: str) -> asyncio.Task:
+    """Spawn an after-turn title the chat's next turn can cancel."""
+    task = _spawn_background(coro)
+    _AUTO_TITLE_PENDING[session_id] = task
+
+    def _forget(done: asyncio.Task) -> None:
+        if _AUTO_TITLE_PENDING.get(session_id) is done:
+            del _AUTO_TITLE_PENDING[session_id]
+
+    task.add_done_callback(_forget)
+    return task
+
+
 async def _maybe_update_session_title(
     db: ChatDatabase,
     session_id: str,
     user_msg: str,
     assistant_msg: str,
     model_id: Optional[str],
+    at_turn_start: bool = False,
 ) -> None:
     """Best-effort background task: re-title the session if the rules say so.
 
-    Called fire-and-forget after each assistant turn finishes — never
-    blocks the user's response. *model_id* is the model the turn ran on, so a
-    local chat is never titled by a cloud model. A failure is logged as a
-    warning with its reason, and the chat keeps its provisional title.
+    Called fire-and-forget as each turn starts (*at_turn_start*, skipped
+    unless the model is a cloud one) and after it finishes —
+    never blocks the user's response. *model_id* is the model the turn runs
+    on, so a local chat is never titled by a cloud model. A failure is logged
+    with its reason, and the chat keeps its provisional title until a later
+    turn's try succeeds.
     """
     # Lookup current session.  If it's gone (deleted while we were
     # generating), bail silently.
@@ -866,6 +982,7 @@ async def _maybe_update_session_title(
         return
     current_title = session.get("title") or ""
     title_is_custom = bool(session.get("title_is_custom"))
+    latest_msg = user_msg
     # Name the chat after its first question, even when that turn was stopped.
     user_msg, assistant_msg = _first_exchange(db, session_id, user_msg, assistant_msg)
     if not _should_retitle(
@@ -883,28 +1000,62 @@ async def _maybe_update_session_title(
     if not title_model:
         return
 
-    with _AUTO_TITLE_LOCK:
-        if session_id in _AUTO_TITLE_TRIED:
-            return
-        _AUTO_TITLE_TRIED.add(session_id)
-
-    # Use the same Lemonade endpoint the chat just used.
-    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+    from gaia.llm.lemonade_client import cloud_model_provider, resolve_lemonade_base_url
     from gaia.llm.lemonade_manager import LemonadeManager
 
+    if at_turn_start and not cloud_model_provider(title_model):
+        return
+    # Use the same Lemonade endpoint the chat just used.
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
-    new_title = await _generate_session_title(
-        base_url=base_url,
-        model_id=title_model,
-        user_msg=user_msg,
-        assistant_msg=assistant_msg,
-    )
-    if not new_title or new_title.lower() == current_title.lower():
+
+    with _AUTO_TITLE_LOCK:
+        if (
+            session_id in _AUTO_TITLE_RUNNING
+            or session_id in _AUTO_TITLE_SETTLED
+            or _AUTO_TITLE_FAILURES.get(session_id, 0) >= _AUTO_TITLE_MAX_TRIES
+            or _AUTO_TITLE_ATTEMPTS.get(session_id, 0) >= _AUTO_TITLE_MAX_ATTEMPTS
+        ):
+            return
+        _AUTO_TITLE_RUNNING.add(session_id)
+        _AUTO_TITLE_ATTEMPTS[session_id] = _AUTO_TITLE_ATTEMPTS.get(session_id, 0) + 1
+    try:
+        new_title = await _title_when_model_free(
+            base_url, title_model, user_msg, assistant_msg, latest_msg
+        )
+    except _NoTopicYet:
+        logger.info(
+            "Auto-title: session %s has no topic yet; its next turn tries again",
+            session_id[:8],
+        )
+        return
+    except _TitleModelBusy as exc:
+        logger.info(
+            "Auto-title: %s stayed in use; session %s's next turn tries again (%s)",
+            title_model,
+            session_id[:8],
+            exc,
+        )
+        return
+    finally:
+        with _AUTO_TITLE_LOCK:
+            _AUTO_TITLE_RUNNING.discard(session_id)
+    if new_title is None:
+        with _AUTO_TITLE_LOCK:
+            _AUTO_TITLE_FAILURES[session_id] = (
+                _AUTO_TITLE_FAILURES.get(session_id, 0) + 1
+            )
+        return
+    if _same_title(new_title, current_title):
+        # The model agrees with the name the chat has: that is its title.
+        with _AUTO_TITLE_LOCK:
+            _AUTO_TITLE_SETTLED.add(session_id)
         return
     try:
         # A no-op when the user renamed the chat while the title was written.
         if not db.replace_auto_title(session_id, current_title, new_title):
             return
+        with _AUTO_TITLE_LOCK:
+            _AUTO_TITLE_SETTLED.add(session_id)
         logger.info(
             "Auto-titled session %s: %r → %r",
             session_id[:8],
@@ -1238,20 +1389,20 @@ def _agent_unavailable_message(requested: str, registry) -> str:
     Mirrors the fail-loudly precedent at _chat_helpers.py around line 589 — no
     silent swap to chat, just a clear message the user can act on.
 
-    The ``gaia-agent-chat`` ids are the one case where the generic message is a
-    dead end: they are hidden, so "pick another agent from the selector" names
-    a selector they are not in, and every historical session carries one. When
-    the wheel is genuinely absent, name the package and its install command
-    instead — a recorded load error still wins, since it says more than
-    "missing".
+    ChatAgent's old ids are the one case where the generic message is a dead
+    end: they resolve to the flagship, so "pick another agent from the
+    selector" names a selector they are not in, and every historical session
+    carries one. When the flagship is genuinely absent, name its package and
+    install command instead — a recorded load error still wins, since it says
+    more than "missing".
     """
     if (
-        requested in CHAT_WHEEL_AGENT_IDS
-        and importlib.util.find_spec("gaia_agent_chat") is None
+        requested in LEGACY_FLAGSHIP_AGENT_IDS
+        and importlib.util.find_spec("gaia_agent") is None
     ):
         return agent_not_installed_message(
             f"The '{requested}' agent is not installed",
-            "gaia-agent-chat",
+            "gaia-agent-gaia",
             next_step="Then restart the server.",
         )
 
@@ -1742,12 +1893,13 @@ def _relayed_documents(rag_file_paths: list, attached: list) -> list:
     Images are left out: the sidecar indexes what it is sent, and an image is
     read by vision, not indexed.
     """
-    from .routers.files import IMAGE_EXTENSIONS
+    from .routers.files import PREVIEWABLE_IMAGE_EXTENSIONS
 
     extra = [
         p
         for p in attached
-        if p not in rag_file_paths and Path(p).suffix.lower() not in IMAGE_EXTENSIONS
+        if p not in rag_file_paths
+        and Path(p).suffix.lower() not in PREVIEWABLE_IMAGE_EXTENSIONS
     ]
     return list(rag_file_paths) + extra
 
@@ -2285,6 +2437,7 @@ def _dispatch_sidecar_query(
     withheld: list | None = None,
     working_directory: str | None = None,
     memory: str = "on",
+    record_followup: Callable[[str], None] | None = None,
     internet_off: bool = False,
     hold_internet_off: Callable[[], ContextManager[bool]] | None = None,
     recording: TurnRecording | None = None,
@@ -2292,6 +2445,10 @@ def _dispatch_sidecar_query(
     turns: list | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
+
+    *record_followup* saves a message the user added mid-turn to the chat. A
+    sidecar that takes such messages gets them while it runs; otherwise the
+    chat is told up front, so it does not offer to add one.
 
     *documents* are the session's attached file paths. A sidecar that takes
     them gets them on every turn; one that should but is too old to stops
@@ -2350,6 +2507,8 @@ def _dispatch_sidecar_query(
             f"'{agent_type}' has no sidecar relay profile; it cannot be "
             f"relayed. Known sidecars: {sorted(SIDECAR_AGENT_IDS)}."
         )
+    # A legacy id (``chat``) relays as the sidecar it resolves to.
+    agent_type = profile.agent_id
 
     try:
         handle = daemon_client.acquire_handle(agent_type)
@@ -2551,8 +2710,51 @@ def _dispatch_sidecar_query(
         )
         return
 
+    from gaia.ui.email_sidecar import grants as relayed_grants
     from gaia.ui.email_sidecar.profiles import full_access_supported
 
+    answers_confirmations = confirmations_supported(profile, handle.api_version)
+    offers_always = bool(
+        session_id
+        and answers_confirmations
+        and grants_supported(profile, handle.api_version)
+    )
+    if offers_always:
+        try:
+            relayed_grants.reconcile(proxy, session_id)
+        except SidecarError as exc:
+            sse_handler._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        f"Couldn't check what the {profile.display_name} agent "
+                        f"may do without asking in this chat, so this turn was "
+                        f"stopped: {exc}. Send the message again; if it keeps "
+                        "failing, restart the agent from its card."
+                    ),
+                }
+            )
+            return
+
+    run_id = str(uuid.uuid4())
+    inbox = None
+    if (
+        session_id
+        and record_followup is not None
+        and followups_supported(profile, handle.api_version)
+    ):
+
+        def _followup_taken(text: str) -> None:
+            record_followup(text)
+            sse_handler._emit({"type": "followup_taken", "text": text})
+
+        inbox = followups.open_relay_inbox(
+            session_id,
+            lambda text: proxy.followup(run_id, text),
+            _followup_taken,
+        )
+    else:
+        sse_handler._emit({"type": "followup_unavailable"})
     try:
         if ignores_internet and hold_internet_off is not None:
             # Read under the switch's lock, so a later flip to off ends this turn.
@@ -2567,6 +2769,7 @@ def _dispatch_sidecar_query(
             sse_handler,
             proxy,
             query=query,
+            run_id=run_id,
             context=context,
             model_id=model_id,
             # The chat's own mode, read per turn: the in-process path applies it
@@ -2579,7 +2782,8 @@ def _dispatch_sidecar_query(
             ),
             profile=profile,
             session_id=session_id,
-            answers_confirmations=confirmations_supported(profile, handle.api_version),
+            answers_confirmations=answers_confirmations,
+            offers_always=offers_always,
             documents=relayed_documents,
             allowed_paths=relayed_scope,
             working_directory=relayed_working_directory,
@@ -2604,6 +2808,8 @@ def _dispatch_sidecar_query(
         )
     finally:
         sse_handler.relay_ignores_internet = False
+        if inbox is not None:
+            followups.close_relay_inbox(session_id, inbox)
     if session_id and profile.min_context_api_version is not None:
         record_relayed_context(
             session_id,
@@ -3574,15 +3780,9 @@ async def _get_chat_response(
                 # Agent factories that don't recognise a field filter it out
                 # via ``dataclasses.fields``/``AgentManifest`` validation.
                 #
-                # Non-streaming vs streaming asymmetry — read before refactoring:
-                # This path forwards ``rag_file_paths`` (the real list) because
-                # non-streaming has no SSE handler, so ChatAgent's silent
-                # ``_index_documents`` in __init__ is the only indexer and must
-                # see the paths. The STREAMING registered-agent path, by
-                # contrast, passes ``rag_file_paths=[]`` and does the indexing
-                # in ``_index_rag_with_progress`` so the user sees progress
-                # events; forwarding the real list there would double-index
-                # (see the regression test in test_chat_helpers.py).
+                # Documents are indexed after the build, as the streaming path
+                # does: indexing takes minutes and the build holds the lock
+                # every other chat needs to start.
                 with writing_tool_registry():
                     agent = registry.create_agent(
                         agent_type,
@@ -3593,7 +3793,7 @@ async def _get_chat_response(
                             min_context_size=device_ctx,
                         ),
                         **_session_agent_kwargs(
-                            rag_file_paths=rag_file_paths,
+                            rag_file_paths=[],
                             library_paths=library_paths,
                             allowed=allowed,
                             session_id=session_id,
@@ -3607,6 +3807,8 @@ async def _get_chat_response(
                         # connected mailbox (#1596).
                         mail_provider=_session_mail_provider(session),
                     )
+                if rag_file_paths and hasattr(agent, "_index_documents") and agent.rag:
+                    agent._index_documents(rag_file_paths)
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
                     agent_type,
@@ -3934,6 +4136,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             yield f"data: {json.dumps({'type': 'answer', 'content': refusal})}\n\n"
             yield f"data: {json.dumps(_done_event(msg_id, refusal, False))}\n\n"
             return
+        await _cancel_pending_title(session_id)
+        _spawn_background(
+            _maybe_update_session_title(
+                db=db,
+                session_id=session_id,
+                user_msg=request.message,
+                assistant_msg="",
+                model_id=model_id,
+                at_turn_start=True,
+            )
+        )
 
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
@@ -4001,120 +4214,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         }
                     )
 
-                elif agent_type == "chat":
-                    # -- Cache miss: ChatAgent --
-                    try:
-                        from gaia_agent_chat.agent import (
-                            ChatAgent,
-                            ChatAgentConfig,
-                        )
-                    except ImportError as e:
-                        raise RuntimeError(
-                            agent_import_error_message(
-                                e,
-                                "The chat agent is not installed",
-                                "gaia-agent-chat",
-                                next_step="Then restart the server.",
-                            )
-                        ) from e
-
-                    logger.info(
-                        "chat: Creating new chat agent (ChatAgent) for session %s",
-                        session_id[:8],
-                    )
-                    _session_kwargs = _session_agent_kwargs(
-                        rag_file_paths=[],  # streaming path indexes separately below
-                        library_paths=library_paths,
-                        allowed=allowed,
-                        session_id=session_id,
-                        working_directory=working_directory,
-                        dynamic_tools=dynamic_tools,
-                        memory_incognito=_memory_off(session, db),
-                    )
-                    config = ChatAgentConfig(
-                        model_id=model_id,
-                        streaming=True,
-                        silent_mode=False,
-                        debug=False,
-                        device=device,
-                        min_context_size=device_ctx,
-                        **_session_kwargs,
-                    )
-
-                    _stamp_chat_identity(config)
-                    t_construct = _time.monotonic()
-                    with writing_tool_registry(sse_handler):
-                        agent = ChatAgent(config)
-                    logger.info(
-                        "chat: Invoking agent chat for session %s, model=%s took=%.3fs",
-                        session_id[:8],
-                        model_id,
-                        _time.monotonic() - t_construct,
-                    )
-                    _register_agent_memory_ops(agent)
-                    agent.console = sse_handler  # Assign early so tool events flow
-
-                    # Early-exit if consumer disconnected
-                    if sse_handler.cancelled.is_set():
-                        return
-
-                    # -- Phase 3: RAG indexing --
-                    # Session-attached docs are indexed with full SSE progress events.
-                    # Library docs are silently pre-indexed from disk cache so the
-                    # system prompt shows them as "already indexed" — preventing the
-                    # LLM from calling index_document again on unchanged files.
-                    # The hash-based cache (RAGSDK) guarantees no re-processing
-                    # unless file content has actually changed.
-                    if rag_file_paths and agent.rag:
-                        t_rag = _time.monotonic()
-                        _index_rag_with_progress(agent, rag_file_paths, sse_handler)
-                        logger.info(
-                            "PERF RAG indexing session=%s took=%.3fs",
-                            session_id[:8],
-                            _time.monotonic() - t_rag,
-                        )
-
-                    # -- Phase 3b: Silently pre-index library docs from cache --
-                    # Library docs that are already on disk are loaded from the
-                    # hash-based RAG cache (no LLM/embedding re-computation for
-                    # unchanged files).  Adding them to agent.indexed_files causes
-                    # rebuild_system_prompt() to emit the ANTI-RE-INDEX RULE, so
-                    # the LLM will query them directly instead of re-indexing.
-                    if library_paths and agent.rag:
-                        preindexed = 0
-                        for fpath in library_paths:
-                            try:
-                                result = agent.rag.index_document(fpath)
-                                if result.get("success") and not result.get("error"):
-                                    agent.indexed_files.add(fpath)
-                                    preindexed += 1
-                            except Exception as lib_err:
-                                logger.debug(
-                                    "Library pre-index skipped for %s: %s",
-                                    fpath,
-                                    lib_err,
-                                )
-                        if preindexed:
-                            agent.rebuild_system_prompt()
-                            logger.info(
-                                "Pre-indexed %d library doc(s) from cache", preindexed
-                            )
-
-                    # Cache the agent for subsequent turns in this session.
-                    _store_agent(session_id, model_id, document_ids, agent, agent_type)
-                    logger.info(
-                        "chat: Total setup (cache miss, chat) session=%s took=%.3fs",
-                        session_id[:8],
-                        _time.monotonic() - t0,
-                    )
-                    sse_handler._emit(
-                        {
-                            "type": "status",
-                            "status": "info",
-                            "message": "Sending to model...",
-                        }
-                    )
-
                 elif _should_relay_to_sidecar(agent_type, _agent_registry):
                     # #2109: a sidecar turn is a SELF-CONTAINED early-exit
                     # path — it relays the sidecar's canonical /query loop and
@@ -4142,6 +4241,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         withheld=relayed_env["withheld"],
                         working_directory=working_directory,
                         memory=_memory_mode(session, db),
+                        record_followup=lambda text: db.add_message(
+                            session_id, "user", text
+                        ),
                         internet_off=relayed_env["internet_off"],
                         hold_internet_off=functools.partial(
                             held_internet_off, db, session_id
@@ -4155,7 +4257,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     return
 
                 else:
-                    # -- Cache miss: non-chat agent via registry --
+                    # -- Cache miss: create the agent via the registry --
                     registry = _agent_registry
                     if registry is None or registry.get(agent_type) is None:
                         # Registry unavailable or agent_type unknown — emit a
@@ -4184,9 +4286,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             session_id[:8],
                         )
                         t_construct = _time.monotonic()
-                        # Same session-scoped kwargs as the built-in Chat
-                        # streaming path. Registered agents backed by ChatAgent
-                        # (e.g. gaia-lite) need these so session docs are
+                        # Session-scoped kwargs: agents backed by ChatAgent
+                        # (the flagship) need these so session docs are
                         # reachable and PathValidator accepts absolute paths.
                         #
                         # IMPORTANT: pass ``rag_file_paths=[]`` so ChatAgent
@@ -4221,6 +4322,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                 mail_provider=_session_mail_provider(session),
                             )
                         agent.console = sse_handler
+                        _register_agent_memory_ops(agent)
                         logger.info(
                             "chat: Invoking agent %s for session %s, model=%s took=%.3fs",
                             agent_type,
@@ -4672,7 +4774,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 yield event_data
 
             except queue.Empty:
-                if not producer.is_alive():
+                # The agent can answer and exit between the poll and this check.
+                if not producer.is_alive() and sse_handler.event_queue.empty():
                     break
                 if sse_handler.cancelled.is_set():
                     # Stopped: give the agent a moment to wind down, no more.
@@ -4921,14 +5024,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 yield _undo_link_warning_event(link_warning)
             spending.record_turn(db, model_id, inference_stats)
             # Fire-and-forget auto-titling, on the model this turn ran on.
-            _spawn_background(
+            _spawn_after_turn_title(
                 _maybe_update_session_title(
                     db=db,
                     session_id=request.session_id,
                     user_msg=request.message,
                     assistant_msg=full_response,
                     model_id=model_id,
-                )
+                ),
+                request.session_id,
             )
             done_event = _done_event(
                 msg_id,
@@ -5364,11 +5468,44 @@ class UnreadableDocumentError(RuntimeError):
         self.kind = kind
 
 
-async def _index_document(filepath: Path, display_name: Optional[str] = None) -> int:
+# Live progress of running indexes, keyed by the ``progress_key`` the caller
+# passed (the document id). Written by the indexing thread, read by the status
+# endpoint; each value is replaced whole, never mutated in place.
+INDEX_PROGRESS: dict = {}
+
+
+def index_progress(key: str) -> Optional[dict]:
+    """``{"phase", "done", "total"}`` for a running index, or None."""
+    return INDEX_PROGRESS.get(key)
+
+
+def _page_total(filepath: Path) -> Optional[int]:
+    """Pages a PDF will be read in, or None when the count isn't known upfront."""
+    if filepath.suffix.lower() != ".pdf":
+        return None
+    from pypdf import PdfReader
+    from pypdf.errors import PdfReadError
+
+    try:
+        return len(PdfReader(str(filepath)).pages)
+    except (PdfReadError, OSError, ValueError) as e:
+        # Indexing reads the file again and reports the failure properly.
+        logger.info("No page count for %s: %s", filepath.name, e)
+        return None
+
+
+async def _index_document(
+    filepath: Path,
+    display_name: Optional[str] = None,
+    progress_key: Optional[str] = None,
+) -> int:
     """Index a document using RAG SDK. Returns chunk count.
 
     ``display_name`` is the user's name for the file when *filepath* is a
     copy; every error message names it instead of the copy.
+
+    With ``progress_key``, ``INDEX_PROGRESS[progress_key]`` tracks pages read
+    and then chunks embedded until the index ends.
 
     Runs on an indexing pool (``_INDEX_MAX_PARALLEL`` at once per pool; small
     files have their own, and the rest wait their turn). Cancelling the
@@ -5399,6 +5536,25 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
         if stop.is_set():
             raise IndexingStopped(name)
 
+    def _report(phase: str, done: int, total: Optional[int]) -> None:
+        if progress_key is not None:
+            INDEX_PROGRESS[progress_key] = {
+                "phase": phase,
+                "done": done,
+                "total": total,
+            }
+
+    pages = {"done": 0, "total": None}
+
+    def _page_read() -> None:
+        _step()
+        pages["done"] += 1
+        _report("reading", pages["done"], pages["total"])
+
+    def _embedded(done: int, total: int) -> None:
+        _step()
+        _report("embedding", done, total)
+
     def _queue_update(_event: dict) -> None:
         # Waiting in line for the embedder or vision model is not a stall.
         # Runs on the waiting thread, so it only notes the time.
@@ -5409,6 +5565,9 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
         _step()
+        if progress_key is not None:
+            pages["total"] = _page_total(filepath)
+            _report("reading", 0, pages["total"])
         # Allow access to the file's directory (and user home) since the UI
         # explicitly selected this file via the file browser.
         allowed = [str(filepath.parent), str(Path.home())]
@@ -5419,8 +5578,8 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
             with lease_wait_listener(_queue_update), lease_cancel_scope(stop):
                 result = rag.index_document(
                     str(filepath),
-                    progress_callback=lambda _done, _total: _step(),
-                    heartbeat=_step,
+                    progress_callback=_embedded,
+                    heartbeat=_page_read,
                     **({"display_name": display_name} if display_name else {}),
                 )
         except LeaseWaitCancelled as e:
@@ -5461,6 +5620,8 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
     pool = _INDEX_SMALL_EXECUTOR if small else _INDEX_EXECUTOR
     future = asyncio.get_running_loop().run_in_executor(pool, _do_index)
     future.add_done_callback(_settled_quietly)
+    if progress_key is not None:
+        future.add_done_callback(lambda _f: INDEX_PROGRESS.pop(progress_key, None))
     try:
         while True:
             done, _ = await asyncio.wait({future}, timeout=_INDEX_POLL_S)

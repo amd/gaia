@@ -39,6 +39,10 @@ def use_bundled_cache() -> None:
     os.environ["TIKTOKEN_CACHE_DIR"] = os.path.join(bundle, BUNDLE_DIR)
 
 
+# A one-file download; past this the network is the problem, not the size.
+_STAGE_TIMEOUT_S = 300
+
+
 def stage_cache(dest: Path) -> Path:
     """Recreate *dest* holding only :data:`ENCODING`'s cache file.
 
@@ -50,17 +54,26 @@ def stage_cache(dest: Path) -> Path:
     dest.mkdir(parents=True)
     env = {k: v for k, v in os.environ.items() if k not in _CACHE_ENV}
     env["TIKTOKEN_CACHE_DIR"] = str(dest)
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            f"import tiktoken; tiktoken.get_encoding({ENCODING!r})",
-        ],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                f"import tiktoken; tiktoken.get_encoding({ENCODING!r})",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_STAGE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SystemExit(
+            f"freeze: staging tiktoken's {ENCODING} data into {dest} did not "
+            f"finish within {exc.timeout:g}s. Check access to "
+            "openaipublic.blob.core.windows.net from the freeze environment, "
+            "then re-run."
+        ) from exc
     staged = [p for p in dest.iterdir() if p.is_file()]
     if result.returncode != 0 or not staged:
         raise SystemExit(

@@ -854,6 +854,7 @@ export type StreamEventType =
     | 'agent_created' // New agent created — triggers agent list refresh
     | 'followup_taken'    // The running turn took a message sent mid-turn
     | 'followup_returned' // The turn ended without taking these mid-turn messages
+    | 'followup_unavailable' // The running turn can't take a message mid-turn
     | 'context_usage';    // What this turn's model call holds, by kind
 
 export interface StreamEvent {
@@ -1117,6 +1118,8 @@ export interface ProviderInfo {
     registered?: boolean;
     /** Where Lemonade's key comes from; null when none is configured. */
     key_source?: 'environment' | 'lemonade' | 'stored' | null;
+    /** The saved key's last four characters; null when there is none to read. */
+    key_hint?: string | null;
     /**
      * `waiting_for_os_permission` while the OS holds the saved-key read for the
      * user's permission (a macOS keychain dialog): `key_source` is then unknown,
@@ -1125,6 +1128,8 @@ export interface ProviderInfo {
     key_state?: 'read' | 'waiting_for_os_permission';
     key_message?: string | null;
     models_discovered?: boolean;
+    /** The provider's model list is down, so GAIA offers models it already knows. */
+    known_models?: boolean;
     env_var?: string;
     base_url?: string | null;
     error?: string;

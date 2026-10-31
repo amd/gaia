@@ -506,7 +506,7 @@ class AgentLoop:
                 custom_model = db.get_setting("custom_model")
                 if custom_model:
                     model_id = custom_model
-                elif registry and agent_type != "chat":
+                elif registry:
                     model_id = registry.resolve_model(agent_type) or model_id
                 model_id, device_ctx = _helpers._apply_device_model(
                     session, agent_type, model_id, custom_model, registry

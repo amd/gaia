@@ -125,6 +125,7 @@ That's it. No "What changed" / "Files modified" / "Implementation notes" section
 - **Cut exhaustive file-by-file enumeration and implementation walkthroughs.** The diff is the source of truth for what files changed and how. The description is the source of truth for *why a reviewer should care*.
 - **No "Generated with Claude Code" tagline** (see attribution rule below).
 - **If the PR really does bundle many threads**, group them — don't list 16 commits. Reviewers scan 4 themes faster than 16 bullets.
+- **A PR that fixes an issue says `Closes #N`** (or `Fixes #N`); use `Refs #N` only for partial work. Without the keyword the issue stays open after the fix ships.
 
 **Anti-patterns:**
 
@@ -535,8 +536,8 @@ gaia/
 │   │   ├── tools/      # Cross-agent tool mixins (rag, file, shell, browser, scratchpad, screenshot…)
 │   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
-│   │   #   Packaged agents live in hub/agents/<id>/python/: gaia (flagship),
-│   │   #   chat (its base class), email. Per-task agents were collapsed into
+│   │   #   Packaged agents live in hub/agents/<id>/python/: gaia (flagship,
+│   │   #   incl. its ChatAgent base), email. Per-task agents were collapsed into
 │   │   #   skills under hub/skills/.
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
@@ -636,7 +637,7 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 | Agent | Description |
 |-------|-------------|
 | **GaiaAgent** | The flagship — conversation, documents, data, web, memory, skills — hub (`gaia/`) |
-| **ChatAgent** | The flagship's base class. Its `chat`/`doc`/`file` ids are `hidden` — resolvable, not selectable — hub (`chat/`) |
+| **ChatAgent** | The flagship's base class, in the flagship package (`gaia/`, `gaia_agent.chat_agent`). Its old `chat`/`doc`/`file` ids resolve to `gaia`; `hub/agents/chat/` is a deprecated re-export shim for one release (#6099) |
 | **EmailTriageAgent** | Email triage for Gmail or Outlook (local inference; needs the Google or Microsoft connector) — hub (`email/`) |
 
 Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
@@ -682,7 +683,7 @@ When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can c
 - Agents that leave `model_id` unset call `resolve_default_chat_model()` — `default_model`, else `DEFAULT_MODEL_NAME`. That covers GaiaAgent and ChatAgent. Sharing one model id is what keeps switching agents from evicting and cold-reloading the resident model.
 - **EmailTriageAgent is the one exception.** With no explicit `model_id` it calls `resolve_default_email_model()` (`hub/agents/email/python/gaia_agent_email/model_select.py`), which returns `gemma4-it-e2b-FLM` when an NPU is present *and* that model is already servable, and `DEFAULT_MODEL_NAME` in every other case.
 - Context window: a model that declares `max_ctx_size` and `kv_bytes_per_token` in `MODELS` ([`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)) gets the largest window that fits the GPU memory Lemonade reports (`largest_context` in [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py)), and the fit check charges the KV cache at that same window. Every other model gets its `min_ctx_size`, else `GPU_CTX_SIZE` (65536). `NPU_CTX_SIZE` (32768, the FLM ceiling) applies only to models that run on the NPU, never to a GPU model on a machine whose `default_device` is `npu`. Gemma-4-E4B loads at 65536 (the eval baseline was captured there) when memory allows. Before every load, free memory is checked too (`check_free_memory` in `model_fit.py`): when it is short, the window drops in 8K steps to a 32K floor, and below that the load is refused with how much is needed and free.
-- Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported, and is the RAG SDK's `vlm_model` default (`src/gaia/rag/sdk.py`)
+- Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); it is also the RAG SDK's `vlm_model` default (`src/gaia/rag/sdk.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported
 - Image generation (SD): `SDXL-Turbo`
 
 ### IMPORTANT: Never hardcode how Lemonade is started — `lemonade-server serve` is dead
@@ -790,7 +791,7 @@ adaptive memory/skills/recovery, desktop-installer, browser-use, eval-hillclimbi
 Browse the directory rather than a partial list here.
 
 **Key architectural decisions (April 2026):**
-- **GaiaAgent** rename (#696) landed, but resolved differently than planned: rather than renaming `ChatAgent`, `GaiaAgent` became the flagship (`hub/agents/gaia/python/gaia_agent/agent.py`) and `ChatAgent` (`hub/agents/chat/python/gaia_agent_chat/agent.py`) was kept as its base class — see [Agent Implementations](#agent-implementations)
+- **GaiaAgent** rename (#696) landed, but resolved differently than planned: rather than renaming `ChatAgent`, `GaiaAgent` became the flagship (`hub/agents/gaia/python/gaia_agent/agent.py`) and `ChatAgent` (`hub/agents/gaia/python/gaia_agent/chat_agent.py`, folded into the flagship package in #6099) was kept as its base class — see [Agent Implementations](#agent-implementations)
 - Voice-first is P0 enabling technology (#702)
 - No context compaction — memory + RAG handles long conversations
 - Configuration dashboard + Observability dashboard as separate Agent UI panels
@@ -814,6 +815,14 @@ Two rules are important enough to restate here:
   collapsed inside a `<details>` block.
 - **Output style comes from [How You Communicate](#how-you-communicate)**, same as
   everywhere else. Plain language first, technical depth underneath.
+
+### Filing issues
+
+- **Search before you file.** Run `gh issue list -R amd/gaia --state all --search "<2-3 key terms>"`
+  and read the closed results too. If one matches, comment on it or reopen it instead.
+- **A re-scope closes its children in the same change.** When a plan retires a feature
+  (e.g. agents → skills, #2995), list the issues that assumed it and close them with a
+  one-line reason, or they sit open on a premise that no longer exists.
 
 Automated PR-review *policy* — severity tiers, the nit cap, skip rules, length caps —
 lives in [`REVIEW.md`](REVIEW.md), which is the single source of truth for review
@@ -871,7 +880,7 @@ When a task fits a Superpowers skill (e.g. `superpowers:brainstorming`, `superpo
 **Read the matching skill before starting related work.** Every skill under
 `.claude/skills/<name>/SKILL.md` is auto-discovered by its `description` and invoked with
 the `Skill` tool — run `ls .claude/skills/` to see the current set. They cover releases,
-testing, hub-agent integration, eval scorecards, the weekly audit workflow,
+testing, hub-agent integration, eval scorecards, the proactive audit rotation,
 LemonadeClient changes, GitHub responses, and presentations.
 
 This list is deliberately not enumerated here — a hand-maintained copy drifts the moment

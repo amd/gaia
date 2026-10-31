@@ -31,6 +31,7 @@ run the machine out of memory.
 
 from __future__ import annotations
 
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -156,7 +157,11 @@ def largest_context(
 
 
 def _num(value: Any) -> float:
-    return float(value) if isinstance(value, (int, float)) else 0.0
+    """A plausible finite GiB value, or zero when the report is unusable."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    number = float(value)
+    return number if math.isfinite(number) and 0.0 <= number <= 1024.0 else 0.0
 
 
 def _physical_memory_gb(info: Dict[str, Any]) -> float:

@@ -404,3 +404,67 @@ def test_chat_database_retries_wal_switch_while_another_process_releases(tmp_pat
     finally:
         release.join()
         holder.close()
+
+
+def test_an_existing_chat_database_opens_while_another_process_is_writing(tmp_path):
+    """A complete chat database needs no schema write lock on reopen."""
+    from gaia.ui.database import ChatDatabase
+
+    db_path = tmp_path / "chat.db"
+    ChatDatabase(str(db_path)).close()
+    holder = sqlite3.connect(str(db_path), isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    holder.execute("INSERT INTO settings VALUES ('k', 'v')")
+    try:
+        ChatDatabase(str(db_path)).close()
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+
+
+_CHAT_DATABASE_OPENER = textwrap.dedent("""
+    import sys, time
+    from pathlib import Path
+    from gaia.ui.database import ChatDatabase
+    print("ready", flush=True)
+    for line in sys.stdin:
+        path, start = line.rsplit(" ", 1)
+        while time.time() < float(start):
+            pass
+        try:
+            ChatDatabase(Path(path)).close()
+            print("ok", flush=True)
+        except Exception as exc:  # reported to the test, which fails on it
+            print(f"{type(exc).__name__}: {exc}", flush=True)
+    """)
+
+
+def test_several_processes_opening_one_new_chat_db_all_succeed(tmp_path):
+    """Concurrent first opens must not race on the additive migrations (#6143)."""
+    src = str(Path(__file__).resolve().parents[2] / "src")
+    children = [
+        subprocess.Popen(
+            [sys.executable, "-c", _CHAT_DATABASE_OPENER],
+            env={**os.environ, "PYTHONPATH": src},
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(2)
+    ]
+    failed = []
+    try:
+        for child in children:
+            assert child.stdout.readline().strip() == "ready"
+        for trial in range(30):
+            line = f"{tmp_path / f'chat-{trial}.db'} {time.time() + 0.2}\n"
+            for child in children:
+                child.stdin.write(line)
+                child.stdin.flush()
+            results = [child.stdout.readline().strip() for child in children]
+            failed.extend(result for result in results if result != "ok")
+    finally:
+        for child in children:
+            child.stdin.close()
+            child.wait(timeout=30)
+    assert not failed, f"{len(failed)} chat database opens failed: {failed[0]}"

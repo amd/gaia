@@ -5,26 +5,44 @@ import { useChatStore } from '../../stores/chatStore';
 import type { ThemePreference } from '../../utils/theme';
 import { DesktopAppSettings } from './DesktopAppSettings';
 import { UpdatesSection } from './UpdatesSection';
-import { DEFAULT_CUSTOM, PALETTES, type CustomColors } from '../../utils/palette';
+import { DEFAULT_CUSTOM, PALETTES, type CustomColors, type PaletteId } from '../../utils/palette';
 import { formatShortcut } from '../../utils/platform';
+import { LOCALES, localeOptionLabel, type MessageKey } from '../../i18n/registry';
+import { useT } from '../../i18n/useT';
 
-const THEMES: Array<{ value: ThemePreference; label: string }> = [
-    { value: 'light', label: 'Light' },
-    { value: 'dark', label: 'Dark' },
-    { value: 'system', label: 'Match system' },
+const THEMES: Array<{ value: ThemePreference; label: MessageKey }> = [
+    { value: 'light', label: 'settings.theme.light' },
+    { value: 'dark', label: 'settings.theme.dark' },
+    { value: 'system', label: 'settings.theme.system' },
 ];
 
-const SHORTCUTS: Array<[string, string]> = [
-    ['Enter', 'Send'],
-    ['Shift+Enter', 'New line'],
-    ['Esc', 'Stop the answer'],
-    ['Mod+Shift+O', 'New chat'],
-    ['Mod+K', 'Search chats'],
-    ['Mod+B', 'Show or hide the sidebar'],
-    ['Mod+,', 'Settings'],
+const PALETTE_NAME: Record<PaletteId, MessageKey> = {
+    default: 'palette.default',
+    stone: 'palette.stone',
+    marble: 'palette.marble',
+    glacier: 'palette.glacier',
+    forest: 'palette.forest',
+    sage: 'palette.sage',
+    basalt: 'palette.basalt',
+    gold: 'palette.gold',
+    dusk: 'palette.dusk',
+    custom: 'settings.colors.custom',
+};
+
+const SHORTCUTS: Array<[string, MessageKey]> = [
+    ['Enter', 'settings.shortcut.send'],
+    ['Shift+Enter', 'settings.shortcut.newLine'],
+    ['Esc', 'settings.shortcut.stop'],
+    ['Mod+Shift+O', 'settings.shortcut.newChat'],
+    ['Mod+K', 'settings.shortcut.search'],
+    ['Mod+B', 'settings.shortcut.sidebar'],
+    ['Mod+,', 'settings.shortcut.settings'],
 ];
 
 export function GeneralSettings() {
+    const t = useT();
+    const locale = useChatStore((s) => s.locale);
+    const setLocale = useChatStore((s) => s.setLocale);
     const pref = useChatStore((s) => s.themePreference);
     const setPref = useChatStore((s) => s.setThemePreference);
     const palette = useChatStore((s) => s.palette);
@@ -36,20 +54,36 @@ export function GeneralSettings() {
 
     return (
         <div className="settings-pane">
-            <h2 className="settings-pane-title">General</h2>
+            <h2 className="settings-pane-title">{t('settings.section.general')}</h2>
             <div className="settings-field">
-                <span className="settings-label" id="appearance-label">Appearance</span>
+                <label className="settings-label" htmlFor="ui-language">{t('settings.language')}</label>
+                <select
+                    id="ui-language"
+                    className="settings-input"
+                    value={locale}
+                    onChange={(e) => setLocale(e.target.value)}
+                >
+                    {LOCALES.map(({ meta }) => (
+                        <option key={meta.code} value={meta.code} lang={meta.code} dir={meta.dir}>
+                            {localeOptionLabel(meta)}
+                        </option>
+                    ))}
+                </select>
+                <span className="settings-hint">{t('settings.languageHint')}</span>
+            </div>
+            <div className="settings-field">
+                <span className="settings-label" id="appearance-label">{t('settings.appearance')}</span>
                 <div className="segmented" role="radiogroup" aria-labelledby="appearance-label">
-                    {THEMES.map((t) => (
+                    {THEMES.map((th) => (
                         <button
-                            key={t.value}
+                            key={th.value}
                             type="button"
                             role="radio"
-                            aria-checked={pref === t.value}
-                            className={pref === t.value ? 'is-active' : ''}
-                            onClick={() => setPref(t.value)}
+                            aria-checked={pref === th.value}
+                            className={pref === th.value ? 'is-active' : ''}
+                            onClick={() => setPref(th.value)}
                         >
-                            {t.label}
+                            {t(th.label)}
                         </button>
                     ))}
                 </div>
@@ -57,7 +91,7 @@ export function GeneralSettings() {
             <DesktopAppSettings />
             <UpdatesSection />
             <div className="settings-field">
-                <span className="settings-label" id="palette-label">Colors</span>
+                <span className="settings-label" id="palette-label">{t('settings.colors')}</span>
                 <div className="palette-grid" role="radiogroup" aria-labelledby="palette-label">
                     {PALETTES.map((p) => (
                         <button
@@ -71,7 +105,7 @@ export function GeneralSettings() {
                             <span className="palette-swatch" aria-hidden="true">
                                 {p.swatch.map((c) => <i key={c} style={{ background: c }} />)}
                             </span>
-                            {p.name}
+                            {t(PALETTE_NAME[p.id])}
                         </button>
                     ))}
                     <button
@@ -85,31 +119,31 @@ export function GeneralSettings() {
                             <i style={{ background: custom.base }} />
                             <i style={{ background: custom.accent }} />
                         </span>
-                        Custom
+                        {t('settings.colors.custom')}
                     </button>
                 </div>
                 {palette === 'custom' && (
                     <div className="palette-custom">
                         <label className="palette-color" htmlFor="custom-accent">
                             <input id="custom-accent" type="color" value={custom.accent} onChange={pick('accent')} />
-                            <span>Accent<small>Buttons, links and focus</small></span>
+                            <span>{t('settings.colors.accent')}<small>{t('settings.colors.accentHint')}</small></span>
                         </label>
                         <label className="palette-color" htmlFor="custom-base">
                             <input id="custom-base" type="color" value={custom.base} onChange={pick('base')} />
-                            <span>Background tint<small>The color the grays lean toward</small></span>
+                            <span>{t('settings.colors.base')}<small>{t('settings.colors.baseHint')}</small></span>
                         </label>
-                        <button type="button" className="btn-secondary" onClick={() => setCustom(DEFAULT_CUSTOM)}>Reset</button>
-                        <p className="settings-hint">Text colors adjust on their own so everything stays readable in light and dark.</p>
+                        <button type="button" className="btn-secondary" onClick={() => setCustom(DEFAULT_CUSTOM)}>{t('settings.colors.reset')}</button>
+                        <p className="settings-hint">{t('settings.colors.hint')}</p>
                     </div>
                 )}
             </div>
             <div className="settings-field">
-                <span className="settings-label">Keyboard shortcuts</span>
+                <span className="settings-label">{t('settings.shortcuts')}</span>
                 <dl className="shortcut-list">
                     {SHORTCUTS.map(([keys, what]) => (
                         <div key={keys} className="shortcut-row">
                             <dt><kbd>{formatShortcut(keys)}</kbd></dt>
-                            <dd>{what}</dd>
+                            <dd>{t(what)}</dd>
                         </div>
                     ))}
                 </dl>
