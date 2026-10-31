@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useCallback, useRef, useId } from 'react';
-import { X, Plus, Clock, Play, Pause, Trash2, ChevronDown, ChevronUp, MessageSquare } from 'lucide-react';
+import { X, Plus, Clock, Play, Pause, Trash2, ChevronDown, ChevronUp, MessageSquare, Zap } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useScheduleStore } from '../stores/scheduleStore';
 import { log } from '../utils/logger';
@@ -83,7 +83,7 @@ function formatDays(days: number[]): string {
 }
 
 function ScheduleCard({ schedule }: { schedule: Schedule }) {
-    const { selectedSchedule, selectSchedule, updateScheduleStatus, deleteSchedule, results, resultsLoading, loadSchedules, loadResults } = useScheduleStore();
+    const { selectedSchedule, selectSchedule, updateScheduleStatus, runScheduleNow, deleteSchedule, results, resultsLoading, loadSchedules, loadResults } = useScheduleStore();
     const { setCurrentSession, setShowSchedules } = useChatStore();
     const isSelected = selectedSchedule === schedule.name;
     const [confirmDelete, setConfirmDelete] = useState(false);
@@ -141,6 +141,12 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
         updateScheduleStatus(schedule.name, newStatus);
     }, [schedule.name, schedule.status, updateScheduleStatus]);
 
+    const handleRunNow = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
+        log.ui.info(`Schedule "${schedule.name}": run now`);
+        void runScheduleNow(schedule.name);
+    }, [schedule.name, runScheduleNow]);
+
     const handleDelete = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
         clearConfirmTimer();
@@ -191,6 +197,14 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
                         <MessageSquare size={11} /> Open Chat
                     </button>
                 )}
+                <button
+                    className="btn-sm"
+                    onClick={handleRunNow}
+                    disabled={schedule.running}
+                    title="Run it once now, to try it. Its next scheduled run stays as it is."
+                >
+                    <Zap size={11} /> {schedule.running ? 'Running…' : 'Run now'}
+                </button>
                 <button className="btn-sm" onClick={handleToggleStatus} title={schedule.status === 'active' ? 'Pause' : 'Resume'}>
                     {schedule.status === 'active' ? <><Pause size={11} /> Pause</> : <><Play size={11} /> Resume</>}
                 </button>
@@ -228,7 +242,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
 
 export function ScheduleManager() {
     const { setShowSchedules } = useChatStore();
-    const { schedules, loading, error, loadSchedules, createSchedule } = useScheduleStore();
+    const { schedules, loading, error, actionError, loadSchedules, createSchedule, dismissActionError } = useScheduleStore();
     const close = useCallback(() => setShowSchedules(false), [setShowSchedules]);
     useEscapeToClose(true, close);
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -282,8 +296,9 @@ export function ScheduleManager() {
         pollRef.current = window.setInterval(() => loadSchedules(), 5000);
         return () => {
             if (pollRef.current) clearInterval(pollRef.current);
+            dismissActionError();
         };
-    }, [loadSchedules]);
+    }, [loadSchedules, dismissActionError]);
 
     // Allow creation if all 3 fields are filled. parsed?.valid is a bonus
     // (shows preview) but not a hard gate — the backend validates on create.
@@ -434,6 +449,14 @@ export function ScheduleManager() {
                     {/* Schedule list */}
                     <section className="schedule-section">
                         <h4>Active schedules</h4>
+                        {actionError && (
+                            <div className="schedule-action-error" role="alert">
+                                <span>{actionError}</span>
+                                <button className="btn-icon" onClick={dismissActionError} aria-label="Dismiss error">
+                                    <X size={14} />
+                                </button>
+                            </div>
+                        )}
                         {loading ? (
                             <p className="schedule-empty">Loading schedules...</p>
                         ) : error ? (

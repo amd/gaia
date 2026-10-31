@@ -7,11 +7,13 @@ import { Popover } from './Popover';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import type { PermissionMode } from '../types';
+import { ref, type MessageKey } from '../i18n/registry';
+import { useT } from '../i18n/useT';
 import { announcePermissionMode, usePermissionModeEvents } from '../utils/permissionModeEvents';
 
-export const MODES: Array<{ mode: PermissionMode; label: string; note: string }> = [
-    { mode: 'ask', label: 'Ask before acting', note: 'GAIA asks before it edits files, runs commands or uses tools that change things.' },
-    { mode: 'full_access', label: 'Full access', note: 'Runs every tool and command without asking, in this chat only.' },
+export const MODES: Array<{ mode: PermissionMode; label: MessageKey; note: MessageKey }> = [
+    { mode: 'ask', label: 'perm.ask', note: 'perm.askNote' },
+    { mode: 'full_access', label: 'perm.full', note: 'perm.fullNote' },
 ];
 
 /**
@@ -19,6 +21,7 @@ export const MODES: Array<{ mode: PermissionMode; label: string; note: string }>
  * (the new-chat screen) the choice is held and applied when the chat is made.
  */
 export function PermissionModeChip({ sessionId, disabled }: { sessionId: string | null; disabled?: boolean }) {
+    const t = useT();
     const draftMode = useChatStore((s) => s.draftPermissionMode);
     const setDraftMode = useChatStore((s) => s.setDraftPermissionMode);
     const [mode, setMode] = useState<PermissionMode>(sessionId ? 'ask' : draftMode);
@@ -82,13 +85,13 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
                 disabled={disabled}
                 aria-haspopup="dialog"
                 aria-expanded={open}
-                aria-label={`Permission mode: ${full ? 'full access' : 'ask before acting'}`}
+                aria-label={t('perm.chipAria', { mode: ref(full ? 'perm.fullLower' : 'perm.askLower') })}
             >
                 <Icon size={13} aria-hidden="true" />
-                <span className="composer-chip-label">{full ? 'Full access' : 'Ask'}</span>
+                <span className="composer-chip-label" dir="auto">{full ? t('perm.full') : t('env.ask')}</span>
                 <ChevronDown size={12} aria-hidden="true" />
             </button>
-            <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label="Permission mode">
+            <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label={t('env.permission')}>
                 {MODES.map((m) => (
                     <button
                         key={m.mode}
@@ -99,15 +102,15 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
                     >
                         <span className="popover-item-check" aria-hidden="true">{mode === m.mode && <Check size={13} />}</span>
                         <span className="popover-item-body">
-                            <span className="popover-item-title">{m.label}</span>
-                            <span className="popover-item-note">{m.note}</span>
+                            <span className="popover-item-title">{t(m.label)}</span>
+                            <span className="popover-item-note">{t(m.note)}</span>
                         </span>
                     </button>
                 ))}
                 {confirming && (
                     <div className="popover-message" role="alert">
-                        Full access lets GAIA change files and run commands on this PC without asking.{' '}
-                        <button type="button" className="link-btn" onClick={() => apply('full_access')}>Turn it on</button>
+                        {t('env.fullAccessWarn')}{' '}
+                        <button type="button" className="link-btn" onClick={() => apply('full_access')}>{t('env.turnOn')}</button>
                     </div>
                 )}
                 {error && <div className="popover-message is-error" role="alert">{error}</div>}

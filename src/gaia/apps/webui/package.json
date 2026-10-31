@@ -1,6 +1,6 @@
 {
   "name": "@amd-gaia/agent-ui",
-  "version": "0.25.2",
+  "version": "0.25.4",
   "type": "module",
   "productName": "GAIA Agent UI",
   "description": "Chat with the GAIA agent - local and private by default on AMD Ryzen AI, cloud models when you choose them",
@@ -60,6 +60,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:visual": "vite build && playwright test -c visual/playwright.config.ts",
+    "test:rtl": "vite build && playwright test -c visual/playwright.config.ts rtl --project=light",
     "gen:api-types": "node scripts/gen-api-types.mjs"
   },
   "dependencies": {

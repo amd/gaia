@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Read-only Microsoft Graph mailbox client for the flagship agent's email tools.
 
-Scope is deliberately narrow: list, search, read, and folder enumeration. There
+Scope is deliberately narrow: list, search, read (one message or a whole
+conversation), and folder enumeration. There
 is no mutating verb here, so there is no action ledger to keep consistent and
 nothing to undo. Writes arrive in a later phase together with the ledger that
 makes them reversible.
@@ -36,10 +37,19 @@ _LIST_SELECT = (
     "id,conversationId,subject,from,toRecipients,ccRecipients,"
     "receivedDateTime,isRead,isDraft,flag,categories,bodyPreview"
 )
-_FULL_SELECT = _LIST_SELECT + ",body"
+# Graph only needs the header collection when reading a full conversation;
+# keeping it off list/search calls avoids asking those endpoints for data the
+# caller does not use.
+_FULL_SELECT = _LIST_SELECT + ",internetMessageHeaders,body"
 
 # Graph caps $top at 999; asking for more is a 400, not a truncation.
 _MAX_TOP = 999
+
+# One page of a conversation. Longer threads are reported truncated, not cut.
+_THREAD_TOP = 100
+
+# Well-known folder names Graph accepts in place of a folder id.
+_FOLDER_NAMES = {"inbox": "inbox", "sent": "sentitems"}
 
 # The shape Graph issues for a message id: standard base64, so `+`, `/` and the
 # `=` padding are all legitimate, as are base64url's `-` and `_`.
@@ -95,6 +105,11 @@ def message_summary(
     shape, so the tools and the skill never learn which mailbox they are on.
     """
     flag = (msg.get("flag") or {}).get("flagStatus")
+    headers = {
+        str(header.get("name") or "").lower(): str(header.get("value") or "")
+        for header in msg.get("internetMessageHeaders") or []
+        if header.get("name")
+    }
     summary: Dict[str, Any] = {
         "id": msg.get("id"),
         "thread_id": msg.get("conversationId") or msg.get("id"),
@@ -107,6 +122,9 @@ def message_summary(
         "flagged": flag in ("flagged", "complete"),
         "categories": list(msg.get("categories") or []),
         "preview": (msg.get("bodyPreview") or "").strip(),
+        # Provider-neutral metadata consumed by the waiting-on-you detector.
+        "auto_submitted": headers.get("auto-submitted", ""),
+        "x_autoreply": headers.get("x-autoreply", ""),
     }
     if include_body:
         body = msg.get("body") or {}
@@ -157,6 +175,12 @@ class OutlookReadBackend:
                 "Mail.ReadWrite to this agent. Reconnect Microsoft with "
                 "`gaia connectors` and approve mail access. "
                 f"(request: {where}; code: {code or 'forbidden'})"
+            )
+        if response.status_code == 404:
+            raise MailboxError(
+                "Microsoft Graph has no such message or conversation (404). "
+                "The id may be mistyped, or the mail was deleted. Use an id "
+                f"returned by list_inbox or search_email. (request: {where})"
             )
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After", "unknown")
@@ -218,7 +242,12 @@ class OutlookReadBackend:
             "$orderby": "receivedDateTime desc",
         }
         if unread_only:
-            params["$filter"] = "isRead eq false"
+            # Graph requires every ordered property to lead $filter; without this
+            # broad lower bound it rejects an unread-only inbox with
+            # InefficientFilter.
+            params["$filter"] = (
+                "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false"
+            )
         data = self._get("/me/mailFolders/inbox/messages", params=params)
         return [message_summary(m) for m in data.get("value", [])]
 
@@ -254,6 +283,75 @@ class OutlookReadBackend:
         path = f"/me/messages/{quote(message_id, safe='')}"
         data = self._get(path, params={"$select": _FULL_SELECT})
         return message_summary(data, include_body=True)
+
+    def list_thread_ids(self, folder: str, *, limit: int = 50) -> Dict[str, Any]:
+        """Distinct conversation ids in ``folder`` (``inbox`` or ``sent``), newest first.
+
+        ``truncated`` means older mail exists past ``limit``: Graph returned a
+        next page, or the listing filled the whole budget.
+        """
+        name = _FOLDER_NAMES.get(folder)
+        if name is None:
+            raise ValueError(
+                f"folder must be one of {sorted(_FOLDER_NAMES)}, got {folder!r}"
+            )
+        top = self._clamp(limit)
+        data = self._get(
+            f"/me/mailFolders/{name}/messages",
+            params={
+                "$top": top,
+                "$select": "id,conversationId",
+                "$orderby": "receivedDateTime desc",
+            },
+        )
+        rows = data.get("value", [])
+        thread_ids: List[str] = []
+        for row in rows:
+            tid = row.get("conversationId") or row.get("id")
+            if tid and tid not in thread_ids:
+                thread_ids.append(tid)
+        return {
+            "thread_ids": thread_ids,
+            "messages_listed": len(rows),
+            "truncated": bool(data.get("@odata.nextLink")) or len(rows) >= top,
+        }
+
+    def get_thread(self, thread_id: str) -> Dict[str, Any]:
+        """Every message in one conversation, oldest first, bodies included.
+
+        Graph has no thread resource, so this filters messages on
+        ``conversationId``. Combining that filter with ``$orderby`` trips
+        Graph's InefficientFilter, so the sort happens here instead.
+        """
+        # The id lands inside an OData string literal; the alphabet check is
+        # what keeps a quote out of it.
+        if not thread_id or not _MESSAGE_ID_RE.fullmatch(thread_id):
+            raise ValueError(
+                f"thread_id {thread_id!r} is not a Microsoft Graph conversation "
+                "id. Use the thread_id from a list_inbox or search_email result."
+            )
+        data = self._get(
+            "/me/messages",
+            params={
+                "$filter": f"conversationId eq '{thread_id}'",
+                "$select": _FULL_SELECT,
+                "$top": _THREAD_TOP,
+            },
+        )
+        raw = sorted(
+            data.get("value", []), key=lambda m: m.get("receivedDateTime") or ""
+        )
+        messages = []
+        for msg in raw:
+            summary = message_summary(msg, include_body=True)
+            summary["draft"] = bool(msg.get("isDraft"))
+            summary["_label_ids"] = []
+            messages.append(summary)
+        return {
+            "thread_id": thread_id,
+            "messages": messages,
+            "truncated": bool(data.get("@odata.nextLink")),
+        }
 
     def list_folders(self, *, limit: int = 50) -> List[Dict[str, Any]]:
         """Mail folders with their unread and total counts."""

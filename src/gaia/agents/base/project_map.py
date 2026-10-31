@@ -581,7 +581,7 @@ def render_project_map(
     shape: List[str] = []
     if pm.top_level_dirs:
         # Says the second level is partial, so a bare entry never reads as
-        # proof a subdirectory is absent (#3576).
+        # proof a subdirectory is absent.
         shape.append("Directories (second level listed for only a few):")
         for name in pm.top_level_dirs:
             children = pm.subdirs.get(name)

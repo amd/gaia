@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/ui/agents"
@@ -697,8 +698,7 @@ func (m ChatModel) Init() tea.Cmd {
 	} else if m.dev && m.preScanGateMismatch() {
 		// A client that could serve the pre-scan view but an agentID that
 		// doesn't match must not fail with no signal at all.
-		fmt.Fprintf(os.Stderr,
-			"[DEBUG] pre-scan fetch skipped: agentID %q has a PreScanFetcher client but does not match %q\n",
+		control.DevLogf("pre-scan fetch skipped: agentID %q has a PreScanFetcher client but does not match %q",
 			m.agentID, preScanAgentID)
 	}
 	// Behind the first-boot gate the warm-up waits for it: there may be no
@@ -1273,7 +1273,7 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case capabilitiesProbedMsg:
 		if msg.err != nil && m.dev {
-			fmt.Fprintf(os.Stderr, "[DEBUG] capability probe failed (%v) — gated commands stay in their 'unknown' (shown) state\n", msg.err)
+			control.DevLogf("capability probe failed (%v) — gated commands stay in their 'unknown' (shown) state", msg.err)
 		}
 		return m, nil
 
@@ -1837,7 +1837,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m, nil
 		}
-		panel := providers.New(m.lemonadeBaseURL, m.width, m.height).WithCurrent(providerOfBackend(m.modelBackend))
+		panel := providers.New(m.lemonadeBaseURL, m.width, m.height).WithCurrent(providerOfBackend(m.modelBackend)).WithCurrentModel(m.modelID)
 		m.providerPanel = &panel
 		m.palette.open = false
 		return m, panel.Init()

@@ -1188,8 +1188,8 @@ class TestSpecializedAgents:
 
     def test_chat_agent_exists(self):
         """Verify ChatAgent can be imported."""
-        pytest.importorskip("gaia_agent_chat")
-        from gaia_agent_chat.agent import ChatAgent
+        pytest.importorskip("gaia_agent")
+        from gaia_agent.chat_agent import ChatAgent
 
         assert ChatAgent is not None
 

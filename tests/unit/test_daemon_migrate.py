@@ -37,6 +37,8 @@ def homes(tmp_path, monkeypatch):
     """
     legacy = tmp_path / "gaia"
     host = tmp_path / "gaia" / "host"
+    # GAIA_HOME outranks GAIA_CONFIG_DIR, so an exported one would escape tmp.
+    monkeypatch.delenv("GAIA_HOME", raising=False)
     monkeypatch.setenv("GAIA_CONFIG_DIR", str(legacy))
     monkeypatch.setenv("GAIA_DAEMON_HOME", str(host))
     return legacy, host
@@ -151,6 +153,50 @@ def test_warm_state_migrates_sessions_and_memory(homes):
     finally:
         conn.close()
     assert row is not None and row[0] == "pre-v2 chat"
+
+
+def _memory_contents(db_path):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return [r[0] for r in conn.execute("SELECT content FROM knowledge")]
+    finally:
+        conn.close()
+
+
+def test_an_isolated_gaia_home_never_imports_the_default_homes_memory(
+    tmp_path, monkeypatch
+):
+    """A daemon under GAIA_HOME migrated ``~/.gaia/memory.db`` into its custody.
+
+    A fresh isolated home (an eval category, a test, a second profile) then
+    started with the default home's personal facts and chats.
+    """
+    user_home = tmp_path / "user"
+    monkeypatch.setattr(migrate.Path, "home", classmethod(lambda cls: user_home))
+    _seed_legacy_memory(user_home / ".gaia")
+    isolated = tmp_path / "isolated"
+    isolated.mkdir()
+    monkeypatch.setenv("GAIA_HOME", str(isolated))
+    monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("GAIA_DAEMON_HOME", raising=False)
+
+    migrate.run_migrations()
+
+    custody = migrate.custody_memory_db()
+    assert custody.is_relative_to(isolated)
+    assert not custody.exists() or _memory_contents(custody) == []
+
+
+def test_gaia_home_migrates_its_own_legacy_memory(tmp_path, monkeypatch):
+    isolated = tmp_path / "isolated"
+    _seed_legacy_memory(isolated)
+    monkeypatch.setenv("GAIA_HOME", str(isolated))
+    monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("GAIA_DAEMON_HOME", raising=False)
+
+    migrate.run_migrations()
+
+    assert _memory_contents(migrate.custody_memory_db()) == ["user prefers dark mode"]
 
 
 def test_second_run_is_noop(homes):

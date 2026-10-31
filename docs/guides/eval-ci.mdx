@@ -81,7 +81,6 @@ jobs:
 
 <Warning>
   The Agent UI backend requires a running Lemonade Server for inference. In CI, you can either:
-  - Use a cloud LLM provider via `--backend` pointing to a hosted instance
   - Pre-install Lemonade Server in your CI environment
   - Use a self-hosted runner with AMD hardware
 </Warning>
@@ -131,6 +130,13 @@ gaia eval agent --compare eval/results/latest/scorecard.json
 ```
 
 When only one path is provided, it's compared against `eval/results/baseline.json` automatically.
+
+A baseline only judges the model it was captured on. `--compare` exits 3 when the
+two scorecards ran a different local model or a different eval model, so pin the
+model in CI (`default_model` in the backend's GAIA home, plus `--agent-model`) and
+keep one baseline per model. GAIA's own CI keeps
+`tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/` for Gemma on Strix Point,
+measured by `eval_flagship_gemma_stx.yml`.
 
 ### 3. Explicit Two-File Comparison
 
@@ -496,7 +502,7 @@ gaia eval agent --corpus-dir ~/my-project/eval-corpus
 </CardGroup>
 
 <Warning>
-  The agent under test can run shell commands, so its backend must never inherit `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; only the `gaia eval agent` step needs them. On a public repository anyone can download workflow artifacts, and GitHub masks secrets only in job logs. Keep uploads to scorecards and reproduce a regression locally for its traces.
+  The agent under test can run shell commands, so its backend must never inherit `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or the backup `CLAUDE_CODE_OAUTH_TOKEN_BACKUP`; only the `gaia eval agent` step needs them. On a public repository anyone can download workflow artifacts, and GitHub masks secrets only in job logs. Keep uploads to scorecards and reproduce a regression locally for its traces.
 </Warning>
 
 <Warning>

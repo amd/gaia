@@ -35,6 +35,11 @@
 #      bump — if it goes stale, the retry and the verification quietly stop meaning anything.
 #   5. model check: a run that completes on a model other than the one `--model` asked
 #      for fails, so a substituted model shows up red rather than as a weaker review.
+#   6. account failover: every call runs on CLAUDE_CODE_OAUTH_TOKEN first. Refused for
+#      QUOTA before reaching a model (quota wording, $0, no model usage), it runs once
+#      more on CLAUDE_CODE_OAUTH_TOKEN_SECONDARY, with a warning. A run that reached the
+#      model may have posted already, so it is never retried; nor is a rejected token. Inline rather than the claude-credential action, because
+#      this job checks out fork code and a local action would be read from it.
 #
 # WHY a reusable workflow and not a local composite action: for pull_request_target
 # and issue_comment, GitHub reads workflow files (including a `uses: ./...` reusable
@@ -83,19 +88,18 @@ on:
         required: false
         type: boolean
         default: false
-    outputs:
-      quota_suspected:
-        description: "true when the Claude call was refused before reaching a model, or errored naming a spend/usage limit. claude.yml uses it to ask claude-account-switch.yml to probe the accounts."
-        value: ${{ jobs.run.outputs.quota_suspected }}
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    outputs:
-      quota_suspected: ${{ steps.harness.outputs.quota_suspected }}
+    env:
+      HAS_SECONDARY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' }}
+      # Copies of src/gaia/eval/claude_refusal.py, which this job cannot import: it may
+      # hold a fork's checkout. A unit test fails if they drift. A bare per-minute 429
+      # ("rate limit") is throttling, not quota, so it is in neither.
+      QUOTA_RE: 'hit your limit|limit reached|limit resets|spend limit|usage limit|weekly limit|session limit|quota|credit balance|purchase credits|out of credit|insufficient credit|billing|upgrade your plan|admin-settings/usage'
+      CREDENTIAL_RE: 'authentication_error|authentication failed|invalid api key|invalid x-api-key|invalid bearer token|invalid_token|unauthorized|oauth token|token has expired|please run /login|not logged in|no credential'
     steps:
-      - name: Show which Claude account this job uses
-        run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
       # --- PR events (pull_request_target = review, pull_request_review_comment = reply):
       #     checkout the PR head and diff it against base. ---
       - name: Checkout PR head
@@ -280,8 +284,8 @@ jobs:
         if: steps.surface.outputs.testable == 'true'
         continue-on-error: true
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
-          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
           EVIDENCE_PROMPT: |
             Follow the gaia-testing skill at `.claude/skills/gaia-testing/SKILL.md` (read it) to
@@ -318,9 +322,40 @@ jobs:
             "N/A — no CLI/API/MCP surface changed in this PR." Do NOT review the code, and do NOT
             post any PR comment — writing the file is your only output.
         run: |
+          # pipefail: the default `bash -e` would report tee's status, not claude's.
+          set -o pipefail
           # claude-code pinned — bump deliberately. Direct CLI = no GitHub auth / no github token.
           npm install -g @anthropic-ai/claude-code@2.1.282
+          # One token per step: the agent runs Bash, so the other account's token is
+          # never in this environment. The tail decides whether to retry on it.
+          printf '%s' "$EVIDENCE_PROMPT" > "$RUNNER_TEMP/evidence-prompt.txt"
           claude -p "$EVIDENCE_PROMPT" \
+            --allowedTools "Read,Grep,Glob,Bash,Write" \
+            --max-turns 100 \
+            --model claude-opus-5-5 2>&1 | tee "$RUNNER_TEMP/evidence-primary.log"
+
+      - name: Check whether the evidence run was refused for quota
+        id: evidence_quota
+        if: steps.surface.outputs.testable == 'true' && steps.evidence.outcome == 'failure'
+        run: |
+          set -uo pipefail
+          tail_text=$(tail -c 4000 "$RUNNER_TEMP/evidence-primary.log" 2>/dev/null || true)
+          quota=false
+          if printf '%s' "$tail_text" | grep -qiE "$QUOTA_RE" && ! printf '%s' "$tail_text" | grep -qiE "$CREDENTIAL_RE"; then
+            quota=true
+          fi
+          echo "quota=$quota" >> "$GITHUB_OUTPUT"
+
+      - name: Generate real-world evidence on the secondary account (primary out of quota)
+        id: evidence_secondary
+        if: steps.evidence_quota.outputs.quota == 'true' && env.HAS_SECONDARY == 'true'
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
+          PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+        run: |
+          echo "::warning title=Claude account: using the backup::The primary Claude account is out of quota, so the evidence run is retried on the secondary account (CLAUDE_CODE_OAUTH_TOKEN_SECONDARY)."
+          claude -p "$(cat "$RUNNER_TEMP/evidence-prompt.txt")" \
             --allowedTools "Read,Grep,Glob,Bash,Write" \
             --max-turns 100 \
             --model claude-opus-5-5
@@ -330,7 +365,7 @@ jobs:
       # "nothing to test". Write a visible sentinel so the review says the harness broke, not
       # that the surface was clean. A silent-green evidence stage is exactly how #2417 hid.
       - name: Flag evidence-harness failure (no silent green)
-        if: steps.surface.outputs.testable == 'true' && steps.evidence.outcome == 'failure'
+        if: steps.surface.outputs.testable == 'true' && steps.evidence.outcome == 'failure' && steps.evidence_secondary.outcome != 'success'
         run: |
           {
             echo "⚠️ EVIDENCE HARNESS FAILED TO RUN — this is NOT \"nothing to test\"."
@@ -349,8 +384,8 @@ jobs:
         continue-on-error: true
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
-          anthropic_api_key: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
-          claude_code_oauth_token: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
           prompt: ${{ inputs.prompt }}
@@ -371,8 +406,68 @@ jobs:
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
         continue-on-error: true
         with:
-          anthropic_api_key: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
-          claude_code_oauth_token: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
+          prompt: ${{ inputs.prompt }}
+          claude_args: ${{ inputs.claude_args }}
+
+      # --- Fail over to the secondary account, on quota only ---
+      # Reads the CLI's own result record, like the classification below. Two
+      # conditions, both required:
+      #   - the call never reached a model (is_error, empty modelUsage, $0). A run
+      #     that did may already have posted through `gh` (pr-comment,
+      #     issue-handler, issue-triage), and a retry would post twice;
+      #   - quota WORDING (QUOTA_RE, never a bare per-minute 429). A refusal with no
+      #     text, or one naming the credential, never fails over: the other account
+      #     would hide a token to rotate.
+      - name: Check whether Claude was refused for quota
+        id: quota
+        if: "!cancelled()"
+        env:
+          EXEC_FILE: ${{ steps.a1.outputs.execution_file || steps.a2.outputs.execution_file }}
+        run: |
+          set -uo pipefail
+          quota=false
+          early=false
+          detail=""
+          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
+            result=$(jq -s -c '[.. | objects | select(.type == "result")] | last // empty' \
+              "$EXEC_FILE" 2>/dev/null || true)
+            if [ -n "$result" ] && [ "$(printf '%s' "$result" | jq -r '.is_error')" = "true" ]; then
+              early=$(printf '%s' "$result" | jq -r '
+                if (((.modelUsage // {}) | length) == 0) and ((.total_cost_usd // 0) == 0)
+                then "true" else "false" end')
+              detail=$(printf '%s' "$result" \
+                | jq -r '[.result, .error] | map(select(type == "string")) | join(" ")' \
+                | tr -d '\r\n' | cut -c1-300)
+              if printf '%s' "$detail" | grep -qiE "$QUOTA_RE" && ! printf '%s' "$detail" | grep -qiE "$CREDENTIAL_RE"; then
+                quota=true
+              fi
+            fi
+          fi
+          retry=false
+          if [ "$quota" = "true" ] && [ "$early" != "true" ]; then
+            echo "::warning title=Claude ran out of quota mid-run::The primary Claude account ran out of quota after reaching the model (${detail:-no text}). It is not retried on the secondary: this run may already have posted, and a retry could post twice."
+          elif [ "$quota" = "true" ] && [ "$HAS_SECONDARY" = "true" ]; then
+            retry=true
+            echo "::warning title=Claude account: using the backup::The primary Claude account is out of quota (${detail:-no text}), so this run is retried once on the secondary account (CLAUDE_CODE_OAUTH_TOKEN_SECONDARY)."
+          elif [ "$quota" = "true" ]; then
+            echo "::warning title=No backup Claude account::The primary Claude account is out of quota and CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so there is nothing to retry on."
+          fi
+          {
+            echo "quota=$quota"
+            echo "retry=$retry"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run Claude on the secondary account (primary out of quota)
+        id: b1
+        if: "!cancelled() && steps.quota.outputs.retry == 'true'"
+        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        continue-on-error: true
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
           prompt: ${{ inputs.prompt }}
@@ -389,7 +484,7 @@ jobs:
         id: harness
         if: "!cancelled()"
         env:
-          EXEC_FILE: ${{ steps.a1.outputs.execution_file || steps.a2.outputs.execution_file }}
+          EXEC_FILE: ${{ steps.b1.outputs.execution_file || steps.a1.outputs.execution_file || steps.a2.outputs.execution_file }}
         run: |
           set -uo pipefail
           status=no_output
@@ -420,18 +515,8 @@ jobs:
                 | tr -d '\r\n' | cut -c1-300)
             fi
           fi
-          # A refusal before any model work is budget or credential; the account
-          # switch's own probe tells the two apart, so either one asks it to look.
-          quota_suspected=false
-          if [ "$status" = "not_started" ]; then
-            quota_suspected=true
-          # Exhaustion wording only: a transient 429 "rate limit" is not an empty account.
-          elif [ "$status" = "errored" ] && printf '%s' "$detail" | grep -qiE 'spend limit|usage limit|weekly limit|session limit|limit resets|quota|credit balance|billing|upgrade your plan'; then
-            quota_suspected=true
-          fi
           {
             echo "status=$status"
-            echo "quota_suspected=$quota_suspected"
             echo "turns=$turns"
             echo "cost=$cost"
             echo "models=$models"
@@ -552,11 +637,11 @@ jobs:
           fi
           # Wording only NARROWS an outage the numbers already established; it can never
           # create or suppress one. ASCII substrings only — the real text carries U+00B7.
-          # The authoritative phrase list lives in util/classify_claude_probe.py.
+          # QUOTA_RE is the shared list (src/gaia/eval/claude_refusal.py).
           cause="an exhausted Anthropic spend/rate limit (amd/gaia#4080) or a rejected credential"
-          todo="check the org budget at https://claude.ai/admin-settings/usage first, then CLAUDE_CODE_OAUTH_TOKEN"
-          if printf '%s' "$said" | grep -qiE 'spend limit|usage limit|weekly limit|rate limit|quota|credit balance|billing|upgrade your plan'; then
-            cause="the org's Anthropic BUDGET is exhausted (amd/gaia#4080) — the credential is fine, do not rotate it"
+          todo="check the org budget at https://claude.ai/admin-settings/usage first, then CLAUDE_CODE_OAUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN_SECONDARY"
+          if printf '%s' "$said" | grep -qiE "$QUOTA_RE"; then
+            cause="every configured Claude account is out of BUDGET (amd/gaia#4080) — the credentials are fine, do not rotate them"
             todo="raise the org spend limit at https://claude.ai/admin-settings/usage, or wait for the reset the CLI quoted"
           fi
           msg="The $KIND for $TARGET NEVER RAN, so this red says nothing about $TARGET."

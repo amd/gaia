@@ -58,7 +58,7 @@ the SDK call below and simply reading the procedure yourself.
 Any agent built on GAIA's base `Agent` can load a skill by name:
 
 ```python
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 agent = ChatAgent(ChatAgentConfig())
 agent.load_skill("research-report")     # body joins the system prompt
@@ -235,6 +235,7 @@ This is the part that matters. Copying a skill and editing it is the whole
 workflow:
 
 ```bash
+mkdir -p ~/my-skills
 cp -r hub/skills/source-watch ~/my-skills/gpu-restock-watch
 ```
 

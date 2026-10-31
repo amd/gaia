@@ -217,8 +217,7 @@ turn it on when you'd rather not be asked.
 An update doesn't lose your work. The desktop app asks first if an answer or an
 indexing job is still running, keeps any message you were typing, and reopens the
 chat you were in. The Terminal UI won't install while it is answering or running
-setup, saves the conversation to `~/.gaia/transcripts/` first, and shows it again
-when you reopen it. The agent starts a fresh session after an update, so mention
+setup, saves the conversation first, and shows it again when you reopen it. The agent starts a fresh session after an update, so mention
 anything from earlier that it still needs.
 
 **Desktop app (Agent UI).** It checks 10 seconds after launch and every 4 hours. A
@@ -245,7 +244,7 @@ asks you to **Restart now** or **Later**. **Settings → General → Updates** h
 | `/update list` | List recent releases |
 | `/update auto on` / `off` | Install new releases automatically when you quit (off by default) |
 | `/update rc on` / `off` | Offer release candidates too (off by default; they still wait for `/update now` unless auto-update is on) |
-| `/update unpin` | Offer new releases again after a pinned install |
+| `/update unpin` | Offer new releases again after a pinned install (`/update now` also replaces the pin) |
 | `/update cancel` | Don't install the release queued for quit |
 
 Installing closes the Terminal UI and runs the installer in the same terminal; open
@@ -256,12 +255,14 @@ Releases older than the combined Windows setup can't be installed that way from 
 Terminal UI; use the one-line installer with `GAIA_RELEASE_TAG` set instead. The
 Windows setup finishes in its own window, so an exact version installed through it
 isn't pinned; keep auto-update off to stay on it. The launch check and `/update now` offer only
-the newest release that has an installer for your machine's OS and architecture.
+the newest release that has an installer for your machine's OS and architecture; when a newer
+one has none, `/update` says so and points to the releases page.
 
 Both apps keep the auto-update and release-candidate choices in
 `~/.gaia/update-config.json`, so turning one on in either app turns it on in the
 other. Pins stay separate. If the file can't be read, neither app overwrites it: saving a
-setting fails with a message saying to fix or delete the file. Both check the
+setting fails with a message saying to fix or delete the file, and the desktop app pauses
+its update checks until it is fixed. Both check the
 [GitHub releases](https://github.com/amd/gaia/releases): GitHub's API allows 60
 anonymous requests an hour per network; set `GH_TOKEN` to lift that in the Terminal
 UI. The desktop app installs only releases that publish its update for your

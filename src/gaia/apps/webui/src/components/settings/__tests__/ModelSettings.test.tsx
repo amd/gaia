@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { StrictMode } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelSettings } from '../ModelSettings';
@@ -61,20 +62,97 @@ describe('ModelSettings provider keys', () => {
         expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toHaveAttribute('aria-checked', 'true');
     });
 
+    it('says when the models shown are known ones, because the list is down', async () => {
+        withProviders(fireworks({ models_discovered: true, key_source: 'stored', known_models: true }));
+        const card = await openFireworks();
+        expect(within(card).getByRole('status')).toHaveTextContent(/can't list its models.*Your key still works.*out of date/);
+    });
+
+    it('shows a working key as masked, with its ending and connected', async () => {
+        withProviders(fireworks({ models_discovered: true, key_source: 'stored', key_hint: 'a1b2' }));
+        const card = await openFireworks();
+        const saved = within(card).getByLabelText('Saved Fireworks AI API key');
+        expect(saved).toHaveAttribute('readonly');
+        expect((saved as HTMLInputElement).value).toMatch(/^•+ a1b2$/);
+        expect(within(card).getByText('Connected')).toBeInTheDocument();
+        expect(within(card).queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument();
+    });
+
+    it('offers Reconnect only when the saved key is not connected', async () => {
+        withProviders(fireworks({ models_discovered: false, key_source: 'stored', key_hint: 'a1b2' }));
+        mockedApi.connectProviderWaitingForOs.mockResolvedValue({ ...fireworks(), remembered: true, remember_error: null });
+        const card = await openFireworks();
+        expect(within(card).getByText('Not connected')).toBeInTheDocument();
+        fireEvent.click(within(card).getByRole('button', { name: 'Reconnect' }));
+        await waitFor(() => expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('fireworks', { api_key: undefined }, expect.any(Function), expect.any(Function)));
+    });
+
+    it('replaces a saved key only after asking for a new one', async () => {
+        withProviders(fireworks({ models_discovered: true, key_source: 'stored', key_hint: 'a1b2' }));
+        mockedApi.connectProviderWaitingForOs.mockResolvedValue({ ...fireworks(), remembered: true, remember_error: null });
+        const card = await openFireworks();
+        expect(within(card).queryByLabelText('Fireworks AI API key')).not.toBeInTheDocument();
+        fireEvent.click(within(card).getByRole('button', { name: 'Replace' }));
+        expect(within(card).getByRole('button', { name: 'Save key' })).toBeDisabled();
+        fireEvent.change(within(card).getByLabelText('Fireworks AI API key'), { target: { value: 'fw-new' } });
+        fireEvent.click(within(card).getByRole('button', { name: 'Save key' }));
+        await waitFor(() => expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('fireworks', { api_key: 'fw-new' }, expect.any(Function), expect.any(Function)));
+        expect(await within(card).findByLabelText('Saved Fireworks AI API key')).toBeInTheDocument();
+    });
+
+    it('cancelling a replacement keeps the saved key and drops what was typed', async () => {
+        withProviders(fireworks({ models_discovered: true, key_source: 'stored', key_hint: 'a1b2' }));
+        const card = await openFireworks();
+        fireEvent.click(within(card).getByRole('button', { name: 'Replace' }));
+        fireEvent.change(within(card).getByLabelText('Fireworks AI API key'), { target: { value: 'fw-new' } });
+        fireEvent.click(within(card).getByRole('button', { name: 'Cancel' }));
+        expect(within(card).getByLabelText('Saved Fireworks AI API key')).toBeInTheDocument();
+        fireEvent.click(within(card).getByRole('button', { name: 'Replace' }));
+        expect(within(card).getByLabelText('Fireworks AI API key')).toHaveValue('');
+        expect(mockedApi.connectProviderWaitingForOs).not.toHaveBeenCalled();
+    });
+
+    it('an environment key can be neither replaced nor removed here', async () => {
+        withProviders(fireworks({ models_discovered: true, key_source: 'environment' }));
+        const card = await openFireworks();
+        expect(within(card).getByLabelText('Saved Fireworks AI API key')).toHaveValue('Set in FIREWORKS_API_KEY');
+        expect(within(card).queryByRole('button', { name: 'Replace' })).not.toBeInTheDocument();
+        expect(within(card).queryByRole('button', { name: 'Remove key' })).not.toBeInTheDocument();
+    });
+
+    it('finishes connecting under StrictMode, which remounts effects in development', async () => {
+        mockedApi.connectProviderWaitingForOs.mockResolvedValue({ ...fireworks(), remembered: true, remember_error: null });
+        useChatStore.getState().openSettings('model', 'fireworks');
+        render(<StrictMode><ModelSettings /></StrictMode>);
+        const card = await screen.findByRole('region', { name: 'Fireworks AI' });
+        const field = within(card).getByLabelText('Fireworks AI API key');
+        fireEvent.change(field, { target: { value: 'fw-secret' } });
+        fireEvent.click(within(card).getByRole('button', { name: 'Connect' }));
+        expect(await within(card).findByRole('status')).toHaveTextContent('The key is kept for next time.');
+        expect(field).toHaveValue('');
+        await waitFor(() => expect(within(card).getByRole('button', { name: 'Connect' }).querySelector('.spin')).toBeNull());
+    });
+
+    it('stays quiet about known models on the live list', async () => {
+        withProviders(fireworks({ models_discovered: true, key_source: 'stored' }));
+        const card = await openFireworks();
+        expect(within(card).queryByText(/can't list its models/)).not.toBeInTheDocument();
+    });
+
     it('takes the key in a password field', async () => {
         const card = await openFireworks();
         expect(within(card).getByLabelText('Fireworks AI API key')).toHaveAttribute('type', 'password');
         expect(within(card).getByText('No key yet.')).toBeInTheDocument();
         expect(within(card).getByRole('button', { name: 'Connect' })).toBeDisabled();
-        expect(within(card).queryByRole('button', { name: 'Forget key' })).not.toBeInTheDocument();
+        expect(within(card).queryByRole('button', { name: 'Remove key' })).not.toBeInTheDocument();
     });
 
-    it('says when the model server already holds a key, and offers to forget it', async () => {
+    it('shows a key the model server already holds, and offers to remove it', async () => {
         withProviders(fireworks({ key_source: 'lemonade' }));
         const card = await openFireworks();
-        expect(within(card).getByText(/A key is already configured/)).toBeInTheDocument();
-        expect(within(card).getByRole('button', { name: 'Connect' })).toBeEnabled();
-        expect(within(card).getByRole('button', { name: 'Forget key' })).toBeInTheDocument();
+        expect(within(card).getByLabelText('Saved Fireworks AI API key')).toBeInTheDocument();
+        expect(within(card).getByRole('button', { name: 'Reconnect' })).toBeEnabled();
+        expect(within(card).getByRole('button', { name: 'Remove key' })).toBeInTheDocument();
     });
 
     it('says the OS is asking for keychain access instead of "No key yet", then updates', async () => {
@@ -91,7 +169,7 @@ describe('ModelSettings provider keys', () => {
         const card = await openFireworks();
         expect(within(card).getByText(/asking GAIA for keychain access/)).toBeInTheDocument();
         expect(within(card).queryByText('No key yet.')).not.toBeInTheDocument();
-        expect(await within(card).findByText('A saved key will be used.', {}, { timeout: 4000 })).toBeInTheDocument();
+        expect(await within(card).findByText('Not connected', {}, { timeout: 4000 })).toBeInTheDocument();
     });
 
     it('connects with the typed key and clears the field', async () => {
@@ -116,7 +194,7 @@ describe('ModelSettings provider keys', () => {
         });
         withProviders(fireworks({ key_source: 'stored' }));
         const card = await openFireworks();
-        fireEvent.click(within(card).getByRole('button', { name: 'Connect' }));
+        fireEvent.click(within(card).getByRole('button', { name: 'Reconnect' }));
         expect(await within(card).findByText(/Look for a system dialog/)).toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('radio', { name: /Local/ }));
@@ -134,11 +212,13 @@ describe('ModelSettings provider keys', () => {
         expect(await within(card).findByRole('alert')).toHaveTextContent('Fireworks rejected the key (401)');
     });
 
-    it('forgets a stored key', async () => {
+    it('removes a stored key only after confirming', async () => {
         withProviders(fireworks({ key_source: 'stored' }));
         mockedApi.forgetProviderKey.mockResolvedValue({ removed: true });
         const card = await openFireworks();
-        fireEvent.click(within(card).getByRole('button', { name: 'Forget key' }));
+        fireEvent.click(within(card).getByRole('button', { name: 'Remove key' }));
+        expect(mockedApi.forgetProviderKey).not.toHaveBeenCalled();
+        fireEvent.click(within(card).getByRole('button', { name: 'Remove' }));
         await waitFor(() => expect(mockedApi.forgetProviderKey).toHaveBeenCalledWith('fireworks'));
         expect(await within(card).findByRole('status')).toHaveTextContent('Key cleared');
     });

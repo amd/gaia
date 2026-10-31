@@ -65,7 +65,7 @@ runs.
 |---|---|---|
 | `self.path_validator` | `PathValidator` | Enforces the allowlist/blocklist/size limits every write and read tool checks. |
 
-`ChatAgent` ([`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py))
+`ChatAgent` ([`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py))
 sets it before calling `super().__init__()`, because `_register_tools()` runs
 inside that call.
 
@@ -150,8 +150,9 @@ model's tool-result budget (`limit` can shrink it) and ends on a line break:
 `start_line`/`end_line` work on the extracted text too. Extraction is cached
 per file while it is unchanged, so paging does not re-parse it. A scanned PDF
 with no text layer, an encrypted one, or a corrupt file is an error naming the
-file; `.doc`, `.pptx`, `.xls` and the OpenDocument formats are an error pointing
-at `index_document`.
+file; `.pptx` and `.epub` are an error pointing at `index_document`, and `.doc`,
+`.ppt`, `.xls` and the OpenDocument formats are an error saying to re-save the
+file as `.docx` / `.pptx` / `.xlsx` or PDF.
 
 When the agent also has `index_document`, the mixin adds a short
 `READING DOCUMENTS` prompt fragment: to review, compare, reconcile, audit or

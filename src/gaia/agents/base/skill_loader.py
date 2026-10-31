@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 #: Inclusive cosine threshold. Same calibration basis as ToolLoader's
-#: DEFAULT_THRESHOLD (#1449) — a query is only weakly similar to a short
+#: DEFAULT_THRESHOLD — a query is only weakly similar to a short
 #: trigger description, so real scores sit well below a naive 0.5+ guess.
 DEFAULT_SKILL_THRESHOLD = 0.20
 

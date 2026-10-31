@@ -70,7 +70,7 @@ def flagship_tool_schemas(turn_only: bool = False) -> List[dict]:
     if not turn_only:
         return agent._build_openai_tool_schemas()
 
-    from gaia_agent_chat.tool_bundles import FULL_BUNDLES, FULL_CORE_TOOLS
+    from gaia_agent.tool_bundles import FULL_BUNDLES, FULL_CORE_TOOLS
 
     members = set(FULL_CORE_TOOLS)
     by_name = {bundle.name: bundle for bundle in FULL_BUNDLES}

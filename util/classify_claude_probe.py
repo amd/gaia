@@ -22,55 +22,22 @@ defect, not the fix.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
-import re
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
-# Matched case-insensitively against the probe response. Every pattern must stay
-# ASCII: the real rejection text carries U+00B7 separators, and this file is
-# referenced from a Windows PowerShell step where PS 5.1 reads a BOM-less file as
-# ANSI. Match around such characters, never on them.
-QUOTA_PATTERNS: tuple[str, ...] = (
-    "spend limit",
-    "usage limit",
-    # Match the quantifier, not the reset date - the date changes every reset,
-    # and a U+00B7 sits between "limit" and "resets" in the real text.
-    "weekly limit",
-    # The subscription's short rolling window, separate from the weekly one.
-    "session limit",
-    "rate limit",
-    "rate_limit_error",
-    "limit resets",
-    "quota",
-    "credit balance",
-    "out of credit",
-    "insufficient credit",
-    "insufficient_quota",
-    "billing",
-    "upgrade your plan",
-    "admin-settings/usage",
-)
+# The phrase lists live in one stdlib-only module that the eval runner and
+# claude-run.yml also read, so "out of quota" means one thing everywhere. Loaded by
+# path: CI runs this file before GAIA is installed.
+_SHARED = Path(__file__).resolve().parents[1] / "src" / "gaia" / "eval" / "claude_refusal.py"
+_spec = importlib.util.spec_from_file_location("_claude_refusal", _SHARED)
+refusal = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(refusal)
 
-CREDENTIAL_PATTERNS: tuple[str, ...] = (
-    "authentication_error",
-    "authentication failed",
-    "invalid api key",
-    "invalid x-api-key",
-    "invalid bearer token",
-    "invalid_token",
-    "unauthorized",
-    "oauth token",
-    "token has expired",
-    "please run /login",
-    "not logged in",
-    "no credential",
-)
-
-# Bare status codes need a word boundary: a token count or a session id can
-# contain the digits, and a substring match on "402" would misread it.
-QUOTA_CODES: tuple[str, ...] = ("402", "429")
-CREDENTIAL_CODES: tuple[str, ...] = ("401", "403")
+QUOTA_PATTERNS: tuple[str, ...] = refusal.QUOTA_PHRASES
+CREDENTIAL_PATTERNS: tuple[str, ...] = refusal.CREDENTIAL_PHRASES
 
 EXIT_OK = 0
 EXIT_QUOTA = 2
@@ -101,13 +68,6 @@ class Verdict:
         return " | ".join(parts)
 
 
-def _hits(text: str, patterns: tuple[str, ...], codes: tuple[str, ...]) -> list[str]:
-    lowered = text.lower()
-    found = [p for p in patterns if p in lowered]
-    found += [c for c in codes if re.search(rf"(?<!\d){c}(?!\d)", lowered)]
-    return found
-
-
 def classify(text: str, exit_code: int, always_scan: bool = False) -> Verdict:
     """Decide what a probe response means.
 
@@ -126,8 +86,8 @@ def classify(text: str, exit_code: int, always_scan: bool = False) -> Verdict:
             where="n/a",
         )
 
-    quota = _hits(text, QUOTA_PATTERNS, QUOTA_CODES)
-    credential = _hits(text, CREDENTIAL_PATTERNS, CREDENTIAL_CODES)
+    quota = refusal.quota_hits(text)
+    credential = refusal.credential_hits(text)
 
     if exit_code == 0 and not quota and not credential:
         return Verdict(
@@ -208,7 +168,7 @@ def classify(text: str, exit_code: int, always_scan: bool = False) -> Verdict:
         action=(
             "Read the full response in the step log and act on it directly, then teach "
             "this guard the new phrase by adding it to QUOTA_PATTERNS or "
-            "CREDENTIAL_PATTERNS in util/classify_claude_probe.py so the next occurrence "
+            "CREDENTIAL_PATTERNS (src/gaia/eval/claude_refusal.py) so the next occurrence "
             "is named."
         ),
         where="util/classify_claude_probe.py and the failing step's log",

@@ -24,6 +24,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
 	"github.com/amd/gaia/tui/internal/ui/theme"
+	"github.com/amd/gaia/tui/internal/update"
 )
 
 // prepareTerminal does everything that has to TALK to the terminal before
@@ -79,7 +80,8 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithFullAccessNotice(notice).
-		WithClaude(useClaude, claudeModel)).
+		WithClaude(useClaude, claudeModel).
+		WithTerminalVersion(update.Current)).
 		WithTrace(trace).
 		WithUpdateCheck().
 		WithLocalPreflight(preflight.LocalOptions{
@@ -106,7 +108,7 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 		return fmt.Errorf("cannot start --subprocess %q: %w", argv[0], err)
 	}
 
-	c := client.NewSubprocessClient(bin, argv[1:], dev).WithTrace(trace)
+	c := client.NewSubprocessClient(bin, argv[1:], dev).WithTrace(trace).WithLogf(control.DevLogf)
 	defer func() {
 		if err := closeSession(c, os.Stderr, slowCloseNotice); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -190,7 +192,7 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	if removed, err := control.ClearStale(daemon.PIDAlive); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 	} else if removed && dev {
-		fmt.Fprintln(os.Stderr, "[DEBUG] removed a stale control discovery file")
+		control.DevLogf("removed a stale control discovery file")
 	}
 
 	if ctrl == nil {
@@ -426,7 +428,8 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithClaude(useClaude, claudeModel).
-		WithModel(model)).
+		WithModel(model).
+		WithTerminalVersion(update.Current)).
 		WithTrace(trace)
 	if err := run(m, dev, ctrl); err != nil {
 		return 1, err

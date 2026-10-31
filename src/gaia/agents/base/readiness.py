@@ -40,7 +40,7 @@ from gaia.version import parse_version as _parse_version
 
 logger = get_logger(__name__)
 
-# Test-only hold on model reporting (#2539): Lemonade lazily reloads an
+# Test-only hold on model reporting: Lemonade lazily reloads an
 # unloaded model on the next inference request, which makes "model unavailable"
 # un-testable through these probes alone — by the time a second check runs, a
 # query elsewhere may have already triggered the reload. Setting this env var to
@@ -435,8 +435,13 @@ def _replay_cloud_key(model_id: str) -> bool:
     provider = str(model_id or "").lower().split(".", 1)[0]
     if "." not in str(model_id or "") or provider not in PROVIDERS:
         return False
+    from gaia.llm.local_only import CloudDisabledError
+
     try:
         return ensure_authenticated(provider)
+    except CloudDisabledError as e:
+        logger.warning(str(e))
+        return False
     except (CloudKeyError, GatewayError, requests.RequestException) as e:
         # Never fatal: the model may simply be absent, and the caller's own
         # "not found" message is the actionable one.

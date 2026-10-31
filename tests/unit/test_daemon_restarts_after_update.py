@@ -291,14 +291,13 @@ def daemon_reports(monkeypatch, tmp_path):
 
     answers = {
         "status": _Response(200, {"service": "gaia-daemon", "relayed_turns": 0}),
+        "agents": _Response(200, {"agents": []}),
         "clients": _Response(200, {"clients": [], "seconds_since_request": None}),
     }
     monkeypatch.setattr(
         requests,
         "get",
-        lambda url, **kwargs: answers[
-            "status" if url.endswith("/status") else "clients"
-        ],
+        lambda url, **kwargs: answers[url.rsplit("/", 1)[-1]],
     )
     monkeypatch.setattr(client, "_LOCAL_WORK", [])
     monkeypatch.setattr(client, "pid_alive", lambda pid: pid != 999999)
@@ -359,6 +358,155 @@ def test_another_running_front_end_keeps_the_daemon(daemon_reports):
         200, {"clients": [{"name": "gaia-tui", "pids": [4343]}]}
     )
     assert "gaia-tui is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_supervised_agent_does_not_keep_the_outdated_daemon(daemon_reports):
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia agent", "pids": [4343]}]}
+    )
+
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_packaged_agent_child_does_not_keep_the_outdated_daemon(
+    daemon_reports, monkeypatch
+):
+    import psutil
+
+    class _Child:
+        pid = 4344
+
+    class _Launcher:
+        def children(self, recursive=False):
+            assert recursive is True
+            return [_Child()]
+
+    monkeypatch.setattr(psutil, "Process", lambda pid: _Launcher())
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia agent", "pids": [4344]}]}
+    )
+
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_stopped_or_pidless_agent_does_not_hide_a_front_end(daemon_reports):
+    daemon_reports["agents"] = _Response(
+        200,
+        {
+            "agents": [
+                {"pid": 4343, "state": "stopped"},
+                {"pid": None, "state": "running"},
+                {"pid": "4345", "state": "running"},
+            ]
+        },
+    )
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [
+                {"name": "gaia-tui", "pids": [4343]},
+                {"name": "gaia-ui", "pids": [4345]},
+            ]
+        },
+    )
+
+    assert "gaia-tui, gaia-ui is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_front_end_beside_a_supervised_agent_still_keeps_it(daemon_reports):
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [
+                {"name": "gaia agent", "pids": [4343]},
+                {"name": "gaia-tui", "pids": [5151]},
+            ]
+        },
+    )
+
+    assert "gaia-tui is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_turn_in_a_supervised_agent_still_keeps_it(daemon_reports):
+    daemon_reports["status"] = _Response(
+        200, {"service": "gaia-daemon", "relayed_turns": 1}
+    )
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia agent", "pids": [4343]}]}
+    )
+
+    assert "1 agent turn(s) are still running" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_recent_model_request_from_a_supervised_agent_still_keeps_it(
+    daemon_reports,
+):
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [{"name": "gaia agent", "pids": [4343]}],
+            "seconds_since_request": 5.0,
+        },
+    )
+
+    assert "answered a request 5s ago" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_launcher_that_exited_mid_check_still_counts_its_own_pid(
+    daemon_reports, monkeypatch
+):
+    import psutil
+
+    def gone(pid):
+        raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(psutil, "Process", gone)
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [
+                {"name": "gaia agent", "pids": [4343]},
+                {"name": "gaia-tui", "pids": [5151]},
+            ]
+        },
+    )
+
+    assert "gaia-tui is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_an_older_daemon_without_the_agents_route_is_judged_as_before(
+    daemon_reports,
+):
+    daemon_reports["agents"] = _Response(404)
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia agent", "pids": [4343]}]}
+    )
+
+    assert "gaia agent is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_an_agents_route_that_fails_says_it_could_not_check(daemon_reports):
+    daemon_reports["agents"] = _Response(500, {"detail": "registry exploded"})
+
+    assert "could not check whether it is busy" in client.outdated_daemon_busy(_inst())
 
 
 def test_this_process_and_exited_front_ends_do_not_keep_it(daemon_reports):
@@ -456,6 +604,103 @@ def test_removed_local_work_no_longer_keeps_it(daemon_reports):
 # itself from the front ends it sees: its own turns must be counted here.
 
 
+def test_an_in_process_agent_ui_turn_keeps_the_daemon_from_restarting(
+    daemon_reports, monkeypatch
+):
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    monkeypatch.setattr(helpers, "_active_sse_handlers", {})
+    client.add_local_work(helpers.active_turns_in_flight)
+
+    # The caller registers its handler before it contacts the daemon; that
+    # starting turn must not make its own restart check busy.
+    helpers._active_sse_handlers["chat-starting"] = SSEOutputHandler()
+    assert client.outdated_daemon_busy(_inst()) is None
+
+    # A second in-process turn that has reached the agent query must keep the
+    # daemon alive while the model/tool loop is still running.
+    running = SSEOutputHandler()
+    running.in_process_turn_active = True
+    helpers._active_sse_handlers["chat-running"] = running
+    assert "1 Agent UI chat(s) are still answering" in (
+        client.outdated_daemon_busy(_inst())
+    )
+
+
+class _InProcessAgent:
+    """Cached in-process agent whose query reports what the daemon would see."""
+
+    def __init__(self, fail=False):
+        self.indexed_files = set()
+        self.conversation_history = []
+        self.rag = None
+        self.path_validator = None
+        self._cancel_event = threading.Event()
+        self.console = None
+        self.fail = fail
+        self.seen = []
+
+    def _register_tools(self):
+        pass
+
+    def process_query(self, _message, **_kwargs):
+        from gaia.ui import _chat_helpers as helpers
+
+        self.seen.append(helpers.active_turns_in_flight())
+        if self.fail:
+            raise RuntimeError("tool loop blew up")
+        if self.console is not None:
+            self.console.print_final_answer("done")
+        return {"result": "done", "status": "success"}
+
+
+def _run_in_process_turn(monkeypatch, agent):
+    import asyncio
+    from types import SimpleNamespace
+
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.models import ChatRequest
+
+    monkeypatch.setattr(helpers, "_active_sse_handlers", {})
+    monkeypatch.setattr(helpers, "_agent_registry", None)
+    monkeypatch.setattr(helpers, "_maybe_load_expected_model", lambda *a, **k: None)
+    helpers._agent_cache.clear()
+    db = ChatDatabase(":memory:")
+    try:
+        session = db.create_session(model="M-GGUF", agent_type="chat")
+        helpers._store_agent(session["id"], "M-GGUF", [], agent, "chat")
+        request = ChatRequest(session_id=session["id"], message="hi", stream=True)
+
+        async def drain():
+            async for _chunk in helpers._stream_chat_impl(
+                SimpleNamespace(handler=None), db, session, request
+            ):
+                pass
+
+        asyncio.run(drain())
+    finally:
+        helpers._agent_cache.clear()
+        db.close()
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["answers", "raises"])
+def test_the_real_in_process_turn_counts_only_while_its_agent_runs(
+    daemon_reports, monkeypatch, fail
+):
+    from gaia.ui import _chat_helpers as helpers
+
+    client.add_local_work(helpers.active_turns_in_flight)
+    agent = _InProcessAgent(fail=fail)
+    _run_in_process_turn(monkeypatch, agent)
+
+    assert agent.seen == ["1 Agent UI chat(s) are still answering"]
+    # A turn that ended, even by raising, must not hold the daemon forever.
+    assert helpers.active_turns_in_flight() is None
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
 class _ParkedProxy:
     """A flagship whose run parks on *event* until released."""
 
@@ -504,7 +749,7 @@ def test_a_parked_agent_ui_turn_keeps_the_daemon_from_restarting(
     from gaia.ui.sse_handler import SSEOutputHandler
 
     monkeypatch.setattr(helpers, "_active_sse_handlers", {})
-    client.add_local_work(helpers.relayed_turns_in_flight)
+    client.add_local_work(helpers.active_turns_in_flight)
     # The calling chat, still on its way to the agent, does not count.
     helpers._active_sse_handlers["chat-b"] = SSEOutputHandler()
     assert client.outdated_daemon_busy(_inst()) is None

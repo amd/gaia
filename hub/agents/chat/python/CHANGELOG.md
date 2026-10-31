@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **Deprecated: `ChatAgent` moved into the flagship package (#6099).** Import
+  it from `gaia_agent.chat_agent`; `gaia_agent_chat.agent` and the other
+  submodules keep working for one release as aliases of their new homes in
+  `gaia_agent`, with a `DeprecationWarning`. The package now depends on `gaia-agent-gaia`
+  instead of the other way round, and is deleted in #6103.
+- The `chat`, `doc` and `file` agent ids are no longer registered here. The
+  registry resolves them, and `chat-lite` / `doc-lite` / `file-lite` /
+  `gaia-lite`, to the flagship `gaia` agent for API, MCP and scheduled
+  callers. Agent UI chats saved under a retired agent stay read-only.
+  MCP settings saved under `installed:chat` no longer apply.
+- With Local only on (`gaia config set network_policy local_ai_only`), the
+  Perplexity-backed `search_web` tool is not registered, because it answers
+  through Perplexity's cloud AI. A cached agent that still has it refuses with
+  the same reason. The DuckDuckGo `search_web` from the browser tools still
+  registers: it runs no AI model.
+- Resolves the user's real Documents folder for the session guidance, including
+  Windows Known Folder Move/OneDrive and Linux `XDG_DOCUMENTS_DIR`, instead of
+  assuming it is always `~/Documents` (#5885). File search and the Agent UI's
+  Documents quick link use the same folder.
+- The data profile's prompt no longer says it can browse the web or transcribe
+  audio and video. It registers neither, so the model promised a tool it could not
+  call. The web and media lines now appear only for profiles that register those
+  tools (#6036).
+- `gaia chat --index <file>` indexes the named file from any working
+  directory. A file outside the folder `gaia chat` ran in was refused as "not
+  in allowed paths", the error was only logged, and the agent answered without
+  the document. Naming a file grants read access to that file, not its folder.
 - `get_system_info` reports free disk space (`disk_free_gb`) and available
   memory (`memory_available_gb`), and computes disk use from free space. On a
   Mac it reported only the share macOS's system volume uses, so a nearly full

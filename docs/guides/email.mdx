@@ -6,13 +6,13 @@ icon: "envelope"
 
 # Email
 
-The flagship [`gaia` agent](/guides/gaia) reads your mailbox — Gmail or Outlook — through **five read-only tools**, and every inference over an email body runs locally on your machine via Lemonade. No email content ever leaves your device.
+The flagship [`gaia` agent](/guides/gaia) reads your mailbox — Gmail or Outlook — through **eight read-only tools**, and every inference over an email body runs locally on your machine via Lemonade. No email content ever leaves your device.
 
-**Reading is all it does today.** It lists your inbox, searches it, opens a message, and lists folders. It does not archive, label, draft, reply, or send. Triage itself — working out what actually needs you — is judgment the model does, driven by the bundled `inbox-triage` skill; the tools hand it facts, never verdicts. The plan for the write verbs is [Email triage as a skill](/plans/email-triage-skill).
+**Reading is all it does today.** It lists your inbox, searches it, opens a message or a whole conversation, finds the threads waiting on your reply, and lists folders. It does not archive, label, draft, reply, or send. Triage itself — working out what actually needs you — is judgment the model does, driven by the bundled `inbox-triage` skill; the tools hand it facts, never verdicts. The plan for the write verbs is [Email triage as a skill](/plans/email-triage-skill).
 
 ## Action surface
 
-These five tools are the whole surface.
+These eight tools are the whole surface.
 
 | Tool | What you'd ask for |
 |---|---|
@@ -21,8 +21,13 @@ These five tools are the whole surface.
 | `search_email` | *"Did I get anything about the Acme invoice?"* — searches every folder, in **relevance** order rather than newest-first. Every term is ANDed, so 2–3 distinctive keywords beat a sentence. If nothing matches, it retries with progressively fewer terms and flags the result as approximate, so you may see hits for a narrower query than you typed. |
 | `read_email` | *"Open that one"* — one message in full, including its body. Very long bodies are truncated, and the result says so. |
 | `list_mail_folders` | *"How much is sitting in Archive?"* — every folder with its unread and total counts. |
+| `get_thread` | *"Catch me up on the thread with Dana"* — every message in one conversation, oldest first, with bodies. Long bodies are clipped so the whole thread fits; no message is ever dropped. |
+| `list_waiting_on_you` | *"What's waiting on me?"* — inbox threads where someone asked you directly for a reply, a decision, or a meeting time, and you were already in that conversation. Oldest first, with how many days each has waited. |
+| `list_connected_mailboxes` | *"Which account are you reading?"* — each mailbox's connection state and which one the other tools use. Reads local connector state only, so it works with the internet off. |
 
-Reading bodies is bounded **per turn**, not just per message: once a turn has read enough mail to fill its share of the context window, `read_email` refuses with `turn_budget_exhausted` and says so, instead of quietly overflowing the conversation.
+`list_waiting_on_you` is narrow on purpose: newsletters, cold outreach, and automated senders never qualify, and neither does a sender you told to stop writing. A first message from someone you have never replied to won't appear either — the full triage pass still catches those. It scans the 50 most recent inbox messages by default (up to 100 on Gmail, 200 on Outlook), and says when older mail was not checked.
+
+Reading bodies is bounded **per turn**, not just per message: once a turn has read enough mail to fill its share of the context window, `read_email` and `get_thread` refuse with `turn_budget_exhausted` and say so, instead of quietly overflowing the conversation. `get_thread` also refuses up front when the thread has too many messages to fit in what is left of the turn, and names the thread's size and the remaining budget — read the messages that matter one at a time instead.
 
 ## Setup
 
@@ -96,8 +101,9 @@ Or run the installed binary directly — `~/.gaia/bin/gaia-tui`, which you may n
 Then just ask:
 
 - *What came in today?*
-- *Anything in my inbox that needs a reply?*
+- *What's waiting on me?*
 - *Find the email about the Acme invoice*
+- *Catch me up on that thread*
 
 ## Mailbox selection
 
@@ -149,4 +155,8 @@ The access token has expired or scopes were revoked. Reconnect Google in Setting
 
 ### Reading stopped partway through a big inbox
 
-Expected, and it says so: `read_email` returns `turn_budget_exhausted` once a turn has filled its mail-reading budget. Narrow the request, or continue in a new turn.
+Expected, and it says so: `read_email` and `get_thread` return `turn_budget_exhausted` once a turn has filled its mail-reading budget. Narrow the request, or continue in a new turn.
+
+### "Nothing is waiting on you", but someone is
+
+`list_waiting_on_you` only counts a thread you already replied in, and only when the latest message asks you something directly. A first-contact request from someone new, or an ask phrased without a question to you, won't appear there. Ask for a full triage of the inbox instead, which judges every message.
