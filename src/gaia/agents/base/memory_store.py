@@ -1525,6 +1525,7 @@ class MemoryStore:
         except sqlite3.OperationalError as e:
             # A failed dedup search means store() falls through to inserting a
             # duplicate -- debug level hid exactly that for as long as this
+            # query could raise.
             logger.warning("[MemoryStore] FTS5 dedup search failed: %s", e)
 
         return None

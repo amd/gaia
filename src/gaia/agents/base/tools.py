@@ -375,9 +375,10 @@ def get_tool_display_name(tool_name: str) -> str:
 
 
 def get_tool_display_label(tool_name: str) -> Optional[str]:
-    """Return a label for the tool suitable for UI progress strips, or returns None.
+    """Return the tool's ``display_label`` for UI progress strips, or None.
 
-    Returns None if the tool isn't found/registered.
+    None when the tool isn't registered or declares no ``display_label``;
+    callers pick their own fallback.
     """
     tool = _TOOL_REGISTRY.get(tool_name)
     if not tool:

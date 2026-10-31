@@ -11167,7 +11167,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Track errors but DON'T break early — drain all N
                     # tool calls first so conversation history reflects
-                    # the full set, per acceptance criterion (b).
+                    # the full set.
                     is_error = Agent._is_error_result(tool_result)
                     if is_error:
                         failed = tool_result_error_fields(tool_result)
