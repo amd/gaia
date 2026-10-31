@@ -280,9 +280,6 @@ class ChatAgentConfig:
     claude_model: str = "claude-sonnet-5"
     base_url: Optional[str] = None
     model_id: Optional[str] = None  # None = use default model (Gemma)
-    # Optional Lemonade TTS model role. Empty uses the local Kokoro default;
-    # speech tools never download it implicitly.
-    tts_model: Optional[str] = None
 
     # Execution settings
     max_steps: int = field(default_factory=default_max_steps)
@@ -2852,15 +2849,17 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     "error": "output_path must end in .wav for local speech output.",
                 }
 
-            model = getattr(self.config, "tts_model", None) or DEFAULT_TTS_MODEL
+            model = DEFAULT_TTS_MODEL
             try:
                 client = LemonadeTTSClient(
-                    base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None)),
+                    base_url=resolve_lemonade_base_url(
+                        getattr(self, "_base_url", None)
+                    ),
                     model=model,
                 )
                 client.check_model_available()
                 before_change(destination, "text_to_speech")
-                duration = client.synthesize_to_wav_long(
+                duration, chunks = client.synthesize_to_wav_long(
                     text, destination, voice=voice, speed=speed
                 )
             except (ConnectionError, LemonadeTTSError, OSError, ValueError) as exc:
@@ -2877,7 +2876,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 "duration_seconds": round(duration, 2),
                 "voice": voice,
                 "model": model,
-                "chunks": max(1, (len(text) + 1799) // 1800),
+                "chunks": chunks,
             }
 
         # MCP tools — load from <gaia_home>/mcp_servers.json if configured.

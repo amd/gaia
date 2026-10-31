@@ -157,12 +157,18 @@ class TestTTSRequestShape:
             assert handle.getsampwidth() == 2
             assert handle.getnframes() == TTS_SAMPLE_RATE
 
-    def test_missing_model_preflight_does_not_start_a_download(self, monkeypatch):
+    def test_missing_model_preflight_names_the_talk_download_command(self, monkeypatch):
         wire = Wire(
             monkeypatch,
-            [catalog({"id": DEFAULT_TTS_MODEL, "labels": ["tts"], "downloaded": False})],
+            [
+                catalog(
+                    {"id": DEFAULT_TTS_MODEL, "labels": ["tts"], "downloaded": False}
+                )
+            ],
         )
-        with pytest.raises(LemonadeTTSError, match="not downloaded"):
+        with pytest.raises(
+            LemonadeTTSError, match=r"not downloaded.*gaia download --agent talk"
+        ):
             LemonadeTTSClient(base_url=BASE).check_model_available()
         assert [request.url for request in wire.requests] == [
             f"{BASE}/models?show_all=true"
@@ -178,11 +184,14 @@ class TestTTSRequestShape:
         )
         out = tmp_path / "long.wav"
         text = "First sentence. Second sentence."
-        seconds = LemonadeTTSClient(base_url=BASE).synthesize_to_wav_long(
+        seconds, chunks = LemonadeTTSClient(base_url=BASE).synthesize_to_wav_long(
             text, out, limit=20
         )
-        speech_requests = [request for request in wire.requests if request.method == "POST"]
+        speech_requests = [
+            request for request in wire.requests if request.method == "POST"
+        ]
         assert len(speech_requests) == 2
+        assert chunks == 2
         assert seconds == pytest.approx(8 / TTS_SAMPLE_RATE)
         with wave.open(str(out)) as handle:
             assert handle.getnframes() == 8

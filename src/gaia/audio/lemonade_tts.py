@@ -185,12 +185,19 @@ def _split_text(text: str, limit: int) -> List[str]:
             current = f"{current} {piece}".strip()
     if current:
         chunks.append(current)
-    # A URL/code-like run may contain no sentence boundary; hard-split only
-    # those oversized pieces so the request remains bounded.
+    # A URL/code-like run may contain no sentence boundary. Split it at the
+    # last whitespace inside each window when possible so speech does not cut
+    # ordinary words in half; fall back to the hard bound for one long token.
     result: List[str] = []
     for chunk in chunks:
-        for start in range(0, len(chunk), limit):
-            result.append(chunk[start : start + limit])
+        while len(chunk) > limit:
+            split_at = chunk.rfind(" ", 0, limit + 1)
+            if split_at <= 0:
+                split_at = limit
+            result.append(chunk[:split_at])
+            chunk = chunk[split_at:].lstrip()
+        if chunk:
+            result.append(chunk)
     return result
 
 
@@ -251,7 +258,7 @@ class LemonadeTTSClient(LemonadeAudioService):
         if entry is None:
             raise LemonadeTTSError(
                 f"Lemonade has no TTS model '{self.model}' in its catalog. "
-                "Choose an installed TTS model in Settings → Models."
+                "Run `gaia download --agent talk`, then retry."
             )
         if "tts" not in (entry.get("labels") or []):
             raise LemonadeTTSError(
@@ -260,11 +267,13 @@ class LemonadeTTSClient(LemonadeAudioService):
             )
         if entry.get("downloaded") is not True:
             size = entry.get("size")
-            size_hint = f" (~{float(size):.2f} GB)" if isinstance(size, (int, float)) else ""
+            size_hint = (
+                f" (~{float(size):.2f} GB)" if isinstance(size, (int, float)) else ""
+            )
             raise LemonadeTTSError(
-                f"TTS model '{self.model}' is not downloaded{size_hint}. "
-                "Download it from Settings → Models, then retry. GAIA will not "
-                "download speech models during a chat."
+                f"TTS model '{self.model}' is not downloaded{size_hint}. Run "
+                "`gaia download --agent talk`, then retry. GAIA will not download "
+                "speech models during a chat."
             )
 
     def synthesize_long(
@@ -298,11 +307,14 @@ class LemonadeTTSClient(LemonadeAudioService):
         voice: str = DEFAULT_VOICE,
         speed: float = 1.0,
         limit: int = 1800,
-    ) -> float:
-        """Synthesize long text into one 16-bit mono WAV."""
-        samples, rate = self.synthesize_long(text, voice=voice, speed=speed, limit=limit)
+    ) -> Tuple[float, int]:
+        """Synthesize long text into one 16-bit mono WAV and report its chunks."""
+        pieces = _split_text(text, limit)
+        samples, rate = self.synthesize_long(
+            text, voice=voice, speed=speed, limit=limit
+        )
         write_wav(output_path, samples, rate)
-        return len(samples) / rate
+        return len(samples) / rate, len(pieces)
 
     def synthesize(
         self, text: str, voice: str = DEFAULT_VOICE, speed: float = 1.0

@@ -1449,6 +1449,12 @@ class LemonadeStatus:
 
 # Define available models
 MODELS = {
+    # --- Built-in speech model used by the talk profile ---
+    "kokoro-v1": ModelRequirement(
+        model_type=ModelType.TTS,
+        model_id="kokoro-v1",
+        display_name="Kokoro TTS",
+    ),
     # --- Primary model: Gemma 4 E4B (default for all roles) ---
     # ctx_size = 65536 (64K): doubles the prior 32K default. Doc-Q&A flows
     # (RAG retrieval results + history + tool result + system prompt)
@@ -1955,9 +1961,9 @@ AGENT_PROFILES = {
     "talk": AgentProfile(
         name="talk",
         display_name="Talk Agent",
-        models=["gemma-4-e4b"],
+        models=["gemma-4-e4b", "kokoro-v1"],
         min_ctx_size=GPU_CTX_SIZE,
-        description="Voice-enabled chat",
+        description="Voice-enabled chat with local Kokoro speech",
     ),
     "rag": AgentProfile(
         name="rag",
