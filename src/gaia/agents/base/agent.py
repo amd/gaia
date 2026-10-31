@@ -1340,6 +1340,11 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
     r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+)?"
     r"(?:executing step|first step|(?:my|our) next step"
     r"|now,? i need to|now,? i'll|now,? i will|i'll now|i will now"
+    # Bare "Starting with X now." is often a fact ("Starting with iOS 17 apps
+    # get widgets now."), so only first person, "now:" or "now..." count.
+    r"|(?:i'm|i am|i'll|i will) start(?:ing)?\s+(?:with|by|on|now)\b[^:]*$"
+    r"|starting now(?:[.!:]|\.\.\.|…)?$"
+    r"|starting\s+(?:with|by|on)\b[^,;:]*?\bnow(?::|\.\.\.|…)"
     r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)"
     r"|fetching\b(?!.*\b(?:failed|returned|timed out)\b)"
     r"|(?:now,? )?(?:i|we) (?:still |just )?need to)",
@@ -1347,6 +1352,9 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
 )
 _PLAN_HEADING_PATTERN = re.compile(
     r"^(?:corrected|new|updated|revised) plan\b", re.IGNORECASE
+)
+_STEP_HEADING_PATTERN = re.compile(
+    r"(?:execution\s+)?step\s+(\d+)\s*/\s*(\d+)\s*:?", re.IGNORECASE
 )
 
 
@@ -1413,6 +1421,10 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
         _PLAN_HEADING_PATTERN.match(re.sub(r"[*_`#>]", "", line).strip())
         for line in heading_lines
     ):
+        return "narration"
+    # Only a bare "Step 1/3" heading with nothing under it; any step text is content.
+    step = _STEP_HEADING_PATTERN.fullmatch(last_line)
+    if step and int(step.group(1)) < int(step.group(2)):
         return "narration"
     return None
 

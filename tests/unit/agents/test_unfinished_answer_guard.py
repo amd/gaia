@@ -40,6 +40,52 @@ FAILED_RUN_ENDINGS = [
         id="row3-now-i-need-to",
     ),
     pytest.param(
+        "Starting with the Central region report now: `central_q2_2026.md`.",
+        "narration",
+        id="issue-starting-with-now",
+    ),
+    pytest.param(
+        "Starting next month, rent rises.",
+        None,
+        id="starting-next-month-is-not-a-plan",
+    ),
+    pytest.param(
+        "Corrected Plan Update\n\nExecution Step 1/3: list the reports.",
+        "narration",
+        id="issue-execution-step-heading",
+    ),
+    pytest.param(
+        "The totals need every report.\n\n### Execution Step 1/3",
+        "narration",
+        id="ends-on-a-bare-step-heading",
+    ),
+    pytest.param("Starting now.", "narration", id="starting-now"),
+    pytest.param(
+        "I'll start with the Central report now.",
+        "narration",
+        id="ill-start-with",
+    ),
+    pytest.param(
+        "Let me start with the Central report.",
+        "narration",
+        id="let-me-start",
+    ),
+    pytest.param(
+        "I'm starting with the West region report now.",
+        "narration",
+        id="im-starting-with-now",
+    ),
+    pytest.param(
+        "I’m starting by reading the first report now.",
+        "narration",
+        id="im-starting-curly-apostrophe",
+    ),
+    pytest.param(
+        "Starting with the first file now...",
+        "narration",
+        id="starting-with-now-ellipsis",
+    ),
+    pytest.param(
         "`duplicate` is on #5. Second write:",
         "narration",
         id="row4-trailing-colon",
@@ -180,12 +226,152 @@ COMPLETED_ANSWERS = [
         id="need-to-mid-sentence",
     ),
     pytest.param("", id="empty"),
+    pytest.param(
+        "Yes. Starting with Python 3.12, f-strings now support nested quotes.",
+        id="starting-with-a-version-is-a-fact",
+    ),
+    pytest.param(
+        "Starting with version 2.0, uploads are faster now.",
+        id="starting-with-clause-ending-in-now",
+    ),
+    pytest.param(
+        "Starting with the Central report, now every region is counted.",
+        id="starting-with-then-now-in-the-result",
+    ),
+    pytest.param(
+        "## Results\n\nStep 1/3: listed the 8 reports.\nStep 2/3: read each "
+        "one.\nStep 3/3: summed revenue.\n\nTotal revenue is $41.2M.",
+        id="completed-step-report",
+    ),
+    pytest.param(
+        "Revised plan\n\nWe moved the review to Friday.\n\n"
+        "All three files are updated.",
+        id="plan-heading-three-paragraphs-back",
+    ),
+    pytest.param(
+        "Step 3/3 done.\n\nRevenue is $41.2M.",
+        id="last-step-reached",
+    ),
+    # Finished answers an earlier draft of the "starting now" / step rules
+    # sent back to work.
+    pytest.param(
+        "Step 1/3: install. Step 2/3: configure. Step 3/3: run.",
+        id="steps-on-one-line",
+    ),
+    pytest.param(
+        "Step 10/12 is where most users fail, so read it carefully. "
+        "Everything else is fine.",
+        id="step-named-in-a-sentence",
+    ),
+    pytest.param(
+        "Step 1/3: download.\nStep 2/3: unzip.\nStep 3 (optional): run gaia init.",
+        id="last-step-unnumbered",
+    ),
+    pytest.param(
+        "Starting with Windows 11 24H2 you can do this now.",
+        id="starting-with-a-release-then-a-clause",
+    ),
+    pytest.param(
+        "Step 2/5: you're configuring the network. Click Next when ready.",
+        id="step-with-instructions",
+    ),
+    pytest.param(
+        "Step 1/2 of the migration is done; step 2 runs tonight at 2am.",
+        id="step-status-report",
+    ),
+    pytest.param(
+        "Starting with the basics is the best approach for now.",
+        id="starting-with-as-a-subject",
+    ),
+    # A bare "Starting with/on/by X ... now." is usually a version or date fact.
+    pytest.param(
+        "Starting with Python 3 strings default to Unicode now.",
+        id="fact-python-3",
+    ),
+    pytest.param(
+        "Starting with Windows 11 Microsoft requires TPM now.",
+        id="fact-windows-11",
+    ),
+    pytest.param(
+        "Starting with iOS 17 apps get interactive widgets now.",
+        id="fact-ios-17",
+    ),
+    pytest.param(
+        "Starting on Monday payroll runs weekly now.",
+        id="fact-starting-on-monday",
+    ),
+    pytest.param(
+        "Your reorg is finished. Starting with Q3 Central reports to West now.",
+        id="fact-reorg",
+    ),
+    pytest.param(
+        "Starting with Chrome 120 third-party cookies get blocked now.",
+        id="fact-chrome-120",
+    ),
+    pytest.param(
+        "Starting by default telemetry stays off now.",
+        id="fact-starting-by-default",
+    ),
+    pytest.param(
+        "Starting with GAIA 1 agents ship separately now.",
+        id="fact-gaia-1",
+    ),
 ]
 
 
 @pytest.mark.parametrize("answer", COMPLETED_ANSWERS)
 def test_completed_answers_are_not_caught(answer):
     assert _unfinished_answer_kind(answer) is None
+
+
+# Realistic finished answers that mention steps, plans, "starting" or "now".
+# A wrong re-prompt costs the user a whole turn, so none of these may trip.
+FINISHED_CORPUS = [
+    "Your laptop is ready now.",
+    "The build passes now.",
+    "Starting today, the office opens at 8am.",
+    "Starting in 2027, the API requires a key.",
+    "Starting with GAIA 0.25, the daemon restarts itself after an update.",
+    "Starting from scratch is usually faster than fixing that config.",
+    "Starting with the basics is the best approach for now.",
+    "Starting with Windows 11 24H2 you can do this now.",
+    "Starting by the river, the trail climbs 300 m to the ridge.",
+    "I'm starting to see why: the cache key ignores the model id.",
+    "I'm starting with good news: all 26 tests pass.",
+    "Starting on Monday, standups move to 9:30.",
+    "Starting with version 2.0, uploads are faster now.",
+    "It's working now. Let me know if anything else breaks.",
+    "Right now there are 14 open issues and 3 open PRs.",
+    "For now, keep the default model; the larger one needs 64 GB.",
+    "Done. The report is saved to C:/reports/q2_summary.md.",
+    "Step 1/3: install. Step 2/3: configure. Step 3/3: run.",
+    "Step 10/12 is where most users fail, so read it carefully. "
+    "Everything else is fine.",
+    "Step 2/5: you're configuring the network. Click Next when ready.",
+    "Step 1/2 of the migration is done; step 2 runs tonight at 2am.",
+    "Steps:\n1. Open Settings.\n2. Pick a model.\n3. Click Save.\n\n"
+    "That's it; the new model loads on your next message.",
+    "## Step 1/2\nInstall the driver.\n\n## Step 2/2\nReboot.",
+    "### Step 1/3\nDownload the installer.\n\n### Step 2/3\nRun it.\n\n"
+    "### Step 3/3\nSign in.",
+    "Step 3 of 3 is complete, so the migration is finished.",
+    "The plan is approved and the team starts Monday.",
+    "Your new plan costs $30/month and starts on the 1st.",
+    "We're now on step 4 of 4: everything is deployed.",
+    "Total revenue across the eight reports is $41.2M. Central and West "
+    "missed target; the other six met it.",
+    "I listed the folder: 8 reports, all from Q2 2026.",
+    "Now the totals match: $41.2M in both the sheet and the summary.",
+    "Starting with Python 3.12, f-strings support nested quotes, so your "
+    "snippet is valid now.",
+    "The fix is in. Starting now, failed uploads retry three times.",
+]
+
+
+def test_a_corpus_of_finished_answers_is_never_flagged():
+    flagged = [a for a in FINISHED_CORPUS if _unfinished_answer_kind(a) is not None]
+    assert len(FINISHED_CORPUS) >= 30
+    assert flagged == []
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +471,32 @@ def test_completed_answer_is_not_reprompted(agent):
 
     assert len(sent) == 1
     assert _final_text(result) == "Done. Let me know if you want changes."
+
+
+def test_starting_now_ending_is_reprompted_then_answer_accepted(agent):
+    sent = _stub_chat(
+        agent,
+        "Starting with the Central region report now: `central_q2_2026.md`.",
+        "Total revenue is $41.2M; Central and West missed target.",
+    )
+
+    result = agent.process_query("Roll up the eight reports", max_steps=10)
+
+    assert len(sent) == 2
+    assert "described your next step instead of doing it" in sent[1][-1]["content"]
+    assert _final_text(result) == (
+        "Total revenue is $41.2M; Central and West missed target."
+    )
+
+
+def test_a_starting_with_fact_is_not_reprompted(agent):
+    answer = "Yes. Starting with Python 3.12, f-strings now support nested quotes."
+    sent = _stub_chat(agent, answer)
+
+    result = agent.process_query("Can f-strings nest quotes?", max_steps=10)
+
+    assert len(sent) == 1
+    assert _final_text(result) == answer
 
 
 @pytest.mark.parametrize(
