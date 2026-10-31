@@ -204,6 +204,31 @@ model sends its full size again.
 
 Gemma 4 E4B stays at 65,536 tokens on every PC.
 
+### Give the GPU more memory
+
+On a PC whose GPU shares the system's memory (a Strix Halo or other Ryzen AI
+APU), how much of it the GPU may use decides which models fit. GAIA reads the
+split, shows which models a bigger share would fit, and keeps at least 16 GB for
+the CPU. Either way the change needs administrator rights and a restart, and
+GAIA never restarts the PC itself. After the restart it reads the split again
+and says whether the change took effect.
+
+- **Linux:** GAIA sets it for you after you confirm. It writes
+  `options ttm pages_limit=<pages>` to `/etc/modprobe.d/ttm.conf` (the setting
+  AMD's `amd-ttm` tool writes), rebuilds the boot image, and asks for your
+  password through `pkexec`. It keeps the file's previous contents so you can
+  undo the change. If the kernel command line, another file in
+  `/etc/modprobe.d`, or the kernel itself already decides the limit, GAIA shows
+  the exact commands instead of changing anything.
+- **Windows:** you change it in AMD Software: Adrenalin Edition, under
+  Performance › Tuning › Variable Graphics Memory, then restart. AMD allows up to
+  75% of RAM there. GAIA lists these steps rather than applying them, because
+  AMD's interface for this setting restarts the PC by itself. Without that
+  option, set UMA Frame Buffer Size in the BIOS.
+
+The Agent UI serves this at `/api/gpu-memory` and the daemon at
+`/daemon/v1/gpu-memory`, with `apply`, `revert` and `pending` routes under each.
+
 ## What the ranked picks measured
 
 The two flash picks were measured end to end with the GAIA flagship agent over the
