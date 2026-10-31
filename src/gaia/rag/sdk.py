@@ -468,7 +468,7 @@ class RAGConfig:
         False  # Enable LLM-based intelligent chunking (requires LLM client)
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
-    vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
+    vlm_model: str = DEFAULT_MODEL_NAME
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
     # Security settings
@@ -2497,7 +2497,7 @@ These positions indicate where to split the text."""
                     f"{describe_start_hint().instruction}\n"
                     "Then index the image again."
                 ) from e
-            # Reachable, so the model is what's missing; `gaia init` skips it.
+            # Reachable, so the model is what's missing.
             pull = describe_client_hint("pull", model).instruction
             raise ImageExtractionError(
                 f"Cannot index image {file_name}: vision model {model} is not "
