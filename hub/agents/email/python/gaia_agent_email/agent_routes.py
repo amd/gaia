@@ -415,6 +415,20 @@ _CONFIRM_RESPONSES = {
     404: {"description": "No active run awaits confirmation."},
     409: {"description": "The run has no pending tool confirmation."},
 }
+_CONNECTOR_ERRORS = {
+    401: {"description": "Mailbox authentication is missing, revoked, or needs renewal."},
+    403: {"description": "The mailbox connection lacks the required permission."},
+    500: {"description": "The mailbox connector failed unexpectedly."},
+    503: {
+        "description": "Mailbox configuration is unavailable or the connection is busy.",
+        "headers": {
+            "Retry-After": {
+                "description": "Seconds to wait before retrying a busy connection.",
+                "schema": {"type": "string"},
+            }
+        },
+    },
+}
 _AGENT_QUERY_RESPONSES = {
     200: {
         "description": "Server-Sent Events stream for the stateful email-agent turn.",
@@ -659,7 +673,7 @@ async def set_autonomy(request: AutonomyLevelRequest) -> Dict[str, Any]:
             )
         },
         501: {"description": "This agent build has no autonomy surface."},
-        503: {"description": "Mailbox configuration is unavailable."},
+        **_CONNECTOR_ERRORS,
     },
 )
 async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
@@ -708,10 +722,11 @@ async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
 @router.post(
     "/autonomy/undo",
     responses={
-        400: {"description": "The action id is invalid."},
+        400: {"description": "This action type has no reversal implemented."},
         404: {"description": "No such email-agent session."},
-        409: {"description": "The undo window has expired."},
+        409: {"description": "Unknown, expired, or already-undone action id."},
         501: {"description": "This agent build has no autonomy undo."},
+        **_CONNECTOR_ERRORS,
     },
 )
 async def undo_autonomy(request: AutonomyUndoRequest) -> Dict[str, Any]:

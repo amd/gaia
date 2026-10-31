@@ -47,10 +47,11 @@ ARTIFACT_PATH = Path(__file__).resolve().parents[1] / "openapi.email.json"
 
 
 def build_app():
-    """Build a minimal FastAPI app mounting ONLY the email router.
+    """Build a minimal FastAPI app mounting every published email router.
 
-    Mirrors how the product/freeze servers mount the router, so the generated
-    spec matches what a host actually serves.
+    Mirrors how the product/freeze servers mount the stateless, stateful-agent,
+    and connection-intake routers, so the generated spec matches what a host
+    actually serves.
     """
     from fastapi import FastAPI
     from gaia_agent_email import caller_auth
