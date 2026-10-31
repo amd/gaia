@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -86,7 +87,8 @@ if _stubbed_modules:
 # of the #1030 fix).
 _BUDGET_CHARS = {
     # profile + indexed-doc count -> max chars
-    ("full", 0): 12_000,
+    # Sized for the Windows environment block, the longest of the three OSes.
+    ("full", 0): 12_500,
     ("full", 1): 14_000,
     ("full", 5): 14_500,
     # Large-N budget — pins the scaling property so a regression that
@@ -121,22 +123,51 @@ def _make_agent(prompt_profile: str, n_indexed: int) -> ChatAgent:
     return a
 
 
+# The environment block differs per OS, so each OS is measured on every
+# runner. Values are realistic long ones so the result doesn't depend on
+# the machine running the test.
+_PLATFORMS = {
+    "Windows": ("10.0.26100", "AMD64", Path(r"C:\Users\firstname.lastname")),
+    "Darwin": (
+        "Darwin Kernel Version 24.6.0: Mon Jul 14 11:28:30 PDT 2025; "
+        "root:xnu-11417.140.69~1/RELEASE_ARM64_T6000",
+        "arm64",
+        Path("/Users/firstname.lastname"),
+    ),
+    "Linux": (
+        "#1 SMP PREEMPT_DYNAMIC Thu Sep 11 18:03:12 UTC 2025",
+        "x86_64",
+        Path("/home/firstname.lastname"),
+    ),
+}
+
+
+@pytest.mark.parametrize("os_name", sorted(_PLATFORMS))
 @pytest.mark.parametrize(("profile", "n_indexed"), sorted(_BUDGET_CHARS.keys()))
-def test_chat_system_prompt_within_budget(profile: str, n_indexed: int) -> None:
+def test_chat_system_prompt_within_budget(
+    profile: str, n_indexed: int, os_name: str
+) -> None:
     """The composed ChatAgent system prompt must stay under its char budget.
 
     Regression guard for #1030 — pre-fix the ``full`` profile with one
     indexed document was ~52 000 chars / ~15 000 tokens, which was
     enough to time out Gemma 4 E4B's first planning call on iGPU.
     """
+    version, machine, home = _PLATFORMS[os_name]
     agent = _make_agent(profile, n_indexed)
-    prompt = agent._get_system_prompt()
+    with (
+        patch("gaia_agent_chat.agent.platform.system", return_value=os_name),
+        patch("gaia_agent_chat.agent.platform.version", return_value=version),
+        patch("gaia_agent_chat.agent.platform.machine", return_value=machine),
+        patch("gaia_agent_chat.agent.Path.home", return_value=home),
+    ):
+        prompt = agent._get_system_prompt()
     budget = _BUDGET_CHARS[(profile, n_indexed)]
 
     assert prompt, "system prompt should not be empty"
     assert len(prompt) <= budget, (
         f"ChatAgent system prompt exceeded budget for "
-        f"profile={profile!r}, indexed={n_indexed}: "
+        f"os={os_name}, profile={profile!r}, indexed={n_indexed}: "
         f"{len(prompt)} chars > {budget} budget. "
         f"This regressed the #1030 fix — either trim what you added, "
         f"move it behind a conditional, or raise the budget in the same "
