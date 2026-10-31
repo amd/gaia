@@ -155,11 +155,15 @@ class _WriterAgent(Agent):
         def write_file(file_path: str, content: str) -> dict:
             """Write a file."""
             agent.writes.append((file_path, content))
+            # On disk, so the end-of-turn read-back sees what a real write leaves.
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
             return {"status": "success", "file_path": file_path}
 
 
 @pytest.fixture
-def writer():
+def writer(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     snapshot = dict(_TOOL_REGISTRY)
     with patch("gaia.agents.base.agent.AgentSDK"):
         built = _WriterAgent(silent_mode=True, skip_lemonade=True)
