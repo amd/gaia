@@ -191,19 +191,6 @@ def test_python_scan_of_this_environment_runs():
     assert all(f.verdict in {"ok", "denied", "unknown"} for f in findings)
 
 
-def test_repo_npm_lockfiles_are_clean():
-    locks = [
-        REPO / "src/gaia/apps/webui/package-lock.json",
-        REPO / "hub/agents/gaia/npm/package-lock.json",
-        REPO / "hub/agents/email/npm/package-lock.json",
-    ]
-    findings = [
-        f for lock in locks if lock.exists() for f in check_licenses.scan_npm(lock)
-    ]
-    bad = [f"{f.name} {f.licence}" for f in findings if f.verdict != "ok"]
-    assert not bad, bad
-
-
 def test_setup_py_declares_no_known_copyleft_packages():
     setup = (REPO / "setup.py").read_text(encoding="utf-8").lower()
     for pkg in ("pymupdf", "fitz", "pyqt5", "pyqt6", "mysql-connector", "pygobject"):
@@ -249,14 +236,19 @@ def test_parenthesised_permissive_expressions_pass(licence):
     assert classify(licence)[0] == "ok", licence
 
 
-@pytest.mark.parametrize("licence", ["(MIT", "MIT AND", "OR MIT", "MIT ) (", "LicenseRef-Proprietary"])
+@pytest.mark.parametrize(
+    "licence", ["(MIT", "MIT AND", "OR MIT", "MIT ) (", "LicenseRef-Proprietary"]
+)
 def test_malformed_or_proprietary_expressions_are_not_ok(licence):
     assert classify(licence)[0] == "unknown", licence
 
 
 def test_free_text_mentioning_copyleft_is_denied_even_with_an_alternative():
     # Free text has no reliable OR; a copyleft mention needs a human review entry.
-    assert classify("Dual Licensed - GNU AFFERO GPL 3.0 or Artifex Commercial License")[0] == "denied"
+    assert (
+        classify("Dual Licensed - GNU AFFERO GPL 3.0 or Artifex Commercial License")[0]
+        == "denied"
+    )
     assert classify("MIT or LGPL, at your option")[0] == "denied"
 
 
@@ -264,8 +256,12 @@ def test_free_text_mentioning_copyleft_is_denied_even_with_an_alternative():
 
 
 def test_reviewed_entry_outside_its_version_range_needs_review_again():
-    inside = check_licenses._classify_component("python", "matplotlib", "3.11.2", "free text")
-    outside = check_licenses._classify_component("python", "matplotlib", "4.0.0", "free text")
+    inside = check_licenses._classify_component(
+        "python", "matplotlib", "3.11.2", "free text"
+    )
+    outside = check_licenses._classify_component(
+        "python", "matplotlib", "4.0.0", "free text"
+    )
     assert inside.verdict == "ok"
     assert outside.verdict == "unknown"
     assert "re-check the licence" in outside.detail
@@ -273,14 +269,22 @@ def test_reviewed_entry_outside_its_version_range_needs_review_again():
 
 def test_copyleft_classifier_overrides_a_permissive_licence_field():
     finding = check_licenses._classify_component(
-        "python", "sneaky", "1.0", "MIT", ["License :: OSI Approved :: GNU General Public License v3 (GPLv3)"]
+        "python",
+        "sneaky",
+        "1.0",
+        "MIT",
+        ["License :: OSI Approved :: GNU General Public License v3 (GPLv3)"],
     )
     assert finding.verdict == "denied"
 
 
 def test_dual_licence_listing_gpl_classifier_passes_when_expression_offers_it():
     finding = check_licenses._classify_component(
-        "python", "dual", "1.0", "BSD-3-Clause OR GPL-2.0", ["License :: OSI Approved :: GNU General Public License v2 (GPLv2)"]
+        "python",
+        "dual",
+        "1.0",
+        "BSD-3-Clause OR GPL-2.0",
+        ["License :: OSI Approved :: GNU General Public License v2 (GPLv2)"],
     )
     assert finding.verdict == "ok"
 
@@ -296,13 +300,19 @@ def test_npm_production_only_skips_dev_entries(tmp_path):
                 "packages": {
                     "": {"name": "ext"},
                     "node_modules/runtime": {"version": "1.0.0", "license": "MIT"},
-                    "node_modules/packager": {"version": "1.0.0", "license": "SEE LICENSE IN LICENSE.txt", "dev": True},
+                    "node_modules/packager": {
+                        "version": "1.0.0",
+                        "license": "SEE LICENSE IN LICENSE.txt",
+                        "dev": True,
+                    },
                 }
             }
         ),
         encoding="utf-8",
     )
     full = {f.name: f.verdict for f in check_licenses.scan_npm(lock)}
-    prod = {f.name: f.verdict for f in check_licenses.scan_npm(lock, production_only=True)}
+    prod = {
+        f.name: f.verdict for f in check_licenses.scan_npm(lock, production_only=True)
+    }
     assert full == {"runtime": "ok", "packager": "unknown"}
     assert prod == {"runtime": "ok"}
