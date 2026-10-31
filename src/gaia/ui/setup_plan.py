@@ -28,6 +28,14 @@ class SetupPlanError(Exception):
     """The plan could not be worked out, with what to do next."""
 
 
+class ServerNotRunning(SetupPlanError):
+    """The answer needs the model server, which isn't running yet."""
+
+
+class UnknownModel(SetupPlanError):
+    """The model can't be used that way: unknown, not downloaded, not planned."""
+
+
 # Re-exported: the router and CLI answer a needed confirmation from here.
 NeedsAcknowledgement = model_choice.NeedsAcknowledgement
 
@@ -84,6 +92,12 @@ def _registry_size(model_id: str) -> Optional[float]:
     return mr.size_gb if mr and mr.size_gb else None
 
 
+_FREE_MEMORY_UNREAD = (
+    "GAIA couldn't read this PC's free memory, so it can't tell whether this "
+    "model would load now. Details are in the GAIA server log."
+)
+
+
 def _options(client, capacity) -> List[Dict[str, Any]]:
     """Each default chat model, and whether this PC and its Lemonade can run it.
 
@@ -93,13 +107,14 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
     """
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_LADDER,
-        _free_memory_rules_out,
+        LemonadeClientError,
         _model_ids_match,
         find_model_requirement,
+        free_memory_shortfall,
         kv_cache_for,
         lemonade_server_version,
     )
-    from gaia.llm.model_fit import check_fit, check_server_supports
+    from gaia.llm.model_fit import ModelFitError, check_fit, check_server_supports
 
     catalog: Dict[str, float] = {}
     server_version = None
@@ -126,9 +141,15 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
             if not supported.fits:
                 fits, reason = False, supported.reason
         if fits and client is not None and mr and model_id != DEFAULT_MODEL_LADDER[-1]:
-            busy = _free_memory_rules_out(client, mr, capacity)
-            if busy:
-                fits, reason = False, busy
+            try:
+                busy = free_memory_shortfall(client, mr, capacity)
+            except (ModelFitError, LemonadeClientError):
+                # The screen shows numbers; the reading error goes to the log.
+                logger.exception("Setup plan: could not read free memory")
+                fits, reason = None, _FREE_MEMORY_UNREAD
+            else:
+                if busy:
+                    fits, reason = False, busy
         options.append(
             {
                 "id": model_id,
@@ -166,7 +187,7 @@ def _profile_models(profile: str, client) -> List[str]:
     if config["models"]:
         return list(config["models"])
     if client is None:
-        raise SetupPlanError(
+        raise ServerNotRunning(
             f"The '{profile}' profile's models come from the model server, which "
             "is not running yet. Run `gaia init --skip-models` to start it first."
         )
@@ -412,7 +433,7 @@ def _require_client(action: str):
     """A client for the server setup uses; raises when it isn't running yet."""
     client = _client(_lemonade()["url"])
     if client is None:
-        raise SetupPlanError(
+        raise ServerNotRunning(
             f"The model server is not running yet, so GAIA can't {action}. "
             "Start setup first; this works once the server is up."
         )
@@ -468,7 +489,7 @@ def choose_chat_model(
         None,
     )
     if entry is None or not entry["chat_choice"]:
-        raise SetupPlanError(
+        raise UnknownModel(
             f"{model_id} is not a chat model GAIA knows or one this Lemonade "
             "Server has downloaded. Download it first (Settings → Model in the "
             "Agent UI), then pick it."
@@ -509,7 +530,7 @@ def set_model_skipped(model_id: str, skipped: bool) -> None:
     if skipped:
         planned = [e["id"] for e in build_plan()["catalog"] if e["planned"]]
         if not any(model_choice.ids_match(model_id, m) for m in planned):
-            raise SetupPlanError(
+            raise UnknownModel(
                 f"{model_id} is not one of the models setup downloads "
                 f"({', '.join(planned)}), so there is nothing to skip."
             )
@@ -538,7 +559,7 @@ def remove_model(model_id: str) -> float:
             None,
         )
         if entry is None or not entry.get("downloaded"):
-            raise SetupPlanError(
+            raise UnknownModel(
                 f"{model_id} is not downloaded, so there is nothing to remove."
             )
         client.delete_model(entry["id"])
@@ -562,7 +583,7 @@ def _download_entry(model_id: str):
         None,
     )
     if entry is None:
-        raise SetupPlanError(
+        raise UnknownModel(
             f"{model_id} is not a model GAIA knows or one in this Lemonade "
             "Server. Add it in Settings → Model first."
         )

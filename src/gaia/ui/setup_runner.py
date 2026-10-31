@@ -65,6 +65,14 @@ class SetupError(Exception):
     """``gaia init`` could not be asked or run, with what to do next."""
 
 
+class SetupBusy(SetupError):
+    """Setup, or that model's download, is already running."""
+
+
+class LemonadeOverridden(SetupError):
+    """``LEMONADE_BASE_URL`` picks the server, so setup can't switch it."""
+
+
 def _marker():
     from gaia.config import gaia_home
 
@@ -460,19 +468,23 @@ def overall(models: List[ModelProgress]) -> Dict[str, Any]:
     }
 
 
-def _failure_text(model_id: str, message: str, kind: Optional[str]) -> str:
+def _failure_text(model_id: str, kind: Optional[str]) -> str:
+    """What the row says; Lemonade's own words go to the log, not the screen."""
     if kind == "disk_full":
         return (
             f"Ran out of disk space while downloading {model_id}. Free some space "
             "on the model drive and press Retry; the download continues from "
-            f"where it stopped. Lemonade said: {message}"
+            "where it stopped."
         )
     if kind == "network":
         return (
             f"The connection dropped while downloading {model_id}. Press Retry "
-            f"to continue from where it stopped. Lemonade said: {message}"
+            "to continue from where it stopped."
         )
-    return message
+    return (
+        f"Lemonade couldn't download {model_id}. Press Retry; the full error is "
+        "in the GAIA server log."
+    )
 
 
 @dataclass
@@ -588,15 +600,15 @@ class SetupRunner:
             from gaia.llm.lemonade_choice import env_override_note
 
             if env_override_note():
-                raise SetupError(
+                raise LemonadeOverridden(
                     "LEMONADE_BASE_URL points GAIA at another server, so setup "
                     "can't switch to GAIA's own. Unset it and restart GAIA."
                 )
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
-                raise SetupError("Setup is already running.")
+                raise SetupBusy("Setup is already running.")
             if self._pulls:
-                raise SetupError(
+                raise SetupBusy(
                     f"{', '.join(self._pulls)} is still downloading. Wait for it "
                     "or cancel it, then start setup."
                 )
@@ -647,12 +659,12 @@ class SetupRunner:
         user skipped at setup and now wants. Lemonade resumes a partial file."""
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
-                raise SetupError(
+                raise SetupBusy(
                     "Setup is running and downloads its models itself. Retry this "
                     "model once it finishes."
                 )
             if model_id in self._pulls:
-                raise SetupError(f"{model_id} is already downloading.")
+                raise SetupBusy(f"{model_id} is already downloading.")
             stop = threading.Event()
             self._pulls[model_id] = stop
             self._models[model_id] = ModelProgress(id=model_id, state="downloading")
@@ -712,15 +724,15 @@ class SetupRunner:
                     on_retry=retrying,
                     **model_choice.pull_kwargs_for(model_id),
                 )
-            outcome = "ready" if ok else "failed"
-            message = None if ok else f"Lemonade did not finish downloading {model_id}."
+            outcome, kind = ("ready" if ok else "failed"), "lemonade"
         except ModelDownloadCancelledError:
-            outcome, message = "cancelled", None
+            outcome, kind = "cancelled", None
         except LemonadeClientError as e:
-            outcome, message = "failed", str(e)
-        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.exception("Download of %s failed", model_id)
+            outcome, kind = "failed", model_choice.error_kind(str(e))
+        except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("Download of %s stopped on an unexpected error", model_id)
-            outcome, message = "failed", f"Download stopped on an unexpected error: {e}"
+            outcome, kind = "failed", "lemonade"
         with self._lock:
             self._pulls.pop(model_id, None)
             entry = self._models.setdefault(model_id, ModelProgress(id=model_id))
@@ -734,9 +746,8 @@ class SetupRunner:
             elif outcome == "cancelled":
                 entry.state = "cancelled"
             elif entry.state != "failed":
-                kind = model_choice.error_kind(message)
                 entry.state, entry.error_kind = "failed", kind
-                entry.error = _failure_text(model_id, message or "", kind)
+                entry.error = _failure_text(model_id, kind)
 
     def _on_event(self, event: Dict[str, Any]) -> None:
         """One ``gaia init --progress-json`` event (or an in-process pull's)."""
@@ -784,9 +795,10 @@ class SetupRunner:
                 entry.retrying_until = int(event.get("until") or 0)
             elif kind == "error":
                 message = str(event.get("message") or "")
+                logger.warning("Download of %s failed: %s", model_id, message)
                 entry.error_kind = error_kind(message)
                 entry.state, entry.speed_bps = "failed", 0
-                entry.error = _failure_text(model_id, message, entry.error_kind)
+                entry.error = _failure_text(model_id, entry.error_kind)
 
     def _mirror_totals(self, run: SetupRun) -> None:
         """Fill the run's single bar from the per-model totals. Caller holds the lock."""
@@ -810,14 +822,14 @@ class SetupRunner:
         """Run the setup thread; an unexpected error fails the run, never strands it."""
         try:
             self._pump(run, proc)
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("Setup thread failed")
             with self._lock:
                 if run.state in ("running", "verifying"):
                     run.state = "failed"
                     run.error = (
-                        f"Setup stopped on an unexpected error: {e}. "
-                        "See the Agent UI backend log for details."
+                        "Setup stopped on an unexpected error. Details are in "
+                        "the Agent UI backend log."
                     )
 
     def _pump(self, run: SetupRun, proc: subprocess.Popen) -> None:

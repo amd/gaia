@@ -667,3 +667,44 @@ def test_without_a_server_each_action_says_what_it_could_not_do(no_server):
         sp.remove_model(DEFAULT_MODEL_NAME)
     with pytest.raises(sp.SetupPlanError, match="can't download"):
         sp.prepare_download(DEFAULT_MODEL_NAME)
+
+
+def test_plan_routes_never_send_exception_text(client, monkeypatch):
+    def broken():
+        raise sp.SetupPlanError("Cannot read C:/Users/secret/.gaia/config.json: boom")
+
+    monkeypatch.setattr(sp, "_lemonade", broken)
+    for method, path, body in (
+        ("get", "/api/setup/plan", None),
+        ("post", "/api/setup/chat-model", {"model_id": "x"}),
+        ("post", "/api/setup/models/skip", {"model_id": "x"}),
+        ("post", "/api/setup/models/remove", {"model_id": "x"}),
+    ):
+        r = getattr(client, method)(
+            path, headers=UI, **({"json": body} if body else {})
+        )
+        assert r.status_code == 503, path
+        assert "secret" not in r.json()["detail"] and "server log" in r.json()["detail"]
+
+
+def test_a_server_that_is_not_running_gets_its_own_answer(client, no_server):
+    r = client.post(
+        "/api/setup/models/remove", json={"model_id": DEFAULT_MODEL_NAME}, headers=UI
+    )
+    assert r.status_code == 503 and "isn't running yet" in r.json()["detail"]
+
+
+def test_unreadable_free_memory_is_fit_unknown_not_the_error_text(running, monkeypatch):
+    from gaia.llm import lemonade_client
+
+    def unreadable(url):
+        raise lemonade_client.LemonadeClientError("socket error at C:/secret")
+
+    fake = running(BIG_GPU)
+    fake.base_url = "http://127.0.0.1:9/api/v1"
+    monkeypatch.setattr(lemonade_client, "_free_memory_snapshot", unreadable)
+    large = next(
+        o for o in sp.build_plan()["options"] if o["id"] == LARGE_DEFAULT_MODEL_NAME
+    )
+    assert large["fits"] is None
+    assert "secret" not in large["reason"] and "free memory" in large["reason"]

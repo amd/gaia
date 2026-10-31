@@ -2040,16 +2040,27 @@ def _free_memory_rules_out(client, requirement, capacity) -> Optional[str]:
     Judged at the smallest window a load shrinks to, so a model refused here
     is one setup's verify step would also refuse.
     """
-    from gaia.llm.model_fit import MIN_CONTEXT_TOKENS, ModelFitError
+    from gaia.llm.model_fit import ModelFitError
+
+    try:
+        return free_memory_shortfall(client, requirement, capacity)
+    except (ModelFitError, LemonadeClientError) as e:
+        return f"could not read this PC's free memory, so cannot confirm it would load: {e}"
+
+
+def free_memory_shortfall(client, requirement, capacity) -> Optional[str]:
+    """:func:`_free_memory_rules_out`'s reason, built from the numbers only.
+
+    Raises ``ModelFitError`` or ``LemonadeClientError`` when the free memory
+    cannot be read, so the caller decides what to show.
+    """
+    from gaia.llm.model_fit import MIN_CONTEXT_TOKENS
 
     url = getattr(client, "base_url", None)
     if not _is_local_url(url):
         return None
     window = min(MIN_CONTEXT_TOKENS, context_for_capacity(requirement, capacity))
-    try:
-        free, resident = _free_memory_snapshot(url)
-    except (ModelFitError, LemonadeClientError) as e:
-        return f"could not read this PC's free memory, so cannot confirm it would load: {e}"
+    free, resident = _free_memory_snapshot(url)
     verdict = _verdict_for(free, resident, requirement, window)
     if verdict is None or verdict.fits:
         return None
