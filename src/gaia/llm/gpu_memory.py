@@ -51,8 +51,12 @@ MIN_SETTING_GB = 4.0
 PRESET_STEP_GB = 16.0
 #: AMD Variable Graphics Memory converts at most this share of RAM.
 WINDOWS_VGM_MAX_FRACTION = 0.75
-#: 4 KiB pages per GB, the unit ``ttm.pages_limit`` takes (as ``amd-ttm``).
-PAGES_PER_GB = 262144
+#: Every ``*_gb`` here is decimal (1 GB = 10**9 bytes), as in ``model_fit``.
+GB = 10**9
+#: ``ttm.pages_limit`` counts 4 KiB pages.
+PAGE_BYTES = 4096
+#: AMD Software and ``amd-ttm`` count GiB (2**30 bytes), though they label it GB.
+GIB = 2**30
 #: A reading within this many GB of the target counts as the target.
 TOOK_EFFECT_TOLERANCE_GB = 1.0
 
@@ -68,10 +72,13 @@ PENDING_NOT_APPLIED = "not_applied"
 WINDOWS_STEPS = (
     "Right-click the desktop and open AMD Software: Adrenalin Edition.",
     "Go to Performance > Tuning and find Variable Graphics Memory.",
-    "Choose Custom and set it to {gb} GB, or the closest option above it.",
+    "Choose Custom and set it to {gib} GiB, or the closest option above it. "
+    "AMD Software counts in GiB (1 GiB is 1.07 GB) and labels them GB, so "
+    "{gib} there is the {gb} GB GAIA shows.",
     "Restart your PC, then come back here. GAIA reads the new split.",
-    "No Variable Graphics Memory option? Set UMA Frame Buffer Size to {gb} GB "
-    "in your PC's BIOS instead. With AMD Software, leave the BIOS on Auto.",
+    "No Variable Graphics Memory option? Set UMA Frame Buffer Size to {gib} "
+    "GiB (shown as {gib} GB) in your PC's BIOS instead. With AMD Software, "
+    "leave the BIOS on Auto.",
 )
 LINUX_MODPROBE_STEPS = (
     "Run: echo 'options {module} pages_limit={pages}' | "
@@ -79,7 +86,7 @@ LINUX_MODPROBE_STEPS = (
     "Rebuild the boot image. Ubuntu: sudo update-initramfs -u · "
     "Fedora: sudo dracut --regenerate-all -f",
     "Restart your PC, then come back here. GAIA reads the new split.",
-    "Or use AMD's tool: amd-ttm --set {gb}",
+    "Or use AMD's tool, which counts in GiB: amd-ttm --set {gib}",
 )
 LINUX_CMDLINE_STEPS = (
     "Set {module}.pages_limit={pages} on the kernel command line, replacing "
@@ -434,7 +441,7 @@ def _total_ram_gb(info: Dict[str, Any], carve_out_gb: float) -> float:
             raise GpuMemoryError(f"Couldn't read {meminfo}: {e}") from e
         if match:
             # The OS doesn't count the carve-out; installed RAM does.
-            return int(match.group(1)) / 1024**2 + carve_out_gb
+            return int(match.group(1)) * 1024 / GB + carve_out_gb
     raise GpuMemoryError(
         "Couldn't tell how much memory this PC has: Lemonade didn't report "
         "'Physical Memory'. Update Lemonade (`gaia init`) and retry."
@@ -538,14 +545,16 @@ def _guided_steps(
     machine: _Machine, setup: Optional[_LinuxSetup], gb: float
 ) -> List[str]:
     if machine.os == "windows":
-        return [s.format(gb=_fmt(gb)) for s in WINDOWS_STEPS]
+        gib = _fmt(math.ceil(gb * GB / GIB))
+        return [s.format(gb=_fmt(gb), gib=gib) for s in WINDOWS_STEPS]
     module = setup.module if setup else "ttm"
     pages = pages_for(gb)
     steps = {
         "cmdline": LINUX_CMDLINE_STEPS,
         "ostree": LINUX_OSTREE_STEPS,
     }.get(setup.steps if setup else "modprobe", LINUX_MODPROBE_STEPS)
-    return [s.format(module=module, pages=pages, gb=_fmt(gb)) for s in steps] + [
+    gib = _fmt(round(pages * PAGE_BYTES / GIB, 1))
+    return [s.format(module=module, pages=pages, gib=gib) for s in steps] + [
         LINUX_BIOS_STEP
     ]
 
@@ -555,8 +564,13 @@ def _fmt(gb: float) -> str:
 
 
 def pages_for(gb: float) -> int:
-    """``ttm.pages_limit`` for a limit of *gb*."""
-    return int(round(gb * PAGES_PER_GB))
+    """``ttm.pages_limit`` for a limit of *gb* decimal GB."""
+    return int(round(gb * GB / PAGE_BYTES))
+
+
+def gb_for(pages: int) -> float:
+    """Decimal GB in *pages* 4 KiB pages."""
+    return pages * PAGE_BYTES / GB
 
 
 # --- Pending change -------------------------------------------------------------

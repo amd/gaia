@@ -11,11 +11,13 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+_SETTING_GB = "GPU memory to set, in decimal GB (10**9 bytes)."
 
 
 class GpuMemoryApplyRequest(BaseModel):
-    setting_gb: float
+    setting_gb: float = Field(description=_SETTING_GB)
     confirm: bool = False
 
 
@@ -24,7 +26,7 @@ class GpuMemoryRevertRequest(BaseModel):
 
 
 class GpuMemoryPendingRequest(BaseModel):
-    setting_gb: float
+    setting_gb: float = Field(description=_SETTING_GB)
 
 
 def build_gpu_memory_router(token: str) -> APIRouter:

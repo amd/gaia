@@ -608,9 +608,15 @@ export interface GoalStatusUpdate {
 }
 export interface GpuMemoryApplyRequest {
   confirm?: boolean;
+  /**
+   * GPU memory to set, in decimal GB (10**9 bytes).
+   */
   setting_gb: number;
 }
 export interface GpuMemoryPendingRequest {
+  /**
+   * GPU memory to set, in decimal GB (10**9 bytes).
+   */
   setting_gb: number;
 }
 export interface GpuMemoryRevertRequest {

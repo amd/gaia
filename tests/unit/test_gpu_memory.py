@@ -159,7 +159,7 @@ class Sandbox:
         self.boot = self._now()
         if pages is not None:
             self.set_module("ttm", pages=pages)
-            gtt = pages / gm.PAGES_PER_GB
+            gtt = gm.gb_for(pages)
             self.info["devices"]["amd_gpu"][0]["virtual_mem_gb"] = gtt
 
 
@@ -288,8 +288,16 @@ class TestLinuxSplit:
     def test_guided_steps_render_the_asked_value(self, box):
         result = gm.describe(box.info, LOCAL, setting_gb=96)
         assert any(
-            f"pages_limit={96 * gm.PAGES_PER_GB}" in s for s in result["guided_steps"]
+            f"pages_limit={96 * 10**9 // 4096}" in s for s in result["guided_steps"]
         )
+
+    def test_every_gb_is_decimal_and_pages_are_4kib(self, box):
+        assert gm.pages_for(96) == 23_437_500  # 96e9 / 4096
+        assert gm.gb_for(gm.pages_for(96)) == pytest.approx(96, abs=1e-3)
+        steps = gm.describe(box.info, LOCAL, setting_gb=96)["guided_steps"]
+        assert any("pages_limit=23437500" in s for s in steps)
+        # amd-ttm counts GiB: 96 GB is 89.4 GiB.
+        assert any("counts in GiB: amd-ttm --set 89.4" in s for s in steps)
 
     def test_guided_steps_never_render_a_starving_value(self, box):
         with pytest.raises(gm.OutOfRange):
@@ -307,7 +315,8 @@ class TestLinuxSplit:
             "MemTotal:       131596288 kB\nMemFree: 1 kB\n", encoding="ascii"
         )
         result = gm.describe(info, LOCAL)
-        assert result["total_gb"] == pytest.approx(126, abs=0.6)
+        # 131596288 KiB is 134.75 decimal GB, plus the 0.5 GB carve-out.
+        assert result["total_gb"] == pytest.approx(135.3, abs=0.05)
 
     def test_no_total_ram_anywhere_is_loud(self, box):
         info = linux_igpu(128, 62.5)
@@ -400,7 +409,7 @@ class TestLinuxApply:
         result = gm.apply(96, confirm=True)
         assert len(box.calls) == 1
         conf = box.conf.read_text(encoding="utf-8")
-        assert f"options ttm pages_limit={96 * gm.PAGES_PER_GB}" in conf
+        assert f"options ttm pages_limit={96 * 10**9 // 4096}" in conf
         assert result["pending"]["state"] == gm.PENDING_RESTART
         assert result["pending"]["setting_gb"] == 96
         assert result["pending"]["previous_setting_gb"] == 62.5
@@ -611,6 +620,12 @@ class TestWindows:
         assert result["setting"]["max_gb"] == 96  # AMD's 75% cap
         steps = " ".join(result["guided_steps"])
         assert "Performance > Tuning" in steps and "BIOS" in steps
+
+    def test_amd_software_steps_are_in_gib_and_say_so(self, box, windows):
+        steps = gm.describe(box.info, LOCAL, setting_gb=64)["guided_steps"]
+        # 64 GB is 59.6 GiB; AMD Software's next whole value is 60.
+        assert any("set it to 60 GiB" in s and "64 GB" in s for s in steps)
+        assert any("60 GiB (shown as 60 GB)" in s for s in steps)
 
     def test_projection_matches_model_fit(self, box, windows):
         result = gm.describe(box.info, LOCAL)

@@ -257,7 +257,7 @@ def _windows_adapter_memory_gb(name: Any) -> float:
             except OSError:
                 # "Properties" and other non-adapter subkeys refuse the read.
                 continue
-            return int(size) / 1024**3 if isinstance(size, int) else 0.0
+            return int(size) / 1e9 if isinstance(size, int) else 0.0
 
 
 @dataclass(frozen=True)

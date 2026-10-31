@@ -2421,7 +2421,10 @@ which models a bigger share would fit, and changing it. See
 TUI reads the same answers from the daemon at `/daemon/v1/gpu-memory`. Every
 route needs the `X-Gaia-UI: 1` header (**403** without it) and returns the
 status below, read fresh. **503** when the model server doesn't answer, since
-the split is read from it.
+the split is read from it. Every `*_gb` field, in requests and responses, is
+decimal GB (10^9 bytes), the unit `/api/setup/plan` uses. Only the
+`guided_steps` text converts, to the 4 KiB pages of `ttm.pages_limit` and to
+the GiB that AMD Software and `amd-ttm` count in.
 
 <AccordionGroup>
   <Accordion title="GET /api/gpu-memory">

@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from gaia.llm import gpu_memory
 
@@ -23,8 +23,11 @@ router = APIRouter(tags=["gpu-memory"])
 _AT_THIS_PC = [Depends(require_ui_header), Depends(require_local_pc)]
 
 
+_SETTING_GB = "GPU memory to set, in decimal GB (10**9 bytes)."
+
+
 class GpuMemoryApplyRequest(BaseModel):
-    setting_gb: float
+    setting_gb: float = Field(description=_SETTING_GB)
     confirm: bool = False
 
 
@@ -33,7 +36,7 @@ class GpuMemoryRevertRequest(BaseModel):
 
 
 class GpuMemoryPendingRequest(BaseModel):
-    setting_gb: float
+    setting_gb: float = Field(description=_SETTING_GB)
 
 
 def _answer(call: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:

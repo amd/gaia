@@ -1878,6 +1878,7 @@
         "type": "boolean"
       },
       "setting_gb": {
+        "description": "GPU memory to set, in decimal GB (10**9 bytes).",
         "title": "Setting Gb",
         "type": "number"
       }
@@ -1891,6 +1892,7 @@
   "GpuMemoryPendingRequest": {
     "properties": {
       "setting_gb": {
+        "description": "GPU memory to set, in decimal GB (10**9 bytes).",
         "title": "Setting Gb",
         "type": "number"
       }
