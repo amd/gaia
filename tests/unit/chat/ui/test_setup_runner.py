@@ -293,6 +293,23 @@ def test_describe_reads_the_download_size(line, size):
     assert progress is not None and progress.size == size
 
 
+def test_setup_output_removes_ansi_codes_from_the_model_and_details_log():
+    run = sr.SetupRun(False)
+    runner = sr.SetupRunner()
+
+    runner._consume(run, "\x1b[1;34mStep 1/5: Starting Lemonade Server...\x1b[0m")
+    runner._consume(
+        run,
+        "   Chat model: Gemma-\x1b[1;36m4\x1b[0m-E4B-it-GGUF (default_model)",
+    )
+
+    assert run.chat_model == "Gemma-4-E4B-it-GGUF"
+    assert run.log == [
+        "Step 1/5: Starting Lemonade Server...",
+        "Chat model: Gemma-4-E4B-it-GGUF (default_model)",
+    ]
+
+
 def test_describe_reads_the_chat_model_setup_chose():
     progress = sr.describe(
         "   Chat model: Qwen3.6-35B-A3B-GGUF — this PC has 32 GB for models (AMD iGPU)"
@@ -911,3 +928,50 @@ def test_run_route_passes_the_switch_to_gaias_own(client, monkeypatch):
     test_client.post("/api/setup/run", json={"gaia_lemonade": True})
     test_client.post("/api/setup/run", json={})
     assert seen == [(False, True), (False, False)]
+
+
+@pytest.mark.parametrize(
+    "raw, clean",
+    [
+        # SGR colour and bold.
+        ("\x1b[1;36mGemma\x1b[0m", "Gemma"),
+        # Cursor / erase CSI sequences, and the 8-bit CSI introducer.
+        ("\x1b[2K\x1b[1GStep 2/5: Pulling", "Step 2/5: Pulling"),
+        ("\x9b0mdone", "done"),
+        # OSC 8 hyperlink, ST- and BEL-terminated: the link text survives.
+        ("see \x1b]8;;https://x.example\x1b\\docs\x1b]8;;\x1b\\ now", "see docs now"),
+        ("\x1b]0;window title\x07Ready", "Ready"),
+        # Escapes cut off at the end of a captured line.
+        ("Downloading 40%\x1b[1;3", "Downloading 40%"),
+        ("Downloading 40%\x1b[", "Downloading 40%"),
+        ("Downloading 40%\x1b]8;;https://x.example", "Downloading 40%"),
+        ("Downloading 40%\x1b", "Downloading 40%"),
+        # Charset selection and other two-byte ESC sequences.
+        ("\x1b(BReady\x1b7", "Ready"),
+        # Literal brackets with no ESC are content, not escapes.
+        ("[1;36m is literal", "[1;36m is literal"),
+        ("[bold]Model[/bold] [x] 45%", "[bold]Model[/bold] [x] 45%"),
+        ("[2026-10-29 10:00:00] | INFO", "[2026-10-29 10:00:00] | INFO"),
+        ("[####----] 45% 1.2 GB / 2.5 GB", "[####----] 45% 1.2 GB / 2.5 GB"),
+    ],
+)
+def test_setup_output_strips_only_terminal_escapes(raw, clean):
+    run = sr.SetupRun(False)
+    sr.SetupRunner()._consume(run, raw)
+
+    assert run.log == [clean]
+
+
+def test_a_line_that_is_only_escapes_adds_nothing_to_the_log():
+    run = sr.SetupRun(False)
+    sr.SetupRunner()._consume(run, "\x1b[0m\x1b[2K\x1b]8;;\x1b\\")
+
+    assert run.log == []
+
+
+def test_progress_is_still_read_through_colour_codes():
+    progress = sr.describe(
+        sr._ANSI_RE.sub("", "\x1b[32m[####----]\x1b[0m \x1b[1m45%\x1b[0m")
+    )
+
+    assert progress is not None and progress.percent == 45

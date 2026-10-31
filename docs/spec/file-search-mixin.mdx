@@ -41,6 +41,10 @@ baseline for later edits.
 - Phase 1: common locations (Documents, Downloads, Desktop) with a depth limit
 - Phase 2: deep drive/root search, only when `deep_search=True` and no
   `directory` was named
+  - The user's home is walked first, then each drive or `/`
+  - At a filesystem root, OS trees (`System`, `Library`, `private`, `usr`, `opt`,
+    `proc`, `sys`, `dev`, `run`, `snap`) are walked last, not skipped; one the
+    budget never reaches is listed in `unfinished_paths`
 - Early termination on first match for speed
 
 The search root is the declared sandbox, **not** `Path.cwd()`. A sidecar is
@@ -410,11 +414,12 @@ if matching_files:
 # Phase 2: Deep drive search — never when a directory was named
 if not deep_search or directory:
     return {"status": "success", "files": [], "searched_paths": [...], ...}
+search_location(Path.home(), max_depth=999)  # home first
 if platform.system() == "Windows":
     for drive in ["C:/", "D:/", ...]:
         search_location(drive, max_depth=999)
 else:
-    search_location(Path("/"), max_depth=999)
+    search_location(Path("/"), max_depth=999)  # OS trees deferred to the end
 ```
 
 A zero result reports where it looked: `searched_paths`, a `search_context` of

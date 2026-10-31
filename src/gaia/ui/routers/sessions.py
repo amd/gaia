@@ -187,7 +187,6 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     # here told the user 'gaia' was both unknown and registered.
     valid_ids = sorted(
         {reg.id for reg in registry.list()}
-        | {"chat"}
         | {aid for aid in _SIDECAR_AGENT_TYPES if profile_for(aid).always_relay}
     )
     load_error = registry.get_load_error(agent_type)

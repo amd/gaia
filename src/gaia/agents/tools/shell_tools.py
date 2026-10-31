@@ -49,7 +49,7 @@ from gaia.agents.tools.shell_deletes import (
     split_exact,
 )
 from gaia.agents.tools.shell_session import ShellSession
-from gaia.agents.tools.workspace_paths import _workspace_default
+from gaia.agents.tools.workspace_paths import _workspace_default, _workspace_target
 from gaia.env import child_env
 from gaia.tool_cancellation import tool_cancelled
 
@@ -2514,6 +2514,10 @@ def _posix_pipe_positions(text: str) -> list:
     return positions
 
 
+#: The only characters a cmd.exe line may hold and still be classified read-only.
+_CMD_PLAIN_LINE = re.compile(r"[A-Za-z0-9 ._\\/:-]*")
+
+
 def _pipe_dialect() -> str:
     """Whose pipe rules a step follows: cmd.exe's on Windows, sh's elsewhere."""
     return "cmd" if os.name == "nt" else "posix"
@@ -3315,11 +3319,12 @@ class ShellToolsMixin:
         """``(folder, explicit)`` a call runs in, or None when it names no real one."""
         working_directory = _expand_home(working_directory)
         if working_directory:
-            if not isinstance(working_directory, str) or not os.path.isdir(
-                working_directory
-            ):
+            if not isinstance(working_directory, str):
                 return None
-            return str(Path(working_directory).resolve()), True
+            working_directory = str(_workspace_target(self, working_directory))
+            if not os.path.isdir(working_directory):
+                return None
+            return working_directory, True
         return self._live_session_cwd(), False
 
     def _live_session_cwd(self) -> str:
@@ -3355,6 +3360,51 @@ class ShellToolsMixin:
             f"ran in {session.cwd} instead."
         )
         return session.cwd
+
+    def _line_is_read_only(self, command: str) -> bool:
+        """Return whether *command* is read-only under the ordinary policy.
+
+        Full access changes whether a command may run, not whether it can write.
+        Reparse under the normal policy so redirections and other shell-only
+        constructs still count as untracked changes.
+        """
+        # Full access hands the raw line to sh, which expands $ and backticks
+        # even inside double quotes; the shell-less parse sees only text.
+        if _pipe_dialect() == "posix" and ("$" in command or "`" in command):
+            return False
+        # Braces and globs can expand into a write flag (`find . {-delete,}`):
+        # sh does it off Windows, Git's GNU tools do it to their own argv on it.
+        if any(char in command for char in "{*?["):
+            return False
+        # cmd.exe strips quotes and rewrites ^, %VAR% and !VAR! before the
+        # program runs, so only a line of plain characters can be judged read-only.
+        if _pipe_dialect() == "cmd" and not _CMD_PLAIN_LINE.fullmatch(command):
+            return False
+        # A PowerShell body can run any cmdlet inside a subexpression; never a read.
+        if "powershell" in command.lower() or "pwsh" in command.lower():
+            return False
+        steps, parse_error = _parse_line(command, bypass_gates=False)
+        if parse_error is not None or not steps:
+            return False
+        granted = skill_granted_binaries(self)
+        for step in steps:
+            if step.is_cd:
+                return False
+            for segment in step.segments:
+                if (
+                    not segment
+                    or _interpreter_name(segment[0]) == "powershell"
+                    or self._validate_command(
+                        segment[0].lower(),
+                        segment,
+                        shlex.join(segment),
+                        granted_binaries=granted,
+                        bypass_gates=False,
+                    )
+                    is not None
+                ):
+                    return False
+        return True
 
     def _line_verdict(self, command: str, working_directory: Any = None) -> tuple:
         """``(error, steps)`` for this call, path scope included.
@@ -4639,40 +4689,41 @@ class ShellToolsMixin:
                         "hint": "Rate limiting prevents excessive command execution",
                     }
 
-                # Validate working directory if specified
+                # Validate an explicit directory after resolving it from the
+                # chat workspace; keep the original argument for approval keys.
                 if working_directory:
-                    if not os.path.exists(working_directory):
+                    cwd = str(_workspace_target(self, working_directory))
+                    if not os.path.exists(cwd):
                         return {
                             **NOT_EXECUTED,
                             "status": "error",
-                            "error": f"Working directory not found: {working_directory}",
+                            "error": f"Working directory not found: {cwd}",
                             "has_errors": True,
                         }
 
-                    if not os.path.isdir(working_directory):
+                    if not os.path.isdir(cwd):
                         return {
                             **NOT_EXECUTED,
                             "status": "error",
-                            "error": f"Path is not a directory: {working_directory}",
+                            "error": f"Path is not a directory: {cwd}",
                             "has_errors": True,
                         }
 
                     # Outside full access the line's verdict judges the
                     # folder, before the prompt, so it can be approved there.
-                    if bypass and not self._path_allowed(working_directory):
+                    if bypass and not self._path_allowed(cwd):
                         hint = (
-                            self.path_validator.scratch_hint(working_directory)
+                            self.path_validator.scratch_hint(cwd)
                             if hasattr(self, "path_validator")
                             else ""
                         )
                         return {
                             **NOT_EXECUTED,
                             "status": "error",
-                            "error": f"Access denied: {working_directory} is not in allowed paths.{hint}",
+                            "error": f"Access denied: {cwd} is not in allowed paths.{hint}",
                             "has_errors": True,
                         }
 
-                    cwd = str(Path(working_directory).resolve())
                     session_scoped = False
                 else:
                     # An explicit working_directory is a one-shot override that
@@ -4716,8 +4767,12 @@ class ShellToolsMixin:
                 error, steps = self._line_verdict(command, working_directory)
                 if error and not _reaches_the_prompt(error):
                     return error
-                # Only the read-only tier is known not to write files.
-                may_write = bool(error) or bypass
+                # Full access permits writes; it does not make a known read
+                # untrackable. Classify the line with the ordinary policy so
+                # writes still get snapshots and the Undo warning.
+                may_write = bool(error) or (
+                    bypass and not self._line_is_read_only(command)
+                )
                 if error and unconfirmed:
                     return self._blanket_approval_refusal(error, command)
                 if error and error.get("tier") == TIER_CONFIRM_ONCE:

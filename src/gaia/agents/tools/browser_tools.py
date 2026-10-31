@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 from gaia.agents.base.file_snapshots import before_change
+from gaia.agents.tools.workspace_paths import _workspace_target
 from gaia.tool_cancellation import ToolCancelled, tool_cancelled
 
 if TYPE_CHECKING:
@@ -589,6 +590,8 @@ class BrowserToolsMixin:
                 return "Error: Browser tools not initialized. Download is disabled."
 
             validator = getattr(mixin, "_path_validator", None)
+            if not Path(save_to).expanduser().is_absolute():
+                save_to = str(_workspace_target(mixin, save_to))
 
             # Refuse a blocked folder (/etc, ~/.ssh, ...) before any request.
             if validator:

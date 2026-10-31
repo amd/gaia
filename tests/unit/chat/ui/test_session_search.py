@@ -162,6 +162,35 @@ def test_timestamp_ties_keep_newer_chats_first_in_search_and_sidebar(client, db)
     assert [session["id"] for session in db.list_sessions()] == [new, old]
 
 
+def test_tied_chats_page_without_gaps_or_repeats(db):
+    tied = "2026-01-01T00:00:00+00:00"
+    ids = [db.create_session(title=f"Chat {i}")["id"] for i in range(5)]
+    with db._transaction():
+        db._conn.executemany(
+            "UPDATE sessions SET updated_at = ? WHERE id = ?",
+            [(tied, sid) for sid in ids],
+        )
+
+    paged = [s["id"] for off in range(5) for s in db.list_sessions(limit=1, offset=off)]
+    assert paged == list(reversed(ids))
+
+
+def test_a_later_update_still_beats_a_later_insert(client, db):
+    old = _chat(db, "Old", "orchid")
+    new = _chat(db, "New", "orchid")
+    with db._transaction():
+        db._conn.executemany(
+            "UPDATE sessions SET updated_at = ? WHERE id = ?",
+            [
+                ("2026-01-01T00:00:01+00:00", old),
+                ("2026-01-01T00:00:00+00:00", new),
+            ],
+        )
+
+    assert [h["session_id"] for h in _search(client, "orchid")] == [old, new]
+    assert [s["id"] for s in db.list_sessions()] == [old, new]
+
+
 def test_private_chats_are_searchable(client, db):
     sid = db.create_session(title="Secret", private=True)["id"]
     db.add_message(sid, "user", "my locker code is in here")

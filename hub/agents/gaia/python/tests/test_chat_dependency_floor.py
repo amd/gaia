@@ -1,0 +1,185 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Guards the amd-gaia dependency floor against ChatAgent's real core needs.
+
+ChatAgent (``gaia_agent.chat_agent``, moved here from gaia-agent-chat in #6099)
+imports ``get_embedding_model_for_device`` from
+``gaia.agents.registry`` at module load; that symbol first shipped in core
+v0.22.0. With a lower floor a fresh resolver may legally select an older
+core and the agent dies at startup with ImportError (#2112). These tests
+pin the floor to the symbol so the two can't silently drift apart again:
+if the floor is lowered, or the agent grows an import the declared floor
+doesn't cover, one of these fails. Mirrors the email agent's
+tests/test_dependency_floor.py (distinct basename: pytest can't collect
+two same-named modules from __init__-less tests dirs in one run).
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+FLAGSHIP_ROOT = Path(__file__).resolve().parents[1]
+
+# First core release shipping gaia.agents.registry.get_embedding_model_for_device
+# (introduced by commit 89db99d6, first tagged in v0.22.0).
+REQUIRED_FLOOR = (0, 22, 0)
+
+# First core release shipping gaia.agents.tools.path_access (#4656).
+PATH_ACCESS_FLOOR = (0, 25, 0)
+
+# First core release shipping gaia.agents.tools.reasoning_tools.
+REASONING_TOOLS_FLOOR = (0, 25, 1)
+
+# First core release shipping gaia.utils.file_lock.held_by_another_program.
+FILE_LOCK_HELD_FLOOR = (0, 25, 1)
+
+# Matches the version in "amd-gaia>=X.Y.Z" with or without an extras suffix
+# (e.g. "amd-gaia[api]>=X.Y.Z") — the extras are #1617's concern, not the floor's.
+_AMD_GAIA_FLOOR_RE = r'"amd-gaia(?:\[[^\]]*\])?>=([0-9.]+)"'
+
+
+def _floor_tuple(version: str) -> tuple[int, ...]:
+    parts = tuple(int(p) for p in version.strip().split(".")[:3])
+    return (parts + (0, 0, 0))[:3]
+
+
+def test_agent_module_imports_and_registry_symbol_exists():
+    """The exact import chain that crashed fresh installs in #2112."""
+    import gaia_agent.chat_agent  # noqa: F401
+
+    from gaia.agents.registry import get_embedding_model_for_device
+
+    assert callable(get_embedding_model_for_device)
+
+
+def test_agent_module_imports_and_gaia_home_symbol_exists():
+    """#4381: the agent imports gaia.config.gaia_home at module load; a
+    core released before that symbol (e.g. 0.24.1) dies here."""
+    import gaia_agent.chat_agent  # noqa: F401
+
+    from gaia.config import gaia_home
+
+    assert callable(gaia_home)
+
+
+def test_pyproject_floor_covers_registry_symbol():
+    pyproject = (FLAGSHIP_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(_AMD_GAIA_FLOOR_RE, pyproject)
+    assert match, "pyproject.toml must declare an amd-gaia>=X.Y.Z floor"
+    assert _floor_tuple(match.group(1)) >= REQUIRED_FLOOR, (
+        f"amd-gaia floor {match.group(1)} predates "
+        "gaia.agents.registry.get_embedding_model_for_device (first shipped in "
+        "0.22.0); a fresh resolver may select a core that ImportErrors at "
+        "agent start (#2112)"
+    )
+
+
+def test_pyproject_floor_covers_path_access():
+    """An older core has no allowed-folders module, so the agent can't import."""
+    from gaia.agents.tools.path_access import read_access_error
+
+    assert callable(read_access_error)
+    pyproject = (FLAGSHIP_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(_AMD_GAIA_FLOOR_RE, pyproject)
+    assert match
+    assert _floor_tuple(match.group(1)) >= PATH_ACCESS_FLOOR, (
+        f"amd-gaia floor {match.group(1)} predates gaia.agents.tools.path_access "
+        "(first shipped in 0.25.0); the agent ImportErrors on an older core"
+    )
+
+
+def _core_release() -> tuple[int, ...]:
+    from packaging.version import Version
+
+    from gaia.version import __version__
+
+    return (Version(__version__).release + (0, 0, 0))[:3]
+
+
+@pytest.mark.parametrize("pyproject", [FLAGSHIP_ROOT / "pyproject.toml"], ids=["gaia"])
+def test_floor_rises_with_the_core_that_ships_reasoning_tools(pyproject):
+    """The floor can't name an unreleased core, so it must rise at that release.
+
+    Below 0.25.1 the in-tree core is the only one the floor could name; from
+    0.25.1 on, a 0.25.0 floor would let a resolver pick a core the agent can't
+    import, since it loads gaia.agents.tools.reasoning_tools at start.
+    """
+    from gaia.agents.tools.reasoning_tools import ReasoningEffortToolsMixin
+
+    assert ReasoningEffortToolsMixin
+    match = re.search(_AMD_GAIA_FLOOR_RE, pyproject.read_text(encoding="utf-8"))
+    assert match, f"{pyproject} must declare an amd-gaia>=X.Y.Z floor"
+    floor = _floor_tuple(match.group(1))
+    assert floor <= _core_release(), (
+        f"amd-gaia floor {match.group(1)} is above the in-tree core; nothing can "
+        "resolve it until that core is released"
+    )
+    if _core_release() >= REASONING_TOOLS_FLOOR:
+        assert floor >= REASONING_TOOLS_FLOOR, (
+            f"core is now {_core_release()}, but {pyproject.parent.name}'s "
+            f"amd-gaia floor is still {match.group(1)}; raise it (and "
+            "min_gaia_version) to 0.25.1, the first core with reasoning_tools"
+        )
+
+
+def test_floor_guard_fails_a_release_that_forgets_the_bump(monkeypatch, tmp_path):
+    stale = tmp_path / "pyproject.toml"
+    stale.write_text('dependencies = ["amd-gaia>=0.25.0"]', encoding="utf-8")
+    monkeypatch.setitem(globals(), "_core_release", lambda: (0, 25, 1))
+    with pytest.raises(AssertionError, match="raise it"):
+        test_floor_rises_with_the_core_that_ships_reasoning_tools(stale)
+
+    ahead = tmp_path / "ahead.toml"
+    ahead.write_text('dependencies = ["amd-gaia>=0.26.0"]', encoding="utf-8")
+    with pytest.raises(AssertionError, match="above the in-tree core"):
+        test_floor_rises_with_the_core_that_ships_reasoning_tools(ahead)
+
+
+@pytest.mark.parametrize("pyproject", [FLAGSHIP_ROOT / "pyproject.toml"], ids=["gaia"])
+def test_chat_floor_rises_with_the_core_that_ships_held_by_another_program(pyproject):
+    """ChatAgent imports gaia.utils.file_lock.held_by_another_program at
+    start, which no core before 0.25.1 ships."""
+    from gaia.utils.file_lock import held_by_another_program
+
+    assert callable(held_by_another_program)
+    match = re.search(_AMD_GAIA_FLOOR_RE, pyproject.read_text(encoding="utf-8"))
+    assert match, f"{pyproject} must declare an amd-gaia>=X.Y.Z floor"
+    floor = _floor_tuple(match.group(1))
+    if _core_release() >= FILE_LOCK_HELD_FLOOR:
+        assert floor >= FILE_LOCK_HELD_FLOOR, (
+            f"core is now {_core_release()}, but the flagship's amd-gaia floor "
+            f"is still {match.group(1)}; raise it (and min_gaia_version) to "
+            "0.25.1, the first core with file_lock.held_by_another_program"
+        )
+
+
+def test_held_by_another_program_guard_fails_a_release_that_forgets_the_bump(
+    monkeypatch, tmp_path
+):
+    stale = tmp_path / "pyproject.toml"
+    stale.write_text('dependencies = ["amd-gaia>=0.25.0"]', encoding="utf-8")
+    monkeypatch.setitem(globals(), "_core_release", lambda: (0, 25, 1))
+    with pytest.raises(AssertionError, match="held_by_another_program"):
+        test_chat_floor_rises_with_the_core_that_ships_held_by_another_program(stale)
+
+
+def test_manifest_floors_match_pyproject():
+    """gaia-agent.yaml repeats the floor twice; both must stay in lock-step."""
+    manifest = (FLAGSHIP_ROOT / "gaia-agent.yaml").read_text(encoding="utf-8")
+    min_gaia = re.search(r'min_gaia_version:\s*"([0-9.]+)"', manifest)
+    dep = re.search(_AMD_GAIA_FLOOR_RE, manifest)
+    assert min_gaia, "gaia-agent.yaml must declare min_gaia_version"
+    assert dep, "gaia-agent.yaml must declare an amd-gaia>=X.Y.Z dependency"
+
+    pyproject = (FLAGSHIP_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    pyproject_floor = re.search(_AMD_GAIA_FLOOR_RE, pyproject)
+    assert pyproject_floor
+
+    assert min_gaia.group(1) == dep.group(1) == pyproject_floor.group(1), (
+        "amd-gaia floor drift: pyproject.toml "
+        f"({pyproject_floor.group(1)}) vs gaia-agent.yaml min_gaia_version "
+        f"({min_gaia.group(1)}) / python dependency ({dep.group(1)})"
+    )

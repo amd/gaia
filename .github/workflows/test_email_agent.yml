@@ -12,6 +12,7 @@ on:
     paths:
       - 'hub/agents/email/python/**'
       - 'src/gaia/agents/base/**'
+      - 'src/gaia/utils/sqlite_wal.py'
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
       # Repo-side email suites this workflow runs — changing them must trigger it.
@@ -59,6 +60,7 @@ on:
     paths:
       - 'hub/agents/email/python/**'
       - 'src/gaia/agents/base/**'
+      - 'src/gaia/utils/sqlite_wal.py'
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
       # Repo-side email suites this workflow runs — changing them must trigger it.

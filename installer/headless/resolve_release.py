@@ -17,9 +17,8 @@ Asset names come from the same places the release pipeline uses
 artifactName for the desktop app), spelled with the release's asset version:
 tag v0.25.1-rc2 -> 0.25.1-rc.2.
 
-Waiting exists for the tag trigger: the tag is pushed before publish.yml and
-release_components.yml have attached anything, and the approval gate between
-them is human. A release still missing assets when the wait ends fails with
+Waiting exists for the tag trigger: the tag is pushed before publish.yml has
+attached anything, and a final's approval gate in it is human. A release still missing assets when the wait ends fails with
 the list of what is missing -- testing a half-attached release would report
 installers as broken that simply are not there yet.
 """
@@ -230,8 +229,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             listing = "\n".join(f"    {m}" for m in missing)
             print(
                 f"::error::{tag} {where} after waiting {args.wait_minutes:g} min. Missing:\n{listing}\n"
-                f"Check the publish.yml and release_components.yml runs for {tag}; "
-                f"re-run this workflow once they have attached everything. Nothing was tested.",
+                f"Check the publish.yml run for {tag}; "
+                f"re-run this workflow once it has attached everything. Nothing was tested.",
                 flush=True,
             )
             return 1

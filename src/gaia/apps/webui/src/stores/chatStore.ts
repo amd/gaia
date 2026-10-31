@@ -8,6 +8,7 @@ import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, S
 import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import { DEFAULT_LOCALE, applyLocale, isLocaleCode } from '../i18n/registry';
 import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
 
 /** Settings sections, in the order the settings nav shows them. */
@@ -68,6 +69,16 @@ export function readCustomColors(): CustomColors {
         log.system.warn('Saved custom colors unreadable; starting from the default pair.', err);
     }
     return DEFAULT_CUSTOM;
+}
+
+const LOCALE_KEY = 'gaia-chat-locale';
+
+/** The saved interface language; anything unregistered reads as English. */
+export function readLocale(): string {
+    const v = readPref(LOCALE_KEY, DEFAULT_LOCALE);
+    if (isLocaleCode(v)) return v;
+    log.system.warn(`Saved interface language "${v}" is not a registered locale; using English.`);
+    return DEFAULT_LOCALE;
 }
 
 /** Persist a UI preference. Never throws: a zustand setter must still update state. */
@@ -238,6 +249,9 @@ interface ChatState {
     /** A message queued for one chat; only that chat's view sends it. */
     pendingPrompt: PendingPrompt | null;
     setThemePreference: (pref: ThemePreference) => void;
+    /** Interface language, a code registered in src/i18n/registry.ts. */
+    locale: string;
+    setLocale: (code: string) => void;
     /** Color palette; `default` is the built-in warm gray look. */
     palette: PaletteId;
     customColors: CustomColors;
@@ -514,6 +528,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         applyTheme(theme);
         applyPalette(get().palette, get().customColors, theme);
         set({ theme });
+    },
+    locale: readLocale(),
+    setLocale: (code) => {
+        applyLocale(code);
+        writePref(LOCALE_KEY, code);
+        set({ locale: code });
     },
     palette: readPalette(),
     customColors: readCustomColors(),

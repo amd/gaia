@@ -161,7 +161,7 @@ def test_prompt_args_are_made_json_safe():
 
 def test_the_relay_hands_the_ui_prompt_its_args_and_label():
     handler = SSEOutputHandler()
-    handler.set_relay_confirmation = lambda _cid: None
+    handler.set_relay_confirmation = lambda _cid, _scope=None: None
     relay._dispatch_one(
         handler,
         {
@@ -179,7 +179,7 @@ def test_the_relay_hands_the_ui_prompt_its_args_and_label():
     assert prompt["type"] == "permission_request"
     assert prompt["args"] == {"path": "C:\\a.txt", "kind": "file"}
     assert prompt["tool_label"] == "using a file"
-    # Still no "always": the grant would live where this chat can't see it.
+    # No "always": folder access asks afresh every time.
     assert "always_scope" not in prompt
 
 
@@ -261,7 +261,7 @@ def test_a_noted_call_matching_the_prompt_is_not_sent_twice():
 
 def test_the_relay_puts_gaias_context_back_on_the_ui_prompt():
     handler = SSEOutputHandler()
-    handler.set_relay_confirmation = lambda _cid: None
+    handler.set_relay_confirmation = lambda _cid, _scope=None: None
     relay._dispatch_one(
         handler,
         {
@@ -306,7 +306,7 @@ def test_a_resolved_write_path_is_context_not_an_argument():
 
 def test_the_relay_shows_the_ui_prompt_where_a_write_lands():
     handler = SSEOutputHandler()
-    handler.set_relay_confirmation = lambda _cid: None
+    handler.set_relay_confirmation = lambda _cid, _scope=None: None
     relay._dispatch_one(
         handler,
         {
@@ -338,7 +338,7 @@ def test_a_relative_write_reaches_the_ui_prompt_as_its_full_path():
     wire["confirm_id"] = "c-3"
 
     ui_side = SSEOutputHandler()
-    ui_side.set_relay_confirmation = lambda _cid: None
+    ui_side.set_relay_confirmation = lambda _cid, _scope=None: None
     relay._dispatch_one(ui_side, wire, GAIA_PROFILE, answers_confirmations=True)
     (shown,) = _drain(ui_side)
     assert wire["args"]["file_path"] == "shop2.txt"

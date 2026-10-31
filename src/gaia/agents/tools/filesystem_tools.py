@@ -43,6 +43,7 @@ from gaia.filesystem.name_match import (
     glob_matches_mid_word,
 )
 from gaia.logger import get_logger
+from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
 
@@ -1510,15 +1511,19 @@ class FileSystemToolsMixin:
             elif scope == "smart":
                 roots = list(workspace)
                 common = [
-                    "Documents",
-                    "Downloads",
-                    "Desktop",
-                    "Projects",
-                    "Work",
-                    "OneDrive",
+                    documents_dir(Path(home)),
+                    *(
+                        Path(home) / folder
+                        for folder in (
+                            "Downloads",
+                            "Desktop",
+                            "Projects",
+                            "Work",
+                            "OneDrive",
+                        )
+                    ),
                 ]
-                for folder in common:
-                    p = Path(home) / folder
+                for p in common:
                     if p.exists() and str(p) not in roots:
                         roots.append(str(p))
                 return roots

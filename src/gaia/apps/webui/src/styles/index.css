@@ -155,7 +155,8 @@
     /* Left inset that keeps top-row content clear of the floating .sidebar-toggle. */
     --sidebar-toggle-clearance: 58px;
 
-    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Roboto, Helvetica, Arial, sans-serif;
+    /* Inter has no Arabic; the system faces after it supply the glyphs, offline. */
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', 'Noto Sans Arabic', 'Noto Naskh Arabic', Roboto, Helvetica, Arial, Tahoma, sans-serif;
     --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
     --font-display: var(--font-sans);
     --font-greeting: 'Fraunces', Georgia, 'Times New Roman', serif;
@@ -305,6 +306,20 @@ a:hover { text-decoration: underline; }
 
 /* Layout */
 .app { display: flex; height: 100vh; height: 100dvh; position: relative; }
+
+/* Icons that point along the reading direction mirror in right-to-left text.
+   `scale` composes with the `transform: rotate()` that disclosure chevrons use. */
+:is(.lucide-chevron-right, .lucide-chevron-left, .lucide-arrow-right, .lucide-arrow-left,
+    .lucide-panel-left-close, .lucide-panel-left-open):dir(rtl) {
+    scale: -1 1;
+}
+
+/* Arabic script needs more room between lines than Latin at the same size. */
+:root[lang="ar"] #root { line-height: 1.7; }
+.md-content :is(.md-p, .md-li, .md-blockquote, td, th):dir(rtl),
+.composer-input:dir(rtl) {
+    line-height: 1.85;
+}
 .main-content { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; position: relative; }
 
 /* ── View transitions ───────────────────────────────────────────── */
@@ -314,7 +329,7 @@ a:hover { text-decoration: underline; }
 .notification-center-popover {
     position: fixed;
     top: 52px;
-    right: 16px;
+    inset-inline-end: 16px;
     z-index: 120;
 }
 
@@ -440,7 +455,8 @@ textarea:focus-visible {
 
 .modal-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 20px 18px 8px 24px;
+    padding-block: 20px 8px;
+    padding-inline: 24px 18px;
     flex-shrink: 0;
 }
 .modal-header h3 {
@@ -490,7 +506,7 @@ textarea:focus-visible {
     display: none;
     position: fixed;
     top: 10px;
-    left: 10px;
+    inset-inline-start: 10px;
     z-index: 51;
     width: 38px;
     height: 38px;
@@ -664,7 +680,7 @@ textarea:focus-visible {
 @media (max-width: 768px) {
     .sidebar-toggle { display: flex; }
     .sidebar-overlay.visible { display: block; }
-    .app-notice { margin: 0; border-radius: 0; padding-left: var(--sidebar-toggle-clearance); }
+    .app-notice { margin: 0; border-radius: 0; padding-inline-start: var(--sidebar-toggle-clearance); }
 
     .modal-panel {
         max-width: 96%;
@@ -720,6 +736,20 @@ textarea:focus-visible {
 }
 /* macOS: the traffic lights sit at the top left, over the sidebar's first row. */
 :root[data-titlebar="mac"] .sb-top {
+    padding-left: 84px;
+}
+/* Right to left the sidebar is on the right: it makes room for the Windows
+   controls, and the chat header for the macOS ones. */
+:root[data-titlebar="overlay"][dir="rtl"] .task-header {
+    padding-right: 12px;
+}
+:root[data-titlebar="overlay"][dir="rtl"] .sb-top {
+    padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);
+}
+:root[data-titlebar="mac"][dir="rtl"] .sb-top {
+    padding-left: 10px;
+}
+:root[data-titlebar="mac"][dir="rtl"] .task-header {
     padding-left: 84px;
 }
 

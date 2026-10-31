@@ -833,7 +833,7 @@ same way — via the `gaia.agent` entry point, so the registry discovers it
 automatically:
 
 ```bash From PyPI (pip)
-pip install gaia-agent-hello-world          # one agent
+pip install gaia-agent-email          # one agent
 ```
 
 <Note>
@@ -842,7 +842,7 @@ PyPI publishing for `gaia-agent-*` wheels is currently paused (tracked by
 resolve yet. Until publishing lands, install an agent straight from this repo:
 
 ```bash From source (works today)
-uv pip install "gaia-agent-hello-world @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/hello-world/python"
+uv pip install "gaia-agent-email @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/email/python"
 ```
 </Note>
 
@@ -1678,6 +1678,8 @@ models — alongside local inference. Requires **Lemonade Server 11.8.0+**.
 You enter your token once. Lemonade holds it in memory and forgets it on
 restart, so GAIA keeps a copy in your **OS credential store** (DPAPI, Keychain,
 SecretService) and replays it — encrypted at rest, never in a GAIA file.
+`install` replays it as well; installing with a different `--base-url` deletes it, so
+it is never sent to another gateway.
 
 ```bash
 gaia gateway install --base-url https://llm-api.amd.com/Unified/v1  # register the gateway
@@ -1739,6 +1741,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3.6-35B-A3B-GGUF` on a PC with the memory for it and never overwrites a value you set. `user.Qwen3.8-Flash-Next-GGUF` is available on a 128 GB Strix Halo; choose it here, `gaia init` never does |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) for commands that load without naming a model. A model always runs on the device it was built for |
 | `context_sizes` | _(empty)_ | Context window per local model, set in the Agent UI under **Settings → Model** (`gaia config set` refuses it). A model not listed gets GAIA's automatic size; `GAIA_CTX_SIZE` overrides it |
+| `custom_models` | _(empty)_ | Local models you added from a Hugging Face link, managed with [`gaia model`](#model-command), the Agent UI or the TUI (`gaia config set` refuses it) |
 | `profile` | `chat` | Last `gaia init` profile |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, `rocm`, `metal`, `cpu`, or `auto` to let Lemonade choose. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
@@ -1749,6 +1752,58 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
 | `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui#undo-a-turn) |
 | `undo_max_mb` | `500` | Megabytes those copies may use; the oldest turns are removed first; the size limit never removes the newest |
+| `network_policy` | `cloud_allowed` | `local_ai_only` makes GAIA refuse every cloud AI model — see [Local only](#local-only). Stored in `~/.gaia/policy.json`, not in `config.json` |
+
+### Local only
+
+```bash
+gaia config set network_policy local_ai_only   # no AI request reaches a cloud model
+gaia config get network_policy
+gaia config set network_policy cloud_allowed   # allow cloud models again
+```
+
+With `local_ai_only`, GAIA refuses every AI request to a model Lemonade's catalog
+doesn't list as local: Fireworks and AMD LLM Gateway models, Lemonade router
+collections, and any model id the catalog doesn't know. The refusal names the model
+and how to turn the setting off. Downloading a local model still works.
+
+It applies everywhere GAIA sends a prompt or a key:
+
+- Chat, agents, documents, speech-to-text and text-to-speech run only on local models.
+- Anthropic Claude is refused, including `gaia eval`'s judges and the `claude` CLI that
+  eval, benchmarks and session harvesting launch. `gaia eval agent` stops at its
+  preflight check.
+- GAIA stops handing stored cloud keys to Lemonade, and takes back any it already
+  gave a running GAIA Lemonade. The Agent UI and `gaia-tui` refuse to connect a
+  cloud provider, enter a gateway token, or switch to a cloud model.
+- The web-search tool that answers through Perplexity's cloud AI is turned off.
+
+Setting it also clears a saved cloud model (Fireworks, AMD LLM Gateway or Claude)
+from `default_model` and `last_model` in `config.json`, and prints what it cleared
+and the local model GAIA uses instead. `gaia config show` lists the policy file and the current level.
+
+What it does not cover:
+
+- Non-AI network features: web page fetch, connectors and MCP servers keep working
+  and keep their own permissions.
+- A Lemonade Server you run on another machine: GAIA treats the models it lists as
+  local, so prompts go to that machine.
+- An agent sidecar (such as email) built before this setting existed: it runs its
+  own copy of GAIA, so a cloud model named in a request to it isn't checked. Update
+  the agent with `gaia agent install <id>`.
+- A key set in Lemonade's own environment (for example
+  `LEMONADE_FIREWORKS_API_KEY`), or a key a Lemonade you run yourself holds: GAIA's own
+  requests are still refused, but a program talking to Lemonade directly could use it.
+  If GAIA can't reach its Lemonade when you turn Local only on, it says so; restart
+  Lemonade to drop any key it still holds.
+
+`offline` is reserved for a stricter level that also blocks non-AI network
+features; it is refused for now.
+
+The setting lives in `~/.gaia/policy.json` (move it with `GAIA_POLICY_FILE`), not in
+`config.json`, so a project config passed with `--config` can't relax it. If the
+file can't be read, GAIA treats it as `local_ai_only` until you fix or rewrite it.
+GAIA versions released before this setting existed ignore the file.
 
 ### Full access
 
@@ -1936,6 +1991,33 @@ pull one model, use the client that ships with your Lemonade install — on a
 current Lemonade that is `lemonade pull MODEL_NAME`. When a GAIA command finds a
 model missing, its error names the exact command for your machine, so you never
 have to guess which client you have.
+
+### Model Command
+
+Add a GGUF chat model from a Hugging Face link to the local model list, shared
+with the Agent UI and the TUI. See
+[Add a model from Hugging Face](/guides/ai-providers#add-a-model-from-hugging-face)
+for what is checked.
+
+```bash
+gaia model check https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF
+gaia model add https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF --quant Q8_0
+gaia model list
+gaia model remove user.Qwen3-4B-Instruct-2507-Q8_0-GGUF
+```
+
+| Subcommand | What it does |
+|------------|--------------|
+| `check <link>` | Run the checks and show the model it would add; nothing is saved |
+| `add <link>` | Run the checks and, when they pass, add the model. It downloads the first time you pick it |
+| `remove <id>` | Delete the model's download from Lemonade, forget it, and clear `default_model` / `last_model` if either named it |
+| `list` | The models you added, with the link each came from |
+
+`<link>` is any page of a model repo, a `.gguf` file link, or `owner/repo[:QUANT]`.
+`--quant` picks a quantization or one of its file names (default: a 4-bit one
+such as Q4_K_M, else the largest that fits).
+`--json` prints one JSON object. Exit codes: `0` done, `1` refused (the reason is
+printed), `2` the model server or config could not be read.
 
 ---
 
@@ -3988,7 +4070,7 @@ API keys and tokens in GAIA's state files (`lemonade/state.json`, `host/instance
 Most commands support these options. They come from a shared parent parser, so
 despite the name they are **not** accepted by `gaia agent`, `gaia cache`,
 `gaia config`, `gaia connectors`, `gaia daemon`, `gaia diagnostics`, `gaia engineering`,
-`gaia gateway`, `gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory` or
+`gaia gateway`, `gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory`, `gaia model` or
 `gaia skill` — passing one there fails with `unrecognized arguments`.
 
 | Option | Type | Default | Description |

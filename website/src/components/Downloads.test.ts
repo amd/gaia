@@ -21,8 +21,7 @@ const VERSION = '0.24.1';
 
 // Asset names are spelled out rather than produced by artifactFileName: a test
 // that asks the source for the name it expects cannot notice the source
-// changing it. These are the names publish.yml and release_components.yml
-// attach to a final release.
+// changing it. These are the names publish.yml attaches to a final release.
 const DESKTOP_FILES = {
   'win-x64': 'gaia-agent-ui-0.24.1-x64-setup.exe',
   'darwin-arm64': 'gaia-agent-ui-0.24.1-arm64.dmg',

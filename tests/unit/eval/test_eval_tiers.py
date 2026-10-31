@@ -511,7 +511,8 @@ def test_only_a_final_tag_runs_verify_final_and_it_can_escalate(workflow):
     assert verify["permissions"]["actions"] == "read"
     escalation = workflow["jobs"]["release-escalation"]
     assert "verify-final" in escalation["needs"]
-    assert "needs.verify-final.result" in escalation["if"]
+    outcome = next(s for s in escalation["steps"] if s.get("id") == "outcome")
+    assert outcome["env"]["VERIFY_RESULT"] == "${{ needs.verify-final.result }}"
     # A tier that leaves a job out (skipped) must not file an issue.
     assert "!= 'success'" not in escalation["if"]
 

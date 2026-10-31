@@ -32,7 +32,7 @@
     flex-shrink: 0;
     padding: 16px 10px;
     background: var(--bg-sidebar);
-    border-right: 1px solid var(--border-light);
+    border-inline-end: 1px solid var(--border-light);
     overflow-y: auto;
 }
 
@@ -49,7 +49,7 @@
     border-radius: var(--radius-md);
     color: var(--text-secondary);
     font-size: 13.5px;
-    text-align: left;
+    text-align: start;
 }
 
 .settings-nav-item:hover {
@@ -74,7 +74,7 @@
 .settings-close {
     position: absolute;
     top: 14px;
-    right: 14px;
+    inset-inline-end: 14px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -159,11 +159,53 @@
     overflow-wrap: anywhere;
 }
 
+.settings-warning {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    background: var(--danger-dim);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-md);
+}
+
+.settings-warning p {
+    margin: 0;
+}
+
 .settings-row {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
+}
+
+.settings-key-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.settings-key-status::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.settings-key-masked {
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    cursor: default;
+}
+
+.settings-key-remove {
+    display: inline-flex;
+    align-items: center;
 }
 
 .settings-row-between {
@@ -248,7 +290,7 @@
     background: var(--bg-card);
     color: var(--text-primary);
     font-size: 13px;
-    text-align: left;
+    text-align: start;
     transition: border-color var(--duration) var(--ease);
 }
 
@@ -383,7 +425,7 @@
 }
 
 .model-row-rank {
-    margin-left: 8px;
+    margin-inline-start: 8px;
     color: var(--accent);
     font-size: 12px;
 }
@@ -469,11 +511,12 @@
     .settings-nav {
         flex-direction: row;
         width: 100%;
-        padding: 10px 52px 10px 10px;
+        padding-block: 10px;
+        padding-inline: 10px 52px;
         /* Wrap, don't scroll: a clipped "Privac…" hides that more tabs exist. */
         flex-wrap: wrap;
         overflow-y: visible;
-        border-right: none;
+        border-inline-end: none;
         border-bottom: 1px solid var(--border-light);
     }
 
@@ -487,7 +530,7 @@
 
     .settings-close {
         top: 10px;
-        right: 10px;
+        inset-inline-end: 10px;
     }
 
     .settings-body {

@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
@@ -424,6 +424,22 @@ export async function selectModel(model: string): Promise<ActiveModel> {
     return apiFetch('POST', '/providers/select', { model });
 }
 
+/** Check a pasted Hugging Face link; nothing is saved or downloaded. */
+/** `quant` is a quantization or one of its file names. */
+export async function checkCustomModel(url: string, quant?: string): Promise<CustomModelReport> {
+    return apiFetch('POST', '/providers/local/custom/check', { url, quant: quant || null });
+}
+
+/** Add the model a link names to the local model list (downloads on first use). */
+export async function addCustomModel(url: string, quant?: string): Promise<{ report: CustomModelReport }> {
+    return apiFetch('POST', '/providers/local/custom', { url, quant: quant || null });
+}
+
+/** Remove a model the user added, and its download. */
+export async function removeCustomModel(model: string): Promise<CustomModelRemoved> {
+    return apiFetch('DELETE', `/providers/local/custom/${encodeURIComponent(model)}`);
+}
+
 // -- Cloud prices and spending (#5258) ------------------------------------------
 
 export async function getCloudPrices(provider: string): Promise<CloudPriceList> {
@@ -589,7 +605,7 @@ const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'commentary', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
     'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
-    'followup_taken', 'followup_returned', 'context_usage',
+    'followup_taken', 'followup_returned', 'followup_unavailable', 'context_usage',
 ]);
 
 export function sendMessageStream(
@@ -996,13 +1012,34 @@ export async function deleteDocument(id: string): Promise<void> {
     return apiFetch('DELETE', `/documents/${id}`);
 }
 
+/** How far a running index has got: PDF pages read, then chunks embedded. */
+export interface IndexProgress {
+    phase: 'reading' | 'embedding';
+    done: number;
+    /** Null when the count isn't known upfront (e.g. pages of a non-PDF). */
+    total: number | null;
+}
+
 export async function getDocumentStatus(id: string): Promise<{
     id: string;
     indexing_status: string;
     chunk_count: number;
     is_active: boolean;
+    /** Null unless the document is being indexed right now. */
+    progress: IndexProgress | null;
 }> {
     return apiFetch('GET', `/documents/${id}/status`);
+}
+
+/**
+ * Where a library document opens, at `page` when given. Absolute, so it opens
+ * the same in a browser tab and, from the desktop app's file:// page, in the
+ * system browser (the shell hands http links to it).
+ */
+export function documentFileUrl(id: string, page?: number): string {
+    const url = new URL(`${API_BASE}/documents/${encodeURIComponent(id)}/file`, window.location.href);
+    if (page) url.hash = `page=${page}`;
+    return url.href;
 }
 
 export async function cancelIndexing(id: string): Promise<{ cancelled: boolean; id: string }> {

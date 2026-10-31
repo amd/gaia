@@ -48,14 +48,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, FrozenSet, List, Optional, Tuple
 
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 from gaia_agent.connectors import MAILBOX_REQUIREMENTS
 from gaia_agent.engineering_tools import (
     ENGINEERING_SKILL,
     ENGINEERING_TOOL_NAMES,
     EngineeringToolsMixin,
 )
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
-from gaia_agent_chat.profiles import get_profile_spec
+from gaia_agent.profiles import get_profile_spec
 
 from gaia.agents.base.agent import default_max_steps, parse_skill_manifest
 from gaia.agents.base.project_map import ProjectMapMixin, is_code_repository
@@ -80,21 +80,34 @@ logger = get_logger(__name__)
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
+#: This file's parent folders in a source checkout, nearest first.
+_CHECKOUT_LAYOUT = ("gaia_agent", "python", "gaia", "agents", "hub")
+
+
+def _checkout_skills_dir(agent_file: Path) -> Optional[Path]:
+    """``hub/skills`` when *agent_file* sits at hub/agents/gaia/python/gaia_agent/.
+
+    A bundled root's code runs without ``gaia skill promote``, and an installed
+    package sits at no fixed depth, so a bare ``parents[4]`` would trust
+    whatever ``skills/`` folder lies beside the environment.
+    """
+    parents = list(agent_file.parents)[: len(_CHECKOUT_LAYOUT)]
+    if tuple(p.name for p in parents) != _CHECKOUT_LAYOUT:
+        return None
+    return parents[-1] / "skills"
+
+
 #: The starter pack's canonical home, for a source checkout only.
 #:
 #: Packaging stages the pack into ``_SKILLS_DIR``; in a checkout that directory
 #: holds just a ``.gitkeep``, so without this the agent discovers NO skills and
 #: "load the github-triage skill" fails on a tree that visibly contains it.
-#: hub/agents/gaia/python/gaia_agent/agent.py -> parents[4] is hub/.
-#:
-#: Frozen builds skip this: PyInstaller's extraction dir has no fixed depth
-#: (Linux's is shallow enough that parents[4] raises IndexError at import
-#: time -- verified on the v0.2.0 linux-x64 freeze), and _SKILLS_DIR alone is
-#: correct there since the freeze already bundles the pack as --add-data.
-_HUB_SKILLS_DIR = (
+#: ``None`` outside a checkout. Frozen builds use _SKILLS_DIR alone, since the
+#: freeze already bundles the pack there as --add-data.
+_HUB_SKILLS_DIR: Optional[Path] = (
     _SKILLS_DIR
     if getattr(sys, "frozen", False)
-    else Path(__file__).resolve().parents[4] / "skills"
+    else _checkout_skills_dir(Path(__file__).resolve())
 )
 
 
@@ -115,6 +128,8 @@ def _bundled_skill_roots() -> List[str]:
     """
     roots: List[str] = []
     for directory in (_SKILLS_DIR, _HUB_SKILLS_DIR):
+        if directory is None:
+            continue
         path = str(directory)
         if directory.is_dir() and path not in roots:
             roots.append(path)
@@ -253,6 +268,7 @@ class GaiaAgentConfig(ChatAgentConfig):
     # here means "draw me a picture" has no answer at all. The image-gen skill
     # carries the eviction cost into the procedure.
     enable_sd_tools: bool = True
+    enable_audio_generation_tools: bool = True
 
     rag_documents: List[str] = field(default_factory=list)
 
@@ -333,6 +349,7 @@ def _apply_fast_mode(config: GaiaAgentConfig) -> None:
     config.enable_scratchpad = False
     config.enable_browser = False
     config.enable_sd_tools = False
+    config.enable_audio_generation_tools = False
     config.dynamic_tools = False
     config.dynamic_skills = False
     config.skill_discovery = False

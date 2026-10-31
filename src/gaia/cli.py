@@ -44,6 +44,7 @@ from gaia.mcp.ports import (
 )
 from gaia.perf_analysis import run_perf_visualization
 from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
+from gaia.print_mode import READ_STDIN
 from gaia.tls import use_os_trust_store
 from gaia.version import version
 
@@ -551,8 +552,9 @@ async def async_main(action, **kwargs):
     log = get_logger(__name__)
 
     if action == "chat":
-        from gaia.logger import log_manager
+        from gaia.logger import configure
 
+        log_manager = configure()
         log_manager.configure_agent_console(debug=kwargs.get("debug", False))
 
     # Map actions to agent profiles for Lemonade initialization
@@ -611,7 +613,7 @@ async def async_main(action, **kwargs):
         # `gaia chat` runs the flagship; it ships as the gaia-agent-gaia wheel.
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent_chat.app import interactive_mode
+            from gaia_agent.interactive import interactive_mode
         except ImportError as e:
             raise RuntimeError(
                 agent_import_error_message(
@@ -966,8 +968,9 @@ def _launch_interactive_cli(log=None):
     if log is None:
         log = get_logger(__name__)
 
-    from gaia.logger import log_manager
+    from gaia.logger import configure
 
+    log_manager = configure()
     log_manager.configure_agent_console(debug=False)
 
     try:
@@ -977,7 +980,7 @@ def _launch_interactive_cli(log=None):
 
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent_chat.app import interactive_mode
+            from gaia_agent.interactive import interactive_mode
         except ImportError as e:
             raise RuntimeError(
                 agent_import_error_message(
@@ -1145,7 +1148,7 @@ def build_parser():
         "--print",
         dest="print_prompt",
         nargs="?",
-        const="",
+        const=READ_STDIN,
         default=None,
         metavar="PROMPT",
         help="Run the GAIA agent once on PROMPT, print the answer and exit "
@@ -3686,6 +3689,11 @@ Examples:
 
     skills_cli.add_subparser(subparsers)
 
+    # Local GGUF models added from a Hugging Face link (shared with the Agent UI and TUI).
+    from gaia.llm import custom_models_cli
+
+    custom_models_cli.add_subparser(subparsers)
+
     # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
     # users don't have to pass --model on every chat/llm/prompt (issue #98).
     config_parser = subparsers.add_parser(
@@ -4662,6 +4670,10 @@ def _handle_schedule(args):
 
 
 def main():
+    from gaia.logger import configure
+
+    log_manager = configure()
+
     use_os_trust_store()
     parser = build_parser()
     log = get_logger(__name__)
@@ -4757,8 +4769,6 @@ def main():
         return
 
     # Set logging level using the GaiaLogger manager (if provided)
-    from gaia.logger import log_manager
-
     if hasattr(args, "logging_level"):
         log_manager.set_level("gaia", getattr(logging, args.logging_level))
 
@@ -5995,6 +6005,11 @@ Let me know your answer!
         handle_hub_command(args)
         return
 
+    if args.action == "model":
+        from gaia.llm import custom_models_cli  # pylint: disable=reimported
+
+        sys.exit(custom_models_cli.handle(args))
+
     # Handle Config command
     if args.action == "config":
         handle_config_command(args)
@@ -6892,6 +6907,14 @@ def handle_config_command(args):
         for key in cfg.field_names():
             value = cfg.get(key)
             print(f"  {key} = {value if value is not None else '(unset)'}")
+        from gaia.llm import local_only
+
+        print(f"Policy file: {local_only.policy_path()}")
+        print(f"  {local_only.POLICY_KEY} = {local_only.effective_policy().value}")
+        return
+
+    if args.key == "network_policy":
+        _handle_network_policy(action, args.value if action == "set" else None)
         return
 
     if action == "get":
@@ -6920,6 +6943,52 @@ def handle_config_command(args):
         print(f"✅ Set {args.key} = {cfg.get(args.key)}")
         print(f"   Saved to {config_file}")
         return
+
+
+def _handle_network_policy(action, value) -> None:
+    """``gaia config get|set network_policy``: lives in policy.json, not config.json."""
+    from gaia.config import GaiaConfigError
+    from gaia.llm import local_only
+
+    if action == "get":
+        print(local_only.effective_policy().value)
+        return
+    try:
+        stored = local_only.set_policy(value)
+    except (ValueError, OSError) as e:
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"✅ Set network_policy = {stored.value}")
+    print(f"   Saved to {local_only.policy_path()}")
+    if stored is not local_only.NetworkPolicy.LOCAL_AI_ONLY:
+        return
+    print("   No GAIA AI request will reach a cloud model.")
+    try:
+        cleared = local_only.clear_saved_cloud_models()
+    except GaiaConfigError as e:
+        print(f"⚠️  Saved models were not checked: {e}", file=sys.stderr)
+        return
+    if cleared:
+        from gaia.llm.lemonade_client import resolve_default_chat_model
+
+        for key, model in cleared:
+            print(f"   Cleared {key} (was {model}): it is a cloud model.")
+        print(f"   GAIA now uses {resolve_default_chat_model()} by default.")
+    from gaia.llm.cloud_keys import CloudKeyError, drop_runtime_keys
+
+    try:
+        dropped = drop_runtime_keys()
+    except CloudKeyError as e:
+        print(
+            f"⚠️  Lemonade still holds any cloud key GAIA gave it ({e}). GAIA "
+            "won't use it; restart Lemonade to drop it.",
+            file=sys.stderr,
+        )
+        return
+    # Names come from a fixed table, never from the key-handling call.
+    for provider, name in (("fireworks", "Fireworks AI"), ("amd", "AMD LLM Gateway")):
+        if provider in dropped:
+            print(f"   Removed the {name} key from the running Lemonade Server.")
 
 
 #: Keys that pick which Lemonade GAIA uses; setting one probes and switches.
@@ -7171,11 +7240,45 @@ def handle_gateway_command(args):
                 auth_header_prefix=args.auth_header_prefix,
                 allow_insecure_http=args.allow_insecure_http,
             )
+            auth = result.get("auth_state") or {}
+            restored = False
+            remembered = None
+            # The stored token was issued for the previously registered URL and
+            # is not bound to it, so a new URL must drop it: every later
+            # ensure_authenticated() would otherwise hand it to the new gateway.
+            url_changed = base_url.rstrip("/").lower() != (
+                (state.base_url or "").rstrip("/").lower()
+            )
+            dropped = url_changed and recall_token() is not None and forget_token()
+            needs_token = not (auth.get("env_var_set") or auth.get("runtime_key_set"))
+            if needs_token and not url_changed:
+                remembered = recall_token()
+                if remembered:
+                    # A fresh install must also restore a token saved by `gateway auth`.
+                    restored = manager.ensure_authenticated(recall=lambda: remembered)
+                    if restored:
+                        status = manager.status()
+                        needs_token = not (status.env_var_set or status.runtime_key_set)
+                        result["models_discovered"] = status.models_discovered
             print(
                 f"✅ Registered. Models discovered: {result.get('models_discovered', 0)}"
             )
-            auth = result.get("auth_state") or {}
-            if not (auth.get("env_var_set") or auth.get("runtime_key_set")):
+            if restored:
+                print(
+                    "   Restored the remembered gateway token from the OS credential store."
+                )
+            elif remembered:
+                print(
+                    "\n  The remembered gateway token was not accepted — run "
+                    "`gaia gateway auth` with a current one."
+                )
+            elif dropped:
+                print(
+                    "\n  The gateway URL changed, so GAIA forgot the token remembered "
+                    "for the old one — run `gaia gateway auth` with a token for "
+                    "this gateway."
+                )
+            elif needs_token:
                 print(
                     "\n  No token yet — run `gaia gateway auth` so Lemonade can "
                     "discover models."
@@ -7726,7 +7829,11 @@ def _offer_first_boot_onboarding() -> None:
 
     if answer in ("n", "no"):
         # Declining is an answer — record it so the intro is not re-offered.
-        _mark_onboarding_completed()
+        try:
+            _mark_onboarding_completed()
+        except RuntimeError as e:
+            # A persistence failure must not cost the user their chat session.
+            print(f"Could not record your choice: {e}")
         return
 
     # Onboarding is optional; chat is not. A failure to store must not cost
@@ -8989,7 +9096,10 @@ def handle_agent_import(args):
             print("Agents in bundle:")
             for aid in bundle_agent_ids:
                 print(f"  - {aid}")
-        answer = input("[y/N] Continue? ").strip().lower()
+        try:
+            answer = input("[y/N] Continue? ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
         if answer not in ("y", "yes"):
             print("Import cancelled.")
             sys.exit(0)

@@ -6,12 +6,21 @@
 # Trigger: push a version tag (v*) to main.
 #
 # Flow:
-#   validate → build (pypi + npm + desktop installers, parallel)
+#   validate → build (pypi + npm + desktop installers + terminal installers,
+#              parallel; the Windows setup follows the desktop and terminal builds)
 #            → ci-green (the tagged commit passed CI; parallel with the builds)
 #     → approve (single manual gate for a final; none for an RC)
 #       → publish (pypi + npm, parallel)
 #         → post-publish smoke test (PyPI install verification)
-#         → github release (sigstore + desktop installers)
+#         → github release (sigstore + desktop installers + Windows setup)
+#           → terminal installers (.pkg/.deb/.rpm + checksums)
+#             → website redeploy
+#
+# Every tag, final or RC, attaches every installer from this run: the macOS
+# .pkg and Linux .deb/.rpm (tui-installers, required before anything publishes;
+# attached by github-release-installers) and the combined Windows setup
+# (windows-setup). None of those jobs takes an environment, so a final's
+# installers never wait on release_components.yml's Agent Hub approval.
 #
 # Release candidates: a `vX.Y.Z-rcN` tag runs the same pipeline with these
 # differences (a `vX.Y.Z` final is untouched by them):
@@ -23,14 +32,10 @@
 #   • the GitHub Release is a pre-release and never "latest"
 #   • release notes are the final's (docs/releases/vX.Y.Z.mdx)
 #   • release_components.yml (Agent Hub R2) does not run
-#   • so the terminal installers, which a final gets from release_components.yml,
-#     are built here instead and attached to the pre-release only: the macOS
-#     .pkg and Linux .deb/.rpm (rc-tui, required before anything publishes;
-#     attached by rc-github-release-installers) and the combined Windows setup
-#     (rc-windows-setup)
 #   • the flagship agent (gaia-agent) is frozen from the RC's own commit
 #     (rc-flagship) and attached to the pre-release with gaia-agent-release.json,
-#     which an RC core installs it from; the hub's flagship is never used by an RC
+#     which an RC core installs it from; the hub's flagship is never used by an
+#     RC, and the RC's installers wrap this freeze rather than the lock's build
 #
 # Environment setup (one-time, in GitHub repo settings):
 #   1. Create a "publish" environment with required reviewers.
@@ -431,15 +436,15 @@ jobs:
 
   approve-publish:
     name: Approve Publishing
-    needs: [validate, build-pypi, build-npm, build-desktop-installers, rc-flagship, rc-tui-complete, ci-green]
+    needs: [validate, build-pypi, build-npm, build-desktop-installers, rc-flagship, tui-installers-complete, ci-green]
     if: >-
       !cancelled() &&
       needs.build-pypi.result == 'success' &&
       needs.build-npm.result == 'success' &&
       needs.build-desktop-installers.result == 'success' &&
       needs.ci-green.result == 'success' &&
-      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success') &&
-      (needs.validate.outputs.is_rc != 'true' || needs.rc-tui-complete.result == 'success')
+      needs.tui-installers-complete.result == 'success' &&
+      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     runs-on: ubuntu-latest
     environment: ${{ needs.validate.outputs.is_rc == 'true' && 'publish-rc' || 'publish' }}
     steps:
@@ -449,7 +454,7 @@ jobs:
           echo "  npm:                ${{ needs.build-npm.result }}"
           echo "  Desktop Installers: ${{ needs.build-desktop-installers.result }}"
           echo "  RC flagship agent:  ${{ needs.rc-flagship.result }}"
-          echo "  RC terminal pkgs:   ${{ needs.rc-tui-complete.result }}"
+          echo "  Terminal pkgs:      ${{ needs.tui-installers-complete.result }}"
           echo "  CI on this commit:  ${{ needs.ci-green.result }}"
           echo ""
           echo "All builds passed. Publishing approved."
@@ -732,43 +737,44 @@ jobs:
           path: release-assets/gaia-*
           if-no-files-found: error
 
-  # ── Release candidate: the terminal installers ─────────────────────
-  # A final's come from release_components.yml, which never runs for an RC
-  # because the Agent Hub catalog has no pre-release channel. An RC builds them
-  # with the same reusable workflows and attaches them to its GitHub
-  # pre-release -- never to R2 or the hub.
+  # ── The terminal installers, for every tag ──────────────────────────
+  # Built here for a final as well as an RC, with no environment, so a final's
+  # installers never wait on release_components.yml's Agent Hub approval. They
+  # attach to the GitHub release only -- never to R2 or the hub.
   #
   # The binaries, the macOS .pkg and the Linux .deb/.rpm, each smoke-tested on a
-  # clean runner, wrapping the flagship agent THIS run froze (rc-flagship), never
-  # the hub's. The files are named with -rc.N like every other RC asset; inside,
-  # the .deb/.rpm carry X.Y.Z~rc.N so the final upgrades over them
-  # (installer/tui/linux/README.md). approve-publish requires rc-tui-complete:
-  # a candidate whose terminal packages do not install is not one to test.
-  rc-tui:
-    name: Terminal binaries and installers (release candidate)
+  # clean runner. A final wraps the flagship the committed lock pins (validate
+  # has checked it was released from this commit); an RC wraps the one THIS run
+  # froze (rc-flagship), because its lock still pins the last final's. An RC's
+  # files are named with -rc.N like every other RC asset; inside, its .deb/.rpm
+  # carry X.Y.Z~rc.N so the final upgrades over them
+  # (installer/tui/linux/README.md). approve-publish requires
+  # tui-installers-complete: a release whose terminal packages do not install is
+  # not one to publish.
+  tui-installers:
+    name: Terminal binaries and installers
     needs: [validate, rc-flagship]
     if: >-
       !cancelled() &&
       needs.validate.result == 'success' &&
-      needs.validate.outputs.is_rc == 'true' &&
-      needs.rc-flagship.result == 'success'
+      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     uses: ./.github/workflows/tui_installers.yml
     with:
       version: ${{ needs.validate.outputs.npm_version }}
-      sidecar: artifact
+      sidecar: ${{ needs.validate.outputs.is_rc == 'true' && 'artifact' || 'pinned' }}
 
   # installers_ok means every leg that ran passed its clean-runner install. It
-  # does not mean all four packages exist: tui_installers.yml builds no Intel
-  # .pkg when the best-effort darwin-x64 agent leg was skipped. This checks the
-  # four files by name BEFORE anything publishes, so a candidate is never
-  # released short of one.
-  rc-tui-complete:
-    name: Terminal installers complete (release candidate)
-    needs: [validate, rc-tui]
+  # does not mean every package exists: tui_installers.yml builds no Intel .pkg
+  # when there is no darwin-x64 agent to wrap. This checks the files by name
+  # BEFORE anything publishes, so a release never ships short of one. An RC
+  # needs all four; a final needs one per platform its flagship lock has an
+  # agent for, which is the set publish-args names.
+  tui-installers-complete:
+    name: Terminal installers complete
+    needs: [validate, tui-installers]
     if: >-
       !cancelled() &&
-      needs.validate.outputs.is_rc == 'true' &&
-      needs.rc-tui.outputs.installers_ok == 'true'
+      needs.tui-installers.outputs.installers_ok == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -787,8 +793,17 @@ jobs:
       - name: Every terminal installer is present
         env:
           VERSION: ${{ needs.validate.outputs.npm_version }}
+          IS_RC: ${{ needs.validate.outputs.is_rc }}
         run: |
           set -euo pipefail
+          if [ "${IS_RC}" != "true" ]; then
+            if ! python3 installer/tui/artifacts.py publish-args \
+                --version "${VERSION}" --dir dist --exclude-platform win-x64; then
+              echo "::error::the release built no installer named above, so nothing publishes. Fix the 'Terminal binaries and installers' leg and 'Re-run failed jobs'."
+              exit 1
+            fi
+            exit 0
+          fi
           missing=()
           for platform in darwin-arm64 darwin-x64 linux-x64; do
             while IFS= read -r f; do
@@ -800,62 +815,61 @@ jobs:
             exit 1
           fi
 
-  # Embeds THIS run's desktop app setup and flagship agent (same commit, same
-  # tag), never published ones.
-  rc-windows-setup:
-    name: Windows setup (release candidate)
-    needs: [validate, build-desktop-installers, rc-tui, rc-flagship]
+  # Embeds THIS run's desktop app setup (same commit, same tag), never a
+  # published one, and the same flagship agent the terminal installers wrap.
+  windows-setup:
+    name: Windows setup
+    needs: [validate, build-desktop-installers, tui-installers, rc-flagship]
     if: >-
       !cancelled() &&
-      needs.validate.outputs.is_rc == 'true' &&
       needs.build-desktop-installers.result == 'success' &&
-      needs.rc-tui.outputs.binaries_ok == 'true' &&
-      needs.rc-flagship.result == 'success'
+      needs.tui-installers.outputs.binaries_ok == 'true' &&
+      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     permissions:
       contents: read
       actions: read   # this run's windows-installer artifact
     uses: ./.github/workflows/windows_setup.yml
     with:
       version: ${{ needs.validate.outputs.npm_version }}
-      sidecar: artifact
+      sidecar: ${{ needs.validate.outputs.is_rc == 'true' && 'artifact' || 'pinned' }}
       agent_ui_publish_run_sha: ${{ github.sha }}
 
-  # The pre-release still ships without the setup, says so in its notes, and
-  # this job turns the run red so it is never mistaken for a complete candidate.
-  rc-windows-setup-missing:
-    name: Windows setup missing (release candidate)
-    needs: [validate, rc-windows-setup]
+  # The release still ships without the setup (an RC's notes say so), and this
+  # job turns the run red so it is never mistaken for a complete release.
+  windows-setup-missing:
+    name: Windows setup missing
+    needs: [validate, windows-setup]
     if: >-
       !cancelled() &&
-      needs.validate.outputs.is_rc == 'true' &&
-      needs.rc-windows-setup.outputs.ok != 'true'
+      needs.validate.result == 'success' &&
+      needs.windows-setup.outputs.ok != 'true'
     runs-on: ubuntu-latest
     steps:
       - env:
           NPM_VERSION: ${{ needs.validate.outputs.npm_version }}
         run: |
-          echo "::error::gaia-${NPM_VERSION}-win-x64-setup.exe did not build and pass its clean-runner smoke test, so the pre-release does not carry it. Fix the 'Windows setup (release candidate)' failure, then 'Re-run failed jobs': that rebuilds the setup and re-runs GitHub Release, which attaches it."
+          echo "::error::gaia-${NPM_VERSION}-win-x64-setup.exe did not build and pass its clean-runner smoke test, so the release does not carry it. Fix the 'Windows setup' failure, then 'Re-run failed jobs': that rebuilds the setup and re-runs GitHub Release, which attaches it."
           exit 1
 
   github-release:
     name: GitHub Release
-    # rc-windows-setup is waited for, not required: its own timeouts bound the
-    # wait, it is skipped on a final, and a failure is reported by
-    # rc-windows-setup-missing rather than by holding back the pre-release.
+    # windows-setup is waited for, not required: its own timeouts bound the
+    # wait, and a failure is reported by windows-setup-missing rather than by
+    # holding back the release.
     # build-tui IS required: install.sh / install.ps1 download these binaries
     # from the latest release, so one missing leg breaks installs on that
     # platform until the next release.
-    # rc-tui-complete is required too, though approve-publish already was: a
-    # candidate whose terminal packages did not install is not one to release.
-    needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers, build-tui, rc-windows-setup, rc-flagship, rc-tui-complete]
+    # tui-installers-complete is required too, though approve-publish already
+    # was: a release whose terminal packages did not install is not one to ship.
+    needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers, build-tui, windows-setup, rc-flagship, tui-installers-complete]
     if: >-
       !cancelled() &&
       needs.post-publish-smoke.result == 'success' &&
       needs.publish-npm.result == 'success' &&
       needs.build-desktop-installers.result == 'success' &&
       needs.build-tui.result == 'success' &&
-      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success') &&
-      (needs.validate.outputs.is_rc != 'true' || needs.rc-tui-complete.result == 'success')
+      needs.tui-installers-complete.result == 'success' &&
+      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -930,7 +944,7 @@ jobs:
           NOTES_TAG: ${{ needs.validate.outputs.notes_tag }}
           PEP440_VERSION: ${{ needs.validate.outputs.pep440_version }}
           NPM_VERSION: ${{ needs.validate.outputs.npm_version }}
-          WINDOWS_SETUP_OK: ${{ needs.rc-windows-setup.outputs.ok }}
+          WINDOWS_SETUP_OK: ${{ needs.windows-setup.outputs.ok }}
         run: |
           PKG_VERSION="$(installer/tui/linux/build-packages.sh --version "${NPM_VERSION}" --print-package-version)" || exit 1
           NOTES_FILE="docs/releases/${NOTES_TAG}.mdx"
@@ -1012,7 +1026,7 @@ jobs:
       # only as a CI artifact that expires in 14 days, so nothing can install it
       # — install.sh has no URL to fetch and the docs describe a command users
       # cannot obtain.
-      # build-tui's six artifacts only. An RC run also holds rc-tui's
+      # build-tui's six artifacts only. The run also holds tui-installers'
       # `tui-binaries`, which is the setup's input, not a release asset.
       - name: Download TUI binaries
         uses: actions/download-artifact@v8
@@ -1043,15 +1057,15 @@ jobs:
           cat gaia-tui-SHA256SUMS.txt
 
       # After the checksum step, which covers the terminal binaries only.
-      - name: Download the combined Windows setup (release candidate)
-        if: needs.validate.outputs.is_rc == 'true' && needs.rc-windows-setup.outputs.ok == 'true'
+      - name: Download the combined Windows setup
+        if: needs.windows-setup.outputs.ok == 'true'
         uses: actions/download-artifact@v8
         with:
           name: windows-setup
           path: release-assets
 
-      - name: Check the combined Windows setup is this candidate's
-        if: needs.validate.outputs.is_rc == 'true' && needs.rc-windows-setup.outputs.ok == 'true'
+      - name: Check the combined Windows setup is this release's
+        if: needs.windows-setup.outputs.ok == 'true'
         env:
           NPM_VERSION: ${{ needs.validate.outputs.npm_version }}
         run: |
@@ -1122,24 +1136,25 @@ jobs:
           prerelease: true
           make_latest: false
 
-  # ── Release candidate: attach the terminal installers ──────────────
-  # The same four packages, under the same names, that a final attaches from
-  # release_components.yml's github-release-installers, plus the same
-  # gaia-installers-SHA256SUMS.txt. The website and test_installers_headless.yml
-  # resolve them through installer/tui/artifacts.py.
+  # ── Attach the terminal installers ─────────────────────────────────
+  # The macOS .pkg and Linux .deb/.rpm, plus gaia-installers-SHA256SUMS.txt
+  # covering them and the Windows setup github-release attached. The website
+  # and test_installers_headless.yml resolve them through
+  # installer/tui/artifacts.py.
   #
-  # Every package is required: approve-publish already refused to publish
-  # unless all four installed cleanly (rc-tui-complete), so a missing file here
-  # is a broken run, and this job fails naming it. --clobber makes a re-run
-  # replace, not fail.
-  rc-github-release-installers:
-    name: Attach terminal installers (release candidate)
-    needs: [validate, github-release, rc-tui-complete, rc-windows-setup]
+  # No environment: the GitHub release already exists and nothing here touches
+  # R2, so a final attaches its installers without a second approval. Every
+  # package is required: approve-publish already refused to publish unless they
+  # installed cleanly (tui-installers-complete), so a missing file here is a
+  # broken run, and this job fails naming it. --clobber makes a re-run replace,
+  # not fail.
+  github-release-installers:
+    name: Attach terminal installers
+    needs: [validate, github-release, tui-installers-complete, windows-setup]
     if: >-
       !cancelled() &&
-      needs.validate.outputs.is_rc == 'true' &&
       needs.github-release.result == 'success' &&
-      needs.rc-tui-complete.result == 'success'
+      needs.tui-installers-complete.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -1159,21 +1174,39 @@ jobs:
 
       # Checksummed only: github-release already attached it.
       - uses: actions/download-artifact@v8
-        if: needs.rc-windows-setup.outputs.ok == 'true'
+        if: needs.windows-setup.outputs.ok == 'true'
         with:
           name: windows-setup
           path: dist
 
+      # An RC needs all four packages, around the agent its own run froze. A
+      # final needs one per platform its flagship lock has an agent for, which
+      # is what publish-args names.
       - name: List the installers and write their checksums
         env:
           VERSION: ${{ needs.validate.outputs.npm_version }}
-          WINDOWS_SETUP_OK: ${{ needs.rc-windows-setup.outputs.ok }}
+          IS_RC: ${{ needs.validate.outputs.is_rc }}
+          WINDOWS_SETUP_OK: ${{ needs.windows-setup.outputs.ok }}
         run: |
           set -euo pipefail
           : > files.txt
-          for platform in darwin-arm64 darwin-x64 linux-x64; do
-            python3 installer/tui/artifacts.py names --version "${VERSION}" --platform "${platform}" >> files.txt
-          done
+          if [ "${IS_RC}" = "true" ]; then
+            for platform in darwin-arm64 darwin-x64 linux-x64; do
+              python3 installer/tui/artifacts.py names --version "${VERSION}" --platform "${platform}" >> files.txt
+            done
+          else
+            python3 installer/tui/artifacts.py publish-args \
+              --version "${VERSION}" --dir dist --exclude-platform win-x64 > specs.txt
+            while IFS= read -r spec; do
+              [ -n "${spec}" ] || continue
+              path="${spec%=*}"
+              printf '%s\n' "${path#dist/}" >> files.txt
+            done < specs.txt
+          fi
+          if [ ! -s files.txt ]; then
+            echo "::error::installer/tui/artifacts.py named no terminal installers to attach. Nothing was attached."
+            exit 1
+          fi
           cp files.txt summed.txt
           if [ "${WINDOWS_SETUP_OK}" = "true" ]; then
             python3 installer/tui/artifacts.py names --version "${VERSION}" --platform win-x64 >> summed.txt
@@ -1183,7 +1216,7 @@ jobs:
             [ -s "dist/${f}" ] || missing+=("${f}")
           done < summed.txt
           if [ "${#missing[@]}" -ne 0 ]; then
-            echo "::error::the release candidate is missing terminal installers: ${missing[*]}. Nothing was attached. Re-run the failed 'Terminal binaries and installers (release candidate)' leg, then this job."
+            echo "::error::the release is missing terminal installers: ${missing[*]}. Nothing was attached. Re-run the failed 'Terminal binaries and installers' leg, then this job."
             exit 1
           fi
           mapfile -t summed < summed.txt
@@ -1201,16 +1234,17 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" --clobber
           echo "✓ attached ${#files[@]} terminal installers and their checksums to ${TAG}"
 
-  # The website builds its "Try the release candidate" entry from the GitHub
-  # releases at deploy time, so a new RC only appears after a rebuild. A final
-  # gets its rebuild from release_components.yml, which also hides the RC again.
-  redeploy-website-rc:
-    name: Redeploy website (release candidate)
-    needs: [validate, github-release]
+  # The website builds its download links and release entries from the GitHub
+  # releases at deploy time, so a new release only appears after a rebuild.
+  # After github-release-installers, so the rebuild sees the full asset set;
+  # waited for, not required, so a failed attach never keeps the release off
+  # the site.
+  redeploy-website:
+    name: Redeploy website
+    needs: [validate, github-release, github-release-installers]
     if: >-
       !cancelled() &&
-      needs.github-release.result == 'success' &&
-      needs.validate.outputs.is_rc == 'true'
+      needs.github-release.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -1221,4 +1255,3 @@ jobs:
           # --repo: this job has no checkout, so gh cannot infer the repository.
           gh workflow run deploy_website.yml --repo "${GITHUB_REPOSITORY}" --ref main
           echo "Requested website redeploy (deploy_website.yml on main)"
-
