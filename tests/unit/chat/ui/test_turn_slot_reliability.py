@@ -620,9 +620,8 @@ class _ParkingSidecar:
             }
         else:
             yield {"type": "needs_input", "request_id": "q-1", "question": "Which?"}
-        if not self.answered.wait(10):
-            yield {"type": "error", "detail": "nobody answered"}
-            return
+        # No timeout here: the owning test's finally always sets this event.
+        self.answered.wait()
         yield {"type": "token", "delta": "resumed "}
         yield {"type": "final", "answer": f"answer={self.answer}"}
 
