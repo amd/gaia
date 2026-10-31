@@ -40,6 +40,26 @@ FAILED_RUN_ENDINGS = [
         id="row3-now-i-need-to",
     ),
     pytest.param(
+        "Starting with the Central region report now: `central_q2_2026.md`.",
+        "narration",
+        id="issue-starting-with-now",
+    ),
+    pytest.param(
+        "Starting by listing the target directory now.",
+        "narration",
+        id="issue-starting-by-now",
+    ),
+    pytest.param(
+        "Starting next month, rent rises.",
+        None,
+        id="starting-next-month-is-not-a-plan",
+    ),
+    pytest.param(
+        "Corrected Plan Update\n\nExecution Step 1/3: list the reports.",
+        "narration",
+        id="issue-execution-step-heading",
+    ),
+    pytest.param(
         "`duplicate` is on #5. Second write:",
         "narration",
         id="row4-trailing-colon",

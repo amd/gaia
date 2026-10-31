@@ -1340,6 +1340,7 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
     r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+)?"
     r"(?:executing step|first step|(?:my|our) next step"
     r"|now,? i need to|now,? i'll|now,? i will|i'll now|i will now"
+    r"|starting\s+(?:with|by)\b.*\bnow:?"
     r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)"
     r"|fetching\b(?!.*\b(?:failed|returned|timed out)\b)"
     r"|(?:now,? )?(?:i|we) (?:still |just )?need to)",
@@ -1347,6 +1348,9 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
 )
 _PLAN_HEADING_PATTERN = re.compile(
     r"^(?:corrected|new|updated|revised) plan\b", re.IGNORECASE
+)
+_EXECUTION_STEP_HEADING_PATTERN = re.compile(
+    r"^(?:execution\s+)?step\s+\d+\s*/\s*\d+\b", re.IGNORECASE
 )
 
 
@@ -1406,11 +1410,17 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     sentences = re.split(r"(?<=[.!?])\s+", last_line)
     if _NEXT_STEP_INTENT_PATTERN.match(sentences[-1]):
         return "narration"
-    heading_lines = [paragraphs[-1].splitlines()[0]]
-    if len(paragraphs) > 1:
-        heading_lines.append(paragraphs[-2].splitlines()[0])
+    heading_lines = [
+        line
+        for paragraph in paragraphs[-3:]
+        for line in paragraph.splitlines()
+        if line.strip()
+    ]
     if any(
         _PLAN_HEADING_PATTERN.match(re.sub(r"[*_`#>]", "", line).strip())
+        or _EXECUTION_STEP_HEADING_PATTERN.match(
+            re.sub(r"[*_`#>]", "", line).strip()
+        )
         for line in heading_lines
     ):
         return "narration"
