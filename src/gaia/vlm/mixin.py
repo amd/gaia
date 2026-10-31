@@ -114,10 +114,9 @@ class VLMToolsMixin:
 
             Args:
                 image_path: Local path to the image to analyze.
-                focus: One of ``composition``, ``colors``, ``mood``, ``details``,
-                    or ``all`` (default) for a broad description. For a specific
-                    subject such as text, faces, or an object, use
-                    ``answer_question_about_image`` instead.
+                focus: composition, colors, mood, details, or all (default).
+                    For text, faces, or an object, use
+                    answer_question_about_image instead.
             """
             return self._analyze_image(image_path, focus)
 
