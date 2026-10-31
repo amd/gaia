@@ -7985,6 +7985,8 @@ class LemonadeClient:
                     "conversation cache."
                 )
             if recipe == "llamacpp":
+                # Unlike the recipe, this read failing raises: guessing could
+                # send GAIA's flags over the user's own.
                 users_args = self._users_llamacpp_args(model_name)
                 if users_args:
                     self.log.info(
