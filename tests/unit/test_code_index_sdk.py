@@ -489,6 +489,28 @@ class TestEmbeddingModelVersion:
 
 
 class TestFailLoudly:
+    def test_index_repository_checks_faiss_before_embedding(
+        self, tmp_path, monkeypatch
+    ):
+        """A missing FAISS install must fail before any Lemonade work starts."""
+        skip_if_unavailable()
+        sdk = make_sdk(tmp_path)
+        _write_py(tmp_path, "module.py", "def answer(): return 42\n")
+
+        def missing_faiss(name, *args, **kwargs):
+            if name == "faiss":
+                raise ImportError("No module named 'faiss'")
+            return real_import(name, *args, **kwargs)
+
+        real_import = __import__
+        monkeypatch.setattr("builtins.__import__", missing_faiss)
+
+        with patch.object(sdk, "_load_embedder") as load_embedder:
+            with pytest.raises(ImportError, match="code_index dependencies missing"):
+                sdk.index_repository()
+
+        load_embedder.assert_not_called()
+
     def test_load_embedder_raises_with_actionable_message(self, tmp_path):
         """_load_embedder must surface Lemonade-down with a hint, not swallow."""
         skip_if_unavailable()
