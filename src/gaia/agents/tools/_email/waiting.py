@@ -445,7 +445,7 @@ def strip_quoted_text(body: str) -> str:
         if stripped.startswith(">"):
             continue
         kept.append(line)
-    return "\\n".join(kept).strip()
+    return "\n".join(kept).strip()
 
 
 def is_auto_reply(message: Dict[str, Any]) -> bool:

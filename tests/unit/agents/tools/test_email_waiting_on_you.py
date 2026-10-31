@@ -192,6 +192,80 @@ def test_a_cc_only_request_is_not_assigned_to_the_user(api):
     assert _scan(api, mails)["waiting_on_you"] == []
 
 
+def test_quote_stripping_keeps_the_new_text_line_breaks():
+    body = "Hi,\nCould you confirm?\n> old line\nOn Monday Alice wrote:\nolder ask"
+    assert waiting.strip_quoted_text(body) == "Hi,\nCould you confirm?"
+
+
+def test_a_meeting_time_on_its_own_line_still_qualifies(api):
+    out = _scan(api, _thread("Free to meet\nThursday?"))
+    assert out["waiting_on_you"][0]["signal"] == "meeting_time"
+
+
+def test_a_new_ask_above_a_quoted_reply_still_qualifies(api):
+    body = "Could you send the deck?\n\nOn Monday Alice wrote:\nThanks for the update."
+    out = _scan(api, _thread(body))
+    assert [i["message_id"] for i in out["waiting_on_you"]] == ["r1"]
+
+
+def test_a_chevron_quoted_ask_is_not_a_new_request(api):
+    body = "Thanks, noted.\n> Could you please confirm the numbers?"
+    assert _scan(api, _thread(body))["waiting_on_you"] == []
+
+
+def test_an_outlook_original_message_block_is_not_a_new_request(api):
+    body = (
+        "Thanks, noted.\n\n-----Original Message-----\nFrom: Bob\n"
+        "Could you please confirm the numbers?"
+    )
+    assert _scan(api, _thread(body))["waiting_on_you"] == []
+
+
+def test_a_user_on_both_to_and_cc_is_still_asked(api):
+    mails = _thread("Could you please confirm?", cc=f"Me <{USER}>")
+    assert len(_scan(api, mails)["waiting_on_you"]) == 1
+
+
+def test_a_user_in_cc_beside_a_differently_cased_to_is_still_asked(api):
+    mails = _thread("Could you please confirm?", to=USER.upper())
+    mails[-1].cc = f"Me <{USER}>"
+    assert len(_scan(api, mails)["waiting_on_you"]) == 1
+
+
+@pytest.mark.parametrize(
+    "auto_submitted, x_autoreply, expected",
+    [
+        ("no", "", False),
+        (" No ", "", False),
+        ("", "", False),
+        ("", "no", False),
+        ("auto-replied", "", True),
+        ("Auto-Generated", "", True),
+        ("", "YES", True),
+        ("", " true ", True),
+    ],
+)
+def test_auto_reply_headers_follow_rfc_3834(auto_submitted, x_autoreply, expected):
+    message = {"auto_submitted": auto_submitted, "x_autoreply": x_autoreply}
+    assert waiting.is_auto_reply(message) is expected
+
+
+def test_graph_reads_auto_reply_headers_case_insensitively():
+    from gaia.agents.tools._email import graph
+
+    summary = graph.message_summary(
+        {
+            "id": "m1",
+            "internetMessageHeaders": [
+                {"name": "AUTO-SUBMITTED", "value": "auto-replied"},
+                {"name": None, "value": "ignored"},
+            ],
+        }
+    )
+    assert summary["auto_submitted"] == "auto-replied"
+    assert summary["x_autoreply"] == ""
+
+
 # --------------------------------------------------------------------------
 # precision — each way a thread must NOT qualify
 # --------------------------------------------------------------------------
