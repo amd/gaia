@@ -31,8 +31,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.file_snapshots import before_change
+from gaia.agents.tools.path_access import read_access_error
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
+from gaia.vlm.mixin import _image_file_error
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -193,9 +195,16 @@ class SDToolsMixin:
                 size: Optional output size accepted by the server.
                 n: Number of edited images to request.
             """
+            path = Path(image_path).expanduser()
+            denied = read_access_error(self, path)
+            if denied:
+                return denied
+            not_a_file = _image_file_error(path, image_path)
+            if not_a_file:
+                return not_a_file
             try:
                 response = self.sd_client.edit_image(
-                    image_path=image_path,
+                    image_path=path,
                     prompt=prompt,
                     model=model or LemonadeClient.IMAGE_EDIT_DEFAULT_MODEL,
                     size=size,
@@ -232,7 +241,7 @@ class SDToolsMixin:
                     "status": "success",
                     "image_paths": saved,
                     "image_path": saved[0],
-                    "source_image": str(Path(image_path).expanduser()),
+                    "source_image": str(path),
                     "prompt": prompt,
                     "model": model or LemonadeClient.IMAGE_EDIT_DEFAULT_MODEL,
                 }
@@ -246,7 +255,6 @@ class SDToolsMixin:
         def upscale_image(
             image_path: str,
             model: Optional[str] = None,
-            size: Optional[str] = None,
         ) -> Dict[str, Any]:
             """Upscale an existing image with Lemonade's image-upscale endpoint.
 
@@ -255,12 +263,18 @@ class SDToolsMixin:
                 model: Upscale model; defaults to RealESRGAN-x4plus.
                 size: Optional output size accepted by the server.
             """
+            path = Path(image_path).expanduser()
+            denied = read_access_error(self, path)
+            if denied:
+                return denied
+            not_a_file = _image_file_error(path, image_path)
+            if not_a_file:
+                return not_a_file
             try:
                 selected_model = model or LemonadeClient.IMAGE_UPSCALE_DEFAULT_MODEL
                 response = self.sd_client.upscale_image(
-                    image_path=image_path,
+                    image_path=path,
                     model=selected_model,
-                    size=size,
                     timeout=900,
                 )
                 outputs = response.get("data", [])
@@ -288,7 +302,7 @@ class SDToolsMixin:
                     "status": "success",
                     "image_paths": saved,
                     "image_path": saved[0],
-                    "source_image": str(Path(image_path).expanduser()),
+                    "source_image": str(path),
                     "model": selected_model,
                 }
             except (LemonadeClientError, ValueError) as exc:
@@ -623,12 +637,14 @@ class SDToolsMixin:
         Returns:
             Path to saved image file
         """
-        # Create safe filename from prompt
+        # Create safe filename from prompt and model. Model names may come from
+        # a tool argument, so they must not be able to introduce path segments.
         safe_prompt = re.sub(r"[^\w\s-]", "", prompt[:40]).strip().replace(" ", "_")
+        safe_model = re.sub(r"[^\w\s-]", "", model[:80]).strip().replace(" ", "_")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # Content hash: two fast Turbo runs of one prompt land in the same second.
         digest = hashlib.sha256(image_bytes).hexdigest()[:8]
-        filename = f"{safe_prompt}_{model}_{timestamp}_{digest}.png"
+        filename = f"{safe_prompt}_{safe_model}_{timestamp}_{digest}.png"
 
         image_path = self.sd_output_dir / filename
         before_change(image_path, "generate_image")

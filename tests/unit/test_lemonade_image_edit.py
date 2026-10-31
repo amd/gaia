@@ -73,8 +73,23 @@ def test_edit_image_rejects_invalid_arguments(tmp_path):
 
     with pytest.raises(lc.LemonadeClientError, match="non-empty"):
         client.edit_image(source, "  ")
-    with pytest.raises(lc.LemonadeClientError, match="n >= 1"):
+    with pytest.raises(lc.LemonadeClientError, match="between 1 and 10"):
         client.edit_image(source, "change it", n=0)
+    with pytest.raises(lc.LemonadeClientError, match="between 1 and 10"):
+        client.edit_image(source, "change it", n=11)
+    with pytest.raises(lc.LemonadeClientError, match="WIDTHxHEIGHT"):
+        client.edit_image(source, "change it", size="square")
+
+
+def test_image_endpoints_reject_non_png_or_jpeg(tmp_path):
+    source = tmp_path / "source.txt"
+    source.write_text("not an image", encoding="utf-8")
+    client = lc.LemonadeClient(base_url="http://127.0.0.1:13305/api/v1", verbose=False)
+
+    with pytest.raises(lc.LemonadeClientError, match="PNG or JPEG"):
+        client.edit_image(source, "change it")
+    with pytest.raises(lc.LemonadeClientError, match="PNG or JPEG"):
+        client.upscale_image(source)
 
 
 def test_edit_image_surfaces_server_error(tmp_path):
@@ -96,14 +111,16 @@ def test_edit_image_surfaces_server_error(tmp_path):
             client.edit_image(source, "change it")
 
 
-def test_upscale_image_sends_multipart_request(tmp_path):
+def test_upscale_image_sends_json_base64_request(tmp_path):
     source = tmp_path / "source.png"
     source.write_bytes(b"png-bytes")
     captured = {}
 
     def post(*args, **kwargs):
         captured["url"] = args[0]
-        captured["data"] = kwargs["data"]
+        captured["json"] = kwargs["json"]
+        captured["headers"] = kwargs["headers"]
+        captured["has_files"] = "files" in kwargs
         return _Response()
 
     with (
@@ -113,14 +130,15 @@ def test_upscale_image_sends_multipart_request(tmp_path):
         client = lc.LemonadeClient(
             base_url="http://127.0.0.1:13305/api/v1", verbose=False
         )
-        client.upscale_image(source, size="1024x1024")
+        client.upscale_image(source)
 
     assert captured["url"].endswith("/images/upscale")
-    assert captured["data"] == {
+    assert captured["json"] == {
         "model": "RealESRGAN-x4plus",
-        "response_format": "b64_json",
-        "size": "1024x1024",
+        "image": "cG5nLWJ5dGVz",
     }
+    assert captured["headers"]["Content-Type"] == "application/json"
+    assert captured["has_files"] is False
 
 
 def test_image_edit_defaults_are_exposed():
