@@ -44,6 +44,7 @@ class SDToolsMixin:
 
     Tools provided:
     - generate_image: Generate an image from a text prompt
+    - edit_image: Edit an existing image with a text prompt
     - list_sd_models: List available SD models
     - get_generation_history: Get recent generations from this session
 
@@ -171,6 +172,127 @@ class SDToolsMixin:
                 {"status": "error", "error": str}.
             """
             return self._generate_image(prompt, model, size, steps, cfg_scale, seed)
+
+        @tool(
+            atomic=True,
+            timeout=900,
+        )
+        def edit_image(
+            image_path: str,
+            prompt: str,
+            model: Optional[str] = None,
+            size: Optional[str] = None,
+            n: int = 1,
+        ) -> Dict[str, Any]:
+            """Edit an existing image with a text prompt using Lemonade.
+
+            Args:
+                image_path: Local source image path.
+                prompt: Requested change, such as "add a red barn in the background".
+                model: Image-edit model; defaults to Lemonade's edit default.
+                size: Optional output size accepted by the server.
+                n: Number of edited images to request.
+            """
+            try:
+                response = self.sd_client.edit_image(
+                    image_path=image_path,
+                    prompt=prompt,
+                    model=model or LemonadeClient.IMAGE_EDIT_DEFAULT_MODEL,
+                    size=size,
+                    n=n,
+                    timeout=900,
+                )
+                outputs = response.get("data", [])
+                if not outputs:
+                    return {
+                        "status": "error",
+                        "error": "Lemonade returned no edited image.",
+                    }
+                saved = []
+                for index, item in enumerate(outputs, start=1):
+                    encoded = item.get("b64_json")
+                    if not isinstance(encoded, str):
+                        continue
+                    image_bytes = base64.b64decode(encoded)
+                    saved.append(
+                        str(
+                            self._save_image(
+                                f"edited_{Path(image_path).stem}_{index}",
+                                image_bytes,
+                                model or LemonadeClient.IMAGE_EDIT_DEFAULT_MODEL,
+                            )
+                        )
+                    )
+                if not saved:
+                    return {
+                        "status": "error",
+                        "error": "Lemonade returned no b64_json image.",
+                    }
+                return {
+                    "status": "success",
+                    "image_paths": saved,
+                    "image_path": saved[0],
+                    "source_image": str(Path(image_path).expanduser()),
+                    "prompt": prompt,
+                    "model": model or LemonadeClient.IMAGE_EDIT_DEFAULT_MODEL,
+                }
+            except (LemonadeClientError, ValueError) as exc:
+                return {"status": "error", "error": str(exc)}
+
+        @tool(
+            atomic=True,
+            timeout=900,
+        )
+        def upscale_image(
+            image_path: str,
+            model: Optional[str] = None,
+            size: Optional[str] = None,
+        ) -> Dict[str, Any]:
+            """Upscale an existing image with Lemonade's image-upscale endpoint.
+
+            Args:
+                image_path: Local source image path.
+                model: Upscale model; defaults to RealESRGAN-x4plus.
+                size: Optional output size accepted by the server.
+            """
+            try:
+                selected_model = model or LemonadeClient.IMAGE_UPSCALE_DEFAULT_MODEL
+                response = self.sd_client.upscale_image(
+                    image_path=image_path,
+                    model=selected_model,
+                    size=size,
+                    timeout=900,
+                )
+                outputs = response.get("data", [])
+                saved = []
+                for index, item in enumerate(outputs, start=1):
+                    encoded = item.get("b64_json")
+                    if not isinstance(encoded, str):
+                        continue
+                    image_bytes = base64.b64decode(encoded)
+                    saved.append(
+                        str(
+                            self._save_image(
+                                f"upscaled_{Path(image_path).stem}_{index}",
+                                image_bytes,
+                                selected_model,
+                            )
+                        )
+                    )
+                if not saved:
+                    return {
+                        "status": "error",
+                        "error": "Lemonade returned no upscaled image.",
+                    }
+                return {
+                    "status": "success",
+                    "image_paths": saved,
+                    "image_path": saved[0],
+                    "source_image": str(Path(image_path).expanduser()),
+                    "model": selected_model,
+                }
+            except (LemonadeClientError, ValueError) as exc:
+                return {"status": "error", "error": str(exc)}
 
         @tool(
             atomic=True,

@@ -23,7 +23,13 @@ from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
-SD_TOOLS = {"generate_image", "list_sd_models", "get_generation_history"}
+SD_TOOLS = {
+    "generate_image",
+    "edit_image",
+    "upscale_image",
+    "list_sd_models",
+    "get_generation_history",
+}
 
 
 @contextlib.contextmanager

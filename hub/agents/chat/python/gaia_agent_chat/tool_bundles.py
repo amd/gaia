@@ -487,7 +487,13 @@ FULL_BUNDLES = [
     ToolBundle(
         name="image_gen",
         members=frozenset(
-            {"generate_image", "list_sd_models", "get_generation_history"}
+            {
+                "generate_image",
+                "edit_image",
+                "upscale_image",
+                "list_sd_models",
+                "get_generation_history",
+            }
         ),
         description="Generate images from a text prompt (Lemonade).",
     ),
@@ -626,6 +632,8 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "read_email",
         "list_mail_folders",
         "generate_image",
+        "edit_image",
+        "upscale_image",
         "list_sd_models",
         "get_generation_history",
         "generate_music",
