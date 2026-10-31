@@ -58,8 +58,10 @@ from gaia.connectors.providers import reload as reload_provider
 from gaia.connectors.store import (
     DEFAULT_ACCOUNT,
     delete_connection,
+    has_forward_recovery,
     load_connection,
     peek_connection,
+    recover_forward_recovery,
     save_connection,
 )
 
@@ -123,6 +125,19 @@ def load_current_connection(
     ``ConnectionBusyError`` while the lock is busy, so "busy" can also mean
     "unreadable and not yet cleared". Blocking keyring I/O.
     """
+    # A forwarded save spans the client and connection slots. If its process
+    # died between those writes, restore the pre-save pair while holding the
+    # same lock before constructing a provider from the possibly new client.
+    if has_forward_recovery(provider_id):
+        if not lock_held:
+            with _refresh_lock.try_held_sync(provider_id) as acquired:
+                if acquired:
+                    return load_current_connection(
+                        provider_id, account_email=account_email, lock_held=True
+                    )
+            raise ConnectionBusyError(provider_id)
+        recover_forward_recovery(provider_id)
+
     provider = get_provider(provider_id)
     current = peek_connection(provider_id, account_email=account_email)
     if current is None:

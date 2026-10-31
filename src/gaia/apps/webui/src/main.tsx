@@ -8,6 +8,7 @@ import { purgeLegacyAlwaysAllow } from './stores/notificationStore';
 import { applyTheme, markTitleBar, resolveTheme } from './utils/theme';
 import { applyPalette } from './utils/palette';
 import { useChatStore } from './stores/chatStore';
+import { applyLocale } from './i18n/registry';
 import './styles/index.css';
 import './styles/palettes.css';
 import './styles/motion.css';
@@ -24,6 +25,8 @@ applyTheme(resolveTheme(savedTheme === 'light' || savedTheme === 'dark' ? savedT
 // Then the saved palette, which reads the theme it is painted in.
 const ui = useChatStore.getState();
 applyPalette(ui.palette, ui.customColors, ui.theme);
+// And the language, so an RTL layout never paints left-to-right first.
+applyLocale(ui.locale);
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>

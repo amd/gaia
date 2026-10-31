@@ -137,9 +137,9 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			args = append(append([]string{}, args...), "--model", opts.Model)
 		}
 		if agent.CanonicalEvents {
-			return NewCanonicalSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace), nil
+			return NewCanonicalSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace).WithLogf(opts.Logf), nil
 		}
-		return NewSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace), nil
+		return NewSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace).WithLogf(opts.Logf), nil
 
 	default:
 		return nil, fmt.Errorf(

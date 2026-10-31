@@ -406,6 +406,16 @@ class ChatAgentConfig:
     namespaced_agent_id: Optional[str] = None
 
 
+# Added to the per-turn document list only when a document is not in Latin script.
+_CROSS_LANGUAGE_NOTE = (
+    "[Documents marked with a script such as [Arabic] are written in it. When the "
+    "question is in another language, search them with the query translated into "
+    'the document\'s language (English "net debt" -> Arabic "صافي الدين"); a '
+    "query in another language rarely finds the passage. Answer in the language of "
+    "the user's latest message and cite every fact with its document and page.]"
+)
+
+
 class ChatAgent(
     MemoryMixin,
     Agent,
@@ -771,12 +781,17 @@ class ChatAgent(
         if not self.rag:
             return ""
         lines = []
-        if self.rag.indexed_files:
+        # Copied first: a background index can add to the set during this loop.
+        indexed = list(self.rag.indexed_files)
+        if indexed:
+            scripts = {fp: self._scripts(fp) for fp in indexed}
             entries = sorted(
-                {f"{Path(fp).name} ({fp})" for fp in self.rag.indexed_files},
+                {self._indexed_entry(fp, scripts[fp]) for fp in indexed},
                 key=str.lower,
             )
             lines.append(f"[Indexed documents: {', '.join(entries)}]")
+            if any(s and s != ["Latin"] for s in scripts.values()):
+                lines.append(_CROSS_LANGUAGE_NOTE)
         pending = sorted({Path(fp).name for fp in documents_still_indexing(self.rag)})
         if pending:
             lines.append(
@@ -784,6 +799,18 @@ class ChatAgent(
                 f"{', '.join(pending)}]"
             )
         return "\n".join(lines)
+
+    def _scripts(self, file_path: str) -> List[str]:
+        """Scripts a document's text is written in, e.g. ``["Arabic", "Latin"]``."""
+        return self.rag.document_scripts(file_path)
+
+    @staticmethod
+    def _indexed_entry(file_path: str, scripts: List[str]) -> str:
+        """``a.pdf (/docs/a.pdf)``, plus ``[Arabic]`` when not only Latin script."""
+        written_in = (
+            f" [{' + '.join(scripts)}]" if scripts and scripts != ["Latin"] else ""
+        )
+        return f"{Path(file_path).name} ({file_path}){written_in}"
 
     def get_memory_dynamic_context(self) -> str:
         """Per-turn context, plus which documents are indexed right now."""
@@ -1326,17 +1353,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 """
 
         # ── Tier 1: Discovery workflow (compact form) ──
-        discovery_rules = """
+        # find_files comes only from the file_fs group; profiles without it
+        # search with search_file, which doc_rag registers.
+        find_tool = "find_files" if "file_fs" in spec.tool_groups else "search_file"
+        discovery_rules = f"""
 **SMART DISCOVERY WORKFLOW:**
-1. Domain question + nothing relevant indexed: `find_files` with 1-2 document-type keywords (handbook / report / manual / policy / guide), NOT the question's content terms. If nothing after 2 tries, `browse_directory`.
+1. Domain question + nothing relevant indexed: `{find_tool}` with 1-2 document-type keywords (handbook / report / manual / policy / guide), NOT the question's content terms. If nothing after 2 tries, `browse_directory`.
 2. Files found → `index_document` immediately (no confirmation), then query and answer in the same turn.
 3. Already indexed → query directly.
 
 **NEVER ASK PERMISSION TO INDEX.** "Would you like me to index this?" is BANNED. If a document is referenced and you can locate it, index + query + answer in one flow.
 
-**SEARCH LOOP PREVENTION:** Same `find_files` / `browse_directory` query twice with same result → STOP and acknowledge.
+**SEARCH LOOP PREVENTION:** Same `{find_tool}` / `browse_directory` query twice with same result → STOP and acknowledge.
 
-**VAGUE FOLLOW-UP ("what about X?"):** find_files("X") → index_document → query_specific_file with whatever question is implicit, or "key topics overview" if none.
+**VAGUE FOLLOW-UP ("what about X?"):** {find_tool}("X") → index_document → query_specific_file with whatever question is implicit, or "key topics overview" if none.
 """
 
         # ── Tier 1b: Optional tool sections — each block is only injected when

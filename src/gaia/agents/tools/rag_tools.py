@@ -160,6 +160,14 @@ def documents_still_indexing(rag: Any) -> List[str]:
         return sorted(path for path, job in jobs.items() if not job.done.is_set())
 
 
+def _forget_evicted(indexed_files: set, evicted: List[str]) -> None:
+    """Drop documents the library evicted, so asking for one again re-indexes it."""
+    gone = {os.path.realpath(path) for path in evicted}
+    for path in list(indexed_files):
+        if os.path.realpath(path) in gone:
+            indexed_files.discard(path)
+
+
 def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
     """Tool result for a document that is still indexing in the background."""
     name = Path(job.path).name
@@ -339,6 +347,12 @@ def _chunks_have_pages(chunks: List[Dict[str, Any]]) -> bool:
     return any("page" in chunk for chunk in chunks)
 
 
+_MARKER_NOTE = (
+    "A chunk's 'page' is where it starts; text after a '[Page N]' marker inside "
+    "it is on page N, so cite N for facts that follow the marker."
+)
+
+
 def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     """How query_documents asks the model to cite: the full path, plus pages if any."""
     instruction = (
@@ -352,7 +366,9 @@ def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
         instruction += (
             "Format: 'According to <absolute_path> (page X):'\n"
             "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
-            "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n\n"
+            "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n"
+            + _MARKER_NOTE
+            + "\n\n"
         )
         if not all_paged:
             instruction += (
@@ -386,15 +402,23 @@ def _file_instruction(file_name: str, num_chunks: int, has_pages: bool) -> str:
         f"Your answer MUST start with: 'According to {file_name}, page X:' where X is the "
         "page number from the chunk's 'page' field.\n\n"
         f"Example: If chunk has 'page': 2, say 'According to {file_name}, page 2:'\n"
-        f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'"
+        f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'\n"
+        + _MARKER_NOTE
     )
+
+
+_PAGE_MARKER = re.compile(r"\[Page (\d+)\]")
 
 
 def extract_page_from_chunk(
     chunk_text, chunk_index=-1, all_chunks=None, chunk_to_file=None
 ):
     """
-    Extract page number from chunk text or by looking at nearby chunks.
+    The page a chunk's first line is on.
+
+    Text before a mid-chunk ``[Page N]`` belongs to the page an earlier chunk
+    was on. With no earlier chunk to ask, a page-start marker means page N-1;
+    an in-page marker (image text, speaker notes) means page N.
 
     Args:
         chunk_text: The chunk text to extract page from
@@ -406,30 +430,44 @@ def extract_page_from_chunk(
     Returns:
         Page number as int, or None if not found
     """
-    # Strategy 1: Try [Page X] format in this chunk
-    match = re.search(r"\[Page (\d+)\]", chunk_text)
+    match = _PAGE_MARKER.search(chunk_text)
     if match:
-        return int(match.group(1))
+        page = int(match.group(1))
+        if not chunk_text[: match.start()].strip():
+            return page
+        earlier = _page_before(chunk_index, all_chunks, chunk_to_file)
+        if earlier is not None:
+            return earlier
+        if _IN_PAGE_SECTION.match(chunk_text, match.end()):
+            return page
+        return max(1, page - 1)
 
-    # Strategy 2: Try (Page X) format
     match = re.search(r"\(Page (\d+)\)", chunk_text)
     if match:
         return int(match.group(1))
 
-    # Strategy 3: Look backwards in previous chunks to find most recent page marker
-    if chunk_index >= 0 and all_chunks:
-        for prev_idx in range(chunk_index - 1, max(-1, chunk_index - 5), -1):
-            if chunk_to_file is not None and chunk_to_file.get(
-                prev_idx
-            ) != chunk_to_file.get(chunk_index):
-                # Indexed after another document: its pages are not this file's.
-                break
-            if prev_idx < len(all_chunks):
-                prev_chunk = all_chunks[prev_idx]
-                match = re.search(r"\[Page (\d+)\]", prev_chunk)
-                if match:
-                    return int(match.group(1))
+    # No marker: the chunk continues the last page an earlier chunk started.
+    return _page_before(chunk_index, all_chunks, chunk_to_file)
 
+
+# Markers the extractor writes inside a page, not at its start.
+_IN_PAGE_SECTION = re.compile(r"\s*(?:\*\*Content Extracted|### |\*\*Speaker Notes)")
+
+
+def _page_before(chunk_index, all_chunks, chunk_to_file):
+    """The last page marker in the few chunks before this one, same file only."""
+    if chunk_index < 0 or not all_chunks:
+        return None
+    for prev_idx in range(chunk_index - 1, max(-1, chunk_index - 5), -1):
+        if chunk_to_file is not None and chunk_to_file.get(
+            prev_idx
+        ) != chunk_to_file.get(chunk_index):
+            # Indexed after another document: its pages are not this file's.
+            break
+        if prev_idx < len(all_chunks):
+            markers = _PAGE_MARKER.findall(all_chunks[prev_idx])
+            if markers:
+                return int(markers[-1])
     return None
 
 
@@ -955,6 +993,9 @@ class RAGToolsMixin:
                             if idx_result is None:
                                 return _indexing_in_progress(job)
                             if idx_result.get("success"):
+                                _forget_evicted(
+                                    self.indexed_files, idx_result.get("evicted", [])
+                                )
                                 self.indexed_files.add(file_path)
                                 if (
                                     hasattr(self, "current_session")
@@ -1615,6 +1656,8 @@ class RAGToolsMixin:
                     return _indexing_in_progress(job)
 
                 if result.get("success"):
+                    evicted = result.get("evicted", [])
+                    _forget_evicted(self.indexed_files, evicted)
                     self.indexed_files.add(file_path)
                     save_warning = ""
 
@@ -1641,6 +1684,12 @@ class RAGToolsMixin:
                         msg = f"Re-indexed (updated): {file_name}"
                     else:
                         msg = f"Successfully indexed: {file_name}"
+                    if evicted:
+                        names = ", ".join(Path(path).name for path in evicted)
+                        msg += (
+                            f". The document library was full, so it removed {names}; "
+                            "questions about it will find nothing until it is indexed again"
+                        )
                     return {
                         "status": "success",
                         "message": f"{msg}. {save_warning}" if save_warning else msg,
@@ -1655,6 +1704,7 @@ class RAGToolsMixin:
                         "from_cache": result.get("from_cache", False),
                         "already_indexed": result.get("already_indexed", False),
                         "reindexed": result.get("reindexed", False),
+                        **({"evicted": evicted} if evicted else {}),
                     }
                 else:
                     if result.get("error_type") == "embedding_unavailable":

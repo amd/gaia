@@ -247,7 +247,10 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     // A connect waiting on an OS prompt stops asking once setup is gone.
     const mounted = useRef(true);
-    useEffect(() => () => { mounted.current = false; }, []);
+    useEffect(() => {
+        mounted.current = true;
+        return () => { mounted.current = false; };
+    }, []);
     const { network: gateway, recheck: recheckGateway } = useGatewayNetwork();
     const unreachable = (id: ProviderId) => id === 'amd' && gateway?.reachable === false;
 

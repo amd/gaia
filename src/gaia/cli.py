@@ -44,6 +44,7 @@ from gaia.mcp.ports import (
 )
 from gaia.perf_analysis import run_perf_visualization
 from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
+from gaia.print_mode import READ_STDIN
 from gaia.tls import use_os_trust_store
 from gaia.version import version
 
@@ -1147,7 +1148,7 @@ def build_parser():
         "--print",
         dest="print_prompt",
         nargs="?",
-        const="",
+        const=READ_STDIN,
         default=None,
         metavar="PROMPT",
         help="Run the GAIA agent once on PROMPT, print the answer and exit "

@@ -2514,6 +2514,10 @@ def _posix_pipe_positions(text: str) -> list:
     return positions
 
 
+#: The only characters a cmd.exe line may hold and still be classified read-only.
+_CMD_PLAIN_LINE = re.compile(r"[A-Za-z0-9 ._\\/:-]*")
+
+
 def _pipe_dialect() -> str:
     """Whose pipe rules a step follows: cmd.exe's on Windows, sh's elsewhere."""
     return "cmd" if os.name == "nt" else "posix"
@@ -3356,6 +3360,51 @@ class ShellToolsMixin:
             f"ran in {session.cwd} instead."
         )
         return session.cwd
+
+    def _line_is_read_only(self, command: str) -> bool:
+        """Return whether *command* is read-only under the ordinary policy.
+
+        Full access changes whether a command may run, not whether it can write.
+        Reparse under the normal policy so redirections and other shell-only
+        constructs still count as untracked changes.
+        """
+        # Full access hands the raw line to sh, which expands $ and backticks
+        # even inside double quotes; the shell-less parse sees only text.
+        if _pipe_dialect() == "posix" and ("$" in command or "`" in command):
+            return False
+        # Braces and globs can expand into a write flag (`find . {-delete,}`):
+        # sh does it off Windows, Git's GNU tools do it to their own argv on it.
+        if any(char in command for char in "{*?["):
+            return False
+        # cmd.exe strips quotes and rewrites ^, %VAR% and !VAR! before the
+        # program runs, so only a line of plain characters can be judged read-only.
+        if _pipe_dialect() == "cmd" and not _CMD_PLAIN_LINE.fullmatch(command):
+            return False
+        # A PowerShell body can run any cmdlet inside a subexpression; never a read.
+        if "powershell" in command.lower() or "pwsh" in command.lower():
+            return False
+        steps, parse_error = _parse_line(command, bypass_gates=False)
+        if parse_error is not None or not steps:
+            return False
+        granted = skill_granted_binaries(self)
+        for step in steps:
+            if step.is_cd:
+                return False
+            for segment in step.segments:
+                if (
+                    not segment
+                    or _interpreter_name(segment[0]) == "powershell"
+                    or self._validate_command(
+                        segment[0].lower(),
+                        segment,
+                        shlex.join(segment),
+                        granted_binaries=granted,
+                        bypass_gates=False,
+                    )
+                    is not None
+                ):
+                    return False
+        return True
 
     def _line_verdict(self, command: str, working_directory: Any = None) -> tuple:
         """``(error, steps)`` for this call, path scope included.
@@ -4718,8 +4767,12 @@ class ShellToolsMixin:
                 error, steps = self._line_verdict(command, working_directory)
                 if error and not _reaches_the_prompt(error):
                     return error
-                # Only the read-only tier is known not to write files.
-                may_write = bool(error) or bypass
+                # Full access permits writes; it does not make a known read
+                # untrackable. Classify the line with the ordinary policy so
+                # writes still get snapshots and the Undo warning.
+                may_write = bool(error) or (
+                    bypass and not self._line_is_read_only(command)
+                )
                 if error and unconfirmed:
                     return self._blanket_approval_refusal(error, command)
                 if error and error.get("tier") == TIER_CONFIRM_ONCE:

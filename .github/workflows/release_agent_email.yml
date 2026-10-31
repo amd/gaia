@@ -147,7 +147,7 @@ jobs:
             artifact: email-agent-win32-x64.exe
             frozen: email-agent.exe
             required: true
-          - os: macos-14
+          - os: macos-15
             platform: darwin-arm64
             key: darwin-arm64
             artifact: email-agent-darwin-arm64
