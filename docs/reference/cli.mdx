@@ -3696,7 +3696,7 @@ Options accepted by every `gaia tui` command:
 | `--full-access` | off | Run every tool without asking, with the shell guardrails off — arbitrary code execution. Subprocess agents only (the flagship when the TUI launches it); refused over the background service. A banner stays on screen while it is on, and `/full-access off` ends it mid-session. See [Full access](#full-access). The retired `--bypass-permissions` fails naming this flag. |
 | `--use-claude` | off | Answer with Anthropic's Claude API instead of local Lemonade. **Your conversation is sent to Anthropic.** Needs `ANTHROPIC_API_KEY`; the local server is not started and first-run setup is skipped, so RAG, memory and the code index (which embed through Lemonade) need `gaia init --skip-chat-model` later |
 | `--claude-model <id>` | `claude-sonnet-5` | The Claude model `--use-claude` runs on. Only valid with `--use-claude`; an id the agent does not offer is refused before the TUI opens. `""` lets the agent pick |
-| `--dev` | off | Developer mode: per-turn timings, steps, tool arguments and output on screen, and DEBUG logging for agents the TUI launches. `--debug` is an alias |
+| `--dev` | off | Developer mode: per-turn timings, steps, tool arguments and output on screen, connection diagnostics in `~/.gaia/logs/gaia-tui.log`, and DEBUG logging for agents the TUI launches. `--debug` is an alias |
 | `--control`, `--control-port <n>` | off | The loopback control API — see [TUI Control API](#tui-control-api) |
 | `--trace[=<path>]` | off | Record every agent event to a JSONL file — see [TUI Event Trace](#tui-event-trace) |
 
