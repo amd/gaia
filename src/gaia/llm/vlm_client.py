@@ -247,7 +247,7 @@ Output format: Clean markdown with the ACTUAL text from the image."""
                 )
                 raise VLMExtractionError(
                     f"Vision model '{self.vlm_model}' is not downloaded{size_hint}. "
-                    "Download it from Settings → Model or run `gaia init`, then "
+                    "Download it from Settings → Model or run `gaia download --agent vlm`, then "
                     "retry the image request. GAIA will not download it during "
                     "image analysis.",
                     page_num,
