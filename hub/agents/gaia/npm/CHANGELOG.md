@@ -51,6 +51,21 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   bundled with every module its code imports. A skill tool named like a
   confirmation-gated core tool (`write_file`, `run_python`) always asks first,
   and a skill's `write_*` / `edit_*` tool counts as a file change.
+- **Small file edits preserve the file's existing line endings** (#4864), so a
+  one-line change does not rewrite an entire LF or CRLF file in a noisy diff.
+- **Declining folder creation also blocks writes inside that folder** (#4857),
+  rather than letting the same rejected effect be retried through another tool.
+- **Mentioning image generation no longer causes an unsolicited image request**
+  (#4809). The agent only corrects an answer about an image when this turn
+  actually attempted image generation.
+- **Document summaries have enough output budget and fail loudly if still cut
+  off** (#4827), instead of presenting a partial summary as complete.
+- **PDFs with an empty owner password can be indexed** (#4734); PDFs that need
+  a real user password still return the existing actionable error.
+- **Large documents index in the background after the foreground wait budget**
+  (#4754), so a chat can continue instead of waiting for embedding to finish.
+- **The file-verification read-back stays internal to the turn** (#4719), so
+  answers do not expose offsets or other implementation bookkeeping.
 
 ### Added
 
