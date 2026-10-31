@@ -24,16 +24,16 @@ A web development server that serves GAIA apps for browser-based testing and dev
 
 ```bash
 # From project root
-npm run app:jira:run:dev
+npm run app:example:run:dev
 
 # Or directly
-node src/gaia/apps/_shared/dev-server.js jira
+node src/gaia/apps/_shared/dev-server.js example
 ```
 
 ### Important Notes
 
 - This server is for **web development mode** only
-- For **Electron desktop apps**, use `npm run app:jira:run:electron` which uses the Electron framework
+- For **Electron desktop apps**, use the app-specific Electron entry point from the app's own package
 - The MCP server provides proper CORS headers, so no proxy endpoints are needed
 - Apps should read `window.ENV?.GAIA_MCP_URL` to get the configured MCP server URL
 
