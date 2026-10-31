@@ -61,6 +61,7 @@ class TestTheThreeFailureSites:
         vlm.client.get_model_info.return_value = {
             "id": "Gemma-4-E4B-it-GGUF",
             "downloaded": False,
+            "catalog_known": True,
             "size_gb": 5.56,
         }
 
@@ -72,6 +73,20 @@ class TestTheThreeFailureSites:
 
     def test_a_catalog_failure_does_not_hide_the_request_error(self, vlm):
         vlm.client.get_model_info.side_effect = ConnectionError("catalog unavailable")
+        vlm.client.chat_completions.return_value = {
+            "choices": [{"message": {"content": "text"}}]
+        }
+
+        assert vlm.extract_from_image(b"fake-png") == "text"
+        vlm.client.chat_completions.assert_called_once()
+
+    def test_an_unknown_catalog_entry_does_not_block_the_request(self, vlm):
+        vlm.client.get_model_info.return_value = {
+            "id": "Gemma-4-E4B-it-GGUF",
+            "downloaded": False,
+            "catalog_known": False,
+            "size_gb": 5.56,
+        }
         vlm.client.chat_completions.return_value = {
             "choices": [{"message": {"content": "text"}}]
         }

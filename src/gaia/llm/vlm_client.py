@@ -14,6 +14,7 @@ from typing import Optional
 
 from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.env import load_env
+from gaia.llm.lemonade_client import LemonadeClientError
 
 # Load environment variables from .env file
 load_env()
@@ -229,14 +230,17 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             # This is especially important for gateway-only installs, where
             # the chat model may be remote and ``gaia init`` deliberately did
             # not pull the local vision model.  ``get_model_info`` is a
-            # best-effort preflight: non-Lemonade/OpenAI-compatible endpoints
-            # may not expose the catalog, so their normal request error remains
-            # authoritative.
+            # best-effort preflight: endpoints that cannot identify the model
+            # leave the normal request path authoritative.
             try:
                 model_info = self.client.get_model_info(self.vlm_model)
-            except Exception:  # noqa: BLE001 - preserve the request's error
+            except (LemonadeClientError, OSError):
                 model_info = None
-            if isinstance(model_info, dict) and model_info.get("downloaded") is False:
+            if (
+                isinstance(model_info, dict)
+                and model_info.get("catalog_known") is True
+                and model_info.get("downloaded") is False
+            ):
                 size = model_info.get("size_gb")
                 size_hint = (
                     f" (about {size:g} GB)" if isinstance(size, (int, float)) else ""

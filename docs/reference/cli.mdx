@@ -430,8 +430,8 @@ memory holds, up to 262,144 tokens: 256K on a Strix Halo, about 88K on a 32 GB G
 (see [Context length follows memory](/guides/ai-providers#context-length-follows-memory)). Gemma is
 still downloaded, since vision and document-image extraction load it by name. Every
 smaller PC gets Gemma alone. A `default_model` you set yourself always wins and is
-downloaded instead of Gemma; questions about images then download Gemma (~6 GB) the
-first time you ask one, and `gaia init` says so. `--check` asks for the same models
+downloaded instead of Gemma; image tools use Gemma when it is explicitly downloaded
+with `gaia download --agent vlm` (~6 GB). `--check` asks for the same models
 `gaia init` would download.
 </Note>
 

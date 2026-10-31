@@ -4280,8 +4280,10 @@ class LemonadeClient:
             model_name: Name of the model
 
         Returns:
-            Dict with ``id``, ``downloaded``, and ``size_gb`` — the catalog's
-            ``size``, or a name-based estimate when the catalog lacks one
+            Dict with ``id``, ``downloaded``, ``size_gb``, and ``catalog_known``.
+            ``catalog_known`` is false when the server did not return a matching
+            catalog entry, so callers can distinguish "unknown" from an explicit
+            not-downloaded answer.
 
         Raises:
             LemonadeClientError: If the catalog can't be fetched
@@ -4296,12 +4298,14 @@ class LemonadeClient:
                         float(size) if size else self._estimate_model_size(model_name)
                     ),
                     "downloaded": bool(model.get("downloaded", False)),
+                    "catalog_known": "downloaded" in model,
                 }
 
         return {
             "id": model_name,
             "size_gb": self._estimate_model_size(model_name),
             "downloaded": False,
+            "catalog_known": False,
         }
 
     def _model_storage_free_bytes(self) -> Tuple[int, str]:
