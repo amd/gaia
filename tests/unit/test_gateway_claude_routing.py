@@ -507,14 +507,25 @@ def test_gateway_claude_401_explains_likely_token_drift(
     )
     monkeypatch.setattr("gaia.llm.gateway.GatewayManager", lambda: manager)
 
+    with pytest.raises(RuntimeError) as first_raised:
+        client.chat([{"role": "user", "content": "hi"}])
+    assert "those keys differ" not in str(first_raised.value)
+
+    client._gateway_token_source = "OS credential store"
+    manager.status.return_value = SimpleNamespace(
+        env_var_set=False, runtime_key_set=True
+    )
+
     with pytest.raises(RuntimeError) as raised:
         client.chat([{"role": "user", "content": "hi"}])
 
     message = str(raised.value)
-    assert gateway_env.GATEWAY_ENV_VAR in message
-    assert "if other gateway models still work, that key differs" in message
+    assert "GAIA's Claude route used OS credential store" in message
+    assert "Lemonade reports Lemonade runtime auth" in message
+    assert "if other gateway models still work, those keys differ" in message
     assert GATEWAY_TOKEN not in message
-    manager.status.assert_called_once_with(timeout=5)
+    assert manager.status.call_count == 2
+    assert all(call.kwargs == {"timeout": 5} for call in manager.status.call_args_list)
 
 
 def test_unreachable_gateway_names_the_vpn(fake_sdk):
