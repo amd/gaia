@@ -234,8 +234,7 @@ class GatewayState:
     non_streaming_models: List[str] = field(default_factory=list)
     # Native tool calling, learned by one probe per model when the catalog's
     # labels don't say: the AMD gateway labels no model ``tool-calling``, yet
-    # most take ``tools=``. Running a capable model on the in-text JSON format
-    # costs it accuracy on every tool call.
+    # most take ``tools=``.
     tool_calling_models: List[str] = field(default_factory=list)
     no_tool_calling_models: List[str] = field(default_factory=list)
     # When a model's tool-calling probe last failed, ``{model_id: "<UTC ISO>"}``,
@@ -266,6 +265,12 @@ class GatewayState:
                 f"Gateway settings at {target} could not be read: {e}. "
                 f"Delete the file to start fresh, then re-run `gaia gateway install`."
             ) from e
+        if not isinstance(raw, dict):
+            raise GatewayError(
+                f"Gateway settings at {target} hold a JSON "
+                f"{type(raw).__name__}, not an object. Fix the file or delete it "
+                f"to start fresh, then re-run `gaia gateway install`."
+            )
         return cls(
             base_url=raw.get("base_url") or DEFAULT_GATEWAY_BASE_URL,
             enabled_models=list(raw.get("enabled_models") or []),
@@ -277,6 +282,8 @@ class GatewayState:
                 str(k): str(v)
                 for k, v in (raw.get("tool_calling_probe_failures") or {}).items()
             },
+            # ``own_tool_markup_models`` is not read: own markup switches only
+            # the session that wrote it, never later ones.
             unavailable_models={
                 str(k): dict(v)
                 for k, v in (raw.get("unavailable_models") or {}).items()
