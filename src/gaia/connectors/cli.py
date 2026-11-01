@@ -834,6 +834,9 @@ def _handle_activations(args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Standalone entry point — useful for ``python -m gaia.connectors.cli``."""
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(prog="gaia-connectors")
     sub = parser.add_subparsers(dest="action")
     add_subparser(sub)

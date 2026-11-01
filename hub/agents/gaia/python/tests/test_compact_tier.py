@@ -24,12 +24,13 @@ SKILLS_ON_WITHHELD_TOOLS = ("data-explore", "image-gen", "inbox-triage")
 
 
 @contextlib.contextmanager
-def _agent(model_id):
+def _agent(model_id, dynamic_tools=False):
     saved = dict(_TOOL_REGISTRY)
     _TOOL_REGISTRY.clear()
     try:
         with pytest.MonkeyPatch.context() as mp:
             mp.setenv("GAIA_MEMORY_DISABLED", "1")
+            mp.setenv("GAIA_DYNAMIC_TOOLS", "1" if dynamic_tools else "0")
             mp.delenv("GAIA_FAST", raising=False)
             mp.delenv(TIER_ENV, raising=False)
             yield GaiaAgent(config=GaiaAgentConfig(silent_mode=True, model_id=model_id))
@@ -141,3 +142,33 @@ def test_a_failed_switch_keeps_the_old_features(gemma):
         _switch(gemma, LARGE_DEFAULT_MODEL_NAME)
     assert gemma.model_features is COMPACT
     assert set(gemma._tools_registry) == before
+
+
+@pytest.mark.parametrize("model_id", [DEFAULT_MODEL_NAME, NPU_DEFAULT_MODEL_NAME])
+def test_gemma_with_dynamic_tools_selects_without_a_drift_error(model_id):
+    with _agent(model_id, dynamic_tools=True) as agent:
+        assert agent.tool_loader is not None
+        agent.tool_loader.select = lambda *a, **k: []
+        # Withheld tools are absent on purpose, not registry drift.
+        agent._select_tools_for_turn("summarize my notes")
+        with pytest.raises(ValueError, match="missing from the registry"):
+            agent.tool_loader.validate_registry(agent._tools_registry)
+
+
+def test_switching_to_gemma_unloads_a_skill_it_cannot_run():
+    with _agent(LARGE_DEFAULT_MODEL_NAME) as agent:
+        agent.load_skill("data-explore")
+        agent.load_skill("research-report")
+        _switch(agent, DEFAULT_MODEL_NAME)
+        assert agent.unload_skills_needing_withheld_tools() == ["data-explore"]
+        assert "data-explore" not in agent.loaded_skills
+        assert "research-report" in agent.loaded_skills
+        assert "create_table" not in agent.system_prompt
+
+
+def test_a_switch_to_a_larger_model_unloads_nothing():
+    with _agent(LARGE_DEFAULT_MODEL_NAME) as agent:
+        agent.load_skill("data-explore")
+        _switch(agent, LARGE_DEFAULT_MODEL_NAME)
+        assert agent.unload_skills_needing_withheld_tools() == []
+        assert "data-explore" in agent.loaded_skills

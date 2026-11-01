@@ -267,25 +267,99 @@ class TestNpuWindow:
         assert lc.resolve_ctx_size("gemma4-it-e2b-FLM") == lc.NPU_CTX_SIZE
 
 
-class TestSetupFollowsTheConfiguredProfile:
-    """The Agent UI checks and re-runs setup for the profile this PC chose."""
+class TestGpuStaysTheDefault:
+    """The GPU model is the default; the NPU model is an option that, once
+    picked, is the model setup keeps."""
 
-    def test_fresh_pc_sets_up_the_flagship_profile(self):
-        from gaia.ui import setup_runner
-
-        assert setup_runner.check_args(False, False)[3] == "gaia"
-        assert setup_runner.run_command(False) == "gaia init --profile gaia"
-
-    def test_npu_pc_is_checked_and_set_up_as_npu(self):
+    def test_setup_runs_the_flagship_profile_even_after_an_npu_pick(self):
         from gaia.ui import setup_runner
 
         cfg = GaiaConfig()
         cfg.profile = "npu"
         cfg.default_model = lc.NPU_DEFAULT_MODEL_NAME
         cfg.save()
-        assert setup_runner.check_args(False, False)[3] == "npu"
-        assert setup_runner.run_args(False)[2] == "npu"
-        assert setup_runner.run_command(False) == "gaia init --profile npu"
+        assert setup_runner.check_args(False, False)[3] == "gaia"
+        assert setup_runner.run_command(False) == "gaia init --profile gaia"
+
+    def test_an_npu_pick_holds_under_the_flagship_profile(self):
+        cfg = GaiaConfig()
+        cfg.default_model = lc.NPU_DEFAULT_MODEL_NAME
+        cfg.save()
+        choice = resolve_init_chat_model(
+            None, reset_corrupt=False, enforce_fit=False, profile="gaia"
+        )
+        assert (choice.model_id, choice.user_set) == (lc.NPU_DEFAULT_MODEL_NAME, True)
+
+    def test_a_gpu_pick_after_the_npu_holds_too(self):
+        cfg = GaiaConfig()
+        cfg.profile = "npu"
+        cfg.default_model = lc.DEFAULT_MODEL_NAME
+        cfg.save()
+        choice = resolve_init_chat_model(
+            None, reset_corrupt=False, enforce_fit=False, profile="gaia"
+        )
+        assert (choice.model_id, choice.user_set) == (lc.DEFAULT_MODEL_NAME, True)
+
+    def _record(self, profile, configured, picked=lc.NPU_DEFAULT_MODEL_NAME, last=None):
+        from gaia.installer.init_command import ChatModelChoice, InitCommand
+
+        cmd = InitCommand(profile=profile, yes=True)
+        cmd._chat_choice = ChatModelChoice(
+            model_id=picked, user_set=configured == picked, skipped=[]
+        )
+        cmd._chat_model_ready = True
+        cmd._setup_verified = True
+        cfg = GaiaConfig()
+        cfg.default_model = configured
+        cfg.last_model = last
+        cmd._record_chat_choice(cfg)
+        self.cfg = cfg
+        return cfg.default_model
+
+    def test_profile_npu_replaces_the_model_the_uis_start_on(self):
+        self._record("npu", None, last=lc.DEFAULT_MODEL_NAME)
+        assert self.cfg.last_model == lc.NPU_DEFAULT_MODEL_NAME
+        assert self.cfg.last_provider == "local"
+
+    def test_profile_npu_rerun_after_a_gpu_pick_returns_to_the_npu(self):
+        npu = lc.NPU_DEFAULT_MODEL_NAME
+        self._record("npu", npu, last=lc.DEFAULT_MODEL_NAME)
+        assert (self.cfg.default_model, self.cfg.last_model) == (npu, npu)
+
+    def test_profile_npu_leaves_a_cloud_last_model(self):
+        self._record("npu", None, last="claude-sonnet-5")
+        assert self.cfg.last_model == "claude-sonnet-5"
+
+    def test_an_unverified_npu_setup_records_nothing(self):
+        from gaia.installer.init_command import ChatModelChoice, InitCommand
+
+        cmd = InitCommand(profile="npu", yes=True)
+        cmd._chat_choice = ChatModelChoice(
+            model_id=lc.NPU_DEFAULT_MODEL_NAME, user_set=False, skipped=[]
+        )
+        cmd._chat_model_ready = True
+        cmd._setup_verified = False
+        cfg = GaiaConfig()
+        cfg.last_model = lc.DEFAULT_MODEL_NAME
+        cmd._record_chat_choice(cfg)
+        assert (cfg.default_model, cfg.last_model) == (None, lc.DEFAULT_MODEL_NAME)
+
+    def test_profile_npu_replaces_a_gpu_default(self):
+        assert self._record("npu", "Qwen3.6-35B-A3B-GGUF") == lc.NPU_DEFAULT_MODEL_NAME
+
+    def test_profile_npu_leaves_a_cloud_default(self):
+        assert self._record("npu", "claude-sonnet-5") == "claude-sonnet-5"
+
+    def test_plain_init_never_replaces_a_users_model(self):
+        assert (
+            self._record(
+                "gaia", lc.NPU_DEFAULT_MODEL_NAME, picked="Qwen3.6-35B-A3B-GGUF"
+            )
+            == lc.NPU_DEFAULT_MODEL_NAME
+        )
+
+    def test_plain_init_never_picks_the_npu(self):
+        assert lc.NPU_DEFAULT_MODEL_NAME not in lc.DEFAULT_MODEL_LADDER
 
 
 class TestLoadTimeFreeMemory:
@@ -371,12 +445,3 @@ def test_single_turn_flm_builds_are_not_chat_options():
 
     assert not _is_chat_model({"labels": ["vision", "single-turn", "chat"]})
     assert _is_chat_model({"labels": ["audio", "vision", "tool-calling", "chat"]})
-
-
-def test_corrupt_config_does_not_block_setup(tmp_path, monkeypatch):
-    """`gaia init` is what resets a corrupt config, so setup must still start."""
-    from gaia.installer.init_command import configured_setup_profile
-
-    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path))
-    (tmp_path / "config.json").write_text("not json", encoding="utf-8")
-    assert configured_setup_profile() == "gaia"

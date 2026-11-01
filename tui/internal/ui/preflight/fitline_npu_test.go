@@ -21,7 +21,7 @@ func TestFitLineJudgesAnNPUModelOnNPUMemory(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 	big := lemonade.Capacity{MemoryGB: 8, MemorySource: "AMD iGPU", DiskFreeGB: -1, NPUMemoryGB: 64}
-	if got := fitLine(big, chat, true); !strings.Contains(got, "fits") || !strings.Contains(got, "64 GB") {
+	if got := fitLine(big, chat, true); !strings.Contains(got, "fits") || !strings.Contains(got, "68.7 GB") {
 		t.Fatalf("got %q", got)
 	}
 	none := lemonade.Capacity{MemoryGB: 96, MemorySource: "AMD iGPU", DiskFreeGB: -1}
@@ -41,10 +41,10 @@ func TestServerWindowFollowsTheNPUModel(t *testing.T) {
 		}
 	}
 	cases := map[string]int{
-		`{"default_device":"npu","default_model":"gemma4-it-e4b-FLM"}`:       65536,
-		`{"default_device":"npu","default_model":"gemma4-it-e2b-FLM"}`:       32768,
-		`{"default_device":"npu"}`:                                           32768,
-		`{"default_device":"gpu","default_model":"Gemma-4-E4B-it-GGUF"}`:     65536,
+		`{"default_device":"npu","default_model":"gemma4-it-e4b-FLM"}`:   65536,
+		`{"default_device":"npu","default_model":"gemma4-it-e2b-FLM"}`:   32768,
+		`{"default_device":"npu"}`:                                       32768,
+		`{"default_device":"gpu","default_model":"Gemma-4-E4B-it-GGUF"}`: 65536,
 	}
 	for config, want := range cases {
 		if got := profileCtxSize(probe(config)); got != want {

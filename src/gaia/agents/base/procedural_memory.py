@@ -55,7 +55,7 @@ class ProceduralMemoryMixin:
     """
 
     # ==================================================================
-    # Procedures FAISS Index (v3 — procedural memory, #887)
+    # Procedures FAISS Index (v3 — procedural memory)
     # ==================================================================
 
     def _rebuild_proc_faiss_index(self) -> None:
@@ -218,7 +218,7 @@ class ProceduralMemoryMixin:
         return results
 
     # ==================================================================
-    # Skill Recall (procedural memory, #887 — RECALL)
+    # Skill Recall (procedural memory — RECALL)
     # ==================================================================
 
     def recall_skill(
@@ -498,7 +498,7 @@ class ProceduralMemoryMixin:
         self._recalled_skill_prompt = self._build_recalled_skills_prompt(skills, config)
 
     # ==================================================================
-    # Skill Synthesis (procedural memory, #887)
+    # Skill Synthesis (procedural memory)
     # ==================================================================
 
     def _side_request_kwargs(self) -> Dict[str, Any]:

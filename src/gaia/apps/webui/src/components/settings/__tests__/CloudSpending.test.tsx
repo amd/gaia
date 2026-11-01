@@ -13,6 +13,7 @@ import { ModelChip } from '../../ModelChip';
 import { useModelStore } from '../../../stores/modelStore';
 import { useChatStore } from '../../../stores/chatStore';
 import * as api from '../../../services/api';
+import { mockSetupApis } from '../../../test/setupApiMocks';
 import type { ActiveModel, ModelPrice, ProviderInfo, SpendingReport } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -40,6 +41,7 @@ function fireworks(over: Partial<ProviderInfo> = {}): ProviderInfo {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    mockSetupApis(mockedApi);
     useModelStore.setState({ active: LOCAL_ACTIVE, error: null, restoreNotice: null });
     useChatStore.setState({ systemStatus: null, settingsSection: null, sessions: [], currentSessionId: null });
     mockedApi.getCloudPrices.mockImplementation(async (provider) => (provider === 'fireworks'

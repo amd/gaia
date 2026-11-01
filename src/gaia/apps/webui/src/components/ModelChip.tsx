@@ -335,7 +335,7 @@ export function ModelChip() {
                 title={title}
             >
                 <Icon size={13} aria-hidden="true" />
-                <span className="composer-chip-label">{label}</span>
+                <span className="composer-chip-label" dir="auto">{label}</span>
                 {queued && <span className="composer-chip-next">→ {displayModelName(queued)} next</span>}
                 {notDownloaded && <Download size={12} aria-label="Not downloaded" />}
                 {autoSwitchError && <AlertCircle size={12} aria-label="Model switch failed" />}

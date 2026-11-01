@@ -31,7 +31,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("gaia_agent")
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
 import yaml  # noqa: E402
 
@@ -66,7 +66,8 @@ _spec.loader.exec_module(capability_matrix)
 # default: `load_tools` registers only while it is on. `set_reasoning_effort`
 # is in the loop_control bundle but registers on gpt-oss only, so not counted.
 # 98 with the three audio_generation tools (music, sound effects, model list).
-_EXPECTED_TOOLS_TOTAL = 98
+# 101 with get_thread, list_connected_mailboxes and list_waiting_on_you.
+_EXPECTED_TOOLS_TOTAL = 101
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
 # 16 with `sleep`, which joins the core set rather than a bundle: waiting out a
@@ -75,8 +76,8 @@ _EXPECTED_CORE_COUNT = 16
 # 25: the `cli_setup` bundle, `shell_session` (get_shell_state,
 # reset_shell_session), plus `browser_nav` and `browser_use` — the browser
 # tools arrive as two bundles so one pull-in cannot exhaust the dynamic slots.
-# 26 with `audio_generation`.
-_EXPECTED_BUNDLE_COUNT = 26
+# 26 with `audio_generation`; 27 with `email_threads`.
+_EXPECTED_BUNDLE_COUNT = 27
 
 _EXPECTED_SKILL_LIBRARY_TOOLS = frozenset(
     {
@@ -104,13 +105,15 @@ _EXPECTED_REST_OP_NAMES = {
     "query/{run_id}/tool_decision",
     "sessions/{session_id}/bypass",
     "sessions/{session_id}/internet",
+    "sessions/{session_id}/grants",
     "memory",
     "skills",
 }
-_EXPECTED_REST_FUNCTIONAL_COUNT = 9
+# One per route method: sessions/{session_id}/grants is both GET and DELETE.
+_EXPECTED_REST_FUNCTIONAL_COUNT = 11
 # + the init readiness probe and the three liveness/version probes
 # (/health, /version, /v1/gaia/version).
-_EXPECTED_REST_IN_CONTRACT_COUNT = 13
+_EXPECTED_REST_IN_CONTRACT_COUNT = 15
 
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 

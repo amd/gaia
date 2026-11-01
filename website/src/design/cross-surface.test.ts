@@ -198,7 +198,6 @@ describe('the drift guard runs on every tree it reads', () => {
     expect(reads, 'a new cross-tree read belongs here AND in website-ci.yml paths').toEqual([
       '.github/workflows/build_tui.yml',
       '.github/workflows/publish.yml',
-      '.github/workflows/release_components.yml',
       '.github/workflows/website-ci.yml',
       'docs/spec/gaia-design-language.mdx',
       'installer/tui/artifacts.py',

@@ -29,6 +29,9 @@ from __future__ import annotations
 
 import sys
 
+from gaia.logger import configure
+
+configure()
 from gaia_agent_email.server import (  # noqa: F401  (re-exported for the freeze/tests)
     DEFAULT_HOST,
     DEFAULT_PORT,

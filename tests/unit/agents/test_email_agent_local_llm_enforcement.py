@@ -258,8 +258,12 @@ class TestGemmaE2BLazyDownload:
             def _boom(*_a, **_k):
                 raise AssertionError("import-time network/subprocess call")
 
+            # Still a class: asyncio subclasses subprocess.Popen on Windows.
+            class _BoomPopen(subprocess.Popen):
+                __init__ = _boom
+
             requests.adapters.HTTPAdapter.send = _boom
-            subprocess.Popen = _boom
+            subprocess.Popen = _BoomPopen
             subprocess.run = _boom
 
             import gaia.llm.lemonade_client  # noqa: F401 — must not trip _boom

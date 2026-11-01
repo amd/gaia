@@ -7,13 +7,14 @@ Provides document retrieval, querying, and evaluation tools.
 """
 
 import contextvars
+import functools
 import os
 import re
 import threading
 import time
 import weakref
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.file_snapshots import before_change
@@ -27,7 +28,8 @@ from gaia.agents.tools.path_access import (
 from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
-from gaia.rag.sdk import EmbeddingUnavailableError
+from gaia.rag.keyword_search import rank_keyword_chunks
+from gaia.rag.sdk import EmbeddingUnavailableError, text_scripts
 from gaia.tool_cancellation import raise_if_cancelled
 
 logger = get_logger(__name__)
@@ -158,6 +160,14 @@ def documents_still_indexing(rag: Any) -> List[str]:
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.get(rag) or {}
         return sorted(path for path, job in jobs.items() if not job.done.is_set())
+
+
+def _forget_evicted(indexed_files: set, evicted: List[str]) -> None:
+    """Drop documents the library evicted, so asking for one again re-indexes it."""
+    gone = {os.path.realpath(path) for path in evicted}
+    for path in list(indexed_files):
+        if os.path.realpath(path) in gone:
+            indexed_files.discard(path)
 
 
 def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
@@ -339,6 +349,50 @@ def _chunks_have_pages(chunks: List[Dict[str, Any]]) -> bool:
     return any("page" in chunk for chunk in chunks)
 
 
+_MARKER_NOTE = (
+    "A chunk's 'page' is where it starts; text after a '[Page N]' marker inside "
+    "it is on page N, so cite N for facts that follow the marker and the page "
+    "before N for facts ahead of it."
+)
+
+
+def _question_language_note(question: str, chunks: List[Dict[str, Any]]) -> str:
+    """Name the question when the chunks could pull the answer into their language."""
+    asked = text_scripts(question)
+    if not asked or not chunks:
+        return ""
+    found = text_scripts(" ".join(chunk.get("content", "") for chunk in chunks))
+    if not found or found == asked[:1]:
+        return ""
+    return (
+        f"\n\nThe question you are answering is: {question[:300]}\n"
+        "Write your whole answer in the language of that question and translate "
+        "what you use from these chunks. Neither their language nor an earlier "
+        "turn's changes that."
+    )
+
+
+def _answers_in_question_language(mixin: Any):
+    """Restate the question where the model picks its answer's language: after reading."""
+
+    def wrap(search: Callable[..., Dict[str, Any]]):
+        @functools.wraps(search)
+        def wrapper(*args, **kwargs) -> Dict[str, Any]:
+            result = search(*args, **kwargs)
+            if result.get("status") == "success":
+                result["instruction"] = result.get(
+                    "instruction", ""
+                ) + _question_language_note(
+                    getattr(mixin, "_memory_turn_query", ""),
+                    result.get("chunks") or [],
+                )
+            return result
+
+        return wrapper
+
+    return wrap
+
+
 def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     """How query_documents asks the model to cite: the full path, plus pages if any."""
     instruction = (
@@ -352,7 +406,9 @@ def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
         instruction += (
             "Format: 'According to <absolute_path> (page X):'\n"
             "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
-            "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n\n"
+            "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n"
+            + _MARKER_NOTE
+            + "\n\n"
         )
         if not all_paged:
             instruction += (
@@ -386,15 +442,23 @@ def _file_instruction(file_name: str, num_chunks: int, has_pages: bool) -> str:
         f"Your answer MUST start with: 'According to {file_name}, page X:' where X is the "
         "page number from the chunk's 'page' field.\n\n"
         f"Example: If chunk has 'page': 2, say 'According to {file_name}, page 2:'\n"
-        f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'"
+        f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'\n"
+        + _MARKER_NOTE
     )
+
+
+_PAGE_MARKER = re.compile(r"\[Page (\d+)\]")
 
 
 def extract_page_from_chunk(
     chunk_text, chunk_index=-1, all_chunks=None, chunk_to_file=None
 ):
     """
-    Extract page number from chunk text or by looking at nearby chunks.
+    The page a chunk's first line is on.
+
+    Text before a mid-chunk ``[Page N]`` belongs to the page an earlier chunk
+    was on. With no earlier chunk to ask, a page-start marker means page N-1;
+    an in-page marker (image text, speaker notes) means page N.
 
     Args:
         chunk_text: The chunk text to extract page from
@@ -406,30 +470,44 @@ def extract_page_from_chunk(
     Returns:
         Page number as int, or None if not found
     """
-    # Strategy 1: Try [Page X] format in this chunk
-    match = re.search(r"\[Page (\d+)\]", chunk_text)
+    match = _PAGE_MARKER.search(chunk_text)
     if match:
-        return int(match.group(1))
+        page = int(match.group(1))
+        if not chunk_text[: match.start()].strip():
+            return page
+        earlier = _page_before(chunk_index, all_chunks, chunk_to_file)
+        if earlier is not None:
+            return earlier
+        if _IN_PAGE_SECTION.match(chunk_text, match.end()):
+            return page
+        return max(1, page - 1)
 
-    # Strategy 2: Try (Page X) format
     match = re.search(r"\(Page (\d+)\)", chunk_text)
     if match:
         return int(match.group(1))
 
-    # Strategy 3: Look backwards in previous chunks to find most recent page marker
-    if chunk_index >= 0 and all_chunks:
-        for prev_idx in range(chunk_index - 1, max(-1, chunk_index - 5), -1):
-            if chunk_to_file is not None and chunk_to_file.get(
-                prev_idx
-            ) != chunk_to_file.get(chunk_index):
-                # Indexed after another document: its pages are not this file's.
-                break
-            if prev_idx < len(all_chunks):
-                prev_chunk = all_chunks[prev_idx]
-                match = re.search(r"\[Page (\d+)\]", prev_chunk)
-                if match:
-                    return int(match.group(1))
+    # No marker: the chunk continues the last page an earlier chunk started.
+    return _page_before(chunk_index, all_chunks, chunk_to_file)
 
+
+# Markers the extractor writes inside a page, not at its start.
+_IN_PAGE_SECTION = re.compile(r"\s*(?:\*\*Content Extracted|### |\*\*Speaker Notes)")
+
+
+def _page_before(chunk_index, all_chunks, chunk_to_file):
+    """The last page marker in the few chunks before this one, same file only."""
+    if chunk_index < 0 or not all_chunks:
+        return None
+    for prev_idx in range(chunk_index - 1, max(-1, chunk_index - 5), -1):
+        if chunk_to_file is not None and chunk_to_file.get(
+            prev_idx
+        ) != chunk_to_file.get(chunk_index):
+            # Indexed after another document: its pages are not this file's.
+            break
+        if prev_idx < len(all_chunks):
+            markers = _PAGE_MARKER.findall(all_chunks[prev_idx])
+            if markers:
+                return int(markers[-1])
     return None
 
 
@@ -467,6 +545,7 @@ class RAGToolsMixin:
         @tool(
             atomic=True,
         )
+        @_answers_in_question_language(self)
         def query_documents(
             query: str, debug: bool = False  # pylint: disable=unused-argument
         ) -> Dict[str, Any]:
@@ -596,79 +675,30 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
-                # HYBRID SEARCH: Boost scores of chunks containing keywords
-                # Instead of creating new text snippets, we boost the scores of existing chunks
-                query_lower = query.lower()
-
-                # Identify important terms (not common words)
-
-                query_words = re.findall(r"\b[a-z]+\b", query_lower)
-                stop_words = {
-                    "the",
-                    "is",
-                    "what",
-                    "of",
-                    "and",
-                    "a",
-                    "an",
-                    "in",
-                    "to",
-                    "for",
-                }
-                important_terms = [
-                    w for w in query_words if w not in stop_words and len(w) > 2
-                ]
-
+                # HYBRID SEARCH: add the chunks that best match the query's words
                 keyword_boost_info = []
+                for chunk_idx, boost_score, matching_terms in rank_keyword_chunks(
+                    query, enumerate(rag.chunks)
+                ):
+                    # Deduplication below keeps a chunk's higher score.
+                    all_chunks.append(rag.chunks[chunk_idx])
+                    all_scores.append(boost_score)
 
-                if important_terms:
-                    # Check each indexed chunk for keyword matches
-                    for chunk_idx, chunk_text in enumerate(rag.chunks):
-                        chunk_lower = chunk_text.lower()
+                    # Get source file for this chunk
+                    source_file = rag.chunk_to_file.get(chunk_idx, "Unknown")
 
-                        # Count matching terms in this chunk (whole word matching)
-                        matching_terms = []
-                        for term in important_terms:
-                            # Use word boundary regex for whole-word matching
-                            if re.search(r"\b" + re.escape(term) + r"\b", chunk_lower):
-                                matching_terms.append(term)
-
-                        if matching_terms:
-                            # Calculate boost score based on match ratio
-                            match_ratio = (
-                                len(matching_terms) / len(important_terms)
-                                if important_terms
-                                else 0
-                            )
-                            boost_score = 0.6 + (0.2 * match_ratio)  # Range: 0.6-0.8
-
-                            # Add this chunk with boosted score if not already in all_chunks
-                            if chunk_text not in all_chunks:
-                                all_chunks.append(chunk_text)
-                                all_scores.append(boost_score)
-
-                                # Get source file for this chunk
-                                source_file = rag.chunk_to_file.get(
-                                    chunk_idx, "Unknown"
-                                )
-
-                                keyword_boost_info.append(
-                                    {
-                                        "chunk_index": chunk_idx,
-                                        "source_file": (
-                                            Path(source_file).name
-                                            if source_file != "Unknown"
-                                            else "Unknown"
-                                        ),
-                                        "matching_terms": matching_terms,
-                                        "boost_score": boost_score,
-                                        "match_ratio": match_ratio,
-                                    }
-                                )
-
-                                # Limit boosted chunks
-                                if len(keyword_boost_info) >= 5:
-                                    break
+                    keyword_boost_info.append(
+                        {
+                            "chunk_index": chunk_idx,
+                            "source_file": (
+                                Path(source_file).name
+                                if source_file != "Unknown"
+                                else "Unknown"
+                            ),
+                            "matching_terms": matching_terms,
+                            "boost_score": boost_score,
+                        }
+                    )
 
                 # Capture debug info for keyword boosting
                 if debug_info and keyword_boost_info:
@@ -892,6 +922,7 @@ class RAGToolsMixin:
             # cap; at the default a big PDF is abandoned mid-index and re-indexed.
             timeout=600,
         )
+        @_answers_in_question_language(self)
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
             Query a specific file for fast, targeted retrieval.
@@ -955,6 +986,9 @@ class RAGToolsMixin:
                             if idx_result is None:
                                 return _indexing_in_progress(job)
                             if idx_result.get("success"):
+                                _forget_evicted(
+                                    self.indexed_files, idx_result.get("evicted", [])
+                                )
                                 self.indexed_files.add(file_path)
                                 if (
                                     hasattr(self, "current_session")
@@ -1123,99 +1157,46 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
-                # HYBRID SEARCH: Boost scores of chunks containing keywords
-                # Instead of creating new text snippets, we boost the scores of existing chunks
+                # HYBRID SEARCH: add the chunks that best match the query's words
                 if (
                     str(target_file) in rag.file_metadata
                     and "full_text" in rag.file_metadata[str(target_file)]
                 ):
-                    query_lower = query.lower()
-
-                    # Identify important terms (not common words)
-
-                    query_words = re.findall(r"\b[a-z]+\b", query_lower)
-                    # Filter out common words
-                    stop_words = {
-                        "the",
-                        "is",
-                        "what",
-                        "of",
-                        "and",
-                        "a",
-                        "an",
-                        "in",
-                        "to",
-                        "for",
-                    }
-                    important_terms = [
-                        w for w in query_words if w not in stop_words and len(w) > 2
-                    ]
-
-                    if important_terms:
-                        file_keyword_info = []
-
-                        # Check each chunk from this file for keyword matches
-                        file_chunk_indices = rag.file_to_chunk_indices.get(
-                            str(target_file), []
+                    file_chunk_indices = rag.file_to_chunk_indices.get(
+                        str(target_file), []
+                    )
+                    file_keyword_info = []
+                    for chunk_idx, boost_score, matching_terms in rank_keyword_chunks(
+                        query,
+                        (
+                            (chunk_idx, rag.chunks[chunk_idx])
+                            for chunk_idx in file_chunk_indices
+                            if chunk_idx < len(rag.chunks)
+                        ),
+                    ):
+                        # Deduplication below keeps a chunk's higher score.
+                        all_chunks.append(rag.chunks[chunk_idx])
+                        all_scores.append(boost_score)
+                        file_keyword_info.append(
+                            {
+                                "chunk_index": chunk_idx,
+                                "matching_terms": matching_terms,
+                                "boost_score": boost_score,
+                            }
                         )
 
-                        for chunk_idx in file_chunk_indices:
-                            if chunk_idx < len(rag.chunks):
-                                chunk_text = rag.chunks[chunk_idx].lower()
-
-                                # Count matching terms in this chunk (whole word matching)
-                                matching_terms = []
-                                for term in important_terms:
-                                    # Use word boundary regex for whole-word matching
-                                    if re.search(
-                                        r"\b" + re.escape(term) + r"\b", chunk_text
-                                    ):
-                                        matching_terms.append(term)
-
-                                if matching_terms:
-                                    # Calculate boost score based on match ratio
-                                    match_ratio = (
-                                        len(matching_terms) / len(important_terms)
-                                        if important_terms
-                                        else 0
-                                    )
-                                    boost_score = 0.6 + (
-                                        0.2 * match_ratio
-                                    )  # Range: 0.6-0.8
-
-                                    # Add this chunk with boosted score if not already in all_chunks
-                                    chunk_content = rag.chunks[chunk_idx]
-                                    if chunk_content not in all_chunks:
-                                        all_chunks.append(chunk_content)
-                                        all_scores.append(boost_score)
-
-                                        file_keyword_info.append(
-                                            {
-                                                "chunk_index": chunk_idx,
-                                                "matching_terms": matching_terms,
-                                                "boost_score": boost_score,
-                                                "match_ratio": match_ratio,
-                                            }
-                                        )
-
-                                        # Limit boosted chunks
-                                        if len(file_keyword_info) >= 5:
-                                            break
-
-                        # Capture debug info for keyword search
-                        if debug_info and file_keyword_info:
-                            debug_info["keyword_retrieval"].append(
-                                {
-                                    "file": Path(target_file).name,
-                                    "chunks_boosted": len(file_keyword_info),
-                                    "boosted_chunks": file_keyword_info[
-                                        :5
-                                    ],  # Show first 5 boosted chunks
-                                }
-                            )
-                            logger.info(
-                                f"[DEBUG] Keyword search in {Path(target_file).name}: boosted {len(file_keyword_info)} chunks"
-                            )
+                    # Capture debug info for keyword search
+                    if debug_info and file_keyword_info:
+                        debug_info["keyword_retrieval"].append(
+                            {
+                                "file": Path(target_file).name,
+                                "chunks_boosted": len(file_keyword_info),
+                                "boosted_chunks": file_keyword_info,
+                            }
+                        )
+                        logger.info(
+                            f"[DEBUG] Keyword search in {Path(target_file).name}: boosted {len(file_keyword_info)} chunks"
+                        )
 
                 # Update debug info before deduplication - track which chunks before dedup
                 if debug_info:
@@ -1615,6 +1596,8 @@ class RAGToolsMixin:
                     return _indexing_in_progress(job)
 
                 if result.get("success"):
+                    evicted = result.get("evicted", [])
+                    _forget_evicted(self.indexed_files, evicted)
                     self.indexed_files.add(file_path)
                     save_warning = ""
 
@@ -1641,6 +1624,12 @@ class RAGToolsMixin:
                         msg = f"Re-indexed (updated): {file_name}"
                     else:
                         msg = f"Successfully indexed: {file_name}"
+                    if evicted:
+                        names = ", ".join(Path(path).name for path in evicted)
+                        msg += (
+                            f". The document library was full, so it removed {names}; "
+                            "questions about it will find nothing until it is indexed again"
+                        )
                     return {
                         "status": "success",
                         "message": f"{msg}. {save_warning}" if save_warning else msg,
@@ -1655,6 +1644,7 @@ class RAGToolsMixin:
                         "from_cache": result.get("from_cache", False),
                         "already_indexed": result.get("already_indexed", False),
                         "reindexed": result.get("reindexed", False),
+                        **({"evicted": evicted} if evicted else {}),
                     }
                 else:
                     if result.get("error_type") == "embedding_unavailable":
@@ -1854,14 +1844,35 @@ class RAGToolsMixin:
                         "error": f"Invalid summary_type '{summary_type}'. Valid types: {', '.join(valid_types)}",
                     }
 
-                # Get type-specific instruction
+                # Keep the tool's real styles aligned with summarize/SKILL.md.
+                # The caller may reshape this draft for other named styles.
                 type_instructions = {
-                    "brief": "Create a concise 2-3 paragraph summary highlighting the most important points and main themes.",
-                    "detailed": "Create a comprehensive summary covering all major topics, key points, and important details. Organize by sections if applicable.",
-                    "bullets": "Create a bullet-point summary of the key points, organizing related items together. Use sub-bullets for details.",
+                    "brief": (
+                        "Write at most three complete sentences with only two or "
+                        "three essential, concrete takeaways. Use no headings or "
+                        "Markdown bullets, and do not begin with filler such as "
+                        "'Overall' or 'In summary'."
+                    ),
+                    "detailed": (
+                        "Write a comprehensive summary of at least 250 words covering "
+                        "every major topic, key point, and important detail in full "
+                        "paragraphs. Keep every number, percentage, dollar amount, "
+                        "date, and metric. Do not use bullets."
+                    ),
+                    "bullets": (
+                        "Write only a flat Markdown bullet list with at most three "
+                        "top-level bullets. Keep each bullet under 20 words and to "
+                        "one idea; use no headings, numbering, paragraphs, or nested "
+                        "sub-bullets."
+                    ),
                 }
 
                 summary_instruction = type_instructions[summary_type]
+                section_instruction = (
+                    "Extract the key facts, numbers, decisions, and [Page N] markers "
+                    "from this section for a later final synthesis. Do not apply the "
+                    "requested final output style yet."
+                )
 
                 # Get all chunks from the RAG index
                 # Since we can't directly filter chunks by document, we'll use a workaround:
@@ -1963,11 +1974,6 @@ class RAGToolsMixin:
                     f"Document has {total_words} words, {len(pages)} pages, grouped into {len(sections)} sections"
                 )
 
-                # Get document metadata for enhanced summary
-                file_metadata = self.rag.file_metadata.get(target_file, {})
-                num_pages = file_metadata.get("num_pages", len(pages))
-                _vlm_pages = file_metadata.get("vlm_pages", 0)
-
                 # If document is small enough (single section), summarize in one pass
                 if len(sections) <= 1:
                     prompt = f"""{summary_instruction}
@@ -1979,25 +1985,10 @@ Document content:
 
 CRITICAL GROUNDING RULE: Only include information that is explicitly present in the document content above. Do NOT add, infer, or extrapolate any facts, figures, or details that do not appear verbatim or near-verbatim in the document text. If a metric (e.g., net income, cash flow, retention rate) is not mentioned in the document, do not include it.
 
-Generate a well-structured summary with the following format:
+Return only the requested summary body; do not add document metadata or a generic
+heading/template that conflicts with the requested style.
 
-# Document Summary: {Path(target_file).name}
-
-## Document Information
-- **File**: {Path(target_file).name}
-- **Pages**: {num_pages}
-- **Total Words**: ~{total_words:,}
-
-## Overview
-[2-3 sentence overview of what this document is — only from document content]
-
-## Key Content
-[Main content organized by topics/sections — only facts from the document, reference page numbers where applicable]
-
-## Key Takeaways
-[Bullet points of the most important points — only from the document, no extrapolation]
-
-Use the {summary_type} style for the content sections."""
+{summary_instruction}"""
 
                     # Use chat SDK to generate summary
                     try:
@@ -2010,7 +2001,11 @@ Use the {summary_type} style for the content sections."""
                             "document": str(Path(target_file).name),
                             "total_words": total_words,
                             "sections_processed": 1,
-                            "instruction": "Present the summary to the user. The summary includes document metadata, structured sections, and page references.",
+                            "instruction": (
+                                "Present this as a draft in the requested summary style. "
+                                "If the user asked for an unsupported shape such as executive "
+                                "or action items, reshape the draft before replying."
+                            ),
                         }
                     except Exception as e:
                         logger.error(f"Error generating summary: {e}")
@@ -2035,7 +2030,7 @@ Use the {summary_type} style for the content sections."""
 
                     # Generate summary for this section
                     section_prompt = f"""This is section {section_num} of {num_sections} from the document.
-{summary_instruction}
+{section_instruction}
 
 Section content:
 {section_text}
@@ -2074,26 +2069,11 @@ Section summaries:
 
 CRITICAL GROUNDING RULE: Only synthesize information that appears in the section summaries above. Do NOT add, infer, or extrapolate any facts, figures, or details not present in the summaries. Every claim in your output must be traceable to one of the section summaries.
 
-Synthesize these into a single, well-structured summary using this format:
+Return only the requested summary body; do not add document metadata or a generic
+heading/template that conflicts with the requested style. Preserve any useful page
+references from the section summaries.
 
-# Document Summary: {Path(target_file).name}
-
-## Document Information
-- **File**: {Path(target_file).name}
-- **Pages**: {num_pages}
-- **Total Words**: ~{total_words:,}
-- **Sections Processed**: {len(section_summaries)}
-
-## Overview
-[2-3 sentence overview synthesizing all sections]
-
-## Key Content
-[Main content organized by topics - consolidate from all section summaries, reference page numbers]
-
-## Key Takeaways
-[Bullet points of the most important points from across all sections]
-
-Use the {summary_type} style. Ensure page references from section summaries are preserved."""
+{summary_instruction}"""
 
                 try:
                     final_summary = _summary_text(self.rag.chat, final_prompt)
@@ -2106,7 +2086,11 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         "total_words": total_words,
                         "sections_processed": len(section_summaries),
                         "section_summaries": section_summaries,
-                        "instruction": "Present the formatted summary to the user. The summary includes document metadata, organized sections with page references, and key takeaways.",
+                        "instruction": (
+                            "Present this as a draft in the requested summary style. "
+                            "If the user asked for an unsupported shape such as executive "
+                            "or action items, reshape the draft before replying."
+                        ),
                     }
                 except Exception as e:
                     logger.error(f"Error synthesizing final summary: {e}")
@@ -2189,7 +2173,9 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         self.rag.config.cache_dir, output_filename
                     )
                 else:
-                    output_path = str(Path(output_path).expanduser().resolve())
+                    output_path = str(
+                        _resolve_target(output_path, None, _workspace_default(self))
+                    )
                     denied = write_access_error(self, output_path)
                     if denied:
                         return denied

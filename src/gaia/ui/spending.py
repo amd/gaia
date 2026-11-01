@@ -17,7 +17,6 @@ or allows more for the month.
 from __future__ import annotations
 
 import datetime as dt
-import re
 from typing import Any, Dict, List, Optional
 
 from gaia.logger import get_logger
@@ -191,18 +190,15 @@ def limit_refusal(db, model_id: Optional[str]) -> Optional[str]:
 
 def price_list(provider: str) -> List[Dict[str, Any]]:
     """Every priced model a provider offers, recommended first, before connecting."""
-    from gaia.eval.bench.metering import RATES
+    from gaia.llm.fireworks_known_models import offered_models
     from gaia.llm.recommended_models import rank
 
     if provider != "fireworks":
         return []
     out = []
-    for name in RATES:
+    for name in offered_models():
         model_id = f"fireworks.{name}"
         ranked = rank(model_id)
-        # A dated snapshot priced only for old comparisons is no longer offered.
-        if ranked is None and re.search(r"-\d{4}$", name):
-            continue
         out.append(
             {
                 "model": model_id,

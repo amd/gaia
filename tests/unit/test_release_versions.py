@@ -209,6 +209,23 @@ def test_a_flagship_bump_drifts_only_flagship_fields(tree):
     assert "/agents/terminal-hub/0.3.9" not in lock
 
 
+def test_the_chat_shim_requires_the_flagship_it_reexports(tree):
+    """The shim re-exports ChatAgent from gaia-agent-gaia (#6099), so a
+    flagship bump must carry its floor, or a released shim could pair with a
+    flagship that predates the move."""
+    _set_source(tree, rv.FLAGSHIP_INIT, rv._PY_VERSION, "0.3.9")
+    drifted = {line.split(":")[0] for line in rv.run(tree, stamp=False).drift}
+    assert {
+        "hub/agents/chat/python/pyproject.toml (gaia-agent-gaia floor)",
+        "hub/agents/chat/python/gaia-agent.yaml (gaia-agent-gaia floor)",
+    } <= drifted
+    rv.run(tree, stamp=True)
+    assert '"gaia-agent-gaia>=0.3.9"' in _raw(tree / rv.CHAT_PYPROJECT)
+    assert '"gaia-agent-gaia>=0.3.9"' in _raw(
+        tree / "hub/agents/chat/python/gaia-agent.yaml"
+    )
+
+
 def test_the_chat_manifest_follows_chat_not_core_or_flagship(tree):
     _set_source(tree, rv.CHAT_PYPROJECT, rv._TOML_VERSION, "0.2.5")
     report = rv.run(tree, stamp=False)

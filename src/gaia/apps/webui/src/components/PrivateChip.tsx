@@ -3,12 +3,14 @@
 
 import { useEffect, useState } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
+import { useT } from '../i18n/useT';
 import { getMemorySettings } from '../services/memoryApi';
 import { useChatStore } from '../stores/chatStore';
 import { log } from '../utils/logger';
 
 /** New-chat toggle: the chat is created private, so not even its first message is remembered. */
 export function PrivateChip({ disabled }: { disabled?: boolean }) {
+    const t = useT();
     const on = useChatStore((s) => s.draftPrivate);
     const setOn = useChatStore((s) => s.setDraftPrivate);
     const settingsOpen = useChatStore((s) => s.settingsSection !== null);
@@ -43,13 +45,13 @@ export function PrivateChip({ disabled }: { disabled?: boolean }) {
         return (
             <button
                 type="button"
-                className="composer-chip is-unavailable"
+                className="composer-chip composer-chip-memory is-unavailable"
                 disabled
-                aria-label="Memory off"
-                title="Memory is off in Settings, so no chat is saved to memory"
+                aria-label={t('composer.memoryOff')}
+                title={t('composer.memoryOffTitle')}
             >
                 <EyeOff size={13} aria-hidden="true" />
-                <span className="composer-chip-label">Memory off</span>
+                <span className="composer-chip-label" dir="auto">{t('composer.memoryOff')}</span>
             </button>
         );
     }
@@ -57,18 +59,18 @@ export function PrivateChip({ disabled }: { disabled?: boolean }) {
     return (
         <button
             type="button"
-            className={`composer-chip${on ? ' is-on' : ''}`}
+            className={`composer-chip composer-chip-memory${on ? ' is-on' : ''}`}
             onClick={() => setOn(!on)}
             disabled={disabled}
-            aria-label={on ? 'Turn off private chat' : 'Turn on private chat'}
+            aria-label={on ? t('composer.privateOff') : t('composer.privateOn')}
             title={on
-                ? "Turn off private chat. This chat won't be saved to memory."
+                ? t('composer.privateOffTitle')
                 : readFailed
-                    ? "Couldn't read the memory setting. Turn on private chat to keep this chat out of memory either way."
-                    : "Turn on private chat. It won't be saved to memory."}
+                    ? t('composer.memoryUnknownTitle')
+                    : t('composer.privateOnTitle')}
         >
             {on ? <EyeOff size={13} aria-hidden="true" /> : <Eye size={13} aria-hidden="true" />}
-            <span className="composer-chip-label">{on ? 'Private' : readFailed ? 'Memory unknown' : 'Memory on'}</span>
+            <span className="composer-chip-label" dir="auto">{on ? t('composer.private') : readFailed ? t('composer.memoryUnknown') : t('composer.memoryOn')}</span>
         </button>
     );
 }

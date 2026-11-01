@@ -19,6 +19,7 @@ on:
       - 'hub/agents/email/python/**'
       - 'hub/agents/email/npm/**'
       - 'src/gaia/agents/base/**'
+      - 'src/gaia/utils/sqlite_wal.py'
       - 'src/gaia/connectors/**'
       - 'src/gaia/eval/**'
       # Triage runs against Lemonade: the pinned version and the client that
@@ -87,6 +88,9 @@ on:
       - 'tests/unit/conftest.py'
       - 'tests/unit/agents/test_sidecar_card_drift.py'
       - '.github/workflows/eval_flagship.yml'
+      - '.github/workflows/eval_flagship_gemma_stx.yml'
+      - '.github/workflows/eval_scenario_lane.yml'
+      - 'tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/**'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -94,6 +98,7 @@ on:
       - 'hub/agents/email/python/**'
       - 'hub/agents/email/npm/**'
       - 'src/gaia/agents/base/**'
+      - 'src/gaia/utils/sqlite_wal.py'
       - 'src/gaia/connectors/**'
       - 'src/gaia/eval/**'
       # Triage runs against Lemonade: the pinned version and the client that
@@ -162,6 +167,9 @@ on:
       - 'tests/unit/conftest.py'
       - 'tests/unit/agents/test_sidecar_card_drift.py'
       - '.github/workflows/eval_flagship.yml'
+      - '.github/workflows/eval_flagship_gemma_stx.yml'
+      - '.github/workflows/eval_scenario_lane.yml'
+      - 'tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/**'
   merge_group:
   workflow_dispatch:
 
@@ -237,8 +245,8 @@ jobs:
           echo "Scope (fast, fully mocked — no Lemonade, no live mailbox):"
           echo "  - tests/unit/agents/email/         contract schema"
           echo "  - tests/unit/email/                gmail client, triage heuristics, corpus integrity"
-          echo "  - tests/unit/connectors/           OAuth/MCP connector plumbing (email uses it)"
-          echo "  - tests/unit/eval/                 benchmark / quality + perf gate machinery"
+          echo "  - tests/unit/connectors/, tests/unit/eval/ files that load the email"
+          echo "      wheel (the rest run in test_unit.yml, which has no need for it)"
           echo "  - hub/agents/email/python/tests/   REST sidecar contract"
           echo "  - tests/test_email_openapi_conformance.py  OpenAPI spec conformance"
           echo "  - tests/unit/test_email_sidecar_devmode_app.py + _server_wiring.py"
@@ -254,8 +262,16 @@ jobs:
           python -m pytest \
             tests/unit/agents/email/ \
             tests/unit/email/ \
-            tests/unit/connectors/ \
-            tests/unit/eval/ \
+            tests/unit/connectors/test_cli.py \
+            tests/unit/connectors/test_email_scope_drift.py \
+            tests/unit/connectors/test_google_console_scope_docs_drift.py \
+            tests/unit/connectors/test_grant_agent_scope_derivation.py \
+            tests/unit/connectors/test_microsoft_tenant_env_var_removed.py \
+            tests/unit/connectors/test_router_connectors.py \
+            tests/unit/connectors/test_scope_silent_fallback.py \
+            tests/unit/connectors/test_summarize_error_envelope.py \
+            tests/unit/eval/test_release_scorecard.py \
+            tests/unit/eval/test_scorecard_gate.py \
             hub/agents/email/python/tests/ \
             tests/test_email_openapi_conformance.py \
             tests/unit/test_email_sidecar_devmode_app.py \

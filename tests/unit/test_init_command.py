@@ -1371,12 +1371,47 @@ class TestCheckSetupStatus(unittest.TestCase):
         ):
             client = self._loading_client(mock_client_class)
             client.check_model_available.return_value = False
+            client.list_models.return_value = {
+                "data": [{"id": "user.embeddinggemma-300m-GGUF", "size": 0.3}]
+            }
             status = check_setup_status(profile="gaia", skip_chat_model=True, load=True)
 
         self.assertEqual(status.stage, "setup")
         self.assertEqual(status.models[0].size_gb, 0.3)
         self.assertFalse(status.models[0].loaded)
         client.embeddings.assert_not_called()
+
+    def test_missing_model_sizes_match_the_setup_plan(self):
+        """The first-run step and "Choose your models" show one download size:
+        the catalog's size less what an interrupted pull left on disk."""
+        from gaia.installer import init_command
+        from gaia.installer.init_command import check_setup_status
+
+        with (
+            self._embedded(self._running()),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
+            patch.object(
+                init_command,
+                "bytes_already_on_disk",
+                side_effect=lambda _c, ids, store: {m: 100_000_000 for m in ids},
+            ) as on_disk,
+        ):
+            client = self._loading_client(mock_client_class)
+            client.check_model_available.return_value = False
+            client.list_models.return_value = {
+                "data": [{"id": "user.embeddinggemma-300m-GGUF", "size": 0.33}]
+            }
+            client.get_system_info.return_value = {
+                "model_storage": {"path": "/models", "free_bytes": 10**12}
+            }
+            status = check_setup_status(profile="gaia", skip_chat_model=True, load=True)
+
+        self.assertEqual(status.models[0].size_gb, 0.23)
+        self.assertEqual(on_disk.call_args.args[2], "/models")
+        self.assertEqual(
+            init_command.remaining_download_gb(0.33, 100_000_000),
+            status.models[0].size_gb,
+        )
 
 
 class TestInstallPipExtras(unittest.TestCase):
@@ -2669,7 +2704,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
                 _, out = self._render(cmd, rich)
                 self.assertIn("gaia chat --ui", out)
                 self.assertNotIn("gaia chat --device npu", out)
-                self.assertIn("gaia config set default_device gpu", out)
+                self.assertIn("gaia config set default_model <id>", out)
 
     def test_no_build_for_this_machine_is_not_a_failed_setup(self):
         cmd = self._make_cmd("npu", agent_available=False)

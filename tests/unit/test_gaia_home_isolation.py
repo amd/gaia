@@ -8,7 +8,11 @@ from pathlib import Path
 
 from gaia import security
 from gaia.config import gaia_home
-from gaia.logger import LOG_FILE_ENV, log_manager
+from gaia.logger import LOG_FILE_ENV, configure
+
+# The owning process (the CLI) installs logging; under these unit tests this
+# module does the equivalent so the log-file location can be asserted.
+log_manager = configure()
 
 # Read at collection, before any test can patch the home.
 _REAL_GAIA_HOME = Path.home() / ".gaia"

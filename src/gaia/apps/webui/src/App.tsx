@@ -10,6 +10,7 @@ import { SetupScreen } from './components/SetupScreen';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
+import { DownloadChip } from './components/setup/DownloadChip';
 import { NotificationCenter } from './components/NotificationCenter';
 import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
 import { useChatStore } from './stores/chatStore';
@@ -32,6 +33,7 @@ import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup'
 import { FLAGSHIP_AGENT_ID, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
 import { runWhileVisible } from './utils/visibleInterval';
 import { RETRY_INITIAL_MS, retryUntilOk, type Retrier } from './utils/retry';
+import { shouldShowStartupScreen } from './utils/startupGate';
 import type { SetupCheck, StartCard } from './types';
 
 // Heavy, occasional screens load on first use.
@@ -77,6 +79,7 @@ function App() {
     const showMemoryDashboard = useChatStore((s) => s.showMemoryDashboard);
     const showSchedules = useChatStore((s) => s.showSchedules);
     const sidebarOpen = useChatStore((s) => s.sidebarOpen);
+    const sidebarCollapsed = useChatStore((s) => s.sidebarCollapsed);
     const setSidebarOpen = useChatStore((s) => s.setSidebarOpen);
     const setSystemStatus = useChatStore((s) => s.setSystemStatus);
     const setBackendConnected = useChatStore((s) => s.setBackendConnected);
@@ -91,6 +94,7 @@ function App() {
     const dismissRestoreNotice = useModelStore((s) => s.dismissRestoreNotice);
     const showNotificationPanel = useNotificationStore((s) => s.showPanel);
     const initialized = useChatStore((s) => s.systemStatus?.initialized === true);
+    const mainUiShownRef = useRef(false);
     const setShowNotificationPanel = useNotificationStore((s) => s.setShowPanel);
 
     // A successful restore is news for a moment; a failed one waits for the user to pick a model.
@@ -603,9 +607,17 @@ function App() {
 
     const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
 
+    // A transient status loss must not replace a UI that was already shown.
+    const showStartup = shouldShowStartupScreen(
+        setup.state === 'checking',
+        initialized,
+        mainUiShownRef.current,
+    );
+    if (!showStartup && setup.state !== 'needed') mainUiShownRef.current = true;
+
     // A PC set up before can chat while the check runs; a new one waits, so
     // the chat screen never appears and is then replaced by setup.
-    if (setup.state === 'checking' && !initialized) {
+    if (showStartup) {
         return (
             <div className="app">
                 <main className="startup" role="status" aria-label="Starting GAIA">
@@ -619,7 +631,7 @@ function App() {
     if (setup.state === 'needed') {
         return (
             <div className="app">
-                <SetupScreen initial={setup.check} onReady={finishSetup} />
+                <SetupScreen onReady={finishSetup} />
             </div>
         );
     }
@@ -659,6 +671,8 @@ function App() {
                         <button type="button" className="link-btn" onClick={() => void checkSetup()}>Check again</button>
                     </div>
                 )}
+                {/* Model downloads, here when the sidebar that usually shows them is closed or collapsed. */}
+                {(!sidebarOpen || sidebarCollapsed) && <DownloadChip placement="main" />}
                 {flagshipMissing && <FlagshipAgentNotice onInstalled={loadAgents} />}
                 {restoreNotice && (
                     <div className={`app-notice${restoreNotice.ok ? '' : ' is-warning'}`} role="status">

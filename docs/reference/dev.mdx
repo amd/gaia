@@ -122,7 +122,7 @@ uv pip install -e ".[dev,talk,rag,ui]"
 | `dev` | Test + lint tooling (pytest, black, isort, mypy, pylint, …) |
 | `ui` | Agent UI backend (FastAPI + uvicorn + SSE); **required for `gaia --ui`** |
 | `api` | OpenAI-compatible API server (`gaia api start`) |
-| `rag` | RAG document Q&A (FAISS, PyMuPDF, pypdf, Office formats; embeddings come from Lemonade) |
+| `rag` | RAG document Q&A (FAISS, pypdf, pypdfium2, Office formats; embeddings come from Lemonade) |
 | `talk` | Microphone and speaker I/O for `gaia talk` (sounddevice); Whisper and Kokoro run in Lemonade |
 | `mcp` | MCP client/server bridge (`gaia mcp start`) |
 | `image` | Terminal image rendering (`term-image`) |
@@ -289,12 +289,35 @@ files go in `test_unit.yml`'s `offline-integration` job), or list it in
 `util/test_lane_allowlist.yml` with the reason CI can't run it.
 
 Being named isn't the same as running. A file with a module-level
-`pytest.importorskip` (for a hub wheel like `gaia_agent_chat`, or an optional
+`pytest.importorskip` (for a hub wheel like `gaia_agent`, or an optional
 extra) skips wholesale in any lane that lacks the package. The unit lane and the
 lanes that install hub wheels run `util/check_module_skips.py` right after their
 install step. It fails on such a skip unless the file is listed
 under `module_skips:` in the same allowlist, with `runs_in` naming the lane that
 installs the package. That lane must name the file and run the check too.
+</Note>
+
+<Note>
+A pull request can run part of the unit suite, but only when every file it
+changes is a unit test or modified Python code under `src/gaia` or a hub agent
+package that the nightly coverage map records. `util/select_tests.py` then picks
+the test files that change can reach, from that map plus imports and
+patch-target strings. Any other change runs the full suite: data files, `util/`
+scripts, test helpers and fixtures, `eval/`, configs, workflows, any
+`conftest.py`, a source file the map has no entry for (such as a new one), a
+deleted or renamed file, or a missing or stale map. Tests
+load those by path, and neither imports nor coverage can follow what such a
+script reads. Of the last 600 merges to main, about one in five (21%) would have
+had a narrowed run; the rest run everything. Linux runs the selection; Windows
+and macOS run the part of it that touches the OS (processes, paths, locks,
+permissions). Every push to main runs the full suite on Linux, and the nightly
+run covers all three operating systems. The coverage map has one known blind
+spot: code behind a cache or a shared fixture is credited only to the first test
+that ran it, so a test that only reaches it second can be left out until the
+nightly run.
+See what your branch will run with
+`python util/select_tests.py select --base origin/main --explain`, and dispatch
+`test_unit.yml` on the branch to run the full suite.
 </Note>
 
 <Note>
@@ -405,7 +428,7 @@ python util/release_versions.py --check   # what lint runs; changes nothing
 | Source | Fields that follow it |
 |---|---|
 | `src/gaia/version.py` | Agent UI `package.json` and lockfile; `version` in `hub/components/terminal-hub/gaia-agent.yaml`; the `docs/docs.json` navbar label (with `LEMONADE_VERSION`); the flagship and chat agents' `amd-gaia>=` floor and `min_gaia_version`, and the minimum core in the flagship's npm `README.md` and `SKILL.md` |
-| `hub/agents/gaia/python/gaia_agent/__init__.py` | The flagship's `pyproject.toml`, `gaia-agent.yaml`, `npm/package.json`, and `npm/binaries.lock.json` version and sidecar URL |
+| `hub/agents/gaia/python/gaia_agent/__init__.py` | The flagship's `pyproject.toml`, `gaia-agent.yaml`, `npm/package.json`, and `npm/binaries.lock.json` version and sidecar URL; the `gaia-agent-gaia>=` floor of the deprecated chat shim |
 | `hub/agents/chat/python/pyproject.toml` | The chat agent's `gaia-agent.yaml` |
 
 `--stamp` does the work of `installer/version/bump-ui-version.mjs`, the flagship's

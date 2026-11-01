@@ -1,0 +1,130 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Picks the Claude subscription account a job runs on, at run time: the primary if
+# it answers, the secondary if the primary is out of quota, and a failure naming
+# both reset times if both are out. A rejected credential fails at once and never
+# moves the job to the other account. See util/select_claude_account.py.
+#
+# The output is a LABEL, never a token. Pick the secret in the workflow:
+#   claude_code_oauth_token: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+#   anthropic_api_key: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+#
+# Local action, so it is read from the checked-out tree: never use it after
+# checking out untrusted code in a job that holds secrets (claude-run.yml fails
+# over inline for that reason).
+
+name: 'Pick the Claude account'
+description: 'Probe the primary Claude token, fall back to the secondary only on quota, and report which one to use'
+
+inputs:
+  primary-token:
+    description: 'secrets.CLAUDE_CODE_OAUTH_TOKEN'
+    required: false
+    default: ''
+  secondary-token:
+    description: 'secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY'
+    required: false
+    default: ''
+  model:
+    description: 'Model to probe; use the one the job runs, since limits can differ per model'
+    required: false
+    default: 'claude-opus-5-5'
+  what:
+    description: "Names the job in messages, e.g. \"Tonight's code audit\""
+    required: false
+    default: 'This job'
+  quota-note:
+    description: 'Extra sentence for the summary when every account is out of quota'
+    required: false
+    default: ''
+  python:
+    description: 'Python interpreter (default python3, or python on Windows)'
+    required: false
+    default: ''
+  cli-version:
+    description: 'Claude Code CLI version to install when none is on PATH'
+    required: false
+    default: '2.1.282'
+
+outputs:
+  account:
+    description: 'primary, secondary, or none (no subscription token set; use ANTHROPIC_API_KEY)'
+    value: ${{ steps.posix.outputs.account || steps.windows.outputs.account }}
+  verdict:
+    description: 'ok, none, quota, credential or unknown'
+    value: ${{ steps.posix.outputs.verdict || steps.windows.outputs.verdict }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install the Claude CLI if it is missing (Linux/macOS)
+      if: runner.os != 'Windows' && (inputs.primary-token != '' || inputs.secondary-token != '')
+      shell: bash
+      env:
+        CLI_VERSION: ${{ inputs.cli-version }}
+      run: |
+        set -euo pipefail
+        if command -v claude >/dev/null 2>&1; then
+          echo "Using $(command -v claude) ($(claude --version))"
+          exit 0
+        fi
+        if ! command -v npm >/dev/null 2>&1; then
+          echo "::error::npm is not on PATH, so the Claude CLI cannot be installed to probe the accounts. Add actions/setup-node before this action."
+          exit 1
+        fi
+        npm install -g "@anthropic-ai/claude-code@${CLI_VERSION}"
+        claude --version
+
+    - name: Install the Claude CLI if it is missing (Windows)
+      if: runner.os == 'Windows' && (inputs.primary-token != '' || inputs.secondary-token != '')
+      shell: powershell
+      env:
+        CLI_VERSION: ${{ inputs.cli-version }}
+      run: |
+        $found = Get-Command claude -ErrorAction SilentlyContinue
+        if ($found) { Write-Host "Using $($found.Source)"; exit 0 }
+        if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+          Write-Host "::error::npm is not on PATH, so the Claude CLI cannot be installed to probe the accounts. Add actions/setup-node before this action."
+          exit 1
+        }
+        npm install -g "@anthropic-ai/claude-code@$env:CLI_VERSION"
+        if ($LASTEXITCODE -ne 0) { throw "Claude Code CLI install failed" }
+
+    # Tokens travel by env, never argv, and the script masks them first.
+    - name: Probe the accounts and pick one (Linux/macOS)
+      id: posix
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        CLAUDE_TOKEN_PRIMARY: ${{ inputs.primary-token }}
+        CLAUDE_TOKEN_SECONDARY: ${{ inputs.secondary-token }}
+        CLAUDE_PROBE_MODEL: ${{ inputs.model }}
+        CLAUDE_PROBE_WHAT: ${{ inputs.what }}
+        CLAUDE_PROBE_QUOTA_NOTE: ${{ inputs.quota-note }}
+        PYTHON_BIN: ${{ inputs.python }}
+        PYTHONIOENCODING: utf-8
+      run: |
+        "${PYTHON_BIN:-python3}" "$GITHUB_ACTION_PATH/../../../util/select_claude_account.py" \
+          --summary "$GITHUB_STEP_SUMMARY" --github-output "$GITHUB_OUTPUT"
+
+    # Options travel by env: Windows PowerShell 5.1 drops an empty-string argument.
+    - name: Probe the accounts and pick one (Windows)
+      id: windows
+      if: runner.os == 'Windows'
+      shell: powershell
+      env:
+        CLAUDE_TOKEN_PRIMARY: ${{ inputs.primary-token }}
+        CLAUDE_TOKEN_SECONDARY: ${{ inputs.secondary-token }}
+        CLAUDE_PROBE_MODEL: ${{ inputs.model }}
+        CLAUDE_PROBE_WHAT: ${{ inputs.what }}
+        CLAUDE_PROBE_QUOTA_NOTE: ${{ inputs.quota-note }}
+        PYTHON_BIN: ${{ inputs.python }}
+        PYTHONIOENCODING: utf-8
+      run: |
+        $py = if ($env:PYTHON_BIN) { $env:PYTHON_BIN } else { 'python' }
+        $script = Join-Path $env:GITHUB_ACTION_PATH '..\..\..\util\select_claude_account.py'
+        # Preset, so an interpreter that fails to launch cannot read as success.
+        $global:LASTEXITCODE = 1
+        & $py $script --summary $env:GITHUB_STEP_SUMMARY --github-output $env:GITHUB_OUTPUT
+        if ($LASTEXITCODE -ne 0) { exit 1 }

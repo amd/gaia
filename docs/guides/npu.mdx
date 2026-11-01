@@ -41,16 +41,17 @@ This will:
 
 The Agent UI and terminal UI then have an agent to talk to. If GAIA's download server can't be
 reached, setup still downloads the models, then reports itself incomplete and exits
-`1` — run `gaia init --profile npu` again once the network is back. To return to the GPU, run
-`gaia init`, then pick a GPU model in the model list (or `gaia config set default_model <id>`).
+`1` — run `gaia init --profile npu` again once the network is back. To return to the GPU, pick
+a GPU model in the model list (or `gaia config set default_model <id>`).
 
 ## Which NPU model
 
 You don't need the NPU profile to use the NPU. On any PC with a Ryzen AI NPU, a plain
 `gaia init` installs Lemonade's NPU backend, and `gemma4-it-e4b-FLM` then appears in the
 Agent UI and terminal UI model lists, ready to download on first use. The GPU model
-stays the default because it answers faster; `gaia init --profile npu` makes the NPU the
-default instead.
+stays the default because it answers faster. Pick the NPU model in the model list and it
+stays picked: the Agent UI starts on it the next time it opens. `gaia init --profile npu`
+makes it the default from the start.
 
 `gemma4-it-e4b-FLM` is the same Gemma 4 E4B that GAIA runs on the GPU
 (`Gemma-4-E4B-it-GGUF`), built for the NPU by FastFlowLM. It is a 9.1 GB download, needs
@@ -94,7 +95,7 @@ gaia prompt "Hello" --device npu
 ### Agent UI
 
 1. Launch with `gaia chat --ui`
-2. The Agent UI uses your default device. After `gaia init --profile npu` that is the NPU; return to the GPU with `gaia init`
+2. The Agent UI starts on the model you last picked. After `gaia init --profile npu` that is the NPU model; pick a GPU model in the model list to go back
 
 ### Evaluation
 

@@ -18,17 +18,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // Profile is the `gaia init` profile the flagship agent needs — see
@@ -42,27 +38,6 @@ import (
 // ErrUnanswered. Omitting the flag would instead silently set up the wrong
 // agent — the `chat` wheel, which cannot serve this TUI.
 const Profile = "gaia"
-
-// NPUProfile is the flagship on the Ryzen AI NPU (`gaia init --profile npu`).
-const NPUProfile = "npu"
-
-// ConfiguredProfile is the flagship profile this PC was set up with: NPUProfile
-// once `gaia init --profile npu` saved it, else Profile. Checking or re-running
-// setup with it keeps an NPU PC from being judged against, or moved back to,
-// the GPU models. Mirrors configured_setup_profile in init_command.py.
-func ConfiguredProfile() string {
-	raw, err := os.ReadFile(lemonade.ConfigPathFrom(os.Getenv, os.UserHomeDir))
-	if err != nil {
-		return Profile
-	}
-	var cfg struct {
-		Profile string `json:"profile"`
-	}
-	if json.Unmarshal(raw, &cfg) == nil && cfg.Profile == NPUProfile {
-		return NPUProfile
-	}
-	return Profile
-}
 
 // CheckTimeout bounds the readiness probe. It runs a fresh Python interpreter
 // plus one Lemonade health check, so a few seconds is normal -- but after a
@@ -84,6 +59,18 @@ const notReadyExitCode = 1
 // gaia (#the --check rollout).
 var ErrUnanswered = errors.New("setup readiness could not be determined")
 
+// ErrNoCLI distinguishes a missing `gaia` command from an installed CLI that
+// cannot answer a readiness probe. Verify still wraps both cases in
+// ErrUnanswered, but only the latter can be remedied by running `gaia init`.
+var ErrNoCLI = errors.New("the `gaia` CLI is not available")
+
+// InstallCommand and InstallPowerShellCommand are the supported bootstrap
+// commands when the CLI itself is unavailable.
+const (
+	InstallCommand           = "curl -fsSL https://amd-gaia.ai/install.sh | sh"
+	InstallPowerShellCommand = "irm https://amd-gaia.ai/install.ps1 | iex"
+)
+
 // Binary resolves the `gaia` CLI on PATH. A package var, not a bare
 // exec.LookPath call, so tests can substitute a stub without spawning the real
 // CLI (mirrors daemon.Options.StartCommand's injection point).
@@ -91,11 +78,12 @@ var Binary = func() (string, error) {
 	bin, err := exec.LookPath("gaia")
 	if err != nil {
 		return "", fmt.Errorf(
-			"the `gaia` CLI is not on PATH, so setup cannot run. " +
-				"Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
-				"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or " +
-				"`pip install amd-gaia` into the Python environment on your PATH, " +
-				"then retry. From a clone of the repo, `pip install -e .` works too")
+			"%w: the `gaia` CLI is not on PATH, so setup cannot run. "+
+				"Install GAIA with `"+InstallCommand+"` "+
+				"(on Windows: `"+InstallPowerShellCommand+"`), or "+
+				"`pip install amd-gaia` into the Python environment on your PATH, "+
+				"then retry. From a clone of the repo, `pip install -e .` works too",
+			ErrNoCLI)
 	}
 	return bin, nil
 }
@@ -108,7 +96,7 @@ var Binary = func() (string, error) {
 // hub/agents/gaia/python/gaia_agent/stdio.py). Downloading several GB of a chat
 // model that session will never touch is the bug this avoids.
 func CheckArgs(claudeMode bool) []string {
-	args := []string{"init", "--check", "--profile", ConfiguredProfile()}
+	args := []string{"init", "--check", "--profile", Profile}
 	if claudeMode {
 		args = append(args, "--skip-chat-model")
 	}
@@ -126,7 +114,7 @@ func RunArgs(claudeMode bool) []string {
 	// installed — so setup from this screen dead-ended on a component the screen
 	// does not use. Released installs skip the step anyway, so this changes
 	// nothing for them.
-	args := []string{"init", "--profile", ConfiguredProfile(), "--yes", "--skip-webui-build"}
+	args := []string{"init", "--profile", Profile, "--yes", "--skip-webui-build"}
 	if claudeMode {
 		args = append(args, "--skip-chat-model")
 	}
@@ -144,7 +132,7 @@ func SkipSuffix(claudeMode bool) string {
 
 // RunCommand is the command a user should type to do this themselves.
 func RunCommand(claudeMode bool) string {
-	return "gaia init --profile " + ConfiguredProfile() + SkipSuffix(claudeMode)
+	return "gaia init --profile " + Profile + SkipSuffix(claudeMode)
 }
 
 // Check reports whether the flagship profile is ready, without installing or
@@ -212,7 +200,7 @@ func ServerOnlyArgs() []string {
 
 // ServerOnlyCommand is the command a user should type to run that step.
 func ServerOnlyCommand() string {
-	return "gaia init --profile " + ConfiguredProfile() + " --skip-models"
+	return "gaia init --profile " + Profile + " --skip-models"
 }
 
 // StartGAIAServerOnly is StartServerOnly for a user who chose GAIA's own
