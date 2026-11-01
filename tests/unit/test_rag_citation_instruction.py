@@ -7,6 +7,7 @@ a markdown or text file opened with a note explaining there was no page.
 """
 
 from gaia.agents.tools.rag_tools import (
+    _answers_in_question_language,
     _chunks_have_pages,
     _documents_instruction,
     _file_instruction,
@@ -116,3 +117,25 @@ def test_the_registered_tool_carries_the_note(tmp_path):
     host.config = SimpleNamespace()
     RAGToolsMixin.register_rag_tools(host)
     assert hasattr(_TOOL_REGISTRY["query_documents"]["function"], "__wrapped__")
+
+
+def test_a_successful_search_ends_with_the_question():
+    from types import SimpleNamespace
+
+    search = _answers_in_question_language(
+        SimpleNamespace(_memory_turn_query="When is it given?")
+    )(
+        lambda: {
+            "status": "success",
+            "instruction": "Cite the page.",
+            "chunks": [{"content": "تعطى الجرعة الثانية بعد شهر"}],
+        }
+    )
+
+    instruction = search()["instruction"]
+    assert instruction.startswith("Cite the page.")
+    assert "When is it given?" in instruction
+
+
+def test_chunks_with_no_letters_add_nothing():
+    assert not _question_language_note("When is it given?", [{"content": "2024 | 35"}])

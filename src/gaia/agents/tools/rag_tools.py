@@ -361,7 +361,7 @@ def _question_language_note(question: str, chunks: List[Dict[str, Any]]) -> str:
     if not asked or not chunks:
         return ""
     found = text_scripts(" ".join(chunk.get("content", "") for chunk in chunks))
-    if found == asked[:1]:
+    if not found or found == asked[:1]:
         return ""
     return (
         f"\n\nThe question you are answering is: {question[:300]}\n"
