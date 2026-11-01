@@ -97,8 +97,8 @@ assert sum(_EXPECTED_TOOLS_BY_MIXIN.values()) == _EXPECTED_TOOLS_TOTAL
 
 _EXPECTED_MCP_COUNT = 4
 _EXPECTED_EVAL_SUITE_COUNT = 6
-_EXPECTED_REST_FUNCTIONAL_COUNT = 23
-_EXPECTED_REST_IN_CONTRACT_COUNT = 26
+_EXPECTED_REST_FUNCTIONAL_COUNT = 35
+_EXPECTED_REST_IN_CONTRACT_COUNT = 38
 
 # The 6 eval suites are the *_gate_thresholds.json fixture stems at the repo
 # root (NOT under hub/agents/email/python/tests/ — this package ships no such
@@ -152,6 +152,19 @@ _EXPECTED_REST_OP_NAMES = {
     "/v1/connections",
     "/v1/connections/{provider} (POST)",
     "/v1/connections/{provider} (DELETE)",
+    # #6043 stateful Agent UI surface (/v1/email/agent/*), schema 2.15.
+    "agent/session",
+    "agent/session/{session_id}",
+    "agent/session/{session_id}/history",
+    "agent/memory",
+    "agent/memory/{session_id}",
+    "agent/autonomy/{session_id}",
+    "agent/autonomy",
+    "agent/autonomy/run",
+    "agent/autonomy/undo",
+    "agent/confirm-tool",
+    "agent/cancel",
+    "agent/query",
 }
 assert len(_EXPECTED_REST_OP_NAMES) == _EXPECTED_REST_FUNCTIONAL_COUNT
 _EXPECTED_OP_NAMES = _EXPECTED_REST_OP_NAMES | set(_EXPECTED_MCP_TOOL_NAMES)

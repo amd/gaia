@@ -150,6 +150,19 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     "/v1/connections": _NO_EVAL_SENTINEL,
     "/v1/connections/{provider} (POST)": _NO_EVAL_SENTINEL,
     "/v1/connections/{provider} (DELETE)": _NO_EVAL_SENTINEL,
+    # #6043 stateful Agent UI surface, published in schema 2.15.
+    "agent/session": _NO_EVAL_SENTINEL,
+    "agent/session/{session_id}": _NO_EVAL_SENTINEL,
+    "agent/session/{session_id}/history": _NO_EVAL_SENTINEL,
+    "agent/memory": _NO_EVAL_SENTINEL,
+    "agent/memory/{session_id}": _NO_EVAL_SENTINEL,
+    "agent/autonomy/{session_id}": _NO_EVAL_SENTINEL,
+    "agent/autonomy": _NO_EVAL_SENTINEL,
+    "agent/autonomy/run": _NO_EVAL_SENTINEL,
+    "agent/autonomy/undo": _NO_EVAL_SENTINEL,
+    "agent/confirm-tool": _NO_EVAL_SENTINEL,
+    "agent/cancel": _NO_EVAL_SENTINEL,
+    "agent/query": _NO_EVAL_SENTINEL,
     "triage_email": "quality",
     "triage_email_batch": "quality",
     "draft_reply": "drafting",
@@ -546,10 +559,9 @@ def render_markdown(matrix: CapabilityMatrix) -> str:
         )
     lines.append(
         "- Additionally served but **out of the frozen contract** (footnote "
-        "context, not guarded machinery): `agent_routes.py` 12 session routes "
-        "(includes the autonomy control surface, #2529), `connector_routes.py` "
-        "4 OAuth routes, `server.py` 2 inline probes "
-        "-- ~43 total routes served by the sidecar."
+        "context, not guarded machinery): `connector_routes.py` 4 OAuth "
+        "routes and `server.py` 2 inline probes -- ~44 total routes served "
+        "by the sidecar."
     )
     lines.append("")
 

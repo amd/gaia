@@ -6,6 +6,11 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Stateful agent routes are now in the published API description.** The
+  session, memory, autonomy, confirmation, cancel and streaming-query routes
+  under `/v1/email/agent/*` were always served but missing from
+  `openapi.email.json`, so generated clients could not see them. The client
+  now pins schema 2.15 to match (#6043).
 - **No stray "unmapped agent event" line.** A sentence the model wrote before
   checking your mail showed up in the Agent UI as
   `[unmapped agent event: commentary]`. It no longer does.
