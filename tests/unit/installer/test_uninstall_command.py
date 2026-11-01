@@ -1416,9 +1416,9 @@ class TestWindowsJunctions:
 
 
 class TestDeferredWindowsVenvRemoval:
-    """The helper must wait for both the Python worker and its launcher."""
+    """The helper removes an active Windows virtual environment after exit."""
 
-    def test_deferred_helper_waits_for_current_and_parent_process(
+    def test_deferred_helper_waits_for_current_process_and_venv_launcher(
         self, monkeypatch, tmp_path
     ):
         venv = tmp_path / ".gaia" / "venv"
@@ -1439,6 +1439,8 @@ class TestDeferredWindowsVenvRemoval:
         args, kwargs = popen_calls[0]
         command = args[0][-1]
         assert "Wait-Process -Id $pidToWait" in command
+        assert "Get-Process -Id $parentPidToWait" in command
+        assert "$parent.Path.StartsWith($target, [StringComparison]::OrdinalIgnoreCase)" in command
         assert "Wait-Process -Id $parentPidToWait" in command
         assert "$pidToWait = 101" in command
         assert "$parentPidToWait = 202" in command
@@ -1477,7 +1479,11 @@ class TestDeferredWindowsVenvRemoval:
         )
         deferred = []
 
-        monkeypatch.setattr(uc, "_remove_path", lambda *_a, **_kw: False)
+        def unexpected_remove(*_args, **_kwargs):
+            raise AssertionError("an active venv must be deferred before rmtree")
+
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(uc, "_remove_path", unexpected_remove)
         monkeypatch.setattr(uc, "_is_running_from_venv", lambda _path: True)
         monkeypatch.setattr(
             uc,
@@ -1490,6 +1496,30 @@ class TestDeferredWindowsVenvRemoval:
             == uc.EXIT_OK
         )
         assert deferred == [venv]
+
+    def test_execute_plan_reports_failed_active_venv_defer(self, monkeypatch, tmp_path):
+        venv = tmp_path / ".gaia" / "venv"
+        plan = uc.build_plan(
+            venv=True,
+            purge=False,
+            purge_lemonade=False,
+            purge_models=False,
+            home=tmp_path,
+        )
+
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(
+            uc,
+            "_remove_path",
+            lambda *_args, **_kwargs: pytest.fail("active venv must not be removed first"),
+        )
+        monkeypatch.setattr(uc, "_is_running_from_venv", lambda _path: True)
+        monkeypatch.setattr(uc, "_defer_windows_venv_removal", lambda *_args, **_kwargs: False)
+
+        assert (
+            uc.execute_plan(plan, allowed_roots=[venv.parent], home=tmp_path)
+            == uc.EXIT_FS_ERROR
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -1376,7 +1376,10 @@ def _defer_windows_venv_removal(
         "try { "
         "Wait-Process -Id $pidToWait -ErrorAction SilentlyContinue; "
         "if ($parentPidToWait -gt 1) { "
+        "$parent = Get-Process -Id $parentPidToWait -ErrorAction SilentlyContinue; "
+        "if ($parent -and $parent.Path -and $parent.Path.StartsWith($target, [StringComparison]::OrdinalIgnoreCase)) { "
         "Wait-Process -Id $parentPidToWait -ErrorAction SilentlyContinue "
+        "} "
         "} "
         "for ($attempt = 0; $attempt -lt 20 -and (Test-Path -LiteralPath $target); $attempt++) { "
         "try { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop } "
@@ -1588,6 +1591,18 @@ def execute_plan(
 
     def _remove(path: Path) -> None:
         nonlocal all_ok
+        # Windows cannot delete the active venv's interpreter or extension
+        # modules. Defer this known GAIA-owned path before rmtree can leave a
+        # partially deleted environment for later purge steps to import from.
+        if (
+            path == venv_path
+            and _is_windows()
+            and _is_running_from_venv(path)
+        ):
+            if not _defer_windows_venv_removal(path, printer=printer):
+                all_ok = False
+            return
+
         try:
             if _remove_path(path, allowed_roots=allowed_roots, printer=printer):
                 return
@@ -1596,12 +1611,6 @@ def execute_plan(
             all_ok = False
             return
 
-        if (
-            path == venv_path
-            and _is_running_from_venv(path)
-            and _defer_windows_venv_removal(path, printer=printer)
-        ):
-            return
         all_ok = False
 
     # Before the venv goes: clearing credentials imports GAIA modules from it.
