@@ -660,7 +660,6 @@ class TestSessionAgentKwargsShape:
             "allowed_paths",
             "working_directory",
             "ui_session_id",
-            "dynamic_tools",
             "memory_incognito",
             "surface",
         }
@@ -685,28 +684,6 @@ class TestSessionAgentKwargsShape:
             memory_incognito=True,
         )
         assert kwargs["memory_incognito"] is True
-
-    def test_dynamic_tools_defaults_off_and_forwards_when_set(self):
-        """The Beta tool-loader toggle (#1798) defaults off and round-trips
-        through the helper — the field that makes the UI toggle apply."""
-        from gaia.ui._chat_helpers import _session_agent_kwargs
-
-        off = _session_agent_kwargs(
-            rag_file_paths=[],
-            library_paths=[],
-            allowed=["/root"],
-            session_id="s",
-        )
-        assert off["dynamic_tools"] is False
-
-        on = _session_agent_kwargs(
-            rag_file_paths=[],
-            library_paths=[],
-            allowed=["/root"],
-            session_id="s",
-            dynamic_tools=True,
-        )
-        assert on["dynamic_tools"] is True
 
     def test_empty_rag_file_paths_propagates_to_rag_documents(self):
         """Invariant checked by ``test_streaming_registered_agent_does_not_double_index``.

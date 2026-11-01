@@ -1,60 +1,30 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""ToolLoader — per-turn semantic tool selection for agents (#1449, parent #688).
+"""Which tools a session offers the model, and in what form.
 
-Gates which tools appear in the LLM prompt each turn without ever changing the
-global ``_TOOL_REGISTRY``. The registry stays the source of truth for *all*
-registered tools and for execution; the loader only picks the subset that the
-prompt renderers (text and native) surface to the model.
+A local model reads every tool it is offered before it can answer, and any change
+to ``tools=`` makes Gemma 4 and Qwen3.6 re-read the whole conversation. So a
+session starts on a small CORE list, keeps the full list primed on a slot of its
+own, and moves to that list at most once:
 
-Selection model (binding — see the design sketch in #688)
---------------------------------------------------------
-Per turn the loader computes ``CORE ∪ REQUESTED ∪ SKILL ∪ SEMANTIC(query)``, then
-pulls in whole bundles for any semantically-matched member, and accumulates the result
-into a session-scoped *loaded set* that only grows ("expand-on-new-match").
-The set is returned in **admission order** — CORE in registry order, then every
-later admission appended where it happened — and never re-sorted, so a new tool
-only ever adds bytes at the end. Combined with the monotonic set, that keeps a
-non-expansion turn byte-identical AND keeps an expansion turn's prefix intact,
-so the model backend's KV prefix cache stays warm through both.
+* **Core** — a usage-based always-on set. Most turns need nothing else.
+* **Jump** — the first need outside the list moves the session to every
+  registered tool, and the list then stays put. A tool the user names, a recalled
+  procedure's tools, a tool that out-scores the whole list on the query, or a
+  ``search_tools`` hit each trigger it, before the model can misfire: llama.cpp
+  builds its tool grammar from this list, so an undeclared tool is silently
+  rewritten into a declared one rather than refused.
+* **Skill tools** — a skill's tools join the end of the list without a jump, and
+  are the one thing that can leave it: unloading the skill removes them.
 
-* **CORE** — a small always-on set, admitted unconditionally and exempt from
-  the cap and from eviction.
-* **REQUESTED** — tools the user's own message asks for (it names the tool,
-  or asks something only a tool can answer), classified by the host and passed
-  in as plain names via ``select(requested_tools=...)``. Same admission rules
-  as SKILL, one tier ahead of it. Semantic ranking cannot be trusted here: on a
-  large registry most tools clear the threshold and the cap drops the one the
-  user named.
-* **SKILL** — the exact ``tools_required`` of any learned procedure the host
-  recalled for this goal (procedural memory, #887/#1451), passed in as plain
-  tool names via ``select(skill_tools=...)``. Admitted **after CORE, ahead of
-  semantic** (precedence ``CORE > SKILL > SEMANTIC``), cap-bound (NOT
-  cap-exempt) and with no bundle pull-in — a high-precision booster that fires
-  only for goals solved before. Empty/absent on every off-state, leaving the
-  loaded set byte-identical to a CORE+SEMANTIC build.
-* **SEMANTIC** — cosine similarity (dot product over L2-normalized embeddings)
-  of the query against ``"{name}: {description}"`` for every registered tool;
-  a tool matches at ``score >= threshold`` (inclusive).
-* **Bundles** — cohesion groups with *no* activation policy. When any member
-  matches, the whole bundle is pulled in so related tools arrive together.
-* **Bounded monotonic set** — below ``max_tools`` the loaded set is strictly
-  monotonic; at the cap a non-CORE tool is LRU-evicted (oldest last-call,
-  falling back to load-time for never-called tools). CORE and any tool admitted
-  this turn are eviction-exempt. Evicted tools may be re-admitted later — the
-  one and only monotonicity exception. Eviction happens **only at a turn
-  boundary** (inside :meth:`select`): mid-turn the set is add-only, because
-  dropping a tool from the middle of the list re-prefills every tool after it.
-  A mid-turn :meth:`load_bundle` may therefore overshoot the cap until the next
-  turn trims it back.
+Nothing is evicted. :func:`thin_tool_schema` keeps each entry short, and
+:func:`format_tool_docs` hands out what it leaves out, on request.
 
-The loader never imports ``MemoryMixin``; the embedding function(s) are injected
-by the host agent. Any embedding failure session-disables the loader with a
-loud log (mirrors memory v2), and the caller reverts to the full registry.
-
-Naming note: the class name ``ToolLoader`` and method ``reset_session()`` are
-kept from the inert skeleton this replaced — existing call sites in ``cli.py``
-and ``chat/app.py`` are ``hasattr``/``try``-guarded, so no call site changes.
+The registry stays the source of truth for all registered tools and for
+execution; the loader only picks what the prompt renderers surface. It never
+imports ``MemoryMixin``: the embedding function(s) are injected by the host
+agent. An embedding failure session-disables the loader with a loud log, and the
+caller offers the full registry.
 """
 
 from __future__ import annotations
@@ -63,25 +33,25 @@ import hashlib
 import json
 import logging
 import os
-import time
-from dataclasses import dataclass, field
-from typing import Callable, Dict, FrozenSet, List, Optional, Sequence
+import re
+from dataclasses import dataclass
+from typing import Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Default semantic match threshold (cosine), inclusive. Calibrated against the
-# doc profile's live embeddings: a user's question is only weakly
-# similar to a tool's *description*, so real scores sit ~0.05-0.25 (not the
-# 0.5-0.7 a symmetric-similarity guess assumed). 0.20 surfaces document-action
-# tools (index/summarize/RAG) for doc-oriented turns while excluding lower-
-# scoring noise; plain content questions fall back to the CORE set. Overridable.
-DEFAULT_THRESHOLD = 0.20
-# Default cap: 11 CORE (doc profile, incl. the load_tools escape hatch) + 3
-# dynamic slots = 14 (≈62% shrink on the 37-tool doc profile, clears the
-# ≥60% Part-0 TTFT-reduction gate). See the plan deviations.
-DEFAULT_MAX_TOOLS = 14
+# Inclusive cosine a tool outside the list must reach to trigger a jump. Scores
+# alone cannot separate chat from tasks ("how's it going?" scored 0.452, "Make a
+# thunder sound effect." 0.659, on embeddinggemma-300m, but "Search the web" only
+# 0.345), so it must also beat every tool in the list by a margin: small talk
+# scores about the same on everything.
+DEFAULT_THRESHOLD = 0.40
+JUMP_MARGIN = 0.03
+
+# ``search_tools`` returns nothing below this: an answer of "no match" must stay
+# possible, or the model keeps calling whatever came back first.
+SEARCH_FLOOR = 0.20
 
 
 def dynamic_tools_env_override() -> Optional[bool]:
@@ -99,20 +69,85 @@ def dynamic_tools_env_override() -> Optional[bool]:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+#: Longest description a tool keeps in the fixed ``tools=`` list, in characters.
+THIN_DESCRIPTION_CHARS = 90
+
+_FIRST_SENTENCE = re.compile(r"(.+?[.!?])(?:\s|$)")
+
+
+def thin_tool_schema(schema: dict) -> dict:
+    """Return *schema* reduced to what a stable ``tools=`` entry must carry.
+
+    Every parameter stays declared: llama.cpp builds its tool-call grammar from
+    this list, so an undeclared name or argument is not rejected but silently
+    rewritten or dropped (``search_web`` became ``search_past_conversations``,
+    "lines 10 to 20" read the whole file). The prose moves to
+    :func:`format_tool_docs`.
+    """
+    function = schema["function"]
+    text = " ".join((function.get("description") or "").split())
+    match = _FIRST_SENTENCE.match(text)
+    summary = match.group(1) if match else text
+    if len(summary) > THIN_DESCRIPTION_CHARS:
+        summary = summary[:THIN_DESCRIPTION_CHARS].rsplit(" ", 1)[0]
+
+    parameters = function.get("parameters") or {}
+    properties = {}
+    for name, prop in (parameters.get("properties") or {}).items():
+        properties[name] = {k: v for k, v in prop.items() if k != "description"}
+    thin_parameters = {
+        "type": "object",
+        "properties": properties,
+        "required": list(parameters.get("required") or []),
+    }
+    return {
+        "type": "function",
+        "function": {
+            "name": function["name"],
+            "description": summary,
+            "parameters": thin_parameters,
+        },
+    }
+
+
+def format_tool_docs(schema: dict) -> str:
+    """Render a full tool schema as one ``[Tool docs: name]`` text block."""
+    function = schema["function"]
+    parameters = function.get("parameters") or {}
+    required = set(parameters.get("required") or [])
+    lines = [
+        f"[Tool docs: {function['name']}]",
+        (function.get("description") or "").strip(),
+    ]
+    properties = parameters.get("properties") or {}
+    if properties:
+        lines.append("Parameters:")
+    for name, prop in properties.items():
+        need = "required" if name in required else "optional"
+        detail = f"- {name} ({prop.get('type', 'string')}, {need})"
+        if prop.get("enum"):
+            detail += f" one of {', '.join(str(v) for v in prop['enum'])}"
+        if prop.get("description"):
+            detail += f": {prop['description']}"
+        lines.append(detail)
+    return "\n".join(line for line in lines if line)
+
+
 @dataclass(frozen=True)
 class ToolBundle:
-    """An immutable cohesion group of tools — no activation policy.
+    """A named group of related tools.
+
+    The union of CORE and every bundle must cover a profile's registry, which is
+    how a new tool forces a conscious decision instead of shipping unclassified.
 
     Parameters
     ----------
     name:
         Bundle identifier (e.g. ``"rag_query"``, ``"file_edit"``).
     members:
-        Frozenset of tool names that belong together. When any member is
-        semantically matched, the whole bundle is pulled into the candidate set.
+        Frozenset of tool names that belong together.
     description:
-        One-line summary; feeds the escape-hatch menu. Not used for
-        activation (keyword matching is intentionally banned).
+        One-line summary.
     """
 
     name: str
@@ -120,36 +155,13 @@ class ToolBundle:
     description: str = ""
 
 
-@dataclass
-class _ToolState:
-    """Mutable per-session bookkeeping for a single loaded tool."""
-
-    loaded_at: float  # wall-clock load time; LRU fallback for never-called tools
-    load_turn: int  # turn index the tool was admitted on (diagnostics)
-    last_call_ts: Optional[float] = None  # set by record_tool_use when executed
-
-
-@dataclass
-class _Selection:
-    """Internal scratch for one ``select()`` pass (kept for readability)."""
-
-    scores: Dict[str, float] = field(default_factory=dict)
-    matched: List[str] = field(default_factory=list)
-    bundle_pulled: List[str] = field(default_factory=list)
-    skill: List[str] = field(default_factory=list)
-    requested: List[str] = field(default_factory=list)
-    admitted: List[str] = field(default_factory=list)
-    evicted: List[str] = field(default_factory=list)
-    skipped_at_cap: List[str] = field(default_factory=list)
-
-
 class ToolLoader:
-    """Selects which registered tools appear in the LLM prompt each turn.
+    """Decides which registered tools appear in the prompt for a session.
 
     The loader does **not** modify ``_TOOL_REGISTRY`` or gate execution; it
-    returns the name list, in admission order, that the agent renders into its
-    prompt. ``None`` from :meth:`select` means "session-disabled — fall back to
-    the full registry" (the loud, fail-safe path on embedder failure).
+    returns the name list the agent renders into its prompt. ``None`` from
+    :meth:`select` means "session-disabled — offer the full registry" (the loud
+    path on embedder failure).
     """
 
     def __init__(
@@ -160,25 +172,24 @@ class ToolLoader:
         *,
         embed_batch_fn: Optional[Callable[[Sequence[str]], "np.ndarray"]] = None,
         threshold: float = DEFAULT_THRESHOLD,
-        max_tools: int = DEFAULT_MAX_TOOLS,
         optional_tools: Sequence[str] = (),
     ) -> None:
-        """Build a semantic tool loader.
+        """Build a tool loader.
 
         Args:
-            core_tools: Always-on tool names (cap- and eviction-exempt).
-            bundles: Cohesion groups pulled in on a semantic member match.
+            core_tools: Tool names every session starts with.
+            bundles: Groups that, with CORE, must cover the registry.
             embed_fn: Single-text embedder returning an L2-normalized vector.
             embed_batch_fn: Optional batched embedder taking a list of texts and
                 returning a 2-D array (one row per text). Preferred for the
                 one-shot tool-doc embedding; falls back to per-doc ``embed_fn``.
-            threshold: Inclusive cosine match threshold.
-            max_tools: Hard ceiling on the loaded set size.
+            threshold: Inclusive cosine a tool outside the list must reach, and
+                beat every listed tool by :data:`JUMP_MARGIN`.
             optional_tools: Configured names that a healthy registry may
                 legitimately lack — environment-conditional tools, or tools a
                 subclass contributes that the base profile does not. Exempt from
                 :meth:`validate_registry` only; every other name there still
-                fails loudly, and ``select`` already tolerates absent members.
+                fails loudly, and the list simply omits an absent tool.
         """
         self._core: FrozenSet[str] = frozenset(core_tools)
         self._bundles: List[ToolBundle] = list(bundles)
@@ -186,30 +197,16 @@ class ToolLoader:
         self._embed_fn = embed_fn
         self._embed_batch_fn = embed_batch_fn
         self._threshold = float(threshold)
-        self._max_tools = int(max_tools)
-
-        # Reverse index: tool name -> bundles that contain it.
-        self._tool_to_bundles: Dict[str, List[ToolBundle]] = {}
-        for bundle in self._bundles:
-            for member in bundle.members:
-                self._tool_to_bundles.setdefault(member, []).append(bundle)
 
         # Content-keyed embedding cache: (name, sha256(doc_text)) -> vector.
         # Survives reset_session() — embeddings depend only on tool docs.
-        self._embed_cache: Dict[tuple[str, str], "np.ndarray"] = {}
+        self._embed_cache: Dict[Tuple[str, str], "np.ndarray"] = {}
 
-        # Per-session mutable state (cleared by reset_session()).
-        self._loaded: Dict[str, _ToolState] = {}
-        self._last_stamp = 0.0
+        # Per-session state (cleared by reset_session()).
+        self._added: List[str] = []
+        self._jump_reason: Optional[str] = None
         self._turn = 0
         self._session_disabled = False
-        # Escape-hatch activation counters. Both recovery paths
-        # feed the τ-tuning signal: the non-tool-calling free recovery
-        # (record_tool_use on an unlisted tool) and the native explicit recovery
-        # (load_bundle). Summarized on reset_session(), aggregated from logs by
-        # the eval. A rising per-turn rate ⇒ τ too strict.
-        self._escape_hatch_count = 0
-        self._load_tools_count = 0
 
     # ── public API ───────────────────────────────────────────────────────
 
@@ -217,6 +214,16 @@ class ToolLoader:
     def session_disabled(self) -> bool:
         """True once an embedding failure has disabled selection for the session."""
         return self._session_disabled
+
+    @property
+    def turns(self) -> int:
+        """Turns selected for in this session."""
+        return self._turn
+
+    @property
+    def jumped(self) -> bool:
+        """True once this session has moved to the full list."""
+        return self._jump_reason is not None
 
     def validate_registry(self, registry: Dict[str, dict]) -> None:
         """Raise if CORE or any bundle names a tool absent from *registry*.
@@ -226,13 +233,10 @@ class ToolLoader:
         them as drift would fail a healthy agent.
 
         Checks the config→registry direction only (no dead/misspelled CORE or
-        bundle names). The host agent calls this once on first activation
-        (ChatAgent does, since its doc CORE∪bundles must cover the registry) so
-        genuine drift fails loudly at runtime. ``select`` itself does *not* call
-        it — the loader tolerates bundle members absent from the registry by
-        design. The reverse direction (a *registry* tool not covered by
-        CORE/bundles, which would silently never be surfaced) is the CI bundle
-        test's job — it compares both sets exactly.
+        bundle names). The host agent calls this once on first activation so
+        genuine drift fails loudly at runtime. The reverse direction (a
+        *registry* tool not covered by CORE/bundles) is the CI bundle test's job
+        — it compares both sets exactly.
         """
         names = set(registry) | self._optional
         missing_core = sorted(self._core - names)
@@ -243,22 +247,33 @@ class ToolLoader:
                 f"registry. Missing CORE: {missing_core or 'none'}; "
                 f"missing bundle members: {missing_bundle or 'none'}. "
                 "Add them to a bundle (or CORE) in tool_bundles.py, or correct "
-                "the name — selection must account for every registered tool."
+                "the name — every registered tool must be accounted for."
             )
 
     def warm(self, registry: Dict[str, dict]) -> List[str]:
-        """Build the tool embeddings now; return CORE in registry order.
+        """Build the tool embeddings now; return the list a new session starts on.
 
-        CORE is admitted first every turn, so it is the stable start of every
-        turn's tool list — the part a warm-up can usefully prime. Touches no
-        turn state (no turn count, no admissions, no LRU), so the first real
-        turn selects exactly as it would have. Raises if the embedder fails:
-        the caller is warming up on purpose and must hear about it.
+        Touches no turn state, so the first real turn selects exactly as it would
+        have. Raises if the embedder fails: the caller is warming up on purpose
+        and must hear about it.
         """
         if self._session_disabled:
             return []
         self._ensure_tool_embeddings(registry)
-        return [name for name in registry if name in self._core]
+        return self.offered(registry)
+
+    def offered(self, registry: Dict[str, dict]) -> List[str]:
+        """The tool list as it stands, in the order the model sees it.
+
+        Registry order, so two agents with the same tools send the same bytes:
+        the list a warm-up primed is the list the first turn sends.
+        """
+        if self.jumped:
+            return list(registry)
+        listed = [name for name in registry if name in self._core]
+        return listed + [
+            name for name in self._added if name in registry and name not in self._core
+        ]
 
     def select(
         self,
@@ -268,409 +283,145 @@ class ToolLoader:
         skill_tools: Optional[Sequence[str]] = None,
         requested_tools: Optional[Sequence[str]] = None,
     ) -> Optional[List[str]]:
-        """Return the loaded set for this turn in admission order, or ``None``.
+        """Settle this turn's list and return it, or ``None``.
 
-        ``None`` is the fail-safe signal: the session is disabled (embedder
-        down) and the caller must render the full registry / legacy prompt.
-
-        This is the one place tools leave the loaded set: any overshoot a
-        mid-turn :meth:`load_bundle` left behind is trimmed here, LRU first,
-        before this turn's admissions.
+        ``None`` is the session-disabled signal (embedder down): the caller must
+        offer the full registry.
 
         Args:
             query: The selection query (previous + current user message).
             registry: The live tool registry (source of truth for execution).
-            skill_tools: The SKILL signal — exact tool names declared by the
-                host's active skills and by any learned procedure it recalled
-                for this goal (#1451), in priority order. Plain strings (the
-                loader never imports memory). Admitted after CORE and **ahead
-                of** the semantic candidates (precedence
-                ``CORE > SKILL > SEMANTIC``), cap-bound and with no bundle
-                pull-in; a listed tool already loaded is not evicted this turn.
-                ``None`` / empty is the graceful-absence path: the
-                loaded set and the ``TOOL_LOADER`` log are byte-identical to a
-                CORE+SEMANTIC build (no ``skill`` key emitted). Names absent from
-                *registry* are dropped (mirrors bundle-absent handling), not
-                raised.
-            requested_tools: Tools the user's message explicitly asks for.
-                Admitted exactly like ``skill_tools`` but ahead of them; logged
-                under a ``requested`` key only when non-empty.
+            skill_tools: Tools the turn's active skills need. They join the list
+                without a jump. Names absent from *registry* are dropped.
+            requested_tools: Tools the turn cannot do without: named by the user,
+                or used by a recalled procedure. One outside the list is a jump.
         """
         if self._session_disabled:
             return None
-
         self._turn += 1
+        if skill_tools:
+            self.admit_tools(skill_tools, registry)
 
-        try:
-            tool_vecs = self._ensure_tool_embeddings(registry)
-            qvec = self._embed_fn(query)
-        except Exception as exc:  # noqa: BLE001 — disabled + re-surfaced loudly
-            self._session_disabled = True
-            logger.warning(
-                "[ToolLoader] embedding service unreachable — dynamic tool "
-                "selection disabled for this session (all tools will be shown; "
-                "start lemonade-server and reload to re-enable). Reason: %s",
-                exc,
-            )
-            return None
-
-        sel = _Selection()
-
-        # Step 3: score every registry tool; matched = score >= threshold.
-        for name in registry:
-            vec = tool_vecs.get(name)
-            if vec is None:
-                continue
-            score = float(np.dot(qvec, vec))
-            sel.scores[name] = score
-            if score >= self._threshold:
-                sel.matched.append(name)
-
-        # Step 4: bundle pull-in. Any bundle with a matched member contributes
-        # all its registry-present members; a pulled mate's admission score is
-        # the max of its bundle's matched members (or its own score if higher).
-        matched_set = set(sel.matched)
-        candidate_scores: Dict[str, float] = {n: sel.scores[n] for n in sel.matched}
-        for bundle in self._bundles:
-            bundle_matched = [m for m in bundle.members if m in matched_set]
-            if not bundle_matched:
-                continue
-            bundle_score = max(sel.scores[m] for m in bundle_matched)
-            for member in bundle.members:
-                if member not in registry:
-                    continue
-                own = sel.scores.get(member, 0.0)
-                new_score = max(own, bundle_score)
-                if member not in candidate_scores:
-                    sel.bundle_pulled.append(member)
-                candidate_scores[member] = max(
-                    candidate_scores.get(member, 0.0), new_score
+        scores: Dict[str, float] = {}
+        if not self.jumped:
+            listed = set(self.offered(registry))
+            if any(n in registry and n not in listed for n in requested_tools or ()):
+                self.jump("requested")
+            else:
+                try:
+                    tool_vecs = self._ensure_tool_embeddings(registry)
+                    qvec = self._embed_fn(query)
+                except Exception as exc:  # noqa: BLE001 — disabled + re-surfaced loudly
+                    self._session_disabled = True
+                    logger.warning(
+                        "[ToolLoader] embedding service unreachable — dynamic tool "
+                        "loading disabled for this session (all tools will be shown; "
+                        "check that Lemonade is running and reload to re-enable). "
+                        "Reason: %s",
+                        exc,
+                    )
+                    return None
+                scores = {n: float(np.dot(qvec, v)) for n, v in tool_vecs.items()}
+                outside = max(
+                    (s for n, s in scores.items() if n not in listed), default=None
                 )
+                inside = max(
+                    (s for n, s in scores.items() if n in listed), default=-1.0
+                )
+                if (
+                    outside is not None
+                    and outside >= self._threshold
+                    and outside >= inside + JUMP_MARGIN
+                ):
+                    self.jump("retrieval")
 
-        # Step 5: admission. Trim first — a turn boundary is the only point
-        # where dropping a tool is affordable. Then CORE (unconditional,
-        # cap-exempt, in registry order), then SKILL (the recalled recipe,
-        # cap-bound, ahead of semantic), then new candidates by (descending
-        # score, ascending name). Each tier appends, so a tool keeps the slot it
-        # was first offered in for as long as it stays loaded.
-        admitted_this_turn: set[str] = set()
-        self._trim_to_cap(sel)
-        for name in registry:
-            if name in self._core and name not in self._loaded:
-                self._admit(name, sel)
-                admitted_this_turn.add(name)
+        offered = self.offered(registry)
+        self._log_selection(query, scores, offered)
+        return offered
 
-        # REQUESTED then SKILL: exact names, admitted ahead of any semantic
-        # candidate — REQUESTED > SKILL > SEMANTIC by admission order.
-        self._admit_exact(
-            requested_tools, registry, sel, sel.requested, admitted_this_turn
-        )
-        self._admit_exact(skill_tools, registry, sel, sel.skill, admitted_this_turn)
-
-        new_candidates = [
-            n
-            for n in candidate_scores
-            if n not in self._loaded and n not in self._core and n in registry
-        ]
-        new_candidates.sort(key=lambda n: (-candidate_scores[n], n))
-
-        for name in new_candidates:
-            if len(self._loaded) < self._max_tools:
-                self._admit(name, sel)
-                admitted_this_turn.add(name)
-                continue
-            # At cap: evict an LRU non-CORE, non-this-turn tool, or skip.
-            victim = self._pick_eviction_victim(admitted_this_turn)
-            if victim is None:
-                sel.skipped_at_cap.append(name)
-                continue
-            del self._loaded[victim]
-            sel.evicted.append(victim)
-            self._admit(name, sel)
-            admitted_this_turn.add(name)
-
-        loaded = list(self._loaded)
-        self._log_selection(query, sel, loaded)
-        return loaded
-
-    def record_tool_use(self, tool_name: str) -> None:
-        """Note that *tool_name* executed — updates LRU recency.
-
-        If the tool is loaded, refresh its ``last_call_ts``. If it is **not**
-        loaded, the model reached a tool the prompt didn't list (a free
-        non-tool-calling recovery via the full registry); count and log it as the
-        escape-hatch signal. This does *not* auto-load the tool; a native model
-        re-surfaces a missed tool through the explicit :meth:`load_bundle` path
-        (the ``load_tools`` meta-tool).
-        """
-        state = self._loaded.get(tool_name)
-        if state is not None:
-            state.last_call_ts = self._stamp()
+    def jump(self, reason: str) -> None:
+        """Move this session to the full list. Later calls change nothing."""
+        if self.jumped:
             return
-        self._escape_hatch_count += 1
+        self._jump_reason = reason
         logger.info(
-            json.dumps(
-                {
-                    "event": "TOOL_LOADER_ESCAPE_HATCH",
-                    "tool": tool_name,
-                    "turn": self._turn,
-                    "note": "executed unlisted tool via full registry (free recovery)",
-                }
-            )
+            "TOOL_LOADER %s",
+            json.dumps({"turn": self._turn, "event": "jump", "reason": reason}),
         )
+
+    def admit_tools(self, names: Sequence[str], registry: Dict[str, dict]) -> List[str]:
+        """Add a skill's exact *names* to the end of the list; return the list.
+
+        Names absent from *registry* are dropped rather than raised: a skill may
+        name a tool this agent does not have, and the loader must not invent
+        capability.
+        """
+        for name in names:
+            if name in registry and name not in self._added:
+                self._added.append(name)
+        return self.offered(registry)
+
+    def remove_tools(
+        self, names: Sequence[str], registry: Dict[str, dict]
+    ) -> List[str]:
+        """Take an unloaded skill's *names* off the list; return the list."""
+        gone = set(names)
+        self._added = [name for name in self._added if name not in gone]
+        return self.offered(registry)
+
+    def rank(
+        self, query: str, docs: Dict[str, str], limit: int
+    ) -> List[Tuple[str, float]]:
+        """The *limit* best ``(name, score)`` of *docs* for *query*, best first.
+
+        Scores below :data:`SEARCH_FLOOR` are left out. Raises if the embedder
+        fails: a search tool must say so rather than report no matches.
+        """
+        names = list(docs)
+        if not names or limit <= 0:
+            return []
+        vecs = self._embed_docs(docs)
+        qvec = self._embed_fn(query)
+        scored = [(name, float(np.dot(qvec, vecs[name]))) for name in names]
+        scored.sort(key=lambda item: (-item[1], item[0]))
+        return [item for item in scored[:limit] if item[1] >= SEARCH_FLOOR]
+
+    def tool_docs(self, registry: Dict[str, dict]) -> Dict[str, str]:
+        """``name -> text`` for every registered tool, as selection embeds it."""
+        return {name: self._doc_text(name, info) for name, info in registry.items()}
 
     def reset_session(self) -> None:
         """Clear per-session state for a new conversation.
 
-        Emits the per-session escape-hatch summary (the τ-tuning signal) for the
-        conversation just ending **before** clearing, then zeroes the counters
-        alongside the existing state clears. The content-keyed embedding cache
-        survives — embeddings depend only on the tool docs, not the conversation.
+        The content-keyed embedding cache survives — embeddings depend only on
+        the tool docs, not the conversation.
         """
         if self._turn > 0:
-            self._log_session_summary()
-        self._loaded.clear()
+            logger.info(
+                "TOOL_LOADER_SESSION %s",
+                json.dumps({"turns": self._turn, "jump": self._jump_reason}),
+            )
+        self._added.clear()
+        self._jump_reason = None
         self._turn = 0
         self._session_disabled = False
-        self._escape_hatch_count = 0
-        self._load_tools_count = 0
-
-    def bundle_names(self) -> List[str]:
-        """Return the configured bundle names, sorted (the ``load_tools`` menu)."""
-        return sorted(b.name for b in self._bundles)
-
-    def format_bundle_menu(self) -> str:
-        """Return a compact ``"- {name}: {description}"`` menu over all bundles.
-
-        Used both for the native-model system-prompt menu and for the
-        unknown-bundle error text, so the model always sees the same valid names.
-        """
-        return "\n".join(
-            f"- {b.name}: {b.description}" if b.description else f"- {b.name}"
-            for b in self._bundles
-        )
-
-    def load_bundle(self, bundle: str, registry: Dict[str, dict]) -> List[str]:
-        """Admit a bundle's tools into the loaded set (the explicit escape hatch).
-
-        Resolves *bundle* to a :class:`ToolBundle` — exact bundle-name match
-        first, else (robustness nicety) a bare tool name resolved to its
-        bundle(s) via the reverse index — and **appends** each member present in
-        *registry* and not already loaded, in registry order.
-
-        Add-only by design: this runs mid-turn, and evicting to stay under
-        ``max_tools`` would drop a tool from the middle of the offered list and
-        re-prefill every tool after it — the exact cost the escape hatch is
-        trying to avoid. The overshoot is bounded (one bundle per call) and
-        :meth:`select` trims it back at the next turn boundary. Emits a
-        same-turn ``TOOL_LOADER`` *loaded superset* line so the recall parser
-        sees the mid-loop expansion.
-
-        Args:
-            bundle: A bundle name from the menu, or a bare tool name to resolve
-                to its owning bundle(s).
-            registry: The live tool registry (same object passed to
-                :meth:`select`); members absent from it are not admitted.
-
-        Returns:
-            The loaded set after admission, in admission order.
-
-        Raises:
-            KeyError: *bundle* is neither a known bundle name nor a known tool
-                name — the caller turns this into an actionable error listing the
-                valid bundle names.
-        """
-        members, resolved_name = self._resolve_bundle_members(bundle)
-
-        sel = _Selection()
-        for member in registry:
-            if member not in members or member in self._loaded:
-                continue
-            self._admit(member, sel)
-
-        self._load_tools_count += 1
-        payload = {
-            "turn": self._turn,
-            "event": "load_tools",
-            "bundle": resolved_name,
-            "admitted": sorted(sel.admitted),
-            # Read from sel, not hardcoded empty: this path is add-only today,
-            # but a literal would keep reporting "none evicted" if that changed.
-            "evicted": sorted(sel.evicted),
-            "skipped_at_cap": sorted(sel.skipped_at_cap),
-            "loaded": list(self._loaded),
-        }
-        over_cap = len(self._loaded) - self._max_tools
-        if over_cap > 0:
-            payload["over_cap"] = over_cap
-        logger.info("TOOL_LOADER %s", json.dumps(payload))
-        return list(self._loaded)
-
-    def admit_tools(self, names: Sequence[str], registry: Dict[str, dict]) -> List[str]:
-        """Admit exact *names* into the loaded set (the SKILL tier, mid-turn).
-
-        The loaded-skill counterpart to :meth:`load_bundle`: a skill's recipe
-        names exact tools, not a bundle, and a namespaced skill tool belongs to
-        no bundle at all, so ``load_bundle`` would raise ``KeyError`` on it.
-        Add-only for the same reason :meth:`load_bundle` is: this runs mid-turn,
-        and evicting to stay under ``max_tools`` would drop a tool from the
-        middle of the already-offered list and re-prefill every tool after it.
-        The overshoot is bounded (one skill's recipe per call) and :meth:`select`
-        trims it back at the next turn boundary.
-
-        Names absent from *registry* are dropped rather than raised, mirroring
-        the SKILL tier: a skill may name a tool this agent does not have, and
-        the loader must not invent capability.
-
-        Args:
-            names: Exact tool names from the skill's recipe.
-            registry: The live tool registry (same object passed to
-                :meth:`select`).
-
-        Returns:
-            The loaded set after admission, in admission order like
-            :meth:`select` and :meth:`load_bundle` — re-sorting it would move
-            already-offered tools and void the model's cached prompt prefix.
-        """
-        sel = _Selection()
-        for name in names:
-            if name in self._loaded or name not in registry:
-                continue
-            sel.skill.append(name)
-            self._admit(name, sel)
-
-        if sel.skill:
-            payload = {
-                "turn": self._turn,
-                "event": "admit_skill_tools",
-                "skill": sorted(sel.skill),
-                "admitted": sorted(sel.admitted),
-                "loaded": list(self._loaded),
-            }
-            over_cap = len(self._loaded) - self._max_tools
-            if over_cap > 0:
-                payload["over_cap"] = over_cap
-            logger.info("TOOL_LOADER %s", json.dumps(payload))
-        return list(self._loaded)
 
     # ── internals ────────────────────────────────────────────────────────
-
-    def _resolve_bundle_members(self, bundle: str) -> tuple["FrozenSet[str]", str]:
-        """Resolve *bundle* to ``(members, resolved_name)``, or raise ``KeyError``.
-
-        Exact bundle-name match first; else a bare tool name resolved to the
-        union of its owning bundles' members via the reverse index.
-        ``resolved_name`` is the matched bundle name (exact match) or the owning
-        bundle name(s) joined with ``+`` (tool-name match), so the ``load_tools``
-        log line records the bundle actually pulled, not the bare tool name.
-        """
-        for b in self._bundles:
-            if b.name == bundle:
-                return b.members, b.name
-        owning = self._tool_to_bundles.get(bundle)
-        if owning:
-            members = frozenset().union(*(b.members for b in owning))
-            return members, "+".join(b.name for b in owning)
-        raise KeyError(bundle)
-
-    def _admit_exact(
-        self,
-        names: Optional[Sequence[str]],
-        registry: Dict[str, dict],
-        sel: _Selection,
-        record: List[str],
-        admitted_this_turn: set[str],
-    ) -> None:
-        """Admit exact tool *names* in order, deduped, appending each to *record*.
-
-        Cap-bound (mirrors the semantic loop): under cap admit, at cap LRU-evict
-        a non-CORE/non-this-turn tool or skip. No bundle pull-in (exact names).
-        Names absent from *registry* are dropped.
-        """
-        for name in names or ():
-            if name in self._core or name not in registry or name in record:
-                continue
-            record.append(name)
-            if name in self._loaded:
-                # Named again this turn: protect it, or the LRU evicts a tool still in use.
-                admitted_this_turn.add(name)
-                continue
-            if len(self._loaded) < self._max_tools:
-                self._admit(name, sel)
-                admitted_this_turn.add(name)
-                continue
-            victim = self._pick_eviction_victim(admitted_this_turn)
-            if victim is None:
-                sel.skipped_at_cap.append(name)
-                continue
-            del self._loaded[victim]
-            sel.evicted.append(victim)
-            self._admit(name, sel)
-            admitted_this_turn.add(name)
-
-    def _admit(self, name: str, sel: _Selection) -> None:
-        """Add *name* to the loaded set with fresh bookkeeping."""
-        self._loaded[name] = _ToolState(loaded_at=self._stamp(), load_turn=self._turn)
-        sel.admitted.append(name)
-
-    def _stamp(self) -> float:
-        """``time.time()``, strictly after the last stamp — LRU needs a total order.
-
-        Windows' clock repeats for milliseconds, and a tie falls through to the
-        tool's name, which evicts by spelling instead of by age.
-        """
-        self._last_stamp = max(time.time(), self._last_stamp + 1e-6)
-        return self._last_stamp
-
-    def _trim_to_cap(self, sel: _Selection) -> None:
-        """Evict back down to ``max_tools`` after a mid-turn overshoot.
-
-        Runs at the top of a turn's admission, the only point where dropping a
-        tool is affordable. Survivors keep their relative order (a ``dict``
-        delete does not reorder), so the offered list only loses the evicted
-        entries. Stops when nothing is evictable — CORE alone may exceed the cap.
-        """
-        while len(self._loaded) > self._max_tools:
-            victim = self._pick_eviction_victim(set())
-            if victim is None:
-                return
-            del self._loaded[victim]
-            sel.evicted.append(victim)
-
-    def _pick_eviction_victim(self, protected: set[str]) -> Optional[str]:
-        """Return the LRU evictable tool name, or ``None`` if nothing is evictable.
-
-        Evictable = loaded − CORE − tools admitted this turn. Ordering key:
-        ``(last_call_ts or loaded_at, loaded_at, name)`` — least-recently-used
-        first, load-time as the tiebreak for never-called tools, name last for
-        determinism.
-        """
-        evictable = [
-            n for n in self._loaded if n not in self._core and n not in protected
-        ]
-        if not evictable:
-            return None
-
-        def _key(n: str) -> tuple[float, float, str]:
-            st = self._loaded[n]
-            recency = st.last_call_ts if st.last_call_ts is not None else st.loaded_at
-            return (recency, st.loaded_at, n)
-
-        return min(evictable, key=_key)
 
     def _ensure_tool_embeddings(
         self, registry: Dict[str, dict]
     ) -> Dict[str, "np.ndarray"]:
-        """Return ``name -> vector`` for every registry tool, embedding lazily.
+        """Return ``name -> vector`` for every registry tool, embedding lazily."""
+        return self._embed_docs(self.tool_docs(registry))
 
-        Uses the content-keyed cache so unchanged tool docs are embedded once
-        per process. Missing docs are batched into a single embed call when an
+    def _embed_docs(self, docs: Dict[str, str]) -> Dict[str, "np.ndarray"]:
+        """Return ``name -> vector`` for *docs*, embedding what is not cached.
+
+        Uses the content-keyed cache so unchanged docs are embedded once per
+        process. Missing docs are batched into a single embed call when an
         ``embed_batch_fn`` was provided, else embedded per-doc.
         """
-        docs: Dict[str, str] = {
-            name: self._doc_text(name, info) for name, info in registry.items()
-        }
-        keys: Dict[str, tuple[str, str]] = {
+        keys: Dict[str, Tuple[str, str]] = {
             name: (name, _sha256(text)) for name, text in docs.items()
         }
 
@@ -706,47 +457,20 @@ class ToolLoader:
                 break
         return f"{name}: {description}" if description else name
 
-    def _log_selection(self, query: str, sel: _Selection, loaded: List[str]) -> None:
-        """Emit one structured ``TOOL_LOADER`` INFO line (Part-2 tuning data)."""
-        payload = {
-            "turn": self._turn,
-            "query_sha": _sha256(query)[:12],
-            "threshold": self._threshold,
-            "max_tools": self._max_tools,
-            "scores": {k: round(v, 4) for k, v in sel.scores.items()},
-            "matched": sorted(sel.matched),
-            "bundle_pulled": sorted(sel.bundle_pulled),
-            "admitted": sorted(sel.admitted),
-            "evicted": sorted(sel.evicted),
-            "skipped_at_cap": sorted(sel.skipped_at_cap),
-            "loaded": loaded,
-        }
-        # SKILL key only when the signal fired this turn — keeps the off-state
-        # (no recall) log bytes byte-identical to the pre-SKILL format.
-        if sel.skill:
-            payload["skill"] = sorted(sel.skill)
-        if sel.requested:
-            payload["requested"] = sorted(sel.requested)
-        logger.info("TOOL_LOADER %s", json.dumps(payload))
-
-    def _log_session_summary(self) -> None:
-        """Emit one ``TOOL_LOADER_SESSION`` INFO line — the τ-tuning signal.
-
-        ``escape_hatch_rate`` is per turn over both recovery paths (free
-        non-tool-calling recovery + native ``load_tools``); the two component
-        counts are reported separately so the tuner can see which path fired.
-        """
+    def _log_selection(
+        self, query: str, scores: Dict[str, float], offered: List[str]
+    ) -> None:
+        """Emit one structured ``TOOL_LOADER`` INFO line (tuning data)."""
         logger.info(
-            "TOOL_LOADER_SESSION %s",
+            "TOOL_LOADER %s",
             json.dumps(
                 {
-                    "turns": self._turn,
-                    "escape_hatch_count": self._escape_hatch_count,
-                    "load_tools_count": self._load_tools_count,
-                    "escape_hatch_rate": (
-                        self._escape_hatch_count + self._load_tools_count
-                    )
-                    / max(self._turn, 1),
+                    "turn": self._turn,
+                    "query_sha": _sha256(query)[:12],
+                    "threshold": self._threshold,
+                    "scores": {k: round(v, 4) for k, v in scores.items()},
+                    "jump": self._jump_reason,
+                    "loaded": offered,
                 }
             ),
         )

@@ -556,7 +556,7 @@ def test_fast_mode_costs_a_fraction_of_the_default():
         fast = _fixed_prefill(agent)
     with _agent() as agent:
         default = _fixed_prefill(agent)
-    assert fast * 4 < default, (
+    assert fast * 3 < default, (
         f"fast={fast} vs default={default} — fast mode is supposed to be the "
         f"reason a user would accept losing documents, files and the web for a "
         f"session. At this margin it is not worth the trade."

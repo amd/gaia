@@ -1684,14 +1684,40 @@ def test_extraction_tool_reports_a_missing_source_without_asking(
     missing = tmp_path.parent / f"{tmp_path.name}-outside" / "minutes.txt"
     asked = []
     agent.path_validator.set_access_prompt(lambda path: asked.append(path) or True)
+    # Named when the turn began, gone by the time the tool runs.
+    missing.parent.mkdir()
+    missing.write_text("x", encoding="utf-8")
     agent._extraction_ledger = ExtractionLedger(
         f"List every item in {missing}", str(tmp_path)
     )
+    assert agent._extraction_ledger.offered
     agent._tool_reported_usage = []
     agent._register_extraction_tool()
+    missing.unlink()
 
     result = agent._tools_registry["extract_document_items"]["function"](str(missing))
 
     assert result["status"] == "error"
     assert "not found" in result["error"].lower(), result
     assert asked == []
+
+
+def test_extraction_tool_refuses_a_turn_that_is_not_a_listing_request(agent, tmp_path):
+    """A thin list keeps the tool once offered, so a later turn can still call it."""
+    source = tmp_path / "minutes.txt"
+    source.write_text("Item one\n", encoding="utf-8")
+    agent._extraction_ledger = ExtractionLedger(
+        f"List every item in {source}", str(tmp_path)
+    )
+    agent._tool_reported_usage = []
+    agent._register_extraction_tool()
+    agent._extraction_ledger = ExtractionLedger("What day is it?", str(tmp_path))
+    assert not agent._extraction_ledger.offered
+
+    result = agent._tools_registry["extract_document_items"]["function"](str(source))
+
+    assert result == {
+        "status": "error",
+        "error": "extract_document_items is only for requests to list every item "
+        "in a document. Read the document instead.",
+    }

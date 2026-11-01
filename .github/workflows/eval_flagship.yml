@@ -651,6 +651,19 @@ jobs:
             exit 1
           }
 
+      # Last, so the GPU is idle. On against off on this machine, so the gate
+      # needs no stored seconds; it fails if the first turn stops being cheaper,
+      # the prompt cache breaks mid-session, or the short tool list costs steps.
+      - name: Measure dynamic tool loading
+        if: ${{ !cancelled() }}
+        timeout-minutes: 30
+        run: |
+          $ErrorActionPreference = "Continue"
+          . "$HOME\.gaia\lemonade\env.ps1"
+          New-Item -ItemType Directory -Force -Path $env:TASKS_OUT | Out-Null
+          & $env:VENV_PY util/measure_first_turn.py --model $env:TASK_MODEL --out "$env:TASKS_OUT\first_turn.json"
+          if ($LASTEXITCODE -ne 0) { throw "The dynamic tool loading gate failed; each reason is printed above." }
+
       - name: Stop the embedded Lemonade
         if: always()
         run: '& $env:VENV_GAIA lemonade embedded stop'

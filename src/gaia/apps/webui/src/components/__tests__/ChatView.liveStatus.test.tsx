@@ -140,6 +140,17 @@ describe('ChatView live status', () => {
         expect(useChatStore.getState().liveStatus).toBe('Reasoning — 38 words so far');
     });
 
+    it('words the tool-list re-read itself, so it reaches the user in their language', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'status', status: 'working', phase: 'loading_tools', message: 'backend words',
+            } as unknown as StreamEvent);
+        });
+        await liveLine('Loading more tools');
+        expect(useChatStore.getState().livePhase).toBe('loading_tools');
+    });
+
     it('ignores status messages that are not phases', async () => {
         await driveSend();
         act(() => {

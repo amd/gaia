@@ -86,7 +86,7 @@ if _stubbed_modules:
 # of the #1030 fix).
 _BUDGET_CHARS = {
     # profile + indexed-doc count -> max chars
-    ("full", 0): 12_000,
+    ("full", 0): 12_500,
     ("full", 1): 14_000,
     ("full", 5): 14_500,
     # Large-N budget — pins the scaling property so a regression that

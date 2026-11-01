@@ -17,6 +17,7 @@ from ..lemonade_client import (
     CONTEXT_OVERFLOW_PHRASES,
     CONVERSATION_SLOT,
     DEFAULT_MODEL_NAME,
+    FULL_TOOLS_SLOT,
     KV_CACHE_SHARED_PHRASES,
     CloudModelUnavailableError,
     LemonadeAuthError,
@@ -745,6 +746,10 @@ class LemonadeProvider(LLMClient):
         # runaway, so they get the client's standard 0.7.
         if not self._backend.cloud_model_provider(effective_model):
             wanted = kwargs.get("id_slot")
+            if wanted == FULL_TOOLS_SLOT:
+                # An evicted model reports one slot; the turn would then re-read
+                # on the wrong slot, and again on the right one.
+                self._backend._ensure_model_loaded(effective_model)
             if wanted not in (None, CONVERSATION_SLOT) and wanted >= (
                 self._backend.slot_count(effective_model)
             ):

@@ -997,14 +997,18 @@ class TestSystemStatus:
 
 
 class TestDynamicToolsSetting:
-    """/api/settings round-trip + env lock for the Beta dynamic tool loader (#1798)."""
+    """/api/settings round-trip + env lock for dynamic tool loading."""
 
-    def test_cold_state_defaults_to_off(self, client, monkeypatch):
-        """Fresh DB (no dynamic_tools key) + no env var ⇒ off, unlocked —
-        byte-identical to the pre-#1798 default-off path."""
+    @pytest.fixture(autouse=True)
+    def _private_config(self, monkeypatch, tmp_path):
+        """The setting lives in config.json; one test's PUT must not reach the next."""
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", tmp_path / "config.json")
+
+    def test_cold_state_defaults_to_on(self, client, monkeypatch):
+        """No config file + no env var ⇒ on, unlocked."""
         monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
         data = client.get("/api/settings").json()
-        assert data["dynamic_tools"] is False
+        assert data["dynamic_tools"] is True
         assert data["dynamic_tools_locked"] is False
 
     def test_put_true_round_trips(self, client, monkeypatch):

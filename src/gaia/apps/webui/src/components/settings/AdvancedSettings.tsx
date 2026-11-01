@@ -7,6 +7,7 @@ import * as api from '../../services/api';
 import { log } from '../../utils/logger';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
+import { useT } from '../../i18n/useT';
 import { formatGb } from '../../utils/modelLabels';
 import type { SystemStatus, MCPServerStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
@@ -28,8 +29,10 @@ export function AdvancedSettings() {
     const [justSaved, setJustSaved] = useState(false);
     const justSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // Dynamic Tools (Beta) toggle — #1798
-    const [dynamicTools, setDynamicTools] = useState(false);
+    const t = useT();
+
+    // Dynamic Tools toggle
+    const [dynamicTools, setDynamicTools] = useState(true);
     const [dynamicToolsLocked, setDynamicToolsLocked] = useState(false);
     const [savingDynamicTools, setSavingDynamicTools] = useState(false);
     const [dynamicToolsError, setDynamicToolsError] = useState<string | null>(null);
@@ -338,18 +341,15 @@ export function AdvancedSettings() {
                     )}
                 </section>
 
-                {/* Dynamic Tools (Beta) — #1798 */}
+                {/* Dynamic Tools */}
                 <section className="settings-section">
-                    <h4>Dynamic Tools <span className="beta-badge">BETA</span></h4>
-                    <p className="model-override-desc">
-                        Trim each turn&rsquo;s tool list to a semantically-matched subset to
-                        speed up the first response. It does not apply to the GAIA agent yet.
-                    </p>
+                    <h4>{t('settings.dynamicTools.title')}</h4>
+                    <p className="model-override-desc">{t('settings.dynamicTools.description')}</p>
                     {/* <label> wraps the row so a click on the text or the track
                         forwards to the visually-hidden checkbox (matches the
                         working connector/grant toggles). */}
                     <label className="setting-row">
-                        <span>Enable dynamic tool loading</span>
+                        <span>{t('settings.dynamicTools.enable')}</span>
                         <span className="toggle-switch">
                             <input
                                 type="checkbox"

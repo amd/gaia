@@ -1921,19 +1921,18 @@ def _offer_skill_tools(agent: Any, skill: Any) -> None:
     a skill loaded mid-turn otherwise names tools the model cannot call until the
     next turn — and a one-turn task has no next turn.
 
-    Admits into the dynamic tool loader first, so the loader's own loaded set —
-    the thing the *next* turn rebuilds the subset from — knows about the tools
-    too. Widening only the filter would last exactly one turn, and every call of
-    a skill's tool would count against the escape-hatch signal.
+    An agent with a tool loader owns the list, so the next turn keeps them;
+    widening only the filter would last exactly one turn.
     """
     current = getattr(agent, "_active_tool_filter", None)
     if current is None:
         return
     wanted = _skill_tool_names(skill)
+    if agent._admit_skill_tools(wanted):
+        return
     missing = [
         tool for tool in wanted if tool in agent._tools_registry and tool not in current
     ]
-    agent._admit_skill_tools(wanted)
     if missing:
         # Appended, never re-sorted: a reshuffled list breaks the cached prefix.
         agent._apply_tool_filter([*current, *missing])
@@ -3420,6 +3419,12 @@ Do NOT wrap conversational replies in JSON.
             from gaia.agents.base.tools import raise_if_cancelled
 
             ledger = self._extraction_ledger
+            if not ledger.offered:
+                return {
+                    "status": "error",
+                    "error": "extract_document_items is only for requests to list "
+                    "every item in a document. Read the document instead.",
+                }
             extraction_chat = self._make_extraction_chat()
             usage_sink = self._tool_reported_usage
 
@@ -3643,15 +3648,34 @@ Do NOT wrap conversational replies in JSON.
                 self._build_openai_tool_schemas(filter_to=self._active_tool_filter)
                 or None
             )
+            if schemas and self._thin_tool_schemas():
+                from gaia.agents.base.tool_loader import thin_tool_schema
+
+                schemas = [thin_tool_schema(schema) for schema in schemas]
         else:
             schemas = None
         # The trace reports the object that went out as ``tools=``, never a
-        # re-render — a mid-loop load_tools expansion must show up there.
+        # re-render — a mid-loop search_tools jump must show up there.
         self._last_tool_schemas = schemas
         self._last_tool_filter = (
             None if self._active_tool_filter is None else list(self._active_tool_filter)
         )
         return schemas
+
+    def _thin_tool_schemas(self) -> bool:
+        """True when ``tools=`` carries thin schemas, with full docs on request.
+
+        Must not change while a model is loaded: changing it changes ``tools=``,
+        which makes a local model re-read the whole conversation. Default off.
+        """
+        return False
+
+    def _conversation_request_kwargs(self) -> Dict[str, Any]:
+        """Extra request kwargs for this conversation's own model calls.
+
+        Default: none, which keeps the provider's conversation slot.
+        """
+        return {}
 
     def _trace_tool_schema(self) -> Dict[str, Any]:
         """The ``tool_schema`` block of a ``--trace`` artifact.
@@ -3695,8 +3719,8 @@ Do NOT wrap conversational replies in JSON.
         """Return the tool-name subset to surface this turn, or ``None``.
 
         Default: ``None`` — render the full registry (legacy behavior). Agents
-        with a dynamic tool loader override this to return a selection, in
-        admission order (see :class:`~gaia.agents.base.tool_loader.ToolLoader`).
+        with a dynamic tool loader override this to return the session's list
+        (see :class:`~gaia.agents.base.tool_loader.ToolLoader`).
         """
         return None
 
@@ -3711,19 +3735,54 @@ Do NOT wrap conversational replies in JSON.
         behind a once-per-session guard inside the override, not here.
         """
 
-    def _on_tool_invoked(self, tool_name: str) -> None:
-        """Hook called when a tool is about to execute (after registry lookup).
+    def _admit_skill_tools(  # pylint: disable=unused-argument
+        self, names: List[str]
+    ) -> bool:
+        """Put a just-loaded skill's *names* on the tool list; True if handled.
 
-        Default: no-op. Agents with a dynamic tool loader override this to
-        record tool-use recency. Execution itself always uses the full registry,
-        so this never gates execution.
+        Default: ``False`` — without a tool loader, nothing else owns the list.
+        """
+        return False
+
+    def _drop_skill_tools(self, names: List[str]) -> None:
+        """Take an unloaded skill's *names* off the tool list.
+
+        Default: rebuild the filter without them, when there is one.
+        """
+        current = getattr(self, "_active_tool_filter", None)
+        if current is None:
+            return
+        kept = [tool for tool in current if tool not in names]
+        if kept != current:
+            self._apply_tool_filter(kept)
+
+    def _warm_tool_filter(self) -> Optional[List[str]]:
+        """The tool list a warm-up primes: what a new session's first turn sends.
+
+        Default: the active filter, unchanged.
+        """
+        return self._active_tool_filter
+
+    def _prime_second_prefix(  # pylint: disable=unused-argument
+        self, say: Callable[[str], None]
+    ) -> None:
+        """Prime anything a warm-up keeps ready beside the first turn's prompt.
+
+        Default: nothing.
         """
 
-    def _admit_skill_tools(self, names: List[str]) -> None:
-        """Tell the dynamic tool loader a loaded skill needs *names*.
+    def _tool_list_notice(self) -> bool:
+        """True once, when the next request re-reads for a changed tool list.
 
-        Default: no-op — an agent without a loader has no second owner of the
-        turn's tool set to keep in sync. ChatAgent overrides it.
+        Default: never — without a loader the list does not change.
+        """
+        return False
+
+    def _before_model_call(self, messages: List[Dict[str, Any]]) -> None:
+        """Hook run before each model call of a turn, with the messages to send.
+
+        Default: no-op. Raises like the model call it precedes, and may run
+        again if that call is retried.
         """
 
     def _refresh_active_tool_filter(self, user_input: str) -> None:
@@ -3750,8 +3809,8 @@ Do NOT wrap conversational replies in JSON.
 
         The single place the "filter and prompt move together" invariant lives.
         Called from :meth:`_refresh_active_tool_filter` (per user turn) and from
-        the ``load_tools`` escape-hatch handler (mid-loop), so a mid-query
-        expansion is visible to the very next model step — both render paths
+        ``search_tools`` and skill loading (mid-loop), so a mid-query change is
+        visible to the very next model step — both render paths
         (``system_prompt`` and ``_openai_tools``) read these live.
         """
         extraction = getattr(self, "_extraction_ledger", None)
@@ -3892,7 +3951,7 @@ Do NOT wrap conversational replies in JSON.
         loaded skill's body already renders unconditionally). This is the
         explicit escape hatch: calling ``load_skill`` on an already-loaded
         skill always brings its instructions back, even when the per-turn
-        selector missed it — mirrors the ``load_tools`` escape hatch for tools.
+        selector missed it — mirrors ``search_tools`` for tools.
         Callers still need to call :meth:`rebuild_system_prompt` themselves.
         """
         current = self._active_skill_filter
@@ -4032,11 +4091,11 @@ Do NOT wrap conversational replies in JSON.
         Each active skill's ``tools_required``, plus the shell tool when it holds
         a ``shell:execute:<binary>`` grant — a granted binary is useless without
         the tool that runs it. Tools a skill *provides* through its own
-        ``tools.py`` are not included; they still reach the prompt by semantic
-        match. Only skills whose body renders this turn count (see
+        ``tools.py`` are not included; ChatAgent lists those for every loaded
+        skill. Only skills whose body renders this turn count (see
         :meth:`_active_skill_names`), so a loaded skill the turn is not about
         holds no tool slots. Feeds the tool loader's SKILL signal, so an active
-        skill's tools arrive without a separate ``load_tools`` round trip.
+        skill's tools arrive without a separate ``search_tools`` round trip.
         """
         skills = getattr(self, "_loaded_skills", None)
         if not skills:
@@ -4353,6 +4412,21 @@ Do NOT wrap conversational replies in JSON.
         revoked = self.granted_binaries.revoke_skill(name)
         skill = self.loaded_skills.pop(name, None)
         _skill_folder_access(self, skill, grant=False)
+        still_needed = {
+            tool
+            for other in self.loaded_skills.values()
+            for tool in _skill_tool_names(other)
+        }
+        unneeded = [
+            tool for tool in _skill_tool_names(skill) if tool not in still_needed
+        ]
+        if (
+            revoked
+            and not self.granted_binaries.holders()
+            and self._SKILL_SHELL_TOOL not in still_needed
+        ):
+            unneeded.append(self._SKILL_SHELL_TOOL)
+        self._drop_skill_tools(unneeded)
         if self._active_skill_filter is not None:
             self._active_skill_filter = [
                 n for n in self._active_skill_filter if n != name
@@ -4774,6 +4848,9 @@ Do NOT wrap conversational replies in JSON.
         those is reported as it actually starts, never on a timer.
         """
         reading = "Reading the tool results" if after_tools else "Reading your request"
+        phase = "reading"
+        if self._tool_list_notice():
+            phase, reading = "loading_tools", "Loading more tools"
         provider = getattr(getattr(self, "chat", None), "llm_client", None)
         if provider is not None and hasattr(provider, "tool_call_progress"):
             provider.tool_call_progress = self._report_tool_call_progress
@@ -4784,7 +4861,7 @@ Do NOT wrap conversational replies in JSON.
 
             def _on_load(model: str, state: str) -> None:
                 if state == "loaded":
-                    self.console.report_phase("reading", reading)
+                    self.console.report_phase(phase, reading)
                 elif state == "downloading":
                     self.console.report_phase(
                         "downloading_model", f"Downloading {model}"
@@ -4797,7 +4874,7 @@ Do NOT wrap conversational replies in JSON.
                     )
 
             backend.model_load_listener = _on_load
-        self.console.report_phase("reading", reading)
+        self.console.report_phase(phase, reading)
 
     def _report_tool_call_progress(self, tool: str, chars: int) -> None:
         self.console.report_phase(
@@ -6995,13 +7072,6 @@ Do NOT wrap conversational replies in JSON.
                 self._read_validator().add_allowed_path(str(outside))
                 logger.info("User allowed writing %s for this session", outside)
 
-        # Dynamic tool loader: record use for LRU recency. The name is
-        # fully resolved and confirmed in the registry here. Execution stays on
-        # the full registry — recording never gates it — so a model that names
-        # an unlisted tool still runs it (free non-tool-calling recovery), and
-        # the loader logs that as an escape-hatch signal.
-        self._on_tool_invoked(tool_name)
-
         tool = self._tools_registry[tool_name]["function"]
         sig = inspect.signature(tool)
 
@@ -7356,6 +7426,7 @@ Do NOT wrap conversational replies in JSON.
         tools = self._openai_tools if offer_tools else None
         no_calls = {"tool_choice": "none"} if tools else {}
         # The same effort as the loop: a change rewrites the prompt's start.
+        no_calls.update(self._conversation_request_kwargs())
         no_calls.update(self._reasoning_request_kwargs())
         stats = None
         if self.streaming:
@@ -9278,9 +9349,8 @@ Do NOT wrap conversational replies in JSON.
     ) -> Dict[str, Any]:
         """Do the first turn's one-time work now, before anyone is waiting on it.
 
-        Builds the tool embeddings and narrows the tools to the ones every turn
-        starts with, then sends one request carrying the real system prompt and
-        those tool schemas with a one-token budget. That loads the model at its
+        Sends one request carrying the real system prompt and tool schemas with
+        a one-token budget. That loads the model at its
         context size and leaves the prompt prefix in the server's cache, so the
         first real question starts answering instead of reading ~10K tokens of
         instructions. Only worth it for a local model; the caller decides.
@@ -9295,12 +9365,9 @@ Do NOT wrap conversational replies in JSON.
         # has to as well, or it diverges from the first turn's at the skills
         # heading and everything after it — tools included — is re-read.
         self._refresh_active_skill_filter(self.WARM_UP_PROMPT)
-        loader = getattr(self, "tool_loader", None)
-        if loader is not None:
-            say("Indexing tools")
-            core = loader.warm(self._tools_registry)
-            if core:
-                self._apply_tool_filter(core)
+        warm_filter = self._warm_tool_filter()
+        if warm_filter != self._active_tool_filter:
+            self._apply_tool_filter(warm_filter)
         say(f"Loading {self.model_id} and reading its instructions")
         self.chat.send_messages(
             [{"role": "user", "content": self.WARM_UP_PROMPT}],
@@ -9315,6 +9382,8 @@ Do NOT wrap conversational replies in JSON.
         if isinstance(usage, dict):
             result["prompt_tokens"] = usage.get("prompt_tokens")
             result["cached_tokens"] = usage.get("cached_tokens")
+        self._prime_second_prefix(say)
+        result["seconds"] = round(time.perf_counter() - started, 1)
         return result
 
     def process_query(
@@ -9572,7 +9641,8 @@ Do NOT wrap conversational replies in JSON.
         had_extraction_tools = "extract_document_items" in self._tools_registry
         if self._extraction_ledger.offered:
             self._register_extraction_tool()
-        else:
+        # Thin tool lists keep them once offered: removing them changes tools=.
+        elif not self._thin_tool_schemas():
             getattr(self, "_tool_overrides", {}).pop("extract_document_items", None)
             getattr(self, "_tool_overrides", {}).pop("save_extracted_items", None)
             if self._instance_tools is not None:
@@ -10207,11 +10277,13 @@ Do NOT wrap conversational replies in JSON.
                 self._announce_model_call(after_tools=bool(tool_call_history))
                 while True:
                     try:
+                        self._before_model_call(messages)
                         response_stream = self.chat.send_messages_stream(
                             messages=messages,
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
+                            **self._conversation_request_kwargs(),
                             **self._reasoning_request_kwargs(),
                         )
 
@@ -10455,11 +10527,13 @@ Do NOT wrap conversational replies in JSON.
                 _model_step_retries = 0
                 while True:
                     try:
+                        self._before_model_call(messages)
                         chat_response = self.chat.send_messages(
                             messages=messages,
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
+                            **self._conversation_request_kwargs(),
                             **self._reasoning_request_kwargs(),
                         )
                         response = chat_response.text
@@ -10836,6 +10910,7 @@ Do NOT wrap conversational replies in JSON.
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
+                        **self._conversation_request_kwargs(),
                         **self._reasoning_request_kwargs(),
                     )
 
@@ -10881,6 +10956,7 @@ Do NOT wrap conversational replies in JSON.
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
+                        **self._conversation_request_kwargs(),
                         **self._reasoning_request_kwargs(),
                     )
                     plan_response = chat_response.text
@@ -12132,7 +12208,7 @@ Do NOT wrap conversational replies in JSON.
                                 "edit_file",
                                 "read_file",
                                 "run_python",
-                                "load_tools",
+                                "search_tools",
                             )
                         )
                     ):

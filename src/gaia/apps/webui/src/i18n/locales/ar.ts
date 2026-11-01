@@ -635,6 +635,10 @@ const messages: Messages = {
     // Settings
     'settings.title': 'الإعدادات',
     'settings.sections': 'أقسام الإعدادات',
+    'settings.dynamicTools.title': 'الأدوات الديناميكية',
+    'settings.dynamicTools.description': 'يبدأ كل محادثة بأكثر أدوات GAIA استخدامًا ويضيف الباقي عندما تحتاج إليه المهمة، فيصل الرد الأول أسرع. ينطبق ذلك على المحادثات الجديدة.',
+    'settings.dynamicTools.enable': 'تفعيل التحميل الديناميكي للأدوات',
+    'chat.loadingTools': 'جارٍ تحميل المزيد من الأدوات',
     'settings.close': 'إغلاق الإعدادات',
     'settings.loading': 'جارٍ التحميل…',
     'settings.section.general': 'عام',

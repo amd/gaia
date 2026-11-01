@@ -13,6 +13,15 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 - **Docs name the terminal UI binary correctly.** README, SPEC and SKILL said
   a core install runs it as `gaia tui`; the binary is `gaia-tui`, and the
   Python `gaia` CLI rejects `gaia tui`.
+- **The first reply reads less than half as much, and the prompt cache stays warm.**
+  A session now starts on the 26 most-used tools in short form and moves to every
+  tool at most once, with the full list kept ready so a first task starts as fast
+  as a first "hello". On Qwen3.6-35B-A3B a cold first turn read 8,900 tokens instead
+  of 21,300. `search_tools` replaces `load_tools` and also finds installed skills.
+  It is on by default; `gaia config set dynamic_tools false` or
+  `GAIA_DYNAMIC_TOOLS=0` turns it off, and the Agent UI toggle under Settings now
+  reaches this agent. `GAIA_DYNAMIC_TOOLS_TAU` and `GAIA_DYNAMIC_TOOLS_MAX` no
+  longer do anything. Chat models now load with three llama.cpp slots.
 - **The agent ships as one Python package.** `ChatAgent`, the class the agent
   builds on, moved into `gaia-agent-gaia` (`gaia_agent.chat_agent`), so the
   binary and a pip install no longer need `gaia-agent-chat`. Prompts and tools

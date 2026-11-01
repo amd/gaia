@@ -223,6 +223,44 @@ test('settings in the dark theme', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+test('the dynamic tools setting', async ({ page }) => {
+    await open(page);
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('tab', { name: 'متقدم' }).or(dialog.getByRole('button', { name: 'متقدم' })).first().click();
+    const title = dialog.getByText('الأدوات الديناميكية');
+    await title.scrollIntoViewIfNeeded();
+    await expect(title).toBeVisible();
+    await expect(dialog.getByText('يبدأ كل محادثة بأكثر أدوات GAIA استخدامًا', { exact: false })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath('dynamic-tools-setting.png') });
+});
+
+/** Holds the chat stream open on one status event, so the live line stays up. */
+const holdStreamOn = (page: Page, event: object) =>
+    page.addInitScript((payload) => {
+        const real = window.fetch;
+        window.fetch = (input, init) => {
+            if (!String(input).includes('/chat/send')) return real(input, init);
+            const body = new ReadableStream({
+                start: (controller) => controller.enqueue(new TextEncoder().encode(`data: ${payload}\n\n`)),
+            });
+            return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+        };
+    }, JSON.stringify(event));
+
+for (const [locale, wording] of [['ar', 'جارٍ تحميل المزيد من الأدوات'], ['en', 'Loading more tools']]) {
+    test(`a tool re-read is worded in ${locale}`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            holdStreamOn(p, { type: 'status', status: 'working', phase: 'loading_tools', message: 'backend words' }));
+        const box = page.locator('textarea').first();
+        await box.fill('hello');
+        await box.press('Enter');
+        await expect(page.getByText(wording).first()).toBeVisible();
+        await page.screenshot({ path: test.info().outputPath('loading-tools.png') });
+        await expect(page.getByText('backend words')).toHaveCount(0);
+    });
+}
+
 /** How far each Arabic item name's text sits from the row's left and right edges. */
 const arabicNameGaps = (page: Page) =>
     page.locator('.sp-item-name').evaluateAll((els) =>

@@ -983,7 +983,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // Consolidate consecutive ones into a single entry.
                 if (event.type === 'status') {
                     const status = event.status;
-                    const msg = (event.message || '').trim();
+                    const msg = event.phase === 'loading_tools'
+                        ? getT()('chat.loadingTools')
+                        : (event.message || '').trim();
                     if (status === 'history_cut') {
                         historyNotice = msg || undefined;
                         setLiveHistoryNotice(historyNotice ?? null);
@@ -1015,7 +1017,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             updateLastAgentStep({ label: msg || 'Thinking' });
                             return;
                         }
-                        const step = agentEventToStep(event, stepIdRef);
+                        const step = agentEventToStep({ ...event, message: msg }, stepIdRef);
                         if (step) addAgentStep(step);
                     }
                     return;

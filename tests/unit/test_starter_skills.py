@@ -433,6 +433,7 @@ def test_starter_skill_loads_into_an_agent(pack_manager: SkillManager):
         _pin_skill_body = Agent._pin_skill_body
         load_skill = Agent.load_skill
         unload_skill = Agent.unload_skill
+        _drop_skill_tools = Agent._drop_skill_tools
         get_skills_system_prompt = Agent.get_skills_system_prompt
 
         def rebuild_system_prompt(self):
