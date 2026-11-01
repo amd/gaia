@@ -948,6 +948,37 @@ def scenario_provenance(scenarios) -> dict:
     }
 
 
+def merge_resumed_provenance(recorded: dict, fresh: dict) -> dict:
+    """*recorded* with the scenarios a resume re-ran replaced by *fresh*.
+
+    A resume reloads its scenarios, so a local override added or edited since
+    the first session would otherwise run under the first session's record.
+    """
+    recorded_by_id = {e.get("id"): e for e in recorded.get("scenarios") or []}
+    fresh_by_id = {e["id"]: e for e in fresh["scenarios"]}
+    changed = sorted(
+        sid
+        for sid, entry in fresh_by_id.items()
+        if sid in recorded_by_id
+        and recorded_by_id[sid].get("sha256") != entry["sha256"]
+    )
+    if changed:
+        print(
+            f"[WARN] {len(changed)} scenario(s) changed since this run started "
+            f"(recorded in the scorecard): {', '.join(changed)}",
+            file=sys.stderr,
+        )
+    entries = [fresh_by_id.get(sid, e) for sid, e in recorded_by_id.items()]
+    entries += [e for sid, e in fresh_by_id.items() if sid not in recorded_by_id]
+    return {
+        "scenarios": entries,
+        "overridden_builtins": sorted(
+            e["id"] for e in entries if e.get("overrides_builtin")
+        ),
+        "builtin_only": all(e.get("source") == "builtin" for e in entries),
+    }
+
+
 def scenario_set_warnings(baseline: dict, current: dict) -> list:
     """Why two scorecards may not have asked the same questions.
 
@@ -3675,6 +3706,10 @@ class AgentEvalRunner:
             for line in problems:
                 print(f"  - {line}", file=sys.stderr)
             sys.exit(1)
+        if isinstance(config.get("scenario_provenance"), dict):
+            config["scenario_provenance"] = merge_resumed_provenance(
+                config["scenario_provenance"], scenario_provenance(found)
+            )
         by_id = {data["id"]: (path, data) for path, data in found}
         # Original order, so the merged scorecard lists scenarios as the run did.
         planned = [

@@ -472,9 +472,11 @@ gaia eval agent \
 Scenarios in `~/.gaia/eval/scenarios` are picked up automatically. A scenario from
 either place whose `id` matches a built-in one replaces it. The run warns when that
 happens, and the scorecard records it: `config.scenario_provenance` lists every
-scenario's source path and a SHA-256 of its parsed content, and `overridden_builtins` names the replaced ids.
-`--compare` prints a `Different questions` warning when either scorecard replaced a
-built-in, or when a scenario's content differs between the two runs.
+scenario's source path and a SHA-256 of its parsed content, and
+`overridden_builtins` names the replaced ids. A `--resume` re-checks the scenarios
+it re-runs and updates that record. `--compare` prints a `Different questions`
+warning when either scorecard replaced a built-in, or when a scenario's content
+differs between the two runs.
 
 Similarly, use `--corpus-dir` for additional corpus directories:
 

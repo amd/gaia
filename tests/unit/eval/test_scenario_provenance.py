@@ -138,8 +138,7 @@ def _verdict(sid):
     }
 
 
-def test_scorecard_config_carries_provenance(dirs, monkeypatch, capsys):
-    _write(dirs.user, "alpha", objective="EASIER")
+def _fake_driver(monkeypatch):
     monkeypatch.setattr(runner, "preflight_check", lambda *a, **k: [])
     monkeypatch.setattr(runner, "_missing_requirements", lambda _sd, _m: [])
     monkeypatch.setattr(runner, "_stamp_agent_provenance", lambda *a, **k: None)
@@ -162,6 +161,11 @@ def test_scorecard_config_carries_provenance(dirs, monkeypatch, capsys):
         )
 
     monkeypatch.setattr(runner, "_run_driver", driver)
+
+
+def test_scorecard_config_carries_provenance(dirs, monkeypatch, capsys):
+    _write(dirs.user, "alpha", objective="EASIER")
+    _fake_driver(monkeypatch)
     card = AgentEvalRunner(results_dir=dirs.tmp / "results")._run_locked(
         category="cat_a"
     )
@@ -175,6 +179,50 @@ def test_scorecard_config_carries_provenance(dirs, monkeypatch, capsys):
     run_dir = next((dirs.tmp / "results").iterdir())
     on_disk = json.loads((run_dir / "scorecard.json").read_text("utf-8"))
     assert on_disk["config"]["scenario_provenance"] == prov
+
+
+def test_resume_rechecks_the_scenarios_it_reruns(dirs, monkeypatch, capsys):
+    _fake_driver(monkeypatch)
+    card = AgentEvalRunner(results_dir=dirs.tmp / "results")._run_locked(
+        category="cat_a"
+    )
+    assert card["config"]["scenario_provenance"]["builtin_only"] is True
+    run_dir = next((dirs.tmp / "results").iterdir())
+    on_disk = json.loads((run_dir / "scorecard.json").read_text("utf-8"))
+    for s in on_disk["scenarios"]:
+        if s["scenario_id"] == "bravo":
+            s["status"] = runner.NOT_RUN
+    (run_dir / "scorecard.json").write_text(json.dumps(on_disk), encoding="utf-8")
+    # An override dropped in between the two sessions runs on resume.
+    _write(dirs.user, "bravo", objective="EASIER")
+    capsys.readouterr()
+
+    resumed = AgentEvalRunner(results_dir=dirs.tmp / "results")._resume_locked(run_dir)
+    prov = resumed["config"]["scenario_provenance"]
+    assert prov["builtin_only"] is False
+    assert prov["overridden_builtins"] == ["bravo"]
+    bravo = next(e for e in prov["scenarios"] if e["id"] == "bravo")
+    assert bravo["sha256"] == runner._scenario_digest(_scenario("bravo", "EASIER"))
+    # The kept scenario keeps its first-session record.
+    assert [e["id"] for e in prov["scenarios"]] == ["alpha", "bravo"]
+    assert "changed since this run started" in capsys.readouterr().err
+
+
+def test_merge_resumed_provenance_keeps_unrelated_entries():
+    recorded = {
+        "scenarios": [
+            {"id": "a", "source": "builtin", "sha256": "1"},
+            {"id": "b", "source": "builtin", "sha256": "2"},
+        ],
+        "overridden_builtins": [],
+        "builtin_only": True,
+    }
+    fresh = {
+        "scenarios": [{"id": "b", "source": "builtin", "sha256": "2"}],
+        "overridden_builtins": [],
+        "builtin_only": True,
+    }
+    assert runner.merge_resumed_provenance(recorded, fresh) == recorded
 
 
 # --- compare flags it ---------------------------------------------------------
