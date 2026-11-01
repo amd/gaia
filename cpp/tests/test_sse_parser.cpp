@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include <gaia/sse_parser.h>
 
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -431,4 +432,25 @@ TEST(SseParserTest, NullErrorFieldIsNotAnError) {
     EXPECT_FALSE(parser.hasError());
     ASSERT_EQ(tokens.size(), 1u);
     EXPECT_EQ(tokens[0], "ok");
+}
+
+TEST(SseParserTest, EmptyDataFieldIsNotMalformed) {
+    std::vector<std::string> tokens;
+    SseParser parser([&](const std::string& tok) { tokens.push_back(tok); });
+
+    feedString(parser,
+        "data:\n"
+        "data: \n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n");
+
+    EXPECT_EQ(parser.malformedEventCount(), 0u);
+    ASSERT_EQ(tokens.size(), 1u);
+}
+
+TEST(SseParserTest, CallbackExceptionPropagates) {
+    SseParser parser([](const std::string&) { throw std::logic_error("stop"); });
+
+    EXPECT_THROW(feedString(parser, "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n"),
+                 std::logic_error);
+    EXPECT_EQ(parser.malformedEventCount(), 0u);
 }

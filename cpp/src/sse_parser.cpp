@@ -65,6 +65,9 @@ void SseParser::processData(const std::string& payload) {
         return;
     }
 
+    // An empty data: field is legal SSE (keep-alive shims send one).
+    if (data.empty()) return;
+
     std::string token;
     try {
         const json j = json::parse(data);

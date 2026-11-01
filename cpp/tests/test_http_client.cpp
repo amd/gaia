@@ -571,7 +571,7 @@ TEST(LemonadeErrorDecodeTest, NonStreamingOpenAiShapedErrorKeepsItsMessage) {
 }
 
 TEST(LemonadeErrorDecodeTest, NonStreamingOddErrorShapesStillThrow) {
-    for (const char* body : {R"({"error":null})", R"({"error":42})", R"({"error":{}})",
+    for (const char* body : {R"({"error":42})", R"({"error":{}})",
                              R"({"error":{"details":"not-an-object"}})",
                              R"({"error":{"details":{"response":{"error":"str"}}}})"}) {
         bench::MockLlmServer server;
@@ -584,6 +584,19 @@ TEST(LemonadeErrorDecodeTest, NonStreamingOddErrorShapesStillThrow) {
             EXPECT_STREQ(e.what(), "LLM server error") << body;
         }
     }
+}
+
+TEST(LemonadeErrorDecodeTest, NullErrorFieldIsNotAnErrorInEitherMode) {
+    const std::string body =
+        R"({"error":null,"choices":[{"message":{"role":"assistant","content":"fine"}}]})";
+
+    bench::MockLlmServer server;
+    server.pushResponse(body);
+    server.pushResponse(body);
+    LemonadeClient client(server.baseUrl());
+
+    EXPECT_EQ(client.chatCompletions(kChatRequest), body);
+    EXPECT_EQ(streamError(client), "<no exception>");
 }
 
 TEST(LemonadeErrorDecodeTest, NonStreamingNonJsonBodyIsReturnedVerbatim) {

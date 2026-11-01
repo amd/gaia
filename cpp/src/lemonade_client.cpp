@@ -72,7 +72,7 @@ void throwIfErrorBody(const std::string& body) {
     } catch (const json::parse_error&) {
         return; // not a JSON body -- the caller handles the raw text
     }
-    if (parsed.is_object() && parsed.contains("error")) {
+    if (parsed.is_object() && parsed.contains("error") && !parsed["error"].is_null()) {
         throw std::runtime_error(describeServerError(parsed));
     }
 }
