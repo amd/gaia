@@ -2314,7 +2314,9 @@ class TestRenderMapResultData:
             "size": "512x512",
         }
 
-    def test_media_result_never_turns_a_missing_path_into_a_card(self, handler, tmp_path):
+    def test_media_result_never_turns_a_missing_path_into_a_card(
+        self, handler, tmp_path
+    ):
         handler.print_tool_usage("generate_image")
         _drain(handler)
         handler.pretty_print_json(
