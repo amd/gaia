@@ -507,13 +507,33 @@ class TestGoalTransitionsEnforced:
             store.approve_goal(goal.id)
         assert store.get_goal(goal.id).status == "rejected"
 
-    def test_approve_twice_is_refused(self, store):
-        from gaia.agents.base.goal_store import GoalTransitionError
-
+    def test_approve_twice_returns_the_queued_goal(self, store):
         goal = _make_goal(store, source="agent_inferred")
-        store.approve_goal(goal.id)
-        with pytest.raises(GoalTransitionError, match="queued"):
-            store.approve_goal(goal.id)
+        first = store.approve_goal(goal.id)
+        again = store.approve_goal(goal.id)
+        assert again.status == "queued"
+        assert again.approved_for_auto is True
+        assert again.updated_at == first.updated_at
+
+    def test_approve_queued_unapproved_goal_marks_it_approved(self, store):
+        goal = _make_goal(store, source="agent_scheduled")
+        assert goal.status == "queued" and goal.approved_for_auto is False
+        approved = store.approve_goal(goal.id)
+        assert approved.status == "queued"
+        assert approved.approved_for_auto is True
+        assert goal.id in [g.id for g in store.get_actionable_goals()]
+
+    def test_reject_twice_returns_the_rejected_goal(self, store):
+        goal = _make_goal(store, source="agent_inferred")
+        store.reject_goal(goal.id)
+        again = store.reject_goal(goal.id)
+        assert again.status == "rejected"
+        assert again.approved_for_auto is False
+
+    def test_cancel_twice_returns_the_cancelled_goal(self, store):
+        goal = _make_goal(store, source="user")
+        store.cancel_goal(goal.id)
+        assert store.cancel_goal(goal.id).status == "cancelled"
 
     def test_approve_running_goal_is_refused(self, store):
         from gaia.agents.base.goal_store import GoalTransitionError
@@ -540,7 +560,7 @@ class TestGoalTransitionsEnforced:
         assert store.cancel_goal(goal.id).status == "cancelled"
 
     @pytest.mark.parametrize(
-        "state", ["pending_approval", "completed", "failed", "rejected", "cancelled"]
+        "state", ["pending_approval", "completed", "failed", "rejected"]
     )
     def test_cancel_refused_outside_live_states(self, store, state):
         from gaia.agents.base.goal_store import GoalTransitionError

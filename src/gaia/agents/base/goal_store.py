@@ -484,7 +484,8 @@ class GoalStore:
     ) -> Optional[Goal]:
         """Move a goal to ``status`` only from one of ``allowed_from``, atomically.
 
-        Returns None when the goal does not exist.
+        A goal already in ``status`` is returned unchanged (with ``approve``,
+        it is also marked approved). Returns None when the goal does not exist.
 
         Raises:
             GoalTransitionError: the goal exists but is in another state.
@@ -502,22 +503,34 @@ class GoalStore:
             conn.commit()
             if cursor.rowcount == 0:
                 row = conn.execute(
-                    "SELECT status FROM goals WHERE id=?", (goal_id,)
+                    "SELECT status, approved_for_auto FROM goals WHERE id=?",
+                    (goal_id,),
                 ).fetchone()
                 if row is None:
                     return None
-                raise GoalTransitionError(goal_id, action, row["status"], allowed_from)
+                if row["status"] != status:
+                    raise GoalTransitionError(
+                        goal_id, action, row["status"], allowed_from
+                    )
+                # Repeating the action (a double click) is a no-op, not a conflict.
+                if approve and not row["approved_for_auto"]:
+                    conn.execute(
+                        "UPDATE goals SET approved_for_auto=1, updated_at=? WHERE id=?",
+                        (now, goal_id),
+                    )
+                    conn.commit()
         logger.debug("[GoalStore] %s goal %s -> %s", action, goal_id, status)
         return self.get_goal(goal_id)
 
     def approve_goal(self, goal_id: str) -> Optional[Goal]:
         """Approve a goal awaiting approval: move to queued and set approved_for_auto.
 
+        Approving a goal that is already queued just marks it approved.
         Returns None when the goal does not exist.
 
         Raises:
-            GoalTransitionError: the goal is not ``pending_approval`` — a
-                rejected, cancelled or finished goal is never re-queued.
+            GoalTransitionError: the goal is in any other state — a rejected,
+                cancelled or finished goal is never re-queued.
         """
         return self._transition_goal(
             goal_id, "approve", ("pending_approval",), "queued", approve=True
@@ -527,7 +540,8 @@ class GoalStore:
         """Reject a goal awaiting approval.
 
         Raises:
-            GoalTransitionError: the goal is not ``pending_approval``.
+            GoalTransitionError: the goal is neither ``pending_approval`` nor
+                already ``rejected``.
         """
         return self._transition_goal(
             goal_id, "reject", ("pending_approval",), "rejected"
@@ -537,7 +551,8 @@ class GoalStore:
         """Cancel a queued or in-progress goal.
 
         Raises:
-            GoalTransitionError: the goal is in any other state.
+            GoalTransitionError: the goal is neither queued, in progress, nor
+                already ``cancelled``.
         """
         return self._transition_goal(
             goal_id, "cancel", ("queued", "in_progress"), "cancelled"
