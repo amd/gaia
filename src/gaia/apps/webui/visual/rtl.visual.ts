@@ -281,6 +281,22 @@ test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
 });
 
+test('composer chips stay whole at phone width', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 780 });
+    await open(page);
+    const row = page.locator('.composer-chip').first();
+    await expect(row).toBeVisible();
+    const boxes = await page.locator('.composer-chip, .composer-send').evaluateAll((els) =>
+        els.map((el) => {
+            const { left, right, width } = el.getBoundingClientRect();
+            return { left, right, width };
+        }).filter((box) => box.width > 0),
+    );
+    expect(boxes.filter((box) => box.width < 24)).toEqual([]);
+    const sorted = [...boxes].sort((x, y) => x.left - y.left);
+    expect(sorted.filter((box, i) => i > 0 && box.left < sorted[i - 1].right - 1)).toEqual([]);
+});
+
 test('the library path row fits a phone', async ({ page }) => {
     await open(page);
     await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();

@@ -45,7 +45,7 @@ export function PrivateChip({ disabled }: { disabled?: boolean }) {
         return (
             <button
                 type="button"
-                className="composer-chip is-unavailable"
+                className="composer-chip composer-chip-memory is-unavailable"
                 disabled
                 aria-label={t('composer.memoryOff')}
                 title={t('composer.memoryOffTitle')}
@@ -59,7 +59,7 @@ export function PrivateChip({ disabled }: { disabled?: boolean }) {
     return (
         <button
             type="button"
-            className={`composer-chip${on ? ' is-on' : ''}`}
+            className={`composer-chip composer-chip-memory${on ? ' is-on' : ''}`}
             onClick={() => setOn(!on)}
             disabled={disabled}
             aria-label={on ? t('composer.privateOff') : t('composer.privateOn')}
