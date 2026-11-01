@@ -111,6 +111,7 @@ echo "List the Python files here" | gaia -p --output-format json
 | `--output-format text\|json` | `text` (default) prints the answer alone; `json` prints one JSON object (below) |
 | `--verbose` | With `--output-format json`: add the turn's full `conversation` (every model message and tool call) |
 | `--max-steps <n>` | Cap on agent steps for this run, at least 1. Default: the agent's own limit ([Agent step limit](#agent-step-limit)) |
+| `--time-limit <seconds>` | Wall-clock seconds the turn may take, at least 1. At 70% the agent is told to write what was asked for. Near the limit (at 90%, or earlier when its steps are slow) it stops working, writes any requested file still missing, and answers. A turn still busy at the limit is stopped there: a running shell or Python command ends, a model call already sent is waited for, and the answer is printed. Counted from the start of the turn, after server start-up, so give a wrapper's own timeout some headroom above it. Default: no limit |
 | `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking |
 | `--full-access` | Full access, as the TUI's `/full-access`: lifts the shell guardrails, so test runners, build tools and other commands outside the no-prompt list run, and grants paths outside the current folder without asking. Implies `--dangerously-skip-permissions` |
 | `--base-url <url>` | Use a remote Lemonade server instead of the local one |
@@ -143,6 +144,7 @@ subcommand instead.
 | `duration_s` | Wall-clock seconds for the turn, excluding server start-up |
 | `error_count` | Errors the agent recorded during the turn |
 | `error` | Only when `is_error`: why the turn failed |
+| `time_limit_reached` | Only when `--time-limit` ended the turn early |
 | `conversation` | Only with `--verbose`: the turn's messages and tool calls |
 
 **Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other

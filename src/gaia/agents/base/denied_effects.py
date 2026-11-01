@@ -21,12 +21,15 @@ from __future__ import annotations
 
 import ast
 import logging
+import ntpath
 import os
 import re
 import shlex
 import tempfile
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+
+from gaia.agents.base.call_risk import DESTRUCTIVE, shell_command_risk
 
 logger = logging.getLogger(__name__)
 
@@ -434,8 +437,16 @@ def _python_invocation(args: Sequence[str], cwd: str, depth: int) -> Set[Effect]
     return set()
 
 
-def effects_of_shell_command(command: str, cwd: str, depth: int = 0) -> Set[Effect]:
-    """Every effect a shell command line has, segment by segment."""
+def effects_of_shell_command(
+    command: str,
+    cwd: str,
+    depth: int = 0,
+    keep: Optional[Callable[[str, Set[Effect]], Set[Effect]]] = None,
+) -> Set[Effect]:
+    """Every effect a shell command line has, segment by segment.
+
+    *keep*, given a segment and its effects, returns the ones to count.
+    """
     if depth > 3 or not isinstance(command, str):
         return set()
     effects: Set[Effect] = set()
@@ -462,12 +473,14 @@ def effects_of_shell_command(command: str, cwd: str, depth: int = 0) -> Set[Effe
                 continue
             else:
                 kept.append(tok)
+        found: Set[Effect] = set()
         for target in redirect_targets:
             if target.lower() not in ("/dev/null", "nul", "$null"):
                 path = _norm_path(target, cwd)
                 if path:
-                    effects.add(Effect(PATH, path))
-        effects |= _effects_of_argv(kept, cwd, depth)
+                    found.add(Effect(PATH, path))
+        found |= _effects_of_argv(kept, cwd, depth)
+        effects |= keep(segment, found) if keep is not None else found
     return effects
 
 
@@ -696,9 +709,15 @@ def _is_url_arg(key: str) -> bool:
 
 
 def effects_of_call(
-    tool_name: str, tool_args: Optional[Dict[str, Any]], cwd: Optional[str] = None
+    tool_name: str,
+    tool_args: Optional[Dict[str, Any]],
+    cwd: Optional[str] = None,
+    keep: Optional[Callable[[str, Set[Effect]], Set[Effect]]] = None,
 ) -> Set[Effect]:
-    """Every effect a tool call would have, whichever tool carries it."""
+    """Every effect a tool call would have, whichever tool carries it.
+
+    *keep* filters a shell command's effects segment by segment.
+    """
     args = tool_args if isinstance(tool_args, dict) else {}
     name = (tool_name or "").lower()
     cwd = cwd or os.getcwd()
@@ -716,7 +735,7 @@ def effects_of_call(
 
     for key in _SHELL_ARG_NAMES:
         if isinstance(args.get(key), str):
-            effects |= effects_of_shell_command(args[key], cwd)
+            effects |= effects_of_shell_command(args[key], cwd, keep=keep)
     if "python" in name and re.search(r"run|exec", name):
         if isinstance(args.get("code"), str):
             effects |= effects_of_python_code(args["code"], cwd)
@@ -805,12 +824,61 @@ def render_call(tool_name: str, tool_args: Optional[Dict[str, Any]]) -> str:
 
 @dataclass
 class Denial:
-    """One declined call and the effects it covered."""
+    """One declined call and the effects it covered.
+
+    *by_user* is False for a refusal no person made: a policy, or a console
+    that had no one to ask. The model must never be told the user said no.
+    """
 
     tool_name: str
     rendered: str
     reason: str
     effects: Set[Effect] = field(default_factory=set)
+    by_user: bool = True
+
+    def who(self) -> str:
+        """Who said no, as the model and the user are told."""
+        return "the user declined" if self.by_user else "was refused"
+
+
+def _names_path(text: str, target: str) -> bool:
+    """True when *text* names the file or folder *target*."""
+    lowered = (text or "").lower().replace("/", "\\")
+    path = target.lower().replace("/", "\\").rstrip("\\")
+    if path and path in lowered:
+        return True
+    name = ntpath.basename(path)
+    if not name:
+        return False
+    return (
+        re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w-]|\.\w)", lowered) is not None
+    )
+
+
+def _refusal_scope(
+    reason: str, refused_alone: Optional[Callable[[str], bool]]
+) -> Callable[[str, Set[Effect]], Set[Effect]]:
+    """Which paths of a refused shell line the refusal is about.
+
+    A path the reason names always counts. Otherwise only a segment that
+    deletes or discards keeps its paths, and only when the policy would refuse
+    that segment on its own (*refused_alone*; with none, every such segment
+    counts): refusing ``rm`` still guards its target, while refusing ``copy``
+    says nothing about an allowed ``git checkout`` beside it, nor about the
+    files ``copy`` was given. Hosts are kept as before.
+    """
+
+    def keep(segment: str, effects: Set[Effect]) -> Set[Effect]:
+        destroys = shell_command_risk(segment) == DESTRUCTIVE and (
+            refused_alone is None or refused_alone(segment)
+        )
+        return {
+            e
+            for e in effects
+            if e.kind != PATH or destroys or _names_path(reason, e.target)
+        }
+
+    return keep
 
 
 class DeniedEffects:
@@ -829,18 +897,26 @@ class DeniedEffects:
         tool_args: Optional[Dict[str, Any]],
         reason: str,
         kinds: Optional[Set[str]] = None,
+        by_user: bool = True,
+        scope_to_reason: bool = False,
+        refused_alone: Optional[Callable[[str], bool]] = None,
     ) -> Optional[Denial]:
         """Remember what this declined call would have done.
 
         *kinds* narrows what is kept: a policy refusal of one command shape
         records the host or path it targeted, not the whole command family.
+        *scope_to_reason* keeps only the paths the refusal is about, judged
+        with *refused_alone* (see :func:`_refusal_scope`).
         """
-        effects = effects_of_call(tool_name, tool_args, self.cwd)
+        keep = _refusal_scope(reason, refused_alone) if scope_to_reason else None
+        effects = effects_of_call(tool_name, tool_args, self.cwd, keep=keep)
         if kinds is not None:
             effects = {e for e in effects if e.kind in kinds}
         if not effects:
             return None
-        denial = Denial(tool_name, render_call(tool_name, tool_args), reason, effects)
+        denial = Denial(
+            tool_name, render_call(tool_name, tool_args), reason, effects, by_user
+        )
         self.denials.append(denial)
         return denial
 

@@ -4,6 +4,7 @@
 Chat Agent - Interactive chat with RAG and file search capabilities.
 """
 
+import ast
 import dataclasses
 import errno
 import os
@@ -13,7 +14,7 @@ import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
+from typing import Any, ClassVar, Collection, Dict, FrozenSet, List, Optional
 
 from gaia.config import gaia_home
 from gaia.logger import get_logger
@@ -146,20 +147,88 @@ NOTIFY_DESKTOP_PS_SCRIPT = (
     f"[string]$env:{NOTIFY_TITLE_ENV_VAR})"
 )
 
-# ``run_python`` puts the project root on PYTHONPATH, so ``import gaia``
-# resolves far enough to fail on the symbol instead of the package — and the
-# raw ImportError reads as a typo worth retrying rather than the wrong path.
-_GAIA_TOOL_IMPORT_PATTERN = re.compile(
-    r"^[ \t]*(?:from[ \t]+gaia(?:\.[\w.]+)?[ \t]+import[ \t]+.*"
-    r"|import[ \t]+gaia(?:\.[\w.]+)?(?![\w.]).*)$",
-    re.MULTILINE,
-)
+
+def _imports_gaia_tools(code: str, tool_names: Collection[str]) -> Optional[str]:
+    """The line that reaches for one of the agent's tools through ``gaia``.
+
+    Tools are bound to the running agent, never attributes of the ``gaia``
+    package, so ``from gaia import write_file`` cannot work in a subprocess and
+    its bare ImportError reads as a typo worth retrying. Importing a project's
+    own modules -- ``from gaia.agents.base import claims`` in a GAIA checkout --
+    is ordinary Python and is not refused.
+    """
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return None  # Python reports it, with the line.
+    lines = (code or "").splitlines()
+    package_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0:
+            if node.module == "gaia" and any(
+                alias.name in tool_names for alias in node.names
+            ):
+                return lines[node.lineno - 1].strip()
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "gaia" or (
+                    alias.name.startswith("gaia.") and alias.asname is None
+                ):
+                    package_names.add(alias.asname or "gaia")
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in package_names
+            and node.attr in tool_names
+        ):
+            return lines[node.lineno - 1].strip()
+    return None
 
 
-def _imports_gaia_tools(code: str) -> Optional[str]:
-    """The offending line when a snippet tries to import GAIA itself."""
-    match = _GAIA_TOOL_IMPORT_PATTERN.search(code or "")
-    return match.group(0).strip() if match else None
+_MISSING_IMPORT = re.compile(r"cannot import name '(\w+)' from '(gaia(?:\.[\w.]+)?)'")
+
+
+def _tool_import_hint(stderr: str, tool_names: Collection[str]) -> Optional[str]:
+    """What to do when a run failed importing a tool's name from ``gaia``."""
+    match = _MISSING_IMPORT.search(stderr or "")
+    if not match or match.group(1) not in tool_names:
+        return None
+    return (
+        f"`{match.group(1)}` is one of your tools, not part of `{match.group(2)}`: "
+        "call it directly as a tool instead of importing it."
+    )
+
+
+def _project_import_paths(project: os.PathLike | str) -> List[str]:
+    """What a snippet run in *project* needs on ``PYTHONPATH`` to import it.
+
+    The root for a flat layout, and ``src/`` too when it holds a package, so a
+    ``src/``-layout checkout imports its own code rather than an installed copy.
+    """
+    root = Path(project)
+    paths = [str(root)]
+    src = root / "src"
+    if not src.is_dir():
+        return paths
+    try:
+        children = list(src.iterdir())
+    except OSError as e:
+        # Running anyway would import an installed copy in place of the project.
+        raise OSError(
+            f"Could not list {src} to put the project's src/ layout on the import "
+            f"path: {e}. Check the folder's permissions."
+        ) from e
+    if any((child / "__init__.py").is_file() for child in children):
+        paths.append(str(src))
+    return paths
+
+
+def _with_project_paths(env: Dict[str, str], project: os.PathLike | str) -> None:
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = os.pathsep.join(
+        _project_import_paths(project) + ([existing] if existing else [])
+    )
 
 
 def _python_run_result(
@@ -201,13 +270,11 @@ def _python_script_run_context(
 ) -> tuple[Path, Dict[str, str]]:
     """Working directory and environment for running *script* as a subprocess.
 
-    A script under *project_dir* runs from it with it on ``PYTHONPATH``, so
-    ``tests/test_x.py`` can import the project's packages. Anything else — and
-    every run with no project at all, where *project_dir* is ``None`` — runs
-    from its own folder with the environment unchanged.
-
-    Only flat-layout projects become importable this way: a ``src/`` layout
-    needs ``src/`` on the path, which this does not add.
+    A script under *project_dir* runs from it with it -- and its ``src/``, for
+    a ``src/`` layout -- on ``PYTHONPATH``, so ``tests/test_x.py`` can import
+    the project's packages. Anything else, and every run with no project at
+    all (*project_dir* is ``None``), runs from its own folder with the
+    environment unchanged.
     """
     script = Path(script).resolve()
     env = child_env()
@@ -218,10 +285,7 @@ def _python_script_run_context(
     project = Path(project_dir).resolve()
     if not script.is_relative_to(project):
         return script.parent, env
-    existing = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = (
-        os.pathsep.join([str(project), existing]) if existing else str(project)
-    )
+    _with_project_paths(env, project)
     return project, env
 
 
@@ -2111,7 +2175,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except ValueError as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
-                offending = _imports_gaia_tools(code)
+                tool_names = set(_TOOL_REGISTRY) | set(
+                    getattr(self, "_tools_registry", None) or ()
+                )
+                offending = _imports_gaia_tools(code, tool_names)
                 if offending:
                     return {
                         "status": "error",
@@ -2203,10 +2270,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 env = child_env()
                 env["PYTHONIOENCODING"] = "utf-8"
                 if project:
-                    existing = env.get("PYTHONPATH")
-                    env["PYTHONPATH"] = (
-                        os.pathsep.join([project, existing]) if existing else project
-                    )
+                    _with_project_paths(env, project)
 
                 # The system temp dir keeps the snippet out of the workspace.
                 with tempfile.NamedTemporaryFile(
@@ -2274,6 +2338,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "resolve there, so use absolute paths for the user's "
                         "files."
                     )
+                notes.append(_tool_import_hint(r.stderr, tool_names))
                 result = _python_run_result(
                     r,
                     r.stdout[:8000],

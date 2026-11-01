@@ -770,6 +770,24 @@ _STEP_CAP_ANSWER_PROMPT = (
     "you found, what you couldn't finish and why, and what they can do next."
 )
 
+# The time-limit counterparts: one notice, then a stop that leaves room for
+# the write-only step and the closing answer before the caller's hard limit.
+_TIME_LIMIT_ANSWER_PROMPT = (
+    "The {seconds}-second time limit for this request is nearly up and no more "
+    "tools can run. Give the user your final answer now, using only what the "
+    "tool results above show: what you found, what you couldn't finish and "
+    "why, and what they can do next."
+)
+_TIME_NOTICE = (
+    "Time budget: {used} of {total} seconds used. Stop gathering context. If "
+    "the task asks for files or other deliverables, write them now from what "
+    "you already have, marking any value you could not verify as unverified; "
+    "refine afterwards if there is time. When the time is up no tool can run "
+    "and anything not already written is lost."
+)
+_TIME_NOTICE_AT = 0.7
+_TIME_STOP_AT = 0.9
+
 # How much of the step budget must be gone before each notice is sent, and
 # what it says. Until these existed the only thing the model ever heard about
 # the budget was _STEP_CAP_ANSWER_PROMPT above — which arrives after the last
@@ -859,6 +877,27 @@ _FAILED_CALL_ANSWER_PROMPT = (
     "now from what the results above show: what you completed, what that "
     "failure kept you from doing, and what the user should do next. The "
     "failure itself is reported after your answer; don't repeat it."
+)
+
+# Sent once when a forced stop would leave a requested file unwritten; only
+# writes to those files run in that one step.
+_WRITE_BEFORE_STOP_PROMPT = (
+    "{reason} Before it does, write the requested files that do not exist "
+    "yet: {files}. Write them now from what you already have, marking "
+    "anything you could not confirm as unverified. Only writes to those files "
+    "run in this one step; your final answer comes after it."
+)
+_STOP_REASON_REPEATS = "The turn is ending because `{tool}` kept repeating."
+_STOP_REASON_STEPS = "The turn is ending: all {steps} steps are used."
+_STOP_REASON_TIME = "The turn is ending: its {seconds}-second time limit is nearly up."
+_DELIVERABLE_WRITE_TOOLS = ("write_file", "write_markdown_file", "write_python_file")
+_NOT_A_DELIVERABLE_WRITE = (
+    "Not run — only the requested files could be written at this point."
+)
+# Added to a forced stop's closing prompt while a requested file is still missing.
+_STILL_UNWRITTEN_NOTE = (
+    "These requested files were not written: {files}. Say so; do not say "
+    "they are written."
 )
 
 # Added when the closing reply called a tool anyway and is asked again, tools gone.
@@ -2476,6 +2515,13 @@ Do NOT wrap conversational replies in JSON.
         self._budget_notices_sent: set = set()
         # The model that wrote its own tool-call markup in this session, if any.
         self._own_markup_model: Optional[str] = None
+        # Wall-clock seconds a turn may take, when the caller set one
+        # (``gaia -p --time-limit``). None: no time limit is known.
+        self.time_limit_s: Optional[float] = None
+        self._turn_started_at: Optional[float] = None
+        self._last_boundary_at = 0.0
+        self._slowest_step_s = 0.0
+        self._time_notice_sent = False
         self._budget_notices_on = budget_notices_enabled()
         self.conversation_history = (
             []
@@ -6427,7 +6473,13 @@ Do NOT wrap conversational replies in JSON.
             logger.info("User allowed %s after declining %s", command, denial.rendered)
             return None, True
 
-        if answer is None:
+        if answer is None and not denial.by_user:
+            asked = (
+                "This is a limit on what may run here, not a decision anyone "
+                "made. Do not route around it; if the work needs it, say which "
+                f"command (`{command}`) and why in your answer."
+            )
+        elif answer is None:
             asked = (
                 "Stop and ask the user: name the exact command you need "
                 f"(`{command}`) and why you need it, or tell them what you can "
@@ -6441,9 +6493,10 @@ Do NOT wrap conversational replies in JSON.
         else:
             asked = f"The user was asked about this exact call and replied: {answer!r}."
         logger.info(
-            "Refused %s: it %s, declined earlier as %s",
+            "Refused %s: it %s, which %s earlier as %s",
             tool_name,
             effect.describe(),
+            denial.who(),
             denial.rendered,
         )
         return (
@@ -6453,7 +6506,7 @@ Do NOT wrap conversational replies in JSON.
                 "blocked_effect": effect.describe(),
                 "declined_call": denial.rendered,
                 "error": (
-                    f"Not run: this {effect.describe()}, which the user declined "
+                    f"Not run: this {effect.describe()}, which {denial.who()} "
                     f"earlier in this request (`{denial.rendered}` — "
                     f"{denial.reason}). A denial covers the effect, not only the "
                     "tool it was asked through, so do not reach it with another "
@@ -6486,8 +6539,13 @@ Do NOT wrap conversational replies in JSON.
         )
         request = " ".join(str(raw or "").split())
         purpose = f" to finish “{request[:160]}”" if request else ""
+        earlier = (
+            f"You declined `{denial.rendered}`"
+            if denial.by_user
+            else f"`{denial.rendered}` was refused"
+        )
         question = (
-            f"You declined `{denial.rendered}` earlier in this request. My next "
+            f"{earlier} earlier in this request. My next "
             f"step{purpose} {effect.describe()} another way:\n\n{command}\n\n"
             "I stopped instead of running it. Allow it once?"
         )
@@ -6889,6 +6947,14 @@ Do NOT wrap conversational replies in JSON.
                     tool_args,
                     str(refusal.get("error") if isinstance(refusal, dict) else refusal),
                     kinds={NETWORK, PATH},
+                    by_user=False,
+                    scope_to_reason=True,
+                    refused_alone=lambda segment: (
+                        self._policy_refusal(
+                            tool_name, {**(tool_args or {}), "command": segment}
+                        )
+                        is not None
+                    ),
                 )
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
@@ -6978,11 +7044,14 @@ Do NOT wrap conversational replies in JSON.
                     # Nobody said no, so this is not a refusal to route around.
                     denied["timed_out"] = True
                 else:
-                    if denied_error == user_denial_message(tool_name):
+                    by_user = denied_error == user_denial_message(tool_name)
+                    if by_user:
                         denied["hint"] = DECLINED_HINT
                     ledger = getattr(self, "_denied_effects", None)
                     if ledger is not None:
-                        ledger.record(tool_name, tool_args, denied_error)
+                        ledger.record(
+                            tool_name, tool_args, denied_error, by_user=by_user
+                        )
                 return denied
             # A call approved once runs against this record, and only once.
             noted = getattr(self, "note_confirmed_call", None)
@@ -9243,8 +9312,16 @@ Do NOT wrap conversational replies in JSON.
         listed as saved instead of calling the whole turn unconfirmed.
         """
         self._check_extraction_sources()
-        gaps = self._completion_evidence.gaps(
+        evidence = self._completion_evidence
+        gaps = evidence.gaps(
             answer or "", _claims_file_write, readback=not model_failed
+        )
+        # The output the request asked for, when the save gaps above don't own it.
+        requested = {evidence.key(path) for path in evidence.requested}
+        gaps.extend(
+            f"No successful write to `{path}` is recorded for this turn."
+            for path in self._pending_deliverables()
+            if evidence.key(path) not in requested
         )
         gaps.extend(self._extraction_ledger.gaps(self._turn_outputs()))
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
@@ -9261,7 +9338,6 @@ Do NOT wrap conversational replies in JSON.
         inventory = self._extraction_ledger.render()
         if inventory and answer:
             answer += "\n\n" + inventory
-        evidence = self._completion_evidence
         saved = evidence.written_files() if model_failed else []
         if saved and answer:
             answer += "\n\n" + saved_before_error(
@@ -9481,6 +9557,56 @@ Do NOT wrap conversational replies in JSON.
             return notice
         return None
 
+    def _time_limit_passed(self) -> bool:
+        """True once the turn is past its time limit's stop point.
+
+        The stop point leaves room for the write-only step and the closing
+        answer: a tenth of the limit, or two of the turn's slowest steps so
+        far when that is more. It is also why a stop the caller's own timer
+        forces at the limit counts as reaching it.
+        """
+        limit = getattr(self, "time_limit_s", None)
+        started = getattr(self, "_turn_started_at", None)
+        if not limit or limit <= 0 or started is None:
+            return False
+        reserve = max(limit * (1 - _TIME_STOP_AT), 2 * self._slowest_step_s)
+        return time.monotonic() - started >= limit - reserve
+
+    def _time_is_up(self, messages: List[Dict], conversation: List[Dict]) -> bool:
+        """Warn once near the turn's time limit; True once it is time to stop.
+
+        Only a limit the caller set counts (``time_limit_s``); nothing here
+        guesses one. Called at each step boundary, which is also where the
+        slowest step is measured.
+        """
+        limit = getattr(self, "time_limit_s", None)
+        started = getattr(self, "_turn_started_at", None)
+        if not limit or limit <= 0 or started is None:
+            return False
+        now = time.monotonic()
+        self._slowest_step_s = max(self._slowest_step_s, now - self._last_boundary_at)
+        self._last_boundary_at = now
+        used = now - started
+        if self._time_limit_passed():
+            logger.warning("Stopping the turn at %.0fs of its %ss limit", used, limit)
+            return True
+        if (
+            used >= limit * _TIME_NOTICE_AT
+            and not self._time_notice_sent
+            and getattr(self, "_budget_notices_on", False)
+        ):
+            self._time_notice_sent = True
+            notice = _TIME_NOTICE.format(used=int(used), total=int(limit))
+            pending = self._pending_deliverables()
+            if pending:
+                named = ", ".join(f"`{path}`" for path in pending)
+                notice += f" Requested but not written yet: {named}."
+            # Per-turn, like the step notices: never carried into saved history.
+            transient = getattr(messages, "append_transient", messages.append)
+            transient({"role": "user", "content": notice})
+            conversation.append({"role": "user", "content": notice})
+        return False
+
     def _drain_followups(self, messages: List[Dict], conversation: List[Dict]) -> int:
         """Fold any queued mid-turn follow-ups into this turn's context.
 
@@ -9691,6 +9817,11 @@ Do NOT wrap conversational replies in JSON.
         # between turns takes effect.
         self._budget_notices_sent = set()
         self._budget_notices_on = budget_notices_enabled()
+        self._turn_started_at = time.monotonic()
+        self._last_boundary_at = self._turn_started_at
+        self._slowest_step_s = 0.0
+        self._time_notice_sent = False
+        time_limit_reached = False
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
@@ -9762,6 +9893,7 @@ Do NOT wrap conversational replies in JSON.
                     "The request was stopped before it finished. Try again, or "
                     "break it into smaller steps if it was taking too long."
                 )
+                time_limit_reached = self._time_limit_passed()
                 break
 
             # Anything the user sent mid-turn joins the context here, where the
@@ -9776,6 +9908,9 @@ Do NOT wrap conversational replies in JSON.
             # as the drain above: appended at the step boundary so the next
             # model call sees it.
             self._announce_step_budget(messages, conversation, steps_taken, steps_limit)
+            if self._time_is_up(messages, conversation):
+                time_limit_reached = True
+                break
 
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
@@ -12296,13 +12431,26 @@ Do NOT wrap conversational replies in JSON.
         # Before any footer below sums the conversation.
         self._record_unrecorded_step(conversation)
 
-        # Out of steps with no answer: one more call, tools withheld, so the
-        # user hears what was found rather than only the canned note.
-        max_steps_reached = (
+        # Out of steps or time with no answer: a write-only step if a requested
+        # file is missing, then one more call, tools withheld, so the user
+        # hears what was found rather than only the canned note.
+        budget_ran_out = (
             final_answer is None and not cancelled_by_console and not user_stopped
         )
-        if max_steps_reached:
+        max_steps_reached = budget_ran_out and not time_limit_reached
+        if budget_ran_out:
             tool_steps = steps_taken
+            seconds = int(self.time_limit_s or 0)
+            steps_taken = self._write_deliverables_before_stop(
+                messages,
+                conversation,
+                steps_taken,
+                (
+                    _STOP_REASON_TIME.format(seconds=seconds)
+                    if time_limit_reached
+                    else _STOP_REASON_STEPS.format(steps=steps_limit)
+                ),
+            )
             steps_taken += 1
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
@@ -12311,16 +12459,28 @@ Do NOT wrap conversational replies in JSON.
                 cap_answer = self._closing_answer(
                     messages,
                     conversation,
-                    _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
+                    self._with_unwritten_note(
+                        _TIME_LIMIT_ANSWER_PROMPT.format(seconds=seconds)
+                        if time_limit_reached
+                        else _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit)
+                    ),
                     steps_taken,
                 )
             except Exception as e:  # noqa: BLE001 - the reason goes in the answer
-                logger.warning("Could not write the step-limit summary: %s", e)
-                final_answer = (
-                    self._generate_max_steps_message(
+                logger.warning("Could not write the closing summary: %s", e)
+                if time_limit_reached:
+                    latest = self._latest_findings(conversation)
+                    final_answer = (
+                        f"I reached the {seconds}-second time limit for this "
+                        "request before I could finish."
+                        + (f"\n\nWhat I had found so far:\n{latest}" if latest else "")
+                    )
+                else:
+                    final_answer = self._generate_max_steps_message(
                         conversation, tool_steps, steps_limit, findings=True
                     ).rstrip()
-                    + f"\n\nThe summary of what I found couldn't be written: {e}"
+                final_answer += (
+                    f"\n\nThe summary of what I found couldn't be written: {e}"
                 )
             else:
                 if cap_answer is None:
@@ -12390,11 +12550,12 @@ Do NOT wrap conversational replies in JSON.
             final_answer = self.finalize_answer(
                 _without_tool_markup(final_answer), conversation
             )
+            # A forced stop is not a finished turn: name an unwritten file, or
+            # a claimed write no tool made, here too.
+            final_answer, completion_gaps = self._gate_unsealed_answer(
+                final_answer, model_failed=self._turn_model_retries["failed"]
+            )
             if self._turn_model_retries["failed"]:
-                # Name what the cut-off turn left undone (an unwritten file…).
-                final_answer, completion_gaps = self._gate_unsealed_answer(
-                    final_answer, model_failed=True
-                )
                 self._announce_turn_failed()
             final_answer = self._with_verification_scope(final_answer)
             verification_scope_applied = True
@@ -12457,6 +12618,7 @@ Do NOT wrap conversational replies in JSON.
                     if has_valid_answer
                     and not completion_gaps
                     and not max_steps_reached
+                    and not time_limit_reached
                     else "incomplete"
                 )
             ),
@@ -12480,6 +12642,7 @@ Do NOT wrap conversational replies in JSON.
             # Where the time went: llm/tool/overhead totals and slowest steps.
             "timing_summary": timing_summary,
             "max_steps_reached": max_steps_reached,
+            "time_limit_reached": time_limit_reached,
             "duration": total_duration,  # Total query processing time in seconds
             "input_tokens": total_input_tokens,  # Total input tokens across all steps
             "output_tokens": total_output_tokens,  # Total output tokens across all steps
@@ -12706,6 +12869,12 @@ Do NOT wrap conversational replies in JSON.
         )
         failed = self._repeats_carry_a_failure(recent_results)
 
+        steps_taken = self._write_deliverables_before_stop(
+            messages,
+            conversation,
+            steps_taken,
+            _STOP_REASON_REPEATS.format(tool=tool_name),
+        )
         steps_taken += 1
         if self._turn_recorder is not None and self.chat is not None:
             self.chat.turn_step = steps_taken
@@ -12715,7 +12884,9 @@ Do NOT wrap conversational replies in JSON.
             answer = self._closing_answer(
                 messages,
                 conversation,
-                prompt.format(tool=tool_name, count=executed_count),
+                self._with_unwritten_note(
+                    prompt.format(tool=tool_name, count=executed_count)
+                ),
                 steps_taken,
             )
         except Exception as e:  # noqa: BLE001 - the reason goes in the answer
@@ -12730,6 +12901,143 @@ Do NOT wrap conversational replies in JSON.
         if failed and answer is not None:
             answer = f"{answer.rstrip()}\n\n{summary}"
         return answer, steps_taken
+
+    def _pending_deliverables(self) -> List[str]:
+        """Files the request named that no write has produced yet."""
+        evidence = getattr(self, "_completion_evidence", None)
+        return evidence.unwritten_outputs() if evidence is not None else []
+
+    def _with_unwritten_note(self, instruction: str) -> str:
+        pending = self._pending_deliverables()
+        if not pending:
+            return instruction
+        files = ", ".join(f"`{path}`" for path in pending)
+        return f"{instruction} {_STILL_UNWRITTEN_NOTE.format(files=files)}"
+
+    def _write_deliverables_before_stop(
+        self,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        steps_taken: int,
+        reason: str,
+    ) -> int:
+        """One write-only step before a forced stop, when a requested file is missing.
+
+        Bounded: a single model call, and only one write to each missing file
+        runs; any other call is answered "not run". The loop's own tool list is
+        sent so the prompt cache still holds. Returns the step count. If the
+        call fails, the stop goes ahead and the completion gate on the closing
+        answer names the unwritten file.
+        """
+        evidence = getattr(self, "_completion_evidence", None)
+        # Only files that don't exist: a whole-file rewrite is no way to finish an edit.
+        pending = [
+            path
+            for path in self._pending_deliverables()
+            if evidence is None or not os.path.exists(evidence.key(path))
+        ]
+        allowed = [n for n in _DELIVERABLE_WRITE_TOOLS if n in self._tools_registry]
+        cancel_event = getattr(self, "_cancel_event", None)
+        if (
+            not pending
+            or not allowed
+            or self._console_cancelled()
+            or (cancel_event is not None and cancel_event.is_set())
+        ):
+            return steps_taken
+
+        self._record_unrecorded_step(conversation)
+        steps_taken += 1
+        if self._turn_recorder is not None and self.chat is not None:
+            self.chat.turn_step = steps_taken
+        # A loop break can stop mid-fan-out; the request needs every result.
+        messages.extend(self._unanswered_tool_call_messages(messages))
+        instruction = _WRITE_BEFORE_STOP_PROMPT.format(
+            reason=reason, files=", ".join(f"`{path}`" for path in pending)
+        )
+        # This turn's request only, never saved history.
+        transient = getattr(messages, "append_transient", messages.append)
+        transient({"role": "user", "content": instruction})
+        conversation.append({"role": "user", "content": instruction})
+        self.console.start_progress(self._progress_label())
+        try:
+            reply = self.chat.send_messages(
+                messages=messages,
+                system_prompt=self.system_prompt,
+                tools=self._openai_tools,
+                **self._reasoning_request_kwargs(),
+            )
+            response, inline_reasoning = _split_reasoning(reply.text or "")
+            reasoning = _response_reasoning(reply) or inline_reasoning
+            parsed = self._parse_llm_response(response) if response else {}
+        except Exception as e:  # noqa: BLE001 - the closing gate names the gap
+            logger.warning("Could not write the requested files before stopping: %s", e)
+            return steps_taken
+        finally:
+            self.console.stop_progress()
+        perf_stats = reply.stats or self.chat.get_stats()
+        if perf_stats:
+            conversation.append(
+                {
+                    "role": "system",
+                    "content": {
+                        "type": "stats",
+                        "step": steps_taken,
+                        "performance_stats": perf_stats,
+                    },
+                }
+            )
+        if not parsed:
+            return steps_taken
+        conversation.append(
+            {"role": "assistant", "content": parsed}
+            | ({"reasoning": reasoning} if reasoning else {})
+        )
+        messages.append(self._build_assistant_message(response, parsed, reasoning))
+
+        native = bool(parsed.get("tool_calls"))
+        calls = parsed.get("tool_calls") or (
+            [{"id": None, "name": parsed["tool"], "tool_args": parsed.get("tool_args")}]
+            if parsed.get("tool")
+            else []
+        )
+        evidence = self._completion_evidence
+        for call in calls:
+            name = call.get("name")
+            args = (
+                call.get("tool_args") if isinstance(call.get("tool_args"), dict) else {}
+            )
+            self.console.print_tool_usage(name)
+            self.console.pretty_print_json(args, "Arguments")
+            target = (
+                evidence.output_written_by(
+                    args.get("file_path") or args.get("path"), pending
+                )
+                if name in allowed
+                else None
+            )
+            if target is not None:
+                pending.remove(target)
+                self.console.start_progress(f"Executing {name}")
+                try:
+                    result = self._execute_tool_timed(name, args)
+                finally:
+                    self.console.stop_progress()
+            else:
+                result = {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": _NOT_A_DELIVERABLE_WRITE,
+                }
+            shown = self._handle_large_tool_result(name, result, conversation, args)
+            self.console.pretty_print_json(result, "Result")
+            self.console.print_tool_complete()
+            messages.append(
+                self._create_tool_message(
+                    name, shown, tool_call_id=call.get("id") if native else None
+                )
+            )
+        return steps_taken
 
     def _end_turn_on_scope(
         self,

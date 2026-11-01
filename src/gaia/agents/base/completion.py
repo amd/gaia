@@ -493,6 +493,8 @@ class CompletionEvidence:
         # The subset of refused reasons that were prompts nobody answered.
         self.unconfirmed: set[str] = set()
         self.requested, self.save_requested = save_obligations(query)
+        # Wider than ``requested``: every file the request asks to produce.
+        self.outputs = named_outputs(query)
         self.instructed = save_instructed(query)
         self.disk_tool_ran = False
         # (started ns, ended ns, succeeded, ledger sequence) per executor run.
@@ -694,10 +696,41 @@ class CompletionEvidence:
         A bare name ("bom.xlsx") counts as written wherever it landed, matching
         how :meth:`gaps` judges it.
         """
+        return self._unwritten(self.requested)
+
+    def unwritten_outputs(self) -> list[str]:
+        """Every file the request asks to produce that nothing has written yet.
+
+        A write that was turned down, or whose approval expired, is left out:
+        the completion check already tells the model not to retry those.
+        """
+        return [
+            path
+            for path in self._unwritten(self.outputs)
+            if self.key(path) not in self.refused
+        ]
+
+    def output_written_by(self, path: Any, pending: list[str]) -> str | None:
+        """The entry of *pending* a write to *path* would produce, if any."""
+        if not isinstance(path, str) or not path.strip() or "\x00" in path:
+            return None
+        key = self.key(path)
+        name = os.path.normcase(ntpath.basename(key))
+        for wanted in pending:
+            if self.key(wanted) == key:
+                return wanted
+            if ntpath.basename(wanted) == wanted and os.path.normcase(wanted) == name:
+                return wanted
+        return None
+
+    def _unwritten(self, paths: list[str]) -> list[str]:
+        # A script or shell command that produced the file counts as its write.
+        for path in paths:
+            self._find_executor_writes(self.key(path))
         written = {key for key, item in self.files.items() if item.written}
         written_names = {os.path.normcase(ntpath.basename(key)) for key in written}
         pending = []
-        for path in self.requested:
+        for path in paths:
             if self.key(path) in written:
                 continue
             if ntpath.basename(path) == path and (
