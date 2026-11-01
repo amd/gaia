@@ -65,12 +65,6 @@ SCHEMA_VERSION = 1
 # host chat agent that owned the single Agent-UI process. #2153 may repoint this.
 DEFAULT_HOST_AGENT_ID = "chat"
 
-# Legacy ``~/.gaia`` root override. Mirrors ``gaia.config.GAIA_CONFIG_DIR`` but is
-# resolved on every call (not import-time) so tests can monkeypatch the env and so
-# a subprocess with a different env resolves its own root — the same discipline
-# ``paths.host_dir`` uses for ``GAIA_DAEMON_HOME``.
-_ENV_LEGACY_HOME = "GAIA_CONFIG_DIR"
-
 
 class MigrationState:
     """String constants for the ``status`` field of :func:`run_migrations`."""
@@ -85,11 +79,15 @@ class MigrationState:
 
 
 def legacy_gaia_dir() -> Path:
-    """The pre-v2 ``~/.gaia`` root holding the flat legacy stores."""
-    override = os.environ.get(_ENV_LEGACY_HOME)
-    if override:
-        return Path(override)
-    return Path.home() / ".gaia"
+    """The pre-v2 root holding the flat legacy stores: this GAIA home's own.
+
+    Resolved like every other GAIA path (``GAIA_HOME``, then ``GAIA_CONFIG_DIR``,
+    then ``~/.gaia``). Reading ``~/.gaia`` under ``GAIA_HOME`` copied the default
+    home's memory and chats into an isolated one's custody.
+    """
+    from gaia.config import gaia_home
+
+    return gaia_home()
 
 
 def custody_dir() -> Path:

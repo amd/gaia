@@ -10,15 +10,15 @@ raises before inference. Use the [Lemonade gateway path](/sdk/sdks/llm#gateway-m
 
 
 <Info>
-  **Source Code:** [`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py)
+  **Source Code:** [`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py)
 </Info>
 
 <Note>
 **Component:** ChatAgent - Reference Conversational AI Implementation
-**Module:** `gaia_agent_chat.agent`
+**Module:** `gaia_agent.chat_agent`
 **Inherits:** Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, FileSearchToolsMixin, FileIOToolsMixin, VLMToolsMixin, ScreenshotToolsMixin, SDToolsMixin, MCPClientMixin
 
-> **Status:** ChatAgent is the base class [GaiaAgent](/guides/gaia) extends, not an agent you pick. Its `chat` / `doc` / `file` registrations are `hidden` — still resolvable by id, so stored sessions and eval scenarios keep working, but absent from the Agent UI picker and the Hub catalog. New work should target the flagship.
+> **Status:** ChatAgent is the base class [GaiaAgent](/guides/gaia) extends, not an agent you pick. It ships in the flagship package (`gaia-agent-gaia`). Its old `chat` / `doc` / `file` ids resolve to the flagship `gaia` agent, so stored sessions reopen on it. `gaia_agent_chat` still imports for one release as a deprecated re-export. New work should target the flagship.
 </Note>
 
 ---
@@ -411,7 +411,7 @@ rag = [
 ]
 
 chat = [
-    "watchdog>=2.1.0",  # File monitoring
+    "watchdog>=2.1.0,<7",  # File monitoring
     "aiohttp>=3.8.0",   # Async HTTP
 ]
 ```
@@ -423,7 +423,7 @@ chat = [
 ### Example 1: Basic Chat with RAG
 
 ```python
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 # Configure agent
 config = ChatAgentConfig(

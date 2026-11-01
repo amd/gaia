@@ -1,0 +1,34 @@
+id: english_document_arabic_questions
+name: "English document, Arabic questions"
+category: rag_quality
+severity: medium
+description: |
+  Agent answers Arabic questions from an English document in Arabic, keeping the
+  figures exact.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - corpus_doc: budget_2025
+      path: "eval/corpus/documents/budget_2025.md"
+
+turns:
+  - turn: 1
+    objective: "Ask, in Arabic and word for word: 'ما هي الميزانية الإجمالية المعتمدة لعام 2025؟'"
+    ground_truth:
+      doc_id: budget_2025
+      fact_id: total_budget
+      expected_answer: "$4.2M"
+    success_criteria: "Agent answers in Arabic that the total approved budget is $4.2M"
+
+  - turn: 2
+    objective: "Ask, in Arabic and word for word: 'عند أي مستوى إنفاق تصبح موافقة المدير المالي مطلوبة؟'"
+    ground_truth:
+      doc_id: budget_2025
+      fact_id: cfo_approval_threshold
+      expected_answer: "Expenses over $50K require CFO approval"
+    success_criteria: "Agent answers in Arabic that expenses over $50K need CFO approval"
+
+expected_outcome: |
+  Both answers are in Arabic and both figures match the English source.

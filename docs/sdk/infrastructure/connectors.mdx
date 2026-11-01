@@ -138,6 +138,11 @@ summary = conn.import_forwarded_connection(
 # summary carries metadata only — never the refresh token or client secret.
 ```
 
+If GAIA stops after writing the forwarded client but before writing its matching
+connection, the next locked connection read restores the pre-import pair before
+checking it. The caller can retry the import; GAIA does not treat that temporary
+mismatch as a reason to delete the prior connection.
+
 ### REST: `POST /v1/connections/{provider}`
 
 The same ingestion is exposed over REST by the Agent UI server (which binds
@@ -186,11 +191,17 @@ app that forwarded it, or from the account's connected-apps page.
 it and GAIA need.** GAIA refreshes with the forwarded `refresh_token` and
 **cannot widen scope at refresh time** — a refresh only ever returns the
 scopes the original consent granted. If the forwarded `scopes` don't cover
-what the target agent needs (for the Email agent: `gmail.modify`,
-`gmail.send`, and a calendar scope), the import **fails loudly** with
-`ScopeMismatchError` (HTTP 403 + `missing_scopes`) rather than silently
-under-provisioning. Re-consent by the host app — with the wider scope set —
-is the only fix.
+what the target agent needs (for the flagship `installed:gaia`:
+`gmail.readonly`; for the Email agent: `gmail.modify` and `gmail.send`), the
+import **fails loudly** with `ScopeMismatchError` (HTTP 403 +
+`missing_scopes`) rather than silently under-provisioning. Re-consent by the
+host app — with the wider scope set — is the only fix.
+
+The REST route checks the scopes the agents in `grant_agents` declare. A
+Python call that passes no `required_scopes` checks only that a Google or
+Microsoft connection carries **one** mail read scope (`gmail.readonly` or
+`gmail.modify`; `Mail.Read` or `Mail.ReadWrite`), so a read-only forward for
+the flagship is accepted.
 </Warning>
 
 <Note>
@@ -274,49 +285,78 @@ gaia connectors disconnect google
 
 ## Agent-author guide
 
-Declare the connectors your agent needs as `REQUIRED_CONNECTORS`:
+Declare the connectors your agent needs as `REQUIRED_CONNECTORS`, then fetch
+the credential from inside a tool:
 
 ```python
+import json
 from typing import ClassVar, List
+
+import httpx
+
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.connectors import ConnectorRequirement, get_access_token_sync
-from gaia.agents.base.tools import tool
+from gaia.connectors.formatting import format_connector_error
+
+GMAIL_READ = "https://www.googleapis.com/auth/gmail.readonly"
+
+
+def recent_message_ids(limit: int) -> dict:
+    """Module-level so it can be unit-tested without building the agent."""
+    try:
+        token = get_access_token_sync(provider="google", scopes=[GMAIL_READ])
+        resp = httpx.get(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+            params={"maxResults": limit},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        ids = [m["id"] for m in resp.json().get("messages", [])]
+        return {"ok": True, "ids": ids}
+    except Exception as e:  # noqa: BLE001 - becomes an actionable message for the model
+        return {"ok": False, "error": format_connector_error(e)}
 
 
 class GmailAgent(Agent):
-    AGENT_ID = "gmail_demo"
+    AGENT_ID = "gmail-demo"
     AGENT_NAME = "Gmail Demo"
-    AGENT_DESCRIPTION = "Lists 5 newest Gmail subjects."
+    AGENT_DESCRIPTION = "Lists the newest Gmail messages."
     CONVERSATION_STARTERS = ["List my newest emails"]
 
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = [
         ConnectorRequirement(
             connector_id="google",
-            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
-            reason="Read your inbox to summarize the 5 newest messages",
+            scopes=(GMAIL_READ,),
+            reason="Read your inbox to list the newest messages",
         ),
     ]
 
-    def _register_tools(self):
-        self._register("list_recent_subjects", self._list_recent_subjects)
+    def _get_system_prompt(self) -> str:
+        return (
+            "Call list_recent_messages when asked about the inbox. If it returns "
+            "AGENT_NOT_GRANTED or NOT_CONNECTED, tell the user which grant or "
+            "connection to add in Settings → Connectors."
+        )
 
-    @tool()
-    def _list_recent_subjects(self) -> list[str]:
-        """List the 5 newest Gmail subjects."""
-        token = get_access_token_sync(
-            provider="google",
-            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
-        )
-        import requests
-        r = requests.get(
-            "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-            params={"maxResults": 5},
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=10,
-        )
-        r.raise_for_status()
-        return [m["id"] for m in r.json().get("messages", [])]
+    def _register_tools(self) -> None:
+        _TOOL_REGISTRY.clear()  # don't inherit tools other agents registered
+
+        @tool
+        def list_recent_messages(limit: int = 5) -> str:
+            """List the ids of the newest Gmail messages."""
+            return json.dumps(recent_message_ids(max(1, min(limit, 25))))
+
+        self._snapshot_tools()
 ```
+
+`format_connector_error` turns the two states a user can fix — `AGENT_NOT_GRANTED`
+and `NOT_CONNECTED` — into a message naming the Settings → Connectors step, so the
+model can relay it instead of guessing. An `mcp_server` connector (GitHub, Tavily, …)
+hands back its configured environment instead of a token:
+`get_credential_sync("mcp-github", required_scopes=["use"])["env"]["GITHUB_PERSONAL_ACCESS_TOKEN"]`
+(from `gaia.connectors.handler`).
 
 The Agent UI consent dialog renders `reason` in plain language. After
 the user grants the scopes, subsequent `get_access_token_sync` calls

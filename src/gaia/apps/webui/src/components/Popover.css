@@ -16,8 +16,8 @@
 
 .popover-above { bottom: calc(100% + 6px); }
 .popover-below { top: calc(100% + 6px); }
-.popover-start { left: 0; }
-.popover-end { right: 0; }
+.popover-start { inset-inline-start: 0; }
+.popover-end { inset-inline-end: 0; }
 
 .popover-heading {
     padding: 6px 8px 4px;
@@ -35,7 +35,7 @@
     border-radius: var(--radius-sm);
     color: var(--text-primary);
     font-size: var(--fs-ui);
-    text-align: left;
+    text-align: start;
 }
 
 .popover-item:hover:not(:disabled),

@@ -1,25 +1,42 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertCircle, Check, ChevronRight, Cloud, Cpu, Info, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
 import { shortModelName, useModelStore } from '../stores/modelStore';
 import { lemonadeKeyRejected } from '../utils/lemonade';
 import { CloudPrices } from './settings/CloudPrices';
 import './settings/CloudSpending.css';
-import { formatGb } from '../utils/modelLabels';
-import { ChatModelChoice, deviceKnown, SystemCheck } from './SetupSteps';
+import { deviceKnown, ModelsStep, ReadySummary, SystemCheck } from './SetupSteps';
 import { StartCards } from './StartCards';
 import { useGatewayNetwork } from '../hooks/useGatewayNetwork';
-import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCheck, SetupPlan, SetupProblem, SetupRunStatus, SetupStep, StartCard } from '../types';
+import { useT, type Translate } from '../i18n/useT';
+import { isMessageKey, type MessageKey } from '../i18n/registry';
+import { ConfirmSheet } from './setup/ConfirmSheet';
+import { DownloadProgress, downloadsActive } from './setup/DownloadProgress';
+import { GpuMemoryPanel } from './setup/GpuMemoryPanel';
+import { tooBigText } from './setup/ModelChecklist';
+import {
+    catalogOf, extraModels, initialSelection, overallFromPlan, showGpuStep, skipChanges, tooBig, type Selection,
+} from './setup/selection';
+import type {
+    GpuMemoryStatus, LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCatalogEntry,
+    SetupConfirm, SetupModelProgress, SetupPlan, SetupProblem, SetupRunStatus, StartCard,
+} from '../types';
 import './SetupScreen.css';
+import './setup/setup.css';
 
-const CHOICES: Array<{ id: ProviderId; title: string; note: string }> = [
-    { id: 'local', title: 'On this PC', note: 'Private. Models run on your AMD hardware; nothing leaves this machine.' },
-    { id: 'fireworks', title: 'Fireworks AI', note: 'Faster, larger cloud models. Needs an API key; chat history is sent to Fireworks AI.' },
-    { id: 'amd', title: 'AMD LLM Gateway', note: 'For AMD employees. Needs a gateway key; chat history is sent to the gateway.' },
+const CHOICES: Array<{ id: ProviderId; title: MessageKey | string; note: MessageKey }> = [
+    { id: 'local', title: 'setup.where.local', note: 'setup.where.localNote' },
+    { id: 'fireworks', title: 'Fireworks AI', note: 'setup.where.fireworksNote' },
+    { id: 'amd', title: 'AMD LLM Gateway', note: 'setup.where.amdNote' },
 ];
+
+/** A provider's name: translated for "On this PC", a brand name otherwise. */
+function choiceTitle(c: (typeof CHOICES)[number], t: Translate): string {
+    return isMessageKey(c.title) ? t(c.title) : c.title;
+}
 
 const POLL_MS = 1000;
 const CHOICE_KEY = 'gaia-setup-choice';
@@ -41,13 +58,6 @@ function saveChoice(choice: ProviderId): void {
     } catch (err) {
         console.warn('[SetupScreen] could not save the provider choice; a reload will ask again', err);
     }
-}
-
-function StepIcon({ status, n }: { status?: SetupStep['status']; n: number }) {
-    if (status === 'done') return <Check size={14} aria-hidden="true" />;
-    if (status === 'active') return <Loader2 size={14} className="spin" aria-hidden="true" />;
-    if (status === 'failed' || status === 'cancelled') return <AlertCircle size={14} aria-hidden="true" />;
-    return <>{n}</>;
 }
 
 const OFFERED: ReadonlyArray<LemonadeFound['status']> = ['ok', 'needs_key', 'too_old'];
@@ -198,140 +208,380 @@ function ServerProblem({ problem, onRetry, onUseGaia }: { problem: SetupProblem;
 }
 
 interface SetupScreenProps {
-    /** What `gaia init --check` said; the screen is shown only when it is not ready. */
-    initial: SetupCheck;
     /** Setup is done; `first` is a task the user picked to start with. */
     onReady: (first?: StartCard) => void;
 }
 
-/** The steps as they will run, from what is known before setup starts. */
-function plannedSteps(steps: SetupStep[], plan: SetupPlan | null, cloud: boolean): SetupStep[] {
-    if (!plan) return steps;
-    return steps.map((step) => {
-        if (step.key === 'server' && plan.lemonade.mode === 'external') {
-            return { ...step, label: 'Use your Lemonade Server', detail: plan.lemonade.url ?? step.detail };
-        }
-        if (step.key === 'models' && !cloud && !plan.decided_after_server) {
-            const size = plan.download_gb === 0 ? 'already downloaded'
-                : plan.download_gb != null ? formatGb(plan.download_gb) : null;
-            const detail = `chat model ${shortModelName(plan.chat_model.id)}, plus the embedding model`;
-            return { ...step, detail: size ? `${detail} (${size})` : detail };
-        }
-        return step;
-    });
+/** Where the user is: each phase is one numbered step, with Back to the one before. */
+type Phase = 'where' | 'server' | 'models' | 'gpu' | 'download';
+
+type StepKey = 'check' | 'where' | 'server' | 'models' | 'gpu' | 'download' | 'connect';
+
+/** What a confirmation sheet is asking. */
+type Confirm =
+    | { kind: 'no_fit'; models: SetupCatalogEntry[] }
+    | { kind: 'server'; detail: SetupConfirm; then: 'chat' | 'run' }
+    | { kind: 'server'; detail: SetupConfirm; then: 'retry'; id: string };
+
+function errorText(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
+}
+
+interface StepProps {
+    n: number;
+    status: 'done' | 'current' | 'pending' | 'failed' | 'active';
+    label: ReactNode;
+    labelId?: string;
+    children?: ReactNode;
+}
+
+function Step({ n, status, label, labelId, children }: StepProps) {
+    const icon = status === 'done' ? <Check size={14} aria-hidden="true" />
+        : status === 'active' ? <Loader2 size={14} className="spin" aria-hidden="true" />
+            : status === 'failed' ? <AlertCircle size={14} aria-hidden="true" />
+                : n;
+    return (
+        <li className={`setup-step is-${status}`} aria-current={status === 'current' || status === 'active' ? 'step' : undefined}>
+            <div className="setup-step-head">
+                <span className="setup-step-num">{icon}</span>
+                <span className="setup-step-label" id={labelId} tabIndex={labelId ? -1 : undefined}>{label}</span>
+            </div>
+            {children && <div className="setup-step-body">{children}</div>}
+        </li>
+    );
 }
 
 /**
- * First run, the same steps as the TUI: check this PC, choose where GAIA runs
- * and which chat model, then install the model server, download the models and
- * check they load. A cloud choice skips the local chat model (the embedding
- * model is still needed for documents and memory). Ends on a first task.
+ * First run, the same steps as the TUI: check this PC, choose where GAIA runs,
+ * start the model server when there is none yet, choose the models (and, on an
+ * integrated GPU, its memory share), then download them and check they load.
+ * Nothing downloads until the user has seen the models and the totals. A cloud
+ * choice downloads only the embedding model. Ends on a first task.
  */
-export function SetupScreen({ initial, onReady }: SetupScreenProps) {
+export function SetupScreen({ onReady }: SetupScreenProps) {
+    const t = useT();
     const refreshModel = useModelStore((s) => s.refresh);
     const selectModel = useModelStore((s) => s.select);
     const [choice, setChoice] = useState<ProviderId>(() => readChoice() ?? 'local');
+    const [phase, setPhase] = useState<Phase>('where');
     const [hardware, setHardware] = useState<PreflightReport | null>(null);
     const [hardwareError, setHardwareError] = useState<string | null>(null);
     const [run, setRun] = useState<SetupRunStatus | null>(null);
+    const [lostContact, setLostContact] = useState<string | null>(null);
     const [startError, setStartError] = useState<string | null>(null);
     const [key, setKey] = useState('');
     const [keyState, setKeyState] = useState<{ busy: boolean; error: string | null; done: boolean; waiting?: string | null }>({ busy: false, error: null, done: false });
     const [showLog, setShowLog] = useState(false);
     const [plan, setPlan] = useState<SetupPlan | null>(null);
     const [planError, setPlanError] = useState<string | null>(null);
+    const [selection, setSelection] = useState<Selection | null>(null);
+    // The plan the download started from: the download step's totals come from it,
+    // as the models step's did, so the two screens show the same numbers.
+    const [startPlan, setStartPlan] = useState<SetupPlan | null>(null);
+    // The plan read after setup finished: what is really on disk, for the summary.
+    const [finalPlan, setFinalPlan] = useState<SetupPlan | null>(null);
+    const [gpu, setGpu] = useState<GpuMemoryStatus | null>(null);
+    const [keepTrying, setKeepTrying] = useState(false);
+    const [confirm, setConfirm] = useState<Confirm | null>(null);
+    const [noFitAcked, setNoFitAcked] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [actionError, setActionError] = useState<string | null>(null);
+    const [resumeOffer, setResumeOffer] = useState(false);
+    const [serverStep, setServerStep] = useState(false);
     const [cloudModel, setCloudModel] = useState<string | null>(null);
     const [firstTasks, setFirstTasks] = useState<StartCard[]>([]);
     // GAIA uses a Lemonade the user runs, so the Connect step changes nothing there.
     const [usersServer, setUsersServer] = useState(false);
+    // What the last run was started with, so Resume and Retry repeat it.
+    const lastRun = useRef<{ gaiaLemonade: boolean; options: api.SetupRunOptions }>({ gaiaLemonade: false, options: {} });
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     // A connect waiting on an OS prompt stops asking once setup is gone.
     const mounted = useRef(true);
-    useEffect(() => () => { mounted.current = false; }, []);
+    useEffect(() => {
+        mounted.current = true;
+        return () => { mounted.current = false; };
+    }, []);
     const { network: gateway, recheck: recheckGateway } = useGatewayNetwork();
     const unreachable = (id: ProviderId) => id === 'amd' && gateway?.reachable === false;
 
     const cloud = choice !== 'local';
-    const steps: SetupStep[] = run?.steps
-        ?? plannedSteps(cloud ? initial.cloud_steps ?? initial.steps : initial.steps, plan, cloud);
+    const serverRun = !!run?.server_only;
+    const fullRun = run && !run.server_only ? run : null;
     const running = run?.state === 'running' || run?.state === 'verifying';
-    const installed = run?.state === 'ready';
-    // A failed or stopped run leaves the choices open, so a retry can change them.
-    const locked = running || installed;
-    const modelNamed = !!run?.chat_model || (!!plan && !plan.decided_after_server);
-    // The run's steps are numbered after: check, where, and (local) model.
-    const firstRunStep = cloud ? 3 : 4;
-    // Read but not complete: the device waits for the model server, or nothing could be read.
-    const checkOpen = !!hardwareError || (!!hardware && !deviceKnown(hardware));
+    const installed = fullRun?.state === 'ready';
+    const moving = downloadsActive(run);
 
     const loadHardware = useCallback(() => {
         setHardwareError(null);
         api.getOnboardingPreflight()
             .then(setHardware)
-            .catch((err) => setHardwareError(err instanceof Error ? err.message : String(err)));
+            .catch((err) => setHardwareError(errorText(err)));
     }, []);
 
     // A cold PC's first plan can answer after the one asked for once "Use mine" is picked.
     const planRequest = useRef(0);
-    const loadPlan = useCallback(() => {
+    const loadPlan = useCallback(async (): Promise<SetupPlan | null> => {
         const request = ++planRequest.current;
-        setPlan(null);
         setPlanError(null);
-        api.getSetupPlan()
-            .then((p) => { if (request === planRequest.current) setPlan(p); })
-            .catch((err) => {
-                if (request === planRequest.current) setPlanError(err instanceof Error ? err.message : String(err));
-            });
+        try {
+            const p = await api.getSetupPlan();
+            if (request !== planRequest.current) return null;
+            setPlan(p);
+            return p;
+        } catch (err) {
+            if (request === planRequest.current) setPlanError(errorText(err));
+            return null;
+        }
+    }, []);
+
+    const loadGpu = useCallback(async () => {
+        try {
+            const g = await api.getGpuMemory();
+            if (mounted.current) setGpu(g ?? null);
+        } catch (err) {
+            // Optional step: without a reading it stays hidden, and Settings shows the error.
+            console.warn('[SetupScreen] GPU memory could not be read; the step stays hidden', err);
+        }
     }, []);
 
     useEffect(() => {
         api.getLemonadeTarget()
-            .then((t) => setUsersServer(t.source === 'config'))
+            .then((tg) => setUsersServer(tg.source === 'config'))
             .catch((err) => console.warn('[SetupScreen] could not read which Lemonade GAIA uses', err));
         loadHardware();
-        loadPlan();
+        void loadPlan();
         // Pick up a setup another tab (or a reload) already started.
         api.getSetupStatus()
             .then((s) => {
-                if (s.state === 'idle') return;
+                if (s.state === 'idle' && !s.models?.length) return;
                 setRun(s);
+                if (s.server_only) {
+                    setServerStep(true);
+                    if (s.state !== 'ready') setPhase('server');
+                } else {
+                    setPhase('download');
+                }
                 // A cloud run with no saved choice can't say which provider; the
                 // Connect step lets the user switch if this guess is wrong.
                 if (s.skip_chat_model && !readChoice()) setChoice('fireworks');
             })
-            .catch((err) => setStartError(`Could not read setup progress: ${err instanceof Error ? err.message : err}`));
+            .catch((err) => setStartError(`Could not read setup progress: ${errorText(err)}`));
     }, [loadHardware, loadPlan]);
+
+    // The plan seeds the checklist once, from what is planned and on disk.
+    useEffect(() => {
+        if (!plan?.catalog || !plan.lemonade.reachable) return;
+        setSelection((s) => s ?? initialSelection(plan));
+        void loadGpu();
+        // A download that didn't finish last time: offer to resume, never resume on its own.
+        if (!run && plan.catalog.some((e) => e.partial && e.selected)) setResumeOffer(true);
+    }, [plan, loadGpu, run]);
 
     const stopPolling = useCallback(() => {
         if (pollRef.current) clearInterval(pollRef.current);
         pollRef.current = null;
     }, []);
 
-    // Setup started the model server, so the device can be read now.
+    // A full disk: read the free space again, so "Free N GB" is what is needed now.
+    const diskFull = (run?.models ?? []).filter((m) => m.state === 'failed' && m.error_kind === 'disk_full').length;
     useEffect(() => {
-        if (installed) loadHardware();
-    }, [installed, loadHardware]);
+        if (diskFull > 0) void loadPlan();
+    }, [diskFull, loadPlan]);
+
+    const poll = useCallback(async () => {
+        try {
+            const s = await api.getSetupStatus();
+            setLostContact(null);
+            setRun(s);
+        } catch (err) {
+            setLostContact(errorText(err));
+        }
+    }, []);
 
     useEffect(() => {
-        if (!running) return stopPolling;
-        pollRef.current = setInterval(() => {
-            api.getSetupStatus().then(setRun).catch((err) => {
-                setRun((r) => r && { ...r, state: 'failed', error: `Lost contact with GAIA: ${err instanceof Error ? err.message : err}` });
-            });
-        }, POLL_MS);
+        if (!moving && !lostContact) return stopPolling;
+        pollRef.current = setInterval(() => { void poll(); }, POLL_MS);
         return stopPolling;
-    }, [running, stopPolling]);
+    }, [moving, lostContact, poll, stopPolling]);
 
-    const start = useCallback(async (gaiaLemonade = false) => {
+    // The server came up: read the device and the models against it, then choose.
+    useEffect(() => {
+        if (!serverRun || run?.state !== 'ready') return;
+        loadHardware();
+        void loadPlan().then((p) => { if (p?.lemonade.reachable) setPhase((ph) => (ph === 'server' ? 'models' : ph)); });
+    }, [serverRun, run?.state, loadHardware, loadPlan]);
+
+    // Setup finished: read what is on disk now, for the summary.
+    useEffect(() => {
+        if (!installed) return;
+        loadHardware();
+        void loadPlan().then((p) => { if (p) setFinalPlan(p); });
+        void loadGpu();
+    }, [installed, loadHardware, loadPlan, loadGpu]);
+
+    const start = useCallback(async (gaiaLemonade = false, options: api.SetupRunOptions = {}) => {
         setStartError(null);
+        setActionError(null);
+        setResumeOffer(false);
         try {
             saveChoice(choice);
-            setRun(await api.startSetup(cloud, gaiaLemonade));
+            lastRun.current = { gaiaLemonade, options };
+            const s = await api.startSetup(cloud, gaiaLemonade, options);
+            setRun(s);
+            if (options.serverOnly) {
+                setServerStep(true);
+                setPhase('server');
+            } else {
+                setPhase('download');
+            }
             if (gaiaLemonade) setUsersServer(false);
         } catch (err) {
-            setStartError(err instanceof Error ? err.message : String(err));
+            const detail = api.setupConfirmFrom(err);
+            if (detail) {
+                setConfirm({ kind: 'server', detail, then: 'run' });
+                return;
+            }
+            setStartError(errorText(err));
         }
-    }, [cloud, choice]);
+    }, [choice, cloud]);
+
+    const retryRun = useCallback(() => {
+        const { gaiaLemonade, options } = lastRun.current;
+        void start(gaiaLemonade, options);
+    }, [start]);
+
+    /** Download with the selection: the plan's models, minus skips, plus ticked extras. */
+    const download = useCallback((acknowledgeLowDisk: boolean, latest: SetupPlan | null = plan) => {
+        setStartPlan(latest);
+        const extras = latest && selection && !cloud ? extraModels(latest, selection) : [];
+        void start(false, { acknowledgeLowDisk, keepTrying, extraModels: extras });
+    }, [plan, selection, cloud, keepTrying, start]);
+
+    const [ackDisk, setAckDisk] = useState(false);
+
+    /** Save the choices (chat model, skips), then the GPU step or the download. */
+    const commit = useCallback(async (acknowledgeLowDisk: boolean, acknowledgeNoFit = noFitAcked) => {
+        if (!plan || !selection) return;
+        setActionError(null);
+        setAckDisk(acknowledgeLowDisk);
+        const catalog = catalogOf(plan);
+        if (!cloud && !acknowledgeNoFit) {
+            const big = tooBig(catalog, selection).filter((e) => !e.downloaded || e.id === selection.defaultChat);
+            if (big.length > 0 && big.every((e) => e.need_gb != null)) {
+                setConfirm({ kind: 'no_fit', models: big });
+                return;
+            }
+        }
+        setBusy(true);
+        try {
+            let latest = plan;
+            if (!cloud && selection.defaultChat && selection.defaultChat !== latest.chat_model.id) {
+                try {
+                    latest = await api.chooseSetupChatModel(selection.defaultChat, acknowledgeNoFit);
+                } catch (err) {
+                    const detail = api.setupConfirmFrom(err);
+                    if (detail) {
+                        setConfirm({ kind: 'server', detail, then: 'chat' });
+                        return;
+                    }
+                    throw err;
+                }
+            }
+            if (!cloud) {
+                for (const change of skipChanges(latest, selection)) {
+                    latest = await api.skipSetupModel(change.id, change.skipped);
+                }
+            }
+            setPlan(latest);
+            if (!cloud && showGpuStep(gpu, selection)) {
+                setPhase('gpu');
+                return;
+            }
+            download(acknowledgeLowDisk, latest);
+        } catch (err) {
+            setActionError(errorText(err));
+        } finally {
+            setBusy(false);
+        }
+    }, [plan, selection, cloud, noFitAcked, gpu, download]);
+
+    const continueFromWhere = useCallback(() => {
+        saveChoice(choice);
+        setActionError(null);
+        if (!cloud && plan && !plan.lemonade.reachable) {
+            void start(false, { serverOnly: true });
+            return;
+        }
+        setPhase('models');
+    }, [choice, cloud, plan, start]);
+
+    const back = useCallback(() => {
+        setActionError(null);
+        setPhase((p) => (p === 'gpu' ? 'models' : p === 'models' ? 'where' : p));
+    }, []);
+
+    // Alt+Left goes back a step, like the Back button.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (!e.altKey || e.key !== 'ArrowLeft' || confirm) return;
+            if (phase === 'models' || phase === 'gpu') {
+                e.preventDefault();
+                back();
+            }
+        };
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+    }, [phase, back, confirm]);
+
+    const cancel = useCallback(async () => {
+        try {
+            await api.cancelSetup();
+            await poll();
+        } catch (err) {
+            setActionError(errorText(err));
+        }
+    }, [poll]);
+
+    /** One model again: Retry and Resume continue from the bytes on disk; a failed load
+     *  re-downloads, once the user confirmed it in the row's sheet. */
+    const retryModel = useCallback(async (id: string, kind: SetupModelProgress['error_kind']) => {
+        setActionError(null);
+        setBusy(true);
+        try {
+            if (kind === 'verify') await api.removeSetupModel(id);
+            if (kind === 'disk_full') void loadPlan();
+            try {
+                setRun(await api.downloadSetupModel(id, { keepTrying }));
+            } catch (err) {
+                const detail = api.setupConfirmFrom(err);
+                if (!detail) throw err;
+                setConfirm({ kind: 'server', detail, then: 'retry', id });
+            }
+        } catch (err) {
+            setActionError(errorText(err));
+        } finally {
+            setBusy(false);
+        }
+    }, [keepTrying, loadPlan]);
+
+    const skipModel = useCallback(async (id: string) => {
+        setActionError(null);
+        setBusy(true);
+        try {
+            const entry = plan?.catalog?.find((e) => e.id === id);
+            if (entry?.planned) setPlan(await api.skipSetupModel(id, true));
+            setRun((r) => r && { ...r, models: r.models?.map((m) => (m.id === id ? { ...m, state: 'skipped' } : m)) });
+        } catch (err) {
+            setActionError(errorText(err));
+        } finally {
+            setBusy(false);
+        }
+    }, [plan]);
+
+    const restartDownloads = useCallback(async () => {
+        await cancel();
+        retryRun();
+    }, [cancel, retryRun]);
 
     const connect = useCallback(async () => {
         setKeyState({ busy: true, error: null, done: false });
@@ -350,7 +600,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
             setKey('');
             setKeyState({ busy: false, error: null, done: true });
         } catch (err) {
-            setKeyState({ busy: false, error: err instanceof Error ? err.message : String(err), done: false });
+            setKeyState({ busy: false, error: errorText(err), done: false });
         }
     }, [choice, key, selectModel, usersServer]);
 
@@ -366,10 +616,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     }, [onReady, refreshModel]);
 
     const canFinish = installed && (!cloud || keyState.done);
-    const activeStep = steps.find((s) => s.status === 'active' || s.status === 'failed');
-    // The one model that answers: what setup (or the cloud step) actually chose.
-    const answering = cloud ? cloudModel
-        : run?.chat_model ?? (plan && !plan.decided_after_server ? plan.chat_model.id : null);
+    const answering = cloud ? cloudModel : fullRun?.chat_model ?? (plan && !plan.decided_after_server ? plan.chat_model.id : null);
 
     useEffect(() => {
         if (!canFinish) return;
@@ -378,38 +625,71 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
             .catch((err) => console.warn('[SetupScreen] no first tasks to offer', err));
     }, [canFinish]);
 
+    const names = useMemo(() => {
+        const out: Record<string, string> = {};
+        for (const e of plan?.catalog ?? []) out[e.id] = e.name;
+        return out;
+    }, [plan]);
+
+    // The steps, numbered as shown: the server and GPU steps appear only when they apply.
+    const gpuStep = !cloud && (phase === 'gpu' || (!!selection && showGpuStep(gpu, selection)));
+    const serverShown = !cloud && (serverStep || phase === 'server' || (!!plan && !plan.lemonade.reachable && !fullRun));
+    const keys: StepKey[] = ['check', 'where', ...(serverShown ? ['server' as const] : []), 'models', ...(gpuStep ? ['gpu' as const] : []), 'download', ...(cloud ? ['connect' as const] : [])];
+    const num = (k: StepKey) => keys.indexOf(k) + 1;
+    const order: StepKey[] = ['where', 'server', 'models', 'gpu', 'download', 'connect'];
+    const at = order.indexOf(phase === 'download' && installed && cloud ? 'connect' : phase);
+    const stepStatus = (k: StepKey): StepProps['status'] => {
+        const i = order.indexOf(k);
+        if (installed && k !== 'connect') return 'done';
+        if (i < at) return 'done';
+        if (i === at) return 'current';
+        return 'pending';
+    };
+    const checkOpen = !!hardwareError || (!!hardware && !deviceKnown(hardware));
+    const runFailed = run?.state === 'failed' || run?.state === 'cancelled';
+    const downloadDone = fullRun && (fullRun.state === 'failed' || fullRun.state === 'cancelled')
+        && (fullRun.models ?? []).length > 0
+        && (fullRun.models ?? []).every((m) => m.state === 'ready' || m.state === 'skipped' || m.state === 'verifying' || m.state === 'unchecked')
+        && !moving;
+
+    const lede = canFinish ? t('setup.lede.done') : run && running ? t('setup.lede.running') : t('setup.lede.start');
+
     return (
         <main className="setup" aria-labelledby="setup-title">
             <div className="setup-inner">
-                <h1 id="setup-title" className="setup-title">Set up GAIA</h1>
-                <p className="setup-lede">
-                    {canFinish ? 'All set.' : run ? 'Setting things up. Setup keeps going if you switch away.'
-                        : 'A few minutes of setup, then your first chat.'}
-                </p>
+                <h1 id="setup-title" className="setup-title">{t('setup.title')}</h1>
+                <p className="setup-lede">{lede}</p>
+
+                {resumeOffer && phase !== 'download' && (
+                    <div className="setup-banner" role="status">
+                        <Info size={14} aria-hidden="true" />
+                        <span>{t('setup.resume.banner')}</span>
+                        <span className="setup-row">
+                            <button type="button" className="btn-primary" onClick={() => download(false)}>{t('setup.resume.resume')}</button>
+                            <button type="button" className="btn-secondary" onClick={() => { setResumeOffer(false); setPhase('models'); }}>{t('setup.models.change')}</button>
+                        </span>
+                    </div>
+                )}
 
                 <ol className="setup-steps">
                     <li className={`setup-step${checkOpen ? '' : hardware ? ' is-done' : ' is-current'}`}>
                         <div className="setup-step-head">
                             <span className="setup-step-num">
-                                {checkOpen ? <Info size={14} aria-hidden="true" /> : hardware ? <Check size={14} aria-hidden="true" /> : 1}
+                                {checkOpen ? <Info size={14} aria-hidden="true" /> : hardware ? <Check size={14} aria-hidden="true" /> : num('check')}
                             </span>
-                            <span className="setup-step-label">Check this PC</span>
+                            <span className="setup-step-label">{t('setup.check.title')}</span>
                         </div>
-                        {!locked && (
+                        {phase === 'where' && (
                             <div className="setup-step-body">
                                 <SystemCheck hardware={hardware} error={hardwareError} />
                             </div>
                         )}
                     </li>
 
-                    <li className={`setup-step${locked ? ' is-done' : ' is-current'}`}>
-                        <div className="setup-step-head">
-                            <span className="setup-step-num">{locked ? <Check size={14} aria-hidden="true" /> : 2}</span>
-                            <span className="setup-step-label">Choose where GAIA runs</span>
-                        </div>
-                        {!locked && (
-                            <div className="setup-step-body">
-                                <ExistingLemonadeOffer onChosen={(mode) => { setUsersServer(mode === 'external'); loadHardware(); loadPlan(); }} />
+                    <Step n={num('where')} status={stepStatus('where')} label={t('setup.where.title')}>
+                        {phase === 'where' && (
+                            <>
+                                <ExistingLemonadeOffer onChosen={(mode) => { setUsersServer(mode === 'external'); loadHardware(); void loadPlan(); }} />
                                 <div className="setup-choices" role="radiogroup" aria-label="Where GAIA runs">
                                     {CHOICES.map((c) => (
                                         <button
@@ -423,96 +703,183 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                         >
                                             {c.id === 'local' ? <Cpu size={16} aria-hidden="true" /> : <Cloud size={16} aria-hidden="true" />}
                                             <span>
-                                                <span className="setup-choice-title">{c.title}</span>
-                                                <span className="setup-choice-note">{unreachable(c.id) ? gateway?.detail : c.note}</span>
+                                                <span className="setup-choice-title">{choiceTitle(c, t)}</span>
+                                                <span className="setup-choice-note">{unreachable(c.id) ? gateway?.detail : t(c.note)}</span>
                                             </span>
                                         </button>
                                     ))}
                                 </div>
                                 {gateway?.reachable === false && (
-                                    <button type="button" className="btn-secondary" onClick={recheckGateway}>
+                                    <button type="button" className="btn-secondary setup-start" onClick={recheckGateway}>
                                         Check the AMD gateway again
                                     </button>
                                 )}
-                            </div>
-                        )}
-                    </li>
-
-                    {!cloud && (
-                        <li className={`setup-step${locked && modelNamed ? ' is-done' : locked ? ' is-pending' : ' is-current'}`}>
-                            <div className="setup-step-head">
-                                <span className="setup-step-num">{locked && modelNamed ? <Check size={14} aria-hidden="true" /> : 3}</span>
-                                <span className="setup-step-label">Chat model</span>
-                            </div>
-                            <div className="setup-step-body">
-                                <ChatModelChoice
-                                    plan={plan}
-                                    planError={planError}
-                                    chosen={run?.chat_model ?? null}
-                                    locked={locked}
-                                    onPlan={setPlan}
-                                />
-                            </div>
-                        </li>
-                    )}
-
-                    {!run && (
-                        <li className="setup-step-action">
-                            <button type="button" className="btn-primary setup-start" onClick={() => void start()} disabled={unreachable(choice)}>
-                                Start setup
-                            </button>
-                            {unreachable(choice) && <p className="setup-error" role="alert">{gateway?.detail}. Choose another option, or connect and check again.</p>}
-                            {startError && <p className="setup-error" role="alert">{startError}</p>}
-                        </li>
-                    )}
-
-                    {steps.map((step, i) => {
-                        const status = run ? step.status : 'pending';
-                        const isActive = status === 'active';
-                        const failed = status === 'failed' || status === 'cancelled';
-                        return (
-                            <li key={step.key} className={`setup-step is-${status ?? 'pending'}`} aria-current={isActive ? 'step' : undefined}>
-                                <div className="setup-step-head">
-                                    <span className="setup-step-num"><StepIcon status={status} n={i + firstRunStep} /></span>
-                                    <span className="setup-step-label">
-                                        {step.label}
-                                        {step.detail && <span className="setup-step-detail"> — {step.detail}</span>}
-                                    </span>
+                                <div className="setup-row setup-nav">
+                                    <button type="button" className="btn-primary setup-start" onClick={continueFromWhere} disabled={unreachable(choice)}>
+                                        {t('setup.continue')}
+                                    </button>
                                 </div>
-                                {isActive && run && (
-                                    <div className="setup-step-body">
-                                        <p className="setup-hint" role="status">{run.text}</p>
-                                        {run.percent != null && (
-                                            <>
-                                                <progress className="setup-progress" max={100} value={run.percent} aria-label={run.text} />
-                                                <p className="setup-hint">{run.percent}%{run.size ? ` · ${run.size}` : ''}</p>
-                                            </>
-                                        )}
+                                {unreachable(choice) && <p className="setup-error" role="alert">{gateway?.detail}. Choose another option, or connect and check again.</p>}
+                                {startError && <p className="setup-error" role="alert">{startError}</p>}
+                            </>
+                        )}
+                    </Step>
+
+                    {serverShown && (
+                        <Step
+                            n={num('server')}
+                            status={serverRun && run?.state === 'ready' || (plan?.lemonade.reachable && phase !== 'server') ? 'done'
+                                : serverRun && runFailed ? 'failed' : phase === 'server' ? 'active' : 'pending'}
+                            label={usersServer
+                                ? <>{t('setup.server.yours')}{plan?.lemonade.url && <span className="setup-step-detail"> — <bdi>{plan.lemonade.url}</bdi></span>}</>
+                                : <>{t('setup.server.install')}<span className="setup-step-detail"> — {t('setup.server.aboutMinute')}</span></>}
+                        >
+                            {phase === 'server' && serverRun && running && (
+                                <p className="setup-hint" role="status">{run?.text}</p>
+                            )}
+                            {phase === 'server' && serverRun && runFailed && run && (
+                                <>
+                                    <p className="setup-error" role="alert">{run.error ?? 'Setup stopped.'}</p>
+                                    {run.problem ? (
+                                        <ServerProblem problem={run.problem} onRetry={() => void start(false, { serverOnly: true })} onUseGaia={() => void start(true, { serverOnly: true })} />
+                                    ) : (
+                                        <div className="setup-row">
+                                            <button type="button" className="btn-primary" onClick={() => void start(!!run.gaia_lemonade, { serverOnly: true })}>Try again</button>
+                                            <span className="setup-hint">or run <code>{run.command}</code> in a terminal.</span>
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                            {phase === 'server' && serverRun && run?.state === 'ready' && (
+                                <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.models.loading')}</p>
+                            )}
+                        </Step>
+                    )}
+
+                    <Step n={num('models')} status={stepStatus('models')} label={t('setup.models.title')} labelId="setup-models-title">
+                        {phase === 'models' && (
+                            <ModelsStep
+                                plan={plan}
+                                planError={planError}
+                                onRetryPlan={() => void loadPlan()}
+                                onUseRecommended={() => void start(false, { keepTrying })}
+                                selection={selection}
+                                onSelection={setSelection}
+                                cloud={cloud}
+                                keepTrying={keepTrying}
+                                onKeepTrying={setKeepTrying}
+                                labelledBy="setup-models-title"
+                                onBack={back}
+                                onContinue={(ack) => void commit(ack)}
+                                busy={busy}
+                                error={actionError ?? startError}
+                            />
+                        )}
+                    </Step>
+
+                    {gpuStep && (
+                        <Step n={num('gpu')} status={stepStatus('gpu')} label={t('gpu.title')} labelId="setup-gpu-title">
+                            {phase === 'gpu' && gpu && (
+                                <>
+                                    <GpuMemoryPanel
+                                        status={gpu}
+                                        onStatus={setGpu}
+                                        mode="setup"
+                                        headingId="setup-gpu-title"
+                                        names={names}
+                                        onBack={back}
+                                        onSkip={() => download(ackDisk)}
+                                        onContinue={() => download(ackDisk)}
+                                    />
+                                    {startError && <p className="setup-error" role="alert">{startError}</p>}
+                                </>
+                            )}
+                        </Step>
+                    )}
+
+                    <Step
+                        n={num('download')}
+                        status={installed ? 'done' : phase === 'download' ? (runFailed && !downloadDone ? 'failed' : running ? 'active' : 'current') : 'pending'}
+                        label={t('setup.download.title')}
+                        labelId="setup-download-title"
+                    >
+                        {phase === 'download' && fullRun && (
+                            <>
+                                {(fullRun.models?.length ?? 0) > 0 ? (
+                                    <div className={lostContact ? 'is-stale' : undefined}>
+                                        <DownloadProgress
+                                            status={{ ...fullRun, overall: overallFromPlan(fullRun, startPlan ?? plan) }}
+                                            names={names}
+                                            freeGb={plan?.disk?.free_gb ?? null}
+                                            onCancel={() => void cancel()}
+                                            onRetry={(id, kind) => void retryModel(id, kind)}
+                                            onResume={(id) => void retryModel(id, null)}
+                                            onResumeAll={retryRun}
+                                            onSkip={(id) => void skipModel(id)}
+                                            onRestart={() => void restartDownloads()}
+                                            busy={busy || !!lostContact}
+                                            retryLater={running}
+                                            labelledBy="setup-download-title"
+                                        />
+                                    </div>
+                                ) : running ? (
+                                    <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {fullRun.text}</p>
+                                ) : null}
+                                {fullRun.state === 'verifying' && (
+                                    <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.download.verifying')}</p>
+                                )}
+                                {lostContact && (
+                                    <div className="setup-row" role="alert">
+                                        <span className="setup-error">Lost contact with GAIA: {lostContact}</span>
+                                        <button type="button" className="btn-secondary" onClick={() => void poll()}>{t('setup.reconnect')}</button>
                                     </div>
                                 )}
-                                {failed && run && step === activeStep && (
-                                    <div className="setup-step-body">
-                                        <p className="setup-error" role="alert">{run.error ?? 'Setup stopped.'}</p>
-                                        {run.problem ? (
-                                            <ServerProblem problem={run.problem} onRetry={() => void start()} onUseGaia={() => void start(true)} />
+                                {runFailed && downloadDone && fullRun.state === 'failed' && !fullRun.model_failed && (
+                                    // No model failed, so the run stopped for another reason: say so, in
+                                    // fixed words, with the raw text behind Details.
+                                    fullRun.problem
+                                        ? <ServerProblem problem={fullRun.problem} onRetry={retryRun} onUseGaia={() => void start(true, lastRun.current.options)} />
+                                        : (
+                                            <div className="setup-error" role="alert">
+                                                <p>{t('setup.download.stoppedBeforeCheck')}</p>
+                                                {fullRun.error && (
+                                                    <details className="dl-details">
+                                                        <summary>{t('setup.progress.details')}</summary>
+                                                        <pre dir="ltr">{fullRun.error}</pre>
+                                                    </details>
+                                                )}
+                                            </div>
+                                        )
+                                )}
+                                {runFailed && downloadDone && (
+                                    <div className="setup-row">
+                                        <button type="button" className="btn-primary" onClick={retryRun} disabled={busy}>{t('setup.finish')}</button>
+                                        <span className="setup-hint">{t('setup.download.finishNote')}</span>
+                                    </div>
+                                )}
+                                {runFailed && !downloadDone && !(fullRun.models ?? []).some((m) => m.state === 'failed' || m.state === 'cancelled') && (
+                                    <>
+                                        <p className="setup-error" role="alert">{fullRun.error ?? 'Setup stopped.'}</p>
+                                        {fullRun.problem ? (
+                                            <ServerProblem problem={fullRun.problem} onRetry={retryRun} onUseGaia={() => void start(true, lastRun.current.options)} />
                                         ) : (
                                             <div className="setup-row">
-                                                <button type="button" className="btn-primary" onClick={() => void start(!!run.gaia_lemonade)}>Try again</button>
-                                                <span className="setup-hint">or run <code>{run.command}</code> in a terminal.</span>
+                                                <button type="button" className="btn-primary" onClick={() => void start(!!fullRun.gaia_lemonade, lastRun.current.options)}>Try again</button>
+                                                <span className="setup-hint">or run <code>{fullRun.command}</code> in a terminal.</span>
                                             </div>
                                         )}
-                                        {startError && <p className="setup-error" role="alert">{startError}</p>}
-                                    </div>
+                                    </>
                                 )}
-                            </li>
-                        );
-                    })}
+                                {(actionError || startError) && <p className="setup-error" role="alert">{actionError ?? startError}</p>}
+                            </>
+                        )}
+                    </Step>
 
                     {cloud && (
                         <li className={`setup-step${keyState.done ? ' is-done' : installed ? ' is-current' : ' is-pending'}`}>
                             <div className="setup-step-head">
-                                <span className="setup-step-num">{keyState.done ? <Check size={14} aria-hidden="true" /> : steps.length + firstRunStep}</span>
-                                <span className="setup-step-label">Connect {CHOICES.find((c) => c.id === choice)?.title}</span>
+                                <span className="setup-step-num">{keyState.done ? <Check size={14} aria-hidden="true" /> : num('connect')}</span>
+                                <span className="setup-step-label">Connect {choiceTitle(CHOICES.find((c) => c.id === choice) ?? CHOICES[1], t)}</span>
                             </div>
                             {installed && !keyState.done && (
                                 <form className="setup-step-body" onSubmit={(e) => { e.preventDefault(); void connect(); }}>
@@ -528,7 +895,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                                 disabled={keyState.busy || unreachable(c.id)}
                                                 title={unreachable(c.id) ? gateway?.detail ?? undefined : undefined}
                                             >
-                                                {c.title}
+                                                {choiceTitle(c, t)}
                                             </button>
                                         ))}
                                     </div>
@@ -575,13 +942,16 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                     <div className="setup-done" role="status">
                         <div className="setup-done-head">
                             <p>
-                                GAIA is ready.
-                                {answering && <> <strong>{shortModelName(answering)}</strong> answers{cloud ? ' in the cloud' : ' on this PC'}.</>}
+                                {t.compose((say) => [
+                                    say('setup.ready.title'),
+                                    answering ? say(cloud ? 'setup.ready.answersCloud' : 'setup.ready.answersLocal', { model: cloud ? shortModelName(answering) : (names[answering] ?? finalPlan?.catalog?.find((e) => e.id === answering)?.name ?? shortModelName(answering)) }) : null,
+                                ].filter(Boolean).join(' '))}
                             </p>
                             <button type="button" className="btn-primary" onClick={() => void finish()} autoFocus>
-                                Start chatting
+                                {t('setup.ready.start')}
                             </button>
                         </div>
+                        {!cloud && finalPlan && <ReadySummary plan={finalPlan} chatModel={answering} gpu={gpu} />}
                         {firstTasks.length > 0 && (
                             <>
                                 <p className="setup-hint">Or start with one of these:</p>
@@ -591,6 +961,45 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                     </div>
                 )}
             </div>
+
+            {confirm?.kind === 'no_fit' && (
+                <ConfirmSheet
+                    title={confirm.models.length === 1
+                        ? t('setup.confirm.noFitOne', { name: confirm.models[0].name })
+                        : t('setup.confirm.noFitMany')}
+                    confirmLabel={t('setup.confirm.downloadAnyway')}
+                    cancelLabel={t('setup.confirm.pickSmaller')}
+                    onConfirm={() => { setConfirm(null); setNoFitAcked(true); void commit(ackDisk, true); }}
+                    onCancel={() => setConfirm(null)}
+                >
+                    {confirm.models.map((e) => <p key={e.id}><bdi>{e.name}</bdi>: {tooBigText(e, t)}</p>)}
+                </ConfirmSheet>
+            )}
+            {confirm?.kind === 'server' && (
+                <ConfirmSheet
+                    title={confirm.detail.code === 'low_disk' ? t('setup.confirm.lowDiskTitle') : t('setup.confirm.noFitServerTitle')}
+                    confirmLabel={confirm.detail.code === 'low_disk' ? t('setup.confirm.downloadAnyway') : t('setup.confirm.useAnyway')}
+                    cancelLabel={t('setup.confirm.changeModels')}
+                    onConfirm={() => {
+                        const c = confirm;
+                        setConfirm(null);
+                        if (c.then === 'chat') {
+                            setNoFitAcked(true);
+                            void commit(ackDisk, true);
+                        } else if (c.then === 'retry') {
+                            void api.downloadSetupModel(c.id, { keepTrying, acknowledgeLowDisk: true })
+                                .then(setRun)
+                                .catch((err) => setActionError(errorText(err)));
+                        } else {
+                            const { gaiaLemonade, options } = lastRun.current;
+                            void start(gaiaLemonade, { ...options, acknowledgeLowDisk: true });
+                        }
+                    }}
+                    onCancel={() => { const c = confirm; setConfirm(null); if (c.then !== 'retry') setPhase('models'); }}
+                >
+                    <p>{confirm.detail.message}</p>
+                </ConfirmSheet>
+            )}
         </main>
     );
 }

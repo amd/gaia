@@ -122,6 +122,12 @@ jobs:
           cd src/gaia/apps/webui
           npm test
 
+      - name: Check right-to-left layout
+        run: |
+          cd src/gaia/apps/webui
+          npx playwright install --with-deps chromium
+          npm run test:rtl
+
   test-apps-integration:
     name: Test Apps Integration
     runs-on: ubuntu-latest

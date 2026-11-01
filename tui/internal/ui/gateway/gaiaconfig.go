@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // setDefaultModel points GAIA's persistent `default_model` at a gateway model,
@@ -19,6 +21,10 @@ import (
 // Unknown keys are preserved: this file is shared with the Python side
 // (gaia.config.GaiaConfig), which owns fields this package does not model.
 func setDefaultModel(modelID string) error {
+	if lemonade.LocalOnly() {
+		return fmt.Errorf("Local only is on, so GAIA did not make %s the default model. %s",
+			modelID, lemonade.LocalOnlyHint)
+	}
 	path := gaiaConfigPath()
 
 	config := map[string]any{}

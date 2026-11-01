@@ -210,6 +210,9 @@ class TestFullAccessMode:
             def session_grants(self):
                 return set()
 
+            def session_grant_scopes(self):
+                return {}
+
         state = PermissionState(full_access=enabled)
         handler = _Handler()
         state.attach(handler)
@@ -506,6 +509,9 @@ class TestTheHandoffIsAtomic:
 
         def session_grants(self):
             return set()
+
+        def session_grant_scopes(self):
+            return {}
 
         def resolve_tool_confirmation(self, **kwargs):
             self.calls.append(kwargs)

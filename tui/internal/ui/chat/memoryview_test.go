@@ -195,7 +195,7 @@ func TestMemoryUnsupportedClientReportsPlainly(t *testing.T) {
 	}
 	last := m.messages[len(m.messages)-1]
 	if last.Role != RoleError || !strings.Contains(last.Content, "/memory") ||
-		!strings.Contains(last.Content, "gaia tui status") {
+		!strings.Contains(last.Content, "gaia-tui status") {
 		t.Errorf("no actionable explanation for an unsupported client: %+v", last)
 	}
 }

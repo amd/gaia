@@ -13,10 +13,13 @@ drive the real runner loop and ``run_scenario_subprocess`` against a fake
   command;
 * ``--resume`` runs only the scenarios without a result and merges them into
   the same scorecard, each stamped with its own commit and time;
-* a genuine agent failure or a timeout never stops a run.
+* a genuine agent failure or a timeout never stops a run;
+* a quota refusal moves the run to the backup account once, and a second one
+  stops it with a ``partial`` block that compare and the gate read as INCOMPLETE.
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -31,6 +34,7 @@ from gaia.eval.claude_outage import (
     QUOTA,
     UNREACHABLE,
     classify_driver_failure,
+    switch_to_backup_account,
 )
 from gaia.eval.integrity_gate import main as gate_main
 from gaia.eval.integrity_gate import zero_token_errors
@@ -148,7 +152,8 @@ def harness(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setenv("CLAUDE_ACCOUNT", "secondary")
+    monkeypatch.setenv("GAIA_CLAUDE_ACCOUNT", "secondary")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN_BACKUP", raising=False)
     monkeypatch.delenv("GITHUB_SHA", raising=False)
 
     state = SimpleNamespace(tmp=tmp_path, fake=None, commit="aaa111")
@@ -212,7 +217,10 @@ def test_the_stop_names_account_reset_and_how_to_resume(harness, capsys):
     assert stopped["after_scenario"] == "charlie"
     assert stopped["not_run"] == ["charlie", "delta", "echo"]
     assert "CLAUDE_CODE_OAUTH_TOKEN" in stopped["account"]
-    assert "CLAUDE_ACCOUNT=secondary" in stopped["account"]
+    assert "the secondary account" in stopped["account"]
+    # With no backup configured the stop says so, and still counts what ran.
+    assert card["partial"]["ran"] == 2 and card["partial"]["total"] == 5
+    assert "no backup account" in card["partial"]["reason"]
 
     err = out.err
     assert "Claude quota exhausted during charlie (scenario 3 of 5)" in err
@@ -489,7 +497,11 @@ def _failed(result, status=None, tokens=0, **extra):
             QUOTA,
             "2025-10-21 16:00 UTC",
         ),
-        (_failed("API Error: 429 rate_limit_error", 429, tokens=5000), QUOTA, None),
+        (_failed("You've hit your limit · resets 3pm (UTC)"), QUOTA, "3pm (UTC)"),
+        (_failed("API Error: 429 You've hit your weekly limit", 429), QUOTA, None),
+        # A bare per-minute 429 is throttling: it never reached Claude, so the run
+        # treats it as unreachable (stops after two in a row), never as quota.
+        (_failed("API Error: 429 rate_limit_error", 429), UNREACHABLE, None),
         (_failed("Credit balance is too low", 400), QUOTA, None),
         (_failed("Invalid API key · Please run /login", 401), CREDENTIAL, None),
         (_failed("OAuth token has expired"), CREDENTIAL, None),
@@ -509,6 +521,8 @@ def test_outage_signatures(payload, kind, resets):
         (_ok("x") | {"result": "waited until a rate limit resets"}, 0),
         # The scenario's own budget cap is BUDGET_EXCEEDED, not the account's.
         (_failed("budget exceeded", subtype="error_max_budget_usd", tokens=900), 1),
+        # Throttled after real work: the scenario's own error, not the account's.
+        (_failed("API Error: 429 rate_limit_error", 429, tokens=5000), 1),
         # Claude answered for a while, then the run broke for its own reasons.
         (_failed("Tool call failed: CONNECTION_CLOSED", tokens=40000), 1),
     ],
@@ -602,3 +616,200 @@ def test_compare_never_reads_not_run_as_a_regression(tmp_path):
     result = compare_scorecards(tmp_path / "b.json", tmp_path / "c.json")
     assert not result["regressed"]
     assert [e["scenario_id"] for e in result["unmeasured"]] == ["a"]
+
+
+# --- failing over to the backup account ---------------------------------------
+
+PRIMARY_TOKEN = "test-token"
+BACKUP_TOKEN = "backup-token"
+
+
+class TwoAccountClaude(FakeClaude):
+    """A ``claude -p`` whose quota is per account, read from the live env."""
+
+    def __init__(self, budgets, resets=None, rejected=()):
+        super().__init__(budget=99)
+        self.budgets = dict(budgets)
+        self.resets = resets or {}
+        self.rejected = set(rejected)
+        self.tokens = []
+
+    def __call__(
+        self, cmd, *, input, timeout, cwd
+    ):  # pylint: disable=redefined-builtin
+        token = os.environ["CLAUDE_CODE_OAUTH_TOKEN"]
+        sid = re.search(r"^id: (\S+)$", input, re.MULTILINE).group(1)
+        self.calls.append(sid)
+        self.tokens.append(token)
+        if token in self.rejected:
+            refused = {
+                **QUOTA_HIT,
+                "result": "OAuth token has expired",
+                "api_error_status": 401,
+            }
+            return SimpleNamespace(returncode=1, stdout=json.dumps(refused), stderr="")
+        if self.budgets[token] <= 0:
+            when = self.resets.get(token, "3pm (UTC)")
+            hit = {
+                **QUOTA_HIT,
+                "result": f"You've hit your weekly limit · resets {when}",
+            }
+            return SimpleNamespace(returncode=1, stdout=json.dumps(hit), stderr="")
+        self.budgets[token] -= 1
+        return SimpleNamespace(returncode=0, stdout=json.dumps(_ok(sid)), stderr="")
+
+
+@pytest.fixture
+def two_accounts(harness, monkeypatch):
+    monkeypatch.setenv("GAIA_CLAUDE_ACCOUNT", "primary")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN_BACKUP", BACKUP_TOKEN)
+    return harness
+
+
+def _stopped_two_account_run(two_accounts, fake):
+    two_accounts.use(fake)
+    with pytest.raises(SystemExit) as exc:
+        AgentEvalRunner(results_dir=two_accounts.tmp / "results")._run_locked(
+            category="cat_a"
+        )
+    run_dir = next((two_accounts.tmp / "results").iterdir())
+    return exc.value.code, run_dir
+
+
+def test_quota_on_the_primary_moves_the_run_to_the_backup(two_accounts, capsys):
+    fake = TwoAccountClaude({PRIMARY_TOKEN: 2, BACKUP_TOKEN: 99})
+    two_accounts.use(fake)
+    card = AgentEvalRunner(results_dir=two_accounts.tmp / "results")._run_locked(
+        category="cat_a"
+    )
+
+    # charlie was refused on the primary, then re-run on the backup.
+    assert fake.calls == ["alpha", "bravo", "charlie", "charlie", "delta", "echo"]
+    assert fake.tokens[3:] == [BACKUP_TOKEN] * 3
+    assert [s["status"] for s in card["scenarios"]] == ["PASS"] * 5
+    assert "stopped" not in card and "partial" not in card
+    switches = card["config"]["claude_account_switches"]
+    assert len(switches) == 1
+    assert switches[0]["from"] == "primary" and switches[0]["to"] == "secondary"
+    assert switches[0]["from_resets"] == "3pm (UTC)"
+    assert switches[0]["during_scenario"] == "charlie"
+    out = capsys.readouterr()
+    assert "[ACCOUNT SWITCH] The primary Claude account is out of quota" in out.out
+    # Labels only: neither token reaches a log or the scorecard.
+    for token in (PRIMARY_TOKEN, BACKUP_TOKEN):
+        assert token not in out.out + out.err
+        assert token not in json.dumps(card)
+
+
+def test_both_accounts_out_keeps_what_ran_and_marks_the_rest(two_accounts, capsys):
+    fake = TwoAccountClaude(
+        {PRIMARY_TOKEN: 2, BACKUP_TOKEN: 1},
+        resets={PRIMARY_TOKEN: "3pm (UTC)", BACKUP_TOKEN: "9pm (UTC)"},
+    )
+    code, run_dir = _stopped_two_account_run(two_accounts, fake)
+    assert code == EXIT_CLAUDE_OUTAGE
+    # One switch only: delta's refusal on the backup stops the run.
+    assert fake.calls == ["alpha", "bravo", "charlie", "charlie", "delta"]
+
+    card = json.loads((run_dir / "scorecard.json").read_text("utf-8"))
+    assert [(s["scenario_id"], s["status"]) for s in card["scenarios"]] == [
+        ("alpha", "PASS"),
+        ("bravo", "PASS"),
+        ("charlie", "PASS"),
+        ("delta", "INFRA_ERROR"),
+        ("echo", "NOT_RUN"),
+    ]
+    echo = card["scenarios"][4]
+    assert echo["not_run_reason"] == QUOTA and echo["overall_score"] is None
+    partial = card["partial"]
+    assert (partial["ran"], partial["total"], partial["not_run"]) == (3, 5, 2)
+    assert "both Claude accounts are out of quota" in partial["reason"]
+    assert "3pm (UTC)" in partial["reason"] and "9pm (UTC)" in partial["reason"]
+    assert partial["summary"].startswith("partial: 3 of 5 ran, stopped because both")
+
+    md = (run_dir / "summary.md").read_text("utf-8")
+    assert "INCOMPLETE — partial: 3 of 5 ran" in md.split("## Summary")[0]
+    assert "INCOMPLETE: partial: 3 of 5 ran" in capsys.readouterr().err
+
+
+def test_a_partial_run_is_compared_only_on_what_ran(two_accounts, capsys, tmp_path):
+    _code, run_dir = _stopped_two_account_run(
+        two_accounts, TwoAccountClaude({PRIMARY_TOKEN: 2, BACKUP_TOKEN: 1})
+    )
+    baseline = tmp_path / "baseline.json"
+    passed = [{"scenario_id": sid, "status": "PASS", "overall_score": 9} for sid in IDS]
+    baseline.write_text(json.dumps(_card(*passed)), "utf-8")
+    capsys.readouterr()
+
+    result = compare_scorecards(baseline, run_dir / "scorecard.json")
+    # The two that never measured are neither regressions nor progress.
+    assert result["regressed"] == [] and result["improved"] == []
+    assert sorted(e["scenario_id"] for e in result["unmeasured"]) == ["delta", "echo"]
+    assert result["incomplete"]["ran"] == 3
+    out = capsys.readouterr().out
+    assert "[INCOMPLETE] partial: 3 of 5 ran" in out
+    assert "[OK]" not in out
+
+
+def test_the_gate_fails_a_partial_run_even_when_not_enforcing(
+    two_accounts, capsys, tmp_path, monkeypatch
+):
+    _code, run_dir = _stopped_two_account_run(
+        two_accounts, TwoAccountClaude({PRIMARY_TOKEN: 2, BACKUP_TOKEN: 1})
+    )
+    (tmp_path / "res" / "cat_a").mkdir(parents=True)
+    (tmp_path / "base").mkdir()
+    card = (run_dir / "scorecard.json").read_text("utf-8")
+    (tmp_path / "res" / "cat_a" / "scorecard.json").write_text(card, "utf-8")
+    (tmp_path / "base" / "scorecard_cat_a.json").write_text(card, "utf-8")
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    capsys.readouterr()
+
+    code = gate_main(
+        [
+            "--baseline-dir",
+            str(tmp_path / "base"),
+            "--results-dir",
+            str(tmp_path / "res"),
+            "--category",
+            "cat_a",
+        ]
+    )
+    assert code == 1
+    assert "PARTIAL RUN - cat_a: partial: 3 of 5 ran" in capsys.readouterr().out
+    text = summary.read_text("utf-8")
+    assert "Eval integrity: INCOMPLETE" in text
+    assert "the run stopped part-way" in text
+
+
+def test_a_rejected_credential_never_moves_to_the_backup(two_accounts, capsys):
+    fake = TwoAccountClaude(
+        {PRIMARY_TOKEN: 99, BACKUP_TOKEN: 99}, rejected={PRIMARY_TOKEN}
+    )
+    code, run_dir = _stopped_two_account_run(two_accounts, fake)
+    assert code == EXIT_CLAUDE_OUTAGE
+    assert fake.calls == ["alpha"] and fake.tokens == [PRIMARY_TOKEN]
+    card = json.loads((run_dir / "scorecard.json").read_text("utf-8"))
+    assert card["stopped"]["kind"] == CREDENTIAL
+    assert "claude_account_switches" not in card["config"]
+    assert card["partial"]["reason"] == "the Claude credential was rejected"
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"CLAUDE_CODE_OAUTH_TOKEN_BACKUP": ""},
+        {"CLAUDE_CODE_OAUTH_TOKEN_BACKUP": PRIMARY_TOKEN},
+        {"ANTHROPIC_API_KEY": "sk-ant-api-test"},
+    ],
+    ids=["no-backup", "backup-is-the-same-token", "api-key-wins"],
+)
+def test_there_is_nothing_to_switch_to(monkeypatch, env):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", PRIMARY_TOKEN)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN_BACKUP", BACKUP_TOKEN)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    assert switch_to_backup_account({"kind": QUOTA}) is None
+    assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == PRIMARY_TOKEN

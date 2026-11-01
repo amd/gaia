@@ -18,7 +18,7 @@ per request with `/query`'s `provider` field (contract ≥ 2.14) — see
 [`SPEC.md` §5.5](./SPEC.md#55-other-transports).
 
 The terminal UI you get here is the published **`terminal-hub`** component — the
-exact same binary a full GAIA install runs as `gaia tui`, not a separate build. So
+exact same binary a full GAIA install runs as `gaia-tui`, not a separate build. So
 however you arrive at the terminal UI, it behaves identically.
 
 ## What it actually does
@@ -42,7 +42,7 @@ however you arrive at the terminal UI, it behaves identically.
 - **On Linux x64, glibc 2.34 or newer** for the agent sidecar (Ubuntu 22.04,
   Debian 12 and RHEL 9 or later). An older distro cannot start the agent. Check
   with `ldd --version`.
-- The `gaia` Python CLI **0.25.2 or newer** on `PATH` for the daemon the terminal
+- The `gaia` Python CLI **0.25.4 or newer** on `PATH` for the daemon the terminal
   UI starts. An earlier core cannot run this agent, so the UI comes up with
   nothing behind it. Install it with
   `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
@@ -212,7 +212,7 @@ so probe `/version` first. See
 
 **Internet switched off for the chat? Send `internet_off`** (contract ≥
 2.23) every turn: `true` refuses web search, page fetches, the browser,
-connector, mailbox and Agent Hub tools and commands that contact another host;
+connector and Agent Hub tools, mailbox reads, and commands that contact another host;
 `false` allows them.
 Omit it and the agent keeps its own setting. Binaries older than 2.23 reject
 the field with `422`, so probe `/version` first, do not answer an
@@ -284,7 +284,7 @@ version and a source URL for each:
 | Agent sidecar | the `gaia` agent, at this package's version | this package's release           |
 | Terminal UI   | the `terminal-hub` component, at its own version | the core GAIA release       |
 
-The terminal UI is **consumed, not rebuilt**. It is byte-for-byte the `gaia tui`
+The terminal UI is **consumed, not rebuilt**. It is byte-for-byte the `gaia-tui`
 binary a core install ships, so there is no second copy that could lag behind or
 behave differently — which is the entire reason it is sourced this way.
 

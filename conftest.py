@@ -67,7 +67,7 @@ _SOURCE_ROOTS = _source_roots()
 #: Modules whose origin proves which checkout is under test. The hub agents are
 #: listed too: they are separately editable-installed, so ``gaia`` can resolve
 #: here while ``gaia_agent`` quietly comes from another worktree.
-_ANCHOR_MODULES = ("gaia", "gaia_agent", "gaia_agent_chat")
+_ANCHOR_MODULES = ("gaia", "gaia_agent")
 
 
 def _prepend_source_roots() -> None:
@@ -126,6 +126,8 @@ _STATE_ENV = {
     "GAIA_MEMORY_DB": ("memory", "memory.db"),
     # Cloud calls record model availability here.
     "GAIA_GATEWAY_FILE": ("gateway", "gateway.json"),
+    # The network policy: a developer's own "Local only" must not change results.
+    "GAIA_POLICY_FILE": ("policy", "policy.json"),
     # The stdio agent writes each session's chat history under it.
     "GAIA_TUI_HOME": ("tui",),
     # Opened when gaia is first imported, so it must be set before that.

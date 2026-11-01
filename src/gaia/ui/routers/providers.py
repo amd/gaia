@@ -27,11 +27,16 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from gaia.llm.local_only import (
+    SETTINGS_HINT,
+    cloud_blocked,
+    local_only_key_message,
+)
 from gaia.logger import get_logger
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
-from ..security import require_ui_header
+from ..security import require_ui_header, via_tunnel
 
 logger = get_logger(__name__)
 
@@ -213,6 +218,10 @@ def _registration(provider: str, body: "ConnectRequest") -> Dict[str, Any]:
 # ── Views ──────────────────────────────────────────────────────────────────
 
 
+_KEY_HINT_LENGTH = 4
+#: A shorter key would give away too much of itself.
+_MIN_KEY_LENGTH_FOR_HINT = 16
+
 #: ``key_state`` while the OS holds the stored-key read for the user's permission.
 KEY_WAITING = "waiting_for_os_permission"
 
@@ -233,7 +242,29 @@ def _bounded_recall(provider: str) -> Optional[str]:
     )
 
 
-def _key_source(entry: Optional[Dict[str, Any]], provider: str) -> Optional[str]:
+def _known_models_active(provider: str) -> bool:
+    """Whether GAIA's server is serving known models through a list outage."""
+    if provider != FIREWORKS:
+        return False
+    from gaia.llm.fireworks_known_models import KnownModelsError, is_active
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    if not gaia_runs_lemonade():
+        return False
+    try:
+        return is_active(EmbeddedLemonade().config_dir)
+    except KnownModelsError as e:
+        logger.warning("Could not check for known Fireworks models: %s", e)
+        return False
+
+
+def _key_source(
+    entry: Optional[Dict[str, Any]], provider: str, known_models: bool = False
+) -> Optional[str]:
+    # The start environment carries GAIA's stored key here, not one the user set.
+    if known_models:
+        return "stored"
     if entry and entry.get("env_var_set"):
         return "environment"
     if entry and entry.get("runtime_key_set"):
@@ -241,6 +272,21 @@ def _key_source(entry: Optional[Dict[str, Any]], provider: str) -> Optional[str]
     if _bounded_recall(provider):
         return "stored"
     return None
+
+
+def _key_hint(provider: str, key_source: Optional[str]) -> Optional[str]:
+    """The saved key's last characters, so the user can tell which key it is."""
+    from gaia.connectors.credential_wait import CredentialStoreWaiting
+
+    if key_source not in ("stored", "lemonade"):
+        return None
+    try:
+        key = _bounded_recall(provider)
+    except CredentialStoreWaiting:
+        return None
+    if not key or len(key) < _MIN_KEY_LENGTH_FOR_HINT:
+        return None
+    return key[-_KEY_HINT_LENGTH:]
 
 
 def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -255,8 +301,13 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
     }
     if provider == LOCAL:
         return view
+    known_models = _known_models_active(provider)
     try:
-        key_source, key_state, key_message = _key_source(entry, provider), "read", None
+        key_source, key_state, key_message = (
+            _key_source(entry, provider, known_models),
+            "read",
+            None,
+        )
     except CredentialStoreWaiting as e:
         # Unknown, not absent: the UI must not offer "Add your key" here.
         key_source, key_state, key_message = None, KEY_WAITING, str(e)
@@ -264,9 +315,11 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
         {
             "registered": entry is not None,
             "key_source": key_source,
+            "key_hint": _key_hint(provider, key_source),
             "key_state": key_state,
             "key_message": key_message,
             "models_discovered": bool(entry and entry.get("models_discovered")),
+            "known_models": known_models,
             "env_var": env_var_for(provider),
             "base_url": entry.get("base_url") if entry else None,
         }
@@ -352,6 +405,8 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
         offered = [*_suggested_local_models()]
         if offer_optional:
             offered += _optional_models_that_fit()
+    added = _added_models() if provider == LOCAL else []
+    offered += [e["id"] for e in added]
     out: List[Dict[str, Any]] = []
     for m in body.get("data") or []:
         model_id = str(m.get("id") or "")
@@ -403,10 +458,27 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
                     "price": None,
                 }
             )
+    for m in out:
+        entry = next((e for e in added if _model_ids_match(e["id"], m["id"])), None)
+        m["custom"] = entry is not None
+        m["source_url"] = entry["source_url"] if entry else None
     if provider == AMD:
         _rank_gateway_models(out)
     out.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["id"].lower()))
     return out
+
+
+def _added_models() -> List[Dict[str, Any]]:
+    """Models the user added from a link; none when config.json can't be read."""
+    from gaia.config import GaiaConfigError
+    from gaia.llm.custom_models import list_custom_models
+
+    try:
+        return list_custom_models()
+    except GaiaConfigError as e:
+        # The active view reports the broken config; the list still shows the rest.
+        logger.warning("Listing models without the ones you added: %s", e)
+        return []
 
 
 def _optional_models_that_fit() -> List[str]:
@@ -551,6 +623,8 @@ def _check_model_available(model_id: str) -> Optional[str]:
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
 
     provider = provider_of(model_id)
+    if provider != LOCAL and cloud_blocked():
+        return "Local only is on, so cloud models can't run"
     try:
         if provider != LOCAL:
             _require_loopback(_base_url())
@@ -651,13 +725,6 @@ def _known(provider: str) -> None:
         )
 
 
-def _via_tunnel(request: Request) -> bool:
-    return any(
-        h in request.headers
-        for h in ("x-forwarded-for", "x-forwarded-host", "x-forwarded-proto")
-    )
-
-
 # Re-sends a stored key to Lemonade, so a cross-site GET must not reach it.
 @router.get("/api/providers", dependencies=[Depends(require_ui_header)])
 def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
@@ -749,8 +816,12 @@ def connect_provider(
     _known(provider)
     if provider == LOCAL:
         raise HTTPException(status_code=422, detail="Local models need no connection.")
+    if cloud_blocked():
+        raise HTTPException(
+            status_code=409, detail=local_only_key_message(_NAMES[provider])
+        )
     key = (body.api_key or "").strip()
-    if key and _via_tunnel(request):
+    if key and via_tunnel(request):
         raise HTTPException(
             status_code=403,
             detail="Enter provider keys on the PC running GAIA, not over mobile access.",
@@ -776,6 +847,8 @@ def connect_provider(
         return _connect_on_users_server(provider)
     try:
         _require_loopback(_base_url())
+        if key and _known_models_active(provider):
+            _leave_known_models()
         status, result = _lemonade(
             "POST",
             "install",
@@ -798,16 +871,14 @@ def connect_provider(
             if not result.get("models_discovered"):
                 # Lemonade stores a key without checking it; don't leave a dud behind.
                 _lemonade("DELETE", f"cloud/auth/{provider}")
-                raise ProviderError(
-                    f"{_NAMES[provider]} did not accept that key (no models were "
-                    "discovered). Check the key and try again.",
-                    401,
-                )
-            try:
-                remember_key(provider, key)
+                _use_known_models(provider, key)
                 remembered = True
-            except CloudKeyError as e:
-                remember_error = str(e)
+            else:
+                try:
+                    remember_key(provider, key)
+                    remembered = True
+                except CloudKeyError as e:
+                    remember_error = str(e)
         else:
             from gaia.connectors.credential_wait import CredentialStoreWaiting
 
@@ -818,6 +889,16 @@ def connect_provider(
                 raise ProviderError(str(e), 409) from e
             except (CloudKeyError, requests.RequestException) as e:
                 raise ProviderError(str(e), 502) from e
+            if provider == FIREWORKS and not (_cloud_entry(provider) or {}).get(
+                "models_discovered"
+            ):
+                try:
+                    stored = _bounded_recall(provider)
+                except CredentialStoreWaiting as e:
+                    raise ProviderError(str(e), 409) from e
+                if stored:
+                    _use_known_models(provider, stored)
+                del stored
         del key
         entry = _cloud_entry(provider)
     except ProviderError as e:
@@ -832,6 +913,69 @@ def connect_provider(
             ),
         )
     return {**view, "remembered": remembered, "remember_error": remember_error}
+
+
+def _use_known_models(provider: str, key: str) -> None:
+    """After no models came back: serve known ones, or say what actually failed."""
+    from gaia.llm.cloud_keys import (
+        CloudKeyError,
+        ensure_authenticated,
+        remember_key,
+    )
+    from gaia.llm.fireworks_known_models import KnownModelsError, use_known_models
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+    from gaia.llm.providers.fireworks import ModelListState, check_model_list
+
+    name = _NAMES[provider]
+    check = check_model_list(key) if provider == FIREWORKS else None
+    if check is None or check.state is not ModelListState.FAILING:
+        raise ProviderError(
+            f"{name} did not accept that key (no models were discovered). "
+            "Check the key and try again.",
+            401,
+        )
+    outage = (
+        f"{name} could not list its models ({check.detail}). It did not reject "
+        "your key, so there is no need to replace it."
+    )
+    try:
+        remember_key(provider, key)
+    except CloudKeyError as e:
+        raise ProviderError(f"{outage} GAIA could not keep it: {e}", 503) from e
+    if not gaia_runs_lemonade(_base_url()):
+        raise ProviderError(
+            f"{outage} GAIA kept it. Connect again when {name} recovers.", 503
+        )
+    try:
+        use_known_models(EmbeddedLemonade())
+        ensure_authenticated(provider)
+    except (
+        CloudKeyError,
+        EmbeddedLemonadeError,
+        KnownModelsError,
+        requests.RequestException,
+    ) as e:
+        raise ProviderError(
+            f"{outage} GAIA kept it, but could not switch to the models it "
+            f"already knows: {e}",
+            503,
+        ) from e
+
+
+def _leave_known_models() -> None:
+    from gaia.llm.fireworks_known_models import (
+        KnownModelsError,
+        stop_using_known_models,
+    )
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
+
+    try:
+        stop_using_known_models(EmbeddedLemonade())
+    except (EmbeddedLemonadeError, KnownModelsError) as e:
+        raise ProviderError(
+            f"Could not restart GAIA's model server to change the key: {e}", 503
+        ) from e
 
 
 def _uses_users_server() -> bool:
@@ -880,6 +1024,8 @@ def forget_provider_key(provider: str) -> Dict[str, Any]:
     try:
         # The user's own server keeps its keys; only GAIA's copy is removed.
         if not _uses_users_server():
+            if _known_models_active(provider):
+                _leave_known_models()
             status, body = _lemonade("DELETE", f"cloud/auth/{provider}")
             if status >= 400 and status != 404:
                 raise _cloud_error(provider, status, body)
@@ -934,6 +1080,7 @@ def _preferred_backend() -> Optional[str]:
 
 
 def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, Any]:
+    from gaia.installer.model_choice import to_decimal_gb
     from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
 
     from ..local_models import annotate_local_models, measured_speeds
@@ -959,7 +1106,10 @@ def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, A
         m["download_progress"] = _get_download_progress(m["id"])
     return {
         "models": annotated,
-        "memory_gb": round(capacity.memory_gb, 1) if capacity else None,
+        # Decimal GB, as the setup plan and the GPU memory pane report it.
+        "memory_gb": (
+            round(to_decimal_gb(capacity.memory_gb), 1) if capacity else None
+        ),
         "memory_source": capacity.memory_source if capacity else None,
         "capacity_error": capacity_error,
     }
@@ -977,6 +1127,14 @@ def select_model(
     model_id = body.model.strip()
     if not model_id:
         raise HTTPException(status_code=422, detail="No model given.")
+    if provider_of(model_id) != LOCAL and cloud_blocked():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Can't switch to {model_label(model_id)}: Local only is on. "
+                f"{SETTINGS_HINT}"
+            ),
+        )
     from gaia.connectors.credential_wait import CredentialStoreWaiting
 
     try:
@@ -1153,6 +1311,113 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
         else:
             reload = {"started": False, "reason": "restarting"}
     return {**view, "reload": reload}
+
+
+# ── Models the user adds from a Hugging Face link ─────────────────────────
+
+
+class CustomModelRequest(BaseModel):
+    """``quant`` picks a quantization; None lets GAIA choose one that fits."""
+
+    url: str
+    quant: Optional[str] = None
+
+
+def _inspect_custom(body: CustomModelRequest) -> Dict[str, Any]:
+    from gaia.config import GaiaConfigError
+    from gaia.llm.custom_models import inspect_link
+
+    try:
+        system_info = _read_system_info()
+        backend = _preferred_backend()
+        catalog = _lemonade_catalog()
+    except ProviderError as e:
+        _raise(e)
+    try:
+        return inspect_link(
+            body.url,
+            system_info=system_info,
+            preferred_backend=backend,
+            variant=(body.quant or "").strip() or None,
+            catalog=catalog,
+        )
+    except GaiaConfigError as e:
+        # A broken custom_models entry: say how to fix it, not a bare 500.
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+def _lemonade_catalog() -> List[Dict[str, Any]]:
+    status, body = _lemonade("GET", "models?show_all=true")
+    if status >= 400:
+        raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
+    return list(body.get("data") or [])
+
+
+@router.post("/api/providers/local/custom/check")
+def check_custom_model(body: CustomModelRequest) -> Dict[str, Any]:
+    """Check a pasted link without saving or downloading anything."""
+    return _inspect_custom(body)
+
+
+@router.post("/api/providers/local/custom")
+def add_custom_model(body: CustomModelRequest) -> Dict[str, Any]:
+    """Check a pasted link and, when it passes, add the model to the list."""
+    from gaia.config import GaiaConfigError
+    from gaia.llm.custom_models import CustomModelError
+    from gaia.llm.custom_models import add_custom_model as save
+
+    report = _inspect_custom(body)
+    if not report["ok"]:
+        raise HTTPException(status_code=422, detail=report["error"])
+    try:
+        entry = save(report)
+    except CustomModelError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return {"model": entry, "report": report}
+
+
+def _delete_from_lemonade(entry: Dict[str, Any]) -> None:
+    """Delete an added model from Lemonade if it registered it; nothing otherwise."""
+    from gaia.llm.custom_models import listed_entry
+
+    listed = listed_entry(_lemonade_catalog(), entry)
+    if listed is None:
+        return
+    status, result = _lemonade("POST", "delete", {"model_name": listed})
+    if status >= 400:
+        detail = (result.get("error") or {}) if isinstance(result, dict) else {}
+        message = detail.get("message") if isinstance(detail, dict) else detail
+        raise ProviderError(
+            f"Lemonade could not delete {listed} (HTTP {status}): "
+            f"{message or 'no reason given'}. The model is still in your list; "
+            "try again once nothing is using it.",
+            status=502,
+        )
+
+
+@router.delete("/api/providers/local/custom/{model_id}")
+def remove_custom_model(
+    model_id: str, db: ChatDatabase = Depends(get_db)
+) -> Dict[str, Any]:
+    """Remove a model the user added, and delete its download."""
+    from gaia.config import GaiaConfigError
+    from gaia.llm.custom_models import CustomModelError
+    from gaia.llm.custom_models import remove_custom_model as forget
+    from gaia.llm.lemonade_client import _model_ids_match
+
+    try:
+        result = forget(model_id, _delete_from_lemonade)
+    except CustomModelError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ProviderError as e:
+        _raise(e)
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    if _model_ids_match(db.get_setting("custom_model"), result["removed"]):
+        db.set_setting("custom_model", None)
+    return result
 
 
 # ── Live status of the local model (sidebar popover) ──────────────────────

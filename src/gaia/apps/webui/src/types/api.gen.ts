@@ -20,6 +20,7 @@ export interface ApiSchemas {
   Body_upload_document_blob_api_documents_upload_post: BodyUploadDocumentBlobApiDocumentsUploadPost;
   Body_upload_file_api_files_upload_post: BodyUploadFileApiFilesUploadPost;
   BrowseResponse: BrowseResponse;
+  CancelRequest: CancelRequest;
   CancelStreamRequest: CancelStreamRequest;
   ChatModelRequest: ChatModelRequest;
   ChatRequest: ChatRequest;
@@ -30,12 +31,12 @@ export interface ApiSchemas {
   ContextRequest: ContextRequest;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
+  CustomModelRequest: CustomModelRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
   DocumentResponse: DocumentResponse;
   DocumentUploadRequest: DocumentUploadRequest;
-  DownloadModelRequest: DownloadModelRequest;
   DownloadProgress: DownloadProgress;
   EvalMailboxRequest: EvalMailboxRequest;
   FileEntry: FileEntry;
@@ -52,6 +53,9 @@ export interface ApiSchemas {
   ForwardConnectionRequest: ForwardConnectionRequest;
   GoalCreate: GoalCreate;
   GoalStatusUpdate: GoalStatusUpdate;
+  GpuMemoryApplyRequest: GpuMemoryApplyRequest;
+  GpuMemoryPendingRequest: GpuMemoryPendingRequest;
+  GpuMemoryRevertRequest: GpuMemoryRevertRequest;
   GrantRequest: GrantRequest;
   HTTPValidationError: HTTPValidationError;
   IndexFolderRequest: IndexFolderRequest;
@@ -81,6 +85,7 @@ export interface ApiSchemas {
   PreflightReport: PreflightReport;
   PullRequestRequest: PullRequestRequest;
   QuickLink: QuickLink;
+  RemoveModelRequest: RemoveModelRequest;
   RestartRequest: RestartRequest;
   RetryChoiceRequest: RetryChoiceRequest;
   RetryWithRequest: RetryWithRequest;
@@ -100,6 +105,7 @@ export interface ApiSchemas {
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
   SetupRunRequest: SetupRunRequest;
+  SkipModelRequest: SkipModelRequest;
   SourceInfo: SourceInfo;
   StartAgentServerRequest: StartAgentServerRequest;
   SystemStatus: SystemStatus;
@@ -127,6 +133,8 @@ export interface ApiSchemas {
   ValidationError: ValidationError;
   WarmUpStatus: WarmUpStatus;
   WorkInProgress: WorkInProgress;
+  gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
+  gaia__ui__routers__system__DownloadModelRequest: Gaia_Ui_Routers_System__DownloadModelRequest;
 }
 /**
  * Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
@@ -319,13 +327,17 @@ export interface QuickLink {
   name: string;
   path: string;
 }
+export interface CancelRequest {
+  model_id?: string | null;
+}
 export interface CancelStreamRequest {
   session_id: string;
 }
 /**
- * One of setup's default chat models.
+ * A chat model GAIA knows, or one already downloaded in Lemonade.
  */
 export interface ChatModelRequest {
+  acknowledge_no_fit?: boolean;
   model_id: string;
 }
 /**
@@ -402,6 +414,13 @@ export interface CreateSessionRequest {
   system_prompt?: string | null;
   title?: string | null;
 }
+/**
+ * ``quant`` picks a quantization; None lets GAIA choose one that fits.
+ */
+export interface CustomModelRequest {
+  quant?: string | null;
+  url: string;
+}
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];
 }
@@ -448,10 +467,6 @@ export interface DocumentResponse {
  */
 export interface DocumentUploadRequest {
   filepath: string;
-}
-export interface DownloadModelRequest {
-  force?: boolean;
-  model_name: string;
 }
 /**
  * Progress of an in-flight Lemonade model download.
@@ -594,6 +609,22 @@ export interface GoalCreate {
 export interface GoalStatusUpdate {
   progress_notes?: string | null;
   status: string;
+}
+export interface GpuMemoryApplyRequest {
+  confirm?: boolean;
+  /**
+   * GPU memory to set, in decimal GB (10**9 bytes).
+   */
+  setting_gb: number;
+}
+export interface GpuMemoryPendingRequest {
+  /**
+   * GPU memory to set, in decimal GB (10**9 bytes).
+   */
+  setting_gb: number;
+}
+export interface GpuMemoryRevertRequest {
+  confirm?: boolean;
 }
 export interface GrantRequest {
   scopes?: string[];
@@ -931,6 +962,9 @@ export interface PullRequestRequest {
   root: string;
   title: string;
 }
+export interface RemoveModelRequest {
+  model_id: string;
+}
 /**
  * ``confirm`` is required to reload a model on a server GAIA does not run.
  */
@@ -1104,11 +1138,24 @@ export interface SettingsUpdateRequest {
 }
 /**
  * ``skip_chat_model`` when the chat runs on a cloud provider;
- * ``gaia_lemonade`` to set up GAIA's own server instead of the user's.
+ * ``gaia_lemonade`` to set up GAIA's own server instead of the user's;
+ * ``acknowledge_low_disk`` to download past a too-small model drive;
+ * ``keep_trying`` to wait up to two minutes out a dropped connection;
+ * ``extra_models`` to pull models beside the plan's (the user ticked them);
+ * ``server_only`` to start the model server and stop, so the models can be
+ * chosen against it before anything downloads.
  */
 export interface SetupRunRequest {
+  acknowledge_low_disk?: boolean;
+  extra_models?: string[];
   gaia_lemonade?: boolean;
+  keep_trying?: boolean;
+  server_only?: boolean;
   skip_chat_model?: boolean;
+}
+export interface SkipModelRequest {
+  model_id: string;
+  skipped?: boolean;
 }
 export interface StartAgentServerRequest {
   backend_url?: string;
@@ -1268,4 +1315,13 @@ export interface UserInputRequest {
 export interface WorkInProgress {
   answers: RunningAnswer[];
   indexing: RunningIndexJob[];
+}
+export interface Gaia_Ui_Routers_Setup__DownloadModelRequest {
+  acknowledge_low_disk?: boolean;
+  keep_trying?: boolean;
+  model_id: string;
+}
+export interface Gaia_Ui_Routers_System__DownloadModelRequest {
+  force?: boolean;
+  model_name: string;
 }

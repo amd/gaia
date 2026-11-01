@@ -24,7 +24,9 @@ from fastapi.testclient import TestClient
 from gaia import config as config_mod
 from gaia.connectors import credential_wait
 from gaia.connectors.errors import ConnectorsError
-from gaia.llm import cloud_keys, lemonade_client
+from gaia.llm import cloud_keys
+from gaia.llm import custom_models as cm
+from gaia.llm import lemonade_client
 from gaia.llm.cloud_keys import CloudKeyError
 from gaia.llm.gateway import (
     DEFAULT_AUTH_HEADER_NAME,
@@ -35,6 +37,9 @@ from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.llm.recommended_models import RECOMMENDED_MODELS, rank
 from gaia.ui.database import ChatDatabase
 from gaia.ui.routers import providers
+
+from ...test_custom_models import ARCH_SOURCE, SYSTEM_INFO
+from ...test_custom_models import _repo as repo_payload
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 CLOUD_GO = REPO_ROOT / "tui" / "internal" / "lemonade" / "cloud.go"
@@ -612,7 +617,101 @@ def test_connect_reports_a_key_the_store_did_not_keep(client, lemonade, keys):
     assert "did not keep" in body["remember_error"]
 
 
-def test_connect_drops_a_key_that_discovers_no_models(client, lemonade, keys):
+def _fireworks_view(client):
+    providers_list = client.get("/api/providers").json()["providers"]
+    return next(p for p in providers_list if p["id"] == "fireworks")
+
+
+def test_the_view_shows_only_the_end_of_a_saved_key(client, lemonade, keys):
+    keys["stored"]["fireworks"] = KEY
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "runtime_key_set": True}
+    resp = client.get("/api/providers")
+    assert _fireworks_view(client)["key_hint"] == KEY[-4:]
+    assert KEY not in resp.text
+
+
+def test_a_short_key_gets_no_hint(client, lemonade, keys):
+    keys["stored"]["fireworks"] = "short-key"
+    assert _fireworks_view(client)["key_hint"] is None
+
+
+def test_an_environment_key_gets_no_hint(client, lemonade, keys):
+    keys["stored"]["fireworks"] = KEY
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "env_var_set": True}
+    assert _fireworks_view(client)["key_hint"] is None
+
+
+@pytest.fixture
+def model_list(monkeypatch):
+    """Fireworks' answer to the list check, and the server restart, faked."""
+    from gaia.llm import fireworks_known_models as known
+    from gaia.llm.providers import fireworks
+
+    state = {"check": fireworks.ModelListCheck(fireworks.ModelListState.REJECTED)}
+    state["restarts"], state["keys_checked"] = [], []
+
+    def check(key, **_):
+        state["keys_checked"].append(key)
+        return state["check"]
+
+    monkeypatch.setattr(fireworks, "check_model_list", check)
+    monkeypatch.setattr(
+        known, "use_known_models", lambda _: state["restarts"].append(1)
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade",
+        lambda *a: state.get("own", True),
+    )
+    return state
+
+
+def _list_failing():
+    from gaia.llm.providers.fireworks import ModelListCheck, ModelListState
+
+    return ModelListCheck(ModelListState.FAILING, "HTTP 500: Error listing")
+
+
+def test_a_failing_model_list_keeps_the_key_and_serves_known_models(
+    client, lemonade, keys, model_list
+):
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list["check"] = _list_failing()
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "models_discovered": 9}
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 200
+    assert resp.json()["remembered"] is True
+    assert keys["remembered"] == [("fireworks", KEY)]
+    assert model_list["restarts"] == [1]
+    assert KEY not in resp.text
+
+
+def test_a_failing_list_on_a_system_server_blames_fireworks_not_the_key(
+    client, lemonade, keys, model_list
+):
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list.update(check=_list_failing(), own=False)
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert "HTTP 500" in detail and "did not reject" in detail
+    assert keys["remembered"] == [("fireworks", KEY)]
+    assert model_list["restarts"] == []
+    assert KEY not in resp.text
+
+
+def test_a_stored_key_is_checked_when_no_models_come_back(
+    client, lemonade, keys, model_list
+):
+    keys["stored"]["fireworks"] = KEY
+    model_list["check"] = _list_failing()
+    client.post("/api/providers/fireworks/connect", json={})
+    assert model_list["keys_checked"] == [KEY]
+    assert model_list["restarts"] == [1]
+
+
+def test_connect_drops_a_key_that_discovers_no_models(
+    client, lemonade, keys, model_list
+):
     lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
     resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
     assert resp.status_code == 401
@@ -1200,6 +1299,191 @@ def test_select_while_the_server_is_starting_is_503(client, lemonade, keys, db):
     assert db.get_setting("custom_model") is None
 
 
+# ── Models added from a Hugging Face link ─────────────────────────────────
+
+
+CUSTOM_URL = "https://huggingface.co/unsloth/Tiny-GGUF?_sm_nck=1"
+
+
+class _Web:
+    def __init__(self, status, body=None, text=""):
+        self.status_code, self._body, self.text = status, body, text
+
+    def json(self):
+        return self._body
+
+
+@pytest.fixture
+def hf_web(monkeypatch, tmp_path):
+    state = {"repo": repo_payload()}
+
+    def get(url, headers=None):
+        if url.startswith("https://huggingface.co/api/models/"):
+            return _Web(200, state["repo"])
+        return _Web(200, text=ARCH_SOURCE)
+
+    monkeypatch.setattr(cm, "_http_get", get)
+    monkeypatch.setattr(cm, "_arch_cache_path", lambda tag: tmp_path / f"{tag}.json")
+    return state
+
+
+@pytest.fixture
+def custom_config(monkeypatch, tmp_path):
+    path = tmp_path / "config.json"
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", path)
+    return path
+
+
+@pytest.fixture
+def custom_server(lemonade):
+    lemonade.answers[("GET", "system-info")] = (200, SYSTEM_INFO)
+    return lemonade
+
+
+def test_check_saves_nothing(client, custom_server, hf_web, custom_config):
+    body = client.post(
+        "/api/providers/local/custom/check", json={"url": CUSTOM_URL}
+    ).json()
+    assert body["ok"] and body["model_id"] == "user.Tiny-Q4_K_M-GGUF"
+    assert not custom_config.exists()
+    assert custom_server.paths("POST") == []
+
+
+def test_check_reports_an_unsupported_architecture(
+    client, custom_server, hf_web, custom_config
+):
+    hf_web["repo"] = repo_payload(arch="flint")
+    body = client.post(
+        "/api/providers/local/custom/check", json={"url": CUSTOM_URL}
+    ).json()
+    assert body["ok"] is False and "'flint'" in body["error"]
+
+
+def test_add_then_listed_before_download_and_after(
+    client, custom_server, hf_web, custom_config
+):
+    resp = client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["model"]["id"] == "user.Tiny-Q4_K_M-GGUF"
+
+    models = client.get("/api/providers/local/models").json()["models"]
+    row = next(m for m in models if m["id"] == "user.Tiny-Q4_K_M-GGUF")
+    assert row["custom"] is True and row["downloaded"] is False
+    assert row["source_url"] == CUSTOM_URL
+    assert row["display_name"] == "Tiny Q4_K_M" and row["size_gb"] == 3.2
+    assert all(m["custom"] is False for m in models if m is not row)
+
+    # Once downloaded, Lemonade lists it without the namespace.
+    custom_server.models = [
+        {
+            "id": "Tiny-Q4_K_M-GGUF",
+            "downloaded": True,
+            "labels": [],
+            "recipe": "llamacpp",
+        }
+    ]
+    models = client.get("/api/providers/local/models").json()["models"]
+    rows = [m for m in models if "Tiny" in m["id"]]
+    assert len(rows) == 1 and rows[0]["downloaded"] and rows[0]["custom"]
+
+
+def test_add_refused_is_422_with_the_reason(
+    client, custom_server, hf_web, custom_config
+):
+    hf_web["repo"] = repo_payload(template="")
+    resp = client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    assert resp.status_code == 422 and "base model" in resp.json()["detail"]
+    assert not custom_config.exists()
+
+
+def test_add_twice_is_refused(client, custom_server, hf_web, custom_config):
+    client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    resp = client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    assert resp.status_code == 422 and "already added" in resp.json()["detail"]
+
+
+def test_remove_deletes_by_the_name_lemonade_lists(
+    client, custom_server, hf_web, custom_config, db
+):
+    client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    custom_server.models = [
+        {"id": "Tiny-Q4_K_M-GGUF", "checkpoint": "someone/else:x.gguf"},
+        {
+            "id": "Tiny-Q4_K_M-GGUF",
+            "checkpoint": "unsloth/Tiny-GGUF:Tiny-Q4_K_M.gguf",
+            "downloaded": True,
+        },
+    ]
+    custom_server.answers[("POST", "delete")] = (200, {"status": "success"})
+    db.set_setting("custom_model", "user.Tiny-Q4_K_M-GGUF")
+
+    resp = client.delete("/api/providers/local/custom/user.Tiny-Q4_K_M-GGUF")
+    assert resp.status_code == 200, resp.text
+    assert custom_server.call("POST", "delete")["json"] == {
+        "model_name": "Tiny-Q4_K_M-GGUF"
+    }
+    assert cm.CONFIG_KEY not in json.loads(custom_config.read_text())
+    assert db.get_setting("custom_model") is None
+
+
+def test_remove_before_download_skips_the_server_delete(
+    client, custom_server, hf_web, custom_config
+):
+    client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    resp = client.delete("/api/providers/local/custom/user.Tiny-Q4_K_M-GGUF")
+    assert resp.status_code == 200
+    assert "delete" not in custom_server.paths("POST")
+
+
+def test_remove_failure_keeps_the_model(client, custom_server, hf_web, custom_config):
+    client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    custom_server.models = [
+        {
+            "id": "Tiny-Q4_K_M-GGUF",
+            "checkpoint": "unsloth/Tiny-GGUF:Tiny-Q4_K_M.gguf",
+            "downloaded": True,
+        },
+    ]
+    custom_server.answers[("POST", "delete")] = (500, {"error": {"message": "in use"}})
+    resp = client.delete("/api/providers/local/custom/user.Tiny-Q4_K_M-GGUF")
+    assert resp.status_code == 502 and "in use" in resp.json()["detail"]
+    assert cm.find_custom_model("user.Tiny-Q4_K_M-GGUF") is not None
+
+
+def test_check_with_a_broken_saved_list_says_how_to_fix_it(
+    client, custom_server, hf_web, custom_config
+):
+    custom_config.write_text(json.dumps({cm.CONFIG_KEY: [{"id": "nope"}]}))
+    resp = client.post("/api/providers/local/custom/check", json={"url": CUSTOM_URL})
+    assert resp.status_code == 500
+    assert "delete the key" in resp.json()["detail"]
+
+
+def test_remove_a_builtin_is_404(client, custom_server, custom_config):
+    resp = client.delete("/api/providers/local/custom/Gemma-4-E4B-it-GGUF")
+    assert resp.status_code == 404
+
+
+def test_first_download_registers_under_the_user_name(
+    custom_server, hf_web, custom_config, monkeypatch
+):
+    """The download stream sends checkpoint + recipe with the user. name (#1655)."""
+    from gaia.llm.lemonade_client import find_model_requirement
+
+    cm.add_custom_model(cm.inspect_link(CUSTOM_URL, system_info=SYSTEM_INFO))
+    req = find_model_requirement("user.Tiny-Q4_K_M-GGUF")
+    payload = {"model_name": req.model_id}
+    payload.update({k: v for k, v in req.pull_kwargs().items() if v is not None})
+    assert payload == {
+        "model_name": "user.Tiny-Q4_K_M-GGUF",
+        "checkpoint": "unsloth/Tiny-GGUF:Tiny-Q4_K_M.gguf",
+        "recipe": "llamacpp",
+        "mmproj": "mmproj-F16.gguf",
+        "vision": True,
+        "reasoning": True,
+    }
+
+
 # ── AMD gateway reachability (#5604) ───────────────────────────────────────
 
 
@@ -1288,3 +1572,131 @@ def test_an_unreadable_lemonade_address_skips_the_gateway_check(
     reach["error"] = _offline()
     amd = _amd(client.get("/api/providers").json())
     assert amd["network"] == {"reachable": None, "detail": None}
+
+
+# ── Local only ─────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def local_only_on(tmp_path, monkeypatch):
+    from gaia.llm import local_only
+
+    monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+    local_only.set_policy("local_ai_only")
+
+
+@pytest.mark.parametrize("provider", ["fireworks", "amd"])
+def test_connect_is_refused_under_local_only_before_any_lemonade_call(
+    client, lemonade, keys, local_only_on, provider
+):
+    resp = client.post(f"/api/providers/{provider}/connect", json={"api_key": KEY})
+    assert resp.status_code == 409
+    assert "Local only is on" in resp.json()["detail"]
+    assert lemonade.calls == []  # no install, no cloud/auth
+    assert keys["remembered"] == []
+    assert KEY not in resp.text
+
+
+def test_selecting_a_cloud_model_is_refused_under_local_only(
+    client, lemonade, keys, db, local_only_on
+):
+    resp = client.post(
+        "/api/providers/select", json={"model": "fireworks.glm-5p3-flash"}
+    )
+    assert resp.status_code == 409
+    assert "Local only is on" in resp.json()["detail"]
+    assert "network_policy cloud_allowed" in resp.json()["detail"]
+    assert lemonade.calls == []
+    assert db.get_setting("custom_model") is None
+
+
+def test_selecting_a_local_model_still_works_under_local_only(
+    client, lemonade, keys, db, local_only_on
+):
+    lemonade.models = [_CUSTOM_LISTED]
+    resp = client.post("/api/providers/select", json={"model": _CUSTOM})
+    assert resp.status_code == 200, resp.json()
+    assert db.get_setting("custom_model") == _CUSTOM
+
+
+def test_restore_does_not_bring_back_a_cloud_model_under_local_only(
+    client, lemonade, keys, db, local_only_on
+):
+    _write_config({"last_model": "fireworks.glm-5p3-flash"})
+    body = client.get("/api/providers/active").json()
+    assert body["restore"]["status"] == "failed", body["restore"]
+    assert "Local only is on" in body["restore"]["message"]
+    assert db.get_setting("custom_model") is None
+    assert keys["ensure"] == []  # no key replay attempted for the cloud model
+
+
+@pytest.fixture
+def known_models_on(monkeypatch):
+    """GAIA's server is serving known Fireworks models; record each way out."""
+    from gaia.llm import fireworks_known_models as known
+
+    left = []
+    monkeypatch.setattr(providers, "_known_models_active", lambda p: p == "fireworks")
+    monkeypatch.setattr(known, "stop_using_known_models", lambda _: left.append(1))
+    return left
+
+
+def test_forgetting_the_key_takes_it_out_of_the_server_start(
+    client, lemonade, keys, known_models_on
+):
+    keys["stored"]["fireworks"] = KEY
+    resp = client.delete("/api/providers/fireworks/key")
+    assert resp.status_code == 200
+    assert known_models_on == [1]
+    assert "fireworks" not in keys["stored"]
+
+
+def test_a_failed_restart_keeps_the_key_rather_than_half_forgetting(
+    client, lemonade, keys, monkeypatch
+):
+    from gaia.llm import fireworks_known_models as known
+    from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+
+    def boom(_):
+        raise EmbeddedLemonadeError("could not stop")
+
+    monkeypatch.setattr(providers, "_known_models_active", lambda p: True)
+    monkeypatch.setattr(known, "stop_using_known_models", boom)
+    keys["stored"]["fireworks"] = KEY
+    resp = client.delete("/api/providers/fireworks/key")
+    assert resp.status_code == 503
+    assert keys["stored"]["fireworks"] == KEY
+    assert lemonade.paths("DELETE") == []
+
+
+def test_a_new_key_during_known_models_restarts_without_the_old_one(
+    client, lemonade, keys, model_list, known_models_on
+):
+    keys["stored"]["fireworks"] = "fw_old_key_0000000000"
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 200
+    assert known_models_on == [1]
+    assert keys["stored"]["fireworks"] == KEY
+
+
+def test_a_rejected_key_is_never_kept_even_mid_outage(
+    client, lemonade, keys, model_list, known_models_on
+):
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 401
+    assert keys["remembered"] == []
+    assert model_list["restarts"] == []
+    assert KEY not in resp.text
+
+
+def test_only_fireworks_falls_back_to_known_models(client, lemonade, keys, model_list):
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list["check"] = _list_failing()
+    resp = client.post(
+        "/api/providers/amd/connect",
+        json={"api_key": KEY, "base_url": "https://gw.example.com/v1"},
+    )
+    assert model_list["keys_checked"] == []
+    assert model_list["restarts"] == []
+    assert KEY not in resp.text

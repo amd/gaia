@@ -54,6 +54,29 @@ export function markTitleBar(): void {
     if (kind && kind !== 'native') document.documentElement.dataset.titlebar = kind;
 }
 
+const scrimOpen = () => document.querySelector('.modal-overlay, .settings-overlay') !== null;
+
+/** `color` seen through the modal scrim, which can't reach the native window controls. */
+function underScrim(color: string, scrim: string): string {
+    const [r, g, b, alpha] = (scrim.match(/[\d.]+/g) ?? []).map(Number);
+    const base = color.match(/^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i);
+    if (!base || alpha === undefined) return color;
+    const mix = (channel: number, over: number) =>
+        Math.round(channel * (1 - alpha) + over * alpha).toString(16).padStart(2, '0');
+    return `#${mix(parseInt(base[1], 16), r)}${mix(parseInt(base[2], 16), g)}${mix(parseInt(base[3], 16), b)}`;
+}
+
+/** Repaint the window controls as a modal opens and closes. */
+export function watchTitleBarScrim(): void {
+    if (window.gaiaWindow?.titleBar !== 'overlay') return;
+    let open = scrimOpen();
+    new MutationObserver(() => {
+        if (scrimOpen() === open) return;
+        open = !open;
+        syncTitleBar();
+    }).observe(document.body, { childList: true, subtree: true });
+}
+
 /**
  * Paint the desktop app's window controls and the browser frame from the live
  * canvas and text tokens, so a palette reaches them too. applyPalette calls it,
@@ -62,14 +85,17 @@ export function markTitleBar(): void {
 export function syncTitleBar(): void {
     const root = document.documentElement;
     const tokens = getComputedStyle(root);
-    const color = tokens.getPropertyValue('--bg-primary').trim();
+    const canvas = tokens.getPropertyValue('--bg-primary').trim();
+    // Right to left, the controls sit over the sidebar instead of the canvas.
+    const behind = root.dir === 'rtl' ? tokens.getPropertyValue('--bg-sidebar').trim() : canvas;
+    const color = scrimOpen() ? underScrim(behind, tokens.getPropertyValue('--bg-modal-overlay')) : behind;
     const symbolColor = tokens.getPropertyValue('--text-primary').trim();
     if (window.gaiaWindow?.titleBar === 'overlay' && color && symbolColor) {
         window.gaiaWindow.setColors({ color, symbolColor }).catch((err: unknown) => {
             console.error('syncTitleBar: the desktop window controls did not take the colors', err);
         });
     }
-    if (root.dataset.palette && color) {
-        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', color);
+    if (root.dataset.palette && canvas) {
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', canvas);
     }
 }
