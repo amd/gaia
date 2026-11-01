@@ -126,7 +126,7 @@ def test_an_identical_published_version_is_skipped_without_calling_the_cli(
     publish_to_hub(skills_dir / skill)
     # Build noise in the checkout must not read as a content change.
     noise = skills_dir / skill / "__pycache__"
-    noise.mkdir()
+    noise.mkdir(exist_ok=True)
     (noise / "tools.cpython-312.pyc").write_bytes(b"\0")
 
     runner = Runner()
