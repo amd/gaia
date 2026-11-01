@@ -10,6 +10,7 @@ The mocked-HTTP tests live in ``tests/unit/test_lemonade_client_http.py``.
 import os
 import sys
 import unittest
+import uuid
 
 import pytest
 
@@ -27,6 +28,13 @@ HOST = "localhost"
 # Default 13305 matches C++ server / lemonade-server v10.1.0+ (also what Linux CI uses).
 PORT = int(os.environ.get("LEMONADE_PORT", 13305))
 API_BASE = f"http://{HOST}:{PORT}/api/v1"
+
+# A small embedding GGUF that no built-in model points at, so registering it
+# under a fresh user. name is a genuinely cold pull and deleting it afterwards
+# cannot take a built-in model's weights with it.
+COLD_PULL_CHECKPOINT = "nomic-ai/nomic-embed-text-v1-GGUF:Q2_K"
+# Distinctive, and small enough to fit any CI runner.
+LOAD_CTX_SIZE = 8192
 
 
 def is_server_running(host=HOST, port=PORT):
@@ -48,88 +56,46 @@ def is_server_running(host=HOST, port=PORT):
     return False
 
 
+@pytest.mark.integration
 class TestLemonadeClientIntegration(unittest.TestCase):
-    """Integration tests for LemonadeClient with a running server."""
+    """Integration tests for LemonadeClient with a running server.
+
+    Skips when no server is answering. It never starts one: a test that
+    spawns a real Lemonade on a developer's machine outlives the run.
+    """
 
     @classmethod
     def setUpClass(cls):
-        """Set up the test client and server."""
-        print("\n====== SETTING UP INTEGRATION TEST ENVIRONMENT ======")
-
-        # Check if server is already running
-        if is_server_running(HOST, PORT):
-            print(f"✅ Lemonade server already running at {HOST}:{PORT}")
-            cls.server_started_by_test = False
-            # Create client without auto_start since server is already running
-            # IMPORTANT: Set keep_alive=True to prevent termination on client destruction
-            cls.client = create_lemonade_client(
-                model=TEST_MODEL,
-                host=HOST,
-                port=PORT,
-                auto_start=False,  # Don't start - already running
-                auto_load=False,
-                verbose=True,
-                keep_alive=True,  # Don't terminate server when client is destroyed
+        if not is_server_running(HOST, PORT):
+            raise unittest.SkipTest(
+                f"Lemonade server not running at {HOST}:{PORT} - skipping "
+                "integration tests"
             )
-        else:
-            print(f"🚀 Starting new Lemonade server at {HOST}:{PORT}")
-            cls.server_started_by_test = True
-            # Create client with auto_start since no server is running
-            # keep_alive=False (default) so we can terminate it later
-            cls.client = create_lemonade_client(
-                model=TEST_MODEL,
-                host=HOST,
-                port=PORT,
-                auto_start=True,
-                auto_load=False,
-                verbose=True,
-                keep_alive=False,  # We started it, so we should terminate it
-            )
-
-        print(
-            f"Created integration test client with model={TEST_MODEL}, host={HOST}, port={PORT}"
+        cls.client = create_lemonade_client(
+            model=TEST_MODEL,
+            host=HOST,
+            port=PORT,
+            auto_start=False,
+            auto_load=False,
+            verbose=True,
+            keep_alive=True,  # The server is not ours to stop.
         )
 
-    @classmethod
-    def tearDownClass(cls):
-        """Clean up after all tests."""
-        print("\n====== CLEANING UP INTEGRATION TEST ENVIRONMENT ======")
-
-        # Only terminate the server if we started it
-        if hasattr(cls, "client") and hasattr(cls, "server_started_by_test"):
-            if cls.server_started_by_test:
-                try:
-                    print(f"🛑 Terminating Lemonade server (started by test)...")
-                    cls.client.terminate_server()
-                    print(f"\n✅ Lemonade server terminated after integration tests")
-                except Exception as e:
-                    print(f"\n❌ Error terminating Lemonade server: {e}")
-            else:
-                print(
-                    f"⏭️  Leaving Lemonade server running (was already running before tests)"
-                )
-                # Ensure the client won't try to terminate on destruction
-                if hasattr(cls.client, "keep_alive"):
-                    cls.client.keep_alive = True
-        elif hasattr(cls, "client"):
-            # Fallback - but be very careful not to terminate existing servers
-            print(f"⚠️  Unknown server state - checking if we should terminate...")
-            # Only terminate if we can confirm we started it via the server_process
-            if (
-                hasattr(cls.client, "server_process")
-                and cls.client.server_process is not None
-            ):
-                try:
-                    print(f"🛑 Found server process - terminating...")
-                    cls.client.terminate_server()
-                    print(f"\n✅ Lemonade server terminated after integration tests")
-                except Exception as e:
-                    print(f"\n❌ Error terminating Lemonade server: {e}")
-            else:
-                print(f"⏭️  No server process found - leaving server running")
-                # Ensure the client won't try to terminate on destruction
-                if hasattr(cls.client, "keep_alive"):
-                    cls.client.keep_alive = True
+    def _loaded_entry(self, model_name):
+        """The /health entry for *model_name*, failing loudly if it is absent."""
+        health = self.client.health_check()
+        self.assertIn(
+            "all_models_loaded",
+            health,
+            f"/health lost 'all_models_loaded'; got keys {sorted(health)}",
+        )
+        for entry in health["all_models_loaded"]:
+            if model_name in (entry.get("model_name"), entry.get("id")):
+                return entry
+        self.fail(
+            f"{model_name} is not in /health all_models_loaded after loading it: "
+            f"{health['all_models_loaded']}"
+        )
 
     def setUp(self):
         """Set up before each test."""
@@ -149,122 +115,48 @@ class TestLemonadeClientIntegration(unittest.TestCase):
         print("✅ Health check passed")
 
     def test_integration_health_check_914_format(self):
-        """Integration test for Lemonade 9.1.4+ health check format.
+        """The 9.1.4+ /health shape, asserted unconditionally.
 
-        Verifies that the new health check response format with all_models_loaded
-        is correctly parsed and context_size is properly extracted.
-
-        Lemonade 9.1.4+ moved context_size from top-level to:
-        all_models_loaded[N].recipe_options.ctx_size
+        ctx_size lives at all_models_loaded[].recipe_options.ctx_size. Dozens of
+        mocked tests hand-build that shape; if Lemonade moves it again, this is
+        the test that has to go red, so nothing here is guarded by an ``if``.
         """
-        print("\n=== Testing Lemonade 9.1.4+ Health Check Format ===")
+        self.client.load_model(TEST_MODEL)
 
-        # Step 1: Get raw health check response
-        print("Step 1: Fetching health check response...")
         health = self.client.health_check()
-        print(f"Health response keys: {list(health.keys())}")
+        self.assertEqual(health.get("status"), "ok", health)
+        entry = self._loaded_entry(TEST_MODEL)
+        self.assertIn("recipe_options", entry, f"entry keys: {sorted(entry)}")
+        ctx_size = entry["recipe_options"].get("ctx_size")
+        self.assertIsInstance(
+            ctx_size, int, f"recipe_options: {entry['recipe_options']}"
+        )
+        self.assertGreater(ctx_size, 0)
 
-        # Step 2: Verify basic health status
-        self.assertIn("status", health)
-        self.assertEqual(health["status"], "ok")
-        print("✅ Health status is 'ok'")
-
-        # Step 3: Check for Lemonade 9.1.4+ format (all_models_loaded)
-        if "all_models_loaded" in health:
-            print("✅ Found 'all_models_loaded' field (Lemonade 9.1.4+ format)")
-            all_models = health["all_models_loaded"]
-            self.assertIsInstance(all_models, list)
-            print(f"   Number of loaded models: {len(all_models)}")
-
-            if len(all_models) > 0:
-                first_model = all_models[0]
-                print(f"   First model keys: {list(first_model.keys())}")
-
-                # Verify model structure
-                self.assertIn("model_name", first_model)
-                self.assertIn("recipe_options", first_model)
-                print(f"   Model name: {first_model.get('model_name')}")
-                print(f"   Device: {first_model.get('device')}")
-                print(f"   Recipe: {first_model.get('recipe')}")
-
-                # Verify ctx_size in recipe_options
-                recipe_options = first_model.get("recipe_options", {})
-                print(f"   Recipe options: {recipe_options}")
-
-                if "ctx_size" in recipe_options:
-                    ctx_size = recipe_options["ctx_size"]
-                    self.assertIsInstance(ctx_size, int)
-                    self.assertGreater(ctx_size, 0)
-                    print(f"✅ Context size from recipe_options: {ctx_size}")
-                else:
-                    print(
-                        "⚠️  ctx_size not found in recipe_options (model may not have it set)"
-                    )
-        else:
-            print("⚠️  'all_models_loaded' not found - using legacy format (pre-9.1.4)")
-            if "context_size" in health:
-                print(f"   Legacy context_size: {health['context_size']}")
-
-        # Step 4: Verify get_status() extracts context_size correctly
-        print("\nStep 2: Testing get_status() context extraction...")
+        # Any loaded LLM may be the one get_status() reports (a cloud model
+        # counts too), so it must match one of them, not necessarily ours.
+        llm_windows = {
+            m["recipe_options"]["ctx_size"]
+            for m in health["all_models_loaded"]
+            if m.get("type") == "llm"
+        }
         status = self.client.get_status()
         self.assertTrue(status.running)
-        print(f"   Server running: {status.running}")
-        print(f"   Context size from get_status(): {status.context_size}")
+        self.assertIn(
+            status.context_size,
+            llm_windows,
+            "get_status() reported a context size no loaded LLM has",
+        )
 
-        # Context size should be > 0 if an LLM model is loaded
-        # SD/embedding models don't have context_size, so check loaded_models
-        if health.get("model_loaded"):
-            # Check if it's an LLM model (not SD/embedding)
-            is_llm_model = True
-            if status.loaded_models:
-                # If all loaded models are image/embedding models, context_size can be 0
-                is_llm_model = any(
-                    "image" not in model.get("labels", [])
-                    and "embed" not in model.get("labels", [])
-                    for model in status.loaded_models
-                )
-
-            if is_llm_model and status.context_size > 0:
-                print(
-                    f"✅ get_status() correctly extracted context_size: {status.context_size}"
-                )
-            elif is_llm_model and status.context_size == 0:
-                print(
-                    f"⚠️  LLM model loaded but context_size is 0 (may still be initializing)"
-                )
-            else:
-                print(
-                    f"✅ Non-LLM model loaded (SD/embedding), context_size=0 is expected"
-                )
-
-        # Step 5: Verify validate_context_size() works
-        print("\nStep 3: Testing validate_context_size()...")
-        # Only test validation if an LLM model is loaded (context_size > 0)
-        if status.context_size > 0:
-            # Use a small required size that should pass
-            valid, error = self.client.validate_context_size(
-                required_tokens=1024, quiet=True
-            )
-            self.assertTrue(valid, f"validate_context_size(1024) should pass: {error}")
-            print("✅ validate_context_size(1024) passed")
-        else:
-            print(
-                "⏭️  Skipping validate_context_size() - no LLM model loaded (context_size is 0)"
-            )
-
-        # Test with current context size (should pass)
-        if status.context_size > 0:
-            valid, error = self.client.validate_context_size(
-                required_tokens=status.context_size, quiet=True
-            )
-            self.assertTrue(
-                valid,
-                f"validate_context_size({status.context_size}) should pass: {error}",
-            )
-            print(f"✅ validate_context_size({status.context_size}) passed")
-
-        print("\n✅ Lemonade 9.1.4+ health check format test PASSED")
+        reported = status.context_size
+        valid, error = self.client.validate_context_size(
+            required_tokens=reported, quiet=True
+        )
+        self.assertTrue(valid, f"validate_context_size({reported}) failed: {error}")
+        valid, _ = self.client.validate_context_size(
+            required_tokens=reported + 1, quiet=True
+        )
+        self.assertFalse(valid, f"validate_context_size({reported + 1}) passed")
 
     def test_integration_basic_request(self):
         """Integration test for basic request handling."""
@@ -490,82 +382,83 @@ class TestLemonadeClientIntegration(unittest.TestCase):
         print("✅ Get stats test passed")
 
     def test_integration_load_model(self):
-        """Integration test for loading a model (should succeed)."""
-        print("Testing model loading functionality...")
+        """A /load carrying ctx_size and llamacpp_args is accepted, and the
+        window it asked for is the one /health reports back.
 
-        # Use the default test checkpoint that should exist
-        model = TEST_MODEL
-        print(f"Attempting to load existing model: {model}")
+        Mocked tests pin that payload; only a live server proves Lemonade reads
+        those fields rather than ignoring them. save_options is pinned off:
+        the client's default saves, which would persist this test's small window
+        and its llama.cpp args as the model's options on whatever server runs
+        the suite, and GAIA then treats saved args as the user's own.
+        """
+        result = self.client.load_model(
+            model_name=TEST_MODEL,
+            ctx_size=LOAD_CTX_SIZE,
+            llamacpp_args="--ubatch-size 512",
+            save_options=False,
+        )
+        self.assertIn(result.get("status"), ("ok", "success"), result)
 
-        try:
-            # Attempt to load the model - should succeed
-            result = self.client.load_model(model_name=model)
-
-            # Verify the response structure
-            self.assertIn("status", result)
-
-            # Allow either "ok" or "success" as valid status values
-            status = result["status"]
-            print(f"Got status: {status}")
-            self.assertIn(
-                status,
-                ["ok", "success"],
-                f"Expected status 'ok' or 'success', got '{status}'",
-            )
-
-            print(f"✅ Model loading successful: {result}")
-        except LemonadeClientError as e:
-            # If we got an error, the test failed - the model should exist
-            self.fail(
-                f"Expected model {model} to load successfully, but got error: {e}"
-            )
+        ctx_size = self._loaded_entry(TEST_MODEL)["recipe_options"].get("ctx_size")
+        self.assertEqual(
+            ctx_size,
+            LOAD_CTX_SIZE,
+            f"loaded with ctx_size={LOAD_CTX_SIZE}, /health reports {ctx_size}",
+        )
 
     def test_integration_pull_model(self):
-        """Integration test for pulling/installing a model."""
-        print("Testing model pull functionality...")
+        """Pulling an already-registered model succeeds; any error fails the test."""
+        result = self.client.pull_model(model_name=TEST_MODEL)
+        self.assertIsNotNone(result, "pull_model returned None")
+        self.assertIn(result.get("status"), ("success", "ok"), result)
 
-        # Try to pull an existing model
-        model_name = TEST_MODEL
-        print(f"Attempting to pull existing model: {model_name}")
+    def test_integration_pull_registers_a_cold_user_model(self):
+        """Register-and-install a never-seen user. model with checkpoint, recipe
+        and embedding, then confirm Lemonade kept what was sent.
 
+        Pulling a model CI already has proves nothing about registration: the
+        fields are only read on a cold pull, which is where #1655 broke.
+        """
+        model_name = f"user.gaia-it-pull-{uuid.uuid4().hex[:8]}"
+        pulled = False
         try:
-            result = self.client.pull_model(model_name=model_name)
-            print(f"Pull model response: {result}")
-
-            # Handle case where endpoint returns None (not implemented yet)
-            if result is None:
-                print(
-                    "⚠️  Pull model endpoint returned None - may not be implemented yet"
-                )
-                return
-
-            # Verify the response structure
-            self.assertIn("status", result)
-            status = result["status"]
-            self.assertIn(
-                status,
-                ["success", "ok"],
-                f"Expected status 'success' or 'ok', got '{status}'",
+            result = self.client.pull_model(
+                model_name=model_name,
+                checkpoint=COLD_PULL_CHECKPOINT,
+                recipe="llamacpp",
+                embedding=True,
             )
+            pulled = True
+            self.assertIn(result.get("status"), ("success", "ok"), result)
 
-            print(f"✅ Model pull successful: {result}")
-        except LemonadeClientError as e:
-            # Model might already be installed or endpoint not available
-            error_str = str(e)
-            print(f"Model pull result: {error_str}")
-            if any(
-                phrase in error_str.lower()
-                for phrase in [
-                    "already exists",
-                    "already installed",
-                    "404",
-                    "not found",
-                ]
-            ):
-                print("✅ Model already installed or endpoint not available (expected)")
-            else:
-                print(f"❌ Unexpected error during model pull: {error_str}")
-                # Don't fail the test - pull might fail for various reasons in test environment
+            listed = {m.get("id"): m for m in self.client.list_models().get("data", [])}
+            # Lemonade 11.x lists a user model without its namespace prefix.
+            entry = listed.get(model_name) or listed.get(model_name[len("user.") :])
+            self.assertIsNotNone(entry, f"{model_name} is not listed: {sorted(listed)}")
+            self.assertTrue(entry.get("downloaded"), entry)
+            self.assertEqual(entry.get("checkpoint"), COLD_PULL_CHECKPOINT, entry)
+            self.assertIn(
+                "embeddings",
+                entry.get("labels", []),
+                f"embedding=True was not recorded: {entry}",
+            )
+        finally:
+            if pulled:
+                self.client.delete_model(model_name)
+
+    def test_integration_pull_rejects_a_recipe_outside_the_user_namespace(self):
+        """Registration fields on a name without the user. prefix are refused.
+
+        That is the contract GAIA's pull path relies on to never send a recipe
+        for a built-in model.
+        """
+        with self.assertRaises(LemonadeClientError):
+            self.client.pull_model(
+                model_name=f"gaia-it-unprefixed-{uuid.uuid4().hex[:8]}",
+                checkpoint=COLD_PULL_CHECKPOINT,
+                recipe="llamacpp",
+                embedding=True,
+            )
 
     def test_integration_responses_endpoint(self):
         """Integration test for responses API endpoint."""
