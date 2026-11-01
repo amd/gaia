@@ -46,6 +46,18 @@ def test_numbers_are_searchable():
     assert _top("2025", ["results for 2024", "results for 2025"]) == [1]
 
 
+def test_numbers_match_whichever_digits_they_are_written_in():
+    assert _top("٢٠٢٥", ["نتائج ٢٠٢٤", "نتائج ٢٠٢٥"]) == [1]
+    assert _top("2025", ["نتائج ٢٠٢٤", "نتائج ٢٠٢٥"]) == [1]
+    assert _top("۲۰۲۵", ["results 2024", "results 2025"]) == [1]
+
+
+def test_filler_words_alone_do_not_bring_in_a_chunk():
+    texts = [f"this is the clause number {n} of the terms" for n in range(50)]
+
+    assert _top("what is the cancellation fee", texts) == []
+
+
 def test_word_in_every_chunk_of_a_small_document_still_matches():
     assert len(_top("contract", ["contract one", "contract two"])) == 2
 

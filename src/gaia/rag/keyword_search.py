@@ -9,13 +9,19 @@ from collections import Counter
 from typing import Dict, Iterable, List, Tuple
 
 _WORD = re.compile(r"[^\W_]+")
-_ARABIC_MARKS = re.compile("[ً-ٰٟـ]")
-_ARABIC_LETTERS = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه"})
+_ARABIC_MARKS = re.compile("[\u064b-\u065f\u0670\u0640]")
+_ARABIC_LETTERS = str.maketrans(
+    {"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه"}
+    | {chr(0x0660 + digit): str(digit) for digit in range(10)}
+    | {chr(0x06F0 + digit): str(digit) for digit in range(10)}
+)
 # "and", "so", "with", "for", "like", each on "the"; the word stays whole if short.
 _ARABIC_PREFIX = re.compile("^(?:[وف]?(?:[بلك]?ال|لل)|[وف])(?=..)")
 
 _MIN_SCORE = 0.6
 _SCORE_RANGE = 0.3
+# Below this a chunk matched only words most chunks hold, such as "the" or "is".
+_MIN_SHARE = 0.1
 
 
 def _words(text: str) -> List[str]:
@@ -66,7 +72,8 @@ def rank_keyword_chunks(
             for first, second in query_pairs
             if (first, second) in pairs
         )
-        ranked.append((found / whole, index, matched))
+        if found / whole >= _MIN_SHARE:
+            ranked.append((found / whole, index, matched))
 
     ranked.sort(key=lambda item: item[0], reverse=True)
     return [
