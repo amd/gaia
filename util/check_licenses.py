@@ -111,13 +111,18 @@ def _denied_family(text: str) -> str | None:
     return None
 
 
-# MPL-2.0's own definition of the licences it is compatible with names the GPL family.
-_MPL_SECONDARY = re.compile(r'"?Secondary License"? means either the GNU .*?later versions of those licenses\.', re.I)
+# MPL-2.0's own definition of the licences it is compatible with names the GPL family;
+# matched verbatim so nothing can hide between its words.
+_MPL_SECONDARY = (
+    '"Secondary License" means either the GNU General Public License, Version 2.0, the GNU Lesser '
+    "General Public License, Version 2.1, the GNU Affero General Public License, Version 3.0, or any "
+    "later versions of those licenses."
+)
 
 
 def _copyleft_in_text(text: str) -> str | None:
     """A copyleft family named anywhere in licence text, however long or multi-line."""
-    return _denied_family(_MPL_SECONDARY.sub("", " ".join(text.split())))
+    return _denied_family(" ".join(text.split()).replace(_MPL_SECONDARY, ""))
 
 
 def _normalise(term: str) -> str | None:

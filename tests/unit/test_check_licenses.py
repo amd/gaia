@@ -333,14 +333,45 @@ def test_copyleft_deep_in_a_licence_text_is_found():
     assert check_licenses._licence_from_text(text) == "LGPL"
 
 
+# Verbatim from MPL-2.0, with its original line wrapping.
+_MPL_DEFINITION = """Mozilla Public License Version 2.0
+==================================
+
+1.12. "Secondary License"
+    means either the GNU General Public License, Version 2.0, the GNU
+    Lesser General Public License, Version 2.1, the GNU Affero General
+    Public License, Version 3.0, or any later versions of those
+    licenses.
+"""
+
+
 def test_mpl_text_naming_its_secondary_licences_stays_mpl():
-    text = (
-        'Mozilla Public License Version 2.0\n1.12. "Secondary License"\n    means either '
-        "the GNU General Public License, Version 2.0, the GNU Lesser General\n    Public "
-        "License, Version 2.1, the GNU Affero General Public License,\n    Version 3.0, or "
-        "any later versions of those licenses.\n"
+    assert check_licenses._licence_from_text(_MPL_DEFINITION) == "MPL-2.0"
+
+
+@pytest.mark.parametrize(
+    "inserted",
+    [
+        "This bundle is licensed under GPL-3.0.",
+        "x " * 5000 + "GPL-3.0",
+    ],
+    ids=["sentence", "after-10kb"],
+)
+def test_copyleft_inserted_into_the_mpl_definition_is_denied(inserted):
+    text = _MPL_DEFINITION.replace(
+        "the GNU\n    Lesser", f"the GNU {inserted}\n    Lesser"
     )
-    assert check_licenses._licence_from_text(text) == "MPL-2.0"
+    assert text != _MPL_DEFINITION
+    verdict, _ = check_licenses.classify(check_licenses._licence_from_text(text))
+    assert verdict == "denied"
+
+
+def test_copyleft_after_the_mpl_definition_is_denied():
+    text = (
+        _MPL_DEFINITION
+        + "\nlibfoo is bundled under the GNU Lesser General Public License.\n"
+    )
+    assert check_licenses._licence_from_text(text) == "LGPL"
 
 
 def _fake_distribution(name, licence):
