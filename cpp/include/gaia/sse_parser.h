@@ -69,6 +69,27 @@ public:
     /// Return true if any tool_calls delta has been seen.
     bool hasToolCalls() const { return !toolCallsByIndex_.empty(); }
 
+    /// Process a final line the server sent without a trailing newline.
+    ///
+    /// Call once after the transport reports end-of-body. Without it an
+    /// unterminated last event (often an error object) is never seen.
+    void finish();
+
+    /// Return true if a ``data:`` event carried a top-level ``error`` object.
+    bool hasError() const { return !errorEvent_.is_null(); }
+
+    /// The first ``data:`` event that carried an ``error`` (null if none).
+    const json& errorEvent() const { return errorEvent_; }
+
+    /// Number of ``data:`` events that were not valid chat-completion JSON.
+    ///
+    /// A malformed event is a lost delta, so callers must treat a non-zero
+    /// count as a failed stream rather than a short answer.
+    size_t malformedEventCount() const { return malformedEvents_; }
+
+    /// Payload of the first malformed event (truncated), for error messages.
+    const std::string& firstMalformedEvent() const { return firstMalformed_; }
+
 private:
     /// Process one complete SSE line (after newline stripping).
     void processLine(const std::string& line);
@@ -83,6 +104,9 @@ private:
     std::string   buffer_;     // Accumulates partial lines across feed() calls
     bool          done_      = false;
     bool          hasTokens_ = false;
+    json          errorEvent_;
+    size_t        malformedEvents_ = 0;
+    std::string   firstMalformed_;
 
     // Keyed by the delta's ``index`` so parallel calls stay separate and
     // out-of-order chunks land in the right slot. std::map keeps index order.

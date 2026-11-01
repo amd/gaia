@@ -430,3 +430,166 @@ TEST(LemonadeOverHttpClientTest, ServerErrorRaisesWithStatusAndBody) {
                   std::string::npos);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Server error bodies reach the caller in both streaming and non-streaming mode
+// ---------------------------------------------------------------------------
+
+namespace {
+
+const json kChatRequest = {{"model", "mock-model"}, {"messages", json::array()}};
+
+// Lemonade wraps llama-server's context-overflow error in details.response.
+const char* kCtxErrorJson =
+    R"J({"error":{"message":"llama-server error","details":{"response":{"error":)J"
+    R"J({"message":"request (40000 tokens) exceeds the available context size (16384 tokens)",)J"
+    R"J("n_ctx":16384,"n_prompt_tokens":40000}}}}})J";
+
+std::string streamError(LemonadeClient& client) {
+    try {
+        client.chatCompletionsStreaming(kChatRequest, [](const std::string&) {});
+    } catch (const HttpError& e) {
+        return std::string("HttpError: ") + e.what();
+    } catch (const std::runtime_error& e) {
+        return e.what();
+    }
+    return "<no exception>";
+}
+
+} // namespace
+
+TEST(LemonadeErrorDecodeTest, StreamingSseErrorEventSurfacesContextRemedy) {
+    bench::MockLlmServer server;
+    server.enableSseStreaming(true);
+    server.pushSseStream(std::string("data: ") + kCtxErrorJson + "\n\ndata: [DONE]\n\n");
+    LemonadeClient client(server.baseUrl());
+
+    const std::string msg = streamError(client);
+    EXPECT_NE(msg.find("Server context window too small"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("prompt is 40000 tokens"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("n_ctx=16384"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("LEMONADE_CTX_SIZE"), std::string::npos) << msg;
+    EXPECT_EQ(msg.find("lemonade-server serve"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, StreamingUnterminatedErrorEventIsNotLost) {
+    bench::MockLlmServer server;
+    server.enableSseStreaming(true);
+    server.pushSseStream(R"(data: {"error":{"message":"model crashed"}})");
+    LemonadeClient client(server.baseUrl());
+
+    EXPECT_EQ(streamError(client), "model crashed");
+}
+
+TEST(LemonadeErrorDecodeTest, StreamingErrorAfterTokensIsNotATruncatedAnswer) {
+    bench::MockLlmServer server;
+    server.enableSseStreaming(true);
+    server.pushSseStream(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Half an\"}}]}\n\n"
+        "data: {\"error\":\"backend went away\"}\n\n");
+    LemonadeClient client(server.baseUrl());
+
+    EXPECT_EQ(streamError(client), "backend went away");
+}
+
+TEST(LemonadeErrorDecodeTest, StreamingBareJsonErrorBodySurfaces) {
+    // A server that ignores "stream": true and answers with a plain JSON body.
+    bench::MockLlmServer server;
+    server.pushResponse(kCtxErrorJson);
+    LemonadeClient client(server.baseUrl());
+
+    const std::string msg = streamError(client);
+    EXPECT_NE(msg.find("Server context window too small"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, StreamingNon2xxStillRaisesHttpError) {
+    bench::MockLlmServer server;
+    server.pushResponse(R"({"detail":"model not loaded"})", 500);
+    LemonadeClient client(server.baseUrl());
+
+    const std::string msg = streamError(client);
+    EXPECT_EQ(msg.rfind("HttpError: ", 0), 0u) << msg;
+    EXPECT_NE(msg.find("model not loaded"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, StreamingMalformedEventFailsLoudly) {
+    bench::MockLlmServer server;
+    server.enableSseStreaming(true);
+    server.pushSseStream(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\" wor\n\n"
+        "data: [DONE]\n\n");
+    LemonadeClient client(server.baseUrl());
+
+    const std::string msg = streamError(client);
+    EXPECT_NE(msg.find("1 streamed event(s)"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("/chat/completions"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("content"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, StreamingCleanStreamStillSucceeds) {
+    bench::MockLlmServer server;
+    server.enableSseStreaming(true);
+    server.pushSseStream(
+        ": keep-alive\n\n"
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1}}\n\n"
+        "data: [DONE]\n\n");
+    LemonadeClient client(server.baseUrl());
+
+    std::string streamed;
+    EXPECT_NO_THROW(client.chatCompletionsStreaming(
+        kChatRequest, [&streamed](const std::string& t) { streamed += t; }));
+    EXPECT_EQ(streamed, "ok");
+}
+
+TEST(LemonadeErrorDecodeTest, NonStreamingLemonadeContextError) {
+    bench::MockLlmServer server;
+    server.pushResponse(kCtxErrorJson);
+    LemonadeClient client(server.baseUrl());
+
+    try {
+        client.chatCompletions(kChatRequest);
+        FAIL() << "expected runtime_error";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("n_ctx=16384"), std::string::npos) << e.what();
+    }
+}
+
+TEST(LemonadeErrorDecodeTest, NonStreamingOpenAiShapedErrorKeepsItsMessage) {
+    bench::MockLlmServer server;
+    server.pushResponse(R"({"error":{"message":"model 'x' not found","type":"invalid_request"}})");
+    LemonadeClient client(server.baseUrl());
+
+    try {
+        client.chatCompletions(kChatRequest);
+        FAIL() << "expected runtime_error";
+    } catch (const std::runtime_error& e) {
+        EXPECT_STREQ(e.what(), "model 'x' not found");
+    }
+}
+
+TEST(LemonadeErrorDecodeTest, NonStreamingOddErrorShapesStillThrow) {
+    for (const char* body : {R"({"error":null})", R"({"error":42})", R"({"error":{}})",
+                             R"({"error":{"details":"not-an-object"}})",
+                             R"({"error":{"details":{"response":{"error":"str"}}}})"}) {
+        bench::MockLlmServer server;
+        server.pushResponse(body);
+        LemonadeClient client(server.baseUrl());
+        try {
+            client.chatCompletions(kChatRequest);
+            ADD_FAILURE() << "expected runtime_error for " << body;
+        } catch (const std::runtime_error& e) {
+            EXPECT_STREQ(e.what(), "LLM server error") << body;
+        }
+    }
+}
+
+TEST(LemonadeErrorDecodeTest, NonStreamingNonJsonBodyIsReturnedVerbatim) {
+    bench::MockLlmServer server;
+    server.pushResponse("not json at all");
+    LemonadeClient client(server.baseUrl());
+
+    EXPECT_EQ(client.chatCompletions(kChatRequest), "not json at all");
+}
