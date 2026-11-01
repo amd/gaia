@@ -26,6 +26,19 @@ def test_words_side_by_side_rank_above_the_same_words_apart():
     assert _top("net debt", [apart, together])[0] == 1
 
 
+def test_hyphenated_identifier_beats_chunks_matching_its_parts_separately():
+    # Exact issue and ticket IDs are tokenized as words by the Unicode-aware
+    # searcher, but the exact chunk still wins because it contains both terms
+    # adjacent; generic VIOLET and 2210 chunks must not crowd it out.
+    texts = [
+        "VIOLET is the internal project name.",
+        "The batch completed in the year 2210.",
+        "VIOLET-2210 is the exact case identifier.",
+    ]
+
+    assert _top("VIOLET-2210", texts)[0] == 2
+
+
 def test_arabic_query_finds_arabic_chunk():
     texts = ["شروط الخدمة العامة", "بلغ صافي الدين في نهاية العام", "رسوم التفعيل"]
 
