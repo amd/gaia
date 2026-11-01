@@ -840,7 +840,7 @@ class _IgpuLemonade(_FakeLemonade):
     "carve_gib, shared_gib", [(16, 0), (0.5, 15.5), (32, 31.5), (64, 0)]
 )
 def test_plan_memory_matches_the_gpu_memory_pane(
-    running, monkeypatch, carve_gib, shared_gib
+    running, monkeypatch, tmp_path, carve_gib, shared_gib
 ):
     from gaia.llm import gpu_memory
 
@@ -849,6 +849,10 @@ def test_plan_memory_matches_the_gpu_memory_pane(
     monkeypatch.setattr(gpu_memory, "_load_state", lambda: None)
     # The pane exists only on Windows and Linux; run it as Linux on any CI host.
     monkeypatch.setattr(gpu_memory, "_platform", lambda: "linux")
+    (tmp_path / "meminfo").write_text(
+        "MemTotal:       124500000 kB\n", encoding="ascii"
+    )
+    monkeypatch.setattr(gpu_memory, "PATHS", gpu_memory.SystemPaths(proc=tmp_path))
     monkeypatch.setattr(
         gpu_memory,
         "_linux_setup",
