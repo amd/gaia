@@ -102,8 +102,8 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     # The slowest of the last 100 green runs took 3.7 min (tests 86 s, Lemonade
     # start 115 s). Every step carries its own cap so a hang fails at a NAMED step;
-    # the job cap sits above their sum (70) and only catches runner-level stalls (#3339).
-    timeout-minutes: 75
+    # the job cap sits above their sum (75) and only catches runner-level stalls (#3339).
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v7
         timeout-minutes: 5
@@ -116,9 +116,9 @@ jobs:
           install-package: '.[dev]'
 
       - name: Install Lemonade Server
-        # Above the action's two bounded msiexec waits (10 min each), so its own
-        # ::error with the MSI log tail fires first.
-        timeout-minutes: 25
+        # Above the action's bounded waits (10-min download, two 10-min msiexec),
+        # so its own ::error with the MSI log tail fires first.
+        timeout-minutes: 30
         uses: ./.github/actions/install-lemonade
 
       - name: Verify GAIA Installation
