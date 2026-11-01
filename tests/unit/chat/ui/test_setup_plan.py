@@ -59,8 +59,10 @@ class _FakeLemonade:
 
     def get_system_info(self, timeout=None):
         return {
+            "Physical Memory": f"{self.capacity.memory_gb + 64:.2f} GB",
             "devices": {
-                "amd_igpu": {"available": True, "vram_gb": self.capacity.memory_gb}
+                "amd_igpu": {"available": True, "vram_gb": self.capacity.memory_gb},
+                "amd_npu": {"available": True},
             },
             "model_storage": {"free_bytes": self.capacity.disk_free_gb * 1e9},
         }
