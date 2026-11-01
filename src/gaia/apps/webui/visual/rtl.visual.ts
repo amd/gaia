@@ -36,11 +36,11 @@ async function withArabicEnvironment(page: Page): Promise<void> {
     );
 }
 
-async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) => Promise<void>): Promise<void> {
+async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) => Promise<void>, theme: 'light' | 'dark' = 'light'): Promise<void> {
     await page.clock.setFixedTime(NOW);
     await mockApi(page);
     await before?.(page);
-    await useTheme(page, 'light');
+    await useTheme(page, theme);
     await useLocale(page, locale);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto(`/${hash}`);
@@ -71,7 +71,7 @@ const audit = (page: Page): Promise<string[]> =>
             }
 
             const text = el.textContent?.trim() ?? '';
-            if (el.children.length > 0 || !text) continue;
+            if (el.querySelector(':scope > :not(i18n-label)') || !text) continue;
 
             // An English name cut off in rtl keeps its end and loses its start.
             if (style.textOverflow === 'ellipsis' && style.direction === 'rtl' && latin.test(text) && !arabic.test(text)) {
@@ -106,6 +106,45 @@ const audit = (page: Page): Promise<string[]> =>
             if (style.direction === 'rtl' && /^[\d.,]+ (B|KB|MB|GB)$/.test(text) && el.tagName !== 'BDI') {
                 problems.push(`a size needs <bdi>: ${label(el)}`);
             }
+        }
+
+        // The English of a label is quieter than its translation, and still readable.
+        const paint = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
+        const rgb = (color: string): number[] => {
+            paint.clearRect(0, 0, 1, 1);
+            paint.fillStyle = color;
+            paint.fillRect(0, 0, 1, 1);
+            return [...paint.getImageData(0, 0, 1, 1).data];
+        };
+        const luminance = (c: number[]) => {
+            const [r, g, b] = c.slice(0, 3).map((v) => {
+                const s = v / 255;
+                return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+            });
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const backdrop = (el: Element) => {
+            for (let at: Element | null = el; at; at = at.parentElement) {
+                const color = rgb(getComputedStyle(at).backgroundColor);
+                if (color[3] === 255) return color;
+            }
+            return [255, 255, 255, 255];
+        };
+        const contrast = (a: number[], b: number[]) => {
+            const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+            return (hi + 0.05) / (lo + 0.05);
+        };
+        for (const gloss of document.querySelectorAll('.i18n-gloss')) {
+            if (!shown(gloss)) continue;
+            const style = getComputedStyle(gloss);
+            const parent = getComputedStyle(gloss.parentElement!);
+            const ratio = contrast(rgb(style.color), backdrop(gloss));
+            if (ratio < 4.5) problems.push(`gloss reads at ${ratio.toFixed(2)}:1: ${label(gloss)}`);
+            if (parseFloat(style.fontSize) > parseFloat(parent.fontSize)) problems.push(`gloss is larger than its label: ${label(gloss)}`);
+            if (parseFloat(style.fontSize) >= parseFloat(parent.fontSize) && parseFloat(parent.fontSize) > 13.75) {
+                problems.push(`gloss is as large as its label: ${label(gloss)}`);
+            }
+            if (Number(style.fontWeight) > 400) problems.push(`gloss is bold: ${label(gloss)}`);
         }
 
         // An icon and its label need space between them, in either direction.
@@ -172,6 +211,13 @@ test('document being indexed', async ({ page }) => {
 
 test('settings', async ({ page }) => {
     await open(page);
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    expect(await audit(page)).toEqual([]);
+});
+
+test('settings in the dark theme', async ({ page }) => {
+    await open(page, '', 'ar', undefined, 'dark');
     await page.getByRole('button', { name: /Settings/ }).first().click();
     await expect(page.getByRole('dialog')).toBeVisible();
     expect(await audit(page)).toEqual([]);
