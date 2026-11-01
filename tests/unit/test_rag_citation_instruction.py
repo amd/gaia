@@ -7,6 +7,7 @@ a markdown or text file opened with a note explaining there was no page.
 """
 
 from gaia.agents.tools.rag_tools import (
+    _SEARCH_AGAIN_NOTE,
     _chunks_have_pages,
     _documents_instruction,
     _file_instruction,
@@ -28,6 +29,7 @@ def test_paged_file_instruction_is_unchanged():
         "pages, say 'According to report.pdf, pages 2 and 5:'\n"
         "A chunk's 'page' is where it starts; text after a '[Page N]' marker inside "
         "it is on page N, so cite N for facts that follow the marker."
+        + _SEARCH_AGAIN_NOTE
     )
 
 
@@ -45,8 +47,19 @@ def test_paged_documents_instruction_is_unchanged():
         "A chunk's 'page' is where it starts; text after a '[Page N]' marker inside "
         "it is on page N, so cite N for facts that follow the marker.\n\n"
         "IMPORTANT: Always use the full path exactly as given in source_file. "
-        "Do NOT shorten it to just the filename."
+        "Do NOT shorten it to just the filename." + _SEARCH_AGAIN_NOTE
     )
+
+
+def test_every_search_result_asks_for_a_second_search_before_not_found():
+    for text in (
+        _file_instruction("report.pdf", 4, has_pages=True),
+        _file_instruction("policy.md", 2, has_pages=False),
+        _documents_instruction(has_pages=True),
+        _documents_instruction(has_pages=False),
+    ):
+        assert text.endswith(_SEARCH_AGAIN_NOTE)
+    assert "document's language" in _SEARCH_AGAIN_NOTE
 
 
 def test_unpaged_instructions_ask_for_no_page():
