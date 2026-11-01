@@ -65,6 +65,34 @@ func TestTailBufferSingleWriteLargerThanLimit(t *testing.T) {
 	}
 }
 
+// A cut that lands exactly after a newline keeps the whole line that follows.
+func TestTailBufferCleanCutKeepsTheFirstWholeLine(t *testing.T) {
+	cases := map[string]struct {
+		write func(b *tailBuffer)
+		want  string
+	}{
+		// 30 bytes: trimmed in Write at 25 > 2*12, then cut again in String.
+		"many writes": {func(b *tailBuffer) {
+			for i := 0; i < 5; i++ {
+				fmt.Fprintf(b, "line%d\n", i)
+			}
+		}, "line3\nline4\n"},
+		"one write":    {func(b *tailBuffer) { b.Write([]byte("line0\nline1\nline2\n")) }, "line1\nline2\n"},
+		"mid-line cut": {func(b *tailBuffer) { b.Write([]byte("line0\nline1\nline2\nxy")) }, "line2\nxy"},
+	}
+	for name, tc := range cases {
+		b := newTailBuffer(12)
+		tc.write(b)
+		got := b.String()
+		if !strings.HasPrefix(got, stderrDroppedMarker) {
+			t.Errorf("%s: drop not marked: %q", name, got)
+		}
+		if body := strings.TrimPrefix(got, stderrDroppedMarker); body != tc.want {
+			t.Errorf("%s: got %q, want %q", name, body, tc.want)
+		}
+	}
+}
+
 // A cut through a multi-byte rune must not hand the UI an invalid prefix.
 func TestTailBufferDoesNotStartMidRune(t *testing.T) {
 	b := newTailBuffer(7)

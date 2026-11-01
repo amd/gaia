@@ -22,6 +22,9 @@ type tailBuffer struct {
 	limit   int
 	buf     []byte
 	dropped bool
+	// lineStart: the byte dropped just before buf was a newline, so buf
+	// already begins on a whole line.
+	lineStart bool
 }
 
 func newTailBuffer(limit int) *tailBuffer {
@@ -34,6 +37,7 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 	defer t.mu.Unlock()
 	n := len(p)
 	if n > t.limit {
+		t.lineStart = p[n-t.limit-1] == '\n'
 		t.buf = append(t.buf[:0], p[n-t.limit:]...)
 		t.dropped = true
 		return n, nil
@@ -41,6 +45,7 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 	t.buf = append(t.buf, p...)
 	// Trimmed only past twice the limit, so the copy is amortised over many writes.
 	if len(t.buf) > 2*t.limit {
+		t.lineStart = t.buf[len(t.buf)-t.limit-1] == '\n'
 		kept := copy(t.buf, t.buf[len(t.buf)-t.limit:])
 		t.buf = t.buf[:kept]
 		t.dropped = true
@@ -54,13 +59,17 @@ func (t *tailBuffer) String() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	tail := t.buf
-	dropped := t.dropped
+	dropped, lineStart := t.dropped, t.lineStart
 	if len(tail) > t.limit {
+		lineStart = tail[len(tail)-t.limit-1] == '\n'
 		tail = tail[len(tail)-t.limit:]
 		dropped = true
 	}
 	if !dropped {
 		return string(tail)
+	}
+	if lineStart {
+		return stderrDroppedMarker + string(tail)
 	}
 	if i := bytes.IndexByte(tail, '\n'); i >= 0 && i+1 < len(tail) {
 		tail = tail[i+1:]
