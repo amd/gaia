@@ -95,9 +95,10 @@ class VLMClient:
         Args:
             vlm_model: Vision model to use for image extraction
             base_url: Lemonade server API URL (defaults to LEMONADE_BASE_URL env var)
-            auto_load: Load the VLM on each request when needed. A missing
-                model is reported before the request instead of being silently
-                downloaded during image analysis.
+            auto_load: Load the VLM on each request when needed. A model the
+                catalog lists as missing is reported before the request instead
+                of being silently downloaded; an unlisted or unreachable catalog
+                does not block.
             api_key: API key for an authenticated Lemonade server. Forwarded
                 AS-IS to the inner ``LemonadeClient``, which handles the
                 ``LEMONADE_API_KEY`` env-var fallback. VLMClient does NOT

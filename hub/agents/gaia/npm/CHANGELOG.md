@@ -10,6 +10,9 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **Docs name the terminal UI binary correctly.** README, SPEC and SKILL said
+  a core install runs it as `gaia tui`; the binary is `gaia-tui`, and the
+  Python `gaia` CLI rejects `gaia tui`.
 - **The agent ships as one Python package.** `ChatAgent`, the class the agent
   builds on, moved into `gaia-agent-gaia` (`gaia_agent.chat_agent`), so the
   binary and a pip install no longer need `gaia-agent-chat`. Prompts and tools
@@ -54,6 +57,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **A rate-limited page now says how long to wait.** `fetch_webpage` on an
+  HTTP 429 or 503 with `Retry-After` returns the wait as `retry_after` with a
+  hint not to fetch again before then. It returned only the status line, so
+  the agent re-fetched at once and could not tell the user when the limit
+  resets.
 - **One stray tool-call reply no longer triples a gateway model's token use.**
   A gateway model that wrote its own tool-call markup once was moved to native
   tool schemas (~12K more tokens per call) for every later session, so a single

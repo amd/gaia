@@ -45,7 +45,7 @@ Embeddings are generated locally by Lemonade. If you haven't installed it yet, `
 The embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M). A cached index (under `~/.gaia/code_index/`) records the model it was built with, so an index built before v0.22.0 with `nomic-embed-text-v2-moe-GGUF` fails loudly with a model-mismatch error naming both models. Re-index to rebuild it with EmbeddingGemma.
 </Note>
 
-If FAISS or numpy are missing at runtime you'll see exactly:
+GAIA checks for FAISS and numpy before it reads or embeds repository files. If either is missing, it stops with:
 
 ```
 code_index dependencies missing. Install with: pip install -e '.[rag]'
