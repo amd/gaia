@@ -65,17 +65,25 @@ def _repair_visual_order_lines(text: str, pieces: list) -> str:
     text reads from its last clause and a number lands beside the wrong words.
     """
     start = 0
+    # Lines come in text order; a phrase repeated down the page is not the same line.
+    cursor = 0
     for end in range(1, len(pieces) + 1):
         if end < len(pieces) and abs(pieces[end][1] - pieces[start][1]) < _SAME_LINE_PT:
             continue
         line = pieces[start:end]
         start = end
-        if not _is_visual_order(line):
+        stored = re.compile(r"\s*".join(re.escape(piece[2].strip()) for piece in line))
+        # pypdf now and then emits a line ahead of its place, so look back too.
+        found = stored.search(text, cursor) or stored.search(text)
+        if found is None:
             continue
-        stored = r"\s*".join(re.escape(piece[2].strip()) for piece in line)
-        # Escaped so backslashes in the text can't read as group refs.
-        reading = _reading_order(line).replace("\\", r"\\")
-        text = re.sub(stored, reading, text, count=1)
+        in_order = found.start() >= cursor
+        reading = _reading_order(line) if _is_visual_order(line) else found.group()
+        text = text[: found.start()] + reading + text[found.end() :]
+        if in_order:
+            cursor = found.start() + len(reading)
+        else:
+            cursor += len(reading) - len(found.group())
     return text
 
 

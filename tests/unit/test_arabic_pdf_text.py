@@ -189,3 +189,18 @@ def test_persian_page_keeps_its_letters():
 def test_normalization_leaves_other_compatibility_characters_alone():
     assert normalize_arabic_pdf_text("m² ﬁle") == "m² ﬁle"
     assert normalize_arabic_pdf_text("") == ""
+
+
+def test_a_repeated_line_is_repaired_where_it_stands():
+    from gaia.rag.arabic_text import _repair_visual_order_lines
+
+    # The first line is already in reading order; only the second was stored visually.
+    first = "مدة العقد 12 شهرا"
+    stored = "شهرا 12 مدة العقد"
+    text = f"{stored}\nفقرة أخرى\n{stored}\n"
+    pieces = [(50, 700, "شهرا"), (100, 700, "12"), (150, 700, "مدة العقد")]
+    repaired = _repair_visual_order_lines(
+        text,
+        [(10, 800, stored)] + [(10, 750, "فقرة أخرى")] + pieces,
+    )
+    assert repaired == f"{stored}\nفقرة أخرى\n{first}\n"
