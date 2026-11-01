@@ -7,13 +7,14 @@ Provides document retrieval, querying, and evaluation tools.
 """
 
 import contextvars
+import functools
 import os
 import re
 import threading
 import time
 import weakref
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.file_snapshots import before_change
@@ -27,7 +28,7 @@ from gaia.agents.tools.path_access import (
 from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
-from gaia.rag.sdk import EmbeddingUnavailableError
+from gaia.rag.sdk import EmbeddingUnavailableError, text_scripts
 from gaia.tool_cancellation import raise_if_cancelled
 
 logger = get_logger(__name__)
@@ -354,6 +355,43 @@ _MARKER_NOTE = (
 )
 
 
+def _question_language_note(question: str, chunks: List[Dict[str, Any]]) -> str:
+    """Name the question when the chunks could pull the answer into their language."""
+    asked = text_scripts(question)
+    if not asked or not chunks:
+        return ""
+    found = text_scripts(" ".join(chunk.get("content", "") for chunk in chunks))
+    if found == asked[:1]:
+        return ""
+    return (
+        f"\n\nThe question you are answering is: {question[:300]}\n"
+        "Write your whole answer in the language of that question and translate "
+        "what you use from these chunks. Neither their language nor an earlier "
+        "turn's changes that."
+    )
+
+
+def _answers_in_question_language(mixin: Any):
+    """Restate the question where the model picks its answer's language: after reading."""
+
+    def wrap(search: Callable[..., Dict[str, Any]]):
+        @functools.wraps(search)
+        def wrapper(*args, **kwargs) -> Dict[str, Any]:
+            result = search(*args, **kwargs)
+            if result.get("status") == "success":
+                result["instruction"] = result.get(
+                    "instruction", ""
+                ) + _question_language_note(
+                    getattr(mixin, "_memory_turn_query", ""),
+                    result.get("chunks") or [],
+                )
+            return result
+
+        return wrapper
+
+    return wrap
+
+
 def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     """How query_documents asks the model to cite: the full path, plus pages if any."""
     instruction = (
@@ -506,6 +544,7 @@ class RAGToolsMixin:
         @tool(
             atomic=True,
         )
+        @_answers_in_question_language(self)
         def query_documents(
             query: str, debug: bool = False  # pylint: disable=unused-argument
         ) -> Dict[str, Any]:
@@ -931,6 +970,7 @@ class RAGToolsMixin:
             # cap; at the default a big PDF is abandoned mid-index and re-indexed.
             timeout=600,
         )
+        @_answers_in_question_language(self)
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
             Query a specific file for fast, targeted retrieval.

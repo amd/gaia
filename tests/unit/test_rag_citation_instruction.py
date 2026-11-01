@@ -10,6 +10,7 @@ from gaia.agents.tools.rag_tools import (
     _chunks_have_pages,
     _documents_instruction,
     _file_instruction,
+    _question_language_note,
 )
 
 
@@ -67,3 +68,51 @@ def test_mixed_results_ask_for_pages_only_where_chunks_have_them():
     assert "(page X)" in mixed
     assert "cite those by path alone" in mixed
     assert "cite those by path alone" not in _documents_instruction(has_pages=True)
+
+
+def test_an_english_question_over_arabic_chunks_is_restated():
+    note = _question_language_note(
+        "When is the second dose given?", [{"content": "تعطى الجرعة الثانية بعد شهر"}]
+    )
+    assert "When is the second dose given?" in note
+    assert "language of that question" in note
+
+
+def test_an_arabic_question_over_english_chunks_is_restated():
+    question = "متى تعطى الجرعة الثانية؟"
+    assert question in _question_language_note(
+        question, [{"content": "The second dose is given after a month."}]
+    )
+
+
+def test_a_bilingual_chunk_counts_as_another_language():
+    assert _question_language_note(
+        "When is it given?",
+        [{"content": "The dose. تعطى الجرعة الثانية بعد شهر واحد من الأولى"}],
+    )
+
+
+def test_a_question_in_the_chunks_language_adds_nothing():
+    assert not _question_language_note(
+        "When is it given?", [{"content": "It is given after a month."}]
+    )
+
+
+def test_no_chunks_or_no_letters_add_nothing():
+    assert not _question_language_note("When is it given?", [])
+    assert not _question_language_note("2024?", [{"content": "نص"}])
+
+
+def test_the_registered_tool_carries_the_note(tmp_path):
+    """The agent calls the tool from the registry, so that one has to add the note."""
+    from types import SimpleNamespace
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.agents.tools.rag_tools import RAGToolsMixin
+
+    host = RAGToolsMixin.__new__(RAGToolsMixin)
+    host._memory_turn_query = "When is the second dose given?"
+    host.rag = None
+    host.config = SimpleNamespace()
+    RAGToolsMixin.register_rag_tools(host)
+    assert hasattr(_TOOL_REGISTRY["query_documents"]["function"], "__wrapped__")
