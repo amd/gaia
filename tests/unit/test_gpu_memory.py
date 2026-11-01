@@ -310,8 +310,9 @@ class TestLinuxSplit:
         assert gm.gb_for(gm.pages_for(96)) == pytest.approx(96, abs=1e-3)
         steps = gm.describe(box.info, LOCAL, setting_gb=96)["guided_steps"]
         assert any("pages_limit=23437500" in s for s in steps)
-        # amd-ttm counts GiB: 96 GB is 89.4 GiB.
-        assert any("counts in GiB: amd-ttm --set 89.4" in s for s in steps)
+        assert gm.describe(box.info, LOCAL, setting_gb=96)["guided_value"] == (
+            "23437500"
+        )
 
     def test_guided_steps_never_render_a_starving_value(self, box):
         with pytest.raises(gm.OutOfRange):
@@ -535,6 +536,67 @@ class TestAfterRestart:
         assert result["revert"]["available"] is True
 
 
+class TestTheSplitAddsUp:
+    """cpu_gb is memory the GPU can never use, so the two add up to the total."""
+
+    @pytest.mark.parametrize("total,gtt", [(32, 15.5), (64, 31.5), (128, 62.5)])
+    def test_linux(self, box, total, gtt):
+        result = gm.describe(linux_igpu(total, gtt), LOCAL)
+        self.check(result)
+
+    @pytest.mark.parametrize(
+        "physical,carve", [("32.00 GB", 10.0), ("64.00 GB", 16.0), ("128.00 GB", 0.5)]
+    )
+    def test_windows(self, box, windows, physical, carve):
+        box.info = {**WINDOWS_IGPU, "Physical Memory": physical}
+        windows["gb"] = carve
+        self.check(gm.describe(box.info, LOCAL))
+
+    @staticmethod
+    def check(result):
+        assert result["gpu_gb"] + result["cpu_gb"] == pytest.approx(
+            result["total_gb"], abs=0.11
+        )
+        # Every offered target leaves the CPU at least the reserve.
+        for p in result["presets"]:
+            assert result["total_gb"] - p["gpu_gb"] >= result["reserve_gb"] - 0.05
+
+    def test_shot_57_no_longer_offers_a_target_that_breaks_the_reserve(
+        self, box, windows
+    ):
+        # 32 GiB Windows PC with a ~10 GiB carve-out: GPU 22 GB, CPU 12 GB.
+        box.info = {**WINDOWS_IGPU, "Physical Memory": "32.00 GB"}
+        windows["gb"] = 9.6
+        result = gm.describe(box.info, LOCAL)
+        assert result["cpu_gb"] < result["reserve_gb"]
+        assert result["presets"] == [] and result["show_in_setup"] is False
+        with pytest.raises(gm.OutOfRange):
+            gm.record_pending(16)
+
+
+class TestHidingTheStepForTheUsersSelection:
+    """Front-ends hide the step unless a ticked model benefits; the API must say which."""
+
+    def test_unlocks_and_fit_points_agree(self, box):
+        box.info = linux_igpu(64, 16)
+        result = gm.describe(box.info, LOCAL)
+        for m in result["models"]:
+            in_some_preset = any(m["id"] in p["unlocks"] for p in result["presets"])
+            benefits = not m["fits_now"] and m["fits_at_setting_gb"] is not None
+            assert in_some_preset == benefits, m
+
+    def test_a_selection_without_a_beneficiary_hides_the_step(self, box):
+        box.info = linux_igpu(64, 16)
+        result = gm.describe(box.info, LOCAL)
+        by_id = {m["id"]: m for m in result["models"]}
+        ticked = [lc.DEFAULT_MODEL_NAME]  # already fits: nothing to gain
+        assert not any(
+            not by_id[i]["fits_now"] and by_id[i]["fits_at_setting_gb"] is not None
+            for i in ticked
+        )
+        assert by_id[QWEN]["fits_at_setting_gb"] is not None
+
+
 class TestEveryNumberIsTheSameUnit:
     @pytest.mark.parametrize(
         "total,gtt", [(16, 7.75), (32, 15.5), (48, 23.75), (64, 31.5), (128, 62.5)]
@@ -731,11 +793,23 @@ class TestWindows:
         steps = " ".join(result["guided_steps"])
         assert "Performance > Tuning" in steps and "BIOS" in steps
 
-    def test_amd_software_steps_are_in_gib_and_say_so(self, box, windows):
-        steps = gm.describe(box.info, LOCAL, setting_gb=64)["guided_steps"]
-        # 64 GB is 59.6 GiB; AMD Software's next whole value is 60.
-        assert any("set it to 60 GiB" in s and "64 GB" in s for s in steps)
-        assert any("60 GiB (shown as 60 GB)" in s for s in steps)
+    def test_one_value_in_amd_softwares_own_units(self, box, windows):
+        result = gm.describe(box.info, LOCAL, setting_gb=64)
+        steps = result["guided_steps"]
+        # 64 GB is 59.6 GiB, which AMD Software rounds up and shows as "60 GB".
+        assert result["guided_value"] == "60"
+        assert sum(" 60 GB" in s for s in steps) == 1
+        assert not any("GiB" in s for s in steps)
+        # The GPU total GAIA shows includes Windows' shared memory.
+        assert any("shares with the GPU" in s for s in steps)
+
+    def test_the_explanation_names_the_gpu_total_for_that_setting(self, box, windows):
+        result = gm.describe(box.info, LOCAL, setting_gb=64)
+        total = round(64 + (result["total_gb"] - 64) / 2)
+        assert any(f"{total} GB GPU total" in s for s in result["guided_steps"])
+
+    def test_no_gib_anywhere_in_the_response(self, box, windows):
+        assert "GiB" not in json.dumps(gm.describe(box.info, LOCAL))
 
     def test_projection_matches_model_fit(self, box, windows):
         result = gm.describe(box.info, LOCAL)
@@ -771,7 +845,7 @@ class TestWindows:
     def test_following_the_steps_exactly_counts(self, box, windows, target):
         steps = gm.record_pending(target)["guided_steps"]
         gib = math.ceil(target * 1e9 / 2**30)
-        assert any(f"set it to {gib} GiB" in s for s in steps)
+        assert any(f"set it to {gib} GB, as AMD Software shows it" in s for s in steps)
         box.reboot()
         windows["gb"] = float(gib)  # what the driver reads after the restart
         assert (
@@ -818,7 +892,10 @@ class TestWindows:
         box.info = {**WINDOWS_IGPU, "Physical Memory": "32.00 GB"}
         windows["gb"] = 4.0
         result = gm.describe(box.info, LOCAL)
-        assert result["setting"]["max_gb"] == 18  # 34.4 GB less the 16 GB reserve
+        # Windows shares half of what the carve-out leaves, so keeping 16 GB the
+        # GPU can never use caps the setting at 34.4 - 32 = 2 GB: nothing to offer.
+        assert result["setting"]["max_gb"] == 2
+        assert result["presets"] == []
         assert result["show_in_setup"] is False
 
 

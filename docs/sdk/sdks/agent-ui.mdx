@@ -2482,24 +2482,31 @@ TUI reads the same answers from the daemon at `/daemon/v1/gpu-memory`. Every
 route needs the `X-Gaia-UI: 1` header (**403** without it) and returns the
 status below, read fresh. **503** when the model server doesn't answer, since
 the split is read from it. Every `*_gb` field, in requests and responses, is
-decimal GB (10^9 bytes), converted from the GiB Lemonade reports. Only the
-`guided_steps` text converts, to the 4 KiB pages of `ttm.pages_limit` and to
-the GiB that AMD Software and `amd-ttm` count in.
+decimal GB (10^9 bytes), converted from the GiB Lemonade reports. The one
+exception is `guided_value`, the value the steps ask the user to enter: 4 KiB
+pages for `ttm.pages_limit` on Linux, and on Windows the number AMD Software
+shows (it counts GiB and labels them GB). Front-ends show `gpu_gb` for a
+target and `guided_value` as the value to enter, not a preset's `setting_gb`.
 
 <AccordionGroup>
   <Accordion title="GET /api/gpu-memory">
     `applies` (an integrated AMD GPU on a local server; else only
     `hidden_reason`, `os`, `method: "unsupported"` and `method_reason`),
     `show_in_setup` (a bigger share fits a default chat model), `total_gb`,
-    `gpu_gb`, `cpu_gb`, `setting` (`name`, `current_gb`, `min_gb`, `max_gb`;
+    `gpu_gb` (what models can use on the GPU, Windows' shared memory
+    included), `cpu_gb` (what the GPU can never use; `gpu_gb + cpu_gb =
+    total_gb`), `setting` (`name`, `current_gb`, `min_gb`, `max_gb`;
     the GPU memory limit on Linux, Variable Graphics Memory on Windows),
-    `reserve_gb` (16, kept for the CPU), `method` (`apply` or `guided`) with
+    `reserve_gb` (16: no preset or allowed value leaves `cpu_gb` below it), `method` (`apply` or `guided`) with
     `method_reason`, `presets` (`setting_gb`, `gpu_gb`, `unlocks`),
     `recommended_setting_gb`, `models` (`id`, `need_gb`, `default`,
     `fits_now`, `fits_at_setting_gb`), `pending` (`setting_gb`,
     `previous_setting_gb`, `source`, `state`: `restart_required`,
     `took_effect` or `not_applied`), `revert` (`available`,
-    `previous_setting_gb`) and `guided_steps`. **Query:** `setting_gb` renders
+    `previous_setting_gb`), `guided_steps` and `guided_value`. To hide the
+    step when none of the user's ticked models gains from it, show it only if
+    a ticked model has `fits_now: false` and a `fits_at_setting_gb`; that is
+    exactly the set of models named in some preset's `unlocks`. **Query:** `setting_gb` renders
     `guided_steps` for that value (**422** outside `min_gb`–`max_gb`).
   </Accordion>
 
