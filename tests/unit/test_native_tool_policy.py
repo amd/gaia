@@ -151,6 +151,40 @@ def test_catalog_labels_and_local_models_are_unchanged():
     assert lc.uses_native_tool_calls(None) is False
 
 
+@pytest.mark.parametrize(
+    "model_id", ["amd.Claude-Opus-5-5", "amd.Claude-Sonnet-5-5", "amd.claude-haiku-5-5"]
+)
+def test_gateway_claude_is_native_from_its_first_request(model_id):
+    agent = _agent(model_id)
+    assert lc.uses_native_tool_calls(model_id) is True
+    assert agent._uses_native_tool_calls() is True
+    assert not _text_shape(agent)
+
+
+def test_gateway_claude_stays_native_even_if_a_probe_said_otherwise():
+    lc.record_tool_calling("amd.Claude-Opus-5-5", False)
+    assert lc.uses_native_tool_calls("amd.Claude-Opus-5-5") is True
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "amd.Flash",
+        "amd.DeepSeek-V4.1-Flash",
+        "user.Claude-3.7-Sonnet-Reasoning-Gemma3-12B-GGUF",
+        "amd.Claudeish-7B",
+        "fireworks.claude-opus-5-5",
+    ],
+)
+def test_only_gateway_claude_skips_the_text_format(model_id):
+    from gaia.llm.gateway import gateway_claude_upstream_id
+
+    assert gateway_claude_upstream_id(model_id) is None
+    if lc.cloud_model_provider(model_id):
+        lc.record_tool_calling(model_id, True)
+        assert lc.uses_native_tool_calls(model_id) is False
+
+
 def test_an_unknown_model_keeps_the_optimistic_local_default():
     assert lc.uses_native_tool_calls("some-future-model-GGUF") is True
 
