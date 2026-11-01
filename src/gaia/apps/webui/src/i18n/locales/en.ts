@@ -36,6 +36,9 @@ export const enMessages = {
     'sidebar.notificationsUnread': 'Notifications, {n} unread',
     'sidebar.mobileAccess': 'Mobile access',
     'sidebar.mobileAccessOn': 'Mobile access is on',
+    'mobileAccess.installTitle': 'Keep GAIA on your phone',
+    'mobileAccess.installSteps': 'Once GAIA opens, add it to your home screen: in Safari, or Chrome on iPhone, tap Share, then Add to Home Screen. In Chrome on Android, open the ⋮ menu and tap Add to Home screen.',
+    'mobileAccess.linkLifetime': 'This link stops working when mobile access stops. Each time you start it, scan the new code. If GAIA on your home screen no longer connects, open the new link and add it again.',
     'sidebar.settings': 'Settings',
 
     // A chat's row in the sidebar

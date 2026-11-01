@@ -7,6 +7,7 @@ import type { TunnelStatus } from '../types';
 import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useT } from '../i18n/useT';
 import { log } from '../utils/logger';
 import './MobileAccessModal.css';
 
@@ -22,6 +23,7 @@ interface MobileAccessModalProps {
 }
 
 export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAccessModalProps) {
+    const t = useT();
     const [status, setStatus] = useState<TunnelStatus | null>(null);
     const [copied, setCopied] = useState(false);
     const [qrError, setQrError] = useState<string | null>(null);
@@ -243,16 +245,9 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
 
                     {status?.active && !error && (
                         <div className="mobile-install-hint">
-                            <div className="mobile-install-hint-title">Keep GAIA on your phone</div>
-                            <p>
-                                Once GAIA opens, add it to your home screen: in Safari, tap Share, then
-                                Add to Home Screen. In Chrome, open the ⋮ menu and tap Add to Home screen.
-                            </p>
-                            <p>
-                                This link stops working when mobile access stops. Each time you start it,
-                                scan the new code. If GAIA on your home screen no longer connects, open the
-                                new link and add it again.
-                            </p>
+                            <div className="mobile-install-hint-title">{t('mobileAccess.installTitle')}</div>
+                            <p>{t('mobileAccess.installSteps')}</p>
+                            <p>{t('mobileAccess.linkLifetime')}</p>
                         </div>
                     )}
 
