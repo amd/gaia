@@ -1699,8 +1699,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                         <button
                                             className="msg-action-btn"
                                             onClick={handleRetryLast}
-                                            title="Try again"
-                                            aria-label="Try again"
+                                            title={t('msg.tryAgain')}
+                                            aria-label={t('msg.tryAgain')}
                                         >
                                             <RotateCw size={12} />
                                         </button>

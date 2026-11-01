@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError, StreamTimeoutError } from '../../services/api';
 import { classifyChatError } from '../streamErrors';
+import { translator } from '../../i18n/useT';
 
 const kind = (err: Error) => classifyChatError(err).kind;
 
@@ -55,6 +56,12 @@ describe('classifyChatError (#599)', () => {
             expect(text).not.toContain('Traceback');
             expect(text.startsWith('Error:')).toBe(false);
         }
+    });
+
+    it('speaks the chosen language', () => {
+        const { kind: k, text } = classifyChatError(new Error('Failed to fetch'), translator('ar'));
+        expect(k).toBe('connection');
+        expect(text).toContain('انقطع الاتصال');
     });
 
     it('every kind tells the user what to do next', () => {
