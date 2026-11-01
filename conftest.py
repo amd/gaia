@@ -319,12 +319,29 @@ def _isolate_embedded_lemonade_paths():
     """
     from gaia.llm import lemonade_client, lemonade_embedded
 
+    original_gaia_home = lemonade_embedded.gaia_home
     state_path = _STATE_ROOT / "lemonade" / "state.json"
-    state_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def isolated_gaia_home() -> Path:
+        """Preserve a test's explicit GAIA_HOME; replace only Path.home fallback."""
+        if os.environ.get("GAIA_HOME", "").strip():
+            return original_gaia_home()
+        return _STATE_ROOT
+
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(lemonade_client, "EMBEDDED_LEMONADE_STATE", state_path)
-        mp.setattr(lemonade_embedded, "gaia_home", lambda: _STATE_ROOT)
+        mp.setattr(lemonade_embedded, "gaia_home", isolated_gaia_home)
         yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_isolated_embedded_lemonade_state():
+    """Give tests without ``GAIA_HOME`` a fresh fallback state directory."""
+    if not os.environ.get("GAIA_HOME", "").strip():
+        shutil.rmtree(_STATE_ROOT / "lemonade", ignore_errors=True)
+    yield
+    if not os.environ.get("GAIA_HOME", "").strip():
+        shutil.rmtree(_STATE_ROOT / "lemonade", ignore_errors=True)
 
 
 #: EmbeddedLemonade methods that act on a server; none may reach the real home.
