@@ -118,7 +118,8 @@ describe("edge cache", () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, `https://${ORIGIN}/`);
     assert.equal(calls[0].method, "GET");
-    assert.deepEqual(cache.puts, [`https://${ORIGIN}/`]);
+    // Keyed on the public URL, so a zone purge of amd-gaia.ai reaches it.
+    assert.deepEqual(cache.puts, ["https://amd-gaia.ai/"]);
 
     const second = await get("/");
     assert.equal(calls.length, 1);

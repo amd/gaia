@@ -147,9 +147,10 @@ export default {
     }
 
     // The Cache API, not fetch()'s cf options: those left HTML uncached at the
-    // edge (cf-cache-status: DYNAMIC) on this third-party origin.
+    // edge (cf-cache-status: DYNAMIC) on this third-party origin. Keyed on the
+    // public URL so a zone purge of amd-gaia.ai clears it.
     const cache = caches.default;
-    const cacheKey = new Request(target.toString(), { method: "GET" });
+    const cacheKey = new Request(url.toString(), { method: "GET" });
     const cached = await cache.match(cacheKey);
     if (cached) return cached;
 

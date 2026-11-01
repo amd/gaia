@@ -79,7 +79,10 @@ any downstream cache, not just Cloudflare's edge:
 | 3xx | left as Railway sent it |
 
 A full `200` is also stored in the edge cache with the Cache API (`caches.default`),
-so a repeat request within its TTL is served without a round-trip to Railway.
+keyed on the public `amd-gaia.ai` URL (query string included, so a zone purge
+clears it), so a repeat request within its TTL is served without a round-trip to
+Railway. A cache hit answers every GET with the full `200`, ignoring `Range` and
+`If-None-Match` — valid HTTP, but a browser gets no `304` for a cached page.
 `fetch()`'s `cf.cacheEverything` is not used: on this third-party origin it left HTML
 uncached (`cf-cache-status: DYNAMIC`). Errors and 404s are never cached — Railway
 restarts on deploy, and a cached 404 for an asset would outlive the restart.
