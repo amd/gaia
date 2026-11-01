@@ -124,6 +124,25 @@ class TestRunsRegisteredAgent:
         assert isinstance(init["base_url"], str) and init["base_url"]
         assert events[1]["payload"] == {"query": "hi", "trace": False}
 
+    def test_config_default_model_does_not_override_the_agents_own(
+        self, gaia_home, monkeypatch
+    ):
+        """Matches the Agent UI: only an explicit --model reaches a custom agent."""
+        _write_agent(gaia_home, "jarvis")
+        cfg = gaia_home / "config.json"
+        cfg.write_text(json.dumps({"default_model": "cfg-model"}), encoding="utf-8")
+        argv = [*_BASE, "--config", str(cfg), "--agent", "jarvis", "-q", "hi"]
+        assert _run_main(argv, monkeypatch) == 0
+        assert _events(gaia_home)[0]["payload"]["model_id"] is None
+
+    def test_explicit_model_wins_over_config_default(self, gaia_home, monkeypatch):
+        _write_agent(gaia_home, "jarvis")
+        cfg = gaia_home / "config.json"
+        cfg.write_text(json.dumps({"default_model": "cfg-model"}), encoding="utf-8")
+        argv = [*_BASE, "--config", str(cfg), "--agent", "jarvis", "-q", "hi"]
+        assert _run_main([*argv, "--model", "m2"], monkeypatch) == 0
+        assert _events(gaia_home)[0]["payload"]["model_id"] == "m2"
+
     def test_cli_flags_reach_the_constructor(self, gaia_home, monkeypatch):
         _write_agent(gaia_home, "jarvis")
         code = _run_main(

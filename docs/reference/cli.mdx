@@ -1046,7 +1046,7 @@ on stderr.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--query, -q` | string | - | Single query to execute |
-| `--agent` | string | flagship | Run a registered agent instead, such as a custom agent in `~/.gaia/agents/<id>/`. Ids come from `gaia agent status`. An unknown id exits `2` and lists the registered ids. The flagship-only flags (`--index`, `--watch`, `--chunk-size`, `--max-chunks`, `--max-indexed-files`, `--max-total-chunks`, `--mcp-tool-limit`, `--allowed-paths`, `--no-learned-skills`, `--ui`) are rejected with it. See [Custom agents](/guides/custom-agent#running-it-from-the-cli) |
+| `--agent` | string | flagship | Run a registered agent instead, such as a custom agent in `~/.gaia/agents/<id>/`. Ids come from `gaia agent status`. The agent keeps its own default model; only an explicit `--model` overrides it, and `default_model` from config does not. An unknown id exits `2` and lists the registered ids. The flagship-only flags (`--index`, `--watch`, `--chunk-size`, `--max-chunks`, `--max-indexed-files`, `--max-total-chunks`, `--mcp-tool-limit`, `--allowed-paths`, `--no-learned-skills`, `--ui`) are rejected with it. See [Custom agents](/guides/custom-agent#running-it-from-the-cli) |
 | `--model` | string | auto-selected by agent | Override the model the GAIA agent uses (`None` means let the agent pick; see `GaiaAgentConfig.model_id`). Falls back to `default_model` from config — see [Configuration](#configuration) |
 | `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |

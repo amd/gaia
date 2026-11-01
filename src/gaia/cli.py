@@ -4943,7 +4943,14 @@ def main():
             sys.exit(1)
         # builtin_default=None: leave args.model unset when no config default so
         # each command keeps applying its own built-in default downstream.
-        if not (args.action == "chat" and getattr(args, "device", None)):
+        # A non-flagship agent keeps its own model default, as in the Agent UI.
+        if not (
+            args.action == "chat"
+            and (
+                getattr(args, "device", None)
+                or getattr(args, "agent", None) not in (None, "gaia")
+            )
+        ):
             resolved = _cfg.resolve_model(args.model, None)
             if resolved:
                 args.model = resolved
