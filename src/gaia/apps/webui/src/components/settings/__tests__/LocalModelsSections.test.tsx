@@ -66,7 +66,7 @@ describe('Settings > Models on this PC', () => {
         fireEvent.click(row('gpt-oss 20B'));
         fireEvent.click(screen.getByRole('button', { name: 'Apply: download 12.1 GB' }));
         const sheet = await screen.findByRole('alertdialog', { name: 'gpt-oss 20B may not fit this PC. Download it anyway?' });
-        expect(sheet).toHaveTextContent('Needs about 70.0 GB; this PC has 16.0 GiB.');
+        expect(sheet).toHaveTextContent('Needs about 70.0 GB; this PC has 16.0 GB.');
         expect(mocked.downloadSetupModel).not.toHaveBeenCalled();
     });
 

@@ -248,7 +248,7 @@ describe('SetupScreen: warnings and confirmations', () => {
         await continueFromWhere();
         fireEvent.click(await screen.findByRole('button', { name: /^ ?Continue$/ }));
         const sheet = await screen.findByRole('alertdialog', { name: 'Qwen3.6-35B-A3B may not fit this PC. Download it anyway?' });
-        expect(sheet).toHaveTextContent('Needs about 27.1 GB; this PC has 16.0 GiB.');
+        expect(sheet).toHaveTextContent('Needs about 27.1 GB; this PC has 16.0 GB.');
         expect(within(sheet).getByRole('button', { name: 'Pick a smaller one' })).toHaveFocus();
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
         fireEvent.click(within(sheet).getByRole('button', { name: 'Download anyway' }));

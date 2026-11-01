@@ -6,7 +6,7 @@ import { AlertTriangle, HardDrive, HelpCircle, Loader2 } from 'lucide-react';
 import { useT, type Translate } from '../../i18n/useT';
 import type { Say } from '../../i18n/registry';
 import type { SetupCatalogEntry, SetupModelProgress, SetupPlan } from '../../types';
-import { formatBytes, formatMemoryGiB, formatSize } from './format';
+import { formatBytes, formatFitGb, formatSize } from './format';
 import { useDebounced, useTweened } from './motion';
 import { Reveal } from './Reveal';
 import {
@@ -43,12 +43,12 @@ export function statusText(e: SetupCatalogEntry, t: Translate): string {
 /** The memory note, with the backend's numbers and nothing invented. */
 function fitLine(e: SetupCatalogEntry, t: Say): string | null {
     if (e.fits !== true || e.need_gb == null || e.capacity_gb == null) return null;
-    return t('setup.models.fit.ok', { need: formatSize(e.need_gb), have: formatMemoryGiB(e.capacity_gb) });
+    return t('setup.models.fit.ok', { need: formatFitGb(e.need_gb), have: formatFitGb(e.capacity_gb) });
 }
 
 export function tooBigText(e: SetupCatalogEntry, t: Translate): string {
     return e.need_gb != null && e.capacity_gb != null
-        ? t('setup.models.warn.tooBig', { need: formatSize(e.need_gb), have: formatMemoryGiB(e.capacity_gb) })
+        ? t('setup.models.warn.tooBig', { need: formatFitGb(e.need_gb), have: formatFitGb(e.capacity_gb) })
         : t('setup.models.warn.tooBigNoNumbers', { reason: e.fit_reason ?? '' });
 }
 

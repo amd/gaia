@@ -53,8 +53,8 @@ describe('Choose your models', () => {
         expect(row('Qwen3.6-35B-A3B')).toBeChecked();
         expect(row('Qwen3.6-35B-A3B')).toHaveAccessibleName(/Qwen3\.6-35B-A3B.*Chat.*Download 23\.3 GB.*Recommended for this PC/);
         expect(row('embeddinggemma')).toHaveAccessibleName(/Documents.*Download 300 MB/);
-        // Lemonade's memory is GiB and shown as GiB, beside the model's need, as the fit verdict compares them.
-        expect(row('Qwen3.6-35B-A3B')).toHaveAccessibleName(/Needs about 27\.1 GB of memory; this PC has 96\.0 GiB for models\./);
+        // Lemonade's memory is GB and shown as GB, beside the model's need, as the fit verdict compares them.
+        expect(row('Qwen3.6-35B-A3B')).toHaveAccessibleName(/Needs about 27\.1 GB of memory; this PC has 96\.0 GB for models\./);
         expect(within(summary()).getByText('29.6 GB')).toBeInTheDocument();
         expect(within(summary()).getByText('Free on C:')).toBeInTheDocument();
         expect(within(summary()).getByText('412.3 GB')).toBeInTheDocument();
@@ -102,8 +102,18 @@ describe('Choose your models', () => {
     it('warns with real numbers when a model may not fit memory', () => {
         const big = { ...QWEN, fits: false as const, need_gb: 27.1, capacity_gb: 16 };
         render(<Harness plan={plan([big, GEMMA, EMBED])} />);
-        expect(screen.getByRole('note')).toHaveTextContent('Needs about 27.1 GB; this PC has 16.0 GiB. It may be very slow or fail to load.');
+        expect(screen.getByRole('note')).toHaveTextContent('Needs about 27.1 GB; this PC has 16.0 GB. It may be very slow or fail to load.');
         expect(row('Qwen3.6-35B-A3B')).toBeChecked();
+    });
+
+    it('labels a need and the memory it is compared with the same way, everywhere', () => {
+        const big = { ...QWEN, fits: false as const, need_gb: 27.1, capacity_gb: 16 };
+        render(<Harness plan={plan([big, GEMMA, EMBED])} />);
+        const text = document.body.textContent ?? '';
+        expect(text).not.toMatch(/GiB/);
+        const pairs = [...text.matchAll(/Needs about [\d.]+ (\w+)[^.]*?has [\d.]+ (\w+)/g)];
+        expect(pairs.length).toBeGreaterThan(2);
+        for (const m of pairs) expect(m[1], m[0]).toBe(m[2]);
     });
 
     it("marks fit unknown and invents no number when the PC's memory couldn't be read", () => {

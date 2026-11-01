@@ -14,12 +14,12 @@ export function formatSize(gb: number): string {
 }
 
 /**
- * This PC's memory for models, as Lemonade reports it: GiB, labelled so, never
- * converted. The backend's fit verdict compares it with a model's need as is,
- * so converting either number could make a row contradict its own verdict.
+ * A number from the memory-fit calculation: a model's need or this PC's memory
+ * for models. Both come from the same model_fit math in the same unit, so they
+ * share this one label and a sentence never compares two units.
  */
-export function formatMemoryGiB(gib: number): string {
-    return `${gib.toFixed(1)} GiB`;
+export function formatFitGb(gb: number): string {
+    return `${gb.toFixed(1)} GB`;
 }
 
 export function formatBytes(bytes: number): string {
