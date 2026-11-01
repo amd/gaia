@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import wave
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 import requests
@@ -168,6 +168,39 @@ _L16_RE = re.compile(r"^audio/l16\b", re.IGNORECASE)
 _RATE_RE = re.compile(r"\brate=(\d+)", re.IGNORECASE)
 
 
+def _split_text(text: str, limit: int) -> List[str]:
+    """Split speech at sentence boundaries without dropping any text."""
+    if limit < 1:
+        raise ValueError("speech chunk limit must be positive")
+    if len(text) <= limit:
+        return [text]
+    pieces = re.split(r"(?<=[.!?。！？])\s+", text.strip())
+    chunks: List[str] = []
+    current = ""
+    for piece in pieces:
+        if current and len(current) + len(piece) + 1 > limit:
+            chunks.append(current)
+            current = piece
+        else:
+            current = f"{current} {piece}".strip()
+    if current:
+        chunks.append(current)
+    # A URL/code-like run may contain no sentence boundary. Split it at the
+    # last whitespace inside each window when possible so speech does not cut
+    # ordinary words in half; fall back to the hard bound for one long token.
+    result: List[str] = []
+    for chunk in chunks:
+        while len(chunk) > limit:
+            split_at = chunk.rfind(" ", 0, limit + 1)
+            if split_at <= 0:
+                split_at = limit
+            result.append(chunk[:split_at])
+            chunk = chunk[split_at:].lstrip()
+        if chunk:
+            result.append(chunk)
+    return result
+
+
 class LemonadeTTSError(RuntimeError):
     """Raised when Lemonade cannot produce speech."""
 
@@ -212,6 +245,76 @@ class LemonadeTTSClient(LemonadeAudioService):
                 failed.
         """
         self.ensure_model_pulled("tts", say=say)
+
+    def check_model_available(self) -> None:
+        """Verify the configured TTS model is downloaded without pulling it.
+
+        This is the preflight used by the agent tool. A missing model is a
+        user choice in Settings, not something a speech request may download
+        invisibly in the middle of a turn.
+        """
+        catalog = self.catalog()
+        entry = next((item for item in catalog if item.get("id") == self.model), None)
+        if entry is None:
+            raise LemonadeTTSError(
+                f"Lemonade has no TTS model '{self.model}' in its catalog. "
+                "Run `gaia download --agent talk`, then retry."
+            )
+        if "tts" not in (entry.get("labels") or []):
+            raise LemonadeTTSError(
+                f"Lemonade model '{self.model}' is not a TTS model (labels: "
+                f"{', '.join(entry.get('labels') or []) or 'none'})."
+            )
+        if entry.get("downloaded") is not True:
+            size = entry.get("size")
+            size_hint = (
+                f" (~{float(size):.2f} GB)" if isinstance(size, (int, float)) else ""
+            )
+            raise LemonadeTTSError(
+                f"TTS model '{self.model}' is not downloaded{size_hint}. Run "
+                "`gaia download --agent talk`, then retry. GAIA will not download "
+                "speech models during a chat."
+            )
+
+    def synthesize_long(
+        self,
+        text: str,
+        voice: str = DEFAULT_VOICE,
+        speed: float = 1.0,
+        limit: int = 1800,
+    ) -> Tuple[np.ndarray, int]:
+        """Synthesize long text in sentence-sized chunks and join the PCM."""
+        if not text or not text.strip():
+            raise ValueError("text to speak must not be empty.")
+        pieces = _split_text(text, limit)
+        chunks: List[np.ndarray] = []
+        rate: Optional[int] = None
+        for piece in pieces:
+            samples, piece_rate = self.synthesize(piece, voice=voice, speed=speed)
+            if rate is None:
+                rate = piece_rate
+            elif piece_rate != rate:
+                raise LemonadeTTSError(
+                    f"Lemonade changed speech sample rate from {rate} to {piece_rate}."
+                )
+            chunks.append(samples)
+        return np.concatenate(chunks), rate or TTS_SAMPLE_RATE
+
+    def synthesize_to_wav_long(
+        self,
+        text: str,
+        output_path: str | Path,
+        voice: str = DEFAULT_VOICE,
+        speed: float = 1.0,
+        limit: int = 1800,
+    ) -> Tuple[float, int]:
+        """Synthesize long text into one 16-bit mono WAV and report its chunks."""
+        pieces = _split_text(text, limit)
+        samples, rate = self.synthesize_long(
+            text, voice=voice, speed=speed, limit=limit
+        )
+        write_wav(output_path, samples, rate)
+        return len(samples) / rate, len(pieces)
 
     def synthesize(
         self, text: str, voice: str = DEFAULT_VOICE, speed: float = 1.0
