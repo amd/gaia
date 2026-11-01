@@ -14,12 +14,75 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from gaia.logger import get_logger
+
 from .. import setup_plan as plan_api
 from ..security import require_ui_header
-from ..setup_plan import SetupPlanError, build_plan, choose_chat_model
-from ..setup_runner import SetupError, check, runner, step_labels, users_lemonade_url
+from ..setup_plan import (
+    ServerNotRunning,
+    SetupPlanError,
+    UnknownModel,
+    build_plan,
+    choose_chat_model,
+)
+from ..setup_runner import (
+    LemonadeOverridden,
+    SetupBusy,
+    SetupError,
+    check,
+    runner,
+    step_labels,
+    users_lemonade_url,
+)
 
+logger = get_logger(__name__)
 router = APIRouter(tags=["setup"])
+
+# Fixed words for each failure: what failed, what to do, where the details are.
+# Exception text stays in the server log, never in a response.
+_LOG = "Details are in the Agent UI server log."
+_SERVER_DOWN = (
+    "The model server isn't running yet. Start setup first, then try again. " + _LOG
+)
+_PLAN_FAILED = (
+    "GAIA couldn't work out the setup plan. Check that the model server is "
+    "running and that ~/.gaia/config.json is valid, then try again. " + _LOG
+)
+_CHECK_FAILED = (
+    "GAIA couldn't check whether setup is done. Run `gaia init --check` in a "
+    "terminal to see why. " + _LOG
+)
+_BUSY = (
+    "Setup or that model's download is already running. Wait for it or cancel "
+    "it, then try again."
+)
+_OVERRIDDEN = (
+    "LEMONADE_BASE_URL points GAIA at another server, so setup can't switch to "
+    "GAIA's own. Unset it and restart GAIA."
+)
+_START_FAILED = (
+    "Setup couldn't start. Run `gaia init --profile gaia` in a terminal to see "
+    "why. " + _LOG
+)
+
+
+def _plan_error(e: SetupPlanError, unknown_model: str) -> HTTPException:
+    """The response for a failed plan call; *unknown_model* is the 422 wording."""
+    logger.exception("Setup plan request failed")
+    if isinstance(e, ServerNotRunning):
+        return HTTPException(status_code=503, detail=_SERVER_DOWN)
+    if isinstance(e, UnknownModel):
+        return HTTPException(status_code=422, detail=unknown_model)
+    return HTTPException(status_code=503, detail=_PLAN_FAILED)
+
+
+def _run_error(e: SetupError) -> HTTPException:
+    logger.exception("Setup could not start")
+    if isinstance(e, SetupBusy):
+        return HTTPException(status_code=409, detail=_BUSY)
+    if isinstance(e, LemonadeOverridden):
+        return HTTPException(status_code=409, detail=_OVERRIDDEN)
+    return HTTPException(status_code=500, detail=_START_FAILED)
 
 
 # Starts a subprocess that can load models, so a cross-site GET must not reach it.
@@ -30,7 +93,8 @@ def setup_check(skip_chat_model: bool = False, load: bool = False) -> Dict[str, 
         status = check(skip_chat_model=skip_chat_model, load=load)
         users_server = users_lemonade_url()
     except SetupError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        logger.exception("Setup check failed")
+        raise HTTPException(status_code=503, detail=_CHECK_FAILED) from e
     # cloud_steps lets the UI show a cloud choice's smaller download before it starts.
     return {
         **status,
@@ -46,7 +110,7 @@ def setup_plan() -> Dict[str, Any]:
     try:
         return build_plan()
     except SetupPlanError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        raise _plan_error(e, _PLAN_FAILED) from e
 
 
 def _confirm(warning: Dict[str, Any]) -> HTTPException:
@@ -74,7 +138,11 @@ def setup_chat_model(body: ChatModelRequest) -> Dict[str, Any]:
         choose_chat_model(body.model_id, acknowledge_no_fit=True)
         return build_plan()
     except SetupPlanError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise _plan_error(
+            e,
+            f"{body.model_id} isn't a chat model GAIA knows or one this Lemonade "
+            "Server has downloaded. Download it first, then pick it.",
+        ) from e
 
 
 class SkipModelRequest(BaseModel):
@@ -89,7 +157,11 @@ def setup_skip_model(body: SkipModelRequest) -> Dict[str, Any]:
         plan_api.set_model_skipped(body.model_id, body.skipped)
         return build_plan()
     except SetupPlanError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise _plan_error(
+            e,
+            f"{body.model_id} isn't one of the models setup downloads, so there "
+            "is nothing to skip.",
+        ) from e
 
 
 class DownloadModelRequest(BaseModel):
@@ -117,9 +189,13 @@ def setup_download_model(body: DownloadModelRequest) -> Dict[str, Any]:
         )
         return runner.download_model(client, model_id, body.keep_trying)
     except SetupError as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
+        raise _run_error(e) from e
     except SetupPlanError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise _plan_error(
+            e,
+            f"{body.model_id} isn't a model GAIA knows or one in this Lemonade "
+            "Server. Add it in Settings, then try again.",
+        ) from e
 
 
 class RemoveModelRequest(BaseModel):
@@ -133,13 +209,18 @@ def setup_remove_model(body: RemoveModelRequest) -> Dict[str, Any]:
     if runner.busy_with(body.model_id):
         raise HTTPException(
             status_code=409,
-            detail=f"{body.model_id} is downloading. Cancel it first.",
+            detail=(
+                "Setup or that model's download is running, so the model can't be "
+                "removed now. Wait for it or cancel it, then try again."
+            ),
         )
     try:
         freed = plan_api.remove_model(body.model_id)
         return {**build_plan(), "freed_gb": freed}
     except SetupPlanError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise _plan_error(
+            e, f"{body.model_id} isn't downloaded, so there is nothing to remove."
+        ) from e
 
 
 class SetupRunRequest(BaseModel):
@@ -197,9 +278,9 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
             server_only=body.server_only,
         )
     except SetupPlanError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        raise _plan_error(e, _PLAN_FAILED) from e
     except SetupError as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
+        raise _run_error(e) from e
 
 
 @router.get("/api/setup/status")

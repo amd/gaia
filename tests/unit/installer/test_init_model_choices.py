@@ -242,10 +242,12 @@ def test_declining_gemma_on_a_small_pc_leaves_no_chat_model_and_says_so(
     fake = lemonade()
     sp.set_model_skipped(DEFAULT_MODEL_NAME, True)
     cmd = InitCommand(profile="gaia", yes=True)
-    assert _download(cmd)
+    # Same verdict as `gaia init --check`: no chat model is a failed setup.
+    assert not _download(cmd)
     assert _pulled(fake) == [DEFAULT_EMBEDDING_MODEL]
     out = capsys.readouterr().out
     assert "no local chat model" in out and "images" in out
+    assert f"No local chat model: {DEFAULT_MODEL_NAME} is skipped" in out
     # Nothing downloaded for chat, so nothing becomes everyone's default.
     config = gaia.config.GaiaConfig.load()
     cmd._record_chat_choice(config)
@@ -418,3 +420,56 @@ def test_download_model_fetches_vision_for_a_user_whose_chat_model_replaced_it(
     cmd = InitCommand(profile="gaia", yes=True, extra_models=[DEFAULT_MODEL_NAME])
     assert _download(cmd)
     assert fake.pulls == [(DEFAULT_MODEL_NAME, {})]
+
+
+def test_every_model_skipped_fails_loudly_and_still_sends_the_plan(
+    lemonade, home, capsys
+):
+    fake = lemonade()
+    sp.set_model_skipped(DEFAULT_MODEL_NAME, True)
+    sp.set_model_skipped(DEFAULT_EMBEDDING_MODEL, True)
+    cmd = InitCommand(profile="gaia", yes=True, progress_json=True)
+    assert not _download(cmd)
+    assert fake.pulls == []
+    out = capsys.readouterr().out
+    events = [json.loads(line) for line in out.splitlines() if line.startswith("{")]
+    plan = next(e for e in events if e["event"] == "plan")
+    assert plan["models"] == [] and set(plan["skipped"]) == {
+        DEFAULT_MODEL_NAME,
+        DEFAULT_EMBEDDING_MODEL,
+    }
+    error = next(e for e in events if e["event"] == "error")
+    assert "No local chat model" in error["message"]
+    assert "initialization complete" not in out.lower()
+
+
+def test_npu_profile_can_skip_its_own_flm_model(lemonade, home):
+    lemonade()
+    with pytest.raises(sp.UnknownModel):
+        sp.set_model_skipped(FLM, True)  # not one of the gaia profile's models
+    sp.set_model_skipped(FLM, True, profile="npu")
+    assert _config(home)["skipped_models"] == [FLM]
+
+
+def test_download_later_with_the_chat_model_skipped_succeeds_on_its_own_pull(
+    lemonade, home, capsys
+):
+    """`--download-model X` is judged on X; readiness stays `--check`'s job."""
+    fake = lemonade(downloaded=[EMBEDDER])
+    sp.set_model_skipped(DEFAULT_MODEL_NAME, True)
+    cmd = InitCommand(profile="gaia", yes=True, extra_models=[LARGE_DEFAULT_MODEL_NAME])
+    assert _download(cmd)
+    assert _pulled(fake) == [LARGE_DEFAULT_MODEL_NAME]
+    assert "No local chat model" in capsys.readouterr().out
+
+
+def test_download_later_still_fails_when_its_own_pull_fails(lemonade, home):
+    fake = lemonade(downloaded=[EMBEDDER])
+    sp.set_model_skipped(DEFAULT_MODEL_NAME, True)
+
+    def broken(model_name, **_fields):
+        yield {"event": "error", "error": "checkpoint not found"}
+
+    fake.pull_model_stream = broken
+    cmd = InitCommand(profile="gaia", yes=True, extra_models=[LARGE_DEFAULT_MODEL_NAME])
+    assert not _download(cmd)
