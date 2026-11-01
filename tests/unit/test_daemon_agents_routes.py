@@ -637,6 +637,17 @@ def test_remove_entry_ignores_a_pid_recorded_for_another_agent(daemon_home):
     assert [e["agent_id"] for e in ledger.read_entries()] == ["toy-a"]
 
 
+def test_remove_entry_with_no_pid_drops_nothing(daemon_home):
+    # A reap that cannot name its pid must not wipe the agent's survivors.
+    from gaia.daemon.sidecars import ledger
+
+    ledger.record_spawn(
+        agent_id="email", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
+    )
+    ledger.remove_entry("email", None)
+    assert [e["pid"] for e in ledger.read_entries()] == [1]
+
+
 def test_remove_entry_of_an_unrecorded_pid_is_a_no_op(daemon_home):
     from gaia.daemon.sidecars import ledger
 
@@ -656,7 +667,7 @@ def test_remove_entry_deletes_only_the_named_agent(daemon_home):
     ledger.record_spawn(
         agent_id="toy-a", pid=2, port=200, mode="user", argv=["b"], started_at=2.0
     )
-    ledger.remove_entry("email")
+    ledger.remove_entry("email", 1)
     entries = ledger.read_entries()
     assert len(entries) == 1
     assert entries[0]["agent_id"] == "toy-a"
@@ -672,7 +683,7 @@ def test_ledger_file_never_contains_a_token_field(daemon_home):
     ledger.record_spawn(
         agent_id="toy-a", pid=2, port=200, mode="dev", argv=["b"], started_at=2.0
     )
-    ledger.remove_entry("email")
+    ledger.remove_entry("email", 1)
     ledger.record_spawn(
         agent_id="email", pid=3, port=300, mode="user", argv=["c"], started_at=3.0
     )
@@ -741,7 +752,7 @@ def _wire_manager_ledger(m, agent_id):
         argv=argv,
         started_at=m.started_at,
     )
-    m.on_process_reaped = lambda: ledger.remove_entry(agent_id)
+    m.on_process_reaped = lambda: ledger.remove_entry(agent_id, m.pid)
 
 
 def test_ledger_entry_exists_from_popen_through_health_wait(

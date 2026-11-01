@@ -93,18 +93,17 @@ def record_spawn(
         _write_entries(entries)
 
 
-def remove_entry(agent_id: str, pid: Optional[int] = None) -> None:
-    """Drop the entry for *agent_id*'s *pid* after its process is confirmed gone.
+def remove_entry(agent_id: str, pid: int) -> None:
+    """Drop *agent_id*'s *pid* entry after that process is confirmed gone.
 
-    With *pid* omitted every entry for *agent_id* is dropped.
+    Only that pid's entry goes: an earlier spawn of the same agent that is
+    still alive keeps its entry for the next crash-reap.
     """
     with _LEDGER_LOCK:
         entries = [
             e
             for e in read_entries()
-            if not (
-                e.get("agent_id") == agent_id and (pid is None or e.get("pid") == pid)
-            )
+            if not (e.get("agent_id") == agent_id and e.get("pid") == pid)
         ]
         _write_entries(entries)
 
