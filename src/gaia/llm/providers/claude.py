@@ -1239,11 +1239,26 @@ class GatewayClaudeProvider(ClaudeProvider):
             raise exc
         status = exc.status_code
         if status in (401, 403):
-            raise RuntimeError(
-                f"{where} rejected the token (HTTP {status}). Run `gaia gateway "
-                "auth` with a current token, or update LEMONADE_AMD_API_KEY / "
+            detail = (
+                f"{where} rejected the token (HTTP {status}). Run `gaia gateway auth` "
+                "with a current token, or update LEMONADE_AMD_API_KEY / "
                 "GAIA_GATEWAY_TOKEN if you set one."
-            ) from exc
+            )
+            try:
+                from gaia.llm import gateway
+                from gaia.llm.gateway import GatewayManager
+
+                gateway_status = GatewayManager().status(timeout=5)
+            except Exception as gateway_error:  # preserve the original 401
+                logger.debug("Could not inspect Lemonade gateway auth state: %s", gateway_error)
+            else:
+                if gateway_status.env_var_set and not gateway_status.runtime_key_set:
+                    detail += (
+                        f" Lemonade reports {gateway.GATEWAY_ENV_VAR} is set in its "
+                        "environment, so other gateway models may still be using a "
+                        "different key from this Claude route."
+                    )
+            raise RuntimeError(detail) from exc
         if status == 429:
             raise RuntimeError(
                 f"{where} is rate limiting requests (HTTP 429): {exc.message}. "

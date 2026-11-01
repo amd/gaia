@@ -490,6 +490,28 @@ def test_gateway_errors_are_actionable(fake_sdk, status, message, expected):
     lemonade.assert_not_called()
 
 
+def test_gateway_claude_401_explains_likely_token_drift(
+    fake_sdk, monkeypatch, gateway_env
+):
+    client = _gateway_client()
+    error = fake_sdk.AuthenticationError("invalid subscription key", 401)
+    client._client.messages.create.side_effect = error
+    manager = MagicMock()
+    manager.status.return_value = SimpleNamespace(
+        env_var_set=True, runtime_key_set=False
+    )
+    monkeypatch.setattr("gaia.llm.gateway.GatewayManager", lambda: manager)
+
+    with pytest.raises(RuntimeError) as raised:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    message = str(raised.value)
+    assert gateway_env.GATEWAY_ENV_VAR in message
+    assert "other gateway models may still be using a different key" in message
+    assert GATEWAY_TOKEN not in message
+    manager.status.assert_called_once_with(timeout=5)
+
+
 def test_unreachable_gateway_names_the_vpn(fake_sdk):
     client = _gateway_client()
     client._client.messages.create.side_effect = fake_sdk.APIConnectionError("dns")

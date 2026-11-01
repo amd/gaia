@@ -975,9 +975,9 @@ class GatewayManager:
             return False
         return True
 
-    def status(self) -> GatewayStatus:
+    def status(self, *, timeout: int = _REQUEST_TIMEOUT) -> GatewayStatus:
         """Registration and auth state for the gateway provider."""
-        info = self._request("GET", "system-info")
+        info = self._request("GET", "system-info", timeout=timeout)
         providers = (info.get("cloud") or {}).get("providers") or []
         for entry in providers:
             if entry.get("name") != GATEWAY_PROVIDER:
