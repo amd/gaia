@@ -61,6 +61,8 @@ _SUMMARY_CHAR_CAP = 300
 _MCP_OUTPUT_CHAR_CAP = 16_000
 #: Most diff lines an edit's ``diff`` card carries; the rest is counted, not sent.
 _DIFF_CARD_MAX_LINES = 400
+#: Most characters it carries, so one huge line (a minified file) stays bounded.
+_DIFF_CARD_MAX_CHARS = 64_000
 
 #: Result keys naming a file the tool wrote; kept on the summary view a
 #: relayed result is reduced to.
@@ -1014,6 +1016,11 @@ class SSEOutputHandler(OutputHandler):
             card["unified"] = "\n".join(lines[:_DIFF_CARD_MAX_LINES])
             card["note"] = (
                 f"Showing the first {_DIFF_CARD_MAX_LINES} of {len(lines)} diff lines."
+            )
+        if len(card["unified"]) > _DIFF_CARD_MAX_CHARS:
+            card["unified"] = card["unified"][:_DIFF_CARD_MAX_CHARS]
+            card["note"] = (
+                f"Showing the first {_DIFF_CARD_MAX_CHARS:,} characters of the diff."
             )
         self._pending_diff_card = card
 

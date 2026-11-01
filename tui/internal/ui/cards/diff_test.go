@@ -74,7 +74,7 @@ func TestDiffLongBodyIsBoundedAndCounted(t *testing.T) {
 		t.Errorf("diff card is %d lines; it must stay bounded", n)
 	}
 	shown := maxCardRows - 1
-	assertContains(t, out, "+"+itoa(300-shown)+" more lines (truncated)")
+	assertContains(t, out, "… "+itoa(300-shown)+" more lines (truncated)")
 }
 
 func TestDiffNarrowTerminalStillRenders(t *testing.T) {

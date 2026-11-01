@@ -101,6 +101,36 @@ class TestApprovedEditShowsTheDiff:
         assert "+beta" in card["data"]["unified"]
         assert "note" not in card["data"]
 
+    def test_each_diff_line_is_terminated_once(self, file_tools, tmp_path):
+        _, result, wire = _edit(
+            file_tools, tmp_path, "debug = False\nport = 4200\n", "False", "True"
+        )
+        unified = _results(wire)[0]["data"]["unified"]
+        assert "\n\n" not in unified
+        assert unified.splitlines()[-3:] == [
+            "-debug = False",
+            "+debug = True",
+            " port = 4200",
+        ]
+        assert result["diff"] == unified
+
+    def test_line_ending_only_edit_still_draws_a_card(self, file_tools, tmp_path):
+        path = tmp_path / "crlf.txt"
+        path.write_bytes(b"a\r\nb\n")
+        file_tools("read_file")(str(path))
+        handler = SSEOutputHandler()
+        file_tools.mixin.console = handler
+        _run_call(
+            handler,
+            "edit_file",
+            {},
+            lambda: file_tools("edit_file")(str(path), "a\r\n", "a\n"),
+        )
+        assert path.read_bytes() == b"a\nb\n"
+        (result,) = _results(_wire(handler))
+        assert result["render"] == "diff"
+        assert "\r" not in result["data"]["unified"]
+
     def test_card_matches_the_diff_card_schema(self, file_tools, tmp_path):
         # DiffCard / renderDiff accept {title?, badge?, note?, unified: str} only.
         _, _, wire = _edit(file_tools, tmp_path, "a\nb\n", "b", "c")
@@ -182,6 +212,20 @@ class TestLargeDiffIsBounded:
         data = _results(_wire(handler))[0]["data"]
         assert data["unified"] == diff
         assert "note" not in data
+
+    def test_one_huge_line_is_capped_by_characters(self, monkeypatch):
+        monkeypatch.setattr(sse_handler_module, "_DIFF_CARD_MAX_CHARS", 50)
+        handler = SSEOutputHandler()
+        diff = "-" + "a" * 200 + "\n+" + "b" * 200
+        _run_call(
+            handler,
+            "edit_file",
+            {},
+            lambda: (handler.print_diff(diff, "min.js"), {"status": "success"})[1],
+        )
+        data = _results(_wire(handler))[0]["data"]
+        assert data["unified"] == diff[:50]
+        assert data["note"] == "Showing the first 50 characters of the diff."
 
 
 class TestTranslatorRenderKey:

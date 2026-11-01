@@ -493,7 +493,7 @@ func renderDiff(data json.RawMessage, width int) string {
 		b.add("  " + strings.TrimSuffix(line, "\r"))
 	}
 	if n := len(lines) - len(shown); n > 0 {
-		b.add("  +" + itoa(n) + " more lines (truncated)")
+		b.add("  … " + itoa(n) + " more lines (truncated)")
 	}
 	return b.render()
 }
