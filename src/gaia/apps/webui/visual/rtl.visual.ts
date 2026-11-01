@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MODEL_LIST, NOW, mockApi, useLocale, useTheme, withModelPage } from './fixtures';
+import { ANSWER_SESSION, MODEL_LIST, NOW, mockApi, useLocale, useTheme, withModelPage, withSettingsPanes } from './fixtures';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -298,6 +298,8 @@ for (const locale of ['ar', 'en']) {
         await dialog.locator('[data-section="advanced"]').click();
         const title = dialog.locator('.settings-pane-title');
         await expect(title).toBeVisible();
+        // Advanced fits the dialog until its sections are open.
+        await dialog.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
 
         const close = dialog.locator('.settings-close');
         const before = await close.boundingBox();
@@ -448,6 +450,25 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
     });
+}
+
+for (const locale of ['ar', 'en']) {
+    for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
+        test(`settings ${section} pane (${locale})`, async ({ page }) => {
+            await open(page, '', locale, withSettingsPanes);
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.getByRole('dialog').locator(`[data-section="${section}"]`).click();
+            await expect(page.locator('.settings-pane-title')).toBeVisible();
+            await expect(page.locator('.loading-text, .spin')).toHaveCount(0);
+            await shot(page, `pane-${section}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+
+            await page.locator('.settings-disclosure:not([open]) > summary, .settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await scrollPane(page, 'bottom');
+            await shot(page, `pane-${section}-${locale}-open`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
 }
 
 /** A Strix Halo on first run: Qwen won't fit 16 GB, an FLM model is installed, the disk is tight. */

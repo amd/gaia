@@ -4,9 +4,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import * as memoryApi from '../../services/memoryApi';
 import { useChatStore } from '../../stores/chatStore';
+import { useT } from '../../i18n/useT';
 
 /** Memory on/off and the way into the Memory dashboard. */
 export function MemorySettings() {
+    const t = useT();
     const setShowMemoryDashboard = useChatStore((s) => s.setShowMemoryDashboard);
     const closeSettings = useChatStore((s) => s.closeSettings);
     const [settings, setSettings] = useState<memoryApi.MemorySettings | null>(null);
@@ -34,33 +36,34 @@ export function MemorySettings() {
 
     return (
         <div className="settings-pane">
-            <h2 className="settings-pane-title">Memory</h2>
-            <p className="settings-pane-lede">
-                GAIA remembers facts, preferences and past conversations across chats, on this PC only.
-                Private chats (the eye icon in a chat) are never remembered.
-            </p>
-            <label className="setting-row">
-                <span>Remember across chats</span>
-                <span className="toggle-switch">
-                    <input
-                        type="checkbox"
-                        checked={!!settings?.memory_enabled}
-                        onChange={() => void toggle()}
-                        disabled={!settings || saving}
-                        aria-label="Remember across chats"
-                    />
-                    <span className="toggle-track" />
-                </span>
-            </label>
-            {error && <p className="settings-error" role="alert">{error}</p>}
-            <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => { closeSettings(); setShowMemoryDashboard(true); }}
-            >
-                Open the memory dashboard
-            </button>
-            <p className="settings-hint">Search, edit and forget what GAIA remembers.</p>
+            <h2 className="settings-pane-title">{t('settings.section.memory')}</h2>
+            <p className="settings-pane-lede">{t('settings.memory.lede')}</p>
+            <section className="settings-card" aria-label={t('settings.section.memory')}>
+                <label className="setting-row">
+                    <span>{t('settings.memory.remember')}</span>
+                    <span className="toggle-switch">
+                        <input
+                            type="checkbox"
+                            checked={!!settings?.memory_enabled}
+                            onChange={() => void toggle()}
+                            disabled={!settings || saving}
+                            aria-label={t('settings.memory.remember')}
+                        />
+                        <span className="toggle-track" />
+                    </span>
+                </label>
+                {error && <p className="settings-error" role="alert">{error}</p>}
+                <div className="settings-row settings-row-between">
+                    <span className="settings-hint">{t('settings.memory.dashboardHint')}</span>
+                    <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => { closeSettings(); setShowMemoryDashboard(true); }}
+                    >
+                        {t('settings.memory.dashboard')}
+                    </button>
+                </div>
+            </section>
         </div>
     );
 }

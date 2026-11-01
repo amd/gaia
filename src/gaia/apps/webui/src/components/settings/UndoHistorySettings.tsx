@@ -68,8 +68,10 @@ export function UndoHistorySettings() {
         <div className="settings-field" aria-label="Undo history">
             <span className="settings-label">Undo history</span>
             <p className="settings-hint">
-                Before GAIA changes a file it keeps a copy, so you can undo a turn. Copies older than the
-                time limit, or past the space limit (oldest first), are deleted. The space limit never deletes the latest turn.
+                <bdi>
+                    Before GAIA changes a file it keeps a copy, so you can undo a turn. Copies older than the
+                    time limit, or past the space limit (oldest first), are deleted. The space limit never deletes the latest turn.
+                </bdi>
             </p>
             {settings && (
                 <>

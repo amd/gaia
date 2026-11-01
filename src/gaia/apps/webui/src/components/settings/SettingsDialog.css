@@ -605,6 +605,39 @@
     padding-inline: 12px;
 }
 
+.settings-card > .btn-secondary,
+.settings-card > .btn-danger {
+    align-self: flex-start;
+}
+
+.mcp-status-connected,
+.mcp-status-failed {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* A section's own box and heading repeat the disclosure around it. */
+.settings-disclosure-body .settings-section {
+    margin: 0;
+    padding: 0;
+    background: none;
+    border: none;
+}
+
+.settings-disclosure-body .settings-section > h4 {
+    display: none;
+}
+
+.settings-disclosure-body > .settings-field > .settings-label:first-child {
+    display: none;
+}
+
+.permission-chat + .permission-chat {
+    padding-block-start: 8px;
+    border-block-start: 1px solid var(--border-light);
+}
+
 /* A quiet "more about this" line: long explanations wait here. */
 .settings-more > summary {
     display: inline-flex;

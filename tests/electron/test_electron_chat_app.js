@@ -1401,7 +1401,7 @@ describe('Chat App Integration', () => {
     it('should keep model-server status, custom model, dynamic tools and MCP in Advanced', () => {
       expect(advancedContent).toContain('className="status-grid"');
       expect(advancedContent).toContain('className="model-override-desc"');
-      expect(advancedContent).toContain('Dynamic Tools');
+      expect(advancedContent).toContain('settings.advanced.dynamicTitle');
       expect(advancedContent).toContain('mcp-status-connected');
     });
 
@@ -1412,14 +1412,13 @@ describe('Chat App Integration', () => {
     });
 
     it('should have danger zone section in Privacy', () => {
-      expect(privacyContent).toContain('danger-divider');
       expect(privacyContent).toContain('danger-warning');
       expect(privacyContent).toContain('className="btn-danger"');
     });
 
     it('should have danger zone warning text and two-step confirm', () => {
-      expect(privacyContent).toContain('Deletes every chat and its messages');
-      expect(privacyContent).toContain("confirm ? 'Click again to delete all chats' : 'Delete all chats'");
+      expect(privacyContent).toContain("t('settings.privacy.deleteWarning')");
+      expect(privacyContent).toContain("confirm ? t('settings.privacy.deleteConfirm') : t('settings.privacy.delete')");
     });
   });
 

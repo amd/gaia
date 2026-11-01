@@ -5,10 +5,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import { useInferencePlace } from '../../stores/modelStore';
+import { useT } from '../../i18n/useT';
+import { SettingsDisclosure } from './SettingsDisclosure';
 import { UndoHistorySettings } from './UndoHistorySettings';
 
 /** Where data lives and goes, and how to delete it. */
 export function PrivacySettings() {
+    const t = useT();
     const sessions = useChatStore((s) => s.sessions);
     const removeSession = useChatStore((s) => s.removeSession);
     const place = useInferencePlace();
@@ -35,32 +38,36 @@ export function PrivacySettings() {
             }
         }
         setResult(failed.length
-            ? { ok: false, text: `Could not delete ${failed.length} chat(s): ${failed.join('; ')}` }
-            : { ok: true, text: 'All chats deleted.' });
-    }, [confirm, removeSession, sessions]);
+            ? { ok: false, text: t('settings.privacy.deleteFailed', { n: failed.length, reason: failed.join('; ') }) }
+            : { ok: true, text: t('settings.privacy.deleted') });
+    }, [confirm, removeSession, sessions, t]);
 
     return (
         <div className="settings-pane">
-            <h2 className="settings-pane-title">Privacy</h2>
-            <p className="settings-pane-lede">
-                Chats, documents and memory stay on this PC. {place?.remote
-                    ? `Right now answers come from ${place.label}, so each message and the chat history are sent there.`
-                    : place
-                        ? 'Right now answers are generated on this PC too.'
-                        : "GAIA can't tell right now whether answers are generated on this PC or by a cloud provider."}
-            </p>
-            {dataDir && (
-                <div className="setting-row">
-                    <span>Data folder</span>
-                    <code className="setting-path">{dataDir}</code>
-                </div>
-            )}
-            <UndoHistorySettings />
-            <div className="danger-divider" />
-            <p className="danger-warning">Deletes every chat and its messages. Documents and memory are kept.</p>
-            <button type="button" className="btn-danger" onClick={() => void clearAll()} disabled={sessions.length === 0}>
-                {confirm ? 'Click again to delete all chats' : 'Delete all chats'}
-            </button>
+            <h2 className="settings-pane-title">{t('settings.section.privacy')}</h2>
+            <section className="settings-card" aria-label={t('settings.privacy.whereTitle')}>
+                <p className="settings-note">{t('settings.privacy.stays')}</p>
+                <p className={place?.remote ? 'settings-note' : 'settings-hint'}>
+                    {place?.remote
+                        ? t('settings.privacy.remote', { name: place.label })
+                        : place ? t('settings.privacy.local') : t('settings.privacy.unknown')}
+                </p>
+                {dataDir && (
+                    <div className="setting-row">
+                        <span>{t('settings.privacy.dataFolder')}</span>
+                        <bdi dir="ltr" className="setting-path">{dataDir}</bdi>
+                    </div>
+                )}
+            </section>
+            <SettingsDisclosure title={t('settings.privacy.undo')}>
+                <UndoHistorySettings />
+            </SettingsDisclosure>
+            <section className="settings-card" aria-label={t('settings.privacy.deleteTitle')}>
+                <p className="danger-warning">{t('settings.privacy.deleteWarning')}</p>
+                <button type="button" className="btn-danger" onClick={() => void clearAll()} disabled={sessions.length === 0}>
+                    {confirm ? t('settings.privacy.deleteConfirm') : t('settings.privacy.delete')}
+                </button>
+            </section>
             {result && <p className={result.ok ? 'settings-ok' : 'settings-error'} role={result.ok ? 'status' : 'alert'}>{result.text}</p>}
         </div>
     );

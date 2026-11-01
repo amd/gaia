@@ -71,7 +71,7 @@ function Row({ label, value, title }: { label: string; value: string; title?: st
     return (
         <div className="status-row">
             <span className="status-label">{label}</span>
-            <span className="status-value model-server-value" title={title ?? value}>{value}</span>
+            <span className="status-value model-server-value" dir="auto" title={title ?? value}>{value}</span>
         </div>
     );
 }

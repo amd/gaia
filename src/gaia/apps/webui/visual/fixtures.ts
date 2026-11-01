@@ -122,6 +122,7 @@ const SYSTEM_STATUS = {
     ],
     warm_up: { state: 'done', elapsed_seconds: 2.0, prompt_tokens: 1800, cached_tokens: 1800, error: null },
     detected_devices: ['gpu'], active_profile: 'chat', config_error: null, probe_warnings: [],
+    data_dir: 'C:\\Users\\you\\.gaia\\chat',
 };
 
 const ROUTES: Record<string, unknown> = {
@@ -265,6 +266,42 @@ export async function withModelPage(page: Page, models: unknown[], plan: unknown
         },
         'GET /providers/fireworks/models': { provider: 'fireworks', models: FIREWORKS_MODELS },
         'GET /spending': { month: '2026-10', total_usd: 1.25, turns: 12, unpriced_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price' },
+    };
+    await page.route('**/api/**', async (route: Route) => {
+        const url = new URL(route.request().url());
+        const key = `${route.request().method()} ${url.pathname.replace(/^\/api/, '')}`;
+        if (key in answers) await route.fulfill({ json: answers[key] });
+        else await route.fallback();
+    });
+}
+
+const skill = (name: string, source: string, description: string, over: Record<string, unknown> = {}) => ({
+    name, source, description, version: '1.0.0', always_on: false, ...over,
+});
+
+/** Busy answers for the other Settings panes: grants, many skills, a failed MCP server. */
+export async function withSettingsPanes(page: Page): Promise<void> {
+    const answers: Record<string, unknown> = {
+        'GET /memory/settings': { memory_enabled: true },
+        'GET /skills': {
+            skills: [
+                skill('gh-cli', 'agent-bundled', 'Work with GitHub from the terminal: issues, pull requests and releases.', { always_on: true }),
+                ...['web-research', 'pdf-forms', 'jira', 'docker', 'blender', 'summarize'].map((n) => skill(n, 'agent-bundled', `Use ${n} for a task when a request needs it, and report what happened.`)),
+                skill('team-standup', 'user', 'Write the team standup from yesterday\'s commits.'),
+                skill('deploy-helper', 'claude-project', 'Deploy this project to the staging server.'),
+                skill('old-helper', 'claude-import', 'A helper imported from another tool, with a description long enough to wrap onto a second line of the row.'),
+            ],
+            invalid: { 'C:\\Users\\you\\.gaia\\skills\\broken\\SKILL.md': 'missing name' },
+        },
+        'GET /chat/permissions': {
+            default_mode: 'ask',
+            sessions: [
+                { session_id: ANSWER_SESSION, mode: 'full_access', grants: [{ key: 'k1', label: 'run_shell: npm test' }, { key: 'k2', label: 'write_file: C:\\Users\\me\\Documents\\action-items.md' }] },
+                { session_id: 'a1b2c3d4-0000-4000-8000-000000000002', mode: 'ask', grants: [{ key: 'k3', label: 'fetch_page: go.nps.gov' }] },
+            ],
+        },
+        'GET /mcp/status': { servers: [{ name: 'github', connected: true, tool_count: 12, error: null }, { name: 'calendar', connected: false, tool_count: 0, error: 'Connection refused' }] },
+        'GET /settings/undo': { retention_days: 30, max_mb: 500, used_bytes: 12_400_000, turns: 8, path: 'C:\\Users\\you\\.gaia\\undo' },
     };
     await page.route('**/api/**', async (route: Route) => {
         const url = new URL(route.request().url());
