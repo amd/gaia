@@ -26,13 +26,14 @@ Related config the workflows depend on:
 
 ## 1. `claude.yml` — "Claude AI Assistant" (the main, reactive one)
 
-Reacts to issue/PR activity. Six jobs:
+Reacts to issue/PR activity. The main jobs:
 
 | Job | Fires when | What it does |
 |-----|-----------|--------------|
 | **pr-review** | PR opened / reopened / marked ready | Full diff review (works on fork PRs too) |
 | **pr-rereview** | New commits pushed to a PR (`synchronize`) | Lightweight Sonnet re-check; flags only *new* regressions, silent otherwise |
-| **issue-handler** | New issue opened, or `@claude` in an issue/PR comment | Conversational reply |
+| **conversation-gate** | A comment without `@claude` | Cheap check: is the thread labelled `claude`, or an issue Claude already replied on? Bots never pass it |
+| **issue-handler** | New issue opened, `@claude` in an issue/PR comment, or a follow-up `conversation-gate` let through | Conversational reply. On a follow-up it replies only when it adds something (an answer to its own question, a doc link, a correction) and otherwise stays silent |
 | **pr-comment** | Review comment left on a PR | Responds (non-fork PRs only — GitHub hides secrets from forks on this event) |
 | **auto-fix** | Issue gets the `bug` label (or a bug issue is reopened) | Attempts the fix: creates branch, opens a PR (draft + manual test plan if it can't self-validate), comments on the issue with test steps |
 | **release-notes** | "Publish Release" workflow succeeds on a `v*` tag | Generates GH release notes + docs, bumps version, updates `docs.json` |
