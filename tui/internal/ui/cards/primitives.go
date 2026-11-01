@@ -446,3 +446,54 @@ func firstNonEmpty(vals ...string) string {
 	}
 	return ""
 }
+
+// ---------------------------------------------------------------------------
+// diff
+// ---------------------------------------------------------------------------
+
+type diffPayload struct {
+	Title   string  `json:"title"`
+	Badge   string  `json:"badge"`
+	Note    string  `json:"note"`
+	Unified *string `json:"unified"`
+}
+
+// renderDiff draws a unified diff as plain text. Colour is not available here —
+// box.add strips escapes — so the +/-/@@ prefixes carry the meaning, as in a
+// plain `git diff`.
+func renderDiff(data json.RawMessage, width int) string {
+	var p diffPayload
+	if err := json.Unmarshal(data, &p); err != nil {
+		return renderInvalid("diff", err.Error(), data, width)
+	}
+	if p.Unified == nil {
+		return renderInvalid("diff", "unified is required", data, width)
+	}
+
+	title := strings.TrimSpace(p.Title)
+	if title == "" {
+		title = "Diff"
+	}
+	if badge := strings.TrimSpace(p.Badge); badge != "" {
+		title = badge + " · " + title
+	}
+	b := newBox(title, width)
+	if note := strings.TrimSpace(p.Note); note != "" {
+		b.addWrapped("  ", note)
+	}
+
+	text := strings.TrimRight(*p.Unified, "\n")
+	if text == "" {
+		b.add("  (no changes)")
+		return b.render()
+	}
+	lines := strings.Split(text, "\n")
+	shown := lines[:visibleRows(len(lines), 1)]
+	for _, line := range shown {
+		b.add("  " + strings.TrimSuffix(line, "\r"))
+	}
+	if n := len(lines) - len(shown); n > 0 {
+		b.add("  +" + itoa(n) + " more lines (truncated)")
+	}
+	return b.render()
+}
