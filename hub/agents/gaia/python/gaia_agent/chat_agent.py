@@ -1825,7 +1825,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         )
                 else:
                     logger.warning(
-                        "Auto-save failed for session %s; retry saving before exit.",
+                        "Auto-save failed for session %s; see the preceding error.",
                         self.current_session.session_id,
                     )
         except Exception as e:
