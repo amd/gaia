@@ -331,8 +331,15 @@ gaia init [OPTIONS]
 | `--check` | flag | false | Report whether the profile is already set up and exit — no install, no download. A stopped GAIA Lemonade Server is started through the GAIA daemon (started too if needed), as any GAIA command would. Exit code `0` means ready, `1` means `gaia init` still has work to do. Used by the Go TUI's first-boot check and `/setup` command |
 | `--load` | flag | false | With `--check`: once everything is downloaded, load each model once — the chat model at its context size, the embedding model with a one-word embedding — so "downloaded but will not load" is caught before first use. Exit code `3` means a downloaded model would not load; re-running setup will not fix that. Used by the Go TUI's readiness gate |
 | `--chat-model` | string | — | With `--check`: the local chat model to check instead of the profile default |
-| `--json` | flag | false | With `--check`: print the result as one JSON object — `ready`, `stage` (`setup` or `load`), `reasons`, and per-model `id`, `role`, `size_gb`, `loaded`, `error` |
+| `--json` | flag | false | With `--check`: print the result as one JSON object — `ready`, `stage` (`setup` or `load`), `reasons`, and per-model `id`, `role`, `size_gb`, `loaded`, `error`. With `--plan`: print the plan as one JSON object (see [Choosing models](#choosing-models)) |
 | `--progress-json` | flag | false | Also print setup steps and model download progress as one JSON object per line on stdout, for a tool that shows it (the desktop app's installer). Human output still prints around them. See [Progress events](#progress-events) |
+| `--plan` | flag | false | Print the models setup would download — size left to download, what each is for, whether it fits this PC, and the free space on the model drive — then exit. Downloads nothing |
+| `--use-model` | string | — | Use this chat model and save it as `default_model`: one GAIA knows, or any chat model already downloaded in Lemonade, FLM included. One that may not fit this PC exits `4` until you add `--acknowledge-no-fit` |
+| `--acknowledge-no-fit` | flag | false | With `--use-model`: save it even though it may not fit this PC |
+| `--skip-model` | string | — | Don't download this model, now or in later runs; saved in `skipped_models`. Repeatable |
+| `--download-model` | string | — | Download this model too, and take it off the skip list — e.g. the vision model after `--use-model` replaced it. Repeatable |
+| `--allow-low-disk` | flag | false | Download even when the models need more disk than the model drive has free, instead of stopping |
+| `--keep-trying` | flag | false | When a download's connection drops, retry it for up to two minutes before failing. Off by default |
 
 **Available Profiles:**
 
@@ -369,11 +376,52 @@ is already installed.
 Before it downloads anything, `gaia init` adds up what the models still need and checks
 it against the free space in Lemonade's model store. When they don't all fit, it stops
 before the first download with `Not enough disk space`, how much the models need, how much
-is free, and where, and exits `1`. Each model fitting on its own is not enough. What an
-interrupted download already left there counts as downloaded, so a retry asks only for
-the rest. When GAIA can't read that store (a remote server), a shortfall is a warning and
-the download goes ahead.
+is free, and where, and exits `1`; `--allow-low-disk` downloads anyway. Each model fitting
+on its own is not enough. What an interrupted download already left there counts as
+downloaded, so a retry asks only for the rest. When GAIA can't read that store (a remote
+server), a shortfall is a warning and the download goes ahead.
 </Note>
+
+#### Choosing models
+
+The Agent UI and the terminal UI ask which models to download on first launch, and let
+you change it later in Settings. `gaia init` never asks; it downloads what you chose
+there, and these flags make the same choices from a script:
+
+```bash
+gaia init --plan                              # what setup would download, and why
+gaia init --plan --use-model gemma4-it-e2b-FLM # chat on the NPU model you already have
+gaia init --skip-model Gemma-4-E4B-it-GGUF    # don't download the vision model
+gaia init --download-model Gemma-4-E4B-it-GGUF --yes   # changed your mind
+```
+
+Choices are saved in `~/.gaia/config.json` — the chat model as `default_model`, the
+models you don't want as `skipped_models` — and every later `gaia init`, including
+`--yes`, honors them. `gaia init --check` doesn't count a skipped model as missing, except
+the chat model: with that skipped it reports that there is no local chat model until you
+pick another one or a cloud provider.
+
+Skipping a model is allowed, and setup says what stops working:
+
+| Model | Without it |
+|-------|------------|
+| `Gemma-4-E4B-it-GGUF` | GAIA can't read images or screenshots: vision loads this model by name, whatever the chat model is. On PCs where it is also the chat model, there is no local chat model either |
+| `user.embeddinggemma-300m-GGUF` | GAIA can't search your documents or remember things |
+| The chat model | GAIA has no local chat model; pick another with `--use-model`, or a cloud provider |
+
+With `--plan --json`, the plan is one JSON object, the same one the Agent UI reads from
+`GET /api/setup/plan`. `catalog` lists every model you can pick: the profile's models,
+GAIA's other chat models, and each chat model already downloaded in Lemonade. Each entry
+has `id`, `roles` (`chat`, `vision`, `embedding`), `purpose`, `if_skipped`,
+`size_gb` (what is left to download, partial files subtracted), `full_size_gb`,
+`downloaded`, `recommended` (for this PC), `selected` (setup will download it),
+`skipped`, `chat_choice`, and `fits` (`null` when unknown) with `need_gb`,
+`capacity_gb` and `fit_reason` (decimal GB, converted from the GiB Lemonade reports, as
+the GPU memory API does).
+`disk` is the model drive's `path` and `free_gb` (decimal GB, like every size);
+`download_gb` and `disk_warning` cover the selected models. A choice that needs
+confirming exits `4` and prints `{"needs_acknowledgement": {...}}` with the `code`
+(`no_fit`), the numbers, and the flag that confirms it.
 
 #### Progress events
 
@@ -384,8 +432,9 @@ not such an object, and any `event` you don't know.
 | `event` | Fields | When |
 |---------|--------|------|
 | `step` | `step`, `total`, `message` | A setup step starts |
-| `plan` | `models` (`id`, `bytes_total` or `null` when unknown, `downloaded`), `bytes_total` (what is left to download), `disk_free_bytes` (`null` when Lemonade does not report it) | Before the downloads |
+| `plan` | `models` (`id`, `bytes_total` or `null` when unknown, `downloaded`), `skipped` (ids left out because they are in `skipped_models`), `bytes_total` (what is left to download), `disk_free_bytes` (`null` when Lemonade does not report it) | Before the downloads |
 | `progress` | `model`, `index`, `count`, `bytes_done`, `bytes_total`, `speed_bps` | During a model's download, at most twice a second |
+| `retrying` | `model`, `until` (Unix time the wait ends) | With `--keep-trying`, a dropped connection is being waited out |
 | `model_done` | `model`, `downloaded` (`false` when it was already on disk) | A model is ready |
 | `done` | `ok` | The downloads finished, or one failed |
 | `error` | `message`, and `model` when one model failed | Something stopped setup |
@@ -1472,7 +1521,7 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `test` | Test MCP bridge functionality (optionally against a specific `--tool`) |
 | `agent` | Invoke the MCP orchestrator agent (positional `request` arg + `--domain`, `--context`) |
 | `serve` | Start the Agent UI MCP server (wraps the Agent UI backend) |
-| `tui` | Start the TUI control MCP server (drives a running `gaia tui --control`) |
+| `tui` | Start the TUI control MCP server (drives a running `gaia-tui --control`) |
 
 #### `gaia mcp start` options
 
@@ -1589,7 +1638,7 @@ the tools that run a turn unattended.
 
 Wraps the [TUI control API](#tui-control-api) as MCP tools, so an assistant can
 navigate and type in the TUI session you are watching. The TUI must already be
-running with `gaia tui --control`; the server finds it through
+running with `gaia-tui --control`; the server finds it through
 `~/.gaia/tui/control.json` rather than a fixed port.
 
 | Option | Default | Description |
@@ -1748,6 +1797,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `context_sizes` | _(empty)_ | Context window per local model, set in the Agent UI under **Settings → Model** (`gaia config set` refuses it). A model not listed gets GAIA's automatic size; `GAIA_CTX_SIZE` overrides it |
 | `custom_models` | _(empty)_ | Local models you added from a Hugging Face link, managed with [`gaia model`](#model-command), the Agent UI or the TUI (`gaia config set` refuses it) |
 | `profile` | `chat` | Last `gaia init` profile |
+| `skipped_models` | _(empty)_ | Models you chose not to download; `gaia init` and first-run setup leave them out. Comma-separated with `gaia config set`; also set by `gaia init --skip-model` and the setup screens. See [Choosing models](#choosing-models) |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, `rocm`, `metal`, `cpu`, or `auto` to let Lemonade choose. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
 | `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-tui`, restored on its next launch — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |
@@ -1757,6 +1807,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
 | `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui#undo-a-turn) |
 | `undo_max_mb` | `500` | Megabytes those copies may use; the oldest turns are removed first; the size limit never removes the newest |
+| `project_context` | _(unset = auto)_ | Whether the agent puts a repository's `CLAUDE.md`, `AGENTS.md` and `.claude/skills` in its prompt: `full`, `off`, or `auto` to decide per model (Claude gets them, other models don't). `GAIA_PROJECT_CONTEXT` overrides it — see [Project instructions and skills](/guides/project-map#project-instructions-and-skills) |
 | `network_policy` | `cloud_allowed` | `local_ai_only` makes GAIA refuse every cloud AI model — see [Local only](#local-only). Stored in `~/.gaia/policy.json`, not in `config.json` |
 
 ### Local only
@@ -2633,13 +2684,14 @@ gaia skill audit <dir> [OPTIONS]                                  # pre-publish 
 gaia skill {search,install,remove,lock,promote,publish,keygen,trust} [OPTIONS] # marketplace + trust
 ```
 
-Skills are discovered from three roots, highest precedence first:
+Skills are discovered from these roots, highest precedence first:
 
 | Root label | Location | Writable? |
 |------------|----------|:---------:|
 | `agent-bundled` | An agent package's own `skills/` directory | No |
 | `user` | `~/.gaia/skills/` (honors `GAIA_CONFIG_DIR`) | **Yes** — where `create` and `import` install |
-| `claude-import` | `./.claude/skills/` then `~/.claude/skills/` | No — read-only Claude Code import |
+| `claude-project` | The agent's project's `.claude/skills/` | No — listed in the skill catalog like Claude Code lists them, for a model that gets the full project context (see `project_context` under [Configuration](#configuration)); its `tools.py` and CLI grants stay withheld, since cloning a repo is not consent to run its code |
+| `claude-import` | `./.claude/skills/` (when no project is known) then `~/.claude/skills/` | No — read-only Claude Code import, loadable by name but not listed in the catalog |
 
 ### Subcommands
 
@@ -3667,34 +3719,34 @@ Prefer `gaia hub` when the daemon supervises the agent (today: `email`).
 
 ---
 
-### Terminal UI (`gaia tui`)
+### Terminal UI (`gaia-tui`)
 
-`gaia tui` is the Go/Bubble Tea terminal client: it boots straight into the
+`gaia-tui` is the Go/Bubble Tea terminal client: it boots straight into the
 flagship `gaia` agent's chat, behind a readiness gate. Building from source the
 binary is `tui/bin/gaia-tui` (`cd tui && make build`).
 
 <Note>
-  The binary accepts a leading `tui` word and drops it, so `gaia tui status`
-  and `gaia status` are the same command. Running the source build directly,
+  The binary accepts a leading `tui` word and drops it, so `gaia-tui tui status`
+  and `gaia-tui status` are the same command. Running the source build directly,
   both `./tui/bin/gaia-tui tui status` and `./tui/bin/gaia-tui status` work.
 </Note>
 
 ```bash
-gaia tui                                       # splash -> readiness gate -> chat
-gaia tui run email                             # chat with another agent by id
-gaia tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1/3/130
-gaia tui status                                # background service + what is installed
+gaia-tui                                       # splash -> readiness gate -> chat
+gaia-tui run email                             # chat with another agent by id
+gaia-tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1/3/130
+gaia-tui status                                # background service + what is installed
 ```
 
 | Command | Description |
 |---------|-------------|
-| `gaia tui` | Launch straight into the flagship agent's chat, behind its readiness gate. |
-| `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent by catalog id. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done — and **130** when Ctrl+C, SIGTERM or SIGHUP stopped it. A stop asks the agent to end the turn and waits up to 10s for it to confirm; a second Ctrl+C quits without waiting. If the agent does not confirm, a local agent's process is killed, and one run by the background service is reported on stderr as possibly still running. |
-| `gaia tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia tui run --query` is, `--timeout` included. |
-| `gaia tui status` | Whether the background service is running, which Lemonade it uses (address, version, the chat model's backend and context window), which sidecars it knows, and what is installed. |
-| `gaia tui version` | Print the build version. |
+| `gaia-tui` | Launch straight into the flagship agent's chat, behind its readiness gate. |
+| `gaia-tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent by catalog id. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done — and **130** when Ctrl+C, SIGTERM or SIGHUP stopped it. A stop asks the agent to end the turn and waits up to 10s for it to confirm; a second Ctrl+C quits without waiting. If the agent does not confirm, a local agent's process is killed, and one run by the background service is reported on stderr as possibly still running. |
+| `gaia-tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia-tui run --query` is, `--timeout` included. |
+| `gaia-tui status` | Whether the background service is running, which Lemonade it uses (address, version, the chat model's backend and context window), which sidecars it knows, and what is installed. |
+| `gaia-tui version` | Print the build version. |
 
-Options accepted by every `gaia tui` command:
+Options accepted by every `gaia-tui` command:
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -3713,11 +3765,11 @@ not install agents. Installing the email sidecar is the Python CLI's job
 
 `--query` does not open the alt screen. The answer goes to stdout, progress to
 stderr, and the exit code is `0` on a terminal answer, `1` on an error, and `3`
-when a confirmation gate held back a destructive action — so `gaia tui run
+when a confirmation gate held back a destructive action — so `gaia-tui run
 email --query "…" > answer.txt` captures exactly the answer:
 
 ```bash
-gaia tui run email --query "how many unread?" > answer.txt 2> progress.log
+gaia-tui run email --query "how many unread?" > answer.txt 2> progress.log
 echo $?   # 0
 ```
 
@@ -3740,7 +3792,7 @@ The turn itself is bounded — 15 minutes by default, `--timeout 90s` / `--timeo
 2h` to change it — so an agent that accepts the query and then stops answering is
 reported with what to read next instead of hanging a CI job until the job's own
 timeout kills it. There is no "wait forever": `--timeout 0` is refused. Interactive
-`gaia tui run <id>` is unaffected — a person can read what arrives and press
+`gaia-tui run <id>` is unaffected — a person can read what arrives and press
 ctrl+c.
 
 #### Readiness gate keys
@@ -3778,7 +3830,7 @@ inside tmux, or in a CI log where the terminal never answers that query, force
 a mode instead of guessing:
 
 ```bash
-GAIA_TUI_THEME=light gaia tui    # or: dark
+GAIA_TUI_THEME=light gaia-tui    # or: dark
 ```
 
 <Note>
@@ -3790,7 +3842,7 @@ GAIA_TUI_THEME=light gaia tui    # or: dark
 
 ### TUI Control API
 
-The terminal UI (`gaia tui`, the Go/Bubble Tea binary) can expose a loopback
+The terminal UI (`gaia-tui`, the Go/Bubble Tea binary) can expose a loopback
 HTTP API that drives **the session you are looking at** — not a headless copy.
 An assistant navigates, types, and drives the readiness gate while the frames
 render in your terminal in real time. It is how the TUI gets tested without a
@@ -3800,9 +3852,9 @@ Off by default. Bound to `127.0.0.1` only, and every request needs a bearer
 token.
 
 ```bash
-gaia tui --control                 # auto-assign a port
-gaia tui --control-port 8770       # explicit port (implies --control)
-gaia tui --control --dev           # input counts, state changes, and waits; no input contents
+gaia-tui --control                 # auto-assign a port
+gaia-tui --control-port 8770       # explicit port (implies --control)
+gaia-tui --control --dev           # input counts, state changes, and waits; no input contents
 ```
 
 <Note>
@@ -3834,7 +3886,7 @@ Endpoints (all under `/control/v1`, all requiring `Authorization: Bearer <token>
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /status` | `running` plus the active view (`splash` \| `preflight` \| `chat` \| `unknown`), active agent, streaming, `overlay` (e.g. `help`, `connect-mailbox`, `choose-chat`, `halt`), `blocker` (the key of the readiness row refusing a launch, e.g. `binary`, `chat`, `lemonade`, `model`, `daemon`, `sidecar`, `mailbox`; empty while the gate starts a stopped daemon or agent itself), and terminal size. |
+| `GET /status` | `running` plus the active view (`splash` \| `preflight` \| `chat` \| `unknown`), active agent, streaming, `overlay` (e.g. `help`, `connect-mailbox`, `choose-chat`, `halt`, or `setup-<screen>` while the model setup screens are open: `setup-models`, `setup-gpu`, `setup-download`, `setup-ready`), `blocker` (the key of the readiness row refusing a launch, e.g. `binary`, `chat`, `lemonade`, `model`, `daemon`, `sidecar`, `mailbox`; empty while the gate starts a stopped daemon or agent itself), and terminal size. |
 | `GET /screen` | The current rendered frame. `?format=plain` (default, ANSI stripped) or `?format=ansi`. |
 | `POST /keys` | Inject named keys — `{"keys": ["tab","down","enter"]}`. |
 | `POST /text` | Type a string as runes — `{"text": "triage my inbox"}`. |
@@ -3878,9 +3930,9 @@ tool calls carrying **their arguments** and tool results carrying **their
 payloads**.
 
 ```bash
-gaia tui --trace                       # ~/.gaia/traces/<timestamp>-<agent>.jsonl
-gaia tui --trace=run.jsonl             # a path you choose
-gaia tui --trace --dev                 # record to a file AND show it on screen
+gaia-tui --trace                       # ~/.gaia/traces/<timestamp>-<agent>.jsonl
+gaia-tui --trace=run.jsonl             # a path you choose
+gaia-tui --trace --dev                 # record to a file AND show it on screen
 ```
 
 The path is printed on startup (`trace → …`). An unwritable path is a startup
