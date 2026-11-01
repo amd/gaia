@@ -32,6 +32,8 @@ on:
       # run their checks over every workflow and action.
       - '.github/workflows/**'
       - '.github/actions/**'
+      # test_check_dependabot.py checks the real config against the tracked lockfiles.
+      - '.github/dependabot.yml'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
       # The flagship's npm package files and lock, read by the installer and version tests.
@@ -96,6 +98,8 @@ on:
       # run their checks over every workflow and action.
       - '.github/workflows/**'
       - '.github/actions/**'
+      # test_check_dependabot.py checks the real config against the tracked lockfiles.
+      - '.github/dependabot.yml'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
       # The flagship's npm package files and lock, read by the installer and version tests.

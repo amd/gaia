@@ -321,11 +321,11 @@ def repo(tmp_path, monkeypatch):
 
 class TestLockfileCoverage:
     def test_unwatched_npm_lockfile_rejected(self, repo, capsys):
-        repo.track("website/package-lock.json")
+        repo.track("site/package-lock.json")
         repo.config([_npm("/")])
         assert check_dependabot.run_check() == 1
         err = capsys.readouterr().err
-        assert "website/package-lock.json" in err and "#3525" in err
+        assert "site/package-lock.json" in err and "#3525" in err
 
     def test_unwatched_go_module_rejected(self, repo, capsys):
         repo.track("tui/go.mod")
@@ -334,22 +334,22 @@ class TestLockfileCoverage:
         assert "`gomod`" in capsys.readouterr().err
 
     def test_wrong_ecosystem_does_not_count(self, repo):
-        """A pip entry on /website is not an npm entry on /website."""
-        repo.track("website/package-lock.json")
+        """A pip entry on /site is not an npm entry on /site."""
+        repo.track("site/package-lock.json")
         repo.config(
-            [{"package-ecosystem": "pip", "directory": "/website", "schedule": {}}]
+            [{"package-ecosystem": "pip", "directory": "/site", "schedule": {}}]
         )
         assert check_dependabot.run_check() == 1
 
     def test_directory_entry_covers_lockfile(self, repo):
-        repo.track("website/package-lock.json")
-        repo.config([_npm("/website")])
+        repo.track("site/package-lock.json")
+        repo.config([_npm("/site")])
         assert check_dependabot.run_check() == 0
 
-    @pytest.mark.parametrize("spelling", ["/website", "website", "/website/"])
+    @pytest.mark.parametrize("spelling", ["/site", "site", "/site/"])
     def test_directories_list_covers_lockfile(self, repo, spelling):
-        repo.track("website/package-lock.json", "docs/package-lock.json")
-        repo.config([_npm(directories=["/docs", spelling])])
+        repo.track("site/package-lock.json", "proxy/package-lock.json")
+        repo.config([_npm(directories=["/proxy", spelling])])
         assert check_dependabot.run_check() == 0
 
     def test_directories_glob_covers_lockfile(self, repo):
@@ -361,14 +361,14 @@ class TestLockfileCoverage:
 
     def test_root_entry_does_not_cover_nested_lockfile(self, repo):
         """Dependabot's `/` watches the root manifest only, not the whole tree."""
-        repo.track("package-lock.json", "website/package-lock.json")
+        repo.track("package-lock.json", "site/package-lock.json")
         repo.config([_npm("/")])
         assert check_dependabot.run_check() == 1
 
     def test_parent_directory_does_not_cover_child(self, repo):
-        repo.track("workers/admin/package-lock.json")
-        repo.config([_npm("/workers")])
-        (check_dependabot.REPO_ROOT / "workers").mkdir(exist_ok=True)
+        repo.track("svc/admin/package-lock.json")
+        repo.config([_npm("/svc")])
+        (check_dependabot.REPO_ROOT / "svc").mkdir(exist_ok=True)
         assert check_dependabot.run_check() == 1
 
     def test_excluded_directory_is_skipped(self, repo, monkeypatch):
@@ -411,10 +411,6 @@ class TestRealRepository:
 
     def test_real_listing_finds_the_published_surfaces(self):
         found = set(_REAL_TRACKED_MANIFESTS())
-        for path in (
-            "tui/go.mod",
-            "website/package-lock.json",
-            "hub/agents/gaia/npm/package-lock.json",
-        ):
+        for path in ("tui/go.mod", "hub/agents/gaia/npm/package-lock.json"):
             assert path in found
         assert not any("node_modules/" in p for p in found)
