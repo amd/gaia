@@ -716,7 +716,7 @@ class FileWatcher:
         if not WATCHDOG_AVAILABLE:
             raise ImportError(
                 "FileWatcher requires the 'watchdog' package.\n"
-                "Install with: pip install 'watchdog>=2.1.0'\n"
+                "Install with: pip install 'watchdog>=2.1.0,<7'\n"
                 "Or: uv pip install -e '.[dev]'"
             )
 

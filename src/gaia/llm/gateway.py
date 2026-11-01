@@ -7,7 +7,9 @@ Lemonade >= 11.8 can register any OpenAI-compatible endpoint as a *cloud
 provider* and expose its models in its own ``/api/v1/models`` under a
 ``<provider>.`` namespace. Registering the AMD gateway that way means every
 GAIA agent can address a gateway model with no new LLM client — see
-``docs/guides/llm-gateway.mdx``.
+``docs/guides/llm-gateway.mdx``. Claude models are the exception: they go to
+the gateway's Anthropic route directly (``GatewayClaudeProvider``), the only
+route that honours prompt caching.
 
 **No API token is ever written to a GAIA file.** Tokens go straight to
 Lemonade's ``POST /api/v1/cloud/auth``, which holds them in process memory only.
@@ -80,6 +82,12 @@ DEFAULT_GATEWAY_BASE_URL = os.getenv(
 # That matters because Lemonade can carry exactly one auth header.
 DEFAULT_AUTH_HEADER_NAME = "Ocp-Apim-Subscription-Key"
 DEFAULT_AUTH_HEADER_PREFIX = ""
+
+# The gateway's Anthropic Messages route. Its OpenAI-style route, which
+# Lemonade calls, ignores cache_control, so Claude is sent here instead: this
+# route serves a repeated prompt prefix from cache. Same host, same APIM key.
+GATEWAY_ANTHROPIC_ENV_VAR = "GAIA_GATEWAY_ANTHROPIC_BASE_URL"
+AMD_GATEWAY_ANTHROPIC_BASE_URL = "https://llm-api.amd.com/Anthropic"
 
 # Ordered preference for the picker, best first. The first match is what GAIA
 # selects automatically when a gateway is connected with nothing chosen yet.
@@ -473,6 +481,25 @@ def _no_credential_store_message(platform: Optional[str] = None) -> str:
     )
 
 
+def read_stored_token() -> Optional[str]:
+    """The remembered token, or None when none is stored.
+
+    Raises ``GatewayError`` when the OS credential store can't be read, so a
+    caller that has no prompt to fall back on can say why.
+    """
+    try:
+        from gaia.connectors.store import peek_secret
+
+        return peek_secret(GATEWAY_SECRET_NAME)
+    except Exception as e:  # noqa: BLE001 - keyring backends raise anything
+        raise GatewayError(
+            f"Could not read the gateway token from the OS credential store: {e}. "
+            f"Fix or unlock the credential store, or set {GATEWAY_ENV_VAR} or "
+            f"GAIA_GATEWAY_TOKEN in GAIA's environment. "
+            f"See https://amd-gaia.ai/docs/guides/llm-gateway."
+        ) from e
+
+
 def recall_token() -> Optional[str]:
     """The remembered token, or None when there is none.
 
@@ -481,11 +508,9 @@ def recall_token() -> Optional[str]:
     outcome either way. The reason is logged.
     """
     try:
-        from gaia.connectors.store import peek_secret
-
-        return peek_secret(GATEWAY_SECRET_NAME)
-    except Exception as e:  # noqa: BLE001 - degraded to "prompt me", never fatal
-        log.debug(f"Could not read the stored gateway token: {e}")
+        return read_stored_token()
+    except GatewayError as e:
+        log.debug(str(e))
         return None
 
 
@@ -496,6 +521,72 @@ def forget_token() -> bool:
     had = recall_token() is not None
     delete_secret(GATEWAY_SECRET_NAME)
     return had
+
+
+def gateway_claude_upstream_id(model_id: Optional[str]) -> Optional[str]:
+    """The Anthropic-route id for a gateway Claude model, else None.
+
+    The route takes the catalog id lowercased: ``amd.Claude-Opus-5-5`` is
+    ``claude-opus-5-5`` (checked live against every Claude in the catalog).
+    """
+    prefix = f"{GATEWAY_PROVIDER}."
+    if not model_id or not model_id.startswith(prefix):
+        return None
+    upstream = model_id[len(prefix) :].lower()
+    return upstream if upstream.startswith("claude-") else None
+
+
+def gateway_anthropic_base_url(state: Optional[GatewayState] = None) -> str:
+    """Base URL of the gateway's Anthropic Messages route.
+
+    Only AMD's gateway has a known route. Any other registered gateway needs
+    ``GAIA_GATEWAY_ANTHROPIC_BASE_URL``: guessing would send its token to a
+    host it was never meant for.
+    """
+    override = os.getenv(GATEWAY_ANTHROPIC_ENV_VAR)
+    if override:
+        if urlparse(override).scheme != "https":
+            raise GatewayError(
+                f"{GATEWAY_ANTHROPIC_ENV_VAR} is {override!r}, but GAIA sends the "
+                f"gateway token there, so it must be an https:// URL. Fix or unset it."
+            )
+        return override.rstrip("/")
+    registered = (state or GatewayState.load()).base_url
+    if (
+        urlparse(registered).hostname
+        == urlparse(AMD_GATEWAY_ANTHROPIC_BASE_URL).hostname
+    ):
+        return AMD_GATEWAY_ANTHROPIC_BASE_URL
+    raise GatewayError(
+        f"Claude gateway models are sent to the gateway's Anthropic Messages "
+        f"route, and GAIA only knows that route for AMD's gateway — yours is "
+        f"{registered}. Set {GATEWAY_ANTHROPIC_ENV_VAR} to its Anthropic base "
+        f"URL (the one a Claude Code ANTHROPIC_BASE_URL would use), or pick a "
+        f"non-Claude model. See https://amd-gaia.ai/docs/guides/llm-gateway."
+    )
+
+
+def resolve_gateway_token() -> str:
+    """The gateway token GAIA itself sends, for routes Lemonade doesn't carry.
+
+    Same sources as the rest of GAIA, in order: ``LEMONADE_AMD_API_KEY``,
+    ``GAIA_GATEWAY_TOKEN``, then the OS credential store.
+    """
+    # No prompt to fall back on here, so a broken store must say so.
+    token = (
+        os.getenv(GATEWAY_ENV_VAR)
+        or os.getenv("GAIA_GATEWAY_TOKEN")
+        or read_stored_token()
+    )
+    if not token or not token.strip():
+        raise GatewayError(
+            f"No AMD LLM gateway token found, and Claude gateway models need one "
+            f"in GAIA's own process. Run `gaia gateway auth` (without "
+            f"--no-remember) to store it in the OS credential store, or set "
+            f"{GATEWAY_ENV_VAR} or GAIA_GATEWAY_TOKEN in GAIA's environment. "
+            f"See https://amd-gaia.ai/docs/guides/llm-gateway."
+        )
+    return token.strip()
 
 
 class GatewayManager:

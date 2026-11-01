@@ -2720,10 +2720,14 @@ Do NOT wrap conversational replies in JSON.
         if self.max_output_tokens is not None:
             return self.max_output_tokens
         from gaia.agents.base.history import context_window
-        from gaia.llm.lemonade_client import LemonadeClient
+        from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
 
         backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
         if not isinstance(backend, LemonadeClient):
+            # A gateway Claude client calls the gateway itself, not via Lemonade.
+            model = getattr(self.chat, "effective_model", None)
+            if isinstance(model, str) and cloud_model_provider(model):
+                return CLOUD_MAX_OUTPUT_TOKENS
             return LOCAL_MAX_OUTPUT_TOKENS
         if backend.cloud_model_provider(self.chat.effective_model):
             return CLOUD_MAX_OUTPUT_TOKENS
@@ -8026,6 +8030,7 @@ Do NOT wrap conversational replies in JSON.
         getter = getattr(client, "get_last_retry_count", None)
         if not callable(getter):
             return 0
+        # pylint: disable-next=assignment-from-none
         count = getter()
         if isinstance(count, int) and not isinstance(count, bool):
             return count

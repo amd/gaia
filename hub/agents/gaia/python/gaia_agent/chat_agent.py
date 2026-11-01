@@ -3122,7 +3122,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 "Please install the required dependencies:\n"
                 '  uv pip install -e ".[dev]"\n\n'
                 "Or install watchdog directly:\n"
-                '  uv pip install "watchdog>=2.1.0"\n'
+                '  uv pip install "watchdog>=2.1.0,<7"\n'
             )
             logger.error(error_msg)
             raise ImportError(error_msg)

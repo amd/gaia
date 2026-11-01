@@ -524,7 +524,7 @@ def _should_process(self, event: FileSystemEvent) -> bool:
 # pyproject.toml
 [project]
 dependencies = [
-    "watchdog>=3.0.0",  # File system monitoring
+    "watchdog>=3.0.0,<7",  # File system monitoring
 ]
 ```
 

@@ -55,8 +55,10 @@ WINDOWS_VGM_MAX_FRACTION = 0.75
 GB = 10**9
 #: ``ttm.pages_limit`` counts 4 KiB pages.
 PAGE_BYTES = 4096
-#: AMD Software and ``amd-ttm`` count GiB (2**30 bytes), though they label it GB.
+#: Lemonade, AMD Software and ``amd-ttm`` count GiB (2**30 bytes), labelled GB.
 GIB = 2**30
+#: Lemonade's GiB in decimal GB: memory is converted once, where it comes in.
+GB_PER_GIB = GIB / GB
 #: A reading within this many GB of the target counts as the target.
 TOOK_EFFECT_TOLERANCE_GB = 1.0
 
@@ -106,7 +108,9 @@ LINUX_BIOS_STEP = (
 )
 
 _CMDLINE_KEYS = ("ttm.pages_limit", "amdttm.pages_limit", "amdgpu.gttsize")
-_OPTIONS_LINE = re.compile(r"^\s*options\s+(amd)?ttm\b.*\bpages_limit=", re.M)
+_OPTIONS_LINE = re.compile(
+    r"^\s*options\s+((amd)?ttm\b.*\bpages_limit=|amdgpu\b.*\bgttsize=)", re.M
+)
 _CONF_NAME = "ttm.conf"
 #: The only lines GAIA writes to the conf as root: blanks, comments, ttm options.
 _SAFE_CONF_LINE = re.compile(
@@ -398,6 +402,8 @@ class _Machine:
     carve_out_gb: float
     shared_gb: float
     windows_shared: bool
+    #: RAM the OS sees (Linux MemTotal), which can be less than installed RAM.
+    os_visible_gb: Optional[float] = None
 
     @property
     def setting_gb(self) -> float:
@@ -412,6 +418,8 @@ class _Machine:
             )
         else:
             cap = self.total_gb - RESERVE_GB - self.carve_out_gb
+            if self.os_visible_gb is not None:
+                cap = min(cap, self.os_visible_gb - RESERVE_GB)
         return float(max(0, math.floor(cap)))
 
     def gpu_gb_at(self, setting_gb: float) -> float:
@@ -425,23 +433,28 @@ class _Machine:
         return self.carve_out_gb + setting_gb
 
 
+def _meminfo_total_gb() -> float:
+    """Linux MemTotal in decimal GB: the RAM the OS sees, without the carve-out."""
+    meminfo = PATHS.proc / "meminfo"
+    try:
+        text = meminfo.read_text(encoding="ascii")
+    except OSError as e:
+        raise GpuMemoryError(f"Couldn't read {meminfo}: {e}") from e
+    match = re.search(r"^MemTotal:\s+(\d+)\s+kB", text, re.M)
+    if not match:
+        raise GpuMemoryError(f"{meminfo} has no MemTotal line.")
+    return int(match.group(1)) * 1024 / GB
+
+
 def _total_ram_gb(info: Dict[str, Any], carve_out_gb: float) -> float:
     from gaia.llm.model_fit import physical_memory_gb
 
     reported = physical_memory_gb(info)
     if reported > 0:
-        return reported
-    meminfo = PATHS.proc / "meminfo"
+        return reported * GB_PER_GIB
     if _platform() == "linux":
-        try:
-            match = re.search(
-                r"^MemTotal:\s+(\d+)\s+kB", meminfo.read_text(encoding="ascii"), re.M
-            )
-        except OSError as e:
-            raise GpuMemoryError(f"Couldn't read {meminfo}: {e}") from e
-        if match:
-            # The OS doesn't count the carve-out; installed RAM does.
-            return int(match.group(1)) * 1024 / GB + carve_out_gb
+        # The OS doesn't count the carve-out; installed RAM does.
+        return _meminfo_total_gb() + carve_out_gb
     raise GpuMemoryError(
         "Couldn't tell how much memory this PC has: Lemonade didn't report "
         "'Physical Memory'. Update Lemonade (`gaia init`) and retry."
@@ -475,14 +488,15 @@ def _fit(model_id: str, requirement, memory_gb: float) -> Tuple[bool, float]:
         required_memory_gb,
     )
 
-    capacity = MachineCapacity(memory_gb, "AMD iGPU", None)
+    # model_fit judges in Lemonade's GiB.
+    capacity = MachineCapacity(memory_gb / GB_PER_GIB, "AMD iGPU", None)
     if model_id in OPTIONAL_CHAT_MODELS:
         kv = kv_cache_gb(requirement.kv_bytes_per_token, requirement.min_ctx_size)
     else:
         kv = kv_cache_for(requirement, capacity)
     return (
         check_fit(requirement.size_gb, capacity, kv).fits,
-        required_memory_gb(requirement.size_gb, kv),
+        required_memory_gb(requirement.size_gb, kv) * GB_PER_GIB,
     )
 
 
@@ -620,10 +634,9 @@ def _pending(
             else PENDING_NOT_APPLIED
         )
     else:
-        reached = abs(machine.setting_gb - state["setting_gb"])
         result = (
             PENDING_TOOK_EFFECT
-            if reached <= TOOK_EFFECT_TOLERANCE_GB
+            if _reached(machine, state["setting_gb"], state.get("previous_setting_gb"))
             else PENDING_NOT_APPLIED
         )
     return {
@@ -633,6 +646,21 @@ def _pending(
         "recorded_at": state.get("recorded_at"),
         "state": result,
     }
+
+
+def _reached(machine: _Machine, target: float, previous: Optional[float]) -> bool:
+    """Whether the split now reads as *target*.
+
+    On Windows the steps round up to AMD Software's whole GiB, so a raise
+    counts once the reading is at or above the target, and a cut once it is
+    at or below that rounded-up value.
+    """
+    now, tol = machine.setting_gb, TOOK_EFFECT_TOLERANCE_GB
+    if machine.os != "windows":
+        return abs(now - target) <= tol
+    if previous is None or target >= previous:
+        return now >= target - tol
+    return now <= math.ceil(target * GB / GIB) * GB_PER_GIB + tol
 
 
 def _record(
@@ -695,13 +723,14 @@ def _machine(info: Dict[str, Any], os_name: str):
         )
     if os_name not in ("linux", "windows"):
         return None, "GAIA can only show this on Windows and Linux."
-    total = _total_ram_gb(info, split.carve_out_gb)
+    carve_out = split.carve_out_gb * GB_PER_GIB
     return (
         _Machine(
             os=os_name,
-            total_gb=total,
-            carve_out_gb=split.carve_out_gb,
-            shared_gb=split.shared_gb,
+            total_gb=_total_ram_gb(info, carve_out),
+            os_visible_gb=_meminfo_total_gb() if os_name == "linux" else None,
+            carve_out_gb=carve_out,
+            shared_gb=split.shared_gb * GB_PER_GIB,
             windows_shared=split.reported_by == "windows",
         ),
         None,
@@ -712,12 +741,15 @@ def describe(
     info: Dict[str, Any],
     base_url: Optional[str] = None,
     setting_gb: Optional[float] = None,
+    check_setting: bool = True,
 ) -> Dict[str, Any]:
     """The GPU memory step for a Lemonade ``/system-info`` body.
 
     *base_url* is the Lemonade the body came from: a remote server's memory
     isn't this PC's, so the step is hidden. *setting_gb* renders the guided
-    steps for that value instead of the recommended one.
+    steps for that value instead of the recommended one; ``check_setting``
+    False skips its range check, for a value already recorded. Lemonade
+    reports GiB; every ``*_gb`` returned is decimal GB.
     """
     from gaia.llm.lemonade_client import _is_local_url
 
@@ -731,7 +763,7 @@ def describe(
     machine, why = _machine(info, os_name)
     if machine is None:
         return _hidden(why, os_name)
-    if setting_gb is not None:
+    if setting_gb is not None and check_setting:
         _check_range(setting_gb, MIN_SETTING_GB, machine.max_setting_gb)
 
     setup = _linux_setup() if machine.os == "linux" else None
@@ -875,13 +907,17 @@ def apply(setting_gb: float, confirm: bool) -> Dict[str, Any]:
     pages = pages_for(value)
     content = f"{_CONF_HEADER}\noptions {setup.module} pages_limit={pages}"
     on_disk = _read_conf()
+    # Within 0.1 GB: the API rounds to one decimal.
+    live_matches = setup.live_pages is not None and abs(
+        setup.live_pages - pages
+    ) <= pages_for(0.1)
     if on_disk is not None and on_disk.strip() == content:
-        if setup.live_pages == pages:
+        if live_matches:
             raise NotPossible(f"GPU memory is already set to {_fmt(value)} GB.")
         raise NotPossible(
             f"GPU memory is already set to {_fmt(value)} GB. Restart your PC to use it."
         )
-    if on_disk is None and setup.live_pages == pages:
+    if on_disk is None and live_matches:
         raise NotPossible(f"GPU memory is already {_fmt(value)} GB.")
 
     state = _load_state()
@@ -908,7 +944,7 @@ def apply(setting_gb: float, confirm: bool) -> Dict[str, Any]:
         raise
     _record(current["os"], value, "apply", previous_gb, linux, pages)
     log.info(f"GPU memory limit set to {value} GB ({pages} pages); restart pending")
-    return describe(info, url)
+    return describe(info, url, value)
 
 
 def revert(confirm: bool) -> Dict[str, Any]:
@@ -932,6 +968,15 @@ def revert(confirm: bool) -> Dict[str, Any]:
     if current["os"] != "linux":
         raise NotPossible("Undo is only possible where GAIA made the change.")
     previous = (linux.get("previous_conf") or "").rstrip("\n")
+    limit = pages_for(current["setting"]["max_gb"])
+    for found in re.findall(r"\bpages_limit=(\d+)", previous):
+        if int(found) > limit:
+            raise NotPossible(
+                f"The saved setting gives the GPU {_fmt(round(gb_for(int(found)), 1))}"
+                f" GB, which would leave the CPU less than {_fmt(RESERVE_GB)} GB. "
+                f"Edit {_conf_path()} yourself, or run amd-ttm --clear, then "
+                "restart."
+            )
     _write_conf_as_root(previous or None)
     previous_gb = state.get("previous_setting_gb")
     _record(
@@ -943,7 +988,7 @@ def revert(confirm: bool) -> Dict[str, Any]:
         linux.get("previous_pages"),
     )
     log.info("GPU memory limit change undone; restart pending")
-    return describe(info, url)
+    return describe(info, url, previous_gb, check_setting=False)
 
 
 def record_pending(setting_gb: float) -> Dict[str, Any]:
@@ -954,8 +999,10 @@ def record_pending(setting_gb: float) -> Dict[str, Any]:
     if current["method"] == METHOD_APPLY:
         raise NotPossible("GAIA can set this itself here; use apply instead.")
     value = _checked(setting_gb, current)
-    _record(current["os"], value, "guided", current["setting"]["current_gb"])
-    return describe(info, url)
+    pages = pages_for(value) if current["os"] == "linux" else None
+    previous_gb = current["setting"]["current_gb"]
+    _record(current["os"], value, "guided", previous_gb, None, pages)
+    return describe(info, url, value)
 
 
 def dismiss_pending() -> Dict[str, Any]:
