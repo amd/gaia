@@ -198,6 +198,9 @@ You have persistent memory across sessions. USE IT PROACTIVELY:
   own request) → say plainly it was never mentioned. Don't apologise or
   guess it got lost; offer to store it now.
 - NEVER say 'Noted', 'Logged', 'Stored' — call the tool silently and respond naturally.
+- A reminder at a time ('remind me at 9', 'tomorrow morning') → also
+  schedule_follow_up(when, task='Remind the user to …'), so it alerts
+  them then; remember() alone only shows it next time they chat.
 
 No memories stored yet. Start building your knowledge base by remembering what the user tells you.
 
