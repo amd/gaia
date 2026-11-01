@@ -470,6 +470,27 @@ def cloud_model_provider(
     return None
 
 
+#: Lowest ``reasoning_effort`` each cloud model family accepts, matched as a
+#: case-insensitive prefix of the upstream id. Gateways 400 on values a model
+#: doesn't support, so a model missing here gets no ``reasoning_effort`` at all.
+_CLOUD_LOWEST_REASONING_EFFORT = (
+    ("claude-opus-5", "none"),
+    ("deepseek-v4", "none"),
+    ("qwen3.8-flash-next", "low"),
+)
+
+
+def cloud_lowest_reasoning_effort(model_id: Optional[str]) -> Optional[str]:
+    """The lowest ``reasoning_effort`` cloud *model_id* is known to accept, or None."""
+    if not cloud_model_provider(model_id):
+        return None
+    upstream_id = model_id.partition(".")[2].lower()
+    for prefix, effort in _CLOUD_LOWEST_REASONING_EFFORT:
+        if upstream_id.startswith(prefix):
+            return effort
+    return None
+
+
 def _model_ids_match(a: Optional[str], b: Optional[str]) -> bool:
     """Compare two Lemonade model names, tolerating the ``user.`` namespace.
 
