@@ -201,8 +201,8 @@ AGENT_MODELS = {
 
 The server imports `class_name` lazily on the first request. `init_params` are
 passed to the agent's constructor; `gaia api start --debug`, `--show-prompts`,
-`--streaming`, and `--step-through` inject `GAIA_API_*` env-vars that the
-registry merges into `init_params` at startup.
+and `--streaming` inject `GAIA_API_*` env-vars that the registry merges into
+`init_params` at startup.
 
 <Note>
 Runtime plug-in discovery is on the roadmap (see
