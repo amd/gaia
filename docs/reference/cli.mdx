@@ -1476,7 +1476,7 @@ gaia mcp test-client <server-name>
 **Arguments:**
 - `<server-name>` - Name of the server to test
 
-`test-client` takes no `--config`; it reads the default `mcp_servers.json`.
+`test-client` takes no `--config`; it reads `~/.gaia/mcp_servers.json`, overlaid by `./mcp_servers.json` if present.
 
 **Example:**
 ```bash
