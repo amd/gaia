@@ -74,10 +74,14 @@ def test_generate_image_surfaces_a_server_error(provider):
 
 
 @responses.activate
-def test_generate_image_rejects_an_unknown_model_without_a_request(provider):
-    with pytest.raises(LemonadeClientError, match="Invalid model"):
+def test_generate_image_rejects_an_unknown_model_without_generating(provider):
+    responses.add(responses.GET, f"{BASE}/models", json={"data": []})
+
+    with pytest.raises(LemonadeClientError, match="Invalid"):
         provider.generate_image("a lemon", model="not-an-sd-model")
-    assert len(responses.calls) == 0
+    assert not any(
+        call.request.url.endswith("/images/generations") for call in responses.calls
+    )
 
 
 # --- transcribe_audio -------------------------------------------------------
