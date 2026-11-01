@@ -87,7 +87,7 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 > []}, {}]` (bearer OR none) rather than asserting an unconditional requirement.
 > `EXEMPT_PATHS` routes (`/health`, `/version`, `/v1/email/health`, `/v1/email/version`)
 > declare an explicit empty requirement instead. See
-> [Email Integration → Authentication](https://amd-gaia.ai/docs/guides/email#authentication).
+> [Email guide](https://amd-gaia.ai/docs/guides/email).
 
 ---
 
