@@ -46,6 +46,11 @@ MAX_ENTRIES = 1000
 MAX_UNCOMPRESSED_TOTAL = 500 * 1024 * 1024  # 500 MB
 MAX_UNCOMPRESSED_PER_FILE = 50 * 1024 * 1024  # 50 MB
 
+# Build artefacts that pin the exporter's Python version or OS; never bundled.
+_EXPORT_EXCLUDED_DIRS = frozenset({"__pycache__"})
+_EXPORT_EXCLUDED_SUFFIXES = frozenset({".pyc", ".pyo"})
+_EXPORT_EXCLUDED_NAMES = frozenset({".DS_Store"})
+
 # Lowercase letters/digits/hyphens, 1-52 chars, must start and end with
 # alphanumeric.
 _AGENT_ID_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$")
@@ -152,6 +157,14 @@ def _iso_now() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _is_export_excluded(rel_path: Path) -> bool:
+    return (
+        any(part in _EXPORT_EXCLUDED_DIRS for part in rel_path.parts[:-1])
+        or rel_path.suffix.lower() in _EXPORT_EXCLUDED_SUFFIXES
+        or rel_path.name in _EXPORT_EXCLUDED_NAMES
+    )
+
+
 def export_custom_agents(output_path: Path) -> ExportResult:
     """Export every custom agent under ``~/.gaia/agents/`` into a zip bundle.
 
@@ -193,7 +206,9 @@ def export_custom_agents(output_path: Path) -> ExportResult:
             zf.writestr(BUNDLE_JSON_NAME, json.dumps(manifest, indent=2))
             for agent_dir in agent_dirs:
                 for file_path in sorted(agent_dir.rglob("*")):
-                    if not file_path.is_file():
+                    if not file_path.is_file() or _is_export_excluded(
+                        file_path.relative_to(agent_dir)
+                    ):
                         continue
                     arcname = f"{agent_dir.name}/{file_path.relative_to(agent_dir).as_posix()}"
                     zf.write(file_path, arcname=arcname)
