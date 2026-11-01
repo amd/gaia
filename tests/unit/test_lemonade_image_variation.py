@@ -340,3 +340,35 @@ def test_a_hostile_model_name_cannot_write_outside_the_output_dir(
     saved = Path(result["image_paths"][0])
     assert saved.parent == out.resolve()
     assert ".." not in saved.name and "/" not in saved.name
+
+
+# --- the provider interface ---------------------------------------------------
+
+
+@responses.activate
+def test_the_provider_passes_variation_through_to_its_own_server(monkeypatch, source):
+    from gaia.llm.providers.lemonade import LemonadeProvider
+
+    monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+    reply = {"data": [{"b64_json": _b64(_png_bytes())}]}
+    responses.add(responses.POST, URL, json=reply)
+    provider = LemonadeProvider(base_url=BASE)
+
+    result = provider.create_image_variation(source, model="SD-Turbo", n=1)
+
+    assert result == reply
+    fields = _multipart_fields(responses.calls[0].request)
+    assert fields["model"] == (None, b"SD-Turbo")
+    assert fields["image"] == ("cat.png", source.read_bytes())
+
+
+@responses.activate
+def test_the_provider_surfaces_variation_errors(monkeypatch, tmp_path):
+    from gaia.llm.providers.lemonade import LemonadeProvider
+
+    monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+    provider = LemonadeProvider(base_url=BASE)
+
+    with pytest.raises(LemonadeClientError, match="does not exist"):
+        provider.create_image_variation(tmp_path / "absent.png")
+    assert len(responses.calls) == 0
