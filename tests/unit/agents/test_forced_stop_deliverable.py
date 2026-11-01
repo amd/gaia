@@ -385,3 +385,32 @@ def test_the_write_step_keeps_the_models_reasoning(agent):
     closing_request = chat.sent[-1]
     write_turn = [m for m in closing_request if m.get("tool_calls")][-1]
     assert write_turn.get("reasoning_content") == "plan the file"
+
+
+def test_no_write_step_for_a_requested_file_that_already_exists(agent, tmp_path):
+    """Finishing an edit by rewriting the whole file from memory would lose it."""
+    existing = tmp_path / _TARGET
+    existing.parent.mkdir(parents=True)
+    existing.write_text("# Existing findings\n", encoding="utf-8")
+    chat = _stub_chat(agent, *_repeats(), _answer("Stopped before editing it."))
+
+    agent.process_query(_REQUEST)
+
+    assert chat.send_messages.call_count == _CALLS + 1
+    assert existing.read_text(encoding="utf-8") == "# Existing findings\n"
+
+
+def test_the_write_step_instruction_is_not_saved_into_history(agent, tmp_path):
+    """Saved, the next turn would open on an instruction nobody typed."""
+    _stub_chat(
+        agent, *_repeats(), _native(_write()), _answer(f"`{_TARGET}` is written.")
+    )
+
+    result = agent.process_query(_REQUEST)
+
+    assert (tmp_path / _TARGET).exists()
+    assert result["model_messages"]
+    assert not any(
+        "Before it does, write the requested files" in str(m.get("content"))
+        for m in result["model_messages"]
+    )

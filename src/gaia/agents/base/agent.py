@@ -12929,7 +12929,13 @@ Do NOT wrap conversational replies in JSON.
         call fails, the stop goes ahead and the completion gate on the closing
         answer names the unwritten file.
         """
-        pending = self._pending_deliverables()
+        evidence = getattr(self, "_completion_evidence", None)
+        # Only files that don't exist: a whole-file rewrite is no way to finish an edit.
+        pending = [
+            path
+            for path in self._pending_deliverables()
+            if evidence is None or not os.path.exists(evidence.key(path))
+        ]
         allowed = [n for n in _DELIVERABLE_WRITE_TOOLS if n in self._tools_registry]
         cancel_event = getattr(self, "_cancel_event", None)
         if (
@@ -12949,7 +12955,9 @@ Do NOT wrap conversational replies in JSON.
         instruction = _WRITE_BEFORE_STOP_PROMPT.format(
             reason=reason, files=", ".join(f"`{path}`" for path in pending)
         )
-        messages.append({"role": "user", "content": instruction})
+        # This turn's request only, never saved history.
+        transient = getattr(messages, "append_transient", messages.append)
+        transient({"role": "user", "content": instruction})
         conversation.append({"role": "user", "content": instruction})
         self.console.start_progress(self._progress_label())
         try:

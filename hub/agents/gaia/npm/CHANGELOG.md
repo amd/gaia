@@ -64,6 +64,16 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   tool schemas (~12K more tokens per call) for every later session, so a single
   DeepSeek reply in its own format cost every run after it. The switch now
   lasts only for the session that wrote the markup.
+- **A turn that stops early still writes the file you asked for.** When the
+  agent hits its step limit or keeps repeating a call, it gets one step to
+  write a requested file that doesn't exist yet, and it can only write those
+  files in that step. If the file still isn't written, the answer says so
+  instead of claiming it was.
+- **A refused action is reported as refused, not as your decision.** When a
+  safety rule blocks a command, the agent says the command was refused, and a
+  refused delete still guards what it would have deleted.
+- **`gaia -p --time-limit SECONDS`** tells the agent how long the run may take,
+  so it wraps up and answers before the deadline instead of being cut off.
 - **`run_python` can check a project's own code.** Any `import gaia…` was
   refused, so inside a GAIA checkout the agent copied code into the snippet by
   hand and reported the copy's output as proof. Only reaching for one of its
