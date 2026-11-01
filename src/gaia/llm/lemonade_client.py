@@ -2173,16 +2173,27 @@ def _free_memory_rules_out(client, requirement, capacity) -> Optional[str]:
     Judged at the smallest window a load shrinks to, so a model refused here
     is one setup's verify step would also refuse.
     """
-    from gaia.llm.model_fit import MIN_CONTEXT_TOKENS, ModelFitError
+    from gaia.llm.model_fit import ModelFitError
+
+    try:
+        return free_memory_shortfall(client, requirement, capacity)
+    except (ModelFitError, LemonadeClientError) as e:
+        return f"could not read this PC's free memory, so cannot confirm it would load: {e}"
+
+
+def free_memory_shortfall(client, requirement, capacity) -> Optional[str]:
+    """:func:`_free_memory_rules_out`'s reason, built from the numbers only.
+
+    Raises ``ModelFitError`` or ``LemonadeClientError`` when the free memory
+    cannot be read, so the caller decides what to show.
+    """
+    from gaia.llm.model_fit import MIN_CONTEXT_TOKENS
 
     url = getattr(client, "base_url", None)
     if not _is_local_url(url):
         return None
     window = min(MIN_CONTEXT_TOKENS, context_for_capacity(requirement, capacity))
-    try:
-        free, resident = _free_memory_snapshot(url)
-    except (ModelFitError, LemonadeClientError) as e:
-        return f"could not read this PC's free memory, so cannot confirm it would load: {e}"
+    free, resident = _free_memory_snapshot(url)
     verdict = _verdict_for(free, resident, requirement, window)
     if verdict is None or verdict.fits:
         return None
@@ -2740,6 +2751,25 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
             return True
         return bool(learned_tool_calling(model_id))
     return True  # Unknown GGUF: optimistic default per Tier 0 findings
+
+
+def uses_native_tool_calls(model_id: Optional[str]) -> bool:
+    """Whether an agent should hand *model_id* its tools as ``tools=`` schemas.
+
+    Local models and catalog-labelled cloud models: whenever they take tools.
+    Any other cloud model starts each session on the in-text format (~12K
+    fewer tokens per call, calls batched in a plan); an agent moves it to
+    native calls for that session only if it writes its own tool-call markup.
+    """
+    if not is_tool_calling_model(model_id):
+        return False
+    cloud = _CLOUD_MODELS.get(model_id)
+    if cloud is not None and cloud["tool_calling"]:
+        return True
+    # A gateway id is cloud before this process has read the catalog, too.
+    if cloud is None and cloud_model_provider(model_id) is None:
+        return True
+    return False
 
 
 def _usage_dict(usage: Any) -> Dict[str, Any]:
