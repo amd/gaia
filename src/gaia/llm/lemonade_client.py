@@ -2833,7 +2833,13 @@ def uses_native_tool_calls(model_id: Optional[str]) -> bool:
     Any other cloud model starts each session on the in-text format (~12K
     fewer tokens per call, calls batched in a plan); an agent moves it to
     native calls for that session only if it writes its own tool-call markup.
+    Gateway Claude always gets ``tools=``: its Anthropic route takes native
+    calls and caches the schemas, and on the text format it invents results.
     """
+    from gaia.llm.gateway import gateway_claude_upstream_id
+
+    if gateway_claude_upstream_id(model_id):
+        return True
     if not is_tool_calling_model(model_id):
         return False
     cloud = _CLOUD_MODELS.get(model_id)
