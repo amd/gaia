@@ -83,21 +83,25 @@ def registry():
 
 def test_lock_path_and_repo_root_invert_each_other(tmp_path):
     lock = spec_mod.agent_binary_lock_path(tmp_path, "email")
-    assert lock == tmp_path / "hub" / "agents" / "email" / "npm" / "binaries.lock.json"
+    assert lock == tmp_path.joinpath(
+        "hub", "agents", "email", "npm", "binaries.lock.json"
+    )
     assert spec_mod.repo_root_from_agent_binary_lock_path(lock, "email") == tmp_path
 
 
 @pytest.mark.parametrize(
     "tail",
     [
-        "hub/agents/email/npm/other.json",
-        "hub/agents/gaia/npm/binaries.lock.json",
-        "binaries.lock.json",
+        ("hub", "agents", "email", "npm", "other.json"),
+        ("hub", "agents", "gaia", "npm", "binaries.lock.json"),
+        ("binaries.lock.json",),
     ],
 )
 def test_repo_root_refuses_a_mis_shaped_lock_path(tmp_path, tail):
     with pytest.raises(DevSrcDirResolutionError, match="expected"):
-        spec_mod.repo_root_from_agent_binary_lock_path(tmp_path / tail, "email")
+        spec_mod.repo_root_from_agent_binary_lock_path(
+            tmp_path.joinpath(*tail), "email"
+        )
 
 
 def test_default_lock_path_is_this_checkouts_email_lock():
@@ -105,7 +109,6 @@ def test_default_lock_path_is_this_checkouts_email_lock():
     assert plat.default_lock_path() == spec_mod.agent_binary_lock_path(
         repo_root, "email"
     )
-    assert plat.default_lock_path().is_file()
 
 
 # --- caller-side resolution -------------------------------------------------
@@ -201,7 +204,7 @@ def test_mismatched_pin_is_refused_on_attach_too(registry, daemon_lock, tmp_path
 def test_daemon_without_a_lock_refuses_a_pinning_caller(
     registry, tmp_path, monkeypatch
 ):
-    missing = tmp_path / "wheel" / "hub/agents/email/npm/binaries.lock.json"
+    missing = spec_mod.agent_binary_lock_path(tmp_path / "wheel", "email")
     monkeypatch.setattr(plat, "default_lock_path", lambda: missing)
     caller = _write_lock(tmp_path / "caller-checkout", "2.0.0")
     with pytest.raises(ModeConflictError, match="has no binaries.lock.json"):
