@@ -317,7 +317,7 @@ def test_status_extension_fields_match_the_model_state_ping(monkeypatch):
 def test_partial_index_status_matches_the_fixture():
     from gaia.ui.sse_translation import CanonicalTranslator
 
-    [event] = CanonicalTranslator("run").translate(
+    [event] = CanonicalTranslator("run", agent_id="gaia").translate(
         {
             "type": "status",
             "message": "Still reading images in a.pdf",

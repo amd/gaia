@@ -312,7 +312,7 @@ def test_the_notice_reaches_the_wire_once_a_turn():
 
     assert handler.event_queue.qsize() == 1
     event = handler.event_queue.get_nowait()
-    wire = CanonicalTranslator("run").translate(event)
+    wire = CanonicalTranslator("run", agent_id="gaia").translate(event)
 
     assert wire == [
         {

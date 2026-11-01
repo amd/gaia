@@ -180,17 +180,20 @@ def cancel(cache_dir: str, key: str) -> bool:
 
 def _next_page(cache_dir: str) -> Optional[tuple]:
     """The most useful page left anywhere: pages short of text, oldest first."""
-    best = None
     now = time.time()
+    candidates = []
     for state in _all_states(cache_dir):
         if state["state"] == BLOCKED and now < state.get("retry_at", 0):
             continue
-        for page in _pending(state):
+        pending = _pending(state)
+        if pending:
+            page = pending[0]
             rank = (not page["short"], state["queued_at"], page["page"])
-            if best is None or rank < best[0]:
-                best = (rank, state["key"], page)
-            break
-    return (best[1], best[2]) if best else None
+            candidates.append((rank, state["key"], page))
+    if not candidates:
+        return None
+    _, key, page = min(candidates, key=lambda candidate: candidate[0])
+    return key, page
 
 
 def _finish(cache_dir: str, state: Dict[str, Any]) -> None:
