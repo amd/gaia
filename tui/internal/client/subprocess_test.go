@@ -184,67 +184,87 @@ func TestSubprocessClient_CloseBeforeSend(t *testing.T) {
 	}
 }
 
-func TestSubprocessClient_ProcessExitWithError(t *testing.T) {
-	// The mock reads its prompt before exiting: exiting immediately races the
-	// Send, and once the child is gone the write is a broken pipe.
-	src := `package main
+// exitAgentSrc reads its prompt, waits delayMs, then exits 1. It reads first:
+// exiting immediately races the Send, and once the child is gone the write is a
+// broken pipe.
+const exitAgentSrc = `package main
 
 import (
 	"bufio"
 	"os"
+	"strconv"
+	"time"
 )
 
 func main() {
 	bufio.NewReader(os.Stdin).ReadString('\n')
+	if ms, err := strconv.Atoi(os.Getenv("EXIT_AGENT_DELAY_MS")); err == nil {
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
 	os.Exit(1)
 }
 `
-	tmpDir := t.TempDir()
-	srcPath := filepath.Join(tmpDir, "exit_agent.go")
-	if err := os.WriteFile(srcPath, []byte(src), 0644); err != nil {
-		t.Fatalf("write source: %v", err)
-	}
 
-	binName := "exit_agent"
-	if runtime.GOOS == "windows" {
-		binName = "exit_agent.exe"
-	}
-	binPath := filepath.Join(tmpDir, binName)
-
-	goExe := "go"
-	if p, err := exec.LookPath("go"); err == nil {
-		goExe = p
-	}
-
-	cmd := exec.Command(goExe, "build", "-o", binPath, srcPath)
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build exit agent: %v\n%s", err, out)
-	}
-
-	c := NewSubprocessClient(binPath, nil, false)
+// awaitExitError sends one prompt and returns the AgentErrorEvent the exit
+// produces. The turn's context never expires: a deadline would kill a child
+// that is merely slow, and the test would then fail for the runner's load
+// rather than for anything the client did.
+func awaitExitError(t *testing.T, bin string, watchdog time.Duration) event.AgentErrorEvent {
+	t.Helper()
+	c := NewSubprocessClient(bin, nil, false)
 	defer c.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	ch, err := c.Send(ctx, "hello")
+	ch, err := c.Send(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
-	var gotError bool
-	for evt := range ch {
-		if ae, ok := evt.(event.AgentErrorEvent); ok {
-			gotError = true
-			if ae.Content == "" {
-				t.Error("expected non-empty error content")
+	var got *event.AgentErrorEvent
+	timer := time.NewTimer(watchdog)
+	defer timer.Stop()
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				if got == nil {
+					t.Fatal("expected an AgentErrorEvent for process exit with code 1")
+				}
+				return *got
 			}
+			if ae, isErr := evt.(event.AgentErrorEvent); isErr {
+				got = &ae
+			}
+		case <-timer.C:
+			t.Fatalf("the turn did not end within %s of the child exiting", watchdog)
 		}
 	}
+}
 
-	if !gotError {
-		t.Error("expected an AgentErrorEvent for process exit with code 1")
+func TestSubprocessClient_ProcessExitWithError(t *testing.T) {
+	bin := buildAgentFrom(t, t.TempDir(), "exit_agent", exitAgentSrc)
+	t.Setenv("EXIT_AGENT_DELAY_MS", "")
+
+	ae := awaitExitError(t, bin, 60*time.Second)
+	if ae.Content == "" {
+		t.Error("expected non-empty error content")
+	}
+	if !strings.Contains(ae.Content, "code 1") {
+		t.Errorf("error should carry the exit code, got %q", ae.Content)
+	}
+}
+
+// A child slower to exit than the old 5 s turn deadline must still be reported
+// as an exit, not silently killed by the test's own clock.
+func TestSubprocessClient_SlowExitStillReportsError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("sleeps 6 s")
+	}
+	bin := buildAgentFrom(t, t.TempDir(), "exit_agent", exitAgentSrc)
+	t.Setenv("EXIT_AGENT_DELAY_MS", "6000")
+
+	ae := awaitExitError(t, bin, 60*time.Second)
+	if !strings.Contains(ae.Content, "code 1") {
+		t.Errorf("error should carry the exit code, got %q", ae.Content)
 	}
 }
 
