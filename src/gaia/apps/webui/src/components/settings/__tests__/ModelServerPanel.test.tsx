@@ -30,6 +30,7 @@ function info(overrides: Partial<ModelServerInfo> = {}): ModelServerInfo {
             { name: 'cpu', state: 'installed' },
         ],
         preferred_backend: null, system_info_error: null,
+        loaded_models: [],
         ...overrides,
     };
 }
@@ -39,6 +40,37 @@ beforeEach(() => {
 });
 
 describe('ModelServerPanel', () => {
+    it('shows other loaded models with their type, backend, and context', async () => {
+        mockedApi.getModelServer.mockResolvedValue(info({
+            loaded_models: [
+                {
+                    name: 'Gemma-3n-Vision-GGUF',
+                    model_type: 'vision',
+                    recipe: 'llamacpp',
+                    device: 'gpu',
+                    backend: 'vulkan',
+                    backend_source: 'lemonade_default',
+                    ctx_size: 4096,
+                },
+                {
+                    name: 'bge-reranker-v2-m3-GGUF',
+                    model_type: 'reranking',
+                    recipe: 'llamacpp',
+                    device: 'gpu',
+                    backend: 'rocm',
+                    backend_source: 'requested',
+                    ctx_size: null,
+                },
+            ],
+        }));
+        render(<ModelServerPanel />);
+
+        expect(await screen.findByText('Vision model')).toBeInTheDocument();
+        expect(screen.getByText(/Gemma-3n-Vision-GGUF · Vulkan.*4K tokens/)).toBeInTheDocument();
+        expect(screen.getByText('Reranking model')).toBeInTheDocument();
+        expect(screen.getByText(/bge-reranker-v2-m3-GGUF · ROCm/)).toBeInTheDocument();
+    });
+
     it('names the server, its address, and what the chat model runs on', async () => {
         mockedApi.getModelServer.mockResolvedValue(info());
         render(<ModelServerPanel />);

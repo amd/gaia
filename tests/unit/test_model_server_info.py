@@ -230,6 +230,73 @@ def test_chat_and_embedder_are_told_apart_and_long_names_survive():
     assert info["version"] == "2026.41.1"
 
 
+def test_other_loaded_models_are_reported_without_hiding_the_chat_model():
+    health = {
+        "model_loaded": "chat-model",
+        "all_models_loaded": [
+            _llm(name="chat-model"),
+            {
+                "model_name": "vision-encoder",
+                "type": "vision",
+                "recipe": "llamacpp",
+                "device": "gpu",
+                "recipe_options": {"ctx_size": 8192, "llamacpp_backend": "vulkan"},
+            },
+            {
+                "model_name": "speech-recognizer",
+                "type": "transcription",
+                "recipe": "whisper",
+                "device": "cpu",
+            },
+            {
+                "model_name": "cross-encoder",
+                "type": "reranking",
+                "recipe": "llamacpp",
+                "device": "gpu",
+                "recipe_options": {"ctx_size": 4096},
+            },
+        ],
+    }
+    info = describe_model_server(
+        base_url="http://localhost:13305/api/v1",
+        owner="gaia",
+        health=health,
+        system_info=SYSINFO,
+        preferred_backend=None,
+    )
+    assert info["chat_model"]["name"] == "chat-model"
+    assert [model["name"] for model in info["loaded_models"]] == [
+        "vision-encoder",
+        "speech-recognizer",
+        "cross-encoder",
+    ]
+    assert info["loaded_models"][0]["model_type"] == "vision"
+    assert info["loaded_models"][0]["backend"] == "vulkan"
+    assert info["loaded_models"][0]["ctx_size"] == 8192
+
+
+def test_vision_language_models_remain_chat_models():
+    info = describe_model_server(
+        base_url="http://localhost:13305/api/v1",
+        owner="gaia",
+        health={
+            "model_loaded": "vision-chat",
+            "all_models_loaded": [
+                {
+                    "model_name": "vision-chat",
+                    "type": "vlm",
+                    "recipe": "llamacpp",
+                    "recipe_options": {"ctx_size": 32768},
+                }
+            ],
+        },
+        system_info=SYSINFO,
+        preferred_backend=None,
+    )
+    assert info["chat_model"]["name"] == "vision-chat"
+    assert info["loaded_models"] == []
+
+
 @pytest.mark.parametrize(
     "url,port,owner",
     [

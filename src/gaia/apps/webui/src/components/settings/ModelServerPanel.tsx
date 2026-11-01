@@ -39,6 +39,18 @@ function ctxLabel(ctx: number | null | undefined): string {
     return ctx ? `${Math.round(ctx / 1024)}K tokens` : 'unknown';
 }
 
+function modelKindLabel(model: LoadedModelInfo): string {
+    if (!model.model_type) return 'Loaded model';
+    return `${model.model_type.charAt(0).toUpperCase()}${model.model_type.slice(1)} model`;
+}
+
+function loadedModelDetail(model: LoadedModelInfo): string {
+    const name = model.name ? displayModelName(model.name) : 'Unknown model';
+    const detail = [name, runsOn(model)];
+    if (model.backend !== 'remote' && model.ctx_size) detail.push(ctxLabel(model.ctx_size));
+    return detail.join(' · ');
+}
+
 function Row({ label, value, title }: { label: string; value: string; title?: string }) {
     return (
         <div className="status-row">
@@ -154,6 +166,14 @@ export function ModelServerPanel() {
                         ? `${info.embedding_model.name} · ${runsOn(info.embedding_model)}`
                         : 'None loaded'}
                 />
+                {(info.loaded_models ?? []).map((model, index) => (
+                    <Row
+                        key={`${model.name ?? 'unknown'}-${index}`}
+                        label={modelKindLabel(model)}
+                        value={loadedModelDetail(model)}
+                        title={model.name ?? undefined}
+                    />
+                ))}
             </div>
             {info.embedding_note && <p className="settings-hint">{info.embedding_note}</p>}
             {info.system_info_error && <p className="settings-hint">{info.system_info_error}</p>}
