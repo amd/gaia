@@ -322,9 +322,10 @@ def test_real_git_push_succeeds_when_origin_has_release_branch(tmp_path):
     assert "opened https://github.com/amd/gaia/pull/5486-test" == outcome
     branch = pin.branch_name(VERSION)
     git(checkout, "fetch", "origin", branch)
-    assert json.loads(
-        git(checkout, "show", f"origin/{branch}:{pin.LOCK}").stdout
-    ) == _lock()
+    assert (
+        json.loads(git(checkout, "show", f"origin/{branch}:{pin.LOCK}").stdout)
+        == _lock()
+    )
     git(checkout, "show-ref", "--verify", f"refs/remotes/origin/{branch}")
 
 
