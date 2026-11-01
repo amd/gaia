@@ -87,24 +87,23 @@ func statusDownload(gb float64) string { return formatGB(gb) }
 // statusPartial is a row with some bytes already on disk.
 func statusPartial(left float64) string { return formatGB(left) + " left" }
 
-// The model's need is decimal GB; the PC's memory for models comes from
-// Lemonade in GiB. They are labelled as what they are, never converted into
-// each other, and whether a model fits is the backend's verdict, not a
-// comparison of the two numbers here.
+// A model's need and the PC's memory for models both come from model_fit in
+// the same unit, so they carry the same label and compare directly. Whether a
+// model fits is still the backend's verdict, never re-derived here.
 
 // fitLine is the focused row's memory line when the model fits.
-func fitLine(need, haveGiB float64) string {
-	return fmt.Sprintf("Needs about %s of memory; this PC has %s for models.", formatGBShort(need), formatGiB(haveGiB))
+func fitLine(need, have float64) string {
+	return fmt.Sprintf("Needs about %s of memory; this PC has %s for models.", formatGBShort(need), formatGBShort(have))
 }
 
 // noFitLine is the warning under a model that won't fit this PC's memory.
-func noFitLine(need, haveGiB float64) string {
-	return fmt.Sprintf("[!] needs ~%s; this PC has %s. %s", formatGBShort(need), formatGiB(haveGiB), mayBeSlow)
+func noFitLine(need, have float64) string {
+	return fmt.Sprintf("[!] needs ~%s; this PC has %s. %s", formatGBShort(need), formatGBShort(have), mayBeSlow)
 }
 
 // noFitAsk replaces the footer before downloading a model that won't fit.
-func noFitAsk(need, haveGiB float64) string {
-	return fmt.Sprintf("Needs ~%s, this PC has %s.", formatGBShort(need), formatGiB(haveGiB))
+func noFitAsk(need, have float64) string {
+	return fmt.Sprintf("Needs ~%s, this PC has %s.", formatGBShort(need), formatGBShort(have))
 }
 
 // purposeLine says what a model is for, in a few words.

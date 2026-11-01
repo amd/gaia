@@ -39,11 +39,6 @@ func formatGBShort(gb float64) string {
 	return strings.TrimSuffix(s, ".0") + " GB"
 }
 
-// formatGiB is memory Lemonade reports in GiB, labelled as such.
-func formatGiB(gib float64) string {
-	return strings.TrimSuffix(formatGBShort(gib), " GB") + " GiB"
-}
-
 func bytesGB(b int64) float64 { return float64(b) / 1e9 }
 
 // formatSpeed is a download rate.

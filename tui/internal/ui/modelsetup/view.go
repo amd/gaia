@@ -1211,7 +1211,7 @@ func (m Model) detailLines(w int) []string {
 			if p.MemorySource != nil {
 				src = " (" + *p.MemorySource + ")"
 			}
-			raw = append(raw, fmt.Sprintf("Memory for models: %s%s", formatGiB(*p.CapacityGB), src))
+			raw = append(raw, fmt.Sprintf("Memory for models: %s%s", formatGBShort(*p.CapacityGB), src))
 		} else {
 			raw = append(raw, "Memory for models: unknown")
 		}

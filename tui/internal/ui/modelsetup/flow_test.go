@@ -98,11 +98,11 @@ func TestTooBigModelAsksWithRealNumbersAndCanBeConfirmed(t *testing.T) {
 	h := newHarness(t, ModeFirstRun, api)
 	h.focusID(qwen)
 	h.key("space")
-	h.expect("[!] needs ~27 GB; this PC has 16 GiB.")
+	h.expect("[!] needs ~27 GB; this PC has 16 GB.")
 	h.expect("[!] won't fit")
 
 	h.key("enter")
-	h.expect("Needs ~27 GB, this PC has 16 GiB.")
+	h.expect("Needs ~27 GB, this PC has 16 GB.")
 	h.expect("y download anyway")
 	h.expect("n pick another")
 	if api.Called("run") {
@@ -791,7 +791,7 @@ func TestApplyShowsTheSameWarningsAsSetup(t *testing.T) {
 	h := newHarness(t, ModeModels, api)
 	h.focusID(qwen)
 	h.key("space", "a")
-	h.expect("Needs ~27 GB, this PC has 16 GiB.")
+	h.expect("Needs ~27 GB, this PC has 16 GB.")
 	h.key("y")
 	h.expect("Needs 29.6 GB; only 10.0 GB free on C:.")
 	h.key("y")
