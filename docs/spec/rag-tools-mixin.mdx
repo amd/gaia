@@ -339,7 +339,11 @@ class RAGToolsMixin:
         """
         Index all supported files in a directory.
 
-        Supported: PDF, TXT, CSV, JSON, code files.
+        Indexes the same formats as index_document: PDF, Word (.docx),
+        PowerPoint (.pptx), Excel (.xlsx), CSV, JSON, EPUB, text, Markdown
+        and source-code files (gaia.rag.sdk.FOLDER_INDEX_EXTENSIONS).
+        Images are indexed only one at a time; every skipped file is listed
+        with its reason.
 
         Args:
             directory_path: Path to directory
@@ -358,6 +362,9 @@ class RAGToolsMixin:
                 "indexed_files": List[str],
                 "failed_files": List[str],
                 "failure_reasons": Dict[str, str],  # file name -> error
+                "skipped_files": List[Dict[str, str]],  # {"file", "reason"},
+                                                        # first 50
+                "skipped_files_truncated": bool,  # only when over 50
                 "message": str
             }
         """
