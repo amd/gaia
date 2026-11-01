@@ -1072,3 +1072,88 @@ def test_pushed_history_too_big_beside_the_prompt_is_refit(app_client, monkeypat
     assert seen[0]["role"] == "user"
     warnings = [e for e in _parse_sse(resp.text) if "out of the model's view" in str(e)]
     assert len(warnings) == 1
+
+
+# ---------------------------------------------------------------------------
+# A retained session follows the model the caller asks for (#2834). The Agent
+# UI now sends session_id, and its chats can switch model between turns.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def model_tracking_registry(monkeypatch):
+    from gaia_agent_email import agent_routes
+
+    fresh = agent_routes._SessionRegistry()
+    monkeypatch.setattr(agent_routes, "registry", fresh, raising=True)
+    built: list = []
+    closed: list = []
+
+    def _factory(**kwargs):
+        agent = _HappyFakeAgent()
+        agent.built_with = kwargs.get("model_id")
+        built.append(agent)
+        return agent
+
+    monkeypatch.setattr(agent_routes, "build_session_agent", _factory, raising=True)
+    monkeypatch.setattr(agent_routes, "_close_agent", closed.append, raising=True)
+    return fresh, built, closed
+
+
+def test_same_model_keeps_the_session_agent(app_client, model_tracking_registry):
+    registry, built, closed = model_tracking_registry
+    for query in ("one", "two"):
+        resp = app_client.post(
+            "/v1/email/query", json=_req(query, session_id="s1", model="m-a")
+        )
+        assert resp.status_code == 200
+    assert len(built) == 1 and closed == []
+
+
+def test_a_new_model_rebuilds_the_session_agent_on_it(
+    app_client, model_tracking_registry
+):
+    registry, built, closed = model_tracking_registry
+    app_client.post("/v1/email/query", json=_req("one", session_id="s1", model="m-a"))
+    resp = app_client.post(
+        "/v1/email/query", json=_req("two", session_id="s1", model="m-b")
+    )
+    assert resp.status_code == 200
+    assert [a.built_with for a in built] == ["m-a", "m-b"]
+    session = registry.get("s1")
+    assert session.agent is built[1] and session.model_id == "m-b"
+    assert closed == [built[0]]
+    assert built[1].seen_query == "two"
+
+
+def test_omitting_the_model_keeps_whatever_the_session_runs(
+    app_client, model_tracking_registry
+):
+    registry, built, closed = model_tracking_registry
+    app_client.post("/v1/email/query", json=_req("one", session_id="s1", model="m-a"))
+    app_client.post("/v1/email/query", json=_req("two", session_id="s1"))
+    assert len(built) == 1 and closed == []
+
+
+def test_a_failed_rebuild_is_loud_and_releases_the_session(
+    app_client, model_tracking_registry, monkeypatch
+):
+    from gaia_agent_email import agent_routes
+
+    registry, built, closed = model_tracking_registry
+    app_client.post("/v1/email/query", json=_req("one", session_id="s1", model="m-a"))
+
+    def _boom(**kwargs):
+        raise RuntimeError("model m-b is not installed")
+
+    monkeypatch.setattr(agent_routes, "build_session_agent", _boom, raising=True)
+    resp = app_client.post(
+        "/v1/email/query", json=_req("two", session_id="s1", model="m-b")
+    )
+    assert resp.status_code == 502
+    assert "m-b" in resp.json()["detail"]
+    session = registry.get("s1")
+    assert session.agent is built[0] and session.model_id == "m-a"
+    assert closed == []
+    assert session.run_lock.acquire(blocking=False)
+    session.run_lock.release()

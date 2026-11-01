@@ -6,6 +6,9 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Switching model mid-chat takes effect.** In a conversation that keeps its
+  session, a turn that asks for a different model now runs on that model
+  instead of the one the conversation started with.
 - **The binary no longer bundles GPL code.** It used to include PyInstaller's
   own modules and Python's `readline` and `dbm` modules, which link GNU
   Readline (GPL-3.0) and GDBM (GPL-3.0). They are excluded now, and the release

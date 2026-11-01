@@ -9,6 +9,14 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A chat that switches model mid-conversation gets the model it asked
+  for.** `POST /v1/email/query` with a `session_id` used to keep running the
+  session's agent on whatever model it was first built with, even when a later
+  turn named another `model`. That turn now rebuilds the session's agent on
+  the requested model, and a failed rebuild is a 502 that leaves the session
+  usable. This matters now that the Agent UI sends `session_id`, so a
+  follow-up can name a thread the previous turn showed. (#2834)
+
 - **Concurrent startup no longer fails to open the email state database
   during SQLite WAL-mode setup.** The agent now uses GAIA core's bounded WAL
   retry helper when another email agent is opening the same `state.db`.

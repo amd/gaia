@@ -587,6 +587,25 @@ async def query(request: QueryRequest) -> StreamingResponse:
                 status_code=409,
                 detail="A turn is already in progress for this session.",
             )
+        if request.model and request.model != session.model_id:
+            # The session's agent was built on another model; never run this
+            # turn on a model the caller did not ask for.
+            try:
+                rebuilt = await asyncio.to_thread(
+                    agent_routes.build_session_agent, **config_kwargs
+                )
+            except Exception as exc:  # construction failure → fail loud
+                session.run_lock.release()
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Failed to switch the email agent to model "
+                        f"{request.model!r} for this query: {exc}"
+                    ),
+                ) from exc
+            previous, session.agent = session.agent, rebuilt
+            session.model_id = request.model
+            agent_routes._close_agent(previous)
         agent = session.agent
     else:
         try:
