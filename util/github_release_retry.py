@@ -54,11 +54,19 @@ def _run(args: Sequence[str]) -> str:
 
 
 def _rate_reset_delay() -> int | None:
-    """Return seconds until the core API reset, when GitHub reports it."""
+    """Return seconds until a depleted core API budget resets.
+
+    Secondary limits do not consume the core hourly quota, so their response
+    must use the bounded exponential backoff rather than sleeping until an
+    unrelated core reset.
+    """
     try:
-        raw = _run(["api", "rate_limit", "--jq", ".resources.core.reset"])
-        reset = int(raw.strip())
-    except (RateLimited, ReleaseError, ValueError):
+        raw = _run(["api", "rate_limit", "--jq", ".resources.core"])
+        core = json.loads(raw)
+        if int(core["remaining"]) > 0:
+            return None
+        reset = int(core["reset"])
+    except (KeyError, RateLimited, ReleaseError, TypeError, ValueError):
         return None
     return max(1, reset - int(time.time()))
 
@@ -118,7 +126,9 @@ def _release_json(repo: str, tag: str) -> dict:
     return json.loads(raw)
 
 
-def _create_draft(repo: str, tag: str, title: str, notes_file: str, prerelease: bool) -> str:
+def _create_draft(
+    repo: str, tag: str, title: str, notes_file: str, prerelease: bool
+) -> str:
     args = [
         "release",
         "create",
@@ -140,11 +150,22 @@ def _create_draft(repo: str, tag: str, title: str, notes_file: str, prerelease: 
 
 
 def _upload_asset(repo: str, tag: str, asset: str) -> str:
-    return _run(["release", "upload", tag, asset, "--repo", repo])
+    # --clobber replaces a partial (state: starter) asset from an interrupted
+    # upload, while remaining idempotent for a completed asset after re-check.
+    return _run(["release", "upload", tag, asset, "--repo", repo, "--clobber"])
 
 
 def _publish(repo: str, tag: str, notes_file: str, prerelease: bool) -> str:
-    args = ["release", "edit", tag, "--repo", repo, "--draft=false", "--notes-file", notes_file]
+    args = [
+        "release",
+        "edit",
+        tag,
+        "--repo",
+        repo,
+        "--draft=false",
+        "--notes-file",
+        notes_file,
+    ]
     if prerelease:
         args.extend(["--prerelease", "--latest=false"])
     else:
@@ -171,49 +192,86 @@ def publish_release(
 
     deadline = time.monotonic() + max_wait_seconds
     if not _retry("release lookup", lambda: _release_exists(repo, tag), deadline):
-        # A rate-limit response during create can happen after GitHub has made
-        # the draft.  The next loop iteration observes it instead of creating a
-        # second release.
-        while True:
+        # A rate-limit response during create can arrive after GitHub accepted
+        # the draft. Re-check before every create attempt so retries never make
+        # duplicate drafts for one tag.
+        attempt = 0
+        while not _retry(
+            "release lookup", lambda: _release_exists(repo, tag), deadline
+        ):
+            if time.monotonic() >= deadline:
+                raise ReleaseError("release creation exceeded retry deadline")
             try:
                 _create_draft(repo, tag, title, notes_file, prerelease)
                 break
             except RateLimited as exc:
-                delay = _retry_delay(0, deadline)
+                delay = _retry_delay(attempt, deadline)
                 if delay <= 0:
-                    raise ReleaseError(f"release creation exceeded retry deadline: {exc}") from exc
-                print(f"::warning::release creation rate-limited; retrying in {delay}s", file=sys.stderr)
+                    raise ReleaseError(
+                        f"release creation exceeded retry deadline: {exc}"
+                    ) from exc
+                print(
+                    f"::warning::release creation rate-limited; retrying in {delay}s",
+                    file=sys.stderr,
+                )
                 time.sleep(delay)
+                attempt += 1
             except ReleaseError as exc:
                 if "already exists" in str(exc).lower():
                     break
                 raise
 
-    uploaded = set()
+    uploaded: set[str] = set()
     while True:
         state = _retry("release lookup", lambda: _release_json(repo, tag), deadline)
-        uploaded = {item["name"] for item in state.get("assets", [])}
+        uploaded = {
+            item["name"]
+            for item in state.get("assets", [])
+            if item.get("state") == "uploaded"
+        }
         missing = [asset for asset in assets if Path(asset).name not in uploaded]
         if not missing:
             break
         for asset in missing:
             while Path(asset).name not in uploaded:
+                if time.monotonic() >= deadline:
+                    raise ReleaseError(
+                        f"asset upload exceeded retry deadline: {Path(asset).name} "
+                        "did not reach the uploaded state"
+                    )
                 try:
                     _upload_asset(repo, tag, asset)
                 except RateLimited as exc:
                     delay = _retry_delay(0, deadline)
                     if delay <= 0:
-                        raise ReleaseError(f"asset upload exceeded retry deadline: {exc}") from exc
-                    print(f"::warning::asset upload rate-limited; retrying in {delay}s", file=sys.stderr)
+                        raise ReleaseError(
+                            f"asset upload exceeded retry deadline: {exc}"
+                        ) from exc
+                    print(
+                        f"::warning::asset upload rate-limited; retrying in {delay}s",
+                        file=sys.stderr,
+                    )
                     time.sleep(delay)
-                    state = _retry("release lookup", lambda: _release_json(repo, tag), deadline)
-                    uploaded = {item["name"] for item in state.get("assets", [])}
+                    state = _retry(
+                        "release lookup", lambda: _release_json(repo, tag), deadline
+                    )
+                    uploaded = {
+                        item["name"]
+                        for item in state.get("assets", [])
+                        if item.get("state") == "uploaded"
+                    }
                     continue
                 except ReleaseError as exc:
                     if "already exists" not in str(exc).lower():
                         raise
-                state = _retry("release lookup", lambda: _release_json(repo, tag), deadline)
-                uploaded = {item["name"] for item in state.get("assets", [])}
+                state = _retry(
+                    "release lookup", lambda: _release_json(repo, tag), deadline
+                )
+                uploaded = {
+                    item["name"]
+                    for item in state.get("assets", [])
+                    if item.get("state") == "uploaded"
+                }
 
     _retry(
         "release publication",
