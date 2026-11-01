@@ -275,7 +275,7 @@ def test_other_loaded_models_are_reported_without_hiding_the_chat_model():
     assert info["loaded_models"][0]["ctx_size"] == 8192
 
 
-def test_vision_language_models_remain_chat_models():
+def test_chat_capable_vision_models_remain_chat_models():
     info = describe_model_server(
         base_url="http://localhost:13305/api/v1",
         owner="gaia",
@@ -284,7 +284,7 @@ def test_vision_language_models_remain_chat_models():
             "all_models_loaded": [
                 {
                     "model_name": "vision-chat",
-                    "type": "vlm",
+                    "type": "vision",
                     "recipe": "llamacpp",
                     "recipe_options": {"ctx_size": 32768},
                 }
@@ -295,6 +295,29 @@ def test_vision_language_models_remain_chat_models():
     )
     assert info["chat_model"]["name"] == "vision-chat"
     assert info["loaded_models"] == []
+
+
+def test_auxiliary_vision_model_is_listed_when_chat_model_is_loaded():
+    info = describe_model_server(
+        base_url="http://localhost:13305/api/v1",
+        owner="gaia",
+        health={
+            "model_loaded": "chat-model",
+            "all_models_loaded": [
+                _llm(name="chat-model"),
+                {
+                    "model_name": "vision-encoder",
+                    "type": "vision",
+                    "recipe": "llamacpp",
+                    "recipe_options": {"ctx_size": 8192},
+                },
+            ],
+        },
+        system_info=SYSINFO,
+        preferred_backend=None,
+    )
+    assert info["chat_model"]["name"] == "chat-model"
+    assert [m["name"] for m in info["loaded_models"]] == ["vision-encoder"]
 
 
 @pytest.mark.parametrize(

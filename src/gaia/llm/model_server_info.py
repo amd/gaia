@@ -38,8 +38,6 @@ _NON_CHAT_TYPES = frozenset(
         "asr",
         "stt",
         "image",
-        "vision",
-        "3d",
         "tts",
         "speech",
         "audio",
@@ -188,13 +186,12 @@ def _embedder_entry(health: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _other_loaded_entries(health: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Loaded non-chat, non-embedding models for the server detail panel."""
+    """Loaded models not already shown as chat or embedding models."""
+    chat = _chat_entry(health)
     return [
         m
         for m in health.get("all_models_loaded") or []
-        if isinstance(m, dict)
-        and not is_chat_model_entry(m)
-        and m.get("type") != "embedding"
+        if isinstance(m, dict) and m is not chat and m.get("type") != "embedding"
     ]
 
 
@@ -255,8 +252,7 @@ def describe_model_server(
         ),
         "embedding_model": describe_loaded_model(embed, sysinfo) if embed else None,
         "loaded_models": [
-            describe_loaded_model(entry, sysinfo)
-            for entry in other_loaded
+            describe_loaded_model(entry, sysinfo) for entry in other_loaded
         ],
         "embedding_note": EMBEDDER_ON_CPU_WITH_ROCM if embedder_on_cpu else None,
         "default_backend": default_backend,
