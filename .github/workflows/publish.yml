@@ -1124,6 +1124,7 @@ jobs:
       - name: Create GitHub Release with bounded rate-limit retry
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ needs.validate.outputs.tag_name }}
           IS_RC: ${{ needs.validate.outputs.is_rc }}
         run: |
