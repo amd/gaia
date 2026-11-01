@@ -241,6 +241,21 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                         </div>
                     )}
 
+                    {status?.active && !error && (
+                        <div className="mobile-install-hint">
+                            <div className="mobile-install-hint-title">Keep GAIA on your phone</div>
+                            <p>
+                                Once GAIA opens, add it to your home screen: in Safari, tap Share, then
+                                Add to Home Screen. In Chrome, open the ⋮ menu and tap Add to Home screen.
+                            </p>
+                            <p>
+                                This link stops working when mobile access stops. Each time you start it,
+                                scan the new code. If GAIA on your home screen no longer connects, open the
+                                new link and add it again.
+                            </p>
+                        </div>
+                    )}
+
                     {/* Actions */}
                     <div className="mobile-access-actions">
                         {status?.active && onStop && (

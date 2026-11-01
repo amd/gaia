@@ -242,6 +242,30 @@ button.copy-url-btn.copied {
     margin-bottom: 0;
 }
 
+.mobile-install-hint {
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.mobile-install-hint-title {
+    font-size: var(--fs-label);
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.mobile-install-hint p {
+    margin: 0 0 6px;
+}
+
+.mobile-install-hint p:last-child {
+    margin-bottom: 0;
+}
+
 /* Actions */
 .mobile-access-actions {
     display: flex;
