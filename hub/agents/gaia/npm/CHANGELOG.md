@@ -43,6 +43,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **One stray tool-call reply no longer triples a gateway model's token use.**
+  A gateway model that wrote its own tool-call markup once was moved to native
+  tool schemas (~12K more tokens per call) for every later session, so a single
+  DeepSeek reply in its own format cost every run after it. The switch now
+  lasts only for the session that wrote the markup.
 - **The doc profile names a search tool it has.** Its discovery rules told the
   model to start with `find_files`, which that profile does not register, so the
   first discovery step failed. They now name `search_file`, which it does
