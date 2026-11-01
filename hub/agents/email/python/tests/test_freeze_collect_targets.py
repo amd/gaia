@@ -105,3 +105,22 @@ def test_build_bundles_the_tokenizer_plugin_and_data(tmp_path, monkeypatch):
         "--add-data",
         f"{staged}{os.pathsep}{tiktoken_bundle.BUNDLE_DIR}",
     ) in pairs
+
+
+# ---------------------------------------------------------------------------
+# GPL code stays out of the binary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "module", ["PyInstaller", "readline", "_gdbm", "_dbm", "dbm.gnu", "dbm.ndbm"]
+)
+def test_gpl_modules_are_excluded_from_the_binary(module):
+    assert module in freeze.EXCLUDES
+
+
+def test_the_release_build_checks_the_binary_for_copyleft_code():
+    text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    freeze_step = text.index("hub/agents/email/python/packaging/freeze.py --onefile")
+    check_step = text.index("packaging/check_bundle_licenses.py")
+    assert freeze_step < check_step

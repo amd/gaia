@@ -34,35 +34,17 @@ class HTTPTransport(MCPTransport):
         self._connected = False
 
     def connect(self) -> bool:
-        """Test connection to the HTTP server.
+        """Mark the transport ready; HTTP has no session to open.
+
+        The MCP handshake (``initialize`` then ``notifications/initialized``)
+        is :meth:`MCPClient.connect`'s job, so an unreachable server surfaces
+        there as an error naming the URL.
 
         Returns:
-            bool: True if server is reachable
+            bool: Always True
         """
-        try:
-            if self.debug:
-                logger.debug(f"Testing connection to {self.url}")
-
-            # Try a simple health check or initialize request
-            response = self.send_request(
-                "initialize",
-                {
-                    "protocolVersion": "1.0.0",
-                    "clientInfo": {"name": "GAIA", "version": "1.0.0"},
-                    "capabilities": {},
-                },
-            )
-
-            self._connected = "result" in response
-            if self._connected:
-                logger.debug(f"Connected to HTTP MCP server at {self.url}")
-
-            return self._connected
-
-        except Exception as e:
-            logger.error(f"Failed to connect to {self.url}: {e}")
-            self._connected = False
-            return False
+        self._connected = True
+        return True
 
     def disconnect(self) -> None:
         """Mark connection as closed."""
@@ -98,31 +80,59 @@ class HTTPTransport(MCPTransport):
         if self.debug:
             logger.debug(f"Sending HTTP request: {json.dumps(request, indent=2)}")
 
+        response_data = self._post(request)
         try:
-            # Prepare HTTP request
-            req = urllib.request.Request(
-                self.url,
-                data=json.dumps(request).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-
-            # Send request and read response
-            with urllib.request.urlopen(req, timeout=self.timeout) as response:
-                response_data = response.read().decode("utf-8")
-                response_json = json.loads(response_data)
-
-                if self.debug:
-                    logger.debug(
-                        f"Received response: {json.dumps(response_json, indent=2)}"
-                    )
-
-                return response_json
-
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"HTTP request failed: {e}")
+            response_json = json.loads(response_data)
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON response: {e}")
+
+        if self.debug:
+            logger.debug(f"Received response: {json.dumps(response_json, indent=2)}")
+
+        return response_json
+
+    def send_notification(self, method: str, params: Dict[str, Any] = None) -> None:
+        """POST a JSON-RPC notification; the server answers 202 with no body.
+
+        Raises:
+            RuntimeError: If the request failed or the server answered the
+                notification with a JSON-RPC error
+            TimeoutError: If request times out
+        """
+        message: Dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if params:
+            message["params"] = params
+
+        if self.debug:
+            logger.debug(f"Sending HTTP notification: {json.dumps(message, indent=2)}")
+
+        body = self._post(message).strip()
+        if not body:
+            return
+        try:
+            reply = json.loads(body)
+        except json.JSONDecodeError:
+            reply = None
+        if isinstance(reply, dict) and "error" in reply:
+            error = reply["error"]
+            detail = error.get("message") if isinstance(error, dict) else error
+            raise RuntimeError(
+                f"MCP server at {self.url} rejected '{method}': {detail}"
+            )
+
+    def _post(self, message: Dict[str, Any]) -> str:
+        """POST one JSON-RPC message and return the response body as text."""
+        req = urllib.request.Request(
+            self.url,
+            data=json.dumps(message).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                return response.read().decode("utf-8")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"HTTP request to {self.url} failed: {e}") from e
         except TimeoutError:
             raise TimeoutError(f"Request to {self.url} timed out after {self.timeout}s")
         except ConnectionError as e:

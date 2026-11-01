@@ -1,3 +1,6 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """Schedule persistence: read/write ``~/.gaia/schedules.toml``.
 
 The store is the single source of truth so schedules survive daemon restarts.

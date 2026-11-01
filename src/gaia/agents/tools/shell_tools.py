@@ -416,10 +416,10 @@ def _call_key(command: Any, working_directory: Any) -> Tuple[Any, Any]:
     return command, _expand_home(working_directory) or None
 
 
-# The binaries a developer session needs and a read-only session must not have
-# (#3374). Active ONLY under full access; ALLOWED_COMMANDS above is
+# The binaries a developer session needs and a read-only session must not have.
+# Active ONLY under full access; ALLOWED_COMMANDS above is
 # untouched so the read-only tier keeps claiming exactly what it claims, and
-# #2768's sweep of it never has to reason about these entries.
+# a sweep of it never has to reason about these entries.
 #
 # This set permits ARBITRARY CODE EXECUTION — node, make and the interpreters
 # each run whatever the working tree tells them to. That is why it is reachable
@@ -862,7 +862,7 @@ def _is_file_write_flag(token: str) -> bool:
 #: ALLOWED_COMMANDS, so they are refused either way — but the generic refusal
 #: says "only read-only commands are allowed" and lists read-only examples,
 #: which leaves no route to the thing the agent was trying to do. Naming these
-#: lets the refusal point at edit_file instead of dead-ending (#3600).
+#: lets the refusal point at edit_file instead of dead-ending.
 
 
 FILE_REWRITE_BINARIES = frozenset(
@@ -3558,7 +3558,7 @@ class ShellToolsMixin:
                 return allowed, reason, wait_time, waited
             # Sliced, not one long sleep: this runs inside _call_tool_bounded's
             # window, so a wait that ignored the flag would keep the worker
-            # alive past a Stop and past its own timeout (#2600).
+            # alive past a Stop and past its own timeout.
             remaining = wait_time
             while remaining > 0:
                 if tool_cancelled():

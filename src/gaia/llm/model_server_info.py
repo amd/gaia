@@ -127,11 +127,13 @@ def describe_loaded_model(
     from gaia.llm.lemonade_client import resolve_effective_ctx_size
 
     name = entry.get("model_name") or entry.get("id") or None
+    model_type = entry.get("type") if isinstance(entry.get("type"), str) else None
     recipe = entry.get("recipe") if isinstance(entry.get("recipe"), str) else None
     device = entry.get("device") if isinstance(entry.get("device"), str) else None
     options = _as_dict(entry.get("recipe_options"))
     info: Dict[str, Any] = {
         "name": name,
+        "model_type": model_type,
         "recipe": recipe,
         "device": device,
         "backend": None,
@@ -183,6 +185,16 @@ def _embedder_entry(health: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _other_loaded_entries(health: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Loaded models not already shown as the selected chat or embedding model."""
+    shown = (_chat_entry(health), _embedder_entry(health))
+    return [
+        m
+        for m in health.get("all_models_loaded") or []
+        if isinstance(m, dict) and not any(m is entry for entry in shown)
+    ]
+
+
 def server_owner(base_url: str, embedded_port: Optional[int]) -> str:
     """``gaia`` for GAIA's own embedded Lemonade, ``user`` for another local one,
     ``remote`` for one on another machine."""
@@ -212,6 +224,7 @@ def describe_model_server(
     parsed = urlparse(base_url)
     chat = _chat_entry(health)
     embed = _embedder_entry(health)
+    other_loaded = _other_loaded_entries(health)
     sysinfo = system_info or {}
     version = health.get("version")
     default_backend = default_llamacpp_backend(sysinfo)
@@ -238,6 +251,9 @@ def describe_model_server(
             else None
         ),
         "embedding_model": describe_loaded_model(embed, sysinfo) if embed else None,
+        "loaded_models": [
+            describe_loaded_model(entry, sysinfo) for entry in other_loaded
+        ],
         "embedding_note": EMBEDDER_ON_CPU_WITH_ROCM if embedder_on_cpu else None,
         "default_backend": default_backend,
         "available_backends": available_llamacpp_backends(sysinfo),

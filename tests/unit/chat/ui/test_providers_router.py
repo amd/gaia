@@ -617,7 +617,101 @@ def test_connect_reports_a_key_the_store_did_not_keep(client, lemonade, keys):
     assert "did not keep" in body["remember_error"]
 
 
-def test_connect_drops_a_key_that_discovers_no_models(client, lemonade, keys):
+def _fireworks_view(client):
+    providers_list = client.get("/api/providers").json()["providers"]
+    return next(p for p in providers_list if p["id"] == "fireworks")
+
+
+def test_the_view_shows_only_the_end_of_a_saved_key(client, lemonade, keys):
+    keys["stored"]["fireworks"] = KEY
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "runtime_key_set": True}
+    resp = client.get("/api/providers")
+    assert _fireworks_view(client)["key_hint"] == KEY[-4:]
+    assert KEY not in resp.text
+
+
+def test_a_short_key_gets_no_hint(client, lemonade, keys):
+    keys["stored"]["fireworks"] = "short-key"
+    assert _fireworks_view(client)["key_hint"] is None
+
+
+def test_an_environment_key_gets_no_hint(client, lemonade, keys):
+    keys["stored"]["fireworks"] = KEY
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "env_var_set": True}
+    assert _fireworks_view(client)["key_hint"] is None
+
+
+@pytest.fixture
+def model_list(monkeypatch):
+    """Fireworks' answer to the list check, and the server restart, faked."""
+    from gaia.llm import fireworks_known_models as known
+    from gaia.llm.providers import fireworks
+
+    state = {"check": fireworks.ModelListCheck(fireworks.ModelListState.REJECTED)}
+    state["restarts"], state["keys_checked"] = [], []
+
+    def check(key, **_):
+        state["keys_checked"].append(key)
+        return state["check"]
+
+    monkeypatch.setattr(fireworks, "check_model_list", check)
+    monkeypatch.setattr(
+        known, "use_known_models", lambda _: state["restarts"].append(1)
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade",
+        lambda *a: state.get("own", True),
+    )
+    return state
+
+
+def _list_failing():
+    from gaia.llm.providers.fireworks import ModelListCheck, ModelListState
+
+    return ModelListCheck(ModelListState.FAILING, "HTTP 500: Error listing")
+
+
+def test_a_failing_model_list_keeps_the_key_and_serves_known_models(
+    client, lemonade, keys, model_list
+):
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list["check"] = _list_failing()
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "models_discovered": 9}
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 200
+    assert resp.json()["remembered"] is True
+    assert keys["remembered"] == [("fireworks", KEY)]
+    assert model_list["restarts"] == [1]
+    assert KEY not in resp.text
+
+
+def test_a_failing_list_on_a_system_server_blames_fireworks_not_the_key(
+    client, lemonade, keys, model_list
+):
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list.update(check=_list_failing(), own=False)
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert "HTTP 500" in detail and "did not reject" in detail
+    assert keys["remembered"] == [("fireworks", KEY)]
+    assert model_list["restarts"] == []
+    assert KEY not in resp.text
+
+
+def test_a_stored_key_is_checked_when_no_models_come_back(
+    client, lemonade, keys, model_list
+):
+    keys["stored"]["fireworks"] = KEY
+    model_list["check"] = _list_failing()
+    client.post("/api/providers/fireworks/connect", json={})
+    assert model_list["keys_checked"] == [KEY]
+    assert model_list["restarts"] == [1]
+
+
+def test_connect_drops_a_key_that_discovers_no_models(
+    client, lemonade, keys, model_list
+):
     lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
     resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
     assert resp.status_code == 401
@@ -1043,6 +1137,22 @@ def test_select_local_model(client, lemonade, keys, db):
     assert resp.status_code == 200
     assert _config()["last_provider"] == "local"
     assert keys["ensure"] == []
+
+
+def test_a_picked_npu_model_is_the_model_after_a_restart(client, lemonade, keys, db):
+    npu = "gemma4-it-e4b-FLM"
+    lemonade.models = [
+        *_CATALOG,
+        {"id": npu, "downloaded": True, "recipe": "flm", "labels": ["tool-calling"]},
+    ]
+    assert client.post("/api/providers/select", json={"model": npu}).status_code == 200
+    # A restart: a new backend run, nothing chosen yet in it.
+    providers.reset_restore_state()
+    db.set_setting("custom_model", None)
+    body = client.get("/api/providers/active").json()
+    assert body["restore"]["status"] == "restored"
+    assert body["model"] == npu
+    assert db.get_setting("custom_model") == npu
 
 
 def test_select_supersedes_a_failed_restore_notice(client, lemonade, keys, db):
@@ -1534,3 +1644,75 @@ def test_restore_does_not_bring_back_a_cloud_model_under_local_only(
     assert "Local only is on" in body["restore"]["message"]
     assert db.get_setting("custom_model") is None
     assert keys["ensure"] == []  # no key replay attempted for the cloud model
+
+
+@pytest.fixture
+def known_models_on(monkeypatch):
+    """GAIA's server is serving known Fireworks models; record each way out."""
+    from gaia.llm import fireworks_known_models as known
+
+    left = []
+    monkeypatch.setattr(providers, "_known_models_active", lambda p: p == "fireworks")
+    monkeypatch.setattr(known, "stop_using_known_models", lambda _: left.append(1))
+    return left
+
+
+def test_forgetting_the_key_takes_it_out_of_the_server_start(
+    client, lemonade, keys, known_models_on
+):
+    keys["stored"]["fireworks"] = KEY
+    resp = client.delete("/api/providers/fireworks/key")
+    assert resp.status_code == 200
+    assert known_models_on == [1]
+    assert "fireworks" not in keys["stored"]
+
+
+def test_a_failed_restart_keeps_the_key_rather_than_half_forgetting(
+    client, lemonade, keys, monkeypatch
+):
+    from gaia.llm import fireworks_known_models as known
+    from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+
+    def boom(_):
+        raise EmbeddedLemonadeError("could not stop")
+
+    monkeypatch.setattr(providers, "_known_models_active", lambda p: True)
+    monkeypatch.setattr(known, "stop_using_known_models", boom)
+    keys["stored"]["fireworks"] = KEY
+    resp = client.delete("/api/providers/fireworks/key")
+    assert resp.status_code == 503
+    assert keys["stored"]["fireworks"] == KEY
+    assert lemonade.paths("DELETE") == []
+
+
+def test_a_new_key_during_known_models_restarts_without_the_old_one(
+    client, lemonade, keys, model_list, known_models_on
+):
+    keys["stored"]["fireworks"] = "fw_old_key_0000000000"
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 200
+    assert known_models_on == [1]
+    assert keys["stored"]["fireworks"] == KEY
+
+
+def test_a_rejected_key_is_never_kept_even_mid_outage(
+    client, lemonade, keys, model_list, known_models_on
+):
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 401
+    assert keys["remembered"] == []
+    assert model_list["restarts"] == []
+    assert KEY not in resp.text
+
+
+def test_only_fireworks_falls_back_to_known_models(client, lemonade, keys, model_list):
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list["check"] = _list_failing()
+    resp = client.post(
+        "/api/providers/amd/connect",
+        json={"api_key": KEY, "base_url": "https://gw.example.com/v1"},
+    )
+    assert model_list["keys_checked"] == []
+    assert model_list["restarts"] == []
+    assert KEY not in resp.text

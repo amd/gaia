@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
+from gaia.llm.lemonade_client import LemonadeClientError, resident_vision_model
 from gaia.llm.vlm_client import VLMExtractionError
 from gaia.rag.sdk import IMAGE_EXTENSIONS, RAGSDK, ImageExtractionError, RAGConfig
 
@@ -87,7 +88,7 @@ def test_the_vlm_is_built_and_called_the_way_the_pdf_path_calls_it(tmp_path):
     (images,), kwargs = vlm.extract_from_page_images.call_args
     assert kwargs == {"page_num": 1}
     assert len(images) == 1
-    # The keys extract_images_from_page_pymupdf hands the PDF path.
+    # The keys extract_images_from_page_pdfium hands the PDF path.
     assert set(images[0]) == {"image_bytes", "width", "height", "format", "size_kb"}
     assert images[0]["image_bytes"].startswith(PNG_SIGNATURE)
     assert (images[0]["width"], images[0]["height"]) == (320, 120)
@@ -145,8 +146,8 @@ def test_no_vlm_fails_with_the_model_and_where_to_get_it(tmp_path):
 
     vlm = _vlm(available=False)
     pull = StartHint(
-        instruction="Run: lemonade pull Qwen3-VL-4B-Instruct-GGUF",
-        command="lemonade pull Qwen3-VL-4B-Instruct-GGUF",
+        instruction="Run: lemonade pull Gemma-4-E4B-it-GGUF",
+        command="lemonade pull Gemma-4-E4B-it-GGUF",
     )
     with (
         patch("gaia.llm.VLMClient", return_value=vlm),
@@ -158,9 +159,9 @@ def test_no_vlm_fails_with_the_model_and_where_to_get_it(tmp_path):
             _sdk(tmp_path)._extract_text_from_image(str(_image(tmp_path)))
 
     message = str(excinfo.value)
-    hint.assert_called_once_with("pull", "Qwen3-VL-4B-Instruct-GGUF")
+    hint.assert_called_once_with("pull", "Gemma-4-E4B-it-GGUF")
     assert "scan.png" in message
-    assert "Run: lemonade pull Qwen3-VL-4B-Instruct-GGUF" in message
+    assert "Run: lemonade pull Gemma-4-E4B-it-GGUF" in message
     assert "Lemonade Model Manager (http://localhost:13305)" in message
     assert "isn't reachable" not in message
     assert "lemonade-server" not in message
@@ -225,7 +226,7 @@ def test_index_document_reports_the_no_vlm_error_and_indexes_nothing(tmp_path):
         stats = rag.index_document(str(_image(tmp_path)))
 
     assert stats["success"] is False
-    assert "Qwen3-VL-4B-Instruct-GGUF" in stats["error"]
+    assert "Gemma-4-E4B-it-GGUF" in stats["error"]
     assert rag.chunks == [] and not rag.indexed_files
 
 
@@ -402,3 +403,154 @@ def test_the_shared_helper_scales_16_bit_and_leaves_alpha_alone():
     Image.new("RGBA", (10, 10), (0, 0, 0, 0)).save(buf, format="PNG")
     prepared = prepare_image_for_vlm(buf.getvalue())
     assert Image.open(io.BytesIO(prepared["image_bytes"])).mode == "RGBA"
+
+
+def test_default_vision_model_is_one_gaia_init_downloads(tmp_path):
+    """A fresh install must not need an extra download before indexing an image."""
+    from gaia.installer.init_command import INIT_PROFILES
+
+    with patch("gaia.llm.VLMClient", return_value=_vlm()) as client:
+        _sdk(tmp_path)._extract_text_from_image(str(_image(tmp_path)))
+
+    model = client.call_args.kwargs["vlm_model"]
+    for profile in ("gaia", "chat", "rag", "minimal"):
+        assert model in INIT_PROFILES[profile]["models"], profile
+
+
+def test_an_explicit_vision_model_still_wins(tmp_path):
+    with patch("gaia.llm.VLMClient", return_value=_vlm()) as client:
+        _sdk(tmp_path, vlm_model="Qwen3-VL-4B-Instruct-GGUF")._extract_text_from_image(
+            str(_image(tmp_path))
+        )
+    assert client.call_args.kwargs["vlm_model"] == "Qwen3-VL-4B-Instruct-GGUF"
+
+
+def _scan_page(mode="RGB"):
+    """A page-sized image with fine detail, far over the PNG budget."""
+    import random
+
+    rng = random.Random(1)
+    page = Image.new(mode, (1400, 1900), "white")
+    pixels = page.load()
+    for _ in range(600_000):
+        value = (rng.randrange(256),) * 3 + ((255,) if mode == "RGBA" else ())
+        pixels[rng.randrange(1400), rng.randrange(1900)] = value
+    buf = io.BytesIO()
+    page.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_a_scanned_page_keeps_its_resolution():
+    from gaia.rag.pdf_utils import prepare_image_for_vlm
+
+    raw = _scan_page()
+    assert len(raw) > 300 * 1024
+
+    prepared = prepare_image_for_vlm(raw)
+
+    assert (prepared["width"], prepared["height"]) == (1178, 1600)
+    assert prepared["format"] == "jpeg"
+    decoded = Image.open(io.BytesIO(prepared["image_bytes"]))
+    assert decoded.format == "JPEG"
+    assert decoded.size == (1178, 1600)
+    assert prepared["size_kb"] == pytest.approx(len(prepared["image_bytes"]) / 1024)
+
+
+def test_a_transparent_scan_goes_to_jpeg_on_white():
+    from gaia.rag.pdf_utils import prepare_image_for_vlm
+
+    prepared = prepare_image_for_vlm(_scan_page("RGBA"))
+
+    assert prepared["format"] == "jpeg"
+    assert Image.open(io.BytesIO(prepared["image_bytes"])).mode == "RGB"
+
+
+def test_a_slide_picture_keeps_its_resolution_too():
+    from unittest.mock import MagicMock
+
+    from gaia.rag.pptx_utils import extract_images_from_slide
+
+    picture = MagicMock()
+    picture.shape_type = None
+    picture.image.blob = _scan_page()
+    slide = MagicMock()
+    slide.shapes = [picture]
+
+    (image,) = extract_images_from_slide(slide, slide_num=1)
+
+    assert (image["width"], image["height"]) == (1178, 1600)
+
+
+@pytest.mark.parametrize(
+    "default_model, expected",
+    [
+        (None, "Gemma-4-E4B-it-GGUF"),
+        ("Gemma-4-E4B-it-GGUF", "Gemma-4-E4B-it-GGUF"),
+        ("Qwen3.6-35B-A3B-GGUF", "Qwen3.6-35B-A3B-GGUF"),
+        ("fireworks.deepseek-v4p1-flash", "Gemma-4-E4B-it-GGUF"),
+        ("LFM2-8B-A1B-GGUF", "Gemma-4-E4B-it-GGUF"),
+    ],
+)
+def test_scans_use_a_vision_model_the_pc_has(
+    tmp_path, monkeypatch, default_model, expected
+):
+    """Qwen3-VL-4B is never downloaded by gaia init, so it can't be the default."""
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    if default_model:
+        (tmp_path / "config.json").write_text(
+            '{"default_model": "%s"}' % default_model, encoding="utf-8"
+        )
+
+    assert RAGConfig().vlm_model == expected
+
+
+def _loaded(*models):
+    return {"all_models_loaded": [{"model_name": m} for m in models]}
+
+
+@pytest.mark.parametrize(
+    "configured,loaded,expected",
+    [
+        # A tested vision model already resident is used, whichever one it is.
+        ("Gemma-4-E4B-it-GGUF", ["Qwen3.6-35B-A3B-GGUF"], "Qwen3.6-35B-A3B-GGUF"),
+        ("Qwen3.6-35B-A3B-GGUF", ["Gemma-4-E4B-it-GGUF"], "Gemma-4-E4B-it-GGUF"),
+        # A text-only chat model is passed over for the configured one.
+        ("Gemma-4-E4B-it-GGUF", ["LFM2-8B-A1B-GGUF"], "Gemma-4-E4B-it-GGUF"),
+        ("Gemma-4-E4B-it-GGUF", [], "Gemma-4-E4B-it-GGUF"),
+    ],
+)
+def test_scans_use_a_vision_model_already_loaded(configured, loaded, expected):
+    with patch(
+        "gaia.llm.lemonade_client.LemonadeClient.health_check",
+        return_value=_loaded(*loaded),
+    ):
+        assert resident_vision_model(configured) == expected
+
+
+def test_a_chosen_vision_model_is_not_replaced_by_a_loaded_one():
+    with patch("gaia.llm.lemonade_client.LemonadeClient.health_check") as health:
+        model = resident_vision_model("Qwen3-VL-4B-Instruct-GGUF")
+
+    assert model == "Qwen3-VL-4B-Instruct-GGUF"
+    health.assert_not_called()
+
+
+def test_an_unreachable_server_keeps_the_configured_model():
+    with patch(
+        "gaia.llm.lemonade_client.LemonadeClient.health_check",
+        side_effect=LemonadeClientError("not reachable"),
+    ):
+        assert resident_vision_model("Gemma-4-E4B-it-GGUF") == "Gemma-4-E4B-it-GGUF"
+
+
+def test_indexing_a_scan_asks_for_the_loaded_model(tmp_path):
+    with (
+        patch(
+            "gaia.llm.lemonade_client.LemonadeClient.health_check",
+            return_value=_loaded("Qwen3.6-35B-A3B-GGUF"),
+        ),
+        patch("gaia.llm.VLMClient", return_value=_vlm()) as client,
+    ):
+        _sdk(tmp_path)._extract_text_from_image(str(_image(tmp_path)))
+
+    assert client.call_args.kwargs["vlm_model"] == "Qwen3.6-35B-A3B-GGUF"

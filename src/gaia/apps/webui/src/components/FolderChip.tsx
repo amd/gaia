@@ -31,7 +31,7 @@ export function FolderChip({ folder, disabled }: { folder: WorkingFolder; disabl
                     : where}
             >
                 <Folder size={13} aria-hidden="true" />
-                <span className="new-chat-folder-name">{folder.name}</span>
+                <span className="new-chat-folder-name" dir="auto">{folder.name}</span>
             </span>
         );
     }
@@ -52,7 +52,7 @@ export function FolderChip({ folder, disabled }: { folder: WorkingFolder; disabl
                     : `${where} Click to give this chat another folder.`}
             >
                 <Folder size={13} aria-hidden="true" />
-                <span className="new-chat-folder-name">{picked ? `${folder.name} + ${baseName(picked)}` : folder.name}</span>
+                <span className="new-chat-folder-name" dir="auto">{picked ? `${folder.name} + ${baseName(picked)}` : folder.name}</span>
                 <ChevronDown size={12} aria-hidden="true" />
             </button>
             {picked && (
@@ -88,7 +88,7 @@ export function SessionFolderChip({ sessionId, onOpen }: { sessionId: string; on
             onClick={onOpen}
         >
             <Folder size={13} aria-hidden="true" />
-            <span className="composer-chip-label">{name}</span>
+            <span className="composer-chip-label" dir="auto">{name}</span>
         </button>
     );
 }

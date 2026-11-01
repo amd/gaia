@@ -38,6 +38,36 @@ correctness; never let nit volume bury a blocking finding.
 When unsure whether something is 🟡 or 🟢, ask "would this break or mislead a user?" If no,
 it is a nit.
 
+## Licences
+
+GAIA ships no AGPL, GPL or LGPL code (or SSPL, EUPL or non-commercial / share-alike
+licences). Any PR that adds or bundles one is a 🔴, whether it arrives as:
+
+- a new Python, npm or Go dependency, or a bumped version that changed licence
+- a library a wheel compiles in, or a system library a frozen binary or installer collects
+- a new model, font or data file
+- code copied into the tree
+
+When a PR touches `setup.py`, any `pyproject.toml`, `package.json` / `package-lock.json`,
+`go.mod`, `packaging/freeze.py`, `electron-builder.yml` or an installer, name the licence of
+each new or changed dependency. Flag it if the licence is copyleft or unclear. Free-text
+metadata is how copyleft slips past scanners: PyMuPDF declares "GNU AFFERO GPL 3.0". MPL-2.0
+is allowed unmodified. For an `OR` licence, the permissive option is the one GAIA uses.
+
+**Known exceptions, awaiting a removal decision.** These LGPL libraries still ship. Each is
+dynamically linked and replaceable, which LGPL permits. Each is reported on every freeze by
+`check_bundle_licenses.py` (`REVIEWED_LGPL`). Flag any LGPL library not on this list:
+
+- **FFmpeg** (LGPL-2.1-or-later) inside Electron, in every desktop installer.
+- **libquadmath** (LGPL-2.1-or-later), vendored by the numpy and faiss-cpu Linux wheels.
+- **libasound / ALSA** (LGPL-2.1-or-later), vendored by the sherpa-onnx Linux wheel.
+- **libkeyutils** (LGPL-2.1-or-later), from the Linux build container's system
+  OpenSSL/Kerberos.
+
+`.github/workflows/license-check.yml` enforces this on everything GAIA ships. A PR that adds
+an entry to `REVIEWED` in `util/check_licenses.py` must show the evidence that the licence
+is permissive.
+
 ## Nit cap
 
 Post **at most 5 nits** total across the whole review. If you find more, post the five
@@ -51,8 +81,9 @@ CI already enforces these, or the project has decided against them — flagging 
 
 - Anything `python util/lint.py --all` fixes: **black** formatting, **isort** import order,
   trailing whitespace, missing EOF newlines, line length.
-- Copyright headers, SPDX identifiers, and license boilerplate — this is an open-source
-  project and contributors retain their own copyright.
+- Copyright headers, SPDX identifiers, and license boilerplate in file headers — this is an
+  open-source project and contributors retain their own copyright. (Dependency licences are
+  not boilerplate; see Licences.)
 - Generated, vendored, or build-output files.
 - Pure type-hint-completeness nags (type checking is advisory here, not a merge gate).
 
@@ -99,6 +130,14 @@ eventual screenshot, don't block on it. The gap worth flagging is a UI-backed ch
 **neither** a screenshot **nor** the underlying-route evidence this lane could have produced. A
 **Spot regression** subsection (a few *adjacent* operations exercised alongside the changed
 one) is expected content, not scope creep.
+
+**A failed evidence harness is not "N/A".** The bundle has three states: real evidence, `N/A`
+(nothing runnable changed), and `⚠️ EVIDENCE HARNESS FAILED` with a `Cause:` line (auth, quota,
+install, or a run that wrote no bundle). Only the third turns the review job red, through its
+last step "Evidence harness failed — this PR's surface was not exercised", and it names the
+cause in the job summary. Before merging past that red check, re-run the job once the cause is
+fixed, or put manual evidence on the PR. Making the check block merges is a branch-protection
+setting, not something this file can enforce.
 
 ## Sibling paths
 

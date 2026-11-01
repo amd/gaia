@@ -210,14 +210,22 @@ result = agent.process_query("create a sunset over mountains")
 
 **Available Tools:**
 - `generate_image(prompt, model, size, steps, cfg_scale, seed)` - Generate images with SD
-- `list_sd_models()` - Show available models
+- `list_sd_models()` - List the image models downloaded in Lemonade, with each one's `image_defaults`
 - `get_generation_history(limit)` - See generated images from session
+
+To opt into image-to-3D reconstruction, initialize the mixin with
+`enable_3d_tools=True`. This adds
+`generate_3d_model(image_path, model="TRELLIS-3D", resolution=512, seed=42, bg_removal="threshold")`,
+which sends a local image to Lemonade's `/v1/3d/generations` endpoint and saves
+the returned GLB mesh. The selected TRELLIS model must already be downloaded;
+GAIA does not silently download it.
 
 **Supported Models:**
 - **SDXL-Turbo** (default) - Fast, 512x512, ~17s
 - **SD-Turbo** - Faster, 512x512, ~13s
 - **SDXL-Base-1.0** - Photorealistic, 1024x1024, ~9min
 - **SD-1.5** - Legacy, 512x512, ~88s
+- **TheNoise models** (e.g. `Qwen-Image-2.1-Turbo-INT8`) - must already be downloaded; GAIA leaves size, steps, CFG and seed to Lemonade's per-model defaults unless you pass them
 
 ---
 

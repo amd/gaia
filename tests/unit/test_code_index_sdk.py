@@ -489,6 +489,64 @@ class TestEmbeddingModelVersion:
 
 
 class TestFailLoudly:
+    def test_index_repository_checks_faiss_before_embedding(
+        self, tmp_path, monkeypatch
+    ):
+        """A missing FAISS install must fail before any Lemonade work starts."""
+        skip_if_unavailable()
+        sdk = make_sdk(tmp_path)
+        _write_py(tmp_path, "module.py", "def answer(): return 42\n")
+
+        def missing_faiss(name, *args, **kwargs):
+            if name == "faiss":
+                raise ImportError("No module named 'faiss'")
+            return real_import(name, *args, **kwargs)
+
+        real_import = __import__
+        monkeypatch.setattr("builtins.__import__", missing_faiss)
+
+        with patch.object(sdk, "_load_embedder") as load_embedder:
+            with pytest.raises(ImportError, match="code_index dependencies missing"):
+                sdk.index_repository()
+
+        load_embedder.assert_not_called()
+
+    @pytest.mark.parametrize("missing", ["faiss", "numpy"])
+    def test_index_repository_reads_no_files_when_a_dependency_is_missing(
+        self, tmp_path, monkeypatch, missing
+    ):
+        """Neither dependency may be skipped, and the check precedes file discovery."""
+        skip_if_unavailable()
+        sdk = make_sdk(tmp_path)
+        _write_py(tmp_path, "module.py", "def answer(): return 42\n")
+        real_import = __import__
+
+        def without(name, *args, **kwargs):
+            if name == missing:
+                raise ImportError(f"No module named '{missing}'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", without)
+
+        with (
+            patch.object(sdk, "_load_metadata") as load_metadata,
+            patch.object(sdk, "_load_embedder") as load_embedder,
+        ):
+            with pytest.raises(ImportError, match="code_index dependencies missing"):
+                sdk.index_repository()
+
+        load_metadata.assert_not_called()
+        load_embedder.assert_not_called()
+
+    def test_dependency_check_passes_when_both_are_installed(self):
+        """No false positive: an install with FAISS and numpy is not rejected."""
+        skip_if_unavailable()
+        pytest.importorskip("faiss")
+        pytest.importorskip("numpy")
+        from gaia.code_index.sdk import _check_dependencies
+
+        _check_dependencies()
+
     def test_load_embedder_raises_with_actionable_message(self, tmp_path):
         """_load_embedder must surface Lemonade-down with a hint, not swallow."""
         skip_if_unavailable()
