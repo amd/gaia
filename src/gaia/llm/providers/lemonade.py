@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import time
-from typing import Callable, Iterator, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Tuple, Union
 
 from gaia.llm.local_only import CloudDisabledError
 from gaia.utils import perf_trace
@@ -30,6 +30,9 @@ from ..lemonade_client import (
 )
 from ..lemonade_launcher import describe_client_hint
 from ..surface_hints import TUI_MODEL_SWITCH_HINT, TUI_PROVIDER_AUTH_HINT
+
+if TYPE_CHECKING:
+    from gaia.audio.lemonade_asr import Transcript
 
 logger = logging.getLogger(__name__)
 
@@ -891,6 +894,27 @@ class LemonadeProvider(LLMClient):
 
         vlm = VLMClient(base_url=self._backend.base_url)
         return vlm.extract_from_image(images[0], prompt=prompt)
+
+    def generate_image(self, prompt: str, **kwargs) -> dict:
+        """Generate an image; see :meth:`LemonadeClient.generate_image`."""
+        return self._backend.generate_image(prompt, **kwargs)
+
+    def transcribe_audio(
+        self, audio_path: str, model: Optional[str] = None, **kwargs
+    ) -> "Transcript":
+        """Transcribe a 16 kHz mono WAV on this provider's Lemonade server.
+
+        *model* defaults to ``DEFAULT_ASR_MODEL``; other keyword arguments go to
+        :meth:`LemonadeASRClient.transcribe`.
+        """
+        from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL, LemonadeASRClient
+
+        asr = LemonadeASRClient(
+            base_url=self._backend.base_url,
+            model=DEFAULT_ASR_MODEL if model is None else model,
+            api_key=self._backend.api_key,
+        )
+        return asr.transcribe(audio_path, **kwargs)
 
     def get_performance_stats(self) -> dict:
         if self._backend.cloud_model_provider(self._last_model or DEFAULT_MODEL_NAME):
