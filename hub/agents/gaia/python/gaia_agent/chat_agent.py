@@ -3078,9 +3078,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             f" search_web={'registered' if has_perplexity else 'skipped (no PERPLEXITY_API_KEY, or Local only)'}"
         )
 
-    def _index_documents(self, documents: List[str]) -> None:
-        """Index initial documents."""
+    def _index_documents(self, documents: List[str]) -> List[str]:
+        """Index initial documents and return any user-facing failure messages."""
+        failures = []
         for doc in documents:
+            doc_name = os.path.basename(doc)
             try:
                 if os.path.exists(doc):
                     # Naming a file to index is the grant to read it; a folder is never granted.
@@ -3097,13 +3099,17 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     else:
                         error = result.get("error", "Unknown error")
                         logger.error(f"Failed to index {doc}: {error}")
+                        failures.append(f"Failed to index {doc_name}: {error}")
                 else:
                     logger.warning(f"Document not found: {doc}")
+                    failures.append(f"Failed to index {doc_name}: file not found")
             except Exception as e:
                 logger.error(f"Failed to index {doc}: {e}")
+                failures.append(f"Failed to index {doc_name}: {e}")
 
         # Update system prompt after indexing to include the new documents
         self.rebuild_system_prompt()
+        return failures
 
     def _start_watching(self) -> None:
         """Start watching directories for changes."""
