@@ -226,7 +226,7 @@ function installSafetyNet({
 
 // ── Safe mode ─────────────────────────────────────────────────────────────────
 
-const SAFE_MODE_BUTTONS = ["Reset state", "Open log folder", "Quit"];
+const SAFE_MODE_BUTTONS = ["Try again", "Open log folder", "Quit"];
 const SAFE_MODE_RESET = 0;
 const SAFE_MODE_OPEN_LOGS = 1;
 const SAFE_MODE_QUIT = 2;
@@ -236,7 +236,7 @@ const SAFE_MODE_QUIT = 2;
  * work runs. Must be called after app ready: before it, showMessageBoxSync
  * does nothing on Windows.
  *
- * Reset state deletes the crash counter and relaunches; Open log folder opens
+ * Try again deletes the crash counter and relaunches; Open log folder opens
  * ~/.gaia and asks again; Quit exits. If the dialog itself fails, GAIA exits
  * with code 1 rather than retry the start-up that kept crashing.
  *
@@ -259,7 +259,7 @@ async function runSafeModePrompt({ count, dialogModule, appModule, shellModule, 
         title: "GAIA keeps crashing",
         message: `GAIA has crashed ${count} times in a row.`,
         detail:
-          "Reset state clears the crash count and starts GAIA normally. " +
+          "Try again clears the crash count and starts GAIA normally. " +
           `Open log folder shows the logs in ${gaiaDir} to attach to a bug report.` +
           openFailure,
         buttons: SAFE_MODE_BUTTONS,

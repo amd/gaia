@@ -503,7 +503,7 @@ describe("crash-loop safe mode", () => {
     expect(process.stderr.write).toHaveBeenCalledWith(expect.stringContaining(counter));
   });
 
-  test("Reset state deletes the counter, then relaunches and exits 0", async () => {
+  test("Try again deletes the counter, then relaunches and exits 0", async () => {
     const { readCount } = require(SAFETY_NET_PATH);
     seed(JSON.stringify({ count: 3 }));
     const app = safeModeApp();
@@ -525,9 +525,9 @@ describe("crash-loop safe mode", () => {
     await run({ count: 7, dialogModule: dialog });
     const opts = dialog.showMessageBoxSync.mock.calls[0][0];
     expect(opts.message).toContain("7 times");
-    expect(opts.buttons).toEqual(["Reset state", "Open log folder", "Quit"]);
+    expect(opts.buttons).toEqual(["Try again", "Open log folder", "Quit"]);
     expect(opts.buttons[opts.cancelId]).toBe("Quit");
-    expect(opts.buttons[opts.defaultId]).toBe("Reset state");
+    expect(opts.buttons[opts.defaultId]).toBe("Try again");
   });
 
   test("Quit exits 0 without touching the counter or relaunching", async () => {
