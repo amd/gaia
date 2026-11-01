@@ -42,10 +42,14 @@ def redact_token(text: str, token: Optional[str] = None) -> str:
     return _TOKEN_PATTERN.sub(REDACTED, text)
 
 
+class TelegramTokenError(ValueError):
+    """No usable bot token was supplied."""
+
+
 def require_token(token: str) -> None:
-    """Raise ``ValueError`` unless ``token`` is a non-empty string."""
-    if not token or not isinstance(token, str):
-        raise ValueError(
+    """Raise ``TelegramTokenError`` unless ``token`` is a non-blank string."""
+    if not isinstance(token, str) or not token.strip():
+        raise TelegramTokenError(
             "A Telegram bot token is required. Get one from @BotFather and "
             f"pass it with --token. Docs: {DOCS_URL}"
         )

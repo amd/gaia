@@ -168,8 +168,9 @@ def pdf_page_to_image(
         pdf = pdfium.PdfDocument(str(path))
     except pdfium.PdfiumError as e:
         raise PdfRenderError(
-            f"could not open {path}: {e}. The file may be damaged or "
-            "password-protected; re-save it from a PDF viewer and try again."
+            f"could not open {path}: {str(e).rstrip('.')}. The file may be "
+            "damaged or password-protected; re-save it from a PDF viewer and "
+            "try again."
         ) from e
     try:
         if not 0 <= page < len(pdf):

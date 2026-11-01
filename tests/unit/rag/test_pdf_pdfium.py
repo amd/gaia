@@ -143,6 +143,7 @@ class TestExtractionFailsLoudly:
 
         message = str(excinfo.value)
         assert "broken.pdf" in message and "damaged" in message
+        assert ".." not in message
         assert excinfo.value.page_num == 1
         assert excinfo.value.images == []
         assert isinstance(excinfo.value.__cause__, pdfium.PdfiumError)
@@ -269,6 +270,7 @@ class TestPageRendering:
         bad.write_bytes(b"%PDF-1.7\nnot a pdf\n")
         with pytest.raises(PdfRenderError, match="broken.pdf") as excinfo:
             pdf_page_to_image(bad)
+        assert ".." not in str(excinfo.value)
         assert isinstance(excinfo.value.__cause__, pdfium.PdfiumError)
 
     def test_a_password_protected_pdf_raises(self, tmp_path):

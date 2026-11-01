@@ -470,8 +470,9 @@ def test_a_corrupt_pdf_fails_loudly_naming_the_file(extractor, tmp_path):
     pdf_path = tmp_path / "broken.pdf"
     pdf_path.write_bytes(b"%PDF-1.7\nnot actually a pdf\n")
 
-    with pytest.raises(PdfRenderError, match="broken.pdf"):
+    with pytest.raises(PdfRenderError, match="broken.pdf") as excinfo:
         extractor.extract(str(pdf_path))
+    assert ".." not in str(excinfo.value)
     extractor.vlm.extract_from_image.assert_not_called()
 
 

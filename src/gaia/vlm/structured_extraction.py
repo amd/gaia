@@ -151,8 +151,9 @@ class StructuredVLMExtractor:
                 doc = pdfium.PdfDocument(str(doc_path))
             except pdfium.PdfiumError as e:
                 raise PdfRenderError(
-                    f"could not open {doc_path}: {e}. The file may be damaged or "
-                    "password-protected; re-save it from a PDF viewer and try again."
+                    f"could not open {doc_path}: {str(e).rstrip('.')}. The file "
+                    "may be damaged or password-protected; re-save it from a PDF "
+                    "viewer and try again."
                 ) from e
             try:
                 total_pages = len(doc)

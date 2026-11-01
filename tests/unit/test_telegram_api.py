@@ -28,6 +28,7 @@ from gaia.messaging.telegram_api import (
     TelegramNetworkError,
     TelegramRetryAfter,
     TelegramTimedOut,
+    TelegramTokenError,
     redact_token,
 )
 
@@ -543,7 +544,8 @@ async def test_transport_failures_map_to_network_errors(exc, expected):
     with pytest.raises(expected) as excinfo:
         await api.get_me()
     assert isinstance(excinfo.value, TelegramNetworkError)
-    assert "api.telegram.org" in str(excinfo.value)
+    assert excinfo.value.method == "getMe"
+    assert "Check the network connection to api.telegram.org." in str(excinfo.value)
 
 
 @pytest.mark.parametrize(
@@ -584,9 +586,10 @@ async def test_failed_download_raises_and_leaves_no_file(tmp_path):
     assert not dest.exists()
 
 
-def test_empty_token_is_refused():
-    with pytest.raises(ValueError, match="@BotFather"):
-        TelegramBotAPI("")
+@pytest.mark.parametrize("token", ["", "   ", "\n", None])
+def test_empty_token_is_refused(token):
+    with pytest.raises(TelegramTokenError, match="@BotFather"):
+        TelegramBotAPI(token)
 
 
 # --- token redaction -------------------------------------------------------

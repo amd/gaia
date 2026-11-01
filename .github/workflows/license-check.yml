@@ -94,7 +94,8 @@ jobs:
           python util/check_licenses.py npm \
             src/gaia/apps/webui/package-lock.json \
             hub/agents/gaia/npm/package-lock.json \
-            hub/agents/email/npm/package-lock.json             --production-only src/vscode/gaia/package-lock.json
+            hub/agents/email/npm/package-lock.json \
+            --production-only src/vscode/gaia/package-lock.json
 
   go:
     name: Go modules

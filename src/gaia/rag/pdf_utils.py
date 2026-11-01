@@ -131,7 +131,8 @@ def _open_pdf_page(pdf_path, page_index: int):
         pdf = pdfium.PdfDocument(pdf_path)
     except pdfium.PdfiumError as e:
         raise PdfImageExtractionError(
-            f"could not open {pdf_path} to read page {page_index + 1}: {e}. "
+            f"could not open {pdf_path} to read page {page_index + 1}: "
+            f"{str(e).rstrip('.')}. "
             "The file may be damaged or password-protected; re-save it from a "
             "PDF viewer (or remove the password) and index it again.",
             page_index + 1,
