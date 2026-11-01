@@ -15,6 +15,8 @@ import json
 import os
 import re
 import secrets
+import shutil
+import tempfile
 import threading
 import time
 import zipfile
@@ -54,6 +56,7 @@ from gaia.llm.lemonade_client import (
     resolve_default_vision_model,
 )
 from gaia.logger import get_logger
+from gaia.rag import image_pass  # pylint: disable=wrong-import-position
 from gaia.rag.arabic_text import normalize_arabic_pdf_text
 from gaia.security import PathValidator
 from gaia.utils.document_formats import (
@@ -69,7 +72,6 @@ from gaia.utils.file_lock import (
     write_bytes_atomic,
     write_text_atomic,
 )
-from gaia.rag import image_pass  # pylint: disable=wrong-import-position
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
 
 _TEXT_BOM_ENCODINGS = (
@@ -151,7 +153,8 @@ IMAGE_PAGE_TEXT_LIMIT = 200
 MIN_IMAGE_PAGE_COVER = 0.02
 # How a vision model says it found nothing to read.
 _NO_IMAGE_TEXT = re.compile(
-    r"no (?:visible |legible |discernible |readable )?text|does not contain", re.I
+    r"\b(?:no|not contain(?: any)?) (?:visible |legible |discernible |readable )?text\b",
+    re.I,
 )
 
 
@@ -401,7 +404,7 @@ _CACHE_OWNED_FILE = re.compile(
     r"\.json(?:\.sig)?$"
     r"|_extracted\.md$"
     r"|^vectors_[0-9a-f]{24}\.npy$"
-    r"|^[0-9a-f]{32}_images(?:\.json|_source\.[a-z0-9]+)$"
+    r"|^[0-9a-f]{32}_[0-9a-f]{8}_images(?:\.json|_source\.[a-z0-9]+)$"
 )
 
 
@@ -495,8 +498,10 @@ class RAGConfig:
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
     # True makes a document searchable from its text and reads its images in
-    # the background. False reads them during indexing, on pages short of text.
-    read_images_later: bool = True
+    # the background, for apps that stay open. False reads them during
+    # indexing, on pages short of text, so a script's result doesn't change
+    # with what a background thread has reached.
+    read_images_later: bool = False
     # Security settings
     allowed_paths: Optional[List[str]] = None
 
@@ -1802,6 +1807,9 @@ class RAGSDK:
                         "vlm_slides": pdf_metadata.get("vlm_pages", 0),
                         "total_images": pdf_metadata.get("total_images", 0),
                         "images_later": pdf_metadata.get("images_later", []),
+                        "images_source": self._keep_for_images(
+                            pdf_conversion_path, pdf_metadata
+                        ),
                         "vlm_checked": pdf_metadata.get("vlm_checked", False),
                         "vlm_available": pdf_metadata.get("vlm_available", False),
                         "pptx_status": "readable",
@@ -2057,7 +2065,7 @@ class RAGSDK:
             raise image_pass.VisionUnavailable(
                 f"The vision model {model} isn't available on the Lemonade server "
                 f"at {vlm.server_url}, so images can't be read. Download it with "
-                "GAIA's model setup; reading carries on once it's there."
+                "GAIA's model setup."
             )
         if file_path.lower().endswith(".pptx"):
             from pptx import Presentation  # pylint: disable=import-outside-toplevel
@@ -2074,51 +2082,86 @@ class RAGSDK:
             )
 
             images = extract_images_from_page_pymupdf(
-                file_path, page_num=page_num, min_cover=min_cover
+                file_path, page_num=page_num, min_cover=min_cover, strict=True
             )
         return vlm.extract_from_page_images(images, page_num=page_num) if images else []
+
+    def _keep_for_images(
+        self, converted: str, metadata: Dict[str, Any]
+    ) -> Optional[str]:
+        """Copy a converted deck out of its temp folder if its images wait to be read."""
+        if not metadata.get("images_later"):
+            return None
+        handle, kept = tempfile.mkstemp(suffix=".pdf", dir=self.config.cache_dir)
+        os.close(handle)
+        shutil.copyfile(converted, kept)
+        return kept
 
     def _read_until_some_text(
         self, file_path: str, pages_data: list, images_later: list
     ) -> None:
-        """Give a scan its first searchable text now, leaving the rest for later."""
+        """Give a scan its first searchable text now, leaving the rest for later.
+
+        A page that can't be read waits for the background pass; only a scan no
+        page of which can be read fails, with the reason from its last page.
+        """
         if not images_later or any(page["text"].strip() for page in pages_data):
             return
-        while images_later:
+        problem = None
+        for queued in list(images_later):
             _beat()
-            number = images_later.pop(0)["page"]
-            image_texts = _useful_image_texts(self._read_page_images(file_path, number))
+            number = queued["page"]
+            try:
+                image_texts = _useful_image_texts(
+                    self._read_page_images(file_path, number)
+                )
+            except (IndexingStopped, LeaseWaitCancelled, image_pass.VisionUnavailable):
+                raise
+            except Exception as e:  # pylint: disable=broad-except
+                self.log.warning(
+                    "Could not read page %s of %s: %s", number, file_path, e
+                )
+                problem = e
+                continue
+            images_later.remove(queued)
             if image_texts:
                 pages_data[number - 1]["text"] = self._merge_page_texts(
                     pages_data[number - 1]["text"], image_texts, page_num=number
                 )
                 pages_data[number - 1]["vlm_used"] = True
                 return
+        if problem is not None:
+            raise problem
 
     def _read_later(
         self, file_path: str, key: str, cache_path: str, metadata: Dict[str, Any]
-    ) -> int:
-        """Queue a document's unread images; returns how many pages wait."""
-        pages = metadata.get("images_later") or []
-        if not pages:
-            return 0
-        image_pass.register(
-            self.config.cache_dir,
-            key,
-            file_path,
-            Path(file_path).name,
-            cache_path,
-            pages,
-        )
+    ) -> None:
+        """Queue a document's unread images. Runs before its cache is written,
+        so a document whose queue can't be written isn't cached without one."""
+        source = metadata.pop("images_source", None)
+        try:
+            image_pass.register(
+                self.config.cache_dir,
+                key,
+                source or file_path,
+                Path(file_path).name,
+                cache_path,
+                metadata["images_later"],
+            )
+        finally:
+            if source:
+                Path(source).unlink(missing_ok=True)
+
+    def _start_reading_images(self) -> None:
         image_pass.ensure_running(self.config.cache_dir, self._read_queued_page)
-        return len(pages)
 
     def _read_queued_page(self, state: Dict[str, Any], number: int) -> int:
         """Read one queued page into the document's cache; returns chunks added."""
         page = next(p for p in state["pages"] if p["page"] == number)
+        cache_dir = self.config.cache_dir
         image_texts = _useful_image_texts(
             self._read_page_images(
-                state["source"],
+                image_pass.source_file(cache_dir, state),
                 number,
                 min_cover=0.0 if page["short"] else MIN_IMAGE_PAGE_COVER,
             )
@@ -2132,7 +2175,7 @@ class RAGSDK:
         _, _, embeddings = self._create_vector_index(
             list(new_chunks), return_embeddings=True
         )
-        cache_path = state["cache_path"]
+        cache_path = image_pass.cache_file(cache_dir, state)
         cached = self._verify_and_load_cache(cache_path)
         old_chunks = cached["chunks"]
         vectors = self._load_vectors(self._vectors_path(old_chunks), len(old_chunks))
@@ -2160,7 +2203,7 @@ class RAGSDK:
     def resume_image_reading(self) -> None:
         """Pick up images an ended process left unread."""
         if image_pass.overview(self.config.cache_dir)["documents"]:
-            image_pass.ensure_running(self.config.cache_dir, self._read_queued_page)
+            self._start_reading_images()
 
     def refresh_image_text(self) -> None:
         """Make text the background pass has added since last time searchable."""
@@ -2170,23 +2213,29 @@ class RAGSDK:
             if state is None:
                 continue
             if state["revision"] != metadata.get("image_revision", 0):
-                self._absorb_image_text(file_path, state, metadata)
+                # One document's cache must not stop searches of the others.
+                try:
+                    self._absorb_image_text(file_path, state, metadata)
+                except (OSError, ValueError, EmbeddingUnavailableError) as e:
+                    self.log.warning(
+                        "Could not add image text from %s yet: %s", file_path, e
+                    )
             if image_pass.progress(state):
-                image_pass.ensure_running(self.config.cache_dir, self._read_queued_page)
+                self._start_reading_images()
 
     def _absorb_image_text(
         self, file_path: str, state: Dict[str, Any], metadata: Dict[str, Any]
     ) -> None:
-        cached = self._verify_and_load_cache(state["cache_path"])
+        cached = self._verify_and_load_cache(
+            image_pass.cache_file(self.config.cache_dir, state)
+        )
         chunks = cached["chunks"]
+        revision = cached.get("metadata", {}).get("image_revision", state["revision"])
         with self._state_lock:
             known = len(self.file_to_chunk_indices.get(file_path, []))
         new_chunks = chunks[known:]
-        metadata["full_text"] = cached.get("full_text", "")
-        metadata["image_revision"] = cached.get("metadata", {}).get(
-            "image_revision", state["revision"]
-        )
         if not new_chunks:
+            metadata["image_revision"] = revision
             return
         vectors = self._load_vectors(self._vectors_path(chunks), len(chunks))
         if vectors is not None:
@@ -2199,6 +2248,10 @@ class RAGSDK:
         with self._state_lock:
             if file_path not in self.file_to_chunk_indices or self.index is None:
                 return
+            if len(self.file_to_chunk_indices[file_path]) != known:
+                return
+            metadata["full_text"] = cached.get("full_text", "")
+            metadata["image_revision"] = revision
             start = len(self.chunks)
             indices = list(range(start, start + len(new_chunks)))
             rebuilt_chunk_to_file = dict(self.chunk_to_file)
@@ -2218,7 +2271,7 @@ class RAGSDK:
     def images_still_reading(self, paths: Optional[List[str]] = None) -> List[dict]:
         """Documents searched with images unread, each with how far it has got."""
         out = []
-        for file_path, metadata in self.file_metadata.items():
+        for file_path, metadata in list(self.file_metadata.items()):
             if paths is not None and file_path not in paths:
                 continue
             state = image_pass.status(
@@ -2226,7 +2279,7 @@ class RAGSDK:
             )
             reading = image_pass.progress(state)
             if reading:
-                out.append({**reading, "name": Path(file_path).name})
+                out.append({**reading, "path": file_path})
         return out
 
     def _merge_page_texts(
@@ -2883,6 +2936,7 @@ These positions indicate where to split the text."""
             metadata["vlm_pages"] = pptx_metadata.get("vlm_slides", 0)
             metadata["total_images"] = pptx_metadata.get("total_images", 0)
             metadata["images_later"] = pptx_metadata.get("images_later", [])
+            metadata["images_source"] = pptx_metadata.get("images_source")
             return text, metadata
 
         # Image files (read by the vision model)
@@ -4092,12 +4146,14 @@ These positions indicate where to split the text."""
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 stats["from_cache"] = True
+                key = cached_metadata.get("image_pass_key")
+                if key and image_pass.status(self.config.cache_dir, key) is None:
+                    # Lost its queue, not finished: a stopped document keeps one.
+                    self._read_later(file_path, key, cache_path, cached_metadata)
                 reading = self.images_still_reading([file_path])
                 if reading:
                     stats["images_reading"] = reading[0]
-                    image_pass.ensure_running(
-                        self.config.cache_dir, self._read_queued_page
-                    )
+                    self._start_reading_images()
                 if evicted:
                     stats["evicted"] = evicted
                 if not limits_ok:
@@ -4237,9 +4293,14 @@ These positions indicate where to split the text."""
                 # Persist before publishing any searchable state or ownership maps.
                 if self.config.show_stats:
                     print("💾 Caching processed chunks...")
-                images_key = content_key.rsplit("_", 1)[-1]
                 if file_metadata.get("images_later"):
+                    # Content and chunking: what makes two caches the same one.
+                    images_key = (
+                        f"{content_key.rsplit('_', 1)[-1]}"
+                        f"_{self._chunking_fingerprint()}"
+                    )
                     file_metadata["image_pass_key"] = images_key
+                    self._read_later(file_path, images_key, cache_path, file_metadata)
                 cache_data = {
                     "chunks": new_chunks,
                     "full_text": text,
@@ -4248,9 +4309,6 @@ These positions indicate where to split the text."""
                 self._save_cache(cache_path, cache_data)
                 self._save_extracted_markdown(
                     file_path, text, file_metadata, content_key
-                )
-                images_waiting = self._read_later(
-                    file_path, images_key, cache_path, file_metadata
                 )
 
                 if self.index is None:
@@ -4307,8 +4365,10 @@ These positions indicate where to split the text."""
             stats["num_chunks"] = len(new_chunks)
             stats["total_indexed_files"] = len(self.indexed_files)
             stats["total_chunks"] = len(self.chunks)
-            if images_waiting:
-                stats["images_reading"] = self.images_still_reading([file_path])[0]
+            reading = self.images_still_reading([file_path])
+            if reading:
+                stats["images_reading"] = reading[0]
+                self._start_reading_images()
             if file_type == ".pdf":
                 # Whatever extraction reported — "readable" or "degraded".
                 # Hardcoding "readable" here erased the one signal saying some

@@ -473,6 +473,8 @@ export interface Document {
         reason?: string | null;
         seconds_left?: number | null;
     } | null;
+    /** Pages whose images could not be read, so answers can't use them. */
+    images_unread?: number;
     file_size: number;
     chunk_count: number;
     indexed_at: string;

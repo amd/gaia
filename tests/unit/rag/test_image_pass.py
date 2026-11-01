@@ -8,6 +8,7 @@ import hashlib
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -29,7 +30,10 @@ def _vector(text: str) -> np.ndarray:
 def _sdk(cache: Path, read=None) -> RAGSDK:
     sdk = RAGSDK(
         RAGConfig(
-            cache_dir=str(cache), show_stats=False, allowed_paths=[str(cache.parent)]
+            cache_dir=str(cache),
+            show_stats=False,
+            allowed_paths=[str(cache.parent)],
+            read_images_later=True,
         )
     )
     sdk.encoded = []
@@ -84,7 +88,14 @@ TEXT = "Net revenue rose across the whole group this year. " * 12
 
 
 def _drain(sdk: RAGSDK) -> None:
-    image_pass._work(sdk.config.cache_dir, sdk._read_queued_page)
+    """Read everything readable now, on this thread."""
+    cache_dir = sdk.config.cache_dir
+    while (job := image_pass._next_page(cache_dir)) is not None:
+        image_pass._read_one(cache_dir, job[0], job[1], sdk._read_queued_page)
+
+
+def _key(sdk: RAGSDK) -> str:
+    return next(iter(sdk.file_metadata.values()))["image_pass_key"]
 
 
 def test_text_is_searchable_before_any_image_is_read(tmp_path):
@@ -205,13 +216,21 @@ def test_a_failed_page_is_recorded_and_the_rest_are_read(tmp_path):
 
     sdk = _sdk(tmp_path / "cache", read=read)
     sdk.index_document(str(_pdf(tmp_path / "doc.pdf", TEXT, TEXT)))
+    key = _key(sdk)
+    cache_dir = sdk.config.cache_dir
 
+    for _ in range(image_pass._PAGE_ATTEMPTS):
+        _drain(sdk)
+        state = image_pass.status(cache_dir, key)
+        state["retry_at"] = 0
+        image_pass._save(image_pass._state_path(cache_dir, key), state)
     _drain(sdk)
 
-    key = next(iter(sdk.file_metadata.values()))["image_pass_key"]
-    state = image_pass.status(sdk.config.cache_dir, key)
+    state = image_pass.status(cache_dir, key)
     assert state["failed"] == {"1": "the model returned nothing"}
     assert state["done"] == [2]
+    assert sdk.vision_calls.count((1, sdk.vision_calls[0][1])) == 3
+    assert image_pass.overview(cache_dir)["gave_up"] == {key: 1}
 
 
 def test_a_missing_vision_model_says_so_and_loses_no_pages(tmp_path):
@@ -233,9 +252,7 @@ def test_a_missing_vision_model_says_so_and_loses_no_pages(tmp_path):
 def test_cancel_stops_reading_and_keeps_the_text(tmp_path):
     sdk = _sdk(tmp_path / "cache")
     sdk.index_document(str(_pdf(tmp_path / "doc.pdf", TEXT)))
-    key = next(iter(sdk.file_metadata.values()))["image_pass_key"]
-
-    assert image_pass.cancel(sdk.config.cache_dir, key)
+    assert image_pass.cancel(sdk.config.cache_dir, _key(sdk))
     _drain(sdk)
 
     assert sdk.vision_calls == []
@@ -243,12 +260,215 @@ def test_cancel_stops_reading_and_keeps_the_text(tmp_path):
     assert any("Net revenue" in chunk for chunk in sdk.chunks)
 
 
+def test_opening_a_stopped_document_does_not_start_reading_again(tmp_path):
+    pdf = _pdf(tmp_path / "doc.pdf", TEXT)
+    sdk = _sdk(tmp_path / "cache")
+    sdk.index_document(str(pdf))
+    image_pass.cancel(sdk.config.cache_dir, _key(sdk))
+
+    later = _sdk(tmp_path / "cache")
+    later.index_document(str(pdf))
+
+    assert later.images_still_reading() == []
+
+
+def test_a_document_whose_queue_was_lost_is_queued_again(tmp_path):
+    pdf = _pdf(tmp_path / "doc.pdf", TEXT)
+    sdk = _sdk(tmp_path / "cache")
+    sdk.index_document(str(pdf))
+    for leftover in Path(sdk.config.cache_dir).glob("*_images*"):
+        leftover.unlink()
+
+    later = _sdk(tmp_path / "cache")
+    later.index_document(str(pdf))
+
+    assert later.images_still_reading()[0]["pages_total"] == 1
+
+
+def test_indexing_the_same_bytes_again_reads_the_images_again(tmp_path):
+    pdf = _pdf(tmp_path / "doc.pdf", TEXT)
+    sdk = _sdk(tmp_path / "cache")
+    sdk.index_document(str(pdf))
+    _drain(sdk)
+    for cache in Path(sdk.config.cache_dir).glob("*.json*"):
+        if "_images" not in cache.name:
+            cache.unlink()
+
+    later = _sdk(tmp_path / "cache")
+    stats = later.index_document(str(pdf))
+
+    assert stats["success"] and stats["images_reading"]["pages_total"] == 1
+
+
+def test_changing_the_chunking_keeps_its_own_queue(tmp_path):
+    pdf = _pdf(tmp_path / "doc.pdf", TEXT)
+    one = _sdk(tmp_path / "cache")
+    one.index_document(str(pdf))
+    two = _sdk(tmp_path / "cache")
+    two.config.chunk_size = 300
+    two.index_document(str(pdf))
+
+    assert _key(one) != _key(two)
+
+
+def test_a_page_that_can_not_be_found_is_not_counted_as_read(tmp_path):
+    from gaia.rag.pdf_utils import extract_images_from_page_pymupdf
+
+    assert extract_images_from_page_pymupdf(str(tmp_path / "gone.pdf"), 1) == []
+    with pytest.raises(Exception):
+        extract_images_from_page_pymupdf(str(tmp_path / "gone.pdf"), 1, strict=True)
+
+
+def test_one_unreadable_page_does_not_fail_a_scan(tmp_path):
+    def read(number):
+        if number == 1:
+            raise RuntimeError("the model returned nothing")
+        return _reads_a_chart(number)
+
+    sdk = _sdk(tmp_path / "cache", read=read)
+
+    stats = sdk.index_document(str(_pdf(tmp_path / "scan.pdf", "", "")))
+
+    assert stats["success"]
+    assert any("240 million" in chunk for chunk in sdk.chunks)
+    assert stats["images_reading"]["pages_total"] == 1
+
+
+def test_a_scan_with_no_vision_model_says_why(tmp_path):
+    def read(_number):
+        raise VisionUnavailable("The vision model is not available")
+
+    sdk = _sdk(tmp_path / "cache", read=read)
+
+    stats = sdk.index_document(str(_pdf(tmp_path / "scan.pdf", "", "")))
+
+    assert not stats["success"]
+    assert "vision model" in stats["error"]
+
+
+def test_progress_stays_quick_while_a_page_is_being_read(tmp_path):
+    sdk = _sdk(tmp_path / "cache")
+    sdk.index_document(str(_pdf(tmp_path / "doc.pdf", TEXT, TEXT)))
+    cache_dir = sdk.config.cache_dir
+    entered, release = threading.Event(), threading.Event()
+
+    def slow(_state, _number):
+        entered.set()
+        release.wait(5)
+        return 0
+
+    worker = threading.Thread(
+        target=image_pass._work, args=(cache_dir, slow), daemon=True
+    )
+    worker.start()
+    assert entered.wait(5)
+
+    started = time.monotonic()
+    image_pass.rename(cache_dir, _key(sdk), "Report.pdf")
+    stopped = image_pass.cancel(cache_dir, _key(sdk))
+    elapsed = time.monotonic() - started
+    release.set()
+    worker.join(timeout=10)
+
+    assert elapsed < 1.0
+    assert stopped
+
+
+def test_a_reading_that_was_stopped_midway_is_not_brought_back(tmp_path):
+    sdk = _sdk(tmp_path / "cache")
+    sdk.index_document(str(_pdf(tmp_path / "doc.pdf", TEXT, TEXT)))
+    cache_dir = sdk.config.cache_dir
+    key = _key(sdk)
+
+    def stop_while_reading(_state, _number):
+        image_pass.cancel(cache_dir, key)
+        return 1
+
+    job = image_pass._next_page(cache_dir)
+    image_pass._read_one(cache_dir, job[0], job[1], stop_while_reading)
+
+    assert image_pass.progress(image_pass.status(cache_dir, key)) is None
+    assert image_pass._next_page(cache_dir) is None
+
+
+def test_the_worker_waits_for_a_blocked_document_instead_of_leaving(tmp_path):
+    def read(_number):
+        raise VisionUnavailable("The vision model is not available")
+
+    sdk = _sdk(tmp_path / "cache", read=read)
+    sdk.index_document(str(_pdf(tmp_path / "doc.pdf", TEXT)))
+    cache_dir = sdk.config.cache_dir
+    _drain(sdk)
+
+    worker = threading.Thread(
+        target=image_pass._work, args=(cache_dir, sdk._read_queued_page), daemon=True
+    )
+    worker.start()
+    worker.join(timeout=1.5)
+    alive = worker.is_alive()
+    image_pass.cancel(cache_dir, _key(sdk))
+    worker.join(timeout=5)
+
+    assert alive
+    assert not worker.is_alive()
+
+
+def test_a_state_file_can_not_point_outside_the_cache(tmp_path):
+    with pytest.raises(ValueError):
+        image_pass.cache_file(str(tmp_path), {"cache_name": "../elsewhere.json"})
+    with pytest.raises(ValueError):
+        image_pass.source_file(str(tmp_path), {"key": "x", "suffix": ".pdf"})
+
+
+def test_a_chat_scanned_label_mentioning_text_is_kept():
+    from gaia.rag.sdk import _useful_image_texts
+
+    kept = "Allergy notice: this product does not contain nuts or dairy at all."
+    empty = "No visible text is clearly legible in this image, sorry."
+
+    assert _useful_image_texts([{"text": kept}, {"text": empty}]) == [{"text": kept}]
+
+
+def test_a_single_file_search_warns_only_about_that_file(tmp_path):
+    from gaia.agents.tools.rag_tools import _reports_unread_images
+
+    first = _pdf(tmp_path / "a.pdf", TEXT)
+    second = _pdf(tmp_path / "b.pdf", TEXT + "b")
+    sdk = _sdk(tmp_path / "cache")
+    sdk.index_document(str(first))
+    sdk.index_document(str(second))
+    mixin = SimpleNamespace(rag=sdk, console=None)
+    search = _reports_unread_images(mixin)(
+        lambda **_: {"status": "success", "file": str(second.absolute())}
+    )
+
+    assert search()["still_indexing"]["names"] == ["b.pdf"]
+
+    image_pass.cancel(
+        sdk.config.cache_dir,
+        sdk.file_metadata[str(second.absolute())]["image_pass_key"],
+    )
+    assert "still_indexing" not in search()
+
+
+def test_a_relayed_turn_carries_the_notice_and_counts_as_a_turn():
+    import inspect
+
+    from gaia.ui.email_sidecar import relay
+
+    assert inspect.unwrap(relay.relay_query) is not relay.relay_query
+
+
 def test_reading_waits_for_a_chat_turn_to_finish(tmp_path):
     sdk = _sdk(tmp_path / "cache")
     sdk.index_document(str(_pdf(tmp_path / "doc.pdf", TEXT)))
 
     with chat_turn():
-        worker = threading.Thread(target=_drain, args=(sdk,), daemon=True)
+        worker = threading.Thread(
+            target=image_pass._work,
+            args=(sdk.config.cache_dir, sdk._read_queued_page),
+            daemon=True,
+        )
         worker.start()
         time.sleep(0.2)
         assert sdk.vision_calls == []
@@ -330,3 +550,22 @@ def test_the_notice_reaches_the_wire_once_a_turn():
     handler.event_queue.get_nowait()
     handler.print_index_notice("Still reading images", notice)
     assert handler.event_queue.qsize() == 1
+
+
+def test_a_relayed_status_keeps_the_notice_for_the_app():
+    from gaia.ui.email_sidecar import relay
+
+    emitted = []
+    handler = SimpleNamespace(
+        _emit=emitted.append, set_relay_question=lambda _question: None
+    )
+    wire = {
+        "type": "status",
+        "message": "Still reading images in a.pdf",
+        "partial_index": {"names": ["a.pdf"], "pages_done": 1, "pages_total": 4},
+    }
+
+    relay._dispatch_one(handler, wire)
+
+    assert emitted[0]["notice"]["kind"] == "partial_index"
+    assert emitted[0]["notice"]["names"] == ["a.pdf"]

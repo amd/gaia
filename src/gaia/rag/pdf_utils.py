@@ -82,7 +82,7 @@ def prepare_pil_image_for_vlm(img) -> dict:
 
 
 def extract_images_from_page_pymupdf(
-    pdf_path: str, page_num: int, min_cover: float = 0.0
+    pdf_path: str, page_num: int, min_cover: float = 0.0, strict: bool = False
 ) -> List[dict]:
     """
     Extract images using PyMuPDF (more reliable than pypdf for images).
@@ -91,6 +91,8 @@ def extract_images_from_page_pymupdf(
         pdf_path: Path to PDF file
         page_num: Page number (1-indexed)
         min_cover: Leave out images covering less than this share of the page
+        strict: Raise instead of logging, for a caller that records the page as
+            read when nothing comes back
 
     Returns:
         List of image dicts with bytes, dimensions, etc.
@@ -126,6 +128,8 @@ def extract_images_from_page_pymupdf(
                     )
 
                 except Exception as e:
+                    if strict:
+                        raise
                     logger.warning(
                         f"Failed to extract image {img_index + 1} from page {page_num}: {e}"
                     )
@@ -134,8 +138,12 @@ def extract_images_from_page_pymupdf(
             doc.close()
 
     except ImportError:
+        if strict:
+            raise
         logger.error("PyMuPDF not installed. Install: uv pip install pymupdf")
     except Exception as e:
+        if strict:
+            raise
         logger.error(f"Error extracting images from page {page_num}: {e}")
 
     return images

@@ -420,11 +420,14 @@ def _reports_unread_images(mixin: Any):
             rag = _require_rag(mixin)
             if not rag or result.get("status") != "success":
                 return result
-            only = kwargs.get("file_path") or (args[0] if len(args) > 1 else None)
+            # A single-file search reports the file it resolved to.
+            searched = result.get("file")
             reading = [
                 entry
                 for entry in rag.images_still_reading()
-                if only is None or entry["name"] == Path(only).name
+                if searched is None
+                or searched == entry["path"]
+                or (searched == Path(searched).name and searched == entry["name"])
             ]
             if not reading:
                 return result

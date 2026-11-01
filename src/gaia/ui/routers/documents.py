@@ -266,6 +266,21 @@ def _images_overview() -> dict:
     return image_pass.overview(default_rag_cache_dir())
 
 
+def _stop_reading_images(doc: dict) -> bool:
+    """Stop reading *doc*'s images, whichever name the reading goes by."""
+    from gaia.rag import image_pass
+    from gaia.rag.sdk import default_rag_cache_dir
+
+    content = (doc.get("file_hash") or "")[:32]
+    stopped = False
+    for entry in _images_overview()["details"]:
+        if entry["key"].split("_")[0] == content:
+            stopped = (
+                image_pass.cancel(default_rag_cache_dir(), entry["key"]) or stopped
+            )
+    return stopped
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 
@@ -275,12 +290,15 @@ async def list_documents(db: ChatDatabase = Depends(get_db)):
     docs = db.list_documents()
     total_size = sum(d.get("file_size", 0) for d in docs)
     total_chunks = sum(d.get("chunk_count", 0) for d in docs)
-    reading = {entry["name"]: entry for entry in _images_overview()["details"]}
+    images = await asyncio.to_thread(_images_overview)
+    reading = {entry["key"].split("_")[0]: entry for entry in images["details"]}
+    gave_up = {key.split("_")[0]: n for key, n in images["gave_up"].items()}
     responses = [doc_to_response(d) for d in docs]
-    for response in responses:
-        entry = reading.get(response.filename)
-        if entry:
-            response.images_reading = ImagesReading(**entry)
+    for doc, response in zip(docs, responses):
+        content = (doc.get("file_hash") or "")[:32]
+        if content in reading:
+            response.images_reading = ImagesReading(**reading[content])
+        response.images_unread = gave_up.get(content, 0)
 
     return DocumentListResponse(
         documents=responses,
@@ -637,8 +655,9 @@ async def monitor_status(request: Request):
 @router.get("/api/documents/indexing", response_model=IndexingOverview)
 async def get_indexing_overview():
     """Every document indexing now, with one combined bar and time estimate."""
-    images = _images_overview()
+    images = await asyncio.to_thread(_images_overview)
     images.pop("details")
+    images.pop("gave_up")
     return {**index_tracker.overview(), "images": images}
 
 
@@ -728,13 +747,8 @@ async def cancel_image_reading(doc_id: str, db: ChatDatabase = Depends(get_db)):
     doc = db.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    from gaia.rag import image_pass
-    from gaia.rag.sdk import default_rag_cache_dir
-
-    for entry in _images_overview()["details"]:
-        if entry["name"] == doc["filename"]:
-            image_pass.cancel(default_rag_cache_dir(), entry["key"])
-            return {"cancelled": True, "id": doc_id}
+    if await asyncio.to_thread(_stop_reading_images, doc):
+        return {"cancelled": True, "id": doc_id}
     raise HTTPException(
         status_code=404, detail="This document has no images being read"
     )
@@ -834,6 +848,8 @@ async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
     doc = db.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    await asyncio.to_thread(_stop_reading_images, doc)
 
     if not db.delete_document(doc_id):
         # Row vanished between fetch and delete (concurrent delete).

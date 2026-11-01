@@ -1227,6 +1227,11 @@
           }
         ]
       },
+      "images_unread": {
+        "default": 0,
+        "title": "Images Unread",
+        "type": "integer"
+      },
       "indexed_at": {
         "title": "Indexed At",
         "type": "string"

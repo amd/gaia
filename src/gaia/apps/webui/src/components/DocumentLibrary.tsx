@@ -626,6 +626,12 @@ export function DocumentLibrary() {
                                 {indexedTime}
                             </span>
                         )}
+                        {!!doc.images_unread && !doc.images_reading && (
+                            <span className="doc-images-reading">
+                                <AlertCircle size={11} aria-hidden="true" />
+                                {t.plural('docs.images.unread', doc.images_unread)}
+                            </span>
+                        )}
                         {doc.images_reading && (
                             <span className="doc-images-reading">
                                 <Loader size={11} className="doc-spin" aria-hidden="true" />

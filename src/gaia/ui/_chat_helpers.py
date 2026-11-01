@@ -5743,7 +5743,7 @@ async def _index_document(
         # Allow access to the file's directory (and user home) since the UI
         # explicitly selected this file via the file browser.
         allowed = [str(filepath.parent), str(Path.home())]
-        config = RAGConfig(allowed_paths=allowed)
+        config = RAGConfig(allowed_paths=allowed, read_images_later=True)
         rag = RAGSDK(config)
         # Cancel and the no-progress stop also end a wait for the model.
         try:

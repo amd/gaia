@@ -367,6 +367,8 @@ export const enMessages = {
     'docs.images.blocked': "The vision model isn't available, so images can't be read yet. Their text is searchable.",
     'docs.images.row': "Reading images: {done} of {total} pages",
     'docs.images.rowBlocked': "Images waiting for the vision model",
+    'docs.images.unread.one': "Images on {n} page couldn't be read",
+    'docs.images.unread.other': "Images on {n} pages couldn't be read",
     'docs.images.stop': "Stop",
     'docs.images.stopAria': "Stop reading images in {name}",
     'docs.overall.open': "Open Document Library",

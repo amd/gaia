@@ -455,6 +455,7 @@ export interface DocumentResponse {
   filepath: string;
   id: string;
   images_reading?: ImagesReading | null;
+  images_unread?: number;
   indexed_at: string;
   indexing_status?: string;
   last_accessed_at?: string | null;

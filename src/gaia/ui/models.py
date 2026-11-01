@@ -746,6 +746,8 @@ class DocumentResponse(BaseModel):
     error_kind: Optional[str] = None
     # Set while the document is searchable but its images are still being read.
     images_reading: Optional[ImagesReading] = None
+    # Pages whose images could not be read, so answers can't use them.
+    images_unread: int = 0
 
 
 class IndexProgress(BaseModel):
