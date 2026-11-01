@@ -11,7 +11,6 @@ Images go through ``pdf_utils.prepare_image_for_vlm``, same as PDF images.
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import platform

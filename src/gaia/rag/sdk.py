@@ -143,6 +143,8 @@ class ImageExtractionError(ValueError):
 # Each page is one VLM call (seconds to tens of seconds), so a fax-sized TIFF is
 # fine and a 500-page archive is a mistake to stop early.
 MAX_IMAGE_PAGES = 50
+# Past this much text a page's images are logos and photos, not its content.
+IMAGE_PAGE_TEXT_LIMIT = 200
 
 
 def _flatten_for_vlm(img):
@@ -1311,6 +1313,7 @@ class RAGSDK:
             - num_pages: int
             - vlm_pages: int (number of pages enhanced with VLM)
             - total_images: int (total images processed)
+            - image_pages_skipped: int (pages whose images were left unread)
             - pdf_status: str ("readable", "degraded", "encrypted",
               "corrupted", "empty"). "degraded" means the document indexed but
               at least one page may be incomplete — see degraded_pages.
@@ -1426,6 +1429,7 @@ class RAGSDK:
             pages_data = []
             vlm_pages_count = 0
             total_images_processed = 0
+            image_pages_skipped = 0
             degraded_pages = []
             page_warnings = {}
 
@@ -1457,7 +1461,10 @@ class RAGSDK:
 
                 # Step 3: Extract from images if present
                 image_texts = []
-                if has_imgs and vlm_available:
+                read_images = len(pypdf_text.strip()) < IMAGE_PAGE_TEXT_LIMIT
+                if has_imgs and vlm_available and not read_images:
+                    image_pages_skipped += 1
+                elif has_imgs and vlm_available:
                     try:
                         images = extract_images_from_page_pymupdf(pdf_path, page_num=i)
                         if images:
@@ -1544,7 +1551,7 @@ class RAGSDK:
                 print(f"{'='*60}\n")
 
             self.log.info(
-                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages)"
+                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages, {image_pages_skipped} text pages' images left unread)"
             )
 
             # If pypdf parsed the file but every page came back blank, surface
@@ -1576,6 +1583,7 @@ class RAGSDK:
                 "num_pages": total_pages,
                 "vlm_pages": vlm_pages_count,
                 "total_images": total_images_processed,
+                "image_pages_skipped": image_pages_skipped,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
                 "pdf_status": "degraded" if degraded_pages else "readable",
