@@ -39,6 +39,21 @@ export function restartLine(say: Say, gpuGb: number | null, applied = false): st
     return say(applied ? 'gpu.applied' : 'gpu.pending.restart', { gb: formatSize(gpuGb) });
 }
 
+/**
+ * Focus *el* and scroll only its own scroller to show it: a plain focus() also
+ * scrolls overflow-hidden ancestors, which shifts the Settings dialog's body.
+ */
+function focusInView(el: HTMLElement) {
+    el.focus({ preventScroll: true });
+    for (let p = el.parentElement; p; p = p.parentElement) {
+        const overflow = getComputedStyle(p).overflowY;
+        if (overflow !== 'auto' && overflow !== 'scroll') continue;
+        const top = el.getBoundingClientRect().top - p.getBoundingClientRect().top;
+        if (top < 0 || top > p.clientHeight - 40) p.scrollTop += top - 16;
+        return;
+    }
+}
+
 function errorMessage(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
 }
@@ -149,7 +164,8 @@ export interface GpuMemoryPanelProps {
 export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContinue, onBack, headingId }: GpuMemoryPanelProps) {
     const t = useT();
     const focusHeading = useCallback(() => {
-        if (headingId) document.getElementById(headingId)?.focus();
+        const el = headingId ? document.getElementById(headingId) : null;
+        if (el) focusInView(el);
     }, [headingId]);
     useEffect(() => {
         if (mode === 'setup') focusHeading();
