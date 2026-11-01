@@ -1411,6 +1411,88 @@ class TestWindowsJunctions:
 
 
 # ---------------------------------------------------------------------------
+# Windows self-hosted venv cleanup
+# ---------------------------------------------------------------------------
+
+
+class TestDeferredWindowsVenvRemoval:
+    """The helper must wait for both the Python worker and its launcher."""
+
+    def test_deferred_helper_waits_for_current_and_parent_process(
+        self, monkeypatch, tmp_path
+    ):
+        venv = tmp_path / ".gaia" / "venv"
+        venv.mkdir(parents=True)
+        captured = _Capture()
+        popen_calls = []
+
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(uc.os, "getpid", lambda: 101)
+        monkeypatch.setattr(uc.os, "getppid", lambda: 202)
+        monkeypatch.setattr(uc.tempfile, "gettempdir", lambda: str(tmp_path))
+        monkeypatch.setattr(
+            uc.subprocess, "Popen", lambda *a, **kw: popen_calls.append((a, kw))
+        )
+
+        assert uc._defer_windows_venv_removal(venv, printer=captured)
+
+        args, kwargs = popen_calls[0]
+        command = args[0][-1]
+        assert "Wait-Process -Id $pidToWait" in command
+        assert "Wait-Process -Id $parentPidToWait" in command
+        assert "$pidToWait = 101" in command
+        assert "$parentPidToWait = 202" in command
+        assert kwargs["stdin"] is subprocess.DEVNULL
+        assert "[deferred]" in captured.text
+
+    def test_deferred_helper_does_not_wait_for_non_process_parent(
+        self, monkeypatch, tmp_path
+    ):
+        venv = tmp_path / ".gaia" / "venv"
+        venv.mkdir(parents=True)
+        popen_calls = []
+
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(uc.os, "getpid", lambda: 101)
+        monkeypatch.setattr(uc.os, "getppid", lambda: 1)
+        monkeypatch.setattr(uc.tempfile, "gettempdir", lambda: str(tmp_path))
+        monkeypatch.setattr(
+            uc.subprocess, "Popen", lambda *a, **kw: popen_calls.append((a, kw))
+        )
+
+        assert uc._defer_windows_venv_removal(venv)
+
+        command = popen_calls[0][0][0][-1]
+        assert "$parentPidToWait = 1" in command
+        assert "if ($parentPidToWait -gt 1)" in command
+
+    def test_execute_plan_accepts_a_deferred_active_venv(self, monkeypatch, tmp_path):
+        venv = tmp_path / ".gaia" / "venv"
+        plan = uc.build_plan(
+            venv=True,
+            purge=False,
+            purge_lemonade=False,
+            purge_models=False,
+            home=tmp_path,
+        )
+        deferred = []
+
+        monkeypatch.setattr(uc, "_remove_path", lambda *_a, **_kw: False)
+        monkeypatch.setattr(uc, "_is_running_from_venv", lambda _path: True)
+        monkeypatch.setattr(
+            uc,
+            "_defer_windows_venv_removal",
+            lambda path, **_kw: deferred.append(path) or True,
+        )
+
+        assert (
+            uc.execute_plan(plan, allowed_roots=[venv.parent], home=tmp_path)
+            == uc.EXIT_OK
+        )
+        assert deferred == [venv]
+
+
+# ---------------------------------------------------------------------------
 # The pre-3.12 junction-detection fallback
 # ---------------------------------------------------------------------------
 

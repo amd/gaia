@@ -75,6 +75,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -1332,6 +1333,82 @@ def _remove_path(
     return True
 
 
+def _is_running_from_venv(venv: Path) -> bool:
+    """Whether this process executes from ``venv`` rather than merely deleting it."""
+    try:
+        return (
+            Path(sys.executable)
+            .resolve(strict=False)
+            .is_relative_to(venv.resolve(strict=False))
+        )
+    except (OSError, ValueError):
+        return False
+
+
+def _powershell_literal(path: Path) -> str:
+    """Quote a filesystem path as a single-quoted PowerShell literal."""
+    return "'" + str(path).replace("'", "''") + "'"
+
+
+def _defer_windows_venv_removal(
+    venv: Path, *, printer: Callable[[str], None] = print
+) -> bool:
+    """Schedule a best-effort delete of this process's venv after it exits.
+
+    Windows keeps ``python.exe`` and extension modules in the active virtual
+    environment open until this command exits. The detached helper therefore
+    waits for our PID, retries briefly, and records any final failure in the
+    system temp directory instead of hiding a failed cleanup.
+    """
+    if not _is_windows():
+        return False
+
+    log_path = Path(tempfile.gettempdir()) / f"gaia-uninstall-venv-{os.getpid()}.log"
+    escaped_venv = _powershell_literal(venv)
+    escaped_log = _powershell_literal(log_path)
+    parent_pid = os.getppid()
+    command = (
+        "$ErrorActionPreference = 'Stop'; "
+        f"$pidToWait = {os.getpid()}; "
+        f"$parentPidToWait = {parent_pid}; "
+        f"$target = {escaped_venv}; "
+        f"$log = {escaped_log}; "
+        "try { "
+        "Wait-Process -Id $pidToWait -ErrorAction SilentlyContinue; "
+        "if ($parentPidToWait -gt 1) { "
+        "Wait-Process -Id $parentPidToWait -ErrorAction SilentlyContinue "
+        "} "
+        "for ($attempt = 0; $attempt -lt 20 -and (Test-Path -LiteralPath $target); $attempt++) { "
+        "try { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop } "
+        "catch { Start-Sleep -Milliseconds 500 } "
+        "} "
+        "if (Test-Path -LiteralPath $target) { "
+        'throw "Could not remove $target after waiting for GAIA to exit." '
+        "} "
+        "Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue "
+        "} catch { $_ | Out-File -LiteralPath $log -Encoding utf8 }"
+    )
+    try:
+        subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+        )
+    except OSError as exc:
+        _print(f"  [error] could not defer removal of {venv}: {exc}", printer=printer)
+        return False
+
+    _print(
+        f"  [deferred] {venv} will be removed when this GAIA process exits "
+        f"(failure log: {log_path})",
+        printer=printer,
+    )
+    return True
+
+
 def _resolve_lemonade_python() -> Optional[str]:
     """Return the best-guess Python interpreter that owns ``lemonade-server``.
 
@@ -1503,6 +1580,7 @@ def execute_plan(
     half-uninstalled tree behind.
     """
     all_ok = True
+    venv_path = _gaia_home(home) / "venv"
 
     for message in plan.blocked_edits:
         _print(f"  [error] {message}", printer=printer)
@@ -1511,11 +1589,20 @@ def execute_plan(
     def _remove(path: Path) -> None:
         nonlocal all_ok
         try:
-            if not _remove_path(path, allowed_roots=allowed_roots, printer=printer):
-                all_ok = False
+            if _remove_path(path, allowed_roots=allowed_roots, printer=printer):
+                return
         except RuntimeError as exc:
             _print(f"  [error] {exc}", printer=printer)
             all_ok = False
+            return
+
+        if (
+            path == venv_path
+            and _is_running_from_venv(path)
+            and _defer_windows_venv_removal(path, printer=printer)
+        ):
+            return
+        all_ok = False
 
     # Before the venv goes: clearing credentials imports GAIA modules from it.
     if plan.clear_credentials and not _clear_credentials(printer=printer):
