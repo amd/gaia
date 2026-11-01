@@ -31,7 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.base.file_snapshots import before_change
+from gaia.agents.base.file_snapshots import SnapshotError, before_change
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
@@ -228,6 +228,7 @@ class SDToolsMixin:
             }
 
         if self.sd_enable_3d_tools:
+
             @tool(atomic=True, timeout=1800)
             def generate_3d_model(
                 image_path: str,
@@ -253,7 +254,11 @@ class SDToolsMixin:
                 except OSError as exc:
                     return {"status": "error", "error": f"Cannot read image: {exc}"}
                 if not resolved.is_file():
-                    return {"status": "error", "error": f"Image is not a file: {resolved}"}
+                    return {
+                        "status": "error",
+                        "error": f"Image is not a file: {resolved}",
+                    }
+
                 try:
                     encoded = base64.b64encode(resolved.read_bytes()).decode("ascii")
                     mesh = self.sd_client.generate_3d_model(
@@ -264,31 +269,44 @@ class SDToolsMixin:
                         bg_removal=bg_removal,
                     )
                     safe_model = re.sub(r"[^\w\s-]", "", model).strip() or "trellis"
+                    digest = hashlib.sha256(mesh).hexdigest()[:8]
                     output = self.sd_output_dir / (
-                        f"model3d_{safe_model}_{datetime.now():%Y%m%d_%H%M%S}.glb"
+                        f"model3d_{safe_model}_{datetime.now():%Y%m%d_%H%M%S}_{digest}.glb"
                     )
                     output = output.resolve()
                     if self.sd_output_dir.resolve() not in output.parents:
                         return {"status": "error", "error": "Unsafe 3D output path."}
-                    with tempfile.NamedTemporaryFile(
-                        dir=self.sd_output_dir, suffix=".part", delete=False
-                    ) as temp:
-                        staging = Path(temp.name)
-                        temp.write(mesh)
-                    before_change(output, "generate_3d_model")
-                    staging.replace(output)
-                    model_id = getattr(self, "model_id", None)
-                    if isinstance(model_id, str) and model_id:
-                        self.sd_client._ensure_model_loaded(model_id)
-                    return {
-                        "status": "success",
-                        "model_path": str(output),
-                        "model": model,
-                        "format": "glb",
-                        "bytes": len(mesh),
-                    }
-                except (LemonadeClientError, OSError) as exc:
+                    staging: Optional[Path] = None
+                    try:
+                        with tempfile.NamedTemporaryFile(
+                            dir=self.sd_output_dir, suffix=".part", delete=False
+                        ) as temp:
+                            staging = Path(temp.name)
+                            temp.write(mesh)
+                        before_change(output, "generate_3d_model")
+                        staging.replace(output)
+                    finally:
+                        if staging is not None:
+                            staging.unlink(missing_ok=True)
+                except (LemonadeClientError, OSError, SnapshotError) as exc:
                     return {"status": "error", "error": f"3D generation failed: {exc}"}
+
+                result = {
+                    "status": "success",
+                    "model_path": str(output),
+                    "model": model,
+                    "format": "glb",
+                    "bytes": len(mesh),
+                }
+                model_id = getattr(self, "model_id", None)
+                if isinstance(model_id, str) and model_id:
+                    try:
+                        self.sd_client._ensure_model_loaded(model_id)
+                    except LemonadeClientError as exc:
+                        result["warning"] = (
+                            f"Mesh saved, but reloading chat model '{model_id}' failed: {exc}"
+                        )
+                return result
 
         # Tools are automatically registered by the @tool decorator above.
 
