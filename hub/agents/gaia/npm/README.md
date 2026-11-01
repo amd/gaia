@@ -42,7 +42,7 @@ however you arrive at the terminal UI, it behaves identically.
 - **On Linux x64, glibc 2.34 or newer** for the agent sidecar (Ubuntu 22.04,
   Debian 12 and RHEL 9 or later). An older distro cannot start the agent. Check
   with `ldd --version`.
-- The `gaia` Python CLI **0.25.3 or newer** on `PATH` for the daemon the terminal
+- The `gaia` Python CLI **0.25.4 or newer** on `PATH` for the daemon the terminal
   UI starts. An earlier core cannot run this agent, so the UI comes up with
   nothing behind it. Install it with
   `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
@@ -212,7 +212,7 @@ so probe `/version` first. See
 
 **Internet switched off for the chat? Send `internet_off`** (contract ≥
 2.23) every turn: `true` refuses web search, page fetches, the browser,
-connector, mailbox and Agent Hub tools and commands that contact another host;
+connector and Agent Hub tools, mailbox reads, and commands that contact another host;
 `false` allows them.
 Omit it and the agent keeps its own setting. Binaries older than 2.23 reject
 the field with `422`, so probe `/version` first, do not answer an

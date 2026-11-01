@@ -16,6 +16,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/components"
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/ui/modelsetup"
 )
 
 // gaiaTestModel is a flagship-agent model (agentID == setupAgentID), the one
@@ -108,6 +109,12 @@ func TestSetupStartFailureIsSurfacedLoudly(t *testing.T) {
 
 	m := gaiaTestModel(t)
 	updated, _ := m.submit("/setup")
+	m = updated.(ChatModel)
+	if !m.modelSetupOpen {
+		t.Fatal("/setup must open the model choice before anything runs")
+	}
+	// No server yet: the screens ask the host to install it.
+	updated, _ = m.Update(modelsetup.InstallServerMsg{})
 	m = updated.(ChatModel)
 
 	if m.setupRunning {

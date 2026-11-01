@@ -72,7 +72,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Default semantic match threshold (cosine), inclusive. Calibrated against the
-# doc profile's live embeddings (#1449): a user's question is only weakly
+# doc profile's live embeddings: a user's question is only weakly
 # similar to a tool's *description*, so real scores sit ~0.05-0.25 (not the
 # 0.5-0.7 a symmetric-similarity guess assumed). 0.20 surfaces document-action
 # tools (index/summarize/RAG) for doc-oriented turns while excluding lower-
@@ -111,7 +111,7 @@ class ToolBundle:
         Frozenset of tool names that belong together. When any member is
         semantically matched, the whole bundle is pulled into the candidate set.
     description:
-        One-line summary; feeds Part 2's escape-hatch menu. Not used for
+        One-line summary; feeds the escape-hatch menu. Not used for
         activation (keyword matching is intentionally banned).
     """
 
@@ -203,7 +203,7 @@ class ToolLoader:
         self._last_stamp = 0.0
         self._turn = 0
         self._session_disabled = False
-        # Escape-hatch activation counters (Part 2, #1450). Both recovery paths
+        # Escape-hatch activation counters. Both recovery paths
         # feed the τ-tuning signal: the non-tool-calling free recovery
         # (record_tool_use on an unlisted tool) and the native explicit recovery
         # (load_bundle). Summarized on reset_session(), aggregated from logs by
@@ -722,7 +722,7 @@ class ToolLoader:
             "loaded": loaded,
         }
         # SKILL key only when the signal fired this turn — keeps the off-state
-        # (no recall) log bytes byte-identical to Parts 0-2 (#1451).
+        # (no recall) log bytes byte-identical to the pre-SKILL format.
         if sel.skill:
             payload["skill"] = sorted(sel.skill)
         if sel.requested:

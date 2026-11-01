@@ -341,7 +341,7 @@ def test_add_watch_directory_auto_save_called(tmp_path, monkeypatch):
 
 def test_file_tools_mixin_integration():
     """Test FileToolsMixin can be mixed into Chat Agent."""
-    from gaia_agent_chat.agent import ChatAgent
+    from gaia_agent.chat_agent import ChatAgent
 
     # Verify ChatAgent has FileToolsMixin
     assert hasattr(ChatAgent, "register_file_tools")
@@ -426,7 +426,7 @@ except Exception as e:
 ### Example 1: Adding Watch Directory
 
 ```python
-from gaia_agent_chat.agent import ChatAgent
+from gaia_agent.chat_agent import ChatAgent
 
 # Create Chat Agent
 agent = ChatAgent(model="Qwen3-0.6B-GGUF")

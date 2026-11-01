@@ -1,3 +1,6 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """Long-running scheduler daemon.
 
 Reads the schedule store, arms an APScheduler cron trigger per enabled schedule,

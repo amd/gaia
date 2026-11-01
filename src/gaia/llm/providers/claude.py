@@ -26,6 +26,7 @@ except ImportError:
     anthropic = None  # type: ignore[assignment]
 
 from ..base_client import LLMClient
+from ..local_only import assert_provider_permitted
 from .lemonade import _NATIVE_TC_KEY
 
 logger = logging.getLogger(__name__)
@@ -323,6 +324,9 @@ def _cache_last_tool(tools: List[dict]) -> List[dict]:
 class ClaudeProvider(LLMClient):
     """Claude (Anthropic) provider."""
 
+    #: Where requests go, as named in the Local only refusal.
+    _DESTINATION = "Anthropic Claude"
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -332,8 +336,35 @@ class ClaudeProvider(LLMClient):
         timeout: float = 300.0,
         **_kwargs,
     ):
+        assert_provider_permitted(self._DESTINATION)
         sdk = _require_anthropic()
+        self._anthropic = sdk
+        self._model = self._initial_model(model)
+        self._client = self._make_client(sdk, api_key, max_retries, timeout)
+        self._system_prompt = system_prompt
+        self._last_usage: Optional[dict] = None
+        self._last_finish_reason: Optional[str] = None
+        self._last_ttft_seconds: Optional[float] = None
+        # Keyed by the turn's tool_use ids, which Anthropic makes unique.
+        self._replay_turns: "OrderedDict[tuple, _ReplayTurn]" = OrderedDict()
+        # Sanitized-name → GAIA-name; rebuilt per request by _to_anthropic_tools.
 
+    @staticmethod
+    def _initial_model(model: Optional[str]) -> str:
+        resolved = (
+            model if model and model.startswith("claude-") else DEFAULT_CLAUDE_MODEL
+        )
+        if model and not model.startswith("claude-"):
+            logger.warning(
+                "Ignoring non-Claude model id %r for the Claude provider; using %s",
+                model,
+                resolved,
+            )
+        return resolved
+
+    def _make_client(
+        self, sdk: Any, api_key: Optional[str], max_retries: int, timeout: float
+    ) -> Any:
         # The repo keeps ANTHROPIC_API_KEY in .env — same load as gaia.eval.claude.
         from gaia.env import load_env  # pylint: disable=import-outside-toplevel
 
@@ -359,25 +390,7 @@ class ClaudeProvider(LLMClient):
             client_kwargs["default_headers"] = {"anthropic-beta": "oauth-2025-04-20"}
         else:
             client_kwargs["api_key"] = key
-
-        self._anthropic = sdk
-        self._client = sdk.Anthropic(**client_kwargs)
-        self._model = (
-            model if model and model.startswith("claude-") else DEFAULT_CLAUDE_MODEL
-        )
-        if model and not model.startswith("claude-"):
-            logger.warning(
-                "Ignoring non-Claude model id %r for the Claude provider; using %s",
-                model,
-                self._model,
-            )
-        self._system_prompt = system_prompt
-        self._last_usage: Optional[dict] = None
-        self._last_finish_reason: Optional[str] = None
-        self._last_ttft_seconds: Optional[float] = None
-        # Keyed by the turn's tool_use ids, which Anthropic makes unique.
-        self._replay_turns: "OrderedDict[tuple, _ReplayTurn]" = OrderedDict()
-        # Sanitized-name → GAIA-name; rebuilt per request by _to_anthropic_tools.
+        return sdk.Anthropic(**client_kwargs)
 
     @property
     def provider_name(self) -> str:
@@ -893,6 +906,7 @@ class ClaudeProvider(LLMClient):
         if stream:
             return self._stream_chat(params, name_map, prefix_digest)
 
+        assert_provider_permitted(self._DESTINATION)
         start = time.monotonic()
         try:
             response = self._client.messages.create(**params)
@@ -954,6 +968,7 @@ class ClaudeProvider(LLMClient):
     def _stream_chat(
         self, params: dict, name_map: Dict[str, str], prefix_digest: str
     ) -> Iterator[str]:
+        assert_provider_permitted(self._DESTINATION)
         start = time.monotonic()
         try:
             events = self._client.messages.create(**params, stream=True)
@@ -1056,6 +1071,8 @@ class ClaudeProvider(LLMClient):
             "prompt_tokens": prompt_tokens,
             "completion_tokens": output_tokens,
             "total_tokens": prompt_tokens + output_tokens,
+            # The OpenAI-shaped name the agent's turn totals sum.
+            "cached_tokens": cache_read,
             "cache_read_input_tokens": cache_read,
             "cache_creation_input_tokens": cache_write,
             "uncached_input_tokens": uncached,
@@ -1109,3 +1126,137 @@ class ClaudeProvider(LLMClient):
         return result if isinstance(result, str) else "".join(result)
 
     # load_model() / unload_model() inherited from ABC - raise NotSupportedError
+
+
+class GatewayClaudeProvider(ClaudeProvider):
+    """Claude through the AMD LLM gateway's Anthropic Messages route.
+
+    Lemonade reaches the gateway's OpenAI-style route, which drops
+    ``cache_control``, so every call re-bills the whole prompt. This route keeps
+    the markers ``ClaudeProvider`` places, so the fixed prefill and the history
+    are read from cache.
+    """
+
+    _DESTINATION = "AMD LLM Gateway"
+
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        max_retries: int = 3,
+        timeout: float = 300.0,
+        **_kwargs,
+    ):
+        # Lemonade's own kwargs (base_url, its api_key) arrive here too and are
+        # ignored: neither belongs on a request to the gateway.
+        from gaia.llm import gateway  # pylint: disable=import-outside-toplevel
+
+        if gateway.gateway_claude_upstream_id(model) is None:
+            raise ValueError(
+                f"{model!r} is not an AMD gateway Claude model. Pass an "
+                f"'{gateway.GATEWAY_PROVIDER}.Claude-*' id from `gaia gateway models`."
+            )
+        # Before the base URL, so Local only is what a blocked user is told.
+        assert_provider_permitted(self._DESTINATION)
+        self._gateway_model = model
+        self._timeout = timeout
+        self._base_url = gateway.gateway_anthropic_base_url()
+        super().__init__(
+            model=model,
+            system_prompt=system_prompt,
+            max_retries=max_retries,
+            timeout=timeout,
+        )
+
+    @staticmethod
+    def _initial_model(model: Optional[str]) -> str:
+        from gaia.llm.gateway import (  # pylint: disable=import-outside-toplevel
+            gateway_claude_upstream_id,
+        )
+
+        return gateway_claude_upstream_id(model) or ""
+
+    def _make_client(
+        self, sdk: Any, api_key: Optional[str], max_retries: int, timeout: float
+    ) -> Any:
+        from gaia.llm import gateway  # pylint: disable=import-outside-toplevel
+
+        token = gateway.resolve_gateway_token()
+        return sdk.Anthropic(
+            # Explicit, so the SDK reads no ANTHROPIC_* credential from the
+            # environment. _build_params omits the header it would carry.
+            api_key=token,
+            base_url=self._base_url,
+            max_retries=max_retries,
+            timeout=timeout,
+            default_headers={
+                gateway.DEFAULT_AUTH_HEADER_NAME: (
+                    f"{gateway.DEFAULT_AUTH_HEADER_PREFIX}{token}"
+                )
+            },
+        )
+
+    @property
+    def provider_name(self) -> str:
+        return "AMD LLM Gateway (Claude)"
+
+    def _build_params(self, *args, **kwargs):
+        params, name_map, prefix_digest = super()._build_params(*args, **kwargs)
+        # The gateway authenticates on its APIM header alone; no Anthropic
+        # credential header goes with it. Per request, where the SDK honours it.
+        omit = self._anthropic.Omit
+        params["extra_headers"] = {"X-Api-Key": omit(), "Authorization": omit()}
+        return params, name_map, prefix_digest
+
+    def _resolve_model(self, model: Optional[str]) -> str:
+        """The caller's gateway Claude id when it passes one, else this client's.
+
+        Callers pass the agent's ``amd.*`` id; anything else (a local id
+        threaded through a shared kwarg) is not a model this route serves.
+        """
+        from gaia.llm.gateway import (  # pylint: disable=import-outside-toplevel
+            gateway_claude_upstream_id,
+        )
+
+        return gateway_claude_upstream_id(model) or self._model
+
+    def _raise_actionable(self, exc: Exception) -> None:
+        sdk = self._anthropic
+        where = f"the AMD LLM gateway at {self._base_url}"
+        # APITimeoutError subclasses APIConnectionError; a slow gateway isn't off-VPN.
+        if isinstance(exc, sdk.APITimeoutError):
+            raise RuntimeError(
+                f"{where} did not answer within {self._timeout:g}s, so the request "
+                "timed out. The gateway was reached but is slow or overloaded; "
+                "retry in a minute, and check `gaia gateway status` if it persists."
+            ) from exc
+        if isinstance(exc, sdk.APIConnectionError):
+            raise RuntimeError(
+                f"Could not reach {where}: {str(exc).rstrip('.')}. It needs "
+                "AMD's network or VPN; connect, then retry."
+            ) from exc
+        if not isinstance(exc, sdk.APIStatusError):
+            raise exc
+        status = exc.status_code
+        if status in (401, 403):
+            raise RuntimeError(
+                f"{where} rejected the token (HTTP {status}). Run `gaia gateway "
+                "auth` with a current token, or update LEMONADE_AMD_API_KEY / "
+                "GAIA_GATEWAY_TOKEN if you set one."
+            ) from exc
+        if status == 429:
+            raise RuntimeError(
+                f"{where} is rate limiting requests (HTTP 429): {exc.message}. "
+                "Wait a minute, then retry."
+            ) from exc
+        if status in (400, 404) and "not found" in str(exc.message).lower():
+            raise RuntimeError(
+                f"{where} has no deployment of {self._gateway_model} "
+                f"(HTTP {status}): {exc.message}. Run `gaia gateway models` and "
+                "pick a deployed Claude model."
+            ) from exc
+        raise RuntimeError(
+            f"{where} returned HTTP {status}: {exc.message}. Check "
+            "`gaia gateway status`; if it persists, see "
+            "https://amd-gaia.ai/docs/guides/llm-gateway."
+        ) from exc

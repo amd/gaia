@@ -112,6 +112,14 @@ icon: "bug"
     [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
   </Accordion>
 
+  <Accordion title="A cloud model or provider is refused: 'Local only is on'" icon="lock">
+    `network_policy` is set to `local_ai_only`, so GAIA refuses every cloud AI model
+    and won't hand Lemonade a cloud key. Check it with `gaia config get
+    network_policy`, and allow cloud models again with `gaia config set
+    network_policy cloud_allowed`. If you never set it, look at `~/.gaia/policy.json`:
+    a file GAIA can't read counts as Local only. See [Local only](/reference/cli#local-only).
+  </Accordion>
+
   <Accordion title="Connecting a cloud provider fails while GAIA uses my Lemonade" icon="plug-circle-xmark">
     While GAIA uses a Lemonade you run, it never changes that server's setup, so it
     won't register Fireworks AI or the AMD LLM Gateway there or hand it a key. The
@@ -119,6 +127,14 @@ icon: "bug"
     server yourself, with its key (`LEMONADE_FIREWORKS_API_KEY` or
     `LEMONADE_AMD_API_KEY`) in your server's environment, then connect again. Or go
     back to GAIA's own server with `gaia config set lemonade_mode gaia`.
+  </Accordion>
+
+  <Accordion title="Fireworks AI can't list its models" icon="cloud-exclamation">
+    Your key was not rejected, so there is no need to replace it. On GAIA's own
+    Lemonade server, the Agent UI restarts it with the Fireworks models GAIA already
+    knows, so chat keeps working. The list shown may be out of date, and a model
+    Fireworks no longer serves returns Fireworks' own error. On a system Lemonade,
+    GAIA keeps the key and you connect again once Fireworks recovers.
   </Accordion>
 
   <Accordion title="The model list says macOS is asking for keychain access" icon="key">
@@ -506,6 +522,32 @@ error. To run the chat model in the cloud instead, see
     ```bash
     gaia init --force-models --yes
     ```
+  </Accordion>
+
+  <Accordion title="A chat model fails with 'llama-server failed to start'" icon="triangle-exclamation">
+    llama.cpp exited while loading the model. GAIA starts a llama.cpp chat model with two
+    slots over one shared KV cache (`--parallel 2 --kv-unified --cache-ram 0
+    --slot-prompt-similarity 0.5`), so side work such as titles and memory doesn't evict the
+    conversation. Some models and llama.cpp builds can't start with those flags: Gemma 4 with
+    an MTP draft model aborts on llama.cpp b12020, for example
+    ([#6221](https://github.com/amd/gaia/issues/6221)).
+
+    To load a model with your own llama.cpp arguments, save them for it in Lemonade, in the
+    model's settings or with Lemonade's CLI. GAIA then sends no flags of its own, so Lemonade
+    loads the model with your saved options as it would for your own load, and GAIA doesn't
+    save over them:
+    ```bash
+    lemonade load <model> --llamacpp-args "<your args>" --save-options
+    ```
+    With one slot (`-np 1`), side work evicts the conversation's cache, so the turn after a
+    title or memory update can be slower in a long chat.
+
+    GAIA retries the failed start 3 times, because the AMD Vulkan driver sometimes fails a
+    start and then recovers. If it still fails, GAIA won't send that same load again for 2
+    minutes. Until then each message gets the same error straight away, instead of
+    crashing llama.cpp again. A load with different options, such as newly saved arguments
+    or another llama.cpp backend, goes through at once. Lemonade's server log has
+    llama-server's own output.
   </Accordion>
 </AccordionGroup>
 

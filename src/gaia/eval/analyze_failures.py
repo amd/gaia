@@ -845,6 +845,9 @@ def _self_check(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(
         prog="gaia.eval.analyze_failures",
         description="Post-run failure analyzer for the MCP tool reliability eval.",

@@ -10,6 +10,7 @@ import codecs
 import errno
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -19,7 +20,7 @@ import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -51,6 +52,7 @@ from gaia.llm.lemonade_client import (
     EMBEDDER_UBATCH_TOKENS,
 )
 from gaia.logger import get_logger
+from gaia.rag.arabic_text import normalize_arabic_pdf_text
 from gaia.security import PathValidator
 from gaia.utils.document_formats import (
     UNSUPPORTED_DOCUMENTS,
@@ -65,6 +67,7 @@ from gaia.utils.file_lock import (
     write_bytes_atomic,
     write_text_atomic,
 )
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
 
 _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -129,6 +132,56 @@ class EmptyPDFError(PDFExtractionError):
     """
 
     status = "empty"
+
+
+class ImageExtractionError(ValueError):
+    """Raised when an image file cannot be read into text, with a remedy."""
+
+
+# Each page is one VLM call (seconds to tens of seconds), so a fax-sized TIFF is
+# fine and a 500-page archive is a mistake to stop early.
+MAX_IMAGE_PAGES = 50
+
+
+def _flatten_for_vlm(img):
+    """Upright, opaque copy of *img*: EXIF rotation applied, alpha on white.
+
+    Image files only. PDF-embedded images are shown as the PDF places them, so
+    the PDF path must not rotate them by their own EXIF tag.
+    """
+    from PIL import Image, ImageOps  # pylint: disable=import-outside-toplevel
+
+    img = ImageOps.exif_transpose(img)
+    if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+        # The VLM drops alpha, so a transparent background would read as black.
+        rgba = img.convert("RGBA")
+        white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        img = Image.alpha_composite(white, rgba).convert("RGB")
+    return img
+
+
+def _image_pages_for_vlm(img, file_name: str) -> list:
+    """The prepared VLM inputs for an opened image file, one per page."""
+    from PIL import ImageSequence  # pylint: disable=import-outside-toplevel
+
+    from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
+        prepare_pil_image_for_vlm,
+    )
+
+    if img.format != "TIFF":
+        return [prepare_pil_image_for_vlm(_flatten_for_vlm(img))]
+
+    page_count = getattr(img, "n_frames", 1)
+    if page_count > MAX_IMAGE_PAGES:
+        raise ImageExtractionError(
+            f"Cannot index image {file_name}: it has {page_count} pages, and GAIA "
+            f"reads at most {MAX_IMAGE_PAGES} pages from one image file.\n"
+            "Split the TIFF into smaller files and index each one."
+        )
+    return [
+        prepare_pil_image_for_vlm(_flatten_for_vlm(frame))
+        for frame in ImageSequence.Iterator(img)
+    ]
 
 
 class SpreadsheetReadError(ValueError):
@@ -287,12 +340,45 @@ def _cache_lock_target(cache_path: str) -> Path:
     return Path(cache_path).parent / _CACHE_LOCK_NAME
 
 
+# Letter ranges -> script name for document_scripts(); first match wins.
+_SCRIPT_RANGES = (
+    (
+        "Arabic",
+        (
+            (0x0600, 0x06FF),
+            (0x0750, 0x077F),
+            (0x08A0, 0x08FF),
+            (0xFB50, 0xFDFF),
+            (0xFE70, 0xFEFF),
+        ),
+    ),
+    ("Hebrew", ((0x0590, 0x05FF),)),
+    ("Cyrillic", ((0x0400, 0x04FF),)),
+    ("Devanagari", ((0x0900, 0x097F),)),
+    ("CJK", ((0x3040, 0x30FF), (0x4E00, 0x9FFF), (0xAC00, 0xD7AF))),
+)
+
+
+def _script_of(ch: str) -> Optional[str]:
+    """The script of a letter, "Latin" for ASCII/Latin letters, None for the rest."""
+    if not ch.isalpha():
+        return None
+    code = ord(ch)
+    if code < 0x0250:
+        return "Latin"
+    for name, ranges in _SCRIPT_RANGES:
+        if any(lo <= code <= hi for lo, hi in ranges):
+            return name
+    return None
+
+
 # Files the RAG cache writes: signed chunk caches, their sidecar signatures,
-# and extracted-text markdown. clear_cache() deletes nothing else.
+# saved vectors, and extracted-text markdown. clear_cache() deletes nothing else.
 _CACHE_OWNED_FILE = re.compile(
     r"^(?:[0-9a-f]{16}_[0-9a-f]{32}|[0-9a-f]{64}_notfound)(?:_[0-9a-f]{8})?"
     r"\.json(?:\.sig)?$"
     r"|_extracted\.md$"
+    r"|^vectors_[0-9a-f]{24}\.npy$"
 )
 
 
@@ -382,7 +468,7 @@ class RAGConfig:
         False  # Enable LLM-based intelligent chunking (requires LLM client)
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
-    vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
+    vlm_model: str = DEFAULT_MODEL_NAME
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
     # Security settings
@@ -499,6 +585,7 @@ class RAGSDK:
         # Per-file indexing: maps file paths to their chunk indices
         # This enables efficient per-file searches
         self.file_to_chunk_indices = {}  # {file_path: [chunk_idx1, chunk_idx2, ...]}
+        self._scripts_cache = {}  # {file_path: ((first_idx,), n_chunks), scripts)}
         self.chunk_to_file = {}  # {chunk_idx: file_path} for reverse lookup
 
         # Per-file FAISS indices and embeddings (CACHED for performance)
@@ -804,6 +891,37 @@ class RAGSDK:
             return f"{hashlib.sha256(str(path).encode()).hexdigest()}_notfound"
         path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
         return f"{path_hash}_{hasher.hexdigest()[:32]}"
+
+    def document_scripts(self, file_path: str) -> List[str]:
+        """Writing systems that make up at least 10% of an indexed file's letters.
+
+        Lets the agent search a document in its own language when the question
+        is asked in another (an English question over an Arabic report).
+        """
+        with self._state_lock:
+            indices = list(self.file_to_chunk_indices.get(file_path, []))
+            chunks = [self.chunks[i] for i in indices if i < len(self.chunks)]
+        key = (tuple(indices[:1]), len(chunks))
+        cached = self._scripts_cache.get(file_path)
+        if cached and cached[0] == key:
+            return list(cached[1])
+        counts: Dict[str, int] = {}
+        for chunk in chunks:
+            for ch in chunk:
+                script = _script_of(ch)
+                if script:
+                    counts[script] = counts.get(script, 0) + 1
+        total = sum(counts.values())
+        scripts = (
+            sorted(
+                (name for name, n in counts.items() if n / total >= 0.1),
+                key=lambda name: -counts[name],
+            )
+            if total
+            else []
+        )
+        self._scripts_cache[file_path] = (key, scripts)
+        return list(scripts)
 
     def _get_cache_path(self, file_path: str, content_key: Optional[str] = None) -> str:
         """Chunk-cache path: :meth:`_content_key` plus :meth:`_chunking_fingerprint`.
@@ -1261,9 +1379,10 @@ class RAGSDK:
             try:
                 from gaia.llm import VLMClient
                 from gaia.rag.pdf_utils import (
+                    PdfImageExtractionError,
                     PdfPageInspectionError,
                     count_images_in_page,
-                    extract_images_from_page_pymupdf,
+                    extract_images_from_page_pdfium,
                 )
 
                 vlm = VLMClient(
@@ -1311,7 +1430,7 @@ class RAGSDK:
                 page_start = time_module.time()
 
                 # Step 1: Extract text with pypdf
-                pypdf_text = page.extract_text()
+                pypdf_text = normalize_arabic_pdf_text(page.extract_text() or "")
 
                 # Step 2: Check for images
                 has_imgs = False
@@ -1322,7 +1441,7 @@ class RAGSDK:
                         has_imgs, num_imgs = count_images_in_page(page, page_num=i)
                     except PdfPageInspectionError as e:
                         # Unknown, not "none". The inventory comes from pypdf
-                        # and the extraction from PyMuPDF, so a page pypdf
+                        # and the extraction from PDFium, so a page pypdf
                         # cannot inspect may still extract — try it rather than
                         # indexing the page as blank (#3551).
                         page_warning = str(e)
@@ -1336,7 +1455,14 @@ class RAGSDK:
                 image_texts = []
                 if has_imgs and vlm_available:
                     try:
-                        images = extract_images_from_page_pymupdf(pdf_path, page_num=i)
+                        try:
+                            images = extract_images_from_page_pdfium(
+                                pdf_path, page_num=i
+                            )
+                        except PdfImageExtractionError as e:
+                            page_warning = f"image extraction failed on page {i}: {e}"
+                            self.log.warning(page_warning)
+                            images = e.images
                         if images:
                             image_texts = vlm.extract_from_page_images(
                                 images, page_num=i
@@ -2307,6 +2433,133 @@ These positions indicate where to split the text."""
         self.log.info(f"📄 Extracted {len(text):,} characters from Word file")
         return text
 
+    def _extract_text_from_image(self, image_path: str) -> tuple:
+        """Read an image file's text with the vision model.
+
+        Each page is sent as the PDF path sends an embedded image, after EXIF
+        rotation and flattening transparency onto white. A multi-page TIFF is
+        read page by page; other formats (animated GIF included) by their
+        first frame. There is no non-VLM path: an image the VLM cannot read
+        fails instead of indexing empty or placeholder text.
+
+        Returns:
+            (text, metadata) — metadata has vlm_pages and total_images set to
+            the number of pages read, and num_pages for a multi-page TIFF.
+
+        Raises:
+            ImageExtractionError: VLM turned off or unavailable, the file is not
+                a decodable image, it has more than MAX_IMAGE_PAGES pages, or the
+                VLM found no text in it.
+        """
+        from PIL import Image  # pylint: disable=import-outside-toplevel
+
+        from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
+        from gaia.llm.lemonade_launcher import (  # pylint: disable=import-outside-toplevel
+            describe_client_hint,
+            describe_start_hint,
+        )
+        from gaia.llm.vlm_client import (  # pylint: disable=import-outside-toplevel
+            VLMExtractionError,
+        )
+
+        file_name = Path(image_path).name
+        model = self.config.vlm_model
+
+        if not self.config.use_vlm:
+            raise ImageExtractionError(
+                f"Cannot index image {file_name}: image text extraction is off "
+                "(RAGConfig.use_vlm=False).\n"
+                "Images are read by the vision model; set use_vlm=True to index them."
+            )
+
+        # Outside the try: a locked file must reach index_document as PermissionError.
+        raw = Path(image_path).read_bytes()
+        try:
+            with Image.open(io.BytesIO(raw)) as img:
+                pages = _image_pages_for_vlm(img, file_name)
+        except ImageExtractionError:
+            raise
+        except (OSError, ValueError, Image.DecompressionBombError) as e:
+            self.log.error(f"Unreadable image {image_path}: {e}")
+            raise ImageExtractionError(
+                f"Could not read image: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted or not a supported image.\n"
+                "Re-export it as PNG or JPEG and index it again."
+            ) from e
+
+        vlm = VLMClient(vlm_model=model, base_url=self.config.base_url)
+        if not vlm.check_availability():
+            try:
+                vlm.client.health_check()
+            except Exception as e:  # pylint: disable=broad-except
+                if not _is_connection_failure(e):
+                    raise ImageExtractionError(
+                        f"Cannot index image {file_name}: Lemonade Server at "
+                        f"{vlm.server_url} returned an error: {e}\n"
+                        "Check the Lemonade Server log, then index the image again."
+                    ) from e
+                raise ImageExtractionError(
+                    f"Cannot index image {file_name}: Lemonade Server isn't "
+                    f"reachable at {vlm.server_url}.\n"
+                    f"{describe_start_hint().instruction}\n"
+                    "Then index the image again."
+                ) from e
+            # Reachable, so the model is what's missing.
+            pull = describe_client_hint("pull", model).instruction
+            raise ImageExtractionError(
+                f"Cannot index image {file_name}: vision model {model} is not "
+                f"available at {vlm.server_url}.\n"
+                "Images are indexed by reading their text with the vision model.\n"
+                "To fix:\n"
+                f"  1. Download it. {pull}\n"
+                f"     Or download {model} in the Lemonade Model Manager "
+                f"({vlm.server_url}).\n"
+                "  2. Index the image again."
+            )
+
+        if self.config.show_stats:
+            print(f"  🖼️  Reading image text with {model} ({len(pages)} page(s))...")
+        page_texts = []
+        try:
+            for page_num, page in enumerate(pages, 1):
+                _beat()
+                results = vlm.extract_from_page_images([page], page_num=page_num)
+                page_texts.append(
+                    "\n\n".join(r["text"].strip() for r in results).strip()
+                )
+        except VLMExtractionError as e:
+            raise ImageExtractionError(
+                f"Could not read text from image {file_name}: {e}"
+            ) from e
+        finally:
+            vlm.cleanup()
+
+        if len(pages) == 1:
+            text = page_texts[0]
+        else:
+            text = "\n\n".join(
+                f"[Page {i}]\n{t}" for i, t in enumerate(page_texts, 1) if t
+            )
+        if not text.strip():
+            raise ImageExtractionError(
+                f"No text found in image: {file_name}\n"
+                f"The vision model ({model}) read the image but returned no text."
+            )
+
+        self.log.info(
+            f"🖼️  Extracted {len(text):,} characters from {file_name} "
+            f"({len(pages)} page(s))"
+        )
+        metadata = {
+            "num_pages": len(pages) if len(pages) > 1 else None,
+            "vlm_pages": len(pages),
+            "total_images": len(pages),
+            "vlm_checked": True,
+            "vlm_available": True,
+        }
+        return text, metadata
+
     def _extract_text_from_epub(self, epub_path: str) -> tuple:
         """Extract an EPUB book's text; returns ``(text, num_chapters)``."""
         from gaia.rag.epub_utils import (  # pylint: disable=import-outside-toplevel
@@ -2333,8 +2586,8 @@ These positions indicate where to split the text."""
         Returns:
             (text, metadata_dict) tuple where metadata_dict contains:
             - num_pages: int (for PDFs/PPTX) or None
-            - vlm_pages: int (for PDFs/PPTX with VLM) or None
-            - total_images: int (for PDFs/PPTX with VLM) or None
+            - vlm_pages: int (for PDFs/PPTX/images with VLM) or None
+            - total_images: int (for PDFs/PPTX/images with VLM) or None
         """
         file_type = self._get_file_type(file_path)
         metadata = {"num_pages": None, "vlm_pages": None, "total_images": None}
@@ -2360,6 +2613,10 @@ These positions indicate where to split the text."""
             metadata["vlm_pages"] = pptx_metadata.get("vlm_slides", 0)
             metadata["total_images"] = pptx_metadata.get("total_images", 0)
             return text, metadata
+
+        # Image files (read by the vision model)
+        elif file_type in IMAGE_EXTENSIONS:
+            return self._extract_text_from_image(file_path)
 
         # Text-based files
         elif file_type in [".txt", ".md", ".mdx", ".markdown", ".rst", ".log"]:
@@ -2491,7 +2748,8 @@ These positions indicate where to split the text."""
                 f"Cannot index {Path(file_path).name}: it is a binary file, not "
                 f"text, and GAIA has no reader for {file_type} files.\n"
                 "Supported: PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), "
-                "EPUB, plain text, Markdown, CSV, JSON, HTML and source code. "
+                "EPUB, images (PNG, JPG, ...), plain text, Markdown, CSV, JSON, HTML "
+                "and source code. "
                 "Convert the file to one of these (PDF works for most documents) "
                 "and index that copy."
             )
@@ -2796,22 +3054,75 @@ These positions indicate where to split the text."""
         index.add(embeddings.astype("float32"))
         return index
 
+    def _vectors_path(self, chunks: List[str]) -> str:
+        """Where the embeddings of *chunks* under the current embedder are kept.
+
+        The name binds the vectors to the embedding model and the exact chunk
+        text, so different text never reads them and the same text, indexed
+        again from a new temp copy, adds no second file.
+        """
+        digest = hashlib.sha256(self.config.embedding_model.encode("utf-8"))
+        for chunk in chunks:
+            digest.update(b"\x1e" + chunk.encode("utf-8"))
+        return os.path.join(
+            self.config.cache_dir, f"vectors_{digest.hexdigest()[:24]}.npy"
+        )
+
+    def _load_vectors(self, path: str, count: int) -> Optional["np.ndarray"]:
+        """Saved embeddings at *path*, or None when absent or not *count* rows."""
+        if not os.path.exists(path):
+            return None
+        try:
+            with file_lock(_cache_lock_target(path)):
+                vectors = np.load(path, allow_pickle=False)
+        except (OSError, ValueError) as e:
+            self.log.warning(f"Re-embedding: saved vectors unreadable ({path}): {e}")
+            return None
+        if vectors.ndim != 2 or vectors.shape[0] != count:
+            self.log.warning(
+                f"Re-embedding: saved vectors have shape {vectors.shape}, "
+                f"expected {count} rows ({path})"
+            )
+            return None
+        return vectors
+
+    def _save_vectors(self, path: str, vectors: "np.ndarray") -> None:
+        buf = io.BytesIO()
+        np.save(buf, np.ascontiguousarray(vectors, dtype="float32"))
+        with file_lock(_cache_lock_target(path)):
+            write_bytes_atomic(path, buf.getvalue())
+
     def _create_vector_index(
         self,
         chunks: List[str],
         return_embeddings: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         wait_callback: Optional[Callable[[int], None]] = None,
+        cache_path: Optional[str] = None,
     ) -> tuple:
         """Create FAISS vector index from chunks with progress reporting.
 
         ``progress_callback(done, total)`` is called before the first chunk is
         embedded and after every ``PROGRESS_SLICE_CHUNKS`` chunks.
         ``wait_callback`` is passed to ``_encode_texts``.
+
+        With ``cache_path`` (the document's chunk cache), embeddings are saved
+        beside it and reused, so reopening a document never re-embeds it.
         """
         import time as time_module  # pylint: disable=reimported
 
         self._load_embedder()
+
+        vectors_path = self._vectors_path(chunks) if cache_path else None
+        saved = self._load_vectors(vectors_path, len(chunks)) if vectors_path else None
+        if saved is not None:
+            if progress_callback is not None and chunks:
+                progress_callback(len(chunks), len(chunks))
+            index = self._create_faiss_index(saved)
+            self.log.info(f"📚 Index ready with {index.ntotal} saved vectors")
+            if return_embeddings:
+                return index, chunks, saved
+            return index, chunks
 
         # Generate embeddings with detailed progress
         self.log.info(f"🔍 Generating embeddings for {len(chunks)} chunks...")
@@ -2845,6 +3156,12 @@ These positions indicate where to split the text."""
                 progress_callback(start + len(part), len(chunks))
             embeddings = np.concatenate(parts)
         embed_duration = time_module.time() - embed_start
+        if vectors_path:
+            try:
+                self._save_vectors(vectors_path, embeddings)
+            except (OSError, FileLockError) as e:
+                # Saved vectors only speed up reopening; the index itself is built.
+                self.log.warning(f"Could not save vectors to {vectors_path}: {e}")
 
         if self.config.show_stats:
             print(
@@ -3057,20 +3374,20 @@ These positions indicate where to split the text."""
                         result["total_indexed_files"] = len(self.indexed_files)
                         result["total_chunks"] = len(self.chunks)
 
-    def _evict_lru_document(self) -> bool:
+    def _evict_lru_document(self) -> Optional[str]:
         """
         Evict the least recently used document to free memory.
 
         Returns:
-            True if a document was evicted, False otherwise
+            The path of the evicted document, or None if no document was evicted
         """
         if not self.config.enable_lru_eviction:
             self.log.warning("LRU eviction disabled, cannot free memory")
-            return False
+            return None
 
         if not self.file_access_times:
             self.log.warning("No tracked files available for LRU eviction")
-            return False
+            return None
 
         # Find LRU file (oldest access time)
         lru_file = min(self.file_access_times, key=self.file_access_times.get)
@@ -3086,27 +3403,34 @@ These positions indicate where to split the text."""
         result = self.remove_document(lru_file)
         if not result:
             self.log.error(f"Failed to evict LRU document: {Path(lru_file).name}")
-        return result
+            return None
+        return lru_file
 
-    def _check_memory_limits(self) -> bool:
+    def _check_memory_limits(self) -> Tuple[bool, List[str]]:
         """
         Check memory limits and evict documents if necessary.
 
         Returns:
-            True if limits are satisfied, False if still exceeded
+            A tuple containing:
+                - True if limits are satisfied, False if still exceeded
+                - A list of evicted document paths (if any)
         """
+        evicted_files: List[str] = []
+
         # Check total chunks limit
         while (
             self.config.max_total_chunks > 0
             and len(self.chunks) > self.config.max_total_chunks
             and len(self.indexed_files) > 1
         ):  # Keep at least one file
-            if not self._evict_lru_document():
+            path = self._evict_lru_document()
+            if path is None:
                 self.log.warning(
                     f"Cannot meet chunk limit: {len(self.chunks)} chunks "
                     f"exceeds max {self.config.max_total_chunks}, eviction failed"
                 )
                 break
+            evicted_files.append(path)
 
         # Check indexed files limit
         while (
@@ -3114,12 +3438,14 @@ These positions indicate where to split the text."""
             and len(self.indexed_files) > self.config.max_indexed_files
             and len(self.indexed_files) > 1
         ):  # Keep at least one file
-            if not self._evict_lru_document():
+            path = self._evict_lru_document()
+            if path is None:
                 self.log.warning(
                     f"Cannot meet file limit: {len(self.indexed_files)} files "
                     f"exceeds max {self.config.max_indexed_files}, eviction failed"
                 )
                 break
+            evicted_files.append(path)
 
         chunks_ok = (
             self.config.max_total_chunks <= 0
@@ -3129,7 +3455,7 @@ These positions indicate where to split the text."""
             self.config.max_indexed_files <= 0
             or len(self.indexed_files) <= self.config.max_indexed_files
         )
-        return chunks_ok and files_ok
+        return chunks_ok and files_ok, evicted_files
 
     def _has_indexing_capacity(self) -> bool:
         """Check if there is capacity to index another document.
@@ -3385,12 +3711,12 @@ These positions indicate where to split the text."""
                         vlm_info = f" (VLM: {cached_metadata['vlm_pages']} pages)"
                     print(f"  ✅ Loaded {len(cached_chunks)} cached chunks{vlm_info}")
 
-                # The cache holds chunks, not vectors, so this re-embeds.
                 new_index, _, file_embeddings = self._create_vector_index(
                     list(cached_chunks),
                     return_embeddings=True,
                     progress_callback=progress_callback,
                     wait_callback=wait_callback,
+                    cache_path=cache_path,
                 )
 
                 with self._state_lock:
@@ -3478,7 +3804,7 @@ These positions indicate where to split the text."""
                     print("  ✅ Successfully loaded from cache")
 
                 # Check memory limits after cache load
-                limits_ok = self._check_memory_limits()
+                limits_ok, evicted = self._check_memory_limits()
 
                 # Update stats for cache load
                 stats["success"] = True
@@ -3489,6 +3815,8 @@ These positions indicate where to split the text."""
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 stats["from_cache"] = True
+                if evicted:
+                    stats["evicted"] = evicted
                 if not limits_ok:
                     stats["memory_limit_warning"] = True
                 return stats
@@ -3559,6 +3887,7 @@ These positions indicate where to split the text."""
                 return_embeddings=True,
                 progress_callback=progress_callback,
                 wait_callback=wait_callback,
+                cache_path=cache_path,
             )
 
             with self._state_lock:
@@ -3661,7 +3990,9 @@ These positions indicate where to split the text."""
                 self.file_access_times[file_path] = self._access_counter
 
                 # Check memory limits and evict if necessary
-                limits_ok = self._check_memory_limits()
+                limits_ok, evicted = self._check_memory_limits()
+            if evicted:
+                stats["evicted"] = evicted
             if not limits_ok:
                 self.log.warning(
                     f"Memory limits exceeded after indexing {file_path}. "
