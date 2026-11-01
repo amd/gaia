@@ -183,6 +183,7 @@ from gaia.utils import awake_clock
 from gaia.utils.json_string import extract_json_string_field
 from gaia.utils.power import stay_awake
 from gaia.utils.terminal import stdin_is_interactive
+from gaia.utils.turn_activity import is_chat_turn
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
@@ -9231,6 +9232,7 @@ Do NOT wrap conversational replies in JSON.
             result["cached_tokens"] = usage.get("cached_tokens")
         return result
 
+    @is_chat_turn
     def process_query(
         self,
         user_input: str,

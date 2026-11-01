@@ -4747,7 +4747,22 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     fatal_error = event.get("content") or ""
 
                 # Capture agent steps for persistence
-                if event_type == "thinking":
+                if (
+                    event_type == "status"
+                    and (event.get("notice") or {}).get("kind") == "partial_index"
+                ):
+                    step_id += 1
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "status",
+                            "label": event.get("message"),
+                            "notice": event["notice"],
+                            "active": False,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
+                elif event_type == "thinking":
                     step_id += 1
                     # Deactivate previous steps
                     for s in captured_steps:

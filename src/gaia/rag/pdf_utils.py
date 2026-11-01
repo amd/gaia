@@ -81,13 +81,16 @@ def prepare_pil_image_for_vlm(img) -> dict:
     }
 
 
-def extract_images_from_page_pymupdf(pdf_path: str, page_num: int) -> List[dict]:
+def extract_images_from_page_pymupdf(
+    pdf_path: str, page_num: int, min_cover: float = 0.0
+) -> List[dict]:
     """
     Extract images using PyMuPDF (more reliable than pypdf for images).
 
     Args:
         pdf_path: Path to PDF file
         page_num: Page number (1-indexed)
+        min_cover: Leave out images covering less than this share of the page
 
     Returns:
         List of image dicts with bytes, dimensions, etc.
@@ -106,6 +109,11 @@ def extract_images_from_page_pymupdf(pdf_path: str, page_num: int) -> List[dict]
             for img_index, img_info in enumerate(image_list):
                 try:
                     xref = img_info[0]
+                    drawn = sum(
+                        rect.width * rect.height for rect in page.get_image_rects(xref)
+                    )
+                    if drawn < min_cover * page.rect.width * page.rect.height:
+                        continue
 
                     # Extract image bytes (PyMuPDF handles decoding)
                     base_image = doc.extract_image(xref)

@@ -7,13 +7,14 @@ Provides document retrieval, querying, and evaluation tools.
 """
 
 import contextvars
+import functools
 import os
 import re
 import threading
 import time
 import weakref
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.file_snapshots import before_change
@@ -387,6 +388,61 @@ _MARKER_NOTE = (
 )
 
 
+def _unread_images_notice(reading: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """What this search couldn't see yet, for the user and for the model."""
+    names = sorted({entry["name"] for entry in reading})
+    listed = ", ".join(names)
+    done = sum(entry["pages_done"] for entry in reading)
+    total = sum(entry["pages_total"] for entry in reading)
+    return {
+        "message": f"Still reading images in {listed}, so this answer may be incomplete.",
+        "instruction": (
+            f"\n\nThese documents are still being indexed: their text is searchable, "
+            f"but images in {listed} are not all read yet ({done} of {total} pages). "
+            "Say in your answer that it may be incomplete for that reason."
+        ),
+        "notice": {
+            "kind": "partial_index",
+            "names": names,
+            "pages_done": done,
+            "pages_total": total,
+        },
+    }
+
+
+def _reports_unread_images(mixin: Any):
+    """Tell the model and the user when a search ran on an unfinished index."""
+
+    def wrap(search: Callable[..., Dict[str, Any]]):
+        @functools.wraps(search)
+        def wrapper(*args, **kwargs) -> Dict[str, Any]:
+            result = search(*args, **kwargs)
+            rag = _require_rag(mixin)
+            if not rag or result.get("status") != "success":
+                return result
+            only = kwargs.get("file_path") or (args[0] if len(args) > 1 else None)
+            reading = [
+                entry
+                for entry in rag.images_still_reading()
+                if only is None or entry["name"] == Path(only).name
+            ]
+            if not reading:
+                return result
+            unread = _unread_images_notice(reading)
+            result["still_indexing"] = unread["notice"]
+            result["instruction"] = (
+                result.get("instruction", "") + unread["instruction"]
+            )
+            console = getattr(mixin, "console", None)
+            if console is not None:
+                console.print_index_notice(unread["message"], unread["notice"])
+            return result
+
+        return wrapper
+
+    return wrap
+
+
 def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     """How query_documents asks the model to cite: the full path, plus pages if any."""
     instruction = (
@@ -539,6 +595,7 @@ class RAGToolsMixin:
         @tool(
             atomic=True,
         )
+        @_reports_unread_images(self)
         def query_documents(
             query: str, debug: bool = False  # pylint: disable=unused-argument
         ) -> Dict[str, Any]:
@@ -964,6 +1021,7 @@ class RAGToolsMixin:
             # cap; at the default a big PDF is abandoned mid-index and re-indexed.
             timeout=600,
         )
+        @_reports_unread_images(self)
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
             Query a specific file for fast, targeted retrieval.

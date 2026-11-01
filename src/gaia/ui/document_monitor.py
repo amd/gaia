@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import threading
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Set
@@ -272,3 +273,14 @@ class DocumentMonitor:
             if self._active_tasks.get(doc_id) is task:
                 del self._active_tasks[doc_id]
             task.cancel()
+
+
+def resume_image_reading() -> None:
+    """Carry on reading the images a previous run left unread."""
+
+    def resume() -> None:
+        from gaia.rag.sdk import RAGConfig, RAGSDK
+
+        RAGSDK(RAGConfig(show_stats=False)).resume_image_reading()
+
+    threading.Thread(target=resume, name="rag-image-resume", daemon=True).start()

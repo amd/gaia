@@ -163,6 +163,23 @@ page 37 of 229" for a PDF, then "Embedding 412 of 1,180", and a **Cancel**
 button, including for documents still waiting their turn. Formats without a
 page count show a moving bar and the count so far.
 
+You can ask about a document as soon as its text is indexed, which takes
+seconds even for a long PDF. Images are read afterwards, one page at a time, and
+what they contain joins the search as it arrives. A scanned PDF reads pages until
+it has its first searchable text, and carries on the same way. Pages short of
+text go first, across all your documents, and reading pauses while a chat is
+answering. It carries on after a restart.
+
+Until a document's images are done, GAIA tells you:
+
+- A line above the chat says which documents you can already ask about.
+- The library shows "Reading images: 12 of 111 pages" on each row, with **Stop**
+  if you don't need them. The text stays searchable either way.
+- An answer that searched such a document ends with a note saying it may be
+  incomplete. The note stays with the answer.
+
+The TUI keeps the same warning in the transcript, above the answer.
+
 The time left is measured on your PC, not guessed:
 
 - **Estimating…** until it has timed enough pages and chunks.

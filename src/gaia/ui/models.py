@@ -715,6 +715,16 @@ class MessageListResponse(BaseModel):
 # ── Documents ───────────────────────────────────────────────────────────────
 
 
+class ImagesReading(BaseModel):
+    """A searchable document whose images are still being read."""
+
+    pages_done: int = 0
+    pages_total: int = 0
+    state: str = "reading"
+    reason: Optional[str] = None
+    seconds_left: Optional[int] = None
+
+
 class DocumentResponse(BaseModel):
     """A document in the library."""
 
@@ -734,6 +744,8 @@ class DocumentResponse(BaseModel):
     # "corrupted", "encrypted", "empty" (no extractable text), "empty_file"
     # (nothing to index) or "unsupported_workbook" (.xls or password-protected).
     error_kind: Optional[str] = None
+    # Set while the document is searchable but its images are still being read.
+    images_reading: Optional[ImagesReading] = None
 
 
 class IndexProgress(BaseModel):
@@ -770,6 +782,17 @@ class IndexingDocument(BaseModel):
     error: Optional[str] = None
 
 
+class ImagesOverview(BaseModel):
+    """Every document with images still being read in the background."""
+
+    documents: int = 0
+    pages_done: int = 0
+    pages_total: int = 0
+    seconds_left: Optional[int] = None
+    blocked: Optional[str] = None
+    names: List[str] = Field(default_factory=list)
+
+
 class IndexingOverview(BaseModel):
     """All documents indexing now, or the last batch until it is dismissed."""
 
@@ -785,6 +808,7 @@ class IndexingOverview(BaseModel):
     seconds_left: Optional[int] = None
     estimate: str = "estimating"
     documents: List[IndexingDocument] = Field(default_factory=list)
+    images: ImagesOverview = Field(default_factory=ImagesOverview)
 
 
 class DocumentListResponse(BaseModel):

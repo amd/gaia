@@ -562,6 +562,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         # them; an update's daemon restart has to wait for them.
         from gaia.daemon.client import add_local_work, remove_local_work
         from gaia.ui._chat_helpers import active_turns_in_flight
+        from gaia.ui.document_monitor import resume_image_reading
+
+        resume_image_reading()
 
         add_local_work(active_turns_in_flight)
 

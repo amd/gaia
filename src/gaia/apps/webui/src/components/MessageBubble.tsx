@@ -3,7 +3,7 @@
 
 import React, { createContext, useCallback, useContext, useId, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square, FileText } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square, FileText, Info } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
@@ -450,6 +450,7 @@ export function turnEnding(content: string, stopState: Message['stopState']): Tu
 }
 
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+    const partialIndex = agentSteps?.find((step) => step.notice?.kind === 'partial_index')?.notice;
     const t = useT();
     useModelNames();
     const echo = useMemo(
@@ -634,6 +635,12 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         </>
                     ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
                         <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} />
+                    )}
+                    {partialIndex && !isStreaming && (
+                        <p className="msg-partial-index" role="note">
+                            <Info size={13} aria-hidden="true" />
+                            <span>{t.plural('chat.partial.note', partialIndex.names.length, { name: partialIndex.names[0] })}</span>
+                        </p>
                     )}
                     {stopState && (
                         <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">

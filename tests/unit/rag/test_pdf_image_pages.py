@@ -46,7 +46,12 @@ def _extract(tmp_path: Path, pdf: Path, **config):
         }
     ]
     sdk = RAGSDK(
-        RAGConfig(cache_dir=str(tmp_path / ".gaia"), show_stats=False, **config)
+        RAGConfig(
+            cache_dir=str(tmp_path / ".gaia"),
+            show_stats=False,
+            read_images_later=False,
+            **config,
+        )
     )
     with (
         patch("gaia.llm.VLMClient", return_value=vlm),

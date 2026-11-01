@@ -463,6 +463,10 @@ class OutputHandler(ABC):
         """Print warning message."""
         ...
 
+    def print_index_notice(self, message: str, notice: Dict[str, Any]) -> None:
+        """Say this turn searched documents that are still being read."""
+        self.print_info(message)
+
     @abstractmethod
     def print_info(self, message: str):
         """Print informational message."""

@@ -42,6 +42,7 @@ def rag(tmp_path: Path) -> RAGSDK:
     faiss, VLM, and chat/LLM initialization.
     """
     config = RAGConfig(
+        read_images_later=False,
         cache_dir=str(tmp_path / ".gaia"),
         show_stats=False,
         use_local_llm=False,

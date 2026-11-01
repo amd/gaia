@@ -56,6 +56,7 @@ export function statusEventLabel(event: StreamEvent, t: Translate): string | und
     const { notice, index } = event;
     if (notice) {
         const names = joinNames(notice.names, t);
+        if (notice.kind === 'partial_index') return t('chat.partial.step', { names });
         return t(notice.kind === 'still_indexing' ? 'chat.indexing.step' : 'chat.notIndexed.step', { names });
     }
     if (index) {

@@ -127,6 +127,7 @@ MCP_TOOL_FIELDS = ("mcp_server", "mcp_server_label", "mcp_tool")
 #: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning
 #: words so far, or characters of a tool call's arguments so far.
 _PHASE_COUNT_FIELDS = ("words", "chars")
+_PARTIAL_INDEX_FIELDS = ("names", "pages_done", "pages_total")
 
 #: What a ``model_queue`` status carries under ``queue``: where a turn waiting
 #: for the model stands (see ``broker_client.queue_status_event``).
@@ -366,6 +367,10 @@ class CanonicalTranslator:
         message = str(event.get("message", ""))
         if event.get("channel") == DEBUG_CHANNEL:
             return self._debug_status(message)
+        notice = event.get("notice")
+        if isinstance(notice, dict) and notice.get("kind") == "partial_index":
+            partial = {k: notice.get(k) for k in _PARTIAL_INDEX_FIELDS}
+            return [{"type": "status", "message": message, "partial_index": partial}]
         out = self._user_status(message)
         phase = event.get("phase")
         if out and isinstance(phase, str) and phase:

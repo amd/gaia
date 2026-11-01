@@ -1062,6 +1062,10 @@ export async function cancelIndexing(id: string): Promise<{ cancelled: boolean; 
     return apiFetch('POST', `/documents/${id}/cancel`);
 }
 
+export async function cancelImageReading(id: string): Promise<{ cancelled: boolean; id: string }> {
+    return apiFetch('POST', `/documents/${id}/cancel-images`);
+}
+
 export async function reindexDocument(id: string): Promise<Document> {
     return apiFetch('POST', `/documents/${id}/reindex?background=true`);
 }

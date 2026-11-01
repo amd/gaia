@@ -49,6 +49,39 @@ function useDismiss(batchId: string | null | undefined) {
 
 const hasProblem = (o: api.IndexingOverview) => (o.failed ?? 0) + (o.cancelled ?? 0) > 0;
 
+function imagesLine(images: NonNullable<api.IndexingOverview['images']>, t: Translate): string {
+    const count = images.documents ?? 0;
+    return t.plural('docs.images.overall', count, { name: images.names?.[0] ?? '' });
+}
+
+/** Documents you can already ask about, with their images still being read. */
+function ImagesReadingLine({ onOpen }: { onOpen?: () => void }) {
+    const t = useT();
+    const images = useChatStore((s) => s.indexing?.images);
+    if (!images?.documents) return null;
+    const line = imagesLine(images, t);
+    const eta = images.blocked ? null : timeLeftLabel(images.seconds_left, images.seconds_left ? 'ready' : 'estimating', t);
+    const body = (
+        <>
+            {images.blocked
+                ? <AlertCircle size={14} className="index-indicator-icon is-problem" aria-hidden="true" />
+                : <Loader size={14} className="index-indicator-icon doc-spin" aria-hidden="true" />}
+            <span className="index-indicator-text">
+                <span>{line}</span>
+                {eta && <span className="index-indicator-eta">{eta}</span>}
+            </span>
+        </>
+    );
+    return (
+        <div className={`${onOpen ? 'index-indicator' : 'index-summary'} index-images`}>
+            {onOpen
+                ? <button type="button" className="index-indicator-open" onClick={onOpen} title={t('docs.overall.open')}>{body}</button>
+                : <p className="index-images-line">{body}</p>}
+            {images.blocked && <p className="index-images-blocked">{t('docs.images.blocked')}</p>}
+        </div>
+    );
+}
+
 /**
  * Stays reachable while the library is closed: one line above the chat that opens
  * the library, and takes nothing away from the chat. A batch that went wrong
@@ -68,7 +101,8 @@ export function IndexingIndicator() {
         return () => clearTimeout(timer);
     }, [finishedWell, dismiss]);
 
-    if (!overview?.batch_id || !overview.total || libraryOpen) return null;
+    if (libraryOpen) return null;
+    if (!overview?.batch_id || !overview.total) return <ImagesReadingLine onOpen={() => setShowDocLibrary(true)} />;
 
     const active = overview.active === true;
     const summary = active ? countLine(overview, t) : outcomeLine(overview, t);
@@ -109,12 +143,13 @@ export function IndexingSummary() {
     const t = useT();
     const overview = useChatStore((s) => s.indexing);
     const dismiss = useDismiss(overview?.batch_id);
-    if (!overview?.batch_id || !overview.total) return null;
+    if (!overview?.batch_id || !overview.total) return <ImagesReadingLine />;
 
     const active = overview.active === true;
     const running = overview.documents?.find((d) => d.id === overview.current_id);
     const failed = overview.documents?.filter((d) => d.state === 'failed') ?? [];
     return (
+        <>
         <section className="index-summary" aria-label={t('docs.overall.title')}>
             <div className="index-summary-head">
                 <strong>{active ? countLine(overview, t) : outcomeLine(overview, t)}</strong>
@@ -141,6 +176,8 @@ export function IndexingSummary() {
                 <p className="index-summary-problem"><bdi>{joinNames(failed.map((d) => d.filename), t)}</bdi></p>
             )}
         </section>
+        <ImagesReadingLine />
+        </>
     );
 }
 
@@ -153,9 +190,16 @@ export function ChatIndexingNotice({ documents }: { documents: Document[] }) {
     const setShowDocLibrary = useChatStore((s) => s.setShowDocLibrary);
     const indexing = documents.filter(isIndexing);
     const missing = documents.filter(notIndexed);
-    if (!indexing.length && !missing.length) return null;
+    const partial = documents.filter((d) => d.images_reading);
+    if (!indexing.length && !missing.length && !partial.length) return null;
     return (
         <div className="index-chat-notice" role="status">
+            {partial.length > 0 && (
+                <p>
+                    <Loader size={13} className="doc-spin index-chat-notice-icon" aria-hidden="true" />
+                    <span>{t.plural('chat.partial.notice', partial.length, { name: partial[0].filename })}</span>
+                </p>
+            )}
             {indexing.length > 0 && (
                 <p>
                     <Loader size={13} className="doc-spin index-chat-notice-icon" aria-hidden="true" />

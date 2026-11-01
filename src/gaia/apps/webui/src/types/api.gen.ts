@@ -59,6 +59,8 @@ export interface ApiSchemas {
   GpuMemoryRevertRequest: GpuMemoryRevertRequest;
   GrantRequest: GrantRequest;
   HTTPValidationError: HTTPValidationError;
+  ImagesOverview: ImagesOverview;
+  ImagesReading: ImagesReading;
   IndexFolderRequest: IndexFolderRequest;
   IndexFolderResponse: IndexFolderResponse;
   IndexProgress: IndexProgress;
@@ -452,11 +454,22 @@ export interface DocumentResponse {
   filename: string;
   filepath: string;
   id: string;
+  images_reading?: ImagesReading | null;
   indexed_at: string;
   indexing_status?: string;
   last_accessed_at?: string | null;
   last_error?: string | null;
   sessions_using?: number;
+}
+/**
+ * A searchable document whose images are still being read.
+ */
+export interface ImagesReading {
+  pages_done?: number;
+  pages_total?: number;
+  reason?: string | null;
+  seconds_left?: number | null;
+  state?: string;
 }
 /**
  * One document's indexing status.
@@ -662,6 +675,17 @@ export interface ValidationError {
   type: string;
 }
 /**
+ * Every document with images still being read in the background.
+ */
+export interface ImagesOverview {
+  blocked?: string | null;
+  documents?: number;
+  names?: string[];
+  pages_done?: number;
+  pages_total?: number;
+  seconds_left?: number | null;
+}
+/**
  * Request to index all supported documents in a folder.
  */
 export interface IndexFolderRequest {
@@ -703,6 +727,7 @@ export interface IndexingOverview {
   done?: number;
   estimate?: string;
   failed?: number;
+  images?: ImagesOverview;
   percent?: number | null;
   seconds_left?: number | null;
   total?: number;

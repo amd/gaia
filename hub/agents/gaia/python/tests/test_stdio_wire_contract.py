@@ -314,6 +314,27 @@ def test_status_extension_fields_match_the_model_state_ping(monkeypatch):
     )
 
 
+def test_partial_index_status_matches_the_fixture():
+    from gaia.ui.sse_translation import CanonicalTranslator
+
+    [event] = CanonicalTranslator("run").translate(
+        {
+            "type": "status",
+            "message": "Still reading images in a.pdf",
+            "notice": {
+                "kind": "partial_index",
+                "names": ["a.pdf"],
+                "pages_done": 1,
+                "pages_total": 4,
+            },
+        }
+    )
+
+    assert set(event) - set(EVENTS["status"]["fields"]) - {"type"} == set(
+        EVENTS["status"]["partial_index_extension"]
+    )
+
+
 def test_history_cut_status_matches_the_fixture():
     from gaia.agents.base.history import HistoryCut
 

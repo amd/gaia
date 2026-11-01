@@ -1712,6 +1712,9 @@ Used to reach the UI from a phone.
     document library are served; a file deleted from disk returns 404.
   </Accordion>
 
+  <Accordion title="POST /api/documents/{doc_id}/cancel-images">
+    Stops the background reading of a document's images. Its text stays searchable, and anything already read stays too. Returns `{"cancelled": true, "id": "..."}`, or 404 when no images are being read.
+  </Accordion>
   <Accordion title="POST /api/documents/{doc_id}/cancel">
     Cancel an in-flight indexing job, running or still queued.
   </Accordion>

@@ -10,7 +10,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, NOW, mockApi, session, useLocale, useTheme } from './fixtures';
+import { ANSWER_SESSION, MESSAGES, NOW, mockApi, session, useLocale, useTheme } from './fixtures';
 
 const SHOTS = process.env.GAIA_INDEXING_SHOTS;
 
@@ -68,11 +68,19 @@ const STATES: Record<string, object> = {
     },
 };
 
-async function open(page: Page, state: object, theme: 'light' | 'dark', locale: string, hash = ''): Promise<void> {
+async function open(
+    page: Page,
+    state: object,
+    theme: 'light' | 'dark',
+    locale: string,
+    hash = '',
+    documents: object[] = DOCS,
+    steps: object[] = [],
+): Promise<void> {
     await page.clock.setFixedTime(NOW);
     await mockApi(page);
     await page.route('**/api/documents', (route) =>
-        route.fulfill({ json: { documents: DOCS, total: 5, total_size_bytes: 42_000_000, total_chunks: 412 } }),
+        route.fulfill({ json: { documents, total: documents.length, total_size_bytes: 42_000_000, total_chunks: 412 } }),
     );
     await page.route('**/api/documents/indexing', (route) => route.fulfill({ json: overview(state) }));
     await page.route('**/api/documents/*/status', (route) =>
@@ -91,6 +99,16 @@ async function open(page: Page, state: object, theme: 'light' | 'dark', locale: 
             },
         }),
     );
+    if (steps.length) {
+        await page.route('**/api/sessions/*/messages*', (route) => {
+            const messages = (MESSAGES.messages as Array<Record<string, unknown>>).map((message) =>
+                message.role === 'assistant'
+                    ? { ...message, agent_steps: [...((message.agent_steps as object[]) ?? []), ...steps] }
+                    : message,
+            );
+            return route.fulfill({ json: { ...MESSAGES, messages } });
+        });
+    }
     await useTheme(page, theme);
     await useLocale(page, locale);
     await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -125,6 +143,20 @@ const overflow = (page: Page): Promise<string[]> =>
         }
         return problems;
     });
+
+const IMAGES_READING = {
+    batch_id: null,
+    active: false,
+    total: 0,
+    images: {
+        documents: 3,
+        pages_done: 40,
+        pages_total: 310,
+        seconds_left: 5_400,
+        blocked: null,
+        names: ['annual-report-2025.pdf', 'network-survey.pdf', 'scanned-contract.pdf'],
+    },
+};
 
 const library = (page: Page) => page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
 
@@ -180,6 +212,51 @@ for (const locale of ['en', 'ar']) {
         await open(page, STATES.running, 'light', locale, `#${ANSWER_SESSION}`);
         await expect(page.locator('.index-chat-notice')).toBeVisible();
         await shot(page, `phone-chat-${locale}`);
+        expect(await overflow(page)).toEqual([]);
+    });
+
+    for (const theme of ['light', 'dark'] as const) {
+        test(`documents you can ask about while their images are read, ${locale} ${theme}`, async ({ page }, info) => {
+            test.skip(info.project.name !== 'light');
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await open(page, IMAGES_READING, theme, locale, '', [
+                row('r1', 'annual-report-2025.pdf', 'complete', {
+                    chunk_count: 600,
+                    images_reading: { pages_done: 12, pages_total: 111, state: 'reading', seconds_left: 2200 },
+                }),
+            ]);
+            await expect(page.locator('.index-images')).toBeVisible();
+            await shot(page, `images-indicator-${locale}-${theme}`);
+            expect(await overflow(page)).toEqual([]);
+
+            await library(page);
+            await expect(page.locator('.doc-images-reading')).toBeVisible();
+            await shot(page, `images-library-${locale}-${theme}`);
+            expect(await overflow(page)).toEqual([]);
+        });
+    }
+
+    test(`images at phone width, ${locale}`, async ({ page }, info) => {
+        test.skip(info.project.name !== 'light');
+        await page.setViewportSize({ width: 390, height: 780 });
+        await open(page, IMAGES_READING, 'light', locale);
+        await expect(page.locator('.index-images')).toBeVisible();
+        await shot(page, `images-phone-${locale}`);
+        expect(await overflow(page)).toEqual([]);
+    });
+
+    test(`an answer written while images were being read says so, ${locale}`, async ({ page }, info) => {
+        test.skip(info.project.name !== 'light');
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await open(page, STATES.running, 'light', locale, `#${ANSWER_SESSION}`, undefined, [{
+            id: 90,
+            type: 'status',
+            label: 'Still reading images',
+            notice: { kind: 'partial_index', names: ['annual-report-2025.pdf'], pages_done: 12, pages_total: 111 },
+        }]);
+        await page.locator('.msg-partial-index').scrollIntoViewIfNeeded();
+        await expect(page.locator('.msg-partial-index')).toBeVisible();
+        await shot(page, `partial-answer-${locale}`);
         expect(await overflow(page)).toEqual([]);
     });
 

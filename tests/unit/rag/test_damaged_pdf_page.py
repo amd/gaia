@@ -103,7 +103,7 @@ class TestAnUnreadablePageStillGetsATry:
         from gaia.rag import pdf_utils
 
         signature = inspect.signature(pdf_utils.extract_images_from_page_pymupdf)
-        assert list(signature.parameters) == ["pdf_path", "page_num"]
+        assert list(signature.parameters)[:2] == ["pdf_path", "page_num"]
 
 
 # ============================================================================
@@ -123,7 +123,7 @@ class TestTheIndexerRecordsWhatItCouldNotRead:
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
         sdk = RAGSDK.__new__(RAGSDK)
-        sdk.config = RAGConfig(show_stats=False)
+        sdk.config = RAGConfig(show_stats=False, read_images_later=False)
         sdk.log = __import__("logging").getLogger("test-rag")
         return sdk
 
@@ -237,7 +237,7 @@ class TestTheDegradedReportReachesTheCaller:
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
         sdk = RAGSDK.__new__(RAGSDK)
-        sdk.config = RAGConfig(show_stats=False)
+        sdk.config = RAGConfig(show_stats=False, read_images_later=False)
         sdk.log = __import__("logging").getLogger("test-rag")
         return sdk
 

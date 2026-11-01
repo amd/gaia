@@ -1217,6 +1217,16 @@
         "title": "Id",
         "type": "string"
       },
+      "images_reading": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ImagesReading"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "indexed_at": {
         "title": "Indexed At",
         "type": "string"
@@ -1984,6 +1994,101 @@
     "title": "HTTPValidationError",
     "type": "object"
   },
+  "ImagesOverview": {
+    "description": "Every document with images still being read in the background.",
+    "properties": {
+      "blocked": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Blocked"
+      },
+      "documents": {
+        "default": 0,
+        "title": "Documents",
+        "type": "integer"
+      },
+      "names": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Names",
+        "type": "array"
+      },
+      "pages_done": {
+        "default": 0,
+        "title": "Pages Done",
+        "type": "integer"
+      },
+      "pages_total": {
+        "default": 0,
+        "title": "Pages Total",
+        "type": "integer"
+      },
+      "seconds_left": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Seconds Left"
+      }
+    },
+    "title": "ImagesOverview",
+    "type": "object"
+  },
+  "ImagesReading": {
+    "description": "A searchable document whose images are still being read.",
+    "properties": {
+      "pages_done": {
+        "default": 0,
+        "title": "Pages Done",
+        "type": "integer"
+      },
+      "pages_total": {
+        "default": 0,
+        "title": "Pages Total",
+        "type": "integer"
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Reason"
+      },
+      "seconds_left": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Seconds Left"
+      },
+      "state": {
+        "default": "reading",
+        "title": "State",
+        "type": "string"
+      }
+    },
+    "title": "ImagesReading",
+    "type": "object"
+  },
   "IndexFolderRequest": {
     "description": "Request to index all supported documents in a folder.",
     "properties": {
@@ -2212,6 +2317,9 @@
         "default": 0,
         "title": "Failed",
         "type": "integer"
+      },
+      "images": {
+        "$ref": "#/components/schemas/ImagesOverview"
       },
       "percent": {
         "anyOf": [

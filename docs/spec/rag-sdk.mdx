@@ -22,7 +22,7 @@ RAGSDK provides document retrieval and Q&A capabilities using Retrieval-Augmente
 
 **Key Features:**
 - Multi-format support (PDF, TXT, MD, CSV, JSON, code files)
-- VLM-based image text extraction from PDFs, on pages with under 200 characters of their own text, so scans are read and logos and photos on text pages aren't
+- VLM-based image text extraction from PDFs and slides, in a background pass after the text is searchable (`read_images_later`)
 - Intelligent semantic chunking
 - Hardware-accelerated embeddings (NPU/GPU via Lemonade)
 - Per-file search optimization
@@ -66,6 +66,7 @@ class RAGConfig:
     # VLM settings
     vlm_model: str = "Gemma-4-E4B-it-GGUF"
     use_vlm: bool = True  # False: never read PDF/PPTX images, even if the VLM is installed; image files then fail to index
+    read_images_later: bool = True  # False: read images during indexing, only on pages under 200 characters of text
 
     # Security
     allowed_paths: Optional[List[str]] = None
@@ -128,6 +129,7 @@ class RAGSDK:
                 "vlm_pages": int (pages enhanced with VLM),
                 "total_images": int (images processed),
                 "image_pages_skipped": int (pages whose images were left unread),
+                "images_reading": dict (set while the background pass is running: pages_done, pages_total, state, reason, seconds_left),
                 "evicted": List[str] (only when the library hit max_indexed_files
                     or max_total_chunks; paths removed to make room, oldest first),
                 "error": str (if failed),

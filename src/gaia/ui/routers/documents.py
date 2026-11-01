@@ -36,6 +36,7 @@ from ..models import (
     DocumentUploadRequest,
     IndexFolderRequest,
     IndexFolderResponse,
+    ImagesReading,
     IndexingOverview,
 )
 from ..utils import (
@@ -257,6 +258,14 @@ def _start_background_index(
     doc["last_error"] = None
 
 
+def _images_overview() -> dict:
+    """Documents with images still being read in the background."""
+    from gaia.rag import image_pass
+    from gaia.rag.sdk import default_rag_cache_dir
+
+    return image_pass.overview(default_rag_cache_dir())
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 
@@ -266,9 +275,15 @@ async def list_documents(db: ChatDatabase = Depends(get_db)):
     docs = db.list_documents()
     total_size = sum(d.get("file_size", 0) for d in docs)
     total_chunks = sum(d.get("chunk_count", 0) for d in docs)
+    reading = {entry["name"]: entry for entry in _images_overview()["details"]}
+    responses = [doc_to_response(d) for d in docs]
+    for response in responses:
+        entry = reading.get(response.filename)
+        if entry:
+            response.images_reading = ImagesReading(**entry)
 
     return DocumentListResponse(
-        documents=[doc_to_response(d) for d in docs],
+        documents=responses,
         total=len(docs),
         total_size_bytes=total_size,
         total_chunks=total_chunks,
@@ -622,7 +637,9 @@ async def monitor_status(request: Request):
 @router.get("/api/documents/indexing", response_model=IndexingOverview)
 async def get_indexing_overview():
     """Every document indexing now, with one combined bar and time estimate."""
-    return index_tracker.overview()
+    images = _images_overview()
+    images.pop("details")
+    return {**index_tracker.overview(), "images": images}
 
 
 @router.post("/api/documents/indexing/{batch_id}/dismiss")
@@ -703,6 +720,24 @@ async def cancel_indexing(
     indexing_tasks.pop(doc_id, None)
     logger.info("Indexing cancelled by user for document %s", doc_id)
     return {"cancelled": True, "id": doc_id}
+
+
+@router.post("/api/documents/{doc_id}/cancel-images")
+async def cancel_image_reading(doc_id: str, db: ChatDatabase = Depends(get_db)):
+    """Stop reading a document's images; its text stays searchable."""
+    doc = db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    from gaia.rag import image_pass
+    from gaia.rag.sdk import default_rag_cache_dir
+
+    for entry in _images_overview()["details"]:
+        if entry["name"] == doc["filename"]:
+            image_pass.cancel(default_rag_cache_dir(), entry["key"])
+            return {"cancelled": True, "id": doc_id}
+    raise HTTPException(
+        status_code=404, detail="This document has no images being read"
+    )
 
 
 @router.post("/api/documents/{doc_id}/reindex", response_model=DocumentResponse)

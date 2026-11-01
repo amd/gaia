@@ -14,6 +14,19 @@
     font-size: 12px;
 }
 
+.index-images-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    min-inline-size: 0;
+}
+.index-images-blocked {
+    margin: 4px 0 0;
+    font-size: var(--fs-label);
+    color: var(--text-muted);
+}
+
 .index-indicator-open {
     display: flex;
     flex: 1;

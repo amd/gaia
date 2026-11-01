@@ -15,6 +15,7 @@ import { log } from '../utils/logger';
 
 export const BUSY_INTERVAL_MS = 1_500;
 export const IDLE_INTERVAL_MS = 10_000;
+export const IMAGES_INTERVAL_MS = 5_000;
 
 const isIndexing = (status: string | undefined) => status === 'indexing' || status === 'pending';
 
@@ -23,7 +24,7 @@ let generation = 0;
 let lastFingerprint = '';
 
 function fingerprint(o: api.IndexingOverview): string {
-    return [o.batch_id, o.total, o.done, o.failed, o.cancelled].join('|');
+    return [o.batch_id, o.total, o.done, o.failed, o.cancelled, o.images?.documents, o.images?.pages_done].join('|');
 }
 
 /** Read the overview once; when documents finished, the library's rows are stale too. */
@@ -47,6 +48,7 @@ export async function refreshIndexing(): Promise<void> {
 function delay(): number {
     const { indexing, documents } = useChatStore.getState();
     const busy = indexing?.active || documents.some((d) => isIndexing(d.indexing_status));
+    if (!busy && indexing?.images?.documents) return IMAGES_INTERVAL_MS;
     return busy ? BUSY_INTERVAL_MS : IDLE_INTERVAL_MS;
 }
 

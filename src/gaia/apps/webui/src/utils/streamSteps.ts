@@ -60,6 +60,7 @@ export function agentEventToStep(event: StreamEvent, stepIdRef: { current: numbe
                 label: statusEventLabel(event, getT()) || event.status || 'Working',
                 active: event.status === 'working',
                 ...(event.status === 'warning' ? { success: false } : {}),
+                ...(event.notice?.kind === 'partial_index' ? { notice: event.notice } : {}),
                 timestamp: ts,
             };
         case 'agent_error':

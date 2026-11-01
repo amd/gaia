@@ -16,6 +16,7 @@ import { useT, type Translate } from '../i18n/useT';
 import { IndexingProgress } from './IndexingProgress';
 import { IndexingSummary } from './IndexingOverview';
 import { refreshIndexing } from '../services/indexingPoll';
+import { fmt } from '../utils/indexingLabels';
 import './DocumentLibrary.css';
 
 /** Split a stored indexing error into a one-line summary and the rest. */
@@ -451,6 +452,15 @@ export function DocumentLibrary() {
         }
     }, []);
 
+    const handleCancelImages = useCallback(async (id: string) => {
+        try {
+            await api.cancelImageReading(id);
+        } catch (err) {
+            log.doc.error(`Failed to stop reading images: ${id}`, err);
+        }
+        await refreshIndexing();
+    }, []);
+
     const handleCancelIndexing = useCallback(async (id: string) => {
         const doc = documents.find((d) => d.id === id);
         log.doc.info(`Cancelling indexing for: ${doc?.filename || id}`);
@@ -614,6 +624,22 @@ export function DocumentLibrary() {
                             <span className="doc-timestamp" title={t('docs.indexedAt', { time: indexedTimeFull })}>
                                 <Clock size={10} />
                                 {indexedTime}
+                            </span>
+                        )}
+                        {doc.images_reading && (
+                            <span className="doc-images-reading">
+                                <Loader size={11} className="doc-spin" aria-hidden="true" />
+                                {doc.images_reading.state === 'blocked'
+                                    ? t('docs.images.rowBlocked')
+                                    : t('docs.images.row', { done: fmt(doc.images_reading.pages_done ?? 0), total: fmt(doc.images_reading.pages_total ?? 0) })}
+                                <button
+                                    type="button"
+                                    className="link-btn"
+                                    onClick={(e) => { e.stopPropagation(); void handleCancelImages(doc.id); }}
+                                    aria-label={t('docs.images.stopAria', { name: doc.filename })}
+                                >
+                                    {t('docs.images.stop')}
+                                </button>
                             </span>
                         )}
                     </span>
