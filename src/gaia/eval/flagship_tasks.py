@@ -624,8 +624,9 @@ def workspace_diff(workdir: Path, original: Path) -> str:
 # ---------------------------------------------------------------------------
 # Running the flagship
 #: A path into the suite's own folder: the task file and its fixtures. A bare
-#: ``tasks.json`` is not matched, since a SWE-bench repository may have one.
-_ANSWER_KEY_PATH = re.compile(r"eval[\\/]+tasks(?![\w.-])", re.IGNORECASE)
+#: ``tasks.json`` is not matched, since a SWE-bench repository may have one, and
+#: neither is a longer name ending in ``eval`` (``lm_eval/tasks``).
+_ANSWER_KEY_PATH = re.compile(r"(?<![\w.-])eval[\\/]+tasks(?![\w.-])", re.IGNORECASE)
 #: Field names only the task file carries. Their text in a tool result means
 #: the answer key came back, however the agent spelled the path.
 ANSWER_KEY_FIELDS = ("genuine_answer", "must_establish", "wrong_answers")

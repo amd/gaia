@@ -123,6 +123,56 @@ def test_clean_runs_are_not_flagged(entries):
     assert ft.answer_key_contact(_gaia(*entries)) == ""
 
 
+#: Everyday tool calls a coding or question task makes. None reaches the
+#: suite's answer key, so none may fail a task as contaminated.
+EVERYDAY_CALLS = [
+    ("read_file", {"path": "src/app/main.py"}, "def main():\n    return 0\n"),
+    ("read_file", {"path": "README.md"}, "# Project\nRun `make test`."),
+    ("read_file", {"path": "tests/test_dates.py"}, "def test_parse(): ..."),
+    ("read_file", {"path": r"C:\work\proj\src\tasks.py"}, "TASKS = []"),
+    ("read_file", {"path": "celery/app/task.py"}, "class Task: ..."),
+    ("read_file", {"path": "lm_eval/tasks/__init__.py"}, "TASK_REGISTRY = {}"),
+    ("read_file", {"path": "src/retrieval/tasks/rank.py"}, "def rank(): ..."),
+    ("read_file", {"path": "medieval/tasks.md"}, "Knights"),
+    ("read_file", {"path": "docs/eval-tasks.md"}, "How we evaluate"),
+    ("read_file", {"path": "evaluation/tasks/a.yaml"}, "name: a"),
+    ("read_file", {"path": "eval/tasks_old.py"}, ""),
+    ("read_file", {"path": "eval/taskset.json"}, "{}"),
+    ("list_directory", {"path": "."}, "src/\ntests/\nsetup.py"),
+    ("list_directory", {"path": "eval"}, "metrics.py\nrunner.py"),
+    ("search_files", {"pattern": "*.py"}, "src/a.py\nsrc/b.py"),
+    ("search_file_content", {"pattern": "def evaluate"}, "src/a.py:3"),
+    ("search_file_content", {"pattern": "tasks"}, "src/queue.py:1: tasks = []"),
+    ("run_shell_command", {"command": "python -m pytest -q"}, "3 passed"),
+    ("run_shell_command", {"command": "git diff"}, "+    return x\n"),
+    ("run_shell_command", {"command": "git status --short"}, " M src/a.py"),
+    ("run_shell_command", {"command": "pip install -e ."}, "Successfully"),
+    ("run_shell_command", {"command": "ls tests"}, "test_a.py"),
+    ("run_shell_command", {"command": "python manage.py test tasks"}, "OK"),
+    ("run_python", {"code": "import json; print(json.load(open('tasks.json')))"}, "[]"),
+    ("run_python", {"code": "print(sum(range(10)))"}, "45"),
+    ("run_python", {"code": "from eval import tasks"}, ""),
+    ("write_file", {"path": "src/a.py", "content": "x = 1\n"}, "ok"),
+    ("edit_file", {"path": "src/dates.py", "old": "z", "new": "Z"}, "ok"),
+    ("Bash", {"command": "pytest tests/test_eval.py"}, "1 passed"),
+    ("Read", {"file_path": "/repo/src/evaluator/tasks.py"}, "def run(): ..."),
+    ("Grep", {"pattern": "answer", "path": "src"}, "src/qa.py:4: answer = 42"),
+    ("web_fetch", {"url": "https://docs.python.org/3/library/re.html"}, "re"),
+    ("read_file", {"path": "data/answers.csv"}, "id,answer\n1,yes"),
+]
+
+
+@pytest.mark.parametrize(
+    "name,args,result", EVERYDAY_CALLS, ids=[str(i) for i in range(len(EVERYDAY_CALLS))]
+)
+def test_everyday_tool_calls_are_not_contamination(name, args, result):
+    assert ft.answer_key_contact(_gaia(_tool(name, args, result))) == ""
+
+
+def test_the_everyday_corpus_is_large_enough():
+    assert len(EVERYDAY_CALLS) >= 30
+
+
 # --- the task fails, and the gate counts it -----------------------------------
 
 
