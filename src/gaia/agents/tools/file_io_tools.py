@@ -1479,34 +1479,15 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with update results
             """
-            path_validator = _require_path_validator(self)
+            # Report missing setup instead of writing without a check.
+            path_validator = getattr(self, "path_validator", None)
+            if path_validator is None:
+                return _missing_path_validator_write_error(self)
+            gaia_path = "GAIA.md"
             try:
                 from datetime import datetime
 
                 gaia_path = str(_workspace_target(self, project_root) / "GAIA.md")
-
-                is_blocked, reason = path_validator.is_write_blocked(gaia_path)
-                if is_blocked:
-                    return {**NOT_EXECUTED, "status": "error", "error": reason}
-                if not path_validator.is_path_allowed(gaia_path):
-                    return {
-                        **NOT_EXECUTED,
-                        "status": "error",
-                        "error": f"Access denied: {gaia_path} is not in allowed paths."
-                        f"{path_validator.scratch_hint(gaia_path)}",
-                    }
-
-                reads = file_read_record(self)
-                refusal = reads.refusal(gaia_path, "overwriting")
-                if refusal is not None:
-                    path_validator.audit_write(
-                        "write",
-                        gaia_path,
-                        0,
-                        "denied",
-                        refusal.get("error_type", "read_required"),
-                    )
-                    return refusal
 
                 # Start building content
                 content = "# GAIA.md\n\n"
@@ -1552,22 +1533,61 @@ class FileIOToolsMixin:
                 content += "- Use Black formatter for consistent style\n"
                 content += "- Ensure proper error handling\n\n"
 
+                content_size = len(content.encode("utf-8"))
+                is_allowed, reason = path_validator.validate_write(
+                    gaia_path, content_size=content_size
+                )
+                if not is_allowed:
+                    path_validator.audit_write(
+                        "write", gaia_path, content_size, "denied", reason
+                    )
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(gaia_path, "overwriting")
+                if refusal is not None:
+                    path_validator.audit_write(
+                        "write",
+                        gaia_path,
+                        content_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
+                    return refusal
+
                 before_change(gaia_path, "update_gaia_md")
                 # Check existence BEFORE writing for accurate created/updated msg
                 is_new_file = not os.path.exists(gaia_path)
+                backup_path = (
+                    None if is_new_file else path_validator.create_backup(gaia_path)
+                )
 
-                # Write the file
                 with open(gaia_path, "w", encoding="utf-8", newline="") as f:
                     f.write(content)
                 reads.note(gaia_path)
 
-                return {
+                path_validator.audit_write(
+                    "write",
+                    gaia_path,
+                    content_size,
+                    "success",
+                    f"backup={backup_path}" if backup_path else "",
+                )
+                result = {
                     "status": "success",
                     "file_path": gaia_path,
                     "created": is_new_file,
                     "message": f"GAIA.md {'created' if is_new_file else 'updated'} at {gaia_path}",
                 }
+                if backup_path:
+                    result["backup_path"] = backup_path
+                return result
+            except BackupError as e:
+                # Nothing was written, so this must not become a durable lesson.
+                path_validator.audit_write("write", gaia_path, 0, "denied", str(e))
+                return {**NOT_EXECUTED, "status": "error", "error": str(e)}
             except Exception as e:
+                path_validator.audit_write("write", gaia_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
         @tool(preflight=read_first_preflight(self, target_of))
