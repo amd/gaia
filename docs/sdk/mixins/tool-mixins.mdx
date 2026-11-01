@@ -210,7 +210,7 @@ result = agent.process_query("create a sunset over mountains")
 
 **Available Tools:**
 - `generate_image(prompt, model, size, steps, cfg_scale, seed)` - Generate images with SD
-- `list_sd_models()` - Show available models
+- `list_sd_models()` - List the image models downloaded in Lemonade, with each one's `image_defaults`
 - `get_generation_history(limit)` - See generated images from session
 
 To opt into image-to-3D reconstruction, initialize the mixin with
@@ -225,6 +225,7 @@ GAIA does not silently download it.
 - **SD-Turbo** - Faster, 512x512, ~13s
 - **SDXL-Base-1.0** - Photorealistic, 1024x1024, ~9min
 - **SD-1.5** - Legacy, 512x512, ~88s
+- **TheNoise models** (e.g. `Qwen-Image-2.1-Turbo-INT8`) - must already be downloaded; GAIA leaves size, steps, CFG and seed to Lemonade's per-model defaults unless you pass them
 
 ---
 
