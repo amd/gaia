@@ -220,10 +220,14 @@ def test_cancel_with_and_without_a_model(daemon, monkeypatch):
     assert seen == [None, "Gemma-4-E4B-it-GGUF"]
 
 
-def test_the_daemon_app_mounts_the_setup_routes():
+def test_the_daemon_app_mounts_the_setup_routes(monkeypatch):
+    """Asked through the real daemon app, not by listing its routes: newer
+    FastAPI versions nest included routers, so a path list proves nothing."""
     from gaia.daemon.app import create_app
 
+    monkeypatch.setattr(setup_router.runner, "status", lambda: None)
     app = create_app(token=TOKEN, port=1234, pid=111, started_at=0.0)
-    routes = {getattr(r, "path", "") for r in app.routes}
-    assert "/daemon/v1/setup/plan" in routes
-    assert "/daemon/v1/setup/status" in routes
+    client = TestClient(app)
+    r = client.get("/daemon/v1/setup/status", headers=AUTH)
+    assert r.status_code == 200 and r.json() == {"state": "idle"}
+    assert client.get("/daemon/v1/setup/status").status_code == 401
