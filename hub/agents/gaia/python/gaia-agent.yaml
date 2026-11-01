@@ -32,17 +32,18 @@ icon: sparkles
 tools_count: 104
 
 language: python
-# ChatAgent (gaia_agent.chat_agent) imports gaia.agents.tools.reasoning_tools;
-# 0.25.1 is the first core that ships it. (0.25.0 added the allowed-folders
-# check, #4656; 0.24.1 was the first whose daemon can supervise this, #2932.)
-min_gaia_version: "0.25.3"
+# ChatAgent (gaia_agent.chat_agent) calls RAGSDK.document_scripts (#6165);
+# 0.25.4 is the first core that ships it. (0.25.1 added reasoning_tools;
+# 0.25.0 added the allowed-folders check, #4656; 0.24.1 was the first whose
+# daemon can supervise this, #2932.)
+min_gaia_version: "0.25.4"
 models: [Gemma-4-E4B-it-GGUF]
 
 python:
   entry_module: gaia_agent
   entry_class: GaiaAgent
   dependencies:
-    - "amd-gaia>=0.25.3"
+    - "amd-gaia>=0.25.4"
 
 interfaces:
   tui: true

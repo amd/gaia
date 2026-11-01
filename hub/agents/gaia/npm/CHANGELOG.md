@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
+
 ### Changed
 
 - **The agent ships as one Python package.** `ChatAgent`, the class the agent
@@ -15,6 +17,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `chat`, `doc` or `file` agents get this agent instead; Agent UI chats saved
   under them stay read-only. MCP settings saved for `installed:chat` no
   longer apply (#6099).
+- **The binary ships no GPL or AGPL code.** PDF rendering and image
+  extraction moved from PyMuPDF (AGPL-3.0) to pypdfium2 (Apache-2.0 /
+  BSD-3-Clause), so `run_python` scripts get `pypdfium2` in place of
+  `pymupdf`. The binary also stopped carrying PyInstaller's own Python package,
+  GNU Readline and GNU dbm; scripts that `import readline` now get an
+  `ImportError`, and `shelve`/`dbm` keep working on `dbm.dumb`. The release
+  build fails if any of them come back.
+- **Reading a web page no longer dead-ends as early.** When a page splits a
+  multi-word `fetch_page(find=...)` phrase across a table or sentence, the agent
+  gets a labelled passage holding all its words instead of "no occurrence". A
+  page with several links says how to list them, and `open_url` defers to the
+  enforced network policy rather than having the model refuse on its own.
+- **With Claude, the agent follows a repository's own instructions.** Started in
+  a repository, a Claude model gets the project's `CLAUDE.md` / `AGENTS.md` in
+  its prompt and its `.claude/skills` in the skill list, as in Claude Code. Other
+  models get the prompt they had before, because they scored no better with it
+  and paid for it in tokens. `gaia config set project_context full|off|auto`
+  changes the choice.
+
 ### For integrators: contract 2.26
 
 - **"Always" answers can be listed and revoked** (contract **2.26**).
@@ -26,9 +47,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   own. An unknown session or key is a `404`.
 - **`needs_confirmation` carries `always_label`** beside `always_scope`: the
   same grant in plain words (`editing notes.md`), when there is one.
+- **`GET /v1/gaia/skills` can return `"source": "claude-project"`** for a skill
+  in the `.claude/skills` of the project the agent works in. A host that groups
+  rows by `source` must show a value it does not know ungrouped rather than
+  drop it: an Agent UI from before this release hides these skills.
 
 ### Fixed
 
+- **A rate-limited page now says how long to wait.** `fetch_webpage` on an
+  HTTP 429 or 503 with `Retry-After` returns the wait as `retry_after` with a
+  hint not to fetch again before then. It returned only the status line, so
+  the agent re-fetched at once and could not tell the user when the limit
+  resets.
+- **One stray tool-call reply no longer triples a gateway model's token use.**
+  A gateway model that wrote its own tool-call markup once was moved to native
+  tool schemas (~12K more tokens per call) for every later session, so a single
+  DeepSeek reply in its own format cost every run after it. The switch now
+  lasts only for the session that wrote the markup.
+- **The doc profile names a search tool it has.** Its discovery rules told the
+  model to start with `find_files`, which that profile does not register, so the
+  first discovery step failed. They now name `search_file`, which it does
+  register. Profiles with the filesystem tools keep `find_files` (#6070).
 - **A repository indexed with `index_codebase` stays the code-search folder**
   (#6055). In the Agent UI, each new turn reset code search to the session's
   starting folder, so the next `search_code_index` looked in the wrong place
@@ -40,9 +79,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bundled with every module its code imports. A skill tool named like a
   confirmation-gated core tool (`write_file`, `run_python`) always asks first,
   and a skill's `write_*` / `edit_*` tool counts as a file change.
+- **The missing-watchdog hint no longer installs a broken watchdog.** Watching
+  a folder without watchdog told users to install `watchdog>=2.1.0`, which
+  pulls in 7.0.0, whose Windows reader withholds events while any nearby
+  file keeps changing. The hint now caps it at `<7` (#6236).
 
 ### Added
 
+- **Questions in one language find answers in a document written in another**
+  (#6165). When an indexed document is in a non-Latin script, the agent's
+  per-turn list of indexed documents names it (`report.pdf (...) [Arabic]`)
+  and adds a note: search the document with the question translated into its
+  language, answer in the language of the user's latest message, and cite
+  every fact with its document and page. Latin-only documents get no note, so
+  their prompt is unchanged.
+- **The minimum core is now 0.25.4.** That per-turn list calls
+  `RAGSDK.document_scripts`, which first ships in core 0.25.4; on an older
+  core every turn with an indexed document would fail with `AttributeError`.
+  The `amd-gaia` floor and `min_gaia_version` are both 0.25.4, and
+  `tests/test_chat_dependency_floor.py` fails any release that lowers them.
 - **Mail: whole conversations, what's waiting on you, and which account.**
   Three read-only tools join the mail set, for Gmail and Outlook alike.
   `get_thread` reads a whole conversation, oldest first, clipping long bodies

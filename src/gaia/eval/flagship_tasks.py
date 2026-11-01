@@ -69,7 +69,12 @@ FIXTURE = TASKS_DIR / "toybox"
 EXPECTATIONS_DIR = TASKS_DIR / "expectations"
 
 #: Held only by the judge step: the agent under test runs shell commands.
-JUDGE_CREDENTIALS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+JUDGE_CREDENTIALS = (
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN_BACKUP",
+    "CLAUDE_CODE_OAUTH_TOKEN_SECONDARY",
+    "ANTHROPIC_API_KEY",
+)
 
 AXES = ("instruction_compliance", "work_quality", "reasoning", "fabrication_free")
 

@@ -7,6 +7,8 @@ when a request genuinely matches several indexed files the tool returns an
 ambiguity error listing the candidates instead of picking one.
 """
 
+import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -202,3 +204,89 @@ class TestSummarizeDocument:
 
         assert result["status"] == "error"
         assert result["candidates"] == [Q3, "/docs/q3_summary.pdf"]
+
+
+class TestIndexDocumentEviction:
+    def _host(self, tmp_path, rag_result):
+        old = tmp_path / "old.txt"
+        new = tmp_path / "new.txt"
+        for doc in (old, new):
+            doc.write_text("chunk text", encoding="utf-8")
+        rag = _fake_rag(set())
+        host = _make_host(rag)
+        host.indexed_files = {str(old)}
+        host.current_session = None
+        host.rebuild_system_prompt = MagicMock()
+        calls = []
+
+        def index_file(_rag, path):
+            calls.append(path)
+            return dict(rag_result(old, new, path)), None
+
+        return host, old, new, index_file, calls
+
+    def test_the_reply_names_the_evicted_document(self, tmp_path):
+        host, old, new, index_file, _ = self._host(
+            tmp_path,
+            lambda old, new, path: {
+                "success": True,
+                "file_name": new.name,
+                "evicted": [os.path.realpath(old)],
+            },
+        )
+        with patch("gaia.agents.tools.rag_tools._index_within_budget", index_file):
+            result = _tool("index_document")(file_path=str(new))
+
+        assert result["status"] == "success"
+        assert result["evicted"] == [os.path.realpath(old)]
+        assert "old.txt" in result["message"]
+        assert str(old) not in host.indexed_files
+        assert str(new) in host.indexed_files
+
+    def test_an_evicted_document_is_indexed_again_not_reported_already_indexed(
+        self, tmp_path
+    ):
+        host, old, new, index_file, calls = self._host(
+            tmp_path,
+            lambda old, new, path: {
+                "success": True,
+                "file_name": Path(path).name,
+                "evicted": [os.path.realpath(old)] if path.endswith("new.txt") else [],
+            },
+        )
+        with patch("gaia.agents.tools.rag_tools._index_within_budget", index_file):
+            _tool("index_document")(file_path=str(new))
+            again = _tool("index_document")(file_path=str(old))
+
+        assert not again.get("already_indexed"), again
+        assert calls == [os.path.realpath(new), os.path.realpath(old)]
+
+    def test_no_eviction_adds_no_field_and_keeps_the_library(self, tmp_path):
+        host, old, new, index_file, _ = self._host(
+            tmp_path,
+            lambda old, new, path: {"success": True, "file_name": new.name},
+        )
+        with patch("gaia.agents.tools.rag_tools._index_within_budget", index_file):
+            result = _tool("index_document")(file_path=str(new))
+
+        assert "evicted" not in result
+        assert "removed" not in result["message"]
+        assert str(old) in host.indexed_files
+
+    def test_a_similarly_named_document_is_not_forgotten(self, tmp_path):
+        keep = tmp_path / "old.txt.bak"
+        keep.write_text("chunk text", encoding="utf-8")
+        host, old, new, index_file, _ = self._host(
+            tmp_path,
+            lambda old, new, path: {
+                "success": True,
+                "file_name": new.name,
+                "evicted": [os.path.realpath(old)],
+            },
+        )
+        host.indexed_files.add(str(keep))
+        with patch("gaia.agents.tools.rag_tools._index_within_budget", index_file):
+            _tool("index_document")(file_path=str(new))
+
+        assert str(keep) in host.indexed_files
+        assert str(old) not in host.indexed_files

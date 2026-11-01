@@ -445,8 +445,9 @@ DEVELOPER_COMMANDS = frozenset({
 })   # "rm" deliberately excluded
 ```
 
-`git` is in the set, so its binary policy's outright refusals — push, reset,
-rebase — do not apply under bypass. That drops a tripwire, not a boundary:
+`git` is in the set, so the binary policy that holds `git push`, `git reset` and
+`git rebase` does not apply under bypass. Without bypass those commands ask once
+instead of failing. That drops a tripwire, not a boundary:
 `python` and `make` reach git by shelling out regardless. Leaving it out would
 also have made bypass *stricter* than the default tier, where git's read-only
 floor still runs `git status`.

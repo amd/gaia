@@ -28,7 +28,7 @@ from fetch_sidecar import platform_has_sidecar
 
 # terminal-hub platform key -> [(filename template, hub publish key), ...]
 #
-# Installers attach to the GitHub release only (release_components.yml); the
+# Installers attach to the GitHub release only (publish.yml); the
 # keys are what they were published under on the Agent Hub until 0.25.0. They
 # are deliberately NOT the six raw-binary keys: the hub installer picks an
 # artifact with an `endswith` on the platform key (`_filename_matches_platform`

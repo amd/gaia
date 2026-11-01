@@ -38,10 +38,7 @@ from gaia.agents.install_hints import (
 )
 from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
-from gaia.llm.inference_location import (
-    InferenceLocation,
-    resolve_inference_location,
-)
+from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
 from gaia.llm.providers.lemonade import classify_lemonade_exception
 from gaia.security import (
     BLOCKED_DIRECTORIES,
@@ -84,16 +81,9 @@ from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
-from .session_environment import (
-    apply_environment,
-    folders_refusal,
-    held_internet_off,
-)
+from .session_environment import apply_environment, folders_refusal, held_internet_off
 from .session_environment import load as load_environment
-from .session_environment import (
-    with_folder_note,
-    withheld_refusal,
-)
+from .session_environment import with_folder_note, withheld_refusal
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
 from .utils import UPLOAD_LINK_RE, attached_upload_paths, managed_documents_dir
@@ -132,16 +122,18 @@ _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 _background_tasks: set = set()
 
 
-def relayed_turns_in_flight() -> Optional[str]:
-    """Why restarting the daemon now would cut off a chat's agent turn, or None.
+def active_turns_in_flight() -> Optional[str]:
+    """Why restarting the daemon now would cut off an Agent UI turn, or None.
 
-    These turns go straight to the agent, so the daemon cannot count them. A
-    chat still starting its turn has no relayed run yet and does not count.
+    The daemon cannot see turns this backend runs in-process or relays straight
+    to an agent. A chat still starting its turn, such as the one asking the
+    daemon whether it may restart, has neither and does not count.
     """
     running = sum(
         1
         for handler in list(_active_sse_handlers.values())
-        if getattr(handler, "active_relay_run_id", None) is not None
+        if getattr(handler, "in_process_turn_active", False)
+        or getattr(handler, "active_relay_run_id", None) is not None
     )
     if not running:
         return None
@@ -1654,6 +1646,14 @@ def evict_all_session_agents() -> int:
 
 
 # ── Chat Helpers ─────────────────────────────────────────────────────────────
+
+
+def _append_index_failures(answer: str, failures: list[str]) -> str:
+    """Tell the user when an attached document could not be indexed."""
+    if not failures:
+        return answer
+    notice = "\n".join(failures)
+    return f"{answer.rstrip()}\n\n{notice}" if answer else notice
 
 
 def _build_history_pairs(messages: list) -> list:
@@ -3706,6 +3706,7 @@ async def _get_chat_response(
         working_directory = _session_working_directory(
             load_environment(db, session_id)["folders"]
         )
+        index_failures = []
 
         if cached_agent is not None:
             from gaia.agents.base.console import SilentConsole
@@ -3721,13 +3722,22 @@ async def _get_chat_response(
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
                 for fpath in new_paths:
+                    doc_name = Path(fpath).name
                     try:
                         result_idx = agent.rag.index_document(fpath)
                         if result_idx.get("success"):
                             agent.indexed_files.add(fpath)
                             agent.rebuild_system_prompt()
+                        else:
+                            error = result_idx.get("error", "Unknown error")
+                            logger.warning("Failed to index %s: %s", fpath, error)
+                            index_failures.append(
+                                f"Failed to index {doc_name}: {error}"
+                            )
                     except Exception as _idx_err:
                         logger.warning("Failed to index %s: %s", fpath, _idx_err)
+                        index_failures.append(f"Failed to index {doc_name}: {_idx_err}")
+
             logger.info(
                 "chat: Agent cache hit for session %s (agent_type=%s)",
                 session_id[:8],
@@ -3780,15 +3790,9 @@ async def _get_chat_response(
                 # Agent factories that don't recognise a field filter it out
                 # via ``dataclasses.fields``/``AgentManifest`` validation.
                 #
-                # Non-streaming vs streaming asymmetry — read before refactoring:
-                # This path forwards ``rag_file_paths`` (the real list) because
-                # non-streaming has no SSE handler, so ChatAgent's silent
-                # ``_index_documents`` in __init__ is the only indexer and must
-                # see the paths. The STREAMING registered-agent path, by
-                # contrast, passes ``rag_file_paths=[]`` and does the indexing
-                # in ``_index_rag_with_progress`` so the user sees progress
-                # events; forwarding the real list there would double-index
-                # (see the regression test in test_chat_helpers.py).
+                # Documents are indexed after the build, as the streaming path
+                # does: indexing takes minutes and the build holds the lock
+                # every other chat needs to start.
                 with writing_tool_registry():
                     agent = registry.create_agent(
                         agent_type,
@@ -3799,7 +3803,7 @@ async def _get_chat_response(
                             min_context_size=device_ctx,
                         ),
                         **_session_agent_kwargs(
-                            rag_file_paths=rag_file_paths,
+                            rag_file_paths=[],
                             library_paths=library_paths,
                             allowed=allowed,
                             session_id=session_id,
@@ -3813,6 +3817,8 @@ async def _get_chat_response(
                         # connected mailbox (#1596).
                         mail_provider=_session_mail_provider(session),
                     )
+                if rag_file_paths and hasattr(agent, "_index_documents") and agent.rag:
+                    index_failures.extend(agent._index_documents(rag_file_paths) or [])
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
                     agent_type,
@@ -3832,9 +3838,10 @@ async def _get_chat_response(
 
         _apply_memory_state(agent, session, db)
         apply_environment(agent, session_id, db)
-        query = with_folder_note(
-            request.message, load_environment(db, session_id)["folders"]
-        )
+        message = request.message
+        if index_failures:
+            message += "\n\n" + "\n".join(index_failures)
+        query = with_folder_note(message, load_environment(db, session_id)["folders"])
 
         _restore_model_history(agent, db, session_id, query)
 
@@ -3880,11 +3887,13 @@ async def _get_chat_response(
             # Use explicit None check so an intentional empty string isn't
             # overridden by fallback to "answer".
             val = result.get("result")
-            return val if val is not None else result.get("answer", "")
-        result_str = str(result) if result else ""
-        # Strip JSON envelope (e.g. {"answer": "..."}) emitted by agents
-        # whose system prompt requires JSON output format.
-        return _clean_answer_json(result_str)
+            answer = val if val is not None else result.get("answer", "")
+        else:
+            result_str = str(result) if result else ""
+            # Strip JSON envelope (e.g. {"answer": "..."}) emitted by agents
+            # whose system prompt requires JSON output format.
+            answer = _clean_answer_json(result_str)
+        return _append_index_failures(answer, index_failures)
 
     try:
         idle = _TurnIdleClock(_turn_clock())
@@ -4421,7 +4430,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # and the next turn's pre-flight reloads an evicted model.
                 t_query = _time.monotonic()
                 result_holder["agent"] = agent
-                result = agent.process_query(query)
+                sse_handler.in_process_turn_active = True
+                try:
+                    result = agent.process_query(query)
+                finally:
+                    sse_handler.in_process_turn_active = False
                 logger.info(
                     "PERF process_query session=%s took=%.3fs",
                     session_id[:8],

@@ -218,6 +218,10 @@ def _registration(provider: str, body: "ConnectRequest") -> Dict[str, Any]:
 # ── Views ──────────────────────────────────────────────────────────────────
 
 
+_KEY_HINT_LENGTH = 4
+#: A shorter key would give away too much of itself.
+_MIN_KEY_LENGTH_FOR_HINT = 16
+
 #: ``key_state`` while the OS holds the stored-key read for the user's permission.
 KEY_WAITING = "waiting_for_os_permission"
 
@@ -238,7 +242,29 @@ def _bounded_recall(provider: str) -> Optional[str]:
     )
 
 
-def _key_source(entry: Optional[Dict[str, Any]], provider: str) -> Optional[str]:
+def _known_models_active(provider: str) -> bool:
+    """Whether GAIA's server is serving known models through a list outage."""
+    if provider != FIREWORKS:
+        return False
+    from gaia.llm.fireworks_known_models import KnownModelsError, is_active
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    if not gaia_runs_lemonade():
+        return False
+    try:
+        return is_active(EmbeddedLemonade().config_dir)
+    except KnownModelsError as e:
+        logger.warning("Could not check for known Fireworks models: %s", e)
+        return False
+
+
+def _key_source(
+    entry: Optional[Dict[str, Any]], provider: str, known_models: bool = False
+) -> Optional[str]:
+    # The start environment carries GAIA's stored key here, not one the user set.
+    if known_models:
+        return "stored"
     if entry and entry.get("env_var_set"):
         return "environment"
     if entry and entry.get("runtime_key_set"):
@@ -246,6 +272,21 @@ def _key_source(entry: Optional[Dict[str, Any]], provider: str) -> Optional[str]
     if _bounded_recall(provider):
         return "stored"
     return None
+
+
+def _key_hint(provider: str, key_source: Optional[str]) -> Optional[str]:
+    """The saved key's last characters, so the user can tell which key it is."""
+    from gaia.connectors.credential_wait import CredentialStoreWaiting
+
+    if key_source not in ("stored", "lemonade"):
+        return None
+    try:
+        key = _bounded_recall(provider)
+    except CredentialStoreWaiting:
+        return None
+    if not key or len(key) < _MIN_KEY_LENGTH_FOR_HINT:
+        return None
+    return key[-_KEY_HINT_LENGTH:]
 
 
 def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -260,8 +301,13 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
     }
     if provider == LOCAL:
         return view
+    known_models = _known_models_active(provider)
     try:
-        key_source, key_state, key_message = _key_source(entry, provider), "read", None
+        key_source, key_state, key_message = (
+            _key_source(entry, provider, known_models),
+            "read",
+            None,
+        )
     except CredentialStoreWaiting as e:
         # Unknown, not absent: the UI must not offer "Add your key" here.
         key_source, key_state, key_message = None, KEY_WAITING, str(e)
@@ -269,9 +315,11 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
         {
             "registered": entry is not None,
             "key_source": key_source,
+            "key_hint": _key_hint(provider, key_source),
             "key_state": key_state,
             "key_message": key_message,
             "models_discovered": bool(entry and entry.get("models_discovered")),
+            "known_models": known_models,
             "env_var": env_var_for(provider),
             "base_url": entry.get("base_url") if entry else None,
         }
@@ -799,6 +847,8 @@ def connect_provider(
         return _connect_on_users_server(provider)
     try:
         _require_loopback(_base_url())
+        if key and _known_models_active(provider):
+            _leave_known_models()
         status, result = _lemonade(
             "POST",
             "install",
@@ -821,16 +871,14 @@ def connect_provider(
             if not result.get("models_discovered"):
                 # Lemonade stores a key without checking it; don't leave a dud behind.
                 _lemonade("DELETE", f"cloud/auth/{provider}")
-                raise ProviderError(
-                    f"{_NAMES[provider]} did not accept that key (no models were "
-                    "discovered). Check the key and try again.",
-                    401,
-                )
-            try:
-                remember_key(provider, key)
+                _use_known_models(provider, key)
                 remembered = True
-            except CloudKeyError as e:
-                remember_error = str(e)
+            else:
+                try:
+                    remember_key(provider, key)
+                    remembered = True
+                except CloudKeyError as e:
+                    remember_error = str(e)
         else:
             from gaia.connectors.credential_wait import CredentialStoreWaiting
 
@@ -841,6 +889,16 @@ def connect_provider(
                 raise ProviderError(str(e), 409) from e
             except (CloudKeyError, requests.RequestException) as e:
                 raise ProviderError(str(e), 502) from e
+            if provider == FIREWORKS and not (_cloud_entry(provider) or {}).get(
+                "models_discovered"
+            ):
+                try:
+                    stored = _bounded_recall(provider)
+                except CredentialStoreWaiting as e:
+                    raise ProviderError(str(e), 409) from e
+                if stored:
+                    _use_known_models(provider, stored)
+                del stored
         del key
         entry = _cloud_entry(provider)
     except ProviderError as e:
@@ -855,6 +913,69 @@ def connect_provider(
             ),
         )
     return {**view, "remembered": remembered, "remember_error": remember_error}
+
+
+def _use_known_models(provider: str, key: str) -> None:
+    """After no models came back: serve known ones, or say what actually failed."""
+    from gaia.llm.cloud_keys import (
+        CloudKeyError,
+        ensure_authenticated,
+        remember_key,
+    )
+    from gaia.llm.fireworks_known_models import KnownModelsError, use_known_models
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+    from gaia.llm.providers.fireworks import ModelListState, check_model_list
+
+    name = _NAMES[provider]
+    check = check_model_list(key) if provider == FIREWORKS else None
+    if check is None or check.state is not ModelListState.FAILING:
+        raise ProviderError(
+            f"{name} did not accept that key (no models were discovered). "
+            "Check the key and try again.",
+            401,
+        )
+    outage = (
+        f"{name} could not list its models ({check.detail}). It did not reject "
+        "your key, so there is no need to replace it."
+    )
+    try:
+        remember_key(provider, key)
+    except CloudKeyError as e:
+        raise ProviderError(f"{outage} GAIA could not keep it: {e}", 503) from e
+    if not gaia_runs_lemonade(_base_url()):
+        raise ProviderError(
+            f"{outage} GAIA kept it. Connect again when {name} recovers.", 503
+        )
+    try:
+        use_known_models(EmbeddedLemonade())
+        ensure_authenticated(provider)
+    except (
+        CloudKeyError,
+        EmbeddedLemonadeError,
+        KnownModelsError,
+        requests.RequestException,
+    ) as e:
+        raise ProviderError(
+            f"{outage} GAIA kept it, but could not switch to the models it "
+            f"already knows: {e}",
+            503,
+        ) from e
+
+
+def _leave_known_models() -> None:
+    from gaia.llm.fireworks_known_models import (
+        KnownModelsError,
+        stop_using_known_models,
+    )
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
+
+    try:
+        stop_using_known_models(EmbeddedLemonade())
+    except (EmbeddedLemonadeError, KnownModelsError) as e:
+        raise ProviderError(
+            f"Could not restart GAIA's model server to change the key: {e}", 503
+        ) from e
 
 
 def _uses_users_server() -> bool:
@@ -903,6 +1024,8 @@ def forget_provider_key(provider: str) -> Dict[str, Any]:
     try:
         # The user's own server keeps its keys; only GAIA's copy is removed.
         if not _uses_users_server():
+            if _known_models_active(provider):
+                _leave_known_models()
             status, body = _lemonade("DELETE", f"cloud/auth/{provider}")
             if status >= 400 and status != 404:
                 raise _cloud_error(provider, status, body)
@@ -957,6 +1080,7 @@ def _preferred_backend() -> Optional[str]:
 
 
 def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, Any]:
+    from gaia.installer.model_choice import to_decimal_gb
     from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
 
     from ..local_models import annotate_local_models, measured_speeds
@@ -982,7 +1106,10 @@ def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, A
         m["download_progress"] = _get_download_progress(m["id"])
     return {
         "models": annotated,
-        "memory_gb": round(capacity.memory_gb, 1) if capacity else None,
+        # Decimal GB, as the setup plan and the GPU memory pane report it.
+        "memory_gb": (
+            round(to_decimal_gb(capacity.memory_gb), 1) if capacity else None
+        ),
         "memory_source": capacity.memory_source if capacity else None,
         "capacity_error": capacity_error,
     }

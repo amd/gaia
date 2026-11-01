@@ -15,9 +15,9 @@ import sys
 from pathlib import Path
 
 try:
-    import fitz  # PyMuPDF
+    import pypdfium2 as pdfium
 except ImportError:
-    print("Error: PyMuPDF required. Install: pip install pymupdf")
+    print('Error: pypdfium2 required. Install: pip install "amd-gaia[rag]"')
     sys.exit(1)
 
 
@@ -54,7 +54,7 @@ def pdf_to_images(pdf_path, output_dir, page_range='all', scale=2.0, quality=85)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Open PDF
-    doc = fitz.open(str(pdf_path))
+    doc = pdfium.PdfDocument(str(pdf_path))
     total_pages = len(doc)
 
     print(f"📄 PDF: {pdf_path.name}")
@@ -75,16 +75,15 @@ def pdf_to_images(pdf_path, output_dir, page_range='all', scale=2.0, quality=85)
         page = doc[page_idx]
 
         # Render at specified scale
-        mat = fitz.Matrix(scale, scale)
-        pix = page.get_pixmap(matrix=mat)
+        image = page.render(scale=scale).to_pil().convert("RGB")
 
         # Save as JPEG
         output_file = output_dir / f"page_{page_num:04d}.jpg"
-        pix.save(str(output_file), "jpeg", jpg_quality=quality)
+        image.save(str(output_file), "JPEG", quality=quality)
 
         # Get file size
         size_kb = output_file.stat().st_size / 1024
-        print(f"✓ {pix.width}x{pix.height} ({size_kb:.1f} KB)")
+        print(f"✓ {image.width}x{image.height} ({size_kb:.1f} KB)")
 
     doc.close()
 

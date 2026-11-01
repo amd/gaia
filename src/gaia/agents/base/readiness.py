@@ -40,7 +40,7 @@ from gaia.version import parse_version as _parse_version
 
 logger = get_logger(__name__)
 
-# Test-only hold on model reporting (#2539): Lemonade lazily reloads an
+# Test-only hold on model reporting: Lemonade lazily reloads an
 # unloaded model on the next inference request, which makes "model unavailable"
 # un-testable through these probes alone — by the time a second check runs, a
 # query elsewhere may have already triggered the reload. Setting this env var to

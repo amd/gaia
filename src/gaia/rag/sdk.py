@@ -20,7 +20,7 @@ import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -50,6 +50,8 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
+    resident_vision_model,
+    resolve_default_vision_model,
 )
 from gaia.logger import get_logger
 from gaia.rag.arabic_text import normalize_arabic_pdf_text
@@ -141,6 +143,8 @@ class ImageExtractionError(ValueError):
 # Each page is one VLM call (seconds to tens of seconds), so a fax-sized TIFF is
 # fine and a 500-page archive is a mistake to stop early.
 MAX_IMAGE_PAGES = 50
+# Past this much text a page's images are logos and photos, not its content.
+IMAGE_PAGE_TEXT_LIMIT = 200
 
 
 def _flatten_for_vlm(img):
@@ -468,7 +472,7 @@ class RAGConfig:
         False  # Enable LLM-based intelligent chunking (requires LLM client)
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
-    vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
+    vlm_model: str = field(default_factory=resolve_default_vision_model)
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
     # Security settings
@@ -1309,6 +1313,7 @@ class RAGSDK:
             - num_pages: int
             - vlm_pages: int (number of pages enhanced with VLM)
             - total_images: int (total images processed)
+            - image_pages_skipped: int (pages whose images were left unread)
             - pdf_status: str ("readable", "degraded", "encrypted",
               "corrupted", "empty"). "degraded" means the document indexed but
               at least one page may be incomplete — see degraded_pages.
@@ -1379,13 +1384,17 @@ class RAGSDK:
             try:
                 from gaia.llm import VLMClient
                 from gaia.rag.pdf_utils import (
+                    PdfImageExtractionError,
                     PdfPageInspectionError,
                     count_images_in_page,
-                    extract_images_from_page_pymupdf,
+                    extract_images_from_page_pdfium,
                 )
 
                 vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                    vlm_model=resident_vision_model(
+                        self.config.vlm_model, self.config.base_url
+                    ),
+                    base_url=self.config.base_url,
                 )
                 vlm_available = self.config.use_vlm and vlm.check_availability()
 
@@ -1421,6 +1430,7 @@ class RAGSDK:
             pages_data = []
             vlm_pages_count = 0
             total_images_processed = 0
+            image_pages_skipped = 0
             degraded_pages = []
             page_warnings = {}
 
@@ -1440,7 +1450,7 @@ class RAGSDK:
                         has_imgs, num_imgs = count_images_in_page(page, page_num=i)
                     except PdfPageInspectionError as e:
                         # Unknown, not "none". The inventory comes from pypdf
-                        # and the extraction from PyMuPDF, so a page pypdf
+                        # and the extraction from PDFium, so a page pypdf
                         # cannot inspect may still extract — try it rather than
                         # indexing the page as blank (#3551).
                         page_warning = str(e)
@@ -1452,9 +1462,19 @@ class RAGSDK:
 
                 # Step 3: Extract from images if present
                 image_texts = []
-                if has_imgs and vlm_available:
+                read_images = len(pypdf_text.strip()) < IMAGE_PAGE_TEXT_LIMIT
+                if has_imgs and vlm_available and not read_images:
+                    image_pages_skipped += 1
+                elif has_imgs and vlm_available:
                     try:
-                        images = extract_images_from_page_pymupdf(pdf_path, page_num=i)
+                        try:
+                            images = extract_images_from_page_pdfium(
+                                pdf_path, page_num=i
+                            )
+                        except PdfImageExtractionError as e:
+                            page_warning = f"image extraction failed on page {i}: {e}"
+                            self.log.warning(page_warning)
+                            images = e.images
                         if images:
                             image_texts = vlm.extract_from_page_images(
                                 images, page_num=i
@@ -1539,7 +1559,7 @@ class RAGSDK:
                 print(f"{'='*60}\n")
 
             self.log.info(
-                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages)"
+                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages, {image_pages_skipped} text pages' images left unread)"
             )
 
             # If pypdf parsed the file but every page came back blank, surface
@@ -1571,6 +1591,7 @@ class RAGSDK:
                 "num_pages": total_pages,
                 "vlm_pages": vlm_pages_count,
                 "total_images": total_images_processed,
+                "image_pages_skipped": image_pages_skipped,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
                 "pdf_status": "degraded" if degraded_pages else "readable",
@@ -1775,7 +1796,10 @@ class RAGSDK:
                 )
 
                 vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                    vlm_model=resident_vision_model(
+                        self.config.vlm_model, self.config.base_url
+                    ),
+                    base_url=self.config.base_url,
                 )
                 vlm_available = self.config.use_vlm and vlm.check_availability()
 
@@ -2455,7 +2479,11 @@ These positions indicate where to split the text."""
         )
 
         file_name = Path(image_path).name
-        model = self.config.vlm_model
+        model = (
+            resident_vision_model(self.config.vlm_model, self.config.base_url)
+            if self.config.use_vlm
+            else self.config.vlm_model
+        )
 
         if not self.config.use_vlm:
             raise ImageExtractionError(
@@ -2497,7 +2525,7 @@ These positions indicate where to split the text."""
                     f"{describe_start_hint().instruction}\n"
                     "Then index the image again."
                 ) from e
-            # Reachable, so the model is what's missing; `gaia init` skips it.
+            # Reachable, so the model is what's missing.
             pull = describe_client_hint("pull", model).instruction
             raise ImageExtractionError(
                 f"Cannot index image {file_name}: vision model {model} is not "
@@ -3366,20 +3394,20 @@ These positions indicate where to split the text."""
                         result["total_indexed_files"] = len(self.indexed_files)
                         result["total_chunks"] = len(self.chunks)
 
-    def _evict_lru_document(self) -> bool:
+    def _evict_lru_document(self) -> Optional[str]:
         """
         Evict the least recently used document to free memory.
 
         Returns:
-            True if a document was evicted, False otherwise
+            The path of the evicted document, or None if no document was evicted
         """
         if not self.config.enable_lru_eviction:
             self.log.warning("LRU eviction disabled, cannot free memory")
-            return False
+            return None
 
         if not self.file_access_times:
             self.log.warning("No tracked files available for LRU eviction")
-            return False
+            return None
 
         # Find LRU file (oldest access time)
         lru_file = min(self.file_access_times, key=self.file_access_times.get)
@@ -3395,27 +3423,34 @@ These positions indicate where to split the text."""
         result = self.remove_document(lru_file)
         if not result:
             self.log.error(f"Failed to evict LRU document: {Path(lru_file).name}")
-        return result
+            return None
+        return lru_file
 
-    def _check_memory_limits(self) -> bool:
+    def _check_memory_limits(self) -> Tuple[bool, List[str]]:
         """
         Check memory limits and evict documents if necessary.
 
         Returns:
-            True if limits are satisfied, False if still exceeded
+            A tuple containing:
+                - True if limits are satisfied, False if still exceeded
+                - A list of evicted document paths (if any)
         """
+        evicted_files: List[str] = []
+
         # Check total chunks limit
         while (
             self.config.max_total_chunks > 0
             and len(self.chunks) > self.config.max_total_chunks
             and len(self.indexed_files) > 1
         ):  # Keep at least one file
-            if not self._evict_lru_document():
+            path = self._evict_lru_document()
+            if path is None:
                 self.log.warning(
                     f"Cannot meet chunk limit: {len(self.chunks)} chunks "
                     f"exceeds max {self.config.max_total_chunks}, eviction failed"
                 )
                 break
+            evicted_files.append(path)
 
         # Check indexed files limit
         while (
@@ -3423,12 +3458,14 @@ These positions indicate where to split the text."""
             and len(self.indexed_files) > self.config.max_indexed_files
             and len(self.indexed_files) > 1
         ):  # Keep at least one file
-            if not self._evict_lru_document():
+            path = self._evict_lru_document()
+            if path is None:
                 self.log.warning(
                     f"Cannot meet file limit: {len(self.indexed_files)} files "
                     f"exceeds max {self.config.max_indexed_files}, eviction failed"
                 )
                 break
+            evicted_files.append(path)
 
         chunks_ok = (
             self.config.max_total_chunks <= 0
@@ -3438,7 +3475,7 @@ These positions indicate where to split the text."""
             self.config.max_indexed_files <= 0
             or len(self.indexed_files) <= self.config.max_indexed_files
         )
-        return chunks_ok and files_ok
+        return chunks_ok and files_ok, evicted_files
 
     def _has_indexing_capacity(self) -> bool:
         """Check if there is capacity to index another document.
@@ -3787,7 +3824,7 @@ These positions indicate where to split the text."""
                     print("  ✅ Successfully loaded from cache")
 
                 # Check memory limits after cache load
-                limits_ok = self._check_memory_limits()
+                limits_ok, evicted = self._check_memory_limits()
 
                 # Update stats for cache load
                 stats["success"] = True
@@ -3798,6 +3835,8 @@ These positions indicate where to split the text."""
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 stats["from_cache"] = True
+                if evicted:
+                    stats["evicted"] = evicted
                 if not limits_ok:
                     stats["memory_limit_warning"] = True
                 return stats
@@ -3971,7 +4010,9 @@ These positions indicate where to split the text."""
                 self.file_access_times[file_path] = self._access_counter
 
                 # Check memory limits and evict if necessary
-                limits_ok = self._check_memory_limits()
+                limits_ok, evicted = self._check_memory_limits()
+            if evicted:
+                stats["evicted"] = evicted
             if not limits_ok:
                 self.log.warning(
                     f"Memory limits exceeded after indexing {file_path}. "
