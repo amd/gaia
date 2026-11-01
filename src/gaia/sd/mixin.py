@@ -277,10 +277,9 @@ class SDToolsMixin:
                         temp.write(mesh)
                     before_change(output, "generate_3d_model")
                     staging.replace(output)
-                    reload_chat = getattr(self, "_ensure_model_loaded", None)
                     model_id = getattr(self, "model_id", None)
-                    if callable(reload_chat) and isinstance(model_id, str) and model_id:
-                        reload_chat(model_id)
+                    if isinstance(model_id, str) and model_id:
+                        self.sd_client._ensure_model_loaded(model_id)
                     return {
                         "status": "success",
                         "model_path": str(output),

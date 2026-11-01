@@ -58,10 +58,6 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     ),
     "email": ("gaia.agents.tools.email_tools", "EmailToolsMixin"),
     "sd": ("gaia.sd.mixin", "SDToolsMixin"),
-    # 3D generation is an opt-in capability on the SD mixin; keeping a
-    # distinct registry key lets hosts request it without changing the
-    # flagship's default tool roster.
-    "model3d": ("gaia.sd.mixin", "SDToolsMixin"),
     "vlm": ("gaia.vlm.mixin", "VLMToolsMixin"),
     "skills": ("gaia.agents.tools.skill_library_tools", "SkillLibraryToolsMixin"),
     "skill_learning": (
