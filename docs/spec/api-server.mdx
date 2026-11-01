@@ -25,7 +25,7 @@ The GAIA API Server provides an OpenAI-compatible REST API for exposing GAIA age
 - Server-Sent Events (SSE) streaming
 - Dynamic agent registry
 - Workspace root extraction from GitHub Copilot
-- Debug modes (logging, prompts, step-through)
+- Debug modes (logging, prompts, streaming)
 - CORS support
 - Health checks
 - Token usage tracking
@@ -395,7 +395,7 @@ AGENT_MODELS: Dict[str, Dict[str, Any]] = {
 
 class AgentRegistry:
     """Resolves model IDs to agent instances by importing the target class
-    on demand. `gaia api start --debug/--show-prompts/--streaming/--step-through`
+    on demand. `gaia api start --debug/--show-prompts/--streaming`
     set GAIA_API_* env-vars that are merged into `init_params` at startup."""
 
     def get_agent(self, model_id: str):
@@ -865,7 +865,6 @@ def start_server(
     debug: bool = False,
     show_prompts: bool = False,
     streaming: bool = False,
-    step_through: bool = False,
 ):
     """
     Start the API server.
@@ -877,7 +876,6 @@ def start_server(
         debug: Enable debug logging
         show_prompts: Display prompts sent to LLM
         streaming: Enable real-time streaming of LLM responses
-        step_through: Enable step-through debugging mode
     """
     pass
 

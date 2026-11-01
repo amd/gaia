@@ -1543,11 +1543,6 @@ def build_parser():
         action="store_true",
         help="Enable real-time streaming of LLM responses",
     )
-    api_parser.add_argument(
-        "--step-through",
-        action="store_true",
-        help="Enable step-through debugging mode (pause at each agent step)",
-    )
     api_parser.set_defaults(action="api")
 
     # Telegram adapter command (v0.18.2) - supports start|stop|status
@@ -6770,8 +6765,6 @@ def handle_api_command(args):
                 os.environ["GAIA_API_SHOW_PROMPTS"] = "1"
             if getattr(args, "streaming", False):
                 os.environ["GAIA_API_STREAMING"] = "1"
-            if getattr(args, "step_through", False):
-                os.environ["GAIA_API_STEP_THROUGH"] = "1"
 
             from gaia.api.local_http import (
                 UnauthenticatedBindError,
@@ -6800,7 +6793,6 @@ def handle_api_command(args):
                 getattr(args, "debug", False)
                 or getattr(args, "show_prompts", False)
                 or getattr(args, "streaming", False)
-                or getattr(args, "step_through", False)
             ):
                 print("\n🐛 Debug features enabled:")
                 if getattr(args, "debug", False):
@@ -6809,8 +6801,6 @@ def handle_api_command(args):
                     print("   • Show prompts")
                 if getattr(args, "streaming", False):
                     print("   • LLM streaming")
-                if getattr(args, "step_through", False):
-                    print("   • Step-through mode")
 
             print("\n📍 API Endpoint:")
             print(f"   http://{args.host}:{args.port}/v1/chat/completions")
