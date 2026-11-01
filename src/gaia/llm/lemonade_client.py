@@ -2031,6 +2031,62 @@ def defang_harmony_tokens(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return out
 
 
+def normalize_trailing_assistant_messages(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Coalesce a trailing run of assistant messages into one request turn.
+
+    Some agent recovery paths append a synthetic assistant message immediately
+    after the model's assistant reply. llama-server rejects a request whose
+    message list ends with two or more assistant messages, so normalize only
+    that invalid suffix while leaving all user/tool ordering untouched.
+    The input is never mutated.
+    """
+    trailing_start = len(messages)
+    while trailing_start and messages[trailing_start - 1].get("role") == "assistant":
+        trailing_start -= 1
+    if len(messages) - trailing_start < 2:
+        return messages
+
+    merged: Dict[str, Any] = dict(messages[trailing_start])
+    text_parts: List[Any] = []
+    reasoning_parts: List[str] = []
+    tool_calls: List[Any] = []
+    saw_content = False
+    saw_reasoning = False
+    saw_tool_calls = False
+
+    for message in messages[trailing_start:]:
+        if "content" in message:
+            saw_content = True
+            content = message.get("content")
+            if content not in (None, ""):
+                text_parts.append(content)
+        if "reasoning_content" in message:
+            saw_reasoning = True
+            reasoning = message.get("reasoning_content")
+            if reasoning:
+                reasoning_parts.append(str(reasoning))
+        calls = message.get("tool_calls")
+        if calls:
+            saw_tool_calls = True
+            tool_calls.extend(calls)
+
+    if saw_content:
+        if all(isinstance(part, str) for part in text_parts):
+            merged["content"] = "\n\n".join(text_parts)
+        elif text_parts:
+            merged["content"] = text_parts
+        else:
+            merged["content"] = None
+    if saw_reasoning:
+        merged["reasoning_content"] = "\n\n".join(reasoning_parts) or None
+    if saw_tool_calls:
+        merged["tool_calls"] = tool_calls
+
+    return [*messages[:trailing_start], merged]
+
+
 # Define agent profiles with their model requirements
 AGENT_PROFILES = {
     "chat": AgentProfile(
@@ -5270,6 +5326,7 @@ class LemonadeClient:
             # device profile can change between calls, and the budget follows them.
             timeout = request_budget_seconds()
 
+        messages = normalize_trailing_assistant_messages(messages)
         if uses_harmony_format(model):
             messages = defang_harmony_tokens(messages)
         if self.cloud_model_provider(model):
