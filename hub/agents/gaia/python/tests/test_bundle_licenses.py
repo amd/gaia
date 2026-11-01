@@ -219,9 +219,16 @@ def test_a_flagged_binary_fails_and_lists_the_offenders(monkeypatch, capsys):
 
 
 def test_a_clean_binary_passes(monkeypatch, capsys):
-    monkeypatch.setattr(check, "bundle_entry_names", lambda _: ["csv", "pypdfium2"])
+    names = ["csv", "pypdfium2", *check.REQUIRED_NOTICES]
+    monkeypatch.setattr(check, "bundle_entry_names", lambda _: names)
     assert check.main(["gaia-agent"]) == 0
     assert "PASS" in capsys.readouterr().out
+
+
+def test_a_binary_without_notices_fails(monkeypatch, capsys):
+    monkeypatch.setattr(check, "bundle_entry_names", lambda _: ["csv"])
+    assert check.main(["gaia-agent"]) == 1
+    assert "THIRD_PARTY_NOTICES.md" in capsys.readouterr().err
 
 
 def test_the_release_build_runs_the_check_on_the_frozen_binary():
@@ -252,11 +259,48 @@ def test_reviewed_lgpl_libraries_are_reported(name):
 
 def test_reviewed_lgpl_list_never_shadows_a_forbidden_library():
     names = ["libreadline.so.8", "libgdbm.so.6", "libquadmath.so.0"]
-    assert [n for n, _ in check.forbidden_entries(names)] == ["libgdbm.so.6", "libreadline.so.8"]
+    assert [n for n, _ in check.forbidden_entries(names)] == [
+        "libgdbm.so.6",
+        "libreadline.so.8",
+    ]
     assert [n for n, _ in check.reviewed_lgpl_entries(names)] == ["libquadmath.so.0"]
 
 
 def test_permissive_libraries_are_neither_forbidden_nor_reported():
-    names = ["libssl.so.3", "libz.so.1", "libgcc_s.so.1", "libstdc++.so.6", "libpython3.12.so.1.0"]
+    names = [
+        "libssl.so.3",
+        "libz.so.1",
+        "libgcc_s.so.1",
+        "libstdc++.so.6",
+        "libpython3.12.so.1.0",
+    ]
     assert check.forbidden_entries(names) == []
     assert check.reviewed_lgpl_entries(names) == []
+
+
+def test_a_binary_without_licence_notices_is_flagged():
+    assert check.missing_notices(["numpy", "gaia_agent/gaia-agent.yaml"]) == list(
+        check.REQUIRED_NOTICES
+    )
+
+
+def test_notices_are_found_under_either_path_separator():
+    names = [
+        "THIRD_PARTY_NOTICES.md",
+        "licenses\\LGPL-2.1.txt",
+        "licenses/GCC-exception-3.1.txt",
+    ]
+    assert check.missing_notices(names) == []
+
+
+def test_both_freeze_scripts_bundle_the_notices():
+    root = PACKAGING.parents[4]
+    email = (root / "hub/agents/email/python/packaging/freeze.py").read_text(
+        encoding="utf-8"
+    )
+    for source, dest in freeze.NOTICES:
+        assert source.exists(), source
+        rel = source.relative_to(root).as_posix()
+        assert f'REPO_ROOT / "{rel}", "{dest}"' in email
+    for notice in check.REQUIRED_NOTICES:
+        assert (root / notice).is_file(), notice

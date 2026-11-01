@@ -179,6 +179,13 @@ if (!APPIMAGE) {
         );
       });
 
+      test("licence: third-party notices ship in resources", () => {
+        for (const notice of ["THIRD_PARTY_NOTICES.md", "licenses/LGPL-2.1.txt"]) {
+          const file = path.join(squashRoot, "resources", notice);
+          assert.ok(fs.existsSync(file), `expected licence notice at ${file}`);
+        }
+      });
+
       // ── #5268: the Linux tray icon is packed and is the real logo ───
       // tray-manager.cjs loads assets/tray-icon.png (+@2x) from inside
       // app.asar; a missing or placeholder file shows as a blank/red square.
