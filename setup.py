@@ -32,6 +32,7 @@ setup(
     author="AMD",
     url="https://github.com/amd/gaia",
     license="MIT",
+    license_files=["LICENSE.md", "THIRD_PARTY_NOTICES.md", "licenses/*"],
     package_dir={"": "src"},
     packages=[
         "gaia",

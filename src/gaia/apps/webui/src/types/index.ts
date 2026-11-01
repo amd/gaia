@@ -1365,7 +1365,7 @@ export interface SessionPermissions {
 // ── Skills (GET /api/skills) ──────────────────────────────────────────────
 
 /** Which discovery root a skill was found in. */
-export type SkillSource = 'agent-bundled' | 'user' | 'claude-import';
+export type SkillSource = 'agent-bundled' | 'user' | 'claude-project' | 'claude-import';
 
 export interface SkillInfo {
     name: string;

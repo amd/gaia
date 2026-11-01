@@ -404,6 +404,43 @@ def resolve_default_chat_model() -> str:
     return GaiaConfig.load().resolve_model(None, DEFAULT_MODEL_NAME)
 
 
+#: Default chat models that also read images, so indexing a scan loads no second model.
+VISION_CHAT_MODELS = frozenset(
+    {DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME, FLASH_OPTION_MODEL_NAME}
+)
+
+
+def resolve_default_vision_model() -> str:
+    """The model that reads text in scans and images when nobody passed one.
+
+    The PC's chat model when it reads images, because that one is already
+    downloaded and resident; else :data:`DEFAULT_MODEL_NAME`.
+    """
+    model = resolve_default_chat_model()
+    return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
+
+
+def resident_vision_model(configured: str, base_url: Optional[str] = None) -> str:
+    """The already-loaded vision model to read images with, else ``configured``.
+
+    Reading a scan with a model that is already resident spares a reload and
+    evicting chat. Only :data:`VISION_CHAT_MODELS` count, because those have
+    been tested; a model named outside that set was chosen on purpose and stays.
+    """
+    if configured not in VISION_CHAT_MODELS:
+        return configured
+    try:
+        loaded = LemonadeClient(base_url=base_url).health_check()
+    except LemonadeClientError as e:
+        # VLMClient.check_availability reports the unreachable server next.
+        log.warning("Could not read the loaded models from Lemonade: %s", e)
+        return configured
+    for entry in loaded.get("all_models_loaded") or []:
+        if entry.get("model_name") in VISION_CHAT_MODELS:
+            return entry["model_name"]
+    return configured
+
+
 # Default embedding model: EmbeddingGemma 300M (768-dim). Not a Lemonade
 # built-in — registered as a ``user.`` custom model on first pull via
 # checkpoint + recipe + the ``embedding`` label (see MODELS entry).
@@ -2028,6 +2065,79 @@ def defang_harmony_tokens(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
             ]
         out.append(fixed)
     return out
+
+
+_TRAILING_ASSISTANT_CONTINUATION = (
+    "Continue from the preceding assistant context and provide the next response."
+)
+
+
+def normalize_trailing_assistant_messages(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Normalize an invalid assistant-only request suffix.
+
+    Recovery paths can append a synthetic assistant message immediately after
+    the model's assistant reply. llama-server rejects two or more assistant
+    messages at the end of a request, and thinking models also reject an
+    assistant prefill. Coalesce only that invalid suffix; the request boundary
+    adds a continuation user turn after the coalesced history. User/tool order
+    before the suffix is untouched and the input is never mutated.
+    """
+    trailing_start = len(messages)
+    while trailing_start and messages[trailing_start - 1].get("role") == "assistant":
+        trailing_start -= 1
+    if len(messages) - trailing_start < 2:
+        return messages
+
+    merged: Dict[str, Any] = dict(messages[trailing_start])
+    text_parts: List[Any] = []
+    reasoning_parts: List[str] = []
+    tool_calls: List[Any] = []
+    saw_content = False
+    saw_reasoning = False
+    saw_tool_calls = False
+
+    for message in messages[trailing_start:]:
+        if "content" in message:
+            saw_content = True
+            content = message.get("content")
+            if content not in (None, ""):
+                text_parts.append(content)
+        if "reasoning_content" in message:
+            saw_reasoning = True
+            reasoning = message.get("reasoning_content")
+            if reasoning:
+                reasoning_parts.append(str(reasoning))
+        calls = message.get("tool_calls")
+        if calls:
+            saw_tool_calls = True
+            tool_calls.extend(calls)
+
+    if saw_content:
+        if all(isinstance(part, str) for part in text_parts):
+            merged["content"] = "\n\n".join(text_parts)
+        elif text_parts:
+            # OpenAI multimodal content is a flat list. Preserve existing
+            # parts and represent any text from a neighbouring turn as a text
+            # part instead of creating a nested list.
+            flattened: List[Any] = []
+            for part in text_parts:
+                if isinstance(part, list):
+                    flattened.extend(part)
+                elif isinstance(part, str):
+                    flattened.append({"type": "text", "text": part})
+                else:
+                    flattened.append(part)
+            merged["content"] = flattened
+        else:
+            merged["content"] = None
+    if saw_reasoning:
+        merged["reasoning_content"] = "\n\n".join(reasoning_parts) or None
+    if saw_tool_calls:
+        merged["tool_calls"] = tool_calls
+
+    return [*messages[:trailing_start], merged]
 
 
 # Define agent profiles with their model requirements
@@ -5235,6 +5345,19 @@ class LemonadeClient:
             # device profile can change between calls, and the budget follows them.
             timeout = request_budget_seconds()
 
+        normalized_messages = normalize_trailing_assistant_messages(messages)
+        if normalized_messages is not messages:
+            self.log.debug(
+                "Coalesced %d trailing assistant messages before chat request",
+                len(messages) - len(normalized_messages) + 1,
+            )
+            messages = [
+                *normalized_messages,
+                {
+                    "role": "user",
+                    "content": _TRAILING_ASSISTANT_CONTINUATION,
+                },
+            ]
         if uses_harmony_format(model):
             messages = defang_harmony_tokens(messages)
         if self.cloud_model_provider(model):
@@ -6335,6 +6458,83 @@ class LemonadeClient:
         except Exception as e:
             self.log.error(f"Error generating image: {str(e)}")
             raise LemonadeClientError(f"Error generating image: {str(e)}")
+
+    @guard_inference()
+    def generate_3d_model(
+        self,
+        image: str,
+        model: str = "TRELLIS-3D",
+        resolution: int = 512,
+        seed: int = 42,
+        bg_removal: str = "threshold",
+        timeout: int = 1800,
+    ) -> bytes:
+        """Generate a GLB mesh from a base64-encoded input image.
+
+        The 3D endpoint is deliberately opt-in and never downloads a model on
+        behalf of an agent.  Lemonade returns a binary glTF (GLB) document.
+        """
+        if not isinstance(image, str) or not image:
+            raise LemonadeClientError("3D generation requires a base64 image.")
+        if resolution not in {512, 1024, 1536}:
+            raise LemonadeClientError("3D resolution must be 512, 1024, or 1536.")
+        if not isinstance(seed, int):
+            raise LemonadeClientError("3D seed must be an integer.")
+        if bg_removal not in {"threshold", "rembg", "none"}:
+            raise LemonadeClientError(
+                "3D background removal must be threshold, rembg, or none."
+            )
+
+        catalog = self.list_models(show_all=True)
+        entries = catalog.get("data") or []
+        selected = next((entry for entry in entries if entry.get("id") == model), None)
+        if selected is None:
+            raise LemonadeClientError(
+                f"3D model '{model}' is not registered in Lemonade. "
+                "Install/register a TRELLIS model, then retry."
+            )
+        if selected.get("downloaded") is not True:
+            raise LemonadeClientError(
+                f"3D model '{model}' is not downloaded. Download it in Lemonade "
+                "first; GAIA will not silently download a multi-GB 3D model."
+            )
+        labels = set(selected.get("labels") or [])
+        if "3d" not in labels and selected.get("recipe") != "trellis":
+            raise LemonadeClientError(
+                f"Lemonade model '{model}' is not labelled as a TRELLIS 3D model."
+            )
+
+        payload = {
+            "model": model,
+            "image": image,
+            "resolution": resolution,
+            "seed": seed,
+            "bg_removal": bg_removal,
+        }
+        try:
+            response = requests.post(
+                f"{self.base_url}/3d/generations",
+                json=payload,
+                headers={"Content-Type": "application/json", **self._auth_headers()},
+                timeout=(10, timeout),
+            )
+            if response.status_code == 401:
+                raise LemonadeAuthError("Lemonade rejected the API key (401).")
+            if response.status_code >= 400:
+                raise LemonadeClientError(
+                    f"Lemonade 3D generation failed ({response.status_code}): "
+                    f"{http_body_text(response)[:600]}"
+                )
+            mesh = response.content
+            if not mesh.startswith(b"glTF"):
+                raise LemonadeClientError(
+                    "Lemonade returned a non-GLB response for 3D generation."
+                )
+            return mesh
+        except LemonadeClientError:
+            raise
+        except requests.RequestException as exc:
+            raise LemonadeClientError(f"Lemonade 3D request failed: {exc}") from exc
 
     def list_sd_models(self) -> List[Dict[str, Any]]:
         """

@@ -618,6 +618,9 @@ def run_program(
     argv = [executable, *args]
     cancel = current_cancel_event()
     # No shell: the executable is the declared program, resolved to a path.
+    # POSIX gets a private session so the kill reaches helpers such as
+    # LibreOffice's soffice.bin without touching the agent. Windows uses
+    # taskkill /T in terminate_process_tree to reach descendants.
     with subprocess.Popen(
         argv,
         cwd=str(workdir) if workdir is not None else None,
@@ -626,6 +629,7 @@ def run_program(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=os.name != "nt",
     ) as proc:
         deadline = time.monotonic() + timeout
         while True:
@@ -638,15 +642,29 @@ def run_program(
                 cancelled = cancel is not None and cancel.is_set()
                 if not cancelled and time.monotonic() < deadline:
                     continue
-                proc.kill()
-                proc.communicate()
+                _terminate_program_tree(proc)
                 if cancelled:
                     raise ToolCancelled(
                         f"Skill '{call.skill_name}' stopped '{name}': the agent "
                         "stopped waiting for this tool call."
                     ) from None
                 raise subprocess.TimeoutExpired(argv, timeout) from None
+            except BaseException:
+                # Ctrl-C no longer reaches a POSIX child in its own session.
+                _terminate_program_tree(proc)
+                raise
     return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+
+def _terminate_program_tree(proc: subprocess.Popen) -> tuple[str, str]:
+    """Lazily load the shared tree killer for a program this skill started.
+
+    Importing the tools package at module load would eagerly load unrelated
+    browser, RAG, and audio mixins into every skill invocation.
+    """
+    from gaia.agents.tools.command_timeouts import terminate_process_tree
+
+    return terminate_process_tree(proc)
 
 
 # ----------------------------------------------------------------------

@@ -182,8 +182,8 @@ Pick the install path that fits you best:
     your first message. Setup runs again on the next launch.
 
     **Artifact naming** (`electron-builder.yml`):
-    `gaia-agent-ui-<version>-<arch>-setup.<ext>` — e.g. `gaia-agent-ui-0.17.2-x64-setup.exe`
-    and `gaia-agent-ui-0.17.2-amd64.deb`.
+    `gaia-agent-ui-<version>-<arch>-setup.<ext>` — e.g. `gaia-agent-ui-X.Y.Z-x64-setup.exe`
+    and `gaia-agent-ui-X.Y.Z-amd64.deb`.
 
     **Windows (.exe):**
     1. Download **Install GAIA for Windows** from [amd-gaia.ai](https://amd-gaia.ai/#install) (`gaia-<version>-win-x64-setup.exe`) and run it.
@@ -740,7 +740,7 @@ much they use now.
 
 One window with General (language; appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
-Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, or your Claude Code skill folders, with **Use** to try one),
+Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one),
 Connectors, Memory, Notifications, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).
@@ -787,8 +787,8 @@ colors the text shades adjust on their own so everything stays readable.
 **Language** switches the app's labels between **English** and **العربية
 (Arabic)**. In Arabic the whole layout reads right to left, with the sidebar on
 the right, and each label keeps its English in brackets, such as "محادثة جديدة
-(New chat)". It changes the app, not the language GAIA answers in, and this
-device remembers it. In either language, each paragraph of an answer runs in
+(New chat)", set smaller and lighter so the Arabic leads. It changes the app,
+not the language GAIA answers in, and this device remembers it. In either language, each paragraph of an answer runs in
 its own direction, so an answer mixing Arabic and English shows each part the
 right way round, and code always reads left to right.
 
@@ -1179,7 +1179,7 @@ For the REST API reference and backend classes, see the [Agent UI SDK Reference]
 ---
 
 <Note>
-  **Hardware:** Tested on AMD Ryzen AI MAX+ 395 with Qwen3.5-35B-A3B-GGUF via Lemonade Server. Other configurations may work — [report issues here](https://github.com/amd/gaia/issues/new).
+  **Hardware:** Tested on AMD Ryzen AI MAX+ 395 with Gemma-4-E4B-it-GGUF via Lemonade Server. Other configurations may work — [report issues here](https://github.com/amd/gaia/issues/new).
 </Note>
 
 <small style="color: #666;">

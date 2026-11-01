@@ -36,11 +36,11 @@ async function withArabicEnvironment(page: Page): Promise<void> {
     );
 }
 
-async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) => Promise<void>): Promise<void> {
+async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) => Promise<void>, theme: 'light' | 'dark' = 'light'): Promise<void> {
     await page.clock.setFixedTime(NOW);
     await mockApi(page);
     await before?.(page);
-    await useTheme(page, 'light');
+    await useTheme(page, theme);
     await useLocale(page, locale);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto(`/${hash}`);
@@ -71,7 +71,7 @@ const audit = (page: Page): Promise<string[]> =>
             }
 
             const text = el.textContent?.trim() ?? '';
-            if (el.children.length > 0 || !text) continue;
+            if (el.querySelector(':scope > :not(i18n-label)') || !text) continue;
 
             // An English name cut off in rtl keeps its end and loses its start.
             if (style.textOverflow === 'ellipsis' && style.direction === 'rtl' && latin.test(text) && !arabic.test(text)) {
@@ -106,6 +106,45 @@ const audit = (page: Page): Promise<string[]> =>
             if (style.direction === 'rtl' && /^[\d.,]+ (B|KB|MB|GB)$/.test(text) && el.tagName !== 'BDI') {
                 problems.push(`a size needs <bdi>: ${label(el)}`);
             }
+        }
+
+        // The English of a label is quieter than its translation, and still readable.
+        const paint = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
+        const rgb = (color: string): number[] => {
+            paint.clearRect(0, 0, 1, 1);
+            paint.fillStyle = color;
+            paint.fillRect(0, 0, 1, 1);
+            return [...paint.getImageData(0, 0, 1, 1).data];
+        };
+        const luminance = (c: number[]) => {
+            const [r, g, b] = c.slice(0, 3).map((v) => {
+                const s = v / 255;
+                return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+            });
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const backdrop = (el: Element) => {
+            for (let at: Element | null = el; at; at = at.parentElement) {
+                const color = rgb(getComputedStyle(at).backgroundColor);
+                if (color[3] === 255) return color;
+            }
+            return [255, 255, 255, 255];
+        };
+        const contrast = (a: number[], b: number[]) => {
+            const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+            return (hi + 0.05) / (lo + 0.05);
+        };
+        for (const gloss of document.querySelectorAll('.i18n-gloss')) {
+            if (!shown(gloss)) continue;
+            const style = getComputedStyle(gloss);
+            const parent = getComputedStyle(gloss.parentElement!);
+            const ratio = contrast(rgb(style.color), backdrop(gloss));
+            if (ratio < 4.5) problems.push(`gloss reads at ${ratio.toFixed(2)}:1: ${label(gloss)}`);
+            if (parseFloat(style.fontSize) > parseFloat(parent.fontSize)) problems.push(`gloss is larger than its label: ${label(gloss)}`);
+            if (parseFloat(style.fontSize) >= parseFloat(parent.fontSize) && parseFloat(parent.fontSize) > 13.75) {
+                problems.push(`gloss is as large as its label: ${label(gloss)}`);
+            }
+            if (Number(style.fontWeight) > 400) problems.push(`gloss is bold: ${label(gloss)}`);
         }
 
         // An icon and its label need space between them, in either direction.
@@ -177,6 +216,13 @@ test('settings', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+test('settings in the dark theme', async ({ page }) => {
+    await open(page, '', 'ar', undefined, 'dark');
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    expect(await audit(page)).toEqual([]);
+});
+
 /** How far each Arabic item name's text sits from the row's left and right edges. */
 const arabicNameGaps = (page: Page) =>
     page.locator('.sp-item-name').evaluateAll((els) =>
@@ -237,6 +283,43 @@ test.describe('English', () => {
         expect(await audit(page)).toEqual([]);
     });
 });
+
+const lastColor = (page: Page): Promise<string> =>
+    page.evaluate(() => (window as unknown as { __colors: { color: string }[] }).__colors.at(-1)?.color ?? '');
+
+const brightness = (hex: string): number =>
+    [1, 3, 5].reduce((sum, at) => sum + parseInt(hex.slice(at, at + 2), 16), 0);
+
+for (const locale of ['ar', 'en']) {
+    test(`settings close button stays pinned while the pane scrolls (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const dialog = page.getByRole('dialog');
+        await dialog.locator('[data-section="advanced"]').click();
+        const title = dialog.locator('.settings-pane-title');
+        await expect(title).toBeVisible();
+
+        const close = dialog.locator('.settings-close');
+        const before = await close.boundingBox();
+        const titleBefore = await title.boundingBox();
+        const dialogBox = await dialog.boundingBox();
+        if (!before || !titleBefore || !dialogBox) throw new Error('settings dialog did not lay out');
+
+        // Wheel over the pane, the way a person scrolls, so the rule doesn't name the scroller.
+        await page.mouse.move(dialogBox.x + dialogBox.width / 2, dialogBox.y + dialogBox.height / 2);
+        await page.mouse.wheel(0, 10_000);
+        await expect.poll(async () => (await title.boundingBox())?.y ?? 0).toBeLessThan(titleBefore.y - 100);
+
+        const after = await close.boundingBox();
+        if (!after) throw new Error('close button left the layout after scrolling');
+        expect(Math.abs(after.x - before.x)).toBeLessThanOrEqual(1);
+        expect(Math.abs(after.y - before.y)).toBeLessThanOrEqual(1);
+        expect(after.y - dialogBox.y).toBeLessThan(40);
+        const onTop = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-close'),
+            [after.x + after.width / 2, after.y + after.height / 2]);
+        expect(onTop, 'the close button is covered by scrolled content').toBe(true);
+    });
+}
 
 /** A Strix Halo on first run: Qwen won't fit 16 GB, an FLM model is installed, the disk is tight. */
 const SETUP_ENTRY = (over: Record<string, unknown>) => ({
@@ -361,4 +444,49 @@ test('window controls take the color of the sidebar beneath them', async ({ page
         getComputedStyle(document.documentElement).getPropertyValue('--bg-sidebar').trim(),
     ]);
     expect(last).toBe(sidebar);
+
+    await page.locator('.sb').getByRole('button', { name: /الإعدادات/ }).first().click();
+    await expect(page.locator('.settings-overlay')).toBeVisible();
+    await expect.poll(async () => brightness(await lastColor(page))).toBeLessThan(brightness(sidebar));
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.settings-overlay')).toHaveCount(0);
+    await expect.poll(() => lastColor(page)).toBe(sidebar);
+});
+
+test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
+    await open(page);
+    await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
+    await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
+});
+
+test('composer chips stay whole at phone width', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 780 });
+    await open(page);
+    const row = page.locator('.composer-chip').first();
+    await expect(row).toBeVisible();
+    const boxes = await page.locator('.composer-chip, .composer-send').evaluateAll((els) =>
+        els.map((el) => {
+            const { left, right, width } = el.getBoundingClientRect();
+            return { left, right, width };
+        }).filter((box) => box.width > 0),
+    );
+    expect(boxes.filter((box) => box.width < 24)).toEqual([]);
+    const sorted = [...boxes].sort((x, y) => x.left - y.left);
+    expect(sorted.filter((box, i) => i > 0 && box.left < sorted[i - 1].right - 1)).toEqual([]);
+});
+
+test('the library path row fits a phone', async ({ page }) => {
+    await open(page);
+    await page.locator('.sb').getByRole('button', { name: /المستندات/ }).click();
+    await page.setViewportSize({ width: 390, height: 780 });
+    const form = page.locator('.path-input-form');
+    await expect(form).toBeVisible();
+    const clipped = await form.locator('button, input').evaluateAll((els) =>
+        els.filter((el) => {
+            const box = el.getBoundingClientRect();
+            return box.left < 0 || box.right > innerWidth;
+        }).length,
+    );
+    expect(clipped).toBe(0);
 });

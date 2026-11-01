@@ -7,7 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+
+	"github.com/amd/gaia/tui/internal/filelock"
 )
 
 // Full access as a persistent preference.
@@ -84,6 +85,15 @@ func writeConfigKeys(keys map[string]any) (string, error) {
 		return "", fmt.Errorf("cannot locate ~/.gaia/config.json (no home directory)")
 	}
 
+	// Python's GaiaConfig.save_keys holds this same lock around its own
+	// read-modify-write, so the two writers take turns instead of each
+	// merging into a stale copy and dropping the other's keys.
+	lock, err := filelock.Acquire(path, filelock.Timeout)
+	if err != nil {
+		return path, err
+	}
+	defer lock.Release()
+
 	doc := map[string]any{}
 	raw, err := os.ReadFile(path)
 	if err == nil {
@@ -104,10 +114,7 @@ func writeConfigKeys(keys map[string]any) (string, error) {
 	if err != nil {
 		return path, fmt.Errorf("cannot encode %s: %w", path, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return path, fmt.Errorf("cannot create %s: %w", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, append(body, '\n'), 0o600); err != nil {
+	if err := filelock.WriteAtomic(path, append(body, '\n'), 0o600); err != nil {
 		return path, fmt.Errorf("cannot write %s: %w", path, err)
 	}
 	return path, nil

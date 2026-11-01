@@ -55,7 +55,7 @@ var chatCmd = &cobra.Command{
 			} {
 				if cmd.Flags().Changed(f.name) {
 					return fmt.Errorf(
-						"--%s is not supported with --subprocess: %s. Use `gaia tui chat --agent <id> --%s …` "+
+						"--%s is not supported with --subprocess: %s. Use `gaia-tui chat --agent <id> --%s …` "+
 							"(the ids are `gaia` and `email`), or drop --%s",
 						f.name, f.why, f.name, f.name)
 				}
@@ -63,9 +63,9 @@ var chatCmd = &cobra.Command{
 		}
 		if agentID == "" && subprocess == "" {
 			return fmt.Errorf("one of --agent or --subprocess is required\n\n" +
-				"Usage: gaia tui chat --agent email\n" +
-				"       gaia tui chat --agent email --query \"triage my inbox\"\n" +
-				"       gaia tui chat --subprocess \"./gaia-bash --json-events\"")
+				"Usage: gaia-tui chat --agent email\n" +
+				"       gaia-tui chat --agent email --query \"triage my inbox\"\n" +
+				"       gaia-tui chat --subprocess \"./gaia-bash --json-events\"")
 		}
 		// Opened only once the command is known to be runnable, so a refused
 		// launch never announces a trace it is not going to write.

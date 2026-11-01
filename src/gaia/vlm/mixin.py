@@ -35,6 +35,16 @@ logger = get_logger(__name__)
 
 DEFAULT_VLM_MODEL = "Gemma-4-E4B-it-GGUF"
 
+# Subject-specific asks (text, faces, objects) go to answer_question_about_image.
+_FOCUS_PROMPTS = {
+    "composition": "Analyze the composition, framing, and arrangement of elements in this image.",
+    "colors": "Describe the color palette, color relationships, and color mood in this image.",
+    "mood": "Describe the mood, atmosphere, and emotional tone conveyed by this image.",
+    "details": "Provide detailed observations about textures, materials, and fine details in this image.",
+    "all": "Provide a detailed description of this image including composition, colors, mood, style, and interesting elements.",
+}
+IMAGE_ANALYSIS_FOCUSES = frozenset(_FOCUS_PROMPTS)
+
 
 def _image_file_error(path: Path, image_path: str) -> Optional[Dict[str, Any]]:
     """Tool error when *path* is not an existing file, or None when it is."""
@@ -100,7 +110,14 @@ class VLMToolsMixin:
             atomic=True,
         )
         def analyze_image(image_path: str, focus: str = "all") -> Dict[str, Any]:
-            """Analyze an image with VLM."""
+            """Analyze an image with a chosen broad visual focus.
+
+            Args:
+                image_path: Local path to the image to analyze.
+                focus: composition, colors, mood, details, or all (default).
+                    For text, faces, or an object, use
+                    answer_question_about_image instead.
+            """
             return self._analyze_image(image_path, focus)
 
         @tool(
@@ -109,7 +126,13 @@ class VLMToolsMixin:
         def answer_question_about_image(
             image_path: str, question: str
         ) -> Dict[str, Any]:
-            """Answer a question about an image."""
+            """Answer a specific question about an image.
+
+            Args:
+                image_path: Local path to the image to analyze.
+                question: The exact question to answer, for example whether text
+                    is legible, what a person is doing, or which objects appear.
+            """
             return self._answer_question_about_image(image_path, question)
 
         # Tools are automatically registered by the @tool decorator above
@@ -126,6 +149,19 @@ class VLMToolsMixin:
         Returns:
             Dict with status, description, and metadata
         """
+        if isinstance(focus, str):
+            focus = focus.strip().lower()
+        if not isinstance(focus, str) or focus not in IMAGE_ANALYSIS_FOCUSES:
+            choices = ", ".join(sorted(IMAGE_ANALYSIS_FOCUSES))
+            return {
+                "status": "error",
+                "error": (
+                    f"Unknown focus '{focus}'. Use one of: {choices}; for a "
+                    "specific question about text, faces, or an object, call "
+                    "answer_question_about_image."
+                ),
+            }
+
         path = Path(image_path)
         denied = read_access_error(self, path)
         if denied:
@@ -134,16 +170,7 @@ class VLMToolsMixin:
         if not_a_file:
             return not_a_file
 
-        # Build analysis prompt based on focus
-        focus_prompts = {
-            "composition": "Analyze the composition, framing, and arrangement of elements in this image.",
-            "colors": "Describe the color palette, color relationships, and color mood in this image.",
-            "mood": "Describe the mood, atmosphere, and emotional tone conveyed by this image.",
-            "details": "Provide detailed observations about textures, materials, and fine details in this image.",
-            "all": "Provide a detailed description of this image including composition, colors, mood, style, and interesting elements.",
-        }
-
-        prompt = focus_prompts.get(focus, focus_prompts["all"])
+        prompt = _FOCUS_PROMPTS[focus]
 
         try:
             # Read image file as bytes (VLMClient expects bytes, not path)
@@ -229,7 +256,9 @@ class VLMToolsMixin:
 - analyze_image(): For detailed descriptions (composition, colors, mood, style)
 - answer_question_about_image(): For specific questions about image content
 
-Tool schemas provide full parameter details. Be flexible based on user needs."""
+``analyze_image`` accepts focus values: composition, colors, mood, details, or all.
+Use ``answer_question_about_image`` for a specific question. Be flexible based
+on user needs."""
 
     def get_vlm_system_prompt(self) -> str:
         """
