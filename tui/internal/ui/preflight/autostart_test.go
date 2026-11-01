@@ -76,15 +76,6 @@ func TestStartLemonadeRefusesWhatItMayNotStart(t *testing.T) {
 	}
 }
 
-func hasEnv(env []string, want string) bool {
-	for _, e := range env {
-		if e == want {
-			return true
-		}
-	}
-	return false
-}
-
 // --- waiting --------------------------------------------------------------
 
 func TestWaitForLemonadeReturnsAsSoonAsItAnswers(t *testing.T) {
