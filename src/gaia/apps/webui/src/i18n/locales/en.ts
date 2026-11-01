@@ -512,6 +512,7 @@ export const enMessages = {
     'tools.listLabel': 'Tools this chat\'s agent can use',
     'tools.listError': 'Couldn\'t list this agent\'s tools: {error}',
     'tools.empty': 'This agent has no tools: it answers from the model alone.',
+    'tools.notRunning': 'This chat\'s agent isn\'t running yet. It starts with your next message, and its tools show here after that.',
     'tools.cat.mcp': 'Connectors',
     'tools.cat.skill': 'Skills',
     'tools.cat.agent': 'Built in',

@@ -512,6 +512,7 @@ const messages: Messages = {
     'tools.listLabel': 'الأدوات التي يمكن لوكيل هذه المحادثة استخدامها',
     'tools.listError': 'تعذّر سرد أدوات هذا الوكيل: {error}',
     'tools.empty': 'لا يملك هذا الوكيل أدوات: يجيب من النموذج وحده.',
+    'tools.notRunning': 'وكيل هذه المحادثة لا يعمل بعد. يبدأ مع رسالتك التالية، وتظهر أدواته هنا بعد ذلك.',
     'tools.cat.mcp': 'الموصلات',
     'tools.cat.skill': 'المهارات',
     'tools.cat.agent': 'مدمجة',

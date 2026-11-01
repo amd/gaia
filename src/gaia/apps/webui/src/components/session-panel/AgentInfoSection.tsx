@@ -4,7 +4,7 @@
 /**
  * Agent info (#440): the tools this chat's agent can use, grouped by where
  * they come from, so the user knows what to ask for. Read from the running
- * agent; before it starts, the server says so and that is what is shown.
+ * agent; before it starts, the section says so rather than show no tools.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -91,7 +91,8 @@ function ToolList({ sessionId, busy }: AgentInfoSectionProps) {
     // The agent starts with the first reply, and a reply can load a skill's tools.
     useTurnEnd(busy, load);
 
-    if (failure?.notRunning) return <p className="sp-meta" role="status">{failure.text}</p>;
+    // 409 is only ever "not running yet", every new chat's first state: say it in the UI's language.
+    if (failure?.notRunning) return <p className="sp-meta" role="status">{t('tools.notRunning')}</p>;
     if (failure) return <p className="sp-error" role="alert">{t('tools.listError', { error: failure.text })}</p>;
     if (!tools) return <p className="sp-meta">{t('sp.checking')}</p>;
     if (tools.length === 0) return <p className="sp-meta">{t('tools.empty')}</p>;

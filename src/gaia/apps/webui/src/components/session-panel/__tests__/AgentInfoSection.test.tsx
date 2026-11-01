@@ -62,13 +62,14 @@ describe('AgentInfoSection', () => {
         expect(within(list).getByRole('region', { name: 'Skills' })).toHaveTextContent('rss-digest/fetch_rss');
     });
 
-    it('says the agent is not running, from the server, instead of an empty list', async () => {
-        const detail = "This chat's agent isn't running, so its tools can't be listed yet.";
-        mocked.getCapabilities.mockRejectedValue(httpError(409, detail));
+    it('says the agent is not running, in the UI language, instead of an empty list', async () => {
+        mocked.getCapabilities.mockRejectedValue(httpError(409, 'server text in English'));
         expand();
         render(<AgentInfoSection sessionId={SID} busy={false} />);
 
-        expect(await screen.findByRole('status')).toHaveTextContent(detail);
+        const status = await screen.findByRole('status');
+        expect(status).toHaveTextContent(tEn('tools.notRunning'));
+        expect(status).not.toHaveTextContent('server text in English');
         expect(screen.queryByRole('group')).not.toBeInTheDocument();
         expect(screen.queryByText(/has no tools/)).not.toBeInTheDocument();
     });
