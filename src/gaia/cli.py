@@ -6604,6 +6604,36 @@ def _print_autonomy_status(body: dict) -> None:
         f"threshold={threshold} "
         f"trusted_scopes={scope_count}"
     )
+    _print_last_autonomy_cycle(body.get("last_cycle"))
+
+
+def _print_last_autonomy_cycle(last) -> None:
+    # Same whitelist contract as _print_autonomy_status.
+    if not isinstance(last, dict):
+        print("last cycle: none has run yet")
+        return
+    from datetime import datetime
+
+    finished = float(last.get("finished_at") or 0.0)
+    started = float(last.get("started_at") or finished)
+    when = datetime.fromtimestamp(finished).strftime("%Y-%m-%d %H:%M:%S")
+    took = max(0.0, finished - started)
+    level = str(last.get("level"))
+    if last.get("outcome") != "completed":
+        print(f"last cycle: FAILED at {when} after {took:.0f}s (level {level})")
+        print(f"  error: {str(last.get('error'))}")
+        return
+    print(f"last cycle: completed at {when} in {took:.0f}s (level {level})")
+    print(
+        f"  executed={int(last.get('executed') or 0)} "
+        f"proposals={int(last.get('proposals') or 0)} "
+        f"skipped={int(last.get('skipped') or 0)} "
+        f"already_proposed={int(last.get('already_proposed') or 0)} "
+        f"errors={int(last.get('errors') or 0)}"
+    )
+    stopped = last.get("stopped")
+    if stopped:
+        print(f"  stopped early: {str(stopped)}")
 
 
 def _print_autonomy_trust(body: dict) -> None:
@@ -6648,7 +6678,7 @@ def handle_email_autonomy_command(args) -> None:
     through the daemon the same way every other ``gaia email`` command does
     (:mod:`gaia.daemon.agent_control`) — no second auth scheme.
     """
-    from gaia.daemon.agent_control import relay_json
+    from gaia.daemon.agent_control import may_still_be_running, relay_json
     from gaia.daemon.errors import DaemonError
 
     log = get_logger(__name__)
@@ -6734,6 +6764,13 @@ def handle_email_autonomy_command(args) -> None:
         # is cosmetic; a missing log record is not.
         log.error("email autonomy %s failed: %s", action, e)
         print(f"❌ {e}", file=sys.stderr)
+        if action == "run" and may_still_be_running(e):
+            print(
+                "   If the cycle started, it keeps running on the agent. Run "
+                f"`gaia email autonomy status --session-id {session_id}` to "
+                "see its result once it finishes.",
+                file=sys.stderr,
+            )
         sys.exit(1)
 
     sys.exit(0)

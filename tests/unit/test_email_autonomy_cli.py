@@ -365,3 +365,138 @@ class TestAutonomyRunErrorSurfacedOnBothChannels:
         assert (
             distinctive in err
         ), f"the failure must also print to stderr; got: {err!r}"
+
+
+class TestLastCycle:
+    """#2618: status says when autonomy last ran and what it did, so "ran,
+    nothing to do" is told apart from "never ran" without reading logs."""
+
+    def _status(self, capsys, last_cycle):
+        ns = argparse.Namespace(autonomy_action="status", session_id="cli")
+
+        def fake_relay(agent_id, method, path, *, json_body=None):
+            if path == "agent/session":
+                return {"session_id": "cli", "created": False}
+            return {
+                "level": "suggest",
+                "enabled": True,
+                "trust_min_samples": 5,
+                "trust_threshold": 0.85,
+                "trusted_scope_count": 0,
+                "scopes": [],
+                "last_cycle": last_cycle,
+            }
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("gaia.daemon.agent_control.relay_json", fake_relay)
+            with pytest.raises(SystemExit) as exc:
+                cli.handle_email_autonomy_command(ns)
+        assert exc.value.code == 0
+        return capsys.readouterr().out
+
+    def test_never_ran(self, capsys):
+        assert "last cycle: none has run yet" in self._status(capsys, None)
+
+    def test_ran_and_found_nothing_to_do(self, capsys):
+        out = self._status(
+            capsys,
+            {
+                "outcome": "completed",
+                "started_at": 1000.0,
+                "finished_at": 1190.0,
+                "level": "suggest",
+                "executed": 0,
+                "proposals": 0,
+                "decisions": 0,
+                "skipped": 50,
+                "already_proposed": 0,
+                "errors": 0,
+                "stopped": None,
+            },
+        )
+        assert "last cycle: completed at " in out
+        assert "in 190s (level suggest)" in out
+        assert "executed=0 proposals=0 skipped=50" in out
+        assert "stopped early" not in out
+
+    def test_stopped_early_is_named(self, capsys):
+        out = self._status(
+            capsys,
+            {
+                "outcome": "completed",
+                "finished_at": 1000.0,
+                "level": "full",
+                "stopped": "consecutive_failures",
+            },
+        )
+        assert "stopped early: consecutive_failures" in out
+
+    def test_failed_cycle_shows_its_error(self, capsys):
+        out = self._status(
+            capsys,
+            {
+                "outcome": "failed",
+                "started_at": 1000.0,
+                "finished_at": 1003.0,
+                "level": "full",
+                "error": "ConnectorsError: no mailbox connected",
+            },
+        )
+        assert "last cycle: FAILED" in out
+        assert "error: ConnectorsError: no mailbox connected" in out
+
+    @pytest.mark.parametrize("junk", ["yesterday", ["x"], 7])
+    def test_a_non_object_last_cycle_reads_as_none(self, capsys, junk):
+        assert "none has run yet" in self._status(capsys, junk)
+
+    def test_an_old_sidecar_without_the_field_reads_as_none(self, capsys):
+        ns = argparse.Namespace(autonomy_action="status", session_id="cli")
+
+        def fake_relay(agent_id, method, path, *, json_body=None):
+            if path == "agent/session":
+                return {}
+            return {"level": "suggest", "enabled": True}
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("gaia.daemon.agent_control.relay_json", fake_relay)
+            with pytest.raises(SystemExit):
+                cli.handle_email_autonomy_command(ns)
+        assert "none has run yet" in capsys.readouterr().out
+
+
+class TestRunThatOutlivesTheRead:
+    def _run(self, capsys, error):
+        ns = argparse.Namespace(
+            autonomy_action="run", session_id="morning", max_messages=50
+        )
+
+        def fake_relay(agent_id, method, path, *, json_body=None):
+            if path == "agent/session":
+                return {}
+            raise error
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("gaia.daemon.agent_control.relay_json", fake_relay)
+            with pytest.raises(SystemExit) as exc:
+                cli.handle_email_autonomy_command(ns)
+        assert exc.value.code == 1
+        return capsys.readouterr().err
+
+    def test_read_timeout_points_at_status_for_the_same_session(self, capsys):
+        from gaia.daemon.agent_control import AgentResponseTimeoutError
+
+        err = self._run(capsys, AgentResponseTimeoutError("did not answer"))
+        assert "gaia email autonomy status --session-id morning" in err
+
+    def test_relay_5xx_points_at_status(self, capsys):
+        from gaia.daemon.agent_control import AgentHTTPError
+
+        err = self._run(capsys, AgentHTTPError("sidecar did not answer", 502))
+        assert "gaia email autonomy status" in err
+
+    def test_a_refusal_does_not_claim_the_cycle_is_running(self, capsys):
+        from gaia.daemon.agent_control import AgentHTTPError
+
+        err = self._run(capsys, AgentHTTPError("autonomy is off", 409))
+        assert "autonomy is off" in err
+        assert "keeps running" not in err
