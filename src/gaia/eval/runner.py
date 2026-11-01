@@ -2602,6 +2602,65 @@ Fix failures in this order:
 """
 
 
+def require_clean_tree_for_fix() -> None:
+    """Refuse ``--fix`` unless the checkout has no uncommitted tracked changes.
+
+    The fixer edits this checkout with permissions disabled; only a clean
+    starting tree leaves ``git diff`` as an exact record of what it changed.
+    """
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(REPO_ROOT),
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(
+            f"--fix could not check the git state of {REPO_ROOT}: {e}. "
+            "It edits the checkout, so it needs git on PATH to confirm the tree "
+            "is clean."
+        ) from e
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"--fix needs a git checkout of GAIA, but {REPO_ROOT} is not one "
+            f"(git: {(proc.stderr or proc.stdout).strip()[:300]}). Run it from a "
+            "source checkout (`git clone https://github.com/amd/gaia`)."
+        )
+    dirty = [line for line in proc.stdout.splitlines() if line.strip()]
+    if dirty:
+        shown = "\n  ".join(dirty[:10])
+        more = f"\n  ... and {len(dirty) - 10} more" if len(dirty) > 10 else ""
+        raise RuntimeError(
+            f"--fix refuses to start: {REPO_ROOT} has {len(dirty)} uncommitted "
+            f"change(s), and the fixer edits this tree with permissions "
+            f"disabled:\n  {shown}{more}\n"
+            "Commit them or move them to a branch first, or run --fix from a "
+            "separate worktree (`git worktree add <path>`), so `git diff` shows "
+            "exactly what the fixer changed."
+        )
+
+
+def _fix_iteration_failure(fix_result: dict) -> Optional[str]:
+    """Why a fixer iteration did not complete, or ``None`` when it did."""
+    if fix_result.get("error"):
+        return str(fix_result["error"])
+    code = fix_result.get("fixer_exit_code")
+    if code not in (0, None):
+        return f"the fixer exited {code}"
+    return None
+
+
 def run_fix_iteration(scorecard, run_dir, iteration):
     """Invoke Claude Code to fix failing scenarios. Returns fix log entry."""
     # Load fixer prompt from file if available, fall back to inline FIXER_PROMPT
@@ -2688,6 +2747,12 @@ def run_fix_iteration(scorecard, run_dir, iteration):
     except Exception as e:
         print(f"[FIX] Fixer error: {e}", file=sys.stderr)
         return {"iteration": iteration, "error": str(e), "fixes": []}
+
+
+def _write_fix_history(run_dir, fix_history) -> None:
+    (run_dir / "fix_history.json").write_text(
+        json.dumps(fix_history, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 #: Committed next to a baseline's scorecards; names what produced them.
@@ -3214,6 +3279,9 @@ class AgentEvalRunner:
             result = run_audit()
             print(json.dumps(result, indent=2))
             return result
+
+        if fix_mode and resume_dir is None:
+            require_clean_tree_for_fix()
 
         with exclusive_eval("gaia eval agent"):
             if resume_dir is not None:
@@ -3752,6 +3820,17 @@ class AgentEvalRunner:
             # Phase B: Run fixer
             fix_result = run_fix_iteration(current_scorecard, run_dir, iteration)
             fix_history.append(fix_result)
+            failure = _fix_iteration_failure(fix_result)
+            if failure:
+                _write_fix_history(run_dir, fix_history)
+                # Re-scoring a half-edited tree, then fixing it again, compounds
+                # whatever the interrupted fixer left behind.
+                raise RuntimeError(
+                    f"Fix mode stopped: iteration {iteration} did not complete "
+                    f"({failure}). The fixer may have left partial edits in "
+                    f"{REPO_ROOT} — review them with `git diff` before re-running. "
+                    f"Fix history: {run_dir / 'fix_history.json'}"
+                )
 
             # Phase C: Re-run only previously-failed scenarios
             failed_ids = {s.get("scenario_id") for s in failed}
@@ -3846,11 +3925,7 @@ class AgentEvalRunner:
             self._print_summary(new_scorecard, fix_run_id, run_dir)
             current_scorecard = new_scorecard
 
-        # Write fix_log.json with full history
-        fix_log_path = run_dir / "fix_history.json"
-        fix_log_path.write_text(
-            json.dumps(fix_history, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        _write_fix_history(run_dir, fix_history)
 
         # Final comparison: baseline vs current
         baseline_pass = baseline_scorecard.get("summary", {}).get("judged_pass_rate", 0)
@@ -3860,7 +3935,7 @@ class AgentEvalRunner:
         print(f"  Baseline judged pass rate: {baseline_pass:.0%}")
         print(f"  Final judged pass rate:    {final_pass:.0%}")
         print(f"  Delta:                     {(final_pass - baseline_pass):+.0%}")
-        print(f"  Fix history:        {fix_log_path}")
+        print(f"  Fix history:        {run_dir / 'fix_history.json'}")
         print("  Changes are NOT committed -- review before merging.")
         print(f"{'='*60}")
 

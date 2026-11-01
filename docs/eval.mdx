@@ -447,7 +447,7 @@ The fixer prioritizes repairs in this order:
 3. **Multi-scenario failures** before single-scenario issues
 
 <Note>
-  Fix mode uses Claude Code to patch `src/gaia/` source files. Review diffs before committing. Always run `python util/lint.py --all --fix` after fix iterations.
+  Fix mode uses Claude Code to patch `src/gaia/` source files. It refuses to start while tracked files have uncommitted changes, so `git diff` afterwards is exactly what the fixer changed — commit your work or run it from a separate worktree first. If a fixer iteration times out or fails, the loop stops instead of re-scoring a half-edited tree. Review diffs before committing. Always run `python util/lint.py --all --fix` after fix iterations.
 </Note>
 
 ---
