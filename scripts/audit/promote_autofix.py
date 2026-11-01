@@ -34,11 +34,17 @@ BOT_AUTHORS = {"github-actions", "app/github-actions", "github-actions[bot]"}
 AUTO_FIXABLE = re.compile(r"\*\*Auto-fixable:\*\*\s*yes\b", re.IGNORECASE)
 HIGH_SEVERITY = re.compile(r"\*\*Severity:\*\*\s*🔴")
 LIST_LIMIT = 200
+GH_TIMEOUT = 60
 
 
 def _gh(*args: str) -> str:
     result = subprocess.run(
-        ["gh", *args], capture_output=True, text=True, encoding="utf-8", check=False
+        ["gh", *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+        timeout=GH_TIMEOUT,
     )
     if result.returncode != 0:
         raise RuntimeError(f"gh {args[0]} {args[1]} failed: {result.stderr.strip()}")

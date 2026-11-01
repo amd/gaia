@@ -30,11 +30,17 @@ STAMP = re.compile(r"<!-- reviewed-sha: ([0-9a-f]{40}) -->")
 VERDICT = re.compile(r"^\*\*Verdict: ([A-Za-z ]+?)\*\*", re.MULTILINE)
 BLOCKING = "Request changes"
 MAX_DESCRIPTION = 140
+GH_TIMEOUT = 60
 
 
 def _gh(*args: str) -> str:
     result = subprocess.run(
-        ["gh", *args], capture_output=True, text=True, encoding="utf-8", check=False
+        ["gh", *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+        timeout=GH_TIMEOUT,
     )
     if result.returncode != 0:
         raise RuntimeError(f"gh {args[0]} {args[1]} failed: {result.stderr.strip()}")
