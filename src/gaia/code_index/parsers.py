@@ -3,8 +3,9 @@
 """
 Code file parsers for the GAIA code index.
 
-Supports Python (AST-based), JS/TS/Go/Rust/Java/C/C++ (regex-based),
-and a fallback block-based splitter for unknown file types.
+Supports Python (AST-based), JS/TS/Go/Rust/Java/C/C++ and the Verilog,
+SystemVerilog and VHDL hardware languages (regex-based), and a fallback
+block-based splitter for unknown file types.
 """
 
 import ast
@@ -35,6 +36,12 @@ _EXT_TO_LANG = {
     ".cxx": "cpp",
     ".hpp": "cpp",
     ".hxx": "cpp",
+    ".v": "verilog",
+    ".vh": "verilog",
+    ".sv": "systemverilog",
+    ".svh": "systemverilog",
+    ".vhd": "vhdl",
+    ".vhdl": "vhdl",
 }
 
 
@@ -225,6 +232,87 @@ _LANG_PATTERNS: dict = {
         ("class", re.compile(r"^(?:class|struct)\s+(?P<name>\w+)", re.MULTILINE)),
     ],
 }
+
+# Line-anchored so `endmodule`, `end process` and `// module x` never match.
+_VERILOG_PATTERNS = [
+    (
+        "module",
+        re.compile(
+            r"^[ \t]*(?:macro)?module\s+(?:(?:automatic|static)\s+)?(?P<name>\w+)",
+            re.MULTILINE,
+        ),
+    ),
+    (
+        "interface",
+        re.compile(r"^[ \t]*interface\s+(?:class\s+)?(?P<name>\w+)", re.MULTILINE),
+    ),
+    ("package", re.compile(r"^[ \t]*package\s+(?P<name>\w+)", re.MULTILINE)),
+    ("program", re.compile(r"^[ \t]*program\s+(?P<name>\w+)", re.MULTILINE)),
+    (
+        "class",
+        re.compile(r"^[ \t]*(?:virtual\s+)?class\s+(?P<name>\w+)", re.MULTILINE),
+    ),
+    (
+        "function",
+        re.compile(
+            r"^[ \t]*(?:(?:virtual|static|protected|local|extern|pure)\s+)*"
+            r"(?:task|function)\b[^;(\n]*?(?P<name>\w+)\s*[(;]",
+            re.MULTILINE,
+        ),
+    ),
+    (
+        "always",
+        re.compile(r"^[ \t]*(?P<name>always(?:_ff|_comb|_latch)?)\b", re.MULTILINE),
+    ),
+]
+
+_VHDL_PATTERNS = [
+    (
+        "entity",
+        re.compile(
+            r"^[ \t]*entity\s+(?P<name>\w+)\s+is\b", re.MULTILINE | re.IGNORECASE
+        ),
+    ),
+    (
+        "architecture",
+        re.compile(
+            r"^[ \t]*architecture\s+(?P<name>\w+)\s+of\s+\w+\s+is\b",
+            re.MULTILINE | re.IGNORECASE,
+        ),
+    ),
+    (
+        "package",
+        re.compile(
+            r"^[ \t]*package\s+(?:body\s+)?(?P<name>\w+)\s+is\b",
+            re.MULTILINE | re.IGNORECASE,
+        ),
+    ),
+    (
+        "process",
+        re.compile(
+            r"^[ \t]*(?P<name>\w+)\s*:\s*(?:postponed\s+)?process\b",
+            re.MULTILINE | re.IGNORECASE,
+        ),
+    ),
+    (
+        "process",
+        re.compile(
+            r"^[ \t]*(?:postponed\s+)?(?P<name>process)\b",
+            re.MULTILINE | re.IGNORECASE,
+        ),
+    ),
+    (
+        "function",
+        re.compile(
+            r"^[ \t]*(?:(?:pure|impure)\s+)?(?:function|procedure)\s+(?P<name>\w+)",
+            re.MULTILINE | re.IGNORECASE,
+        ),
+    ),
+]
+
+_LANG_PATTERNS["verilog"] = _VERILOG_PATTERNS
+_LANG_PATTERNS["systemverilog"] = _VERILOG_PATTERNS
+_LANG_PATTERNS["vhdl"] = _VHDL_PATTERNS
 
 
 def parse_generic_file(file_path: str, content: str, language: str) -> List[CodeChunk]:
