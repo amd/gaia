@@ -12,10 +12,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
-from gaia.skills.manager import ROOT_AGENT_BUNDLED, ROOT_CLAUDE_IMPORT, ROOT_USER
+from gaia.skills.manager import (
+    ROOT_AGENT_BUNDLED,
+    ROOT_CLAUDE_IMPORT,
+    ROOT_CLAUDE_PROJECT,
+    ROOT_USER,
+    default_project_dir,
+)
 
 #: Where a skill came from: the discovery-root labels the UI groups by.
-SKILL_SOURCES = (ROOT_AGENT_BUNDLED, ROOT_USER, ROOT_CLAUDE_IMPORT)
+SKILL_SOURCES = (ROOT_AGENT_BUNDLED, ROOT_USER, ROOT_CLAUDE_PROJECT, ROOT_CLAUDE_IMPORT)
 
 
 def skills_listing(
@@ -34,6 +40,7 @@ def skills_listing(
     manager = SkillManager(
         agent_skill_dirs=list(agent_skill_dirs),
         excluded_names=tuple(excluded_names),
+        project_dir=default_project_dir(),
     )
     discovered = manager.reload()
     always_on = frozenset(always_on_names)

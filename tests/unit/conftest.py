@@ -34,6 +34,8 @@ def mock_home(tmp_path, monkeypatch):
     real_expanduser = os.path.expanduser
 
     def fake_expanduser(path):
+        # Like the real one, accept any path-like (matplotlib passes a Path).
+        path = os.fspath(path)
         if path == "~":
             return str(tmp_path)
         if path.startswith(("~/", "~\\")):
@@ -88,8 +90,11 @@ _RUN_HOME = Path.home()
 
 def _patch_default_gaia_home(mp, default_gaia_home) -> None:
     from gaia import config as config_mod
+    from gaia import home as home_mod
     from gaia.connectors import _refresh_lock
 
+    # gaia_home() lives in gaia.home; config re-exports it.
+    mp.setattr(home_mod, "default_gaia_home", default_gaia_home)
     mp.setattr(config_mod, "default_gaia_home", default_gaia_home)
     # Bound at import; the connector lock is the one writer among those names.
     mp.setattr(_refresh_lock, "default_gaia_home", default_gaia_home)

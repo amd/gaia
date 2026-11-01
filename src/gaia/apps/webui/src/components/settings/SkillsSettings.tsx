@@ -15,6 +15,11 @@ const GROUPS: Array<{ source: SkillSource; title: string; note: string; empty?: 
         empty: 'None yet. Add a folder with a SKILL.md file to ~/.gaia/skills and reopen this page.',
     },
     {
+        source: 'claude-project',
+        title: 'From this project',
+        note: "In the .claude/skills folder of the project GAIA is working in. Their instructions load; any tools or commands they ask for stay off until you import them.",
+    },
+    {
         source: 'claude-import',
         title: 'From Claude Code',
         note: 'Found in your Claude Code skill folders. GAIA reads them in place and does not change them.',
@@ -39,7 +44,8 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
     const q = query.trim().toLowerCase();
     const shown = (skills ?? []).filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
 
-    const grouped = skills?.every((s) => s.source) ?? false;
+    // A source this build has no group for (a newer agent's) shows the list flat, never hides it.
+    const grouped = skills?.every((s) => GROUPS.some((g) => g.source === s.source)) ?? false;
 
     const renderRow = (s: SkillInfo) => (
         <li key={s.name} className="skill-row">
