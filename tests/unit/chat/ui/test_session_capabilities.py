@@ -65,8 +65,9 @@ def client(home):
 
 
 def _new_session(client, agent_type=None):
-    body = {"agent_type": agent_type} if agent_type else {}
-    session = client.post("/api/sessions", json=body).json()
+    # Straight to the DB: whether /api/sessions accepts "gaia" depends on
+    # which agent packages this test environment has installed.
+    session = client.app.state.db.create_session(agent_type=agent_type)
     return session["id"], session["agent_type"]
 
 
