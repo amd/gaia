@@ -392,8 +392,8 @@ def _suggested_local_models() -> set:
 def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str, Any]]:
     """Chat models for *provider*; *offer_optional* adds the optional ones that fit."""
     from gaia.llm.lemonade_client import (
-        _model_ids_match,
         NPU_CHAT_MODELS,
+        _model_ids_match,
         catalog_context_window,
         find_model_requirement,
         runs_on_npu,
