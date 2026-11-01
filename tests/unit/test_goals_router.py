@@ -246,6 +246,38 @@ class TestGoalActions:
     def test_cancel_missing_returns_404(self, client):
         assert client.put("/api/goals/no-such/cancel").status_code == 404
 
+    def test_approve_after_reject_returns_409_and_stays_rejected(
+        self, client, goal_store
+    ):
+        goal = goal_store.create_goal("Inferred", "desc", source="agent_inferred")
+        client.put(f"/api/goals/{goal.id}/reject")
+
+        resp = client.put(f"/api/goals/{goal.id}/approve")
+
+        assert resp.status_code == 409
+        assert "rejected" in resp.json()["detail"]
+        stored = goal_store.get_goal(goal.id)
+        assert stored.status == "rejected"
+        assert stored.approved_for_auto is False
+
+    def test_reject_queued_goal_returns_409(self, client):
+        created = _create_goal(client)
+        assert client.put(f"/api/goals/{created['id']}/reject").status_code == 409
+
+    def test_cancel_completed_goal_returns_409_and_skips_tick_stop(
+        self, client, goal_store, monkeypatch
+    ):
+        stop_tick = MagicMock(return_value=True)
+        monkeypatch.setattr(agent_loop, "cancel_goal", stop_tick)
+        created = _create_goal(client)
+        goal_store.update_goal_status(created["id"], "completed")
+
+        resp = client.put(f"/api/goals/{created['id']}/cancel")
+
+        assert resp.status_code == 409
+        assert goal_store.get_goal(created["id"]).status == "completed"
+        stop_tick.assert_not_called()
+
 
 # ===========================================================================
 # Delete Goal

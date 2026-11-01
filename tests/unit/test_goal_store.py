@@ -470,3 +470,122 @@ class TestPropose:
 
         goal = store.propose(Proposal(action="a", rationale="r"))
         assert json.loads(goal.progress_notes)["proposer"] == "agent"
+
+
+# ===========================================================================
+# State machine enforcement (#3529)
+# ===========================================================================
+
+
+class TestGoalTransitionsEnforced:
+    """approve/reject/cancel act only on the states they're documented for."""
+
+    @pytest.mark.parametrize(
+        "terminal", ["rejected", "cancelled", "completed", "failed"]
+    )
+    def test_approve_never_resurrects_a_finished_goal(self, store, terminal):
+        from gaia.agents.base.goal_store import GoalTransitionError
+
+        goal = _make_goal(store, source="agent_inferred")
+        store.update_goal_status(goal.id, terminal)
+
+        with pytest.raises(GoalTransitionError, match=terminal):
+            store.approve_goal(goal.id)
+
+        after = store.get_goal(goal.id)
+        assert after.status == terminal
+        assert after.approved_for_auto is False
+        assert goal.id not in [g.id for g in store.get_actionable_goals()]
+
+    def test_approve_after_reject_is_refused(self, store):
+        from gaia.agents.base.goal_store import GoalTransitionError
+
+        goal = _make_goal(store, source="agent_inferred")
+        store.reject_goal(goal.id)
+
+        with pytest.raises(GoalTransitionError):
+            store.approve_goal(goal.id)
+        assert store.get_goal(goal.id).status == "rejected"
+
+    def test_approve_twice_is_refused(self, store):
+        from gaia.agents.base.goal_store import GoalTransitionError
+
+        goal = _make_goal(store, source="agent_inferred")
+        store.approve_goal(goal.id)
+        with pytest.raises(GoalTransitionError, match="queued"):
+            store.approve_goal(goal.id)
+
+    def test_approve_running_goal_is_refused(self, store):
+        from gaia.agents.base.goal_store import GoalTransitionError
+
+        goal = _make_goal(store, source="agent_inferred")
+        store.approve_goal(goal.id)
+        store.update_goal_status(goal.id, "in_progress")
+        with pytest.raises(GoalTransitionError):
+            store.approve_goal(goal.id)
+        assert store.get_goal(goal.id).status == "in_progress"
+
+    def test_reject_only_pending(self, store):
+        from gaia.agents.base.goal_store import GoalTransitionError
+
+        goal = _make_goal(store, source="user")  # queued, never pending
+        with pytest.raises(GoalTransitionError):
+            store.reject_goal(goal.id)
+        assert store.get_goal(goal.id).status == "queued"
+
+    @pytest.mark.parametrize("live", ["queued", "in_progress"])
+    def test_cancel_live_goal(self, store, live):
+        goal = _make_goal(store, source="user")
+        store.update_goal_status(goal.id, live)
+        assert store.cancel_goal(goal.id).status == "cancelled"
+
+    @pytest.mark.parametrize(
+        "state", ["pending_approval", "completed", "failed", "rejected", "cancelled"]
+    )
+    def test_cancel_refused_outside_live_states(self, store, state):
+        from gaia.agents.base.goal_store import GoalTransitionError
+
+        goal = _make_goal(store, source="agent_inferred")
+        if state != "pending_approval":
+            store.update_goal_status(goal.id, state)
+        with pytest.raises(GoalTransitionError):
+            store.cancel_goal(goal.id)
+        assert store.get_goal(goal.id).status == state
+
+    def test_missing_goal_still_returns_none(self, store):
+        assert store.approve_goal("nope") is None
+        assert store.reject_goal("nope") is None
+        assert store.cancel_goal("nope") is None
+
+    def test_transition_error_is_a_value_error(self):
+        from gaia.agents.base.goal_store import GoalTransitionError
+
+        assert issubclass(GoalTransitionError, ValueError)
+
+
+class TestStatusValuesValidated:
+    @pytest.mark.parametrize(
+        "bad", ["done", "Queued", "", "queued ", "approved", None, 1]
+    )
+    def test_unknown_goal_status_raises_and_writes_nothing(self, store, bad):
+        goal = _make_goal(store)
+        with pytest.raises(ValueError, match="unknown goal status"):
+            store.update_goal_status(goal.id, bad)
+        assert store.get_goal(goal.id).status == "queued"
+
+    @pytest.mark.parametrize("bad", ["done", "pending_approval", "rejected", ""])
+    def test_unknown_task_status_raises_and_writes_nothing(self, store, bad):
+        goal = _make_goal(store)
+        task = store.add_task(goal.id, "step")
+        with pytest.raises(ValueError, match="unknown task status"):
+            store.update_task_status(task.id, bad)
+        assert store.get_task(task.id).status == "queued"
+
+    def test_every_documented_goal_status_is_accepted(self, store):
+        from typing import get_args
+
+        from gaia.agents.base.goal_store import GoalStatus
+
+        goal = _make_goal(store)
+        for status in get_args(GoalStatus):
+            assert store.update_goal_status(goal.id, status).status == status

@@ -2249,15 +2249,15 @@ Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/approve">
-    Approve an agent-inferred goal for autonomous execution.
+    Approve an agent-inferred goal for autonomous execution. Only a goal in `pending_approval` can be approved; any other state returns 409, so a rejected, cancelled or finished goal is never re-queued.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/reject">
-    Reject an agent-inferred goal.
+    Reject an agent-inferred goal. Only a goal in `pending_approval` can be rejected; any other state returns 409.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/cancel">
-    Cancel a queued or in-progress goal.
+    Cancel a queued or in-progress goal. Any other state returns 409.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/status">
