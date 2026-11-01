@@ -1028,12 +1028,12 @@ The lemonade server must be running. If not available, the command will provide 
 Talk to the flagship GAIA agent (the same agent the TUI and Agent UI run): start an interactive conversation, or send a single message and exit.
 
 ```bash
-gaia chat [MESSAGE] [OPTIONS]
+gaia chat [OPTIONS]
 ```
 
 **Modes:**
-- **No message**: Starts interactive chat session
-- **Message provided**: Sends single message and exits
+- **Default**: starts an interactive chat session
+- **`--query`/`-q`**: sends a single message and exits
 
 **Output:** the answer goes to stdout; the device banner, model-load progress,
 warnings and errors go to stderr, so `gaia chat -q "…" > answer.txt` captures
@@ -1470,14 +1470,13 @@ gaia mcp tools memory --config ./mcp_servers.json
 Test connection to a configured MCP server.
 
 ```bash
-gaia mcp test-client <server-name> [--config PATH]
+gaia mcp test-client <server-name>
 ```
 
 **Arguments:**
 - `<server-name>` - Name of the server to test
 
-**Options:**
-- `--config PATH` - Custom config file path (default: `~/.gaia/mcp_servers.json`)
+`test-client` takes no `--config`; it reads the default `mcp_servers.json`.
 
 **Example:**
 ```bash
@@ -1534,7 +1533,7 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `--auth-token` | `$GAIA_MCP_AUTH_TOKEN` | Require `Authorization: Bearer <token>` on every request except `/health` |
 | `--no-streaming` | off | Disable SSE streaming; reply synchronously |
 | `--background` | off | Detach; use `gaia mcp stop` to terminate |
-| `--log-file` | stdout | Write logs to this path (useful with `--background`) |
+| `--log-file` | `gaia.mcp.log` | Log file path for `--background` mode |
 | `--verbose` | off | Verbose logging |
 | `--ctx-size` | `32768` | Context window hint passed to Lemonade for loaded models |
 
@@ -1601,7 +1600,9 @@ on loopback, before sending a token across an untrusted network.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--query` | _required_ | Text to send to the server |
+| `--host` | `localhost` | Bridge host to connect to |
+| `--port` | `8765` | Bridge port to connect to |
+| `--query` | `Hello, GAIA!` | Text to send to the server |
 | `--tool` | `gaia.chat` | Which MCP tool to invoke when testing |
 | `--auth-token` | `$GAIA_MCP_AUTH_TOKEN` | Bearer token, if the bridge requires one |
 
@@ -2640,6 +2641,9 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
     | `--chat-only` | Conversational questions only (skip system scan) |
     | `--discover` | System discovery scan only (skip questions) |
     | `--reset` | Delete all discovery-sourced items (preserves user edits) |
+    | `--system` | Re-scan and refresh the silent system context (OS, hardware, apps, versions) |
+    | `--reset-system` | Clear the system context entries and optionally disable auto-collection |
+    | `--infer` | LLM-assisted profile inference from browser history and installed apps |
 
     **Examples:**
 
@@ -2663,6 +2667,13 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
     Reset discovered items:
     ```bash
     gaia memory bootstrap --reset
+    ```
+
+    Refresh or clear the system context, or infer a profile:
+    ```bash
+    gaia memory bootstrap --system
+    gaia memory bootstrap --reset-system
+    gaia memory bootstrap --infer
     ```
   </Tab>
 </Tabs>
@@ -4137,7 +4148,6 @@ despite the name they are **not** accepted by `gaia agent`, `gaia cache`,
 |--------|------|---------|-------------|
 | `--logging-level` | string | INFO | Logging verbosity [DEBUG, INFO, WARNING, ERROR, CRITICAL] |
 | `-v, --version` | flag | - | Show program's version and exit |
-| `--claude-model` | string | `claude-sonnet-5` | Claude model to use when `--use-claude` is set |
 | `--no-lemonade-check` | flag | - | Skip the Lemonade server reachability check (CI/testing without Lemonade) |
 
 <Note>
