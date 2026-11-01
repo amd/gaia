@@ -15,7 +15,7 @@ net-new afterwards. This test asserts both ends of that ledger:
     catalog, plus the net-new ids). For each carried-over id, field-by-field
     equivalence against the legacy ``mcp.py:_CATALOG`` row of the same name is
     asserted as a guard against silent drift during the migration.
-  * DELETED_IDS — these 18 ids must NOT be present. Regression guard against
+  * DELETED_IDS — these 19 ids must NOT be present. Regression guard against
     accidentally re-introducing untested catalog tiles.
 
 When ``src/gaia/ui/routers/mcp.py:_CATALOG`` is finally deleted (also part of
