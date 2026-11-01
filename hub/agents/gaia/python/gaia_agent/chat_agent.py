@@ -524,7 +524,10 @@ class ChatAgent(
 
         # Store model for display
         self.model_display_name = effective_model_id
-        self.model_features = features_for_model(effective_model_id)
+        # A Claude session's tier is Claude's, not the local default's.
+        self.model_features = features_for_model(
+            config.claude_model if config.use_claude else effective_model_id
+        )
 
         # Store max_chunks for adaptive retrieval
         self.base_max_chunks = config.max_chunks

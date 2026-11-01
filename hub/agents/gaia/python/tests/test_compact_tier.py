@@ -24,7 +24,7 @@ SKILLS_ON_WITHHELD_TOOLS = ("data-explore", "image-gen", "inbox-triage")
 
 
 @contextlib.contextmanager
-def _agent(model_id, dynamic_tools=False):
+def _agent(model_id, dynamic_tools=False, **config):
     saved = dict(_TOOL_REGISTRY)
     _TOOL_REGISTRY.clear()
     try:
@@ -33,7 +33,9 @@ def _agent(model_id, dynamic_tools=False):
             mp.setenv("GAIA_DYNAMIC_TOOLS", "1" if dynamic_tools else "0")
             mp.delenv("GAIA_FAST", raising=False)
             mp.delenv(TIER_ENV, raising=False)
-            yield GaiaAgent(config=GaiaAgentConfig(silent_mode=True, model_id=model_id))
+            yield GaiaAgent(
+                config=GaiaAgentConfig(silent_mode=True, model_id=model_id, **config)
+            )
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(saved)
@@ -155,12 +157,23 @@ def test_gemma_with_dynamic_tools_selects_without_a_drift_error(model_id):
             agent.tool_loader.validate_registry(agent._tools_registry)
 
 
-def test_switching_to_gemma_unloads_a_skill_it_cannot_run():
+def test_switching_to_gemma_unloads_a_skill_it_cannot_run(monkeypatch):
     with _agent(LARGE_DEFAULT_MODEL_NAME) as agent:
         agent.load_skill("data-explore")
         agent.load_skill("research-report")
-        _switch(agent, DEFAULT_MODEL_NAME)
-        assert agent.unload_skills_needing_withheld_tools() == ["data-explore"]
+        monkeypatch.setattr(
+            stdio,
+            "_reachable_lemonade_models",
+            lambda *a: ("http://localhost:13305/api/v1", [DEFAULT_MODEL_NAME]),
+        )
+        # A client with no catalog to refresh: the switch must not reach a server.
+        monkeypatch.setattr(stdio, "create_client", lambda **k: object())
+        statuses = []
+        stdio._apply_local_switch(agent, DEFAULT_MODEL_NAME, statuses.append)
+        assert statuses == [
+            f"Unloaded data-explore: {DEFAULT_MODEL_NAME} isn't offered the tools "
+            "they need. Switch to a larger model to use them."
+        ]
         assert "data-explore" not in agent.loaded_skills
         assert "research-report" in agent.loaded_skills
         assert "create_table" not in agent.system_prompt
@@ -172,3 +185,15 @@ def test_a_switch_to_a_larger_model_unloads_nothing():
         _switch(agent, LARGE_DEFAULT_MODEL_NAME)
         assert agent.unload_skills_needing_withheld_tools() == []
         assert "data-explore" in agent.loaded_skills
+
+
+def test_a_session_started_on_claude_keeps_every_feature(monkeypatch, full_tools):
+    # Gemma is this PC's default, but the session runs on Claude.
+    monkeypatch.setattr(
+        "gaia_agent.chat_agent.resolve_default_chat_model",
+        lambda: DEFAULT_MODEL_NAME,
+    )
+    with _agent(None, use_claude=True, claude_model="claude-sonnet-5") as agent:
+        assert agent.model_features is FULL
+        assert "create_table" in agent._tools_registry
+        assert set(agent._tools_registry) == full_tools

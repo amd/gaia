@@ -121,8 +121,9 @@ FLAGSHIP_AGENT_ID = "gaia"
 _AGENT_IMPORT_NAMES = {"gaia": "gaia_agent"}
 
 _NPU_ACTIVE_NOTE = (
-    "The NPU model is now the default. To go back to the GPU, pick a GPU model "
-    "in the model list, or run: gaia config set default_model <id>"
+    "The NPU model is now the default. To go back to the GPU, run: "
+    "gaia config set default_model <id> (a pick in the Agent UI or TUI model "
+    "list changes only what they open on)"
 )
 
 # The profile a bare `gaia init` runs — the flagship agent's configuration.

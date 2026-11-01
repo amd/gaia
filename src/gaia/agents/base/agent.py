@@ -2629,7 +2629,10 @@ Do NOT wrap conversational replies in JSON.
         # for tool-calling models — exactly what the suppression was meant
         # to prevent.
         self.model_id = model_id
-        self.model_features = features_for_model(model_id)
+        # A Claude session's tier is Claude's, not the local model_id's.
+        self.model_features = features_for_model(
+            claude_model if use_claude else model_id
+        )
         self._withheld_tool_entries: Dict[str, Any] = {}
         # Claude always speaks native tool_calls, whatever model_id says — the
         # two tool-capability gates below read this alongside model_id.
