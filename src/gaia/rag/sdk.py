@@ -868,7 +868,8 @@ class RAGSDK:
         """``<path hash>_<content hash>``: the shared stem of a document's cache files.
 
         The content hash (not mtime/size) makes same-size edits and sub-second
-        rewrites invalidate; the path hash keeps identical files apart. An
+        rewrites invalidate; the path hash names each path's own entry, though
+        :meth:`_cache_of_same_bytes` reuses another path's for identical bytes. An
         unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
         then fails at extraction.
 
