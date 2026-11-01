@@ -151,6 +151,11 @@ type SSEClient struct {
 	// without it, Close() could not deliver the shutdown it advertises.
 	done chan struct{}
 
+	// runs counts consume() goroutines plus the cancel each one posts on exit.
+	// Close() waits on it so a process exiting right after abandoning a run
+	// still delivers that cancel.
+	runs sync.WaitGroup
+
 	mu         sync.Mutex
 	inst       *daemon.Instance
 	transcript []Turn
@@ -390,6 +395,8 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	superseded := s.active
 	if !closedMidFlight {
 		s.active = handle
+		// Under s.mu with closed false, so it is ordered before Close's Wait.
+		s.runs.Add(1)
 	}
 	s.mu.Unlock()
 
@@ -440,6 +447,12 @@ func (s *SSEClient) consume(
 	ch chan interface{},
 	query string,
 ) {
+	cancelPosted := false
+	defer func() {
+		if !cancelPosted {
+			s.runs.Done()
+		}
+	}()
 	defer close(ch)
 	defer resp.Body.Close()
 	defer handle.cancel()
@@ -586,7 +599,11 @@ func (s *SSEClient) consume(
 	// Deliberately not inline: cancelRun runs before every deferred cleanup,
 	// including close(ch), so a slow or hung daemon would hold the channel open
 	// and let a superseded turn's completion land on the next turn.
-	go s.cancelRun(handle)
+	cancelPosted = true
+	go func() {
+		defer s.runs.Done()
+		s.cancelRun(handle)
+	}()
 }
 
 func (s *SSEClient) readTimeoutDetail(d time.Duration) string {
@@ -1086,7 +1103,13 @@ func (s *SSEClient) ensureSessionID() (string, error) {
 	return id, nil
 }
 
-// Close cancels any in-flight run and refuses further sends.
+// closeCancelWait bounds how long Close waits for abandoned runs' cancels.
+// Each POST is already bounded by cancelTimeout; the margin covers the read
+// unwinding first.
+const closeCancelWait = cancelTimeout + 2*time.Second
+
+// Close cancels any in-flight run, waits (bounded) until the relay has been
+// asked to drop every abandoned run, and refuses further sends.
 func (s *SSEClient) Close() error {
 	s.mu.Lock()
 	alreadyClosed := s.closed
@@ -1101,7 +1124,20 @@ func (s *SSEClient) Close() error {
 	if active != nil {
 		active.cancel()
 	}
-	return nil
+
+	settled := make(chan struct{})
+	go func() {
+		s.runs.Wait()
+		close(settled)
+	}()
+	select {
+	case <-settled:
+		return nil
+	case <-time.After(closeCancelWait):
+		return fmt.Errorf(
+			"the '%s' agent was not told to stop within %s, so its last run may still be "+
+				"running — check `gaia daemon status`", s.agentID, closeCancelWait)
+	}
 }
 
 // newRunID mints the host-side run handle (contract §2.3): the client knows it

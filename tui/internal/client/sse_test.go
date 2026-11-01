@@ -94,6 +94,8 @@ type fakeRelay struct {
 	// wait on to know it has been asked to stop, without the client tearing
 	// down its own read (#2901).
 	onCancelPost func()
+	// cancelDelay holds a POST .../cancel before it is recorded: a slow daemon.
+	cancelDelay time.Duration
 
 	// followUpStatus overrides the status POST .../followup answers with.
 	// Zero means 200. The interesting values are the two refusals the real
@@ -290,6 +292,9 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 
 	case strings.HasSuffix(r.URL.Path, "/cancel"):
 		parts := strings.Split(r.URL.Path, "/")
+		if f.cancelDelay > 0 {
+			time.Sleep(f.cancelDelay)
+		}
 		f.mu.Lock()
 		f.cancelled = append(f.cancelled, parts[len(parts)-2])
 		f.mu.Unlock()
