@@ -720,6 +720,10 @@ func (m Model) gpuStepShown() bool {
 	if m.gpu == nil || !m.gpu.Applies || !m.gpu.ShowInSetup || m.gpu.Method == setupapi.MethodUnsupported {
 		return false
 	}
+	if len(m.gpu.Presets) == 0 || (m.gpu.Method == setupapi.MethodGuided && m.gpu.GuidedValue == nil) {
+		// Nothing this PC can give.
+		return false
+	}
 	// Only when a model the user wants gains from it: offering more GPU
 	// memory for a model they didn't tick is noise.
 	for _, g := range m.gpu.Models {

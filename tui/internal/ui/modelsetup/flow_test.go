@@ -342,7 +342,8 @@ func TestIntegratedGPUShowsTheStepWithConsentAndCancelByDefault(t *testing.T) {
 	h.expect("CPU 104 GB  |  GPU 24 GB")
 	// The GPU memory the user reads, and the setting that gives it.
 	h.expect("Target: GPU 40 GB")
-	h.expect("Set Variable Graphics Memory to 32 GB for this.")
+	// The target is the GPU memory the user gets, never a preset's setting.
+	h.expectNot("Set Variable Graphics Memory to")
 	h.expect("GAIA keeps at least 16 GB for Windows and your apps.")
 	h.expect("With 40 GB for the GPU, Qwen3.6-35B-A3B fits.")
 
@@ -356,8 +357,9 @@ func TestIntegratedGPUShowsTheStepWithConsentAndCancelByDefault(t *testing.T) {
 
 	h.key("enter")
 	h.expect(gpuConsentKey)
-	h.expect("change the GPU memory to 40 GB (Variable Graphics Memory 32 GB)")
-	h.expect("Current setting: 16 GB, saved for undo.")
+	h.expect("GAIA will give the GPU 40 GB.")
+	h.expectNot("Variable Graphics Memory 32")
+	h.expect("the current setting is saved for undo.")
 	h.expect("y continue")
 	h.expect("n cancel")
 	// esc is no: the safe answer.
@@ -1177,4 +1179,40 @@ func TestDetailsDropPanelFrames(t *testing.T) {
 			t.Errorf("cleanLogLine(%q) = %q, %v; want %q", tc.in, got, ok, tc.want)
 		}
 	}
+}
+
+// The value to enter is the backend's guided_value, in AMD Software's own
+// units, never a preset's setting turned into GiB here.
+func TestTheValueToEnterIsTheBackendsGuidedValue(t *testing.T) {
+	g := gpuShared()
+	g.Method = setupapi.MethodGuided
+	v := "28"
+	g.GuidedValue = &v
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: g})
+	h.key("enter", "enter")
+	h.expect("Value: 28")
+	h.expectNot("Value: 30")
+}
+
+// No guided_value means the PC has nothing to give: no setup step, and /gpu
+// says so instead of showing steps or a value to copy.
+func TestNothingToGiveHidesTheStepsAndTheValue(t *testing.T) {
+	g := gpuShared()
+	g.Method = setupapi.MethodGuided
+	g.GuidedValue, g.GuidedSteps = nil, nil
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: g})
+	h.expect("part 1 of 2")
+	h.key("enter")
+	if h.m.Screen() == "gpu" || h.m.Screen() == "gpu-guide" {
+		t.Fatalf("a PC with nothing to give got the GPU step: %s", h.m.Screen())
+	}
+
+	h2 := newHarness(t, ModeGPU, &f.Fake{P: coldPlan(), G: g})
+	h2.key("enter")
+	if h2.m.Screen() != "gpu-guide" {
+		t.Fatalf("/gpu enter went to %s, want the guide", h2.m.Screen())
+	}
+	h2.expect(gpuNothingToGive)
+	h2.expectNot("Value:")
+	h2.expectNot("copy value")
 }

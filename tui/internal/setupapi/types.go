@@ -221,6 +221,10 @@ type GPU struct {
 	Pending      *GPUPending `json:"pending"`
 	Revert       GPURevert   `json:"revert"`
 	GuidedSteps  []string    `json:"guided_steps"`
+	// GuidedValue is the one value the steps ask the user to enter, in the
+	// units the place they enter it counts in (AMD Software's GB on Windows,
+	// 4 KiB pages on Linux). Nil when the PC has nothing to give.
+	GuidedValue *string `json:"guided_value"`
 }
 
 // GPU methods.

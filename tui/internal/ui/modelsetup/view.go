@@ -634,8 +634,7 @@ func (m Model) gpuView(w int) (body, foot []string) {
 			hint = "  (←/→ to change)"
 		}
 		body = append(body, pad(textStyle.Render("Target: GPU "+formatGBShort(pool))+dimStyle.Render(hint)))
-		setting := fmt.Sprintf("Set %s to %s for this.", g.Setting.Name, formatGBShort(m.targetGB()))
-		body = append(body, indentAll(wrapStyled(dimStyle, setting+" "+fmt.Sprintf(gpuKeepsFmt, formatGBShort(g.ReserveGB)), width), indentW)...)
+		body = append(body, indentAll(wrapStyled(dimStyle, fmt.Sprintf(gpuKeepsFmt, formatGBShort(g.ReserveGB)), width), indentW)...)
 		if u := gpuUnlocks(pool, m.unlocks()); u != "" {
 			body = append(body, pad(okStyle.Render(u)))
 		}
@@ -659,7 +658,7 @@ func (m Model) gpuView(w int) (body, foot []string) {
 	}
 	if m.ask == askGPUConsent {
 		body = append(body, "")
-		body = append(body, indentAll(wrapStyled(textStyle, gpuConsent(pool, g.Setting.Name, m.targetGB(), g.Setting.CurrentGB), width), indentW)...)
+		body = append(body, indentAll(wrapStyled(textStyle, gpuConsent(pool), width), indentW)...)
 	}
 	if m.busy != "" {
 		body = append(body, pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
@@ -756,6 +755,8 @@ func (m Model) guideView(w int) (body, foot []string) {
 	}
 	if m.busy != "" && len(m.gpu.GuidedSteps) == 0 {
 		body = append(body, pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
+	} else if m.busy == "" && m.gpu.GuidedValue == nil {
+		body = append(body, indentAll(wrapStyled(dimStyle, gpuNothingToGive, width), indentW)...)
 	}
 	for i, step := range m.gpu.GuidedSteps {
 		prefix := fmt.Sprintf("%d. ", i+1)
@@ -780,7 +781,10 @@ func (m Model) guideView(w int) (body, foot []string) {
 		}
 		body = append(body, indentAll(wrapStyled(st, m.gpuNote, width), indentW)...)
 	}
-	keys := [][2]string{{"c", "copy value"}}
+	var keys [][2]string
+	if m.copyValue() != "" {
+		keys = append(keys, [2]string{"c", "copy value"})
+	}
 	if m.gpuDone {
 		keys = append(keys, [2]string{"enter", "continue"})
 	} else {

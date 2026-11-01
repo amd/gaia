@@ -5,11 +5,8 @@ package modelsetup
 
 import (
 	"context"
-	"fmt"
 	"io"
-	"math"
 	"os"
-	"regexp"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -349,22 +346,13 @@ func (m Model) guideKey(k string) (Model, tea.Cmd) {
 	return m, nil
 }
 
-var literalRE = regexp.MustCompile("`([^`]+)`")
-
-// copyValue is the one literal the guided steps ask the user to type: the
-// first `quoted` value in them, else the setting in the GiB AMD Software
-// counts in.
+// copyValue is the one value the guided steps ask the user to enter, exactly
+// as the backend gives it: never derived here from a preset's setting.
 func (m Model) copyValue() string {
-	if m.gpu == nil {
+	if m.gpu == nil || m.gpu.GuidedValue == nil {
 		return ""
 	}
-	for _, step := range m.gpu.GuidedSteps {
-		if mm := literalRE.FindStringSubmatch(step); mm != nil {
-			return mm[1]
-		}
-	}
-	gib := math.Ceil(m.targetGB() * 1e9 / (1 << 30))
-	return fmt.Sprintf("%.0f", gib)
+	return *m.gpu.GuidedValue
 }
 
 func (m Model) downloadKey(k string) (Model, tea.Cmd) {

@@ -96,6 +96,7 @@ func flmOnly() setupapi.Plan {
 func gpuShared() *setupapi.GPU {
 	at := 19.0
 	rec := 32.0
+	guided := "30"
 	return &setupapi.GPU{
 		Applies: true, ShowInSetup: true, OS: "windows",
 		TotalGB: 128, GPUGB: 24, CPUGB: 104,
@@ -107,7 +108,8 @@ func gpuShared() *setupapi.GPU {
 		},
 		Recommended: &rec,
 		Models:      []setupapi.GPUModel{{ID: qwen, FitsNow: false, FitsAtSettingGB: &at, Default: true}},
-		GuidedSteps: []string{"Open AMD Software: Adrenalin Edition.", "Go to Performance > Tuning.", "Set Variable Graphics Memory to `30` GiB (the 32 GB GAIA shows).", "Restart your PC."},
+		GuidedSteps: []string{"Open AMD Software: Adrenalin Edition.", "Go to Performance > Tuning.", "Choose Custom and set it to 30 GB, as AMD Software shows it.", "Restart your PC."},
+		GuidedValue: &guided,
 	}
 }
 

@@ -215,9 +215,13 @@ func gpuUnlocks(target float64, models []string) string {
 	return fmt.Sprintf("With %s for the GPU, %s and %s fit.", formatGBShort(target), models[0], models[1])
 }
 
-func gpuConsent(pool float64, name string, setting, current float64) string {
-	return fmt.Sprintf("GAIA will change the GPU memory to %s (%s %s). This needs administrator permission and a restart. Nothing else changes, and you can change it back with /gpu. Current setting: %s, saved for undo.",
-		formatGBShort(pool), name, formatGBShort(setting), formatGBShort(current))
+// gpuNothingToGive replaces the guided steps when the PC has no memory to
+// move to the GPU: steps for 0 GB would starve it.
+const gpuNothingToGive = "This PC has no memory to spare for the GPU, so there is nothing to change."
+
+func gpuConsent(pool float64) string {
+	return fmt.Sprintf("GAIA will give the GPU %s. This needs administrator permission and a restart. Nothing else changes, and you can change it back with /gpu: the current setting is saved for undo.",
+		formatGBShort(pool))
 }
 
 func gpuDone(target float64) string {
