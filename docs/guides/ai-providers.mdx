@@ -12,7 +12,7 @@ turns the cloud choices off.
 
 ## Connect from the TUI
 
-1. Start `gaia tui`. On a first run, setup opens by asking where chat should
+1. Start `gaia-tui`. On a first run, setup opens by asking where chat should
    run: choose **Fireworks AI** or **AMD LLM Gateway** there, and its key form
    opens once Lemonade is installed. Otherwise press **p** during setup, or enter
    **`/provider`** from the command palette in chat.
@@ -208,8 +208,9 @@ Gemma 4 E4B stays at 65,536 tokens on every PC.
 
 On a PC whose GPU shares the system's memory (a Strix Halo or other Ryzen AI
 APU), how much of it the GPU may use decides which models fit. GAIA reads the
-split, shows which models a bigger share would fit, and keeps at least 16 GB for
-the CPU. Either way the change needs administrator rights and a restart, and
+split, shows which models a bigger share would fit, and never suggests a value
+that leaves less than 16 GB the GPU can't use. The GPU and CPU figures add up
+to the PC's memory. If the PC has nothing more to give, there are no steps. Either way the change needs administrator rights and a restart, and
 GAIA never restarts the PC itself. After the restart it reads the split again
 and says whether the change took effect.
 
@@ -222,11 +223,12 @@ and says whether the change took effect.
   the exact commands instead of changing anything.
 - **Windows:** you change it in AMD Software: Adrenalin Edition, under
   Performance › Tuning › Variable Graphics Memory, then restart. AMD allows up to
-  75% of RAM there. AMD Software counts in GiB but labels them GB, so the steps
-  give both: 64 GB in GAIA is 60 GiB there. GAIA lists these steps rather than
-  applying them, because
-  AMD's interface for this setting restarts the PC by itself. Without that
-  option, set UMA Frame Buffer Size in the BIOS.
+  75% of RAM there. The steps give the one value to enter, as AMD Software
+  shows it, and say why it is smaller than the GPU total GAIA shows: usually
+  because Windows also lets the GPU use half of the remaining memory, otherwise
+  because AMD Software's GB are slightly larger. GAIA lists these steps rather
+  than applying them, because AMD's interface for this setting restarts the PC
+  by itself. Without that option, set UMA Frame Buffer Size in the BIOS.
 
 The Agent UI serves this at `/api/gpu-memory` and the daemon at
 `/daemon/v1/gpu-memory`, with `apply`, `revert` and `pending` routes under each.

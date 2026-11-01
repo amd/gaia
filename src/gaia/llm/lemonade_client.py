@@ -2030,6 +2030,79 @@ def defang_harmony_tokens(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return out
 
 
+_TRAILING_ASSISTANT_CONTINUATION = (
+    "Continue from the preceding assistant context and provide the next response."
+)
+
+
+def normalize_trailing_assistant_messages(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Normalize an invalid assistant-only request suffix.
+
+    Recovery paths can append a synthetic assistant message immediately after
+    the model's assistant reply. llama-server rejects two or more assistant
+    messages at the end of a request, and thinking models also reject an
+    assistant prefill. Coalesce only that invalid suffix; the request boundary
+    adds a continuation user turn after the coalesced history. User/tool order
+    before the suffix is untouched and the input is never mutated.
+    """
+    trailing_start = len(messages)
+    while trailing_start and messages[trailing_start - 1].get("role") == "assistant":
+        trailing_start -= 1
+    if len(messages) - trailing_start < 2:
+        return messages
+
+    merged: Dict[str, Any] = dict(messages[trailing_start])
+    text_parts: List[Any] = []
+    reasoning_parts: List[str] = []
+    tool_calls: List[Any] = []
+    saw_content = False
+    saw_reasoning = False
+    saw_tool_calls = False
+
+    for message in messages[trailing_start:]:
+        if "content" in message:
+            saw_content = True
+            content = message.get("content")
+            if content not in (None, ""):
+                text_parts.append(content)
+        if "reasoning_content" in message:
+            saw_reasoning = True
+            reasoning = message.get("reasoning_content")
+            if reasoning:
+                reasoning_parts.append(str(reasoning))
+        calls = message.get("tool_calls")
+        if calls:
+            saw_tool_calls = True
+            tool_calls.extend(calls)
+
+    if saw_content:
+        if all(isinstance(part, str) for part in text_parts):
+            merged["content"] = "\n\n".join(text_parts)
+        elif text_parts:
+            # OpenAI multimodal content is a flat list. Preserve existing
+            # parts and represent any text from a neighbouring turn as a text
+            # part instead of creating a nested list.
+            flattened: List[Any] = []
+            for part in text_parts:
+                if isinstance(part, list):
+                    flattened.extend(part)
+                elif isinstance(part, str):
+                    flattened.append({"type": "text", "text": part})
+                else:
+                    flattened.append(part)
+            merged["content"] = flattened
+        else:
+            merged["content"] = None
+    if saw_reasoning:
+        merged["reasoning_content"] = "\n\n".join(reasoning_parts) or None
+    if saw_tool_calls:
+        merged["tool_calls"] = tool_calls
+
+    return [*messages[:trailing_start], merged]
+
+
 # Define agent profiles with their model requirements
 AGENT_PROFILES = {
     "chat": AgentProfile(
@@ -2136,16 +2209,27 @@ def _free_memory_rules_out(client, requirement, capacity) -> Optional[str]:
     Judged at the smallest window a load shrinks to, so a model refused here
     is one setup's verify step would also refuse.
     """
-    from gaia.llm.model_fit import MIN_CONTEXT_TOKENS, ModelFitError
+    from gaia.llm.model_fit import ModelFitError
+
+    try:
+        return free_memory_shortfall(client, requirement, capacity)
+    except (ModelFitError, LemonadeClientError) as e:
+        return f"could not read this PC's free memory, so cannot confirm it would load: {e}"
+
+
+def free_memory_shortfall(client, requirement, capacity) -> Optional[str]:
+    """:func:`_free_memory_rules_out`'s reason, built from the numbers only.
+
+    Raises ``ModelFitError`` or ``LemonadeClientError`` when the free memory
+    cannot be read, so the caller decides what to show.
+    """
+    from gaia.llm.model_fit import MIN_CONTEXT_TOKENS
 
     url = getattr(client, "base_url", None)
     if not _is_local_url(url):
         return None
     window = min(MIN_CONTEXT_TOKENS, context_for_capacity(requirement, capacity))
-    try:
-        free, resident = _free_memory_snapshot(url)
-    except (ModelFitError, LemonadeClientError) as e:
-        return f"could not read this PC's free memory, so cannot confirm it would load: {e}"
+    free, resident = _free_memory_snapshot(url)
     verdict = _verdict_for(free, resident, requirement, window)
     if verdict is None or verdict.fits:
         return None
@@ -2703,6 +2787,25 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
             return True
         return bool(learned_tool_calling(model_id))
     return True  # Unknown GGUF: optimistic default per Tier 0 findings
+
+
+def uses_native_tool_calls(model_id: Optional[str]) -> bool:
+    """Whether an agent should hand *model_id* its tools as ``tools=`` schemas.
+
+    Local models and catalog-labelled cloud models: whenever they take tools.
+    Any other cloud model starts each session on the in-text format (~12K
+    fewer tokens per call, calls batched in a plan); an agent moves it to
+    native calls for that session only if it writes its own tool-call markup.
+    """
+    if not is_tool_calling_model(model_id):
+        return False
+    cloud = _CLOUD_MODELS.get(model_id)
+    if cloud is not None and cloud["tool_calling"]:
+        return True
+    # A gateway id is cloud before this process has read the catalog, too.
+    if cloud is None and cloud_model_provider(model_id) is None:
+        return True
+    return False
 
 
 def _usage_dict(usage: Any) -> Dict[str, Any]:
@@ -5205,6 +5308,19 @@ class LemonadeClient:
             # device profile can change between calls, and the budget follows them.
             timeout = request_budget_seconds()
 
+        normalized_messages = normalize_trailing_assistant_messages(messages)
+        if normalized_messages is not messages:
+            self.log.debug(
+                "Coalesced %d trailing assistant messages before chat request",
+                len(messages) - len(normalized_messages) + 1,
+            )
+            messages = [
+                *normalized_messages,
+                {
+                    "role": "user",
+                    "content": _TRAILING_ASSISTANT_CONTINUATION,
+                },
+            ]
         if uses_harmony_format(model):
             messages = defang_harmony_tokens(messages)
         if self.cloud_model_provider(model):

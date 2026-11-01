@@ -73,18 +73,19 @@ def test_every_declaration_excludes_the_breaking_major(
         )
 
 
-def test_pymupdf_is_capped_below_2() -> None:
-    """pymupdf 2.0 ships no macOS x86_64 wheel and its sdist fails to build.
+def test_pypdfium2_is_floored_at_5_and_capped_below_6() -> None:
+    """5.0 renamed ``PdfImage.get_pos`` to ``get_bounds``, which pdf_utils calls.
 
-    The cap is global because ``gaia init`` refuses a platform marker on an
-    extra's requirement, so every platform resolves to a 1.x wheel.
+    No marker: ``gaia init`` refuses a platform marker on an extra's
+    requirement, and every supported platform has a 5.x wheel.
     """
-    declared = _requirements("pymupdf")
+    declared = _requirements("pypdfium2")
     assert {where for where, _ in declared} >= {"[rag]", "[ui]"}
     for where, req in declared:
         assert req.marker is None, f"{where} declares '{req}' with a marker"
-        assert req.specifier.contains(Version("1.28.2")), f"{where}: '{req}'"
-        assert not req.specifier.contains(Version("2.0")), f"{where}: '{req}'"
+        assert req.specifier.contains(Version("5.14.0")), f"{where}: '{req}'"
+        assert not req.specifier.contains(Version("4.30.0")), f"{where}: '{req}'"
+        assert not req.specifier.contains(Version("6.0")), f"{where}: '{req}'"
 
 
 _PLATFORMS = {
