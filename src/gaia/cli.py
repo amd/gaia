@@ -7027,6 +7027,35 @@ def _resolve_gateway_token(args, *, prompt: str) -> str:
     return getpass.getpass(prompt)
 
 
+def _test_gateway_claude(model, source, prompt):
+    """``gaia gateway test`` for a Claude model, on the route agents use for it.
+
+    Agents send gateway Claude to the gateway's Anthropic route, not through
+    Lemonade, so a Lemonade round trip would test the wrong path.
+    """
+    from gaia.llm.gateway import GatewayError
+
+    print(f"Testing {model} ({source}) on the gateway's Anthropic route ...\n")
+    try:
+        client = create_client("lemonade", model=model)
+        content = client.chat([{"role": "user", "content": prompt}], max_tokens=256)
+    except (GatewayError, RuntimeError, ImportError) as e:
+        print(f"❌ Testing {model} failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    print(content)
+    usage = client.get_last_usage() or {}
+    if usage:
+        print(
+            f"\n[{usage.get('prompt_tokens', '?')} prompt "
+            f"({usage.get('cached_tokens', 0)} from cache) + "
+            f"{usage.get('completion_tokens', '?')} completion tokens]"
+        )
+    print(
+        "\nThis checked the gateway only. Agents also need Lemonade running; "
+        "`gaia gateway status` checks it."
+    )
+
+
 def handle_gateway_command(args):
     """Handle `gaia gateway ...` (AMD LLM gateway via Lemonade cloud offload)."""
     from gaia.config import GaiaConfigError
@@ -7039,6 +7068,7 @@ def handle_gateway_command(args):
         GatewayState,
         describe_unavailable,
         forget_token,
+        gateway_claude_upstream_id,
         recall_token,
         remember_token,
     )
@@ -7330,6 +7360,9 @@ def handle_gateway_command(args):
                     model = discovered[0].id
                 print(f"No active model set; using {model}.\n")
             source = "from --model" if args.model else "the active gateway model"
+            if gateway_claude_upstream_id(model):
+                _test_gateway_claude(model, source, args.prompt)
+                return
             # Deliberately goes through the ordinary client so this exercises
             # the same path agents use, cloud short-circuits included.
             manager.client.refresh_cloud_models()

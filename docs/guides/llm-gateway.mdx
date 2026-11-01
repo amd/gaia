@@ -145,6 +145,38 @@ the model resident on your NPU or GPU.
 Tool-calling support comes from what the gateway advertises per model, so an agent
 will not try native tool calls against a model that cannot do them.
 
+### Claude models and prompt caching
+
+Chat with a Claude model (`amd.Claude-*`) skips Lemonade and goes straight to the
+gateway's Anthropic Messages route, `https://llm-api.amd.com/Anthropic` — the same route Claude
+Code uses. The OpenAI-compatible route Lemonade calls ignores Anthropic's cache markers,
+so every agent step re-billed the whole prompt. On the Anthropic route, the tool
+schemas, system prompt, and conversation so far are read from cache on later steps:
+a repeated 48K-token prompt came back with all but 4 tokens cached.
+`gaia -p --output-format json` reports this as `cached_tokens`.
+
+What that means in practice:
+
+- **Same token.** GAIA sends it in the `Ocp-Apim-Subscription-Key` header itself,
+  reading `LEMONADE_AMD_API_KEY`, then `GAIA_GATEWAY_TOKEN`, then the OS credential
+  store that `gaia gateway auth` writes to. A token entered with `--no-remember` lives
+  only in Lemonade, which GAIA can't read back, so set one of those variables instead.
+  GAIA never sends an Anthropic API key there.
+- **AMD's gateway only, unless you say otherwise.** If you registered a different
+  gateway, set `GAIA_GATEWAY_ANTHROPIC_BASE_URL` to its Anthropic base URL. GAIA won't
+  guess one, so your token can't go to a host it wasn't issued for.
+- **No silent fallback.** If the Anthropic route fails (bad token, a credential store
+  GAIA can't read, model not deployed, off VPN, timeout), the turn fails with an error
+  that says what to fix. GAIA does not retry
+  through Lemonade, and a missing deployment is not recorded as `(unavailable)`.
+- **Streaming works.** Claude streams on this route, so the
+  [Models that cannot stream](#models-that-cannot-stream) workaround never applies.
+- `gaia gateway test --model amd.Claude-Opus-5-5` tests this route too.
+
+Lemonade still has to be running with the gateway connected: agent startup checks it
+and probes tool calling through it. Every other gateway model,
+`amd.DeepSeek-V4.1-Flash` and `amd.Gemma-4-31B` included, still chats through Lemonade.
+
 ### Models that cannot stream
 
 For some models the gateway accepts a streaming request and then sends no
@@ -202,10 +234,11 @@ from those lists to re-probe it.
 streams too. **Streaming returns no tokens for some other models**, while
 non-streaming works for all of them — a gateway-side limitation, not a GAIA one.
 
-**Every chat model on this gateway — Claude included — is served over OpenAI Chat
-Completions**, not the Anthropic Messages format. That is why GAIA registers the
-provider with `wire_format: openai` and why Claude models work through the ordinary
-agent path with no special handling.
+**Every chat model on this gateway is served over OpenAI Chat Completions**, which is
+why GAIA registers the provider with Lemonade using `wire_format: openai`. Claude
+models are also served over the Anthropic Messages format, and GAIA uses that route
+for them because it caches prompts. See
+[Claude models and prompt caching](#claude-models-and-prompt-caching).
 
 ## Disconnecting
 
