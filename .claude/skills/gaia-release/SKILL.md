@@ -547,19 +547,20 @@ Show the user the smoke-test output, the artifact list, and the drafted Discord 
 
 ### Watch (first 24 hours)
 
-1. Check new issues: `gh issue list --repo amd/gaia --search "v<version>" --state open --limit 30`, and the Discord support channel if the user relays it. Two reports of the same install or startup failure is a bad release.
+1. Check new issues: `gh issue list --repo amd/gaia --search "v<version>" --state open --limit 30` (also search `v<version>-rc`, since an RC-channel user reports against the RC tag), and the Discord support channel if the user relays it. Two reports of the same install or startup failure is a bad release.
 2. Re-run the Phase 6 smoke test on a clean machine (or a clean `uv venv`) and the one-line installer, not only on the machine that built the release.
 
 ### Shipped but broken — contain first, then fix forward
 
 Never delete the tag, the GitHub release, or a PyPI/npm version: other machines already hold them. Contain in this order, and ask the user before each step (all are visible to every user):
 
-1. **Stop the Electron auto-updater from offering it.** The updater reads `latest*.yml` from the newest non-pre-release GitHub release. Demote the bad release and re-promote the last good one:
+1. **Stop the Electron auto-updater from offering it.** With no R2 feed configured, the updater takes the highest-versioned non-draft GitHub release that carries this platform's `latest*.yml`. It skips pre-releases only for installs that have not opted into release candidates, and it ignores GitHub's `Latest` badge. Demote the release, then remove its update manifests so prerelease-channel installs stop seeing it too:
    ```bash
    gh release edit v<bad> --repo amd/gaia --prerelease --latest=false
-   gh release edit v<previous-good> --repo amd/gaia --latest
+   gh release edit v<previous-good> --repo amd/gaia --latest   # for the releases page, not the updater
+   gh release delete-asset v<bad> latest.yml --repo amd/gaia --yes   # repeat for latest-mac.yml, latest-linux*.yml
    ```
-   Confirm with `gh release list --repo amd/gaia --limit 3` that `<previous-good>` is `Latest`. Machines that already updated need the in-app rollback to a previous release, or the fixed version.
+   The installers stay downloadable, so this still follows "never delete the release or tag". Machines that already updated need the in-app rollback to a previous release, or the fixed version.
 2. **Stop `pip install amd-gaia` resolving to it.** Yank the version on PyPI (project page, Manage, Releases, Yank, with a reason). A yanked version still installs when pinned exactly; it stops being the default.
 3. **Stop `npm install @amd-gaia/agent-ui` resolving to it.** Point `latest` back and deprecate the bad version:
    ```bash
