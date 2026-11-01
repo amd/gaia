@@ -16,7 +16,7 @@ icon: "heart-pulse"
 </Info>
 
 <Note>
-**First time?** See [Setup Guide](/setup) to install GAIA, Python, and Lemonade Server.
+**First time?** Follow the [Setup Guide](/setup) to install GAIA and Lemonade Server. The example needs Windows 11 and `uvx` (ships with [uv](https://docs.astral.sh/uv/)) on your `PATH`.
 </Note>
 
 ## See It In Action
@@ -46,7 +46,7 @@ The agent gathers metrics via PowerShell, formats a report, and pastes it into N
     ```bash
     uv run examples/mcp_windows_system_health_agent.py
     ```
-    The agent auto-installs the Windows MCP server via `uvx` on first run.
+    The agent auto-installs the Windows MCP server via `uvx` on first run. `uvx` runs the server in its own isolated environment, so GAIA's Python version does not need to match the server's.
   </Step>
 
   <Step title="Ask about your system">
@@ -100,10 +100,39 @@ graph TB
 2. **mcp_windows_Shell** executes PowerShell commands for CPU, memory, disk
 3. **LLM** analyzes metrics and formats a plain-text health report
 4. **mcp_windows_Shell** copies report to clipboard (Set-Clipboard)
-5. **mcp_windows_Shell** opens Notepad (Start-Process)
+5. **mcp_windows_Shell** creates a new empty temp file and opens it in Notepad, so the report is never appended to a document that was already open
 6. **mcp_windows_Shortcut** pastes with ctrl+v
 
 All reasoning and tool selection is handled by the LLM — the agent decides what to collect and how to present it.
+
+## Troubleshooting
+
+If you see `Failed to connect to MCP server 'windows'`:
+
+1. Run `uvx --version`. If it is not found, install [uv](https://docs.astral.sh/uv/) (`uvx` comes with it).
+2. Run `uvx windows-mcp` by itself to see the server's own error.
+3. If it reports an unsupported Python version, run `uvx --python 3.13 windows-mcp` once; uv downloads that interpreter for the server.
+
+## Add Another MCP Server
+
+<Steps>
+  <Step title="Find a server">
+    Pick one from the cards under [Where to Get More Servers](#where-to-get-more-servers) and note its launch command.
+  </Step>
+  <Step title="Connect it from your agent">
+    ```python
+    self.connect_mcp_server(
+        "time", {"command": "uvx", "args": ["mcp-server-time"]}
+    )
+    ```
+    Its tools register as `mcp_<name>_<tool>` and the system prompt is rebuilt, as the Windows server's tools are above.
+  </Step>
+  <Step title="Tell the agent how to use it">
+    Name the new tools in `_get_system_prompt()`.
+  </Step>
+</Steps>
+
+See the [MCP Client guide](/guides/mcp/client) for configuration files and `gaia mcp` commands.
 
 ## Security Considerations
 
@@ -117,6 +146,7 @@ Before using MCP servers:
 2. **Check permissions** — Understand what system access the server requires
 3. **Limit scope** — Be aware that Windows MCP has full shell and GUI access
 4. **Audit environment variables** — Never pass secrets to servers you haven't reviewed
+5. **Treat third-party servers as untrusted code** — `uvx` and `npx` download and run whatever the package currently contains, so pin a version you have reviewed
 
 ## Where to Get More Servers
 
