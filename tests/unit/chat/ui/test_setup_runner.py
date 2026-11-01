@@ -687,7 +687,9 @@ def test_an_unexpected_error_fails_the_run_and_frees_the_runner(monkeypatch):
     runner.start(False)
     view = _wait_done(runner)
     assert view["state"] == "failed"
-    assert "marker file is read-only" in view["error"]
+    # The cause stays in the server log, never in what the browser is sent.
+    assert "marker file is read-only" not in view["error"]
+    assert "backend log" in view["error"]
     # Not stranded in "verifying": a retry is allowed.
     monkeypatch.setattr(sr, "check", lambda *a, **k: {"ready": True})
     _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
@@ -899,7 +901,9 @@ def test_check_route_unanswered_is_503(client, monkeypatch):
     monkeypatch.setattr(setup_router, "check", check)
     resp = test_client.get("/api/setup/check")
     assert resp.status_code == 503
-    assert "exit 2" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert "exit 2" not in detail
+    assert "gaia init --check" in detail and "server log" in detail
 
 
 def test_status_route_idle(client):
@@ -1225,3 +1229,111 @@ def test_the_run_bar_still_moves_when_init_reports_progress_as_json():
     view = run.view()
     assert view["percent"] == 50
     assert view["size"] == "11.98 GB of 23.63 GB"
+
+
+@pytest.mark.parametrize(
+    "error, status, words",
+    [
+        (sr.SetupBusy("secret path C:/x"), 409, "already running"),
+        (sr.LemonadeOverridden("secret path C:/x"), 409, "LEMONADE_BASE_URL"),
+        (sr.SetupError("Could not start: [WinError 2] C:/secret"), 500, "server log"),
+    ],
+)
+def test_run_route_answers_with_fixed_words_never_the_exception(
+    client, monkeypatch, error, status, words
+):
+    test_client, runner = client
+
+    def start(*_a, **_k):
+        raise error
+
+    monkeypatch.setattr(runner, "start", start)
+    resp = test_client.post("/api/setup/run", json={})
+    assert resp.status_code == status
+    assert words in resp.json()["detail"]
+    assert "secret" not in resp.json()["detail"]
+
+
+def test_a_failed_pull_shows_fixed_words_and_logs_lemonades(caplog):
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event(
+        {"event": "error", "model": QWEN, "message": "HTTP 500 at /secret/path"}
+    )
+    row = _models(runner)[QWEN]
+    assert row["error_kind"] == "lemonade"
+    assert "/secret/path" not in row["error"] and "server log" in row["error"]
+    assert "/secret/path" in caplog.text
+
+
+def test_progress_after_cancel_does_not_revive_a_cancelled_row():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event(json.loads(_plan_event()))
+    run.state = "cancelled"
+    with runner._lock:
+        for entry in runner._models.values():
+            if entry.state == "queued":
+                entry.state = "cancelled"
+    runner._consume(
+        run,
+        json.dumps(
+            {"event": "progress", "model": QWEN, "bytes_done": 5, "bytes_total": 9}
+        ),
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "cancelled" and qwen["can_retry"]
+    assert not runner.busy_with(QWEN)
+
+
+def test_resume_after_a_cancelled_run_still_reports_its_progress():
+    """A single download feeds _on_event directly; the cancelled run must not mute it."""
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._consume(run, _plan_event())
+    run.state = "cancelled"
+    with runner._lock:
+        runner._models[QWEN].state = "cancelled"
+    runner._on_event(
+        {
+            "event": "progress",
+            "model": QWEN,
+            "bytes_done": 11_650_000_000,
+            "bytes_total": 23_300_000_000,
+            "speed_bps": 10,
+        }
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "downloading" and qwen["bytes_done"] == 11_650_000_000
+    assert runner.status()["overall"]["percent"] is not None
+    runner._on_event({"event": "retrying", "model": QWEN, "until": 1_900_000_000})
+    assert _models(runner)[QWEN]["retrying_until"] == 1_900_000_000
+    runner._on_event(
+        {"event": "error", "model": QWEN, "message": "No space left on device"}
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "failed" and qwen["error_kind"] == "disk_full"
+
+
+def test_a_failed_run_never_shows_unchecked_models_as_ready():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    with runner._lock:
+        runner._settle_models({}, run_failed=True)
+    embed = _models(runner)[EMBED]
+    assert embed["state"] == "failed" and embed["error_kind"] == "verify"
+    assert "before GAIA could check" in embed["error"]
+
+
+def test_remove_is_refused_while_setup_runs_or_under_another_spelling(client):
+    test_client, runner = client
+    runner._run = sr.SetupRun(skip_chat_model=False)
+    r = test_client.post("/api/setup/models/remove", json={"model_id": GEMMA})
+    assert r.status_code == 409
+    runner._run.state = "ready"
+    runner._models[EMBED] = sr.ModelProgress(id=EMBED, state="downloading")
+    for spelling in (EMBED.removeprefix("user."), EMBED.upper()):
+        r = test_client.post("/api/setup/models/remove", json={"model_id": spelling})
+        assert r.status_code == 409, spelling

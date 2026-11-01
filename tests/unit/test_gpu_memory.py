@@ -10,6 +10,7 @@ reach pkexec, reg, bcdedit or the real system config.
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from pathlib import Path
 
@@ -27,6 +28,10 @@ LOCAL = "http://localhost:13305/api/v1"
 QWEN = lc.LARGE_DEFAULT_MODEL_NAME
 FLASH = lc.FLASH_OPTION_MODEL_NAME
 REAL_READ_SYSTEM_INFO = gm._read_system_info
+#: Lemonade reports GiB; the API answers in decimal GB.
+GB_PER_GIB = 2**30 / 1e9
+#: The kernel's default limit on a 128 GiB box: 62.5 GiB of 4 KiB pages.
+LIVE_PAGES = 16_384_000
 
 
 def linux_igpu(total_gb: float, gtt_gb: float, carve_gb: float = 0.5) -> dict:
@@ -90,8 +95,9 @@ class Sandbox:
         self.info = linux_igpu(128, 62.5)
         self.url = LOCAL
         self.os = "linux"
-        self.set_module("ttm", pages=gm.pages_for(62.5))
+        self.set_module("ttm", pages=LIVE_PAGES)
         self.cmdline("BOOT_IMAGE=/vmlinuz root=UUID=abc ro quiet splash")
+        self.meminfo(127.5)  # 128 GiB installed less the 0.5 GiB carve-out
         monkeypatch.setattr(
             gm,
             "PATHS",
@@ -126,6 +132,12 @@ class Sandbox:
         else:
             initstate.write_text("live\n", encoding="ascii")
 
+    def meminfo(self, gib: float):
+        kb = int(gib * 1024 * 1024)
+        (self.proc / "meminfo").write_text(
+            f"MemTotal:       {kb} kB\nMemFree:  1 kB\n", encoding="ascii"
+        )
+
     def cmdline(self, text: str):
         (self.proc / "cmdline").write_text(text + "\n", encoding="utf-8")
 
@@ -159,7 +171,7 @@ class Sandbox:
         self.boot = self._now()
         if pages is not None:
             self.set_module("ttm", pages=pages)
-            gtt = gm.gb_for(pages)
+            gtt = pages * 4096 / 2**30  # Lemonade reports GiB
             self.info["devices"]["amd_gpu"][0]["virtual_mem_gb"] = gtt
 
 
@@ -242,17 +254,18 @@ class TestLinuxSplit:
         result = gm.describe(box.info, LOCAL)
         assert result["os"] == "linux"
         assert result["method"] == gm.METHOD_APPLY
-        assert result["total_gb"] == 128
-        assert result["gpu_gb"] == 63
-        assert result["cpu_gb"] == 65
-        assert result["setting"]["current_gb"] == 62.5
-        assert result["setting"]["max_gb"] == 111  # 128 - 16 - 0.5 carve-out
-        assert [p["setting_gb"] for p in result["presets"]] == [64, 80, 96, 111]
+        # Lemonade's 128 GiB, 62.5 GiB and 0.5 GiB, in decimal GB.
+        assert result["total_gb"] == 137.4
+        assert result["gpu_gb"] == 67.6
+        assert result["cpu_gb"] == 69.8
+        assert result["setting"]["current_gb"] == 67.1
+        assert result["setting"]["max_gb"] == 120  # 137.4 - 16 - 0.5 carve-out
+        assert [p["setting_gb"] for p in result["presets"]] == [80, 96, 112, 120]
 
     def test_the_split_is_model_fits_pool(self, box):
         result = gm.describe(box.info, LOCAL)
         cap = model_fit.capacity_from_system_info(box.info)
-        assert result["gpu_gb"] == round(cap.memory_gb, 1)
+        assert result["gpu_gb"] == round(cap.memory_gb * GB_PER_GIB, 1)
 
     def test_128gb_unlocks_flash_but_not_in_setup(self, box):
         result = gm.describe(box.info, LOCAL)
@@ -270,7 +283,8 @@ class TestLinuxSplit:
         mr = lc.find_model_requirement(FLASH)
 
         def fits(gtt):
-            cap = model_fit.MachineCapacity(0.5 + gtt, "AMD iGPU", None)
+            gib = (0.5 * GB_PER_GIB + gtt) / GB_PER_GIB
+            cap = model_fit.MachineCapacity(gib, "AMD iGPU", None)
             return model_fit.check_fit(mr.size_gb, cap, lc.kv_cache_for(mr, cap)).fits
 
         assert fits(at) and not fits(at - 1)
@@ -321,6 +335,7 @@ class TestLinuxSplit:
     def test_no_total_ram_anywhere_is_loud(self, box):
         info = linux_igpu(128, 62.5)
         del info["Physical Memory"]
+        (box.proc / "meminfo").unlink()
         with pytest.raises(gm.GpuMemoryError, match="meminfo"):
             gm.describe(info, LOCAL)
 
@@ -357,6 +372,14 @@ class TestLinuxGuidedWhenGaiaCantApply:
         )
         assert gm.describe(box.info, LOCAL)["method"] == gm.METHOD_APPLY
 
+    def test_a_modprobe_gttsize_is_a_conflict_too(self, box):
+        (box.modprobe_d / "amdgpu.conf").write_text(
+            "options amdgpu gttsize=8192\n", encoding="utf-8"
+        )
+        result = gm.describe(box.info, LOCAL)
+        assert result["method"] == gm.METHOD_GUIDED
+        assert "amdgpu.conf" in result["method_reason"]
+
     def test_another_modprobe_file_sets_it(self, box):
         (box.modprobe_d / "amdgpu-llm.conf").write_text(
             "options ttm pages_limit=1234\n", encoding="utf-8"
@@ -380,7 +403,7 @@ class TestLinuxGuidedWhenGaiaCantApply:
         assert "doesn't manage" in result["method_reason"]
 
     def test_builtin_ttm(self, box):
-        box.set_module("ttm", pages=gm.pages_for(62.5), builtin=True)
+        box.set_module("ttm", pages=LIVE_PAGES, builtin=True)
         result = gm.describe(box.info, LOCAL)
         assert result["method"] == gm.METHOD_GUIDED
         assert "built into" in result["method_reason"]
@@ -396,7 +419,7 @@ class TestLinuxGuidedWhenGaiaCantApply:
         assert gm.describe(box.info, LOCAL)["method"] == gm.METHOD_GUIDED
 
     def test_dkms_driver_uses_amdttm(self, box):
-        box.set_module("amdttm", pages=gm.pages_for(62.5))
+        box.set_module("amdttm", pages=LIVE_PAGES)
         gm.apply(96, confirm=True)
         assert "options amdttm pages_limit=" in box.conf.read_text(encoding="utf-8")
 
@@ -412,8 +435,8 @@ class TestLinuxApply:
         assert f"options ttm pages_limit={96 * 10**9 // 4096}" in conf
         assert result["pending"]["state"] == gm.PENDING_RESTART
         assert result["pending"]["setting_gb"] == 96
-        assert result["pending"]["previous_setting_gb"] == 62.5
-        assert result["revert"] == {"available": True, "previous_setting_gb": 62.5}
+        assert result["pending"]["previous_setting_gb"] == 67.1
+        assert result["revert"] == {"available": True, "previous_setting_gb": 67.1}
 
     def test_values_travel_as_arguments_not_inside_the_script(self, box):
         gm.apply(96, confirm=True)
@@ -439,7 +462,7 @@ class TestLinuxApply:
         assert err.value.status == 400
         assert box.calls == [] and not box.conf.exists()
 
-    @pytest.mark.parametrize("value", [112, 128, 1000, float("inf"), float("nan")])
+    @pytest.mark.parametrize("value", [121, 137, 1000, float("inf"), float("nan")])
     def test_refuses_a_value_that_would_starve_the_os(self, box, value):
         with pytest.raises(gm.OutOfRange) as err:
             gm.apply(value, confirm=True)
@@ -466,7 +489,7 @@ class TestLinuxApply:
 
     def test_already_set_and_live(self, box):
         with pytest.raises(gm.NotPossible, match="already"):
-            gm.apply(62.5, confirm=True)
+            gm.apply(67.1, confirm=True)
 
     def test_already_written_but_not_restarted(self, box):
         gm.apply(96, confirm=True)
@@ -512,6 +535,81 @@ class TestAfterRestart:
         assert result["revert"]["available"] is True
 
 
+class TestEveryNumberIsTheSameUnit:
+    @pytest.mark.parametrize(
+        "total,gtt", [(16, 7.75), (32, 15.5), (48, 23.75), (64, 31.5), (128, 62.5)]
+    )
+    def test_fits_now_agrees_with_the_numbers_shown(self, box, total, gtt):
+        result = gm.describe(linux_igpu(total, gtt), LOCAL)
+        for m in result["models"]:
+            if abs(m["need_gb"] - result["gpu_gb"]) < 0.1:
+                continue  # one-decimal rounding can't decide a tie
+            assert m["fits_now"] == (m["need_gb"] <= result["gpu_gb"]), m
+
+    def test_need_is_decimal_gb(self, box):
+        mr = lc.find_model_requirement(QWEN)
+        need = model(gm.describe(box.info, LOCAL), QWEN)["need_gb"]
+        floor = model_fit.required_memory_gb(mr.size_gb) * GB_PER_GIB
+        assert need >= round(floor, 1)
+
+
+class TestLinuxCapUsesVisibleRam:
+    def test_memtotal_below_installed_ram_caps_the_limit(self, box):
+        box.meminfo(100)  # the OS sees 107.4 GB of the 137.4 GB installed
+        result = gm.describe(box.info, LOCAL)
+        assert result["setting"]["max_gb"] == 91  # 107.4 - 16
+        with pytest.raises(gm.OutOfRange, match="16 GB"):
+            gm.apply(100, confirm=True)
+        assert box.calls == []
+
+    def test_installed_ram_still_caps_when_lower(self, box):
+        box.meminfo(500)
+        assert gm.describe(box.info, LOCAL)["setting"]["max_gb"] == 120
+
+    def test_unreadable_meminfo_is_loud(self, box):
+        (box.proc / "meminfo").write_text("garbage\n", encoding="ascii")
+        with pytest.raises(gm.GpuMemoryError, match="MemTotal"):
+            gm.describe(box.info, LOCAL)
+
+
+class TestUnitsRoundTrip:
+    """Lemonade reports GiB; the API's decimal GB must survive apply and restart."""
+
+    def test_applying_the_fit_point_makes_the_model_fit(self, box):
+        box.info = linux_igpu(48, 23.75)
+        box.set_module("ttm", pages=int(23.75 * 2**30 / 4096))
+        before = model(gm.describe(box.info, LOCAL), QWEN)
+        assert before["fits_now"] is False and before["fits_at_setting_gb"]
+        at = before["fits_at_setting_gb"]
+
+        gm.apply(at, confirm=True)
+        box.reboot(pages=gm.pages_for(at))
+
+        after = gm.describe(box.info, LOCAL)
+        assert model(after, QWEN)["fits_now"] is True
+        assert after["pending"]["state"] == gm.PENDING_TOOK_EFFECT
+        assert after["setting"]["current_gb"] == pytest.approx(at, abs=0.05)
+
+    def test_a_guided_linux_change_is_recognised(self, box):
+        box.ostree.write_text("", encoding="ascii")
+        gm.record_pending(96)
+        box.reboot(pages=gm.pages_for(96))
+        result = gm.describe(box.info, LOCAL)
+        assert result["setting"]["current_gb"] == 96
+        assert result["pending"]["state"] == gm.PENDING_TOOK_EFFECT
+
+    def test_results_carry_steps_for_the_value_just_recorded(self, box):
+        steps = gm.apply(80, confirm=True)["guided_steps"]
+        assert any(f"pages_limit={gm.pages_for(80)}" in s for s in steps)
+        steps = gm.revert(confirm=True)["guided_steps"]
+        assert any(f"pages_limit={gm.pages_for(67.1)}" in s for s in steps)
+
+    def test_guided_record_carries_its_steps(self, box):
+        box.ostree.write_text("", encoding="ascii")
+        steps = gm.record_pending(96)["guided_steps"]
+        assert any(f"pages_limit={gm.pages_for(96)}" in s for s in steps)
+
+
 class TestRevert:
     def test_with_no_record_says_how_to_reset_by_hand(self, box):
         with pytest.raises(gm.NotPossible) as err:
@@ -530,7 +628,7 @@ class TestRevert:
         result = gm.revert(confirm=True)
         assert not box.conf.exists()
         assert result["pending"]["source"] == "revert"
-        assert result["pending"]["setting_gb"] == 62.5
+        assert result["pending"]["setting_gb"] == 67.1
         assert result["revert"]["available"] is False
 
     def test_restores_a_file_gaia_replaced(self, box):
@@ -564,10 +662,21 @@ class TestRevert:
             gm.revert(confirm=True)
         assert len(box.calls) == calls
 
+    def test_undo_refuses_a_record_that_would_starve_the_os(self, box):
+        gm.apply(96, confirm=True)
+        path = gm._state_path()
+        state = json.loads(path.read_text(encoding="utf-8"))
+        state["linux"]["previous_conf"] = "options ttm pages_limit=33554432"
+        path.write_text(json.dumps(state), encoding="utf-8")
+        calls = len(box.calls)
+        with pytest.raises(gm.NotPossible, match="less than 16 GB"):
+            gm.revert(confirm=True)
+        assert len(box.calls) == calls
+
     def test_two_applies_still_undo_to_the_original(self, box):
         gm.apply(80, confirm=True)
         gm.apply(96, confirm=True)
-        assert gm.describe(box.info, LOCAL)["revert"]["previous_setting_gb"] == 62.5
+        assert gm.describe(box.info, LOCAL)["revert"]["previous_setting_gb"] == 67.1
         gm.revert(confirm=True)
         assert not box.conf.exists()
 
@@ -575,7 +684,7 @@ class TestRevert:
         gm.apply(96, confirm=True)
         box.reboot(pages=gm.pages_for(96))
         gm.revert(confirm=True)
-        box.reboot(pages=gm.pages_for(62.5))
+        box.reboot(pages=LIVE_PAGES)
         assert (
             gm.describe(box.info, LOCAL)["pending"]["state"] == gm.PENDING_TOOK_EFFECT
         )
@@ -616,8 +725,9 @@ class TestWindows:
         assert result["setting"]["name"] == "Variable Graphics Memory"
         assert result["setting"]["current_gb"] == 0.5
         # WDDM shares half the RAM Windows sees: model_fit's pool.
-        assert result["gpu_gb"] == pytest.approx(64.2, abs=0.1)
-        assert result["setting"]["max_gb"] == 96  # AMD's 75% cap
+        # 0.5 GiB carve-out plus half of the rest of 128 GiB, in decimal GB.
+        assert result["gpu_gb"] == pytest.approx(69.0, abs=0.1)
+        assert result["setting"]["max_gb"] == 103  # AMD's 75% cap of 137.4 GB
         steps = " ".join(result["guided_steps"])
         assert "Performance > Tuning" in steps and "BIOS" in steps
 
@@ -630,9 +740,9 @@ class TestWindows:
     def test_projection_matches_model_fit(self, box, windows):
         result = gm.describe(box.info, LOCAL)
         preset = result["presets"][-1]
-        windows["gb"] = preset["setting_gb"]
+        windows["gb"] = preset["setting_gb"] / GB_PER_GIB  # the driver's GiB
         cap = model_fit.capacity_from_system_info(box.info)
-        assert preset["gpu_gb"] == pytest.approx(cap.memory_gb, abs=0.1)
+        assert preset["gpu_gb"] == pytest.approx(cap.memory_gb * GB_PER_GIB, abs=0.1)
 
     def test_flash_unlocks_at_a_bigger_carve_out(self, box, windows):
         flash = model(gm.describe(box.info, LOCAL), FLASH)
@@ -652,9 +762,41 @@ class TestWindows:
         assert (
             gm.describe(box.info, LOCAL)["pending"]["state"] == gm.PENDING_NOT_APPLIED
         )
-        windows["gb"] = 64.0
+        windows["gb"] = 60.0  # the GiB the steps told the user to pick
         assert (
             gm.describe(box.info, LOCAL)["pending"]["state"] == gm.PENDING_TOOK_EFFECT
+        )
+
+    @pytest.mark.parametrize("target", [29, 43, 58, 72, 87, 101])
+    def test_following_the_steps_exactly_counts(self, box, windows, target):
+        steps = gm.record_pending(target)["guided_steps"]
+        gib = math.ceil(target * 1e9 / 2**30)
+        assert any(f"set it to {gib} GiB" in s for s in steps)
+        box.reboot()
+        windows["gb"] = float(gib)  # what the driver reads after the restart
+        assert (
+            gm.describe(box.info, LOCAL)["pending"]["state"] == gm.PENDING_TOOK_EFFECT
+        )
+
+    def test_a_raise_short_of_the_target_is_not_applied(self, box, windows):
+        gm.record_pending(64)
+        box.reboot()
+        windows["gb"] = 48.0
+        assert (
+            gm.describe(box.info, LOCAL)["pending"]["state"] == gm.PENDING_NOT_APPLIED
+        )
+
+    def test_a_cut_counts_at_or_below_the_rounded_target(self, box, windows):
+        windows["gb"] = 96.0
+        gm.record_pending(43)
+        box.reboot()
+        windows["gb"] = 40.0  # 43 GB rounds up to 41 GiB; 40 GiB is below it
+        assert (
+            gm.describe(box.info, LOCAL)["pending"]["state"] == gm.PENDING_TOOK_EFFECT
+        )
+        windows["gb"] = 64.0
+        assert (
+            gm.describe(box.info, LOCAL)["pending"]["state"] == gm.PENDING_NOT_APPLIED
         )
 
     def test_guided_record_has_no_undo(self, box, windows):
@@ -676,7 +818,7 @@ class TestWindows:
         box.info = {**WINDOWS_IGPU, "Physical Memory": "32.00 GB"}
         windows["gb"] = 4.0
         result = gm.describe(box.info, LOCAL)
-        assert result["setting"]["max_gb"] == 16
+        assert result["setting"]["max_gb"] == 18  # 34.4 GB less the 16 GB reserve
         assert result["show_in_setup"] is False
 
 

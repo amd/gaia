@@ -2348,6 +2348,10 @@ behind the daemon token instead of the `X-Gaia-UI` header, so both apps read one
 plan and make one set of choices.
 
 <AccordionGroup>
+  Error `detail` strings are fixed messages that say what failed and what to
+  do; the underlying error is written to the Agent UI server log, never sent
+  in a response.
+
   <Accordion title="GET /api/setup/check">
     Runs `gaia init --check --profile gaia --json` and returns its result plus
     the step list: `{"ready": bool, "stage": ..., "reasons": [...], "steps": [...]}`.
@@ -2380,7 +2384,8 @@ plan and make one set of choices.
     The same plan also carries what the model picker needs: `catalog` (every
     model the user can pick, with `roles`, `purpose`, `if_skipped`, `size_gb`
     left to download, `downloaded`, `recommended`, `selected`, `skipped`,
-    `chat_choice`, and `fits` with `need_gb` / `capacity_gb` / `fit_reason`),
+    `chat_choice`, and `fits` with `need_gb` / `capacity_gb` / `fit_reason`; memory
+    figures are Lemonade's own, in GiB, while sizes and disk are decimal GB),
     `disk` (`path`, `free_gb`, `source`), `disk_warning`, and `skipped_models`.
     `gaia init --plan --json` prints the same object; its
     [CLI reference](/reference/cli#choosing-models) lists every field.
@@ -2394,8 +2399,8 @@ plan and make one set of choices.
     plan. **409** with `detail` `{"code": "no_fit", "message", "need_gb",
     "capacity_gb", "acknowledge": "acknowledge_no_fit"}` when it may not fit
     this PC; send it again with that field set to use it anyway. **422** when
-    the model isn't a chat model GAIA or the server knows, or the model server
-    isn't running yet.
+    the model isn't a chat model GAIA or the server knows; **503** when the
+    model server isn't running yet.
   </Accordion>
 
   <Accordion title="POST /api/setup/models/skip">
@@ -2412,14 +2417,15 @@ plan and make one set of choices.
     Follow it with `/api/setup/status`. **202** when started. **409** with a
     `low_disk` `detail` (below) when the drive is too small, or when setup or
     that model is already downloading. **422** for a model neither GAIA nor
-    the server knows.
+    the server knows; **503** when the model server isn't running yet.
   </Accordion>
 
   <Accordion title="POST /api/setup/models/remove">
     Body: `{"model_id": "..."}`. Deletes that model from Lemonade, on request
     only, and adds it to `skipped_models` so setup doesn't download it again.
     Returns the new plan plus `freed_gb`. **409** while it is downloading;
-    **422** when it isn't downloaded.
+    **422** when it isn't downloaded; **503** when the model server isn't
+    running yet.
   </Accordion>
 
   <Accordion title="POST /api/setup/run">
@@ -2480,7 +2486,7 @@ TUI reads the same answers from the daemon at `/daemon/v1/gpu-memory`. Every
 route needs the `X-Gaia-UI: 1` header (**403** without it) and returns the
 status below, read fresh. **503** when the model server doesn't answer, since
 the split is read from it. Every `*_gb` field, in requests and responses, is
-decimal GB (10^9 bytes), the unit `/api/setup/plan` uses. Only the
+decimal GB (10^9 bytes), converted from the GiB Lemonade reports. Only the
 `guided_steps` text converts, to the 4 KiB pages of `ttm.pages_limit` and to
 the GiB that AMD Software and `amd-ttm` count in.
 

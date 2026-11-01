@@ -105,7 +105,9 @@ def test_plan_that_cannot_be_worked_out_is_503(daemon, monkeypatch):
     monkeypatch.setattr(setup_router, "build_plan", broken)
     r = daemon.get("/daemon/v1/setup/plan", headers=AUTH)
     assert r.status_code == 503
-    assert "could not list" in r.json()["detail"]
+    # The UI's own fixed wording; the exception text stays in the log.
+    assert "couldn't work out the setup plan" in r.json()["detail"]
+    assert "could not list" not in r.json()["detail"]
 
 
 def test_chat_model_keeps_the_409_confirmation_shape(daemon, plan, monkeypatch):
@@ -134,14 +136,14 @@ def test_chat_model_keeps_the_409_confirmation_shape(daemon, plan, monkeypatch):
 
 def test_chat_model_refusal_is_422(daemon, monkeypatch):
     def refuse(model_id):
-        raise sp.SetupPlanError(f"{model_id} is not a chat model GAIA knows")
+        raise sp.UnknownModel(f"{model_id} is not a chat model GAIA knows")
 
     monkeypatch.setattr(sp, "chat_model_warning", refuse)
     r = daemon.post(
         "/daemon/v1/setup/chat-model", json={"model_id": "nope"}, headers=AUTH
     )
     assert r.status_code == 422
-    assert "not a chat model" in r.json()["detail"]
+    assert "isn't a chat model" in r.json()["detail"]
 
 
 def test_skip_saves_and_returns_the_plan(daemon, plan, monkeypatch):

@@ -146,7 +146,10 @@ setup(
         # honours CA files loaded on top (certifi), so nothing stops verifying.
         "truststore>=0.10.0",
         "beautifulsoup4",
-        "watchdog>=2.1.0",
+        # watchdog 7.0.0 starves Windows change delivery while a neighbouring
+        # file is written continuously; stay on the known-good 6.x line until
+        # upstream fixes its DirectoryChangeReader.
+        "watchdog>=2.1.0,<7",
         "pillow>=9.0.0",
         # Cron-based scheduler (issue #892): apscheduler drives the daemon;
         # tomli/tomli-w read+write ~/.gaia/schedules.toml (tomllib is stdlib on 3.11+).
@@ -160,6 +163,10 @@ setup(
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
         "keyring>=24.0.0,<26.0.0",
         "tavily-python>=0.5.0",
+        # Gateway Claude models (amd.Claude-*) call the gateway's Anthropic
+        # route through this SDK, so a base install can pick one. 0.49 is the
+        # first to export Omit, which keeps Anthropic credentials off that wire.
+        "anthropic>=0.49.0,<3.0.0",
         # Ed25519 signature verification for `gaia skill install` (#2467). Core,
         # not an extra: a skill's security tier rests on its signature, and a
         # build that cannot verify one would have to either refuse every signed
@@ -287,7 +294,6 @@ setup(
             "jsonschema>=4.0.0,<5.0.0",
         ],
         "eval": [
-            "anthropic",
             "bs4",
             "numpy>=2.0,<2.3.0",
             "pypdf>=6.20.0",
