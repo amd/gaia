@@ -180,7 +180,11 @@ if (!APPIMAGE) {
       });
 
       test("licence: third-party notices ship in resources", () => {
-        for (const notice of ["THIRD_PARTY_NOTICES.md", "licenses/LGPL-2.1.txt"]) {
+        for (const notice of [
+          "THIRD_PARTY_NOTICES.md",
+          "licenses/LGPL-2.1.txt",
+          "licenses/GCC-exception-3.1.txt",
+        ]) {
           const file = path.join(squashRoot, "resources", notice);
           assert.ok(fs.existsSync(file), `expected licence notice at ${file}`);
         }
