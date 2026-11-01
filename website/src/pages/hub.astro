@@ -1,0 +1,39 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// The skills a visitor can install from the Agent Hub, read from
+// hub.amd-gaia.ai at build time (website/src/data/hub.ts). Only the skills
+// lane: apps, agents and components install through other paths.
+
+import Layout from '../layouts/Layout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import SkillCatalog from '../components/SkillCatalog.astro';
+import { getHubSkills } from '../data/hub';
+
+const DOCS = 'https://amd-gaia.ai/docs';
+
+const skills = await getHubSkills();
+---
+
+<Layout
+  title="GAIA Hub — skills for the GAIA agent"
+  description="Browse the skills published to the GAIA Agent Hub and install one with a single command."
+>
+  <Header />
+  <main id="main-content">
+    <section class="g-shell pb-16 pt-[128px] sm:pb-20 sm:pt-[150px]">
+      <p class="g-kicker">Hub</p>
+      <h1 class="g-h-page mt-4">Skills</h1>
+      <p class="g-lede-sm mt-5 max-w-[640px]">
+        A skill teaches the GAIA agent a new task. Install one from the terminal and the
+        agent can load it the next time it needs it.
+        <a href={`${DOCS}/guides/composing-skills`} target="_blank" rel="noopener noreferrer" class="prose-link whitespace-nowrap">How skills work</a>
+      </p>
+
+      <SkillCatalog skills={skills} class="mt-12" />
+    </section>
+  </main>
+  <Footer />
+</Layout>
