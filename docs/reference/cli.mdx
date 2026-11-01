@@ -1250,7 +1250,7 @@ gaia telegram stop
 | `start` | `--allowed-users` (required) | – | Comma-separated numeric user IDs permitted to interact. Starting without one is refused — a bot with no allowlist is reachable by every Telegram user. |
 | `start` | `--background` | false | Run as a daemon (writes PID + health endpoint). |
 | `start` | `--health-port` | 8768 | Health server port (background mode). |
-| `stop` | `--force` | false | Force stop if graceful shutdown fails. |
+| `stop` | `--force` | false | Kill the adapter immediately (SIGKILL / taskkill /F). |
 | `status` | `--health-host` | 127.0.0.1 | Health server host. |
 | `status` | `--health-port` | 8768 | Health server port. |
 
