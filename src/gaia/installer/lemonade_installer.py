@@ -1139,6 +1139,19 @@ class LemonadeInstaller:
             version = os_info.get("VERSION_ID", "")
             pretty_name = os_info.get("PRETTY_NAME", "Unknown Linux")
 
+            # Lemonade's Linux package is currently published through the
+            # Debian-family PPA only. Do not let an unrelated distro fall
+            # through to an apt-specific failure (or, worse, apt advice that
+            # cannot work on that machine).
+            if distro not in {"ubuntu", "debian"}:
+                return (
+                    "Automatic Lemonade installation is supported only on "
+                    "Ubuntu 24.04+ and Debian 13+ via the Lemonade PPA. "
+                    f"Detected: {pretty_name}. Install Lemonade Server manually "
+                    "from https://lemonade-server.ai/ or configure an existing "
+                    "server with LEMONADE_BASE_URL, then re-run: gaia init"
+                )
+
             # Check Ubuntu 24.04+
             if distro == "ubuntu" and version:
                 if int(version.split(".")[0]) < 24:
