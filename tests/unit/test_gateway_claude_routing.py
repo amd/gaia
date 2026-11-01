@@ -473,7 +473,12 @@ def test_local_only_refuses_the_gateway(fake_sdk, monkeypatch):
         (502, "bad gateway", "HTTP 502"),
     ],
 )
-def test_gateway_errors_are_actionable(fake_sdk, status, message, expected):
+def test_gateway_errors_are_actionable(
+    fake_sdk, status, message, expected, monkeypatch
+):
+    manager = MagicMock()
+    manager.status.side_effect = RuntimeError("status unavailable")
+    monkeypatch.setattr("gaia.llm.gateway.GatewayManager", lambda: manager)
     client = _gateway_client()
     error = (
         fake_sdk.AuthenticationError(message, status)
@@ -507,7 +512,7 @@ def test_gateway_claude_401_explains_likely_token_drift(
 
     message = str(raised.value)
     assert gateway_env.GATEWAY_ENV_VAR in message
-    assert "other gateway models may still be using a different key" in message
+    assert "if other gateway models still work, that key differs" in message
     assert GATEWAY_TOKEN not in message
     manager.status.assert_called_once_with(timeout=5)
 

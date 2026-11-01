@@ -1246,17 +1246,18 @@ class GatewayClaudeProvider(ClaudeProvider):
             )
             try:
                 from gaia.llm import gateway
-                from gaia.llm.gateway import GatewayManager
 
-                gateway_status = GatewayManager().status(timeout=5)
+                gateway_status = gateway.GatewayManager().status(timeout=5)
             except Exception as gateway_error:  # preserve the original 401
-                logger.debug("Could not inspect Lemonade gateway auth state: %s", gateway_error)
+                logger.debug(
+                    "Could not inspect Lemonade gateway auth state: %s", gateway_error
+                )
             else:
                 if gateway_status.env_var_set and not gateway_status.runtime_key_set:
                     detail += (
-                        f" Lemonade reports {gateway.GATEWAY_ENV_VAR} is set in its "
-                        "environment, so other gateway models may still be using a "
-                        "different key from this Claude route."
+                        f" Lemonade reads {gateway.GATEWAY_ENV_VAR} from its own "
+                        "environment; if other gateway models still work, that key "
+                        "differs from the one GAIA sends for Claude."
                     )
             raise RuntimeError(detail) from exc
         if status == 429:
