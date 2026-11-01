@@ -78,7 +78,7 @@ The current codebase has cross-agent tool dependencies that block independent pa
 | `RAGToolsMixin` | `agents/chat/tools/rag_tools.py` | ChatAgent | `agents/tools/rag_tools.py` |
 | `FileIOToolsMixin` | `agents/code/tools/file_io.py` | ChatAgent | `agents/tools/file_io_tools.py` |
 | `ShellToolsMixin` | `agents/chat/tools/shell_tools.py` | ChatAgent | `agents/tools/shell_tools.py` |
-| `CodeIndexToolsMixin` | `agents/code_index/tools/mixin.py` | ChatAgent | `agents/tools/code_index_tools.py` |
+| `CodeIndexToolsMixin` | `agents/code_index/tools/mixin.py` | GaiaAgent | `agents/tools/code_index_tools.py` |
 
 After promotion, every `KNOWN_TOOLS` entry in `registry.py` points to `gaia.agents.tools.*`. No agent-specific tool paths remain. Old paths get deprecated re-exports for backward compatibility.
 
