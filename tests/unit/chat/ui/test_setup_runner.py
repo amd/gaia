@@ -1232,12 +1232,45 @@ def test_progress_after_cancel_does_not_revive_a_cancelled_row():
         for entry in runner._models.values():
             if entry.state == "queued":
                 entry.state = "cancelled"
-    runner._on_event(
-        {"event": "progress", "model": QWEN, "bytes_done": 5, "bytes_total": 9}
+    runner._consume(
+        run,
+        json.dumps(
+            {"event": "progress", "model": QWEN, "bytes_done": 5, "bytes_total": 9}
+        ),
     )
     qwen = _models(runner)[QWEN]
     assert qwen["state"] == "cancelled" and qwen["can_retry"]
     assert not runner.busy_with(QWEN)
+
+
+def test_resume_after_a_cancelled_run_still_reports_its_progress():
+    """A single download feeds _on_event directly; the cancelled run must not mute it."""
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._consume(run, _plan_event())
+    run.state = "cancelled"
+    with runner._lock:
+        runner._models[QWEN].state = "cancelled"
+    runner._on_event(
+        {
+            "event": "progress",
+            "model": QWEN,
+            "bytes_done": 11_650_000_000,
+            "bytes_total": 23_300_000_000,
+            "speed_bps": 10,
+        }
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "downloading" and qwen["bytes_done"] == 11_650_000_000
+    assert runner.status()["overall"]["percent"] is not None
+    runner._on_event({"event": "retrying", "model": QWEN, "until": 1_900_000_000})
+    assert _models(runner)[QWEN]["retrying_until"] == 1_900_000_000
+    runner._on_event(
+        {"event": "error", "model": QWEN, "message": "No space left on device"}
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "failed" and qwen["error_kind"] == "disk_full"
 
 
 def test_a_failed_run_never_shows_unchecked_models_as_ready():

@@ -764,9 +764,6 @@ class SetupRunner:
 
         kind = event.get("event")
         with self._lock:
-            # A killed run's last lines must not bring cancelled rows back.
-            if self._run is not None and self._run.state == "cancelled":
-                return
             if kind == "plan":
                 for planned in event.get("models") or []:
                     entry = ModelProgress(
@@ -949,6 +946,10 @@ class SetupRunner:
             except ValueError:
                 event = None
             if isinstance(event, dict) and "event" in event:
+                # A killed run's last lines must not bring cancelled rows back.
+                with self._lock:
+                    if run.state == "cancelled":
+                        return
                 self._on_event(event)
                 return
         progress = describe(line)

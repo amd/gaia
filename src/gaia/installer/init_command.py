@@ -2056,12 +2056,19 @@ class InitCommand:
         return None
 
     def _no_chat_model(self, chat: str) -> bool:
-        """Fail the way ``gaia init --check`` reports it: no local chat model."""
+        """Fail the way ``gaia init --check`` reports it: no local chat model.
+
+        A run that only fetches ``--download-model`` models succeeds or fails on
+        those downloads; the missing chat model is then a note, not a failure.
+        """
         message = (
             f"No local chat model: {chat} is skipped. Pick another chat model "
             "(`gaia init --use-model <id>`) or a cloud provider, then re-run "
             "`gaia init`."
         )
+        if self.extra_models:
+            self._print_warning(message)
+            return True
         self._print_error(message)
         self.events.emit("error", message=message)
         return False

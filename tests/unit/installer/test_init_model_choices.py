@@ -449,3 +449,27 @@ def test_npu_profile_can_skip_its_own_flm_model(lemonade, home):
         sp.set_model_skipped(FLM, True)  # not one of the gaia profile's models
     sp.set_model_skipped(FLM, True, profile="npu")
     assert _config(home)["skipped_models"] == [FLM]
+
+
+def test_download_later_with_the_chat_model_skipped_succeeds_on_its_own_pull(
+    lemonade, home, capsys
+):
+    """`--download-model X` is judged on X; readiness stays `--check`'s job."""
+    fake = lemonade(downloaded=[EMBEDDER])
+    sp.set_model_skipped(DEFAULT_MODEL_NAME, True)
+    cmd = InitCommand(profile="gaia", yes=True, extra_models=[LARGE_DEFAULT_MODEL_NAME])
+    assert _download(cmd)
+    assert _pulled(fake) == [LARGE_DEFAULT_MODEL_NAME]
+    assert "No local chat model" in capsys.readouterr().out
+
+
+def test_download_later_still_fails_when_its_own_pull_fails(lemonade, home):
+    fake = lemonade(downloaded=[EMBEDDER])
+    sp.set_model_skipped(DEFAULT_MODEL_NAME, True)
+
+    def broken(model_name, **_fields):
+        yield {"event": "error", "error": "checkpoint not found"}
+
+    fake.pull_model_stream = broken
+    cmd = InitCommand(profile="gaia", yes=True, extra_models=[LARGE_DEFAULT_MODEL_NAME])
+    assert not _download(cmd)
