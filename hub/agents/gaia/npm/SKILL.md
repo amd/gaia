@@ -10,7 +10,7 @@ frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-tui`).
 It ships no agent logic of its own, and it **builds neither binary at install
 time** — both are published artifacts it downloads and verifies. The terminal UI
 is the published `terminal-hub` component, the same binary a full GAIA install
-runs as `gaia tui`, so its behaviour cannot differ from that one. Everything runs on the local machine against
+runs as `gaia-tui`, so its behaviour cannot differ from that one. Everything runs on the local machine against
 a local model server — nothing you type or index leaves it.
 
 Two ways in:

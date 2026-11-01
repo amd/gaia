@@ -3728,9 +3728,9 @@ flagship `gaia` agent's chat, behind a readiness gate. Building from source the
 binary is `tui/bin/gaia-tui` (`cd tui && make build`).
 
 <Note>
-  The binary accepts a leading `tui` word and drops it, so `gaia-tui tui status`
-  and `gaia-tui status` are the same command. Running the source build directly,
-  both `./tui/bin/gaia-tui tui status` and `./tui/bin/gaia-tui status` work.
+  The binary is `gaia-tui`; the Python `gaia` CLI rejects `gaia tui`. It still
+  accepts and drops a leading `tui` word (`gaia-tui tui status` is the same as
+  `gaia-tui status`) so older docs and scripts that spell it `gaia tui …` keep working.
 </Note>
 
 ```bash

@@ -10,6 +10,9 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **Docs name the terminal UI binary correctly.** README, SPEC and SKILL said
+  a core install runs it as `gaia tui`; the binary is `gaia-tui`, and the
+  Python `gaia` CLI rejects `gaia tui`.
 - **The agent ships as one Python package.** `ChatAgent`, the class the agent
   builds on, moved into `gaia-agent-gaia` (`gaia_agent.chat_agent`), so the
   binary and a pip install no longer need `gaia-agent-chat`. Prompts and tools
@@ -62,6 +65,14 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   stored conversations, after the user approves it. A plain `recall` now says
   how many sensitive entries it held back, and `search_past_conversations`
   leaves out turns that mention something forgotten after they were said.
+- **A slide request gets a slide file, not a picture.** Asked for a slide or
+  deck, the agent ran Stable Diffusion and handed back a blurry image of one.
+  It now asks whether you want PowerPoint (.pptx) or HTML when you didn't say,
+  and builds nothing until you answer; then it builds that file.
+- **Image generation no longer reports an image it didn't make.** A server
+  reply with no image, an unreadable one, or a single flat colour (SDXL can
+  return an all-black frame) counted as success. Each is now an error naming
+  what came back, and success gives the saved file's path.
 - **A rate-limited page now says how long to wait.** `fetch_webpage` on an
   HTTP 429 or 503 with `Retry-After` returns the wait as `retry_after` with a
   hint not to fetch again before then. It returned only the status line, so

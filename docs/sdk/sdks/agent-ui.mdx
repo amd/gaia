@@ -20,7 +20,7 @@ from gaia.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentR
 **See also:** [User Guide](/guides/agent-ui) | [Agent SDK](/sdk/sdks/chat) | [API Specification](/spec/agent-ui-server)
 
 <Warning>
-  **Tested Configuration:** The Agent UI has been tested on **AMD Ryzen AI MAX+ 395** with **Qwen3.5-35B-A3B-GGUF**. Other configurations are not officially verified. See the [User Guide](/guides/agent-ui) for full details and how to report issues on other hardware.
+  **Tested Configuration:** The Agent UI has been tested on **AMD Ryzen AI MAX+ 395** with **Gemma-4-E4B-it-GGUF**. Other configurations are not officially verified. See the [User Guide](/guides/agent-ui) for full details and how to report issues on other hardware.
 </Warning>
 
 ---
@@ -2932,7 +2932,7 @@ CREATE TABLE sessions (
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TEXT,
     updated_at TEXT,
-    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-GGUF',
+    model TEXT NOT NULL DEFAULT 'Gemma-4-E4B-it-GGUF',
     system_prompt TEXT
 );
 
@@ -3089,7 +3089,7 @@ from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 # system prompt from `prompt_profile` ("chat" | "doc" | "file" | "data" |
 # "web" | "full") — there is no `system_prompt` config field.
 config = ChatAgentConfig(
-    model_id=session.get("model", "Qwen3.5-35B-A3B-GGUF"),
+    model_id=session.get("model", "Gemma-4-E4B-it-GGUF"),
     prompt_profile="doc",
     allowed_paths=["/path/to/files"],
 )
