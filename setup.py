@@ -219,12 +219,12 @@ setup(
             # the OS credential store (macOS Keychain, Windows DPAPI, Linux
             # SecretService). Pinned upper bound per supply-chain advisory.
             "keyring>=24.0.0,<26.0.0",
-            # RAG runtime deps — gaia.rag.sdk uses faiss/pypdf/pymupdf/numpy and
+            # RAG runtime deps — gaia.rag.sdk uses faiss/pypdf/pypdfium2/numpy and
             # embeds via Lemonade (NOT sentence-transformers). See #845.
             # Version specifiers match the standalone "rag" extra.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
-            "pymupdf>=1.24.0,<2",
+            "pypdfium2>=5.0.0,<6",
             "pypdf>=6.20.0",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
@@ -250,7 +250,6 @@ setup(
             "uvicorn",
         ],
         "telegram": [
-            "python-telegram-bot>=20.3",
             "psutil>=5.9.0",
         ],
         "slack": [
@@ -320,9 +319,9 @@ setup(
             # RAG embeds via Lemonade, not sentence-transformers — do NOT add it.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
-            # 2.x ships no macOS x86_64 wheel and its sdist doesn't build. No
-            # platform marker: `gaia init` refuses to evaluate one (install_hints).
-            "pymupdf>=1.24.0,<2",
+            # PDF rendering and image extraction (PDFium; Apache-2.0/BSD-3).
+            # PyMuPDF is AGPL-3.0 and must not come back.
+            "pypdfium2>=5.0.0,<6",
             "pypdf>=6.20.0",
             # Reading AND writing the common office formats. The read half is
             # what RAG needs; the write half is what the document skills need,
