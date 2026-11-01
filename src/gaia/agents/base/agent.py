@@ -9345,7 +9345,8 @@ Do NOT wrap conversational replies in JSON.
             Dict containing the final result and operation details
         """
         ns_id = self._namespaced_agent_id()
-        self._turn_error_start = len(self.error_history)
+        # getattr: hosts built with __new__ reach process_query without __init__.
+        self._turn_error_start = len(getattr(self, "error_history", ()))
         # A level the model chose for the last request must not carry into this one.
         reset_effort = getattr(self, "reset_reasoning_effort", None)
         if reset_effort is not None:
