@@ -126,7 +126,7 @@ def _load_lock_or_install_hint(
     is not installed yet", not "your install is broken": say so.
     """
     try:
-        return plat.load_lock(lock_path)
+        return plat.load_lock(lock_path, agent_dir_name)
     except PlatformError as e:
         if lock_path is not None:
             # An explicitly-supplied lock that cannot be read is a caller

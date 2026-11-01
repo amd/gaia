@@ -1259,7 +1259,7 @@ def test_cold_fetch_without_an_install_names_the_hub_install_remedy(
 
     monkeypatch.setattr(
         "gaia.daemon.sidecars.platform.default_lock_path",
-        lambda: install_root / "missing" / "binaries.lock.json",
+        lambda _agent_dir_name="email": install_root / "missing" / "binaries.lock.json",
     )
     with pytest.raises(BinaryNotFoundError, match="gaia hub install email"):
         fetchmod.fetch_binary(
@@ -1604,7 +1604,7 @@ def test_cold_fetch_of_the_flagship_names_gaia_init(monkeypatch, install_root):
 
     monkeypatch.setattr(
         "gaia.daemon.sidecars.platform.default_lock_path",
-        lambda: install_root / "missing" / "binaries.lock.json",
+        lambda _agent_dir_name="email": install_root / "missing" / "binaries.lock.json",
     )
     with pytest.raises(BinaryNotFoundError) as exc_info:
         fetchmod.fetch_binary(

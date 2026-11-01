@@ -296,3 +296,24 @@ def test_force_refetches_past_hub_install(tmp_path):
     )
     assert res.cached is False
     assert sess.calls == ["https://r2.example/email-agent-darwin-arm64"]
+
+
+def test_flagship_default_lock_is_its_own_not_the_email_agents(tmp_path, monkeypatch):
+    """With no explicit lock, the flagship's cache check and download use the
+    flagship's own pins — a binary matching the email lock must not pass."""
+    from gaia.daemon.sidecars import platform as plat
+
+    monkeypatch.delenv("ASSETS_BASE_URL", raising=False)
+    lock = plat.load_lock(agent_dir_name="gaia")
+    expected = lock.binaries["linux-x64"]
+    sess = _FakeSession(b"not-the-flagship-binary")
+    with pytest.raises(IntegrityError) as exc_info:
+        fetchmod.fetch_binary(
+            out_dir=tmp_path / "gaia",
+            platform_key="linux-x64",
+            session=sess,
+            agent_dir_name="gaia",
+        )
+    assert expected.sha256 in str(exc_info.value)
+    assert sess.calls == [fetchmod._join_url(lock.base_url, expected.filename)]
+    assert "/agents/gaia/" in sess.calls[0]

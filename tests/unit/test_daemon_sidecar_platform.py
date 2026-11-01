@@ -117,6 +117,37 @@ def test_default_lock_path_points_at_repo_lock():
     assert p.parts[-3:] == ("email", "npm", "binaries.lock.json")
 
 
+def test_default_lock_path_is_per_agent():
+    p = plat.default_lock_path("gaia")
+    assert p.parts[-3:] == ("gaia", "npm", "binaries.lock.json")
+
+
+def test_flagship_lock_loads_its_sidecar_component():
+    """The flagship's schema-3.0 lock must yield its own sidecar pins, never the
+    email agent's."""
+    path = plat.default_lock_path("gaia")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    sidecar = raw["components"]["sidecar"]
+
+    lock = plat.load_lock(agent_dir_name="gaia")
+
+    assert lock.base_url == sidecar["baseUrl"]
+    assert lock.agent_version == sidecar["componentVersion"]
+    assert set(lock.binaries) == set(sidecar["platforms"])
+    for key, entry in lock.binaries.items():
+        assert entry.sha256 == sidecar["platforms"][key]["sha256"]
+        assert entry.executable == sidecar["platforms"][key]["executable"]
+    email = plat.load_lock(agent_dir_name="email")
+    assert lock.base_url != email.base_url
+
+
+def test_schema3_lock_without_sidecar_component_raises(tmp_path):
+    p = tmp_path / "binaries.lock.json"
+    p.write_text(json.dumps({"schemaVersion": "3.0", "components": {"tui": {}}}))
+    with pytest.raises(PlatformError, match="components.sidecar"):
+        plat.load_lock(p)
+
+
 def test_default_lock_path_exists_and_loads():
     # The real repo lock must load (it ships with placeholder SHAs today).
     lock = plat.load_lock(plat.default_lock_path())
