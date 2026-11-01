@@ -376,6 +376,20 @@ def _script_of(ch: str) -> Optional[str]:
     return None
 
 
+def text_scripts(text: str) -> List[str]:
+    """Writing systems that make up at least 10% of ``text``'s letters, largest first."""
+    counts: Dict[str, int] = {}
+    for ch in text:
+        script = _script_of(ch)
+        if script:
+            counts[script] = counts.get(script, 0) + 1
+    total = sum(counts.values())
+    return sorted(
+        (name for name, n in counts.items() if n / total >= 0.1),
+        key=lambda name: -counts[name],
+    )
+
+
 # Files the RAG cache writes: signed chunk caches, their sidecar signatures,
 # saved vectors, and extracted-text markdown. clear_cache() deletes nothing else.
 _CACHE_OWNED_FILE = re.compile(
@@ -909,21 +923,7 @@ class RAGSDK:
         cached = self._scripts_cache.get(file_path)
         if cached and cached[0] == key:
             return list(cached[1])
-        counts: Dict[str, int] = {}
-        for chunk in chunks:
-            for ch in chunk:
-                script = _script_of(ch)
-                if script:
-                    counts[script] = counts.get(script, 0) + 1
-        total = sum(counts.values())
-        scripts = (
-            sorted(
-                (name for name, n in counts.items() if n / total >= 0.1),
-                key=lambda name: -counts[name],
-            )
-            if total
-            else []
-        )
+        scripts = text_scripts("".join(chunks))
         self._scripts_cache[file_path] = (key, scripts)
         return list(scripts)
 

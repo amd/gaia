@@ -411,7 +411,8 @@ _CROSS_LANGUAGE_NOTE = (
     "question is in another language, search them with the query translated into "
     'the document\'s language (English "net debt" -> Arabic "صافي الدين"); a '
     "query in another language rarely finds the passage. Answer in the language of "
-    "the user's latest message and cite every fact with its document and page.]"
+    "the user's latest message, even when earlier turns or the document are in "
+    "another, and cite every fact with its document and page.]"
 )
 
 
