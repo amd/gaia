@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MODEL_LIST, NOW, mockApi, useLocale, useTheme, withModelPage, withSettingsPanes } from './fixtures';
+import { ANSWER_SESSION, MODEL_LIST, NOW, mockApi, useLocale, useTheme, withConnectors, withModelPage, withSettingsPanes } from './fixtures';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -469,6 +469,59 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
     }
+}
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`settings connectors (${locale})`, () => {
+        const openConnectors = async (page: Page, rows?: unknown[]) => {
+            await open(page, '', locale, (p) => withConnectors(p, rows));
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.getByRole('dialog').locator('[data-section="connectors"]').click();
+            await expect(page.locator('.settings-pane-title')).toBeVisible();
+            await expect(page.locator('.connectors-loading')).toHaveCount(0);
+        };
+
+        test('groups: connected open, the rest closed', async ({ page }) => {
+            await openConnectors(page);
+            await expect(page.locator('.connector-tile').first()).toBeVisible();
+            await expect(page.locator('details[open] .connector-tile')).toHaveCount(3);
+            await shot(page, `connectors-${locale}-top`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('every group and a tile open, with no button inside a button', async ({ page }) => {
+            await openConnectors(page);
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.connector-tile-header', { hasText: 'Microsoft' }).click();
+            await expect(page.locator('.connector-detail')).toBeVisible();
+            await page.locator('.connector-detail').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-open`);
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            await expect(page.locator('.oauth-setup-form')).toBeVisible();
+            await page.locator('.oauth-setup-form').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-setup`);
+            await expect(page.locator('button button')).toHaveCount(0);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('nothing connected: accounts start open', async ({ page }) => {
+            await openConnectors(page, [{ id: 'microsoft', display_name: 'Microsoft', type: 'oauth_pkce', description: 'Mail', configured: false, configurable: true, mcp_env_keys: [], oauth_setup_fields: [] }]);
+            await expect(page.locator('.connector-tile')).toBeVisible();
+            await shot(page, `connectors-${locale}-none`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('phone width: a long account stays on screen', async ({ page }) => {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await open(page, '', locale, (p) => withConnectors(p));
+            await page.getByRole('button', { name: /Open sidebar/ }).click();
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.getByRole('dialog').locator('[data-section="connectors"]').click();
+            await expect(page.locator('.connector-tile').first()).toBeVisible();
+            await shot(page, `connectors-${locale}-phone`);
+            expect(await audit(page)).toEqual([]);
+        });
+    });
 }
 
 /** A Strix Halo on first run: Qwen won't fit 16 GB, an FLM model is installed, the disk is tight. */

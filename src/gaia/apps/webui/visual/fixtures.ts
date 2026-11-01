@@ -311,6 +311,43 @@ export async function withSettingsPanes(page: Page): Promise<void> {
     });
 }
 
+const connector = (id: string, display_name: string, type: string, over: Record<string, unknown> = {}) => ({
+    id, display_name, type, icon: null, category: 'general', tier: 'core', description: `Lets GAIA work with ${display_name} on your behalf.`,
+    product_url: 'https://example.com', docs_url: null, configured: false, configurable: true, enabled: true, account_id: null,
+    default_scopes: [], available_scopes: [], mcp_env_keys: [], oauth_setup_fields: [], supports_device_code: false, ...over,
+});
+
+const CONNECTORS = [
+    connector('google', 'Google', 'oauth_pkce', { configured: true, account_id: 'someone.with.a.long.address@example.com' }),
+    connector('git', 'Git', 'mcp_server', { configured: true }),
+    connector('github-mcp', 'GitHub', 'mcp_server', { configured: true, enabled: false, mcp_env_keys: ['GITHUB_TOKEN'] }),
+    connector('microsoft', 'Microsoft', 'oauth_pkce', { supports_device_code: true }),
+    connector('slack', 'Slack', 'oauth_pkce', {
+        configurable: false, config_error: 'No client configured',
+        oauth_setup_fields: [{ key: 'client_id', label: 'Client ID', kind: 'text', required: true, placeholder: '1234.5678', help_md: 'From your Slack app.' }],
+    }),
+    ...['Brave Search', 'Notion', 'Postgres', 'Memory', 'Filesystem'].map((n) =>
+        connector(n.toLowerCase().replace(' ', '-'), n, 'mcp_server', { mcp_env_keys: n === 'Brave Search' ? ['BRAVE_API_KEY'] : [] })),
+];
+
+/** Settings > Connectors with accounts and servers in each state, or the given rows. */
+export async function withConnectors(page: Page, connectors: unknown[] = CONNECTORS): Promise<void> {
+    const answers: Record<string, unknown> = {
+        'GET /connectors': { connectors },
+        'GET /connectors/agent-mcps': {
+            agent_mcps: [{ agent_id: 'reports', agent_name: 'Reports', server_name: 'warehouse', command: 'uvx', args: ['warehouse-mcp', '--read-only'], disabled: false, config_path: 'C:\\Users\\you\\.gaia\\agents\\reports\\mcp_servers.json' }],
+        },
+    };
+    await page.route('**/api/**', async (route: Route) => {
+        const url = new URL(route.request().url());
+        const key = `${route.request().method()} ${url.pathname.replace(/^\/api/, '')}`;
+        if (key in answers) await route.fulfill({ json: answers[key] });
+        else if (/\/grants$/.test(url.pathname)) await route.fulfill({ json: { grants: {} } });
+        else if (/\/activations$/.test(url.pathname)) await route.fulfill({ json: { activations: {} } });
+        else await route.fallback();
+    });
+}
+
 /** Pick the theme before the app's first paint, the way a returning user would. */
 export async function useTheme(page: Page, theme: 'light' | 'dark'): Promise<void> {
     await page.addInitScript((t) => {
