@@ -25,7 +25,7 @@ requires-python = ">=3.10"
 # gaia-agent-chat, which is now a deprecated re-export shim of this one.
 #
 # Intentionally bare `amd-gaia` (no `[rag]` marker): a plain pip install must
-# not drag faiss/pymupdf in just to import the class. RAG's real dependencies
+# not drag faiss/pypdfium2 in just to import the class. RAG's real dependencies
 # come from `gaia init` into the active interpreter (#2358).
 dependencies = [
   "amd-gaia>=0.25.4",

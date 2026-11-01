@@ -184,6 +184,8 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 		"/clear":       "/clear",
 		"/memory":      "/memory",
 		"/setup":       "/setup",
+		"/models":      "/models",
+		"/gpu":         "/gpu",
 		"/full-access": "/full-access",
 		"/cost":        "/cost",
 		"/slack":       "/slack",
@@ -384,26 +386,28 @@ func TestATinyWindowKeepsTheViewItHas(t *testing.T) {
 	}
 }
 
-// renderCommandsSection replaces the Commands block by POSITION — the label
-// line plus exactly one continuation — because several unrelated lines share
-// the same indent and matching on that would eat them too. Pin the shape it
-// assumes: grow the block to three lines and the third would leak into every
-// filtered render, silently.
-func TestChatHelpCommandsBlockIsExactlyTwoLines(t *testing.T) {
+// renderCommandsSection replaces the Commands block by skipping its
+// continuation lines, and several unrelated wrapped lines share that indent.
+// Pin that a labelled row follows the block, so the skip stops there, and that
+// a filtered render keeps none of the static command lines.
+func TestChatHelpCommandsBlockEndsAtALabelledRow(t *testing.T) {
 	lines := strings.Split(chatHelpText, "\n")
 	for i, line := range lines {
 		if !strings.HasPrefix(line, helpCommandsLabel) {
 			continue
 		}
-		if i+2 >= len(lines) {
-			t.Fatalf("the Commands block runs to the end of the help text; renderCommandsSection expects a line after it")
+		j := i + 1
+		for j < len(lines) && strings.HasPrefix(lines[j], helpCommandsIndent) {
+			j++
 		}
-		if !strings.HasPrefix(lines[i+1], helpCommandsIndent) {
-			t.Fatalf("line %d should be the Commands block's continuation, got %q", i+1, lines[i+1])
+		if j >= len(lines) || !strings.HasPrefix(lines[j], "  /") {
+			t.Fatalf("the Commands block must be followed by a labelled command row, got %q", lines[j%len(lines)])
 		}
-		if strings.HasPrefix(lines[i+2], helpCommandsIndent) {
-			t.Fatalf("the Commands block grew past two lines (line %d: %q) — "+
-				"renderCommandsSection skips exactly one continuation and would leak this one", i+2, lines[i+2])
+		got := ansi.Strip(RenderHelpOverlayForCommands(HelpContextChat, "", 100, 40, 0, []string{"/help"}))
+		for _, static := range []string{"/agents", "/gpu", "/setup"} {
+			if strings.Contains(got, static) {
+				t.Errorf("a filtered render leaked the static %s line:\n%s", static, got)
+			}
 		}
 		return
 	}
