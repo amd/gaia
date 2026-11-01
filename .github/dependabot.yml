@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 # Dependabot configuration for automated dependency updates
-# This file configures Dependabot to check for updates to Python, JavaScript, and GitHub Actions dependencies
+# This file configures Dependabot to check for updates to Python, JavaScript, Go, and GitHub Actions dependencies
 #
 # For detailed documentation on adding/modifying entries, see: docs/reference/dependency-management.mdx
 # Official Dependabot docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
@@ -72,6 +72,47 @@ updates:
   # The example Electron app is a root workspace member (src/gaia/apps/*/webui).
   # root-npm-dependencies owns that lockfile. A nested npm entry split upgrades
   # across two red PRs (amd/gaia#3261).
+
+  # JavaScript - standalone npm packages outside the root workspace: the two
+  # published hub sidecars, the website, the docs proxy, the Cloudflare workers
+  # and the VS Code extension. util/check_dependabot.py fails lint if a tracked
+  # lockfile is missing here (#3525). One grouped PR per directory.
+  - package-ecosystem: "npm"
+    directories:
+      - "/hub/agents/email/npm"
+      - "/hub/agents/gaia/npm"
+      - "/website"
+      - "/docs"
+      - "/workers/agent-hub"
+      - "/workers/admin"
+      - "/src/vscode/gaia"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "javascript"
+    open-pull-requests-limit: 5
+    groups:
+      standalone-npm-dependencies:
+        patterns:
+          - "*"
+
+  # Go - the TUI module behind the published gaia-* binaries. Its
+  # tui/third_party/* forks are wired in by `replace` and stay unwatched.
+  - package-ecosystem: "gomod"
+    directory: "/tui"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "tui"
+    open-pull-requests-limit: 5
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
 
   # GitHub Actions dependencies
   - package-ecosystem: "github-actions"

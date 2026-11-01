@@ -29,10 +29,16 @@ def _write_config(tmp_path: Path, updates: list) -> Path:
     return p
 
 
+_REAL_TRACKED_MANIFESTS = check_dependabot._tracked_manifests
+_REAL_DIRECTORY_EXISTS = check_dependabot._directory_exists
+
+
 @pytest.fixture(autouse=True)
 def patch_config(tmp_path, monkeypatch):
-    """Allow each test to set check_dependabot.CONFIG before calling run_check()."""
-    yield  # tests set check_dependabot.CONFIG themselves
+    """Tests set CONFIG themselves; lockfile coverage is off unless a test opts in."""
+    monkeypatch.setattr(check_dependabot, "_tracked_manifests", lambda: [])
+    monkeypatch.setattr(check_dependabot, "_directory_exists", lambda d: True)
+    yield
 
 
 # ---------------------------------------------------------------------------
@@ -268,3 +274,147 @@ class TestConfigFileErrors:
         p.write_text("version: 2\n", encoding="utf-8")
         monkeypatch.setattr(check_dependabot, "CONFIG", p)
         assert check_dependabot.run_check() == 1
+
+
+# ---------------------------------------------------------------------------
+# Lockfile coverage (#3525)
+# ---------------------------------------------------------------------------
+
+
+def _npm(directory=None, directories=None):
+    entry = {
+        "package-ecosystem": "npm",
+        "schedule": {"interval": "weekly"},
+        "groups": {"all": {"patterns": ["*"]}},
+    }
+    if directory is not None:
+        entry["directory"] = directory
+    if directories is not None:
+        entry["directories"] = directories
+    return entry
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    """A fake checkout: set `.files` to the tracked manifests, dirs are created."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.setattr(check_dependabot, "REPO_ROOT", root)
+    monkeypatch.setattr(check_dependabot, "_directory_exists", _REAL_DIRECTORY_EXISTS)
+
+    class Repo:
+        files: list = []
+
+        def track(self, *paths):
+            for path in paths:
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+            self.files = list(paths)
+            monkeypatch.setattr(check_dependabot, "_tracked_manifests", lambda: paths)
+
+        def config(self, updates):
+            monkeypatch.setattr(
+                check_dependabot, "CONFIG", _write_config(tmp_path, updates)
+            )
+
+    return Repo()
+
+
+class TestLockfileCoverage:
+    def test_unwatched_npm_lockfile_rejected(self, repo, capsys):
+        repo.track("website/package-lock.json")
+        repo.config([_npm("/")])
+        assert check_dependabot.run_check() == 1
+        err = capsys.readouterr().err
+        assert "website/package-lock.json" in err and "#3525" in err
+
+    def test_unwatched_go_module_rejected(self, repo, capsys):
+        repo.track("tui/go.mod")
+        repo.config([_npm("/tui")])
+        assert check_dependabot.run_check() == 1
+        assert "`gomod`" in capsys.readouterr().err
+
+    def test_wrong_ecosystem_does_not_count(self, repo):
+        """A pip entry on /website is not an npm entry on /website."""
+        repo.track("website/package-lock.json")
+        repo.config(
+            [{"package-ecosystem": "pip", "directory": "/website", "schedule": {}}]
+        )
+        assert check_dependabot.run_check() == 1
+
+    def test_directory_entry_covers_lockfile(self, repo):
+        repo.track("website/package-lock.json")
+        repo.config([_npm("/website")])
+        assert check_dependabot.run_check() == 0
+
+    @pytest.mark.parametrize("spelling", ["/website", "website", "/website/"])
+    def test_directories_list_covers_lockfile(self, repo, spelling):
+        repo.track("website/package-lock.json", "docs/package-lock.json")
+        repo.config([_npm(directories=["/docs", spelling])])
+        assert check_dependabot.run_check() == 0
+
+    def test_directories_glob_covers_lockfile(self, repo):
+        repo.track(
+            "hub/agents/a/npm/package-lock.json", "hub/agents/b/npm/package-lock.json"
+        )
+        repo.config([_npm(directories=["/hub/agents/*/npm"])])
+        assert check_dependabot.run_check() == 0
+
+    def test_root_entry_does_not_cover_nested_lockfile(self, repo):
+        """Dependabot's `/` watches the root manifest only, not the whole tree."""
+        repo.track("package-lock.json", "website/package-lock.json")
+        repo.config([_npm("/")])
+        assert check_dependabot.run_check() == 1
+
+    def test_parent_directory_does_not_cover_child(self, repo):
+        repo.track("workers/admin/package-lock.json")
+        repo.config([_npm("/workers")])
+        (check_dependabot.REPO_ROOT / "workers").mkdir(exist_ok=True)
+        assert check_dependabot.run_check() == 1
+
+    def test_excluded_directory_is_skipped(self, repo, monkeypatch):
+        repo.track("tests/electron/package-lock.json")
+        repo.config([_npm("/")])
+        monkeypatch.setattr(
+            check_dependabot, "EXCLUDED", {"tests/electron": "test harness"}
+        )
+        assert check_dependabot.run_check() == 0
+
+    def test_every_exclusion_carries_a_reason(self):
+        for directory, reason in check_dependabot.EXCLUDED.items():
+            assert reason.strip(), f"EXCLUDED[{directory!r}] has no reason"
+
+    def test_entry_pointing_at_a_missing_directory_rejected(self, repo, capsys):
+        repo.track()
+        repo.config([_npm("/hub/agents/email/node")])
+        assert check_dependabot.run_check() == 1
+        assert "does not exist" in capsys.readouterr().err
+
+    def test_git_failure_is_loud(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(check_dependabot, "REPO_ROOT", tmp_path / "missing")
+        with pytest.raises(RuntimeError, match="git ls-files"):
+            _REAL_TRACKED_MANIFESTS()
+
+
+class TestRealRepository:
+    def test_real_config_covers_every_tracked_lockfile(self, monkeypatch):
+        """Regression guard for #3525 against the real dependabot.yml and tree."""
+        monkeypatch.setattr(
+            check_dependabot, "_tracked_manifests", _REAL_TRACKED_MANIFESTS
+        )
+        monkeypatch.setattr(
+            check_dependabot, "_directory_exists", _REAL_DIRECTORY_EXISTS
+        )
+        monkeypatch.setattr(
+            check_dependabot, "CONFIG", REPO_ROOT / ".github" / "dependabot.yml"
+        )
+        assert check_dependabot.run_check() == 0
+
+    def test_real_listing_finds_the_published_surfaces(self):
+        found = set(_REAL_TRACKED_MANIFESTS())
+        for path in (
+            "tui/go.mod",
+            "website/package-lock.json",
+            "hub/agents/gaia/npm/package-lock.json",
+        ):
+            assert path in found
+        assert not any("node_modules/" in p for p in found)
