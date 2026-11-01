@@ -279,6 +279,24 @@
                   "type": "integer",
                   "minimum": 0,
                   "description": "Number of non-blocking findings the audit surfaced."
+                },
+                "attestation": {
+                  "type": "string",
+                  "enum": ["publisher-asserted", "unaudited"],
+                  "description": "How much the verdict is worth: publisher-asserted means the Worker checked the publisher's report is self-consistent, not that the audit provably ran. Absent on records written before it was recorded."
+                },
+                "cleared_tiers": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Tiers the audit reported as cleared; empty when unaudited."
+                },
+                "content_digest": {
+                  "type": "string",
+                  "description": "sha256 over the audited skill tree, as reported; empty string when unaudited."
+                },
+                "manifest_digest": {
+                  "type": "string",
+                  "description": "sha256 over the audited SKILL.md, verified against the uploaded manifest; empty string when unaudited."
                 }
               }
             }
