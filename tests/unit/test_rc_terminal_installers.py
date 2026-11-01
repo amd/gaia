@@ -169,7 +169,7 @@ def test_the_final_release_job_steps(publish):
         "Download Desktop Installer (Windows NSIS)",
         "Download Desktop Installer (macOS DMG)",
         "Download Desktop Installer (Linux DEB + AppImage)",
-        "Create GitHub Release",
+        "Create GitHub Release with bounded rate-limit retry",
     ]
 
 

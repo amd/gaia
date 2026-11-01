@@ -364,17 +364,15 @@ def test_nothing_publishes_unless_the_tagged_commit_passed_ci(publish):
 
 
 def test_an_rc_github_release_is_a_prerelease(publish):
-    steps = [
+    step = next(
         s
         for s in publish["github-release"]["steps"]
-        if s.get("uses", "").startswith("softprops/action-gh-release")
-    ]
-    final = next(s for s in steps if s["if"] == NOT_RC)
-    rc = next(s for s in steps if s["if"] == IS_RC)
-    assert "prerelease" not in final["with"]
-    assert rc["with"]["prerelease"] is True
-    assert rc["with"]["make_latest"] is False
-    assert rc["with"]["files"] == final["with"]["files"]
+        if s.get("name") == "Create GitHub Release with bounded rate-limit retry"
+    )
+    assert step["env"]["IS_RC"] == "${{ needs.validate.outputs.is_rc }}"
+    assert "--prerelease" in step["run"]
+    assert "python3 util/github_release_retry.py" in step["run"]
+    assert "softprops/action-gh-release" not in step["run"]
 
 
 def test_every_release_requests_the_website_redeploy_from_publish(publish):
