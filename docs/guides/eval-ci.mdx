@@ -126,7 +126,7 @@ This writes `eval/results/baseline.json`. Commit this file to your repository.
 On subsequent runs, compare the current results against the saved baseline:
 
 ```bash
-gaia eval agent --compare eval/results/latest/scorecard.json
+gaia eval agent --compare eval/results/eval-20261021-141300/scorecard.json
 ```
 
 When only one path is provided, it's compared against `eval/results/baseline.json` automatically.
@@ -196,7 +196,7 @@ jobs:
 
           # Compare against committed baseline
           gaia eval agent \
-            --compare eval/results/latest/scorecard.json
+            --compare "$(ls -dt eval/results/eval-*/ | head -1)scorecard.json"
 
       - name: Upload results
         if: always()
