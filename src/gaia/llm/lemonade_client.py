@@ -6536,6 +6536,91 @@ class LemonadeClient:
         except requests.RequestException as exc:
             raise LemonadeClientError(f"Lemonade 3D request failed: {exc}") from exc
 
+    IMAGE_VARIATION_DEFAULT_MODEL = "Flux-2-Klein-4B"
+
+    @guard_inference()
+    def create_image_variation(
+        self,
+        image_path: Union[str, Path],
+        model: str = IMAGE_VARIATION_DEFAULT_MODEL,
+        size: Optional[str] = None,
+        n: int = 1,
+        timeout: int = 900,
+    ) -> Dict[str, Any]:
+        """Generate *n* variations of a PNG with ``POST /images/variations``.
+
+        Args:
+            image_path: Local PNG to vary. Lemonade's variations endpoint
+                accepts PNG only.
+            model: Image model, e.g. ``Flux-2-Klein-4B`` or ``SD-Turbo``.
+            size: Output ``WIDTHxHEIGHT``; Lemonade defaults to ``512x512``.
+            n: Number of variations, 1-10 (Lemonade rejects anything else).
+            timeout: Request timeout in seconds; CPU inference takes minutes.
+
+        Returns:
+            The server reply: ``{"data": [{"b64_json": ...}, ...]}``.
+
+        Raises:
+            LemonadeClientError: Bad arguments, a missing or non-PNG file, or a
+                failed request.
+        """
+        path = Path(image_path).expanduser()
+        if not path.is_file():
+            raise LemonadeClientError(f"Image file does not exist: {path}")
+        if path.suffix.lower() != ".png":
+            raise LemonadeClientError(
+                f"Image variations need a PNG, got '{path.name}'. Lemonade's "
+                "variations endpoint accepts PNG only."
+            )
+        if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 10:
+            raise LemonadeClientError(
+                f"Image variations need n between 1 and 10, got {n!r}."
+            )
+        if size is not None and not re.fullmatch(r"[1-9]\d*x[1-9]\d*", size):
+            raise LemonadeClientError(
+                f"Image size must be WIDTHxHEIGHT, e.g. 512x512, got {size!r}."
+            )
+
+        fields: Dict[str, Any] = {
+            "model": model,
+            "n": str(n),
+            "response_format": "b64_json",
+        }
+        if size is not None:
+            fields["size"] = size
+
+        url = f"{self.base_url}/images/variations"
+        self.log.info(f"Creating {n} image variation(s): model={model}, size={size}")
+        try:
+            with path.open("rb") as image_file:
+                response = requests.post(
+                    url,
+                    data=fields,
+                    files={"image": (path.name, image_file, "image/png")},
+                    headers=self._auth_headers(),
+                    timeout=(10, timeout),
+                )
+        except requests.RequestException as exc:
+            raise LemonadeClientError(
+                f"Lemonade image-variation request failed: {exc}"
+            ) from exc
+
+        if response.status_code == 401:
+            raise LemonadeAuthError(
+                "Lemonade returned 401 Unauthorized. Verify LEMONADE_API_KEY."
+            )
+        if response.status_code >= 400:
+            raise LemonadeClientError(
+                f"Lemonade image variation failed ({response.status_code}): "
+                f"{http_body_text(response)[:600]}"
+            )
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise LemonadeClientError(
+                "Lemonade returned a non-JSON reply for image variations."
+            ) from exc
+
     def list_sd_models(self) -> List[Dict[str, Any]]:
         """
         List available Stable Diffusion models from the server.

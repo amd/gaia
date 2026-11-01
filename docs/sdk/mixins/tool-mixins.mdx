@@ -220,6 +220,14 @@ which sends a local image to Lemonade's `/v1/3d/generations` endpoint and saves
 the returned GLB mesh. The selected TRELLIS model must already be downloaded;
 GAIA does not silently download it.
 
+To opt into image variations, initialize the mixin with
+`enable_variation_tools=True`. This adds
+`create_image_variation(image_path, model="Flux-2-Klein-4B", size=None, n=1)`,
+which sends a local PNG to Lemonade's `/v1/images/variations` endpoint (no
+prompt) and saves each of the `n` (1-10) results as its own PNG next to
+generated images. The source image must be inside the agent's allowed folders.
+The same call is available directly as `LemonadeClient.create_image_variation()`.
+
 **Supported Models:**
 - **SDXL-Turbo** (default) - Fast, 512x512, ~17s
 - **SD-Turbo** - Faster, 512x512, ~13s
