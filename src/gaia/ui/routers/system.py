@@ -267,20 +267,18 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     if force:
         payload["force"] = True
 
-    _set_download_progress(
-        model_name,
-        {
-            "state": "starting",
-            "model_name": model_name,
-            "percent": 0,
-            "file": None,
-            "file_index": 0,
-            "total_files": 0,
-            "downloaded_bytes": 0,
-            "total_bytes": 0,
-            "message": None,
-        },
-    )
+    starting = {
+        "state": "starting",
+        "model_name": model_name,
+        "percent": 0,
+        "file": None,
+        "file_index": 0,
+        "total_files": 0,
+        "downloaded_bytes": 0,
+        "total_bytes": 0,
+        "message": None,
+    }
+    _set_download_progress(model_name, starting)
     logger.info("Pull stream starting: %s (force=%s)", model_name, force)
 
     # Track files we've already finished so the running ``downloaded_bytes``
@@ -300,6 +298,11 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
 
     try:
         if runs_on_npu(model_name):
+            # A first install downloads a release and can take minutes.
+            _set_download_progress(
+                model_name,
+                {**starting, "message": "Getting the NPU backend ready…"},
+            )
             await asyncio.to_thread(_install_npu_backend, model_name)
         async with httpx.AsyncClient(timeout=client_timeout) as client:
             async with client.stream(

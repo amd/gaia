@@ -471,10 +471,10 @@ def test_the_settings_download_reports_a_missing_npu(monkeypatch):
     def refuse(self, model):
         raise LemonadeClientError(f"{model} needs an AMD Ryzen AI NPU and its driver.")
 
-    progress = {}
+    updates = []
     monkeypatch.setattr(LemonadeClient, "ensure_npu_backend", refuse)
     monkeypatch.setattr(
-        system, "_set_download_progress", lambda m, p: progress.update({m: p})
+        system, "_set_download_progress", lambda m, p: updates.append(p)
     )
 
     def no_pull(*a, **k):
@@ -493,8 +493,11 @@ def test_the_settings_download_reports_a_missing_npu(monkeypatch):
         await asyncio.sleep(0)
 
     asyncio.run(run())
-    assert progress["gemma4-it-e4b-FLM"]["state"] == "error"
-    assert "Ryzen AI NPU" in progress["gemma4-it-e4b-FLM"]["message"]
+    assert updates[-1]["state"] == "error"
+    assert "Ryzen AI NPU" in updates[-1]["message"]
+    # The install can take minutes, so the row says what it is waiting on.
+    assert updates[1]["state"] == "starting"
+    assert "NPU backend" in updates[1]["message"]
     # A sticky error would block the retry.
     assert evictions == ["gemma4-it-e4b-FLM"]
 
