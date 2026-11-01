@@ -9412,6 +9412,8 @@ def _handle_daemon_agents():
 
 
 def _handle_daemon_start_agent(args):
+    import hashlib
+
     import requests
 
     from gaia.daemon import client
@@ -9419,6 +9421,7 @@ def _handle_daemon_start_agent(args):
     from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
     from gaia.daemon.sidecars.spec import (
         repo_root_from_agent_dev_src_dir,
+        resolve_caller_binary_lock,
         resolve_caller_dev_src_dir,
         resolve_caller_mode,
     )
@@ -9436,6 +9439,14 @@ def _handle_daemon_start_agent(args):
         except DevSrcDirResolutionError as e:
             print(f"❌ {e}")
             sys.exit(1)
+    # User mode's mirror (#2596): the daemon compares this checkout's binary
+    # pin against its own instead of silently serving its own.
+    caller_lock = None
+    caller_lock_sha256 = None
+    if resolved_mode == "user":
+        caller_lock = resolve_caller_binary_lock(args.agent_id)
+        if caller_lock is not None:
+            caller_lock_sha256 = hashlib.sha256(caller_lock.read_bytes()).hexdigest()
 
     try:
         inst = client.start_or_attach(on_progress=_print_daemon_start_progress)
@@ -9446,6 +9457,9 @@ def _handle_daemon_start_agent(args):
     body_payload = {"mode": resolved_mode}
     if dev_src_dir is not None:
         body_payload["dev_src_dir"] = str(dev_src_dir)
+    if caller_lock_sha256 is not None:
+        body_payload["binary_lock_sha256"] = caller_lock_sha256
+        body_payload["binary_lock_path"] = str(caller_lock)
 
     try:
         # Read generously: a first-run ensure may lazily fetch the binary.
@@ -9497,6 +9511,17 @@ def _handle_daemon_start_agent(args):
                 f"❌ the daemon reported dev source '{reported}' but expected "
                 f"'{dev_src_dir}' — the running daemon predates this fix and "
                 f"silently ignored the dev-mode source check. {remedy}"
+            )
+            sys.exit(1)
+
+    if caller_lock_sha256 is not None:
+        if body.get("binary_lock_sha256") != caller_lock_sha256:
+            print(
+                f"❌ the daemon did not confirm it checked the binary pin in "
+                f"{caller_lock} — it predates this check, so the agent may be "
+                "running a different binary than this checkout pins. Restart "
+                "the daemon from this checkout's Python environment, or "
+                "upgrade it."
             )
             sys.exit(1)
 
