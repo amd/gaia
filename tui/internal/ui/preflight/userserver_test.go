@@ -41,7 +41,7 @@ func TestTheModelStepNeverOffersAModelTheUsersServerHas(t *testing.T) {
 	if row.State != StateFailed || !row.FirstRun || row.Fix != FixRunSetup {
 		t.Fatalf("want a first-run download step, got %+v", row)
 	}
-	if row.Step != "download the models (300 MB)" {
+	if row.Step != "choose and download the models (300 MB)" {
 		t.Errorf("step = %q; the 5.97 GB chat model is already on the server", row.Step)
 	}
 	if strings.Contains(row.Line, "Gemma") || !strings.Contains(row.Line, "user.embeddinggemma-300m-GGUF") {
@@ -64,7 +64,7 @@ func TestTheModelStepSumsOnlyMissingModels(t *testing.T) {
 
 	row := modelRow(localRunner{})
 
-	if row.Step != "download the models (300 MB)" {
+	if row.Step != "choose and download the models (300 MB)" {
 		t.Errorf("step = %q", row.Step)
 	}
 	if !strings.Contains(row.Remedy.Action, "starts the local server") {

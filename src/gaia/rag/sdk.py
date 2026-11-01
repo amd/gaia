@@ -50,9 +50,11 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
+    resident_vision_model,
+    resolve_default_vision_model,
 )
 from gaia.logger import get_logger
-from gaia.rag.arabic_text import normalize_arabic_pdf_text
+from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
 from gaia.security import PathValidator
 from gaia.utils.document_formats import (
     UNSUPPORTED_DOCUMENTS,
@@ -141,6 +143,8 @@ class ImageExtractionError(ValueError):
 # Each page is one VLM call (seconds to tens of seconds), so a fax-sized TIFF is
 # fine and a 500-page archive is a mistake to stop early.
 MAX_IMAGE_PAGES = 50
+# Past this much text a page's images are logos and photos, not its content.
+IMAGE_PAGE_TEXT_LIMIT = 200
 
 
 def _flatten_for_vlm(img):
@@ -372,6 +376,20 @@ def _script_of(ch: str) -> Optional[str]:
     return None
 
 
+def text_scripts(text: str) -> List[str]:
+    """Writing systems that make up at least 10% of ``text``'s letters, largest first."""
+    counts: Dict[str, int] = {}
+    for ch in text:
+        script = _script_of(ch)
+        if script:
+            counts[script] = counts.get(script, 0) + 1
+    total = sum(counts.values())
+    return sorted(
+        (name for name, n in counts.items() if n / total >= 0.1),
+        key=lambda name: -counts[name],
+    )
+
+
 # Files the RAG cache writes: signed chunk caches, their sidecar signatures,
 # saved vectors, and extracted-text markdown. clear_cache() deletes nothing else.
 _CACHE_OWNED_FILE = re.compile(
@@ -468,7 +486,7 @@ class RAGConfig:
         False  # Enable LLM-based intelligent chunking (requires LLM client)
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
-    vlm_model: str = DEFAULT_MODEL_NAME
+    vlm_model: str = field(default_factory=resolve_default_vision_model)
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
     # Security settings
@@ -868,7 +886,8 @@ class RAGSDK:
         """``<path hash>_<content hash>``: the shared stem of a document's cache files.
 
         The content hash (not mtime/size) makes same-size edits and sub-second
-        rewrites invalidate; the path hash keeps identical files apart. An
+        rewrites invalidate; the path hash names each path's own entry, though
+        :meth:`_cache_of_same_bytes` reuses another path's for identical bytes. An
         unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
         then fails at extraction.
 
@@ -905,21 +924,7 @@ class RAGSDK:
         cached = self._scripts_cache.get(file_path)
         if cached and cached[0] == key:
             return list(cached[1])
-        counts: Dict[str, int] = {}
-        for chunk in chunks:
-            for ch in chunk:
-                script = _script_of(ch)
-                if script:
-                    counts[script] = counts.get(script, 0) + 1
-        total = sum(counts.values())
-        scripts = (
-            sorted(
-                (name for name, n in counts.items() if n / total >= 0.1),
-                key=lambda name: -counts[name],
-            )
-            if total
-            else []
-        )
+        scripts = text_scripts("".join(chunks))
         self._scripts_cache[file_path] = (key, scripts)
         return list(scripts)
 
@@ -934,6 +939,25 @@ class RAGSDK:
         return os.path.join(
             self.config.cache_dir, f"{key}_{self._chunking_fingerprint()}.json"
         )
+
+    def _cache_of_same_bytes(self, cache_path: str, content_key: str) -> str:
+        """``cache_path``, or the entry another path of these exact bytes left.
+
+        The library indexes an upload's temp copy and chats index the original,
+        so without this a chat reads every page again, images included.
+        """
+        if os.path.exists(cache_path):
+            return cache_path
+        content_hash = content_key.rsplit("_", 1)[-1]
+        if content_hash == "notfound":
+            return cache_path
+        suffix = f"_{content_hash}_{self._chunking_fingerprint()}.json"
+        try:
+            names = sorted(os.listdir(self.config.cache_dir))
+        except FileNotFoundError:
+            return cache_path
+        match = next((name for name in names if name.endswith(suffix)), None)
+        return os.path.join(self.config.cache_dir, match) if match else cache_path
 
     def _extracted_markdown_path(self, content_key: str) -> str:
         """Extracted text depends on content alone, so no chunking fingerprint."""
@@ -1309,6 +1333,7 @@ class RAGSDK:
             - num_pages: int
             - vlm_pages: int (number of pages enhanced with VLM)
             - total_images: int (total images processed)
+            - image_pages_skipped: int (pages whose images were left unread)
             - pdf_status: str ("readable", "degraded", "encrypted",
               "corrupted", "empty"). "degraded" means the document indexed but
               at least one page may be incomplete — see degraded_pages.
@@ -1379,13 +1404,17 @@ class RAGSDK:
             try:
                 from gaia.llm import VLMClient
                 from gaia.rag.pdf_utils import (
+                    PdfImageExtractionError,
                     PdfPageInspectionError,
                     count_images_in_page,
-                    extract_images_from_page_pymupdf,
+                    extract_images_from_page_pdfium,
                 )
 
                 vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                    vlm_model=resident_vision_model(
+                        self.config.vlm_model, self.config.base_url
+                    ),
+                    base_url=self.config.base_url,
                 )
                 vlm_available = self.config.use_vlm and vlm.check_availability()
 
@@ -1421,6 +1450,7 @@ class RAGSDK:
             pages_data = []
             vlm_pages_count = 0
             total_images_processed = 0
+            image_pages_skipped = 0
             degraded_pages = []
             page_warnings = {}
 
@@ -1429,7 +1459,7 @@ class RAGSDK:
                 page_start = time_module.time()
 
                 # Step 1: Extract text with pypdf
-                pypdf_text = normalize_arabic_pdf_text(page.extract_text() or "")
+                pypdf_text = normalize_arabic_pdf_text(extract_pdf_page_text(page))
 
                 # Step 2: Check for images
                 has_imgs = False
@@ -1440,7 +1470,7 @@ class RAGSDK:
                         has_imgs, num_imgs = count_images_in_page(page, page_num=i)
                     except PdfPageInspectionError as e:
                         # Unknown, not "none". The inventory comes from pypdf
-                        # and the extraction from PyMuPDF, so a page pypdf
+                        # and the extraction from PDFium, so a page pypdf
                         # cannot inspect may still extract — try it rather than
                         # indexing the page as blank (#3551).
                         page_warning = str(e)
@@ -1452,9 +1482,19 @@ class RAGSDK:
 
                 # Step 3: Extract from images if present
                 image_texts = []
-                if has_imgs and vlm_available:
+                read_images = len(pypdf_text.strip()) < IMAGE_PAGE_TEXT_LIMIT
+                if has_imgs and vlm_available and not read_images:
+                    image_pages_skipped += 1
+                elif has_imgs and vlm_available:
                     try:
-                        images = extract_images_from_page_pymupdf(pdf_path, page_num=i)
+                        try:
+                            images = extract_images_from_page_pdfium(
+                                pdf_path, page_num=i
+                            )
+                        except PdfImageExtractionError as e:
+                            page_warning = f"image extraction failed on page {i}: {e}"
+                            self.log.warning(page_warning)
+                            images = e.images
                         if images:
                             image_texts = vlm.extract_from_page_images(
                                 images, page_num=i
@@ -1539,7 +1579,7 @@ class RAGSDK:
                 print(f"{'='*60}\n")
 
             self.log.info(
-                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages)"
+                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages, {image_pages_skipped} text pages' images left unread)"
             )
 
             # If pypdf parsed the file but every page came back blank, surface
@@ -1571,6 +1611,7 @@ class RAGSDK:
                 "num_pages": total_pages,
                 "vlm_pages": vlm_pages_count,
                 "total_images": total_images_processed,
+                "image_pages_skipped": image_pages_skipped,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
                 "pdf_status": "degraded" if degraded_pages else "readable",
@@ -1775,7 +1816,10 @@ class RAGSDK:
                 )
 
                 vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                    vlm_model=resident_vision_model(
+                        self.config.vlm_model, self.config.base_url
+                    ),
+                    base_url=self.config.base_url,
                 )
                 vlm_available = self.config.use_vlm and vlm.check_availability()
 
@@ -2455,7 +2499,11 @@ These positions indicate where to split the text."""
         )
 
         file_name = Path(image_path).name
-        model = self.config.vlm_model
+        model = (
+            resident_vision_model(self.config.vlm_model, self.config.base_url)
+            if self.config.use_vlm
+            else self.config.vlm_model
+        )
 
         if not self.config.use_vlm:
             raise ImageExtractionError(
@@ -3669,7 +3717,9 @@ These positions indicate where to split the text."""
             content_key = self._content_key(file_path, raise_locked=True)
         except PermissionError as e:
             return self._document_locked(stats, file_path, e)
-        cache_path = self._get_cache_path(file_path, content_key)
+        cache_path = self._cache_of_same_bytes(
+            self._get_cache_path(file_path, content_key), content_key
+        )
         md_cache_path = self._extracted_markdown_path(content_key)
 
         if os.path.exists(cache_path):
