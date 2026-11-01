@@ -8,6 +8,7 @@ import * as api from '../../../services/api';
 import type { GpuMemoryStatus } from '../../../types';
 import { GpuMemoryPanel, gpuGbAtSetting } from '../GpuMemoryPanel';
 import { gpuStatus } from './fixtures';
+import coldStrixHalo from './coldStrixHalo.json';
 
 vi.mock('../../../services/api', async (importOriginal) => {
     const real = await importOriginal<typeof api>();
@@ -245,5 +246,20 @@ describe('GPU memory: the value to enter', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Show me how' }));
         expect(await screen.findByText(/can’t give the GPU more memory/)).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'I’ve done this' })).not.toBeInTheDocument();
+    });
+});
+
+describe('GPU memory: the real backend payload', () => {
+    // /api/gpu-memory as the backend returns it today, read from a real run.
+    const real = () => ({ ...(coldStrixHalo.gpu as unknown as GpuMemoryStatus), method: 'guided' as const });
+
+    it('offers the steps when the backend does not send guided_value', async () => {
+        const status = real();
+        expect('guided_value' in status ? status.guided_value : undefined).not.toBeNull();
+        mocked.getGpuMemory.mockResolvedValue(status);
+        render(<Harness initial={status} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Show me how' }));
+        expect(await screen.findByText(status.guided_steps![0])).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'I’ve done this' })).toBeInTheDocument();
     });
 });

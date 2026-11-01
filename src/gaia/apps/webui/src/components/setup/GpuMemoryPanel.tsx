@@ -145,7 +145,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
     const [target, setTarget] = useState<number | null>(status.recommended_setting_gb ?? presets[0]?.setting_gb ?? null);
     const [guided, setGuided] = useState(false);
     const [guidedSteps, setGuidedSteps] = useState<string[] | null>(null);
-    const [guidedValue, setGuidedValue] = useState<string | null>(null);
+    const [guidedValue, setGuidedValue] = useState<string | null | undefined>(undefined);
     const [sheet, setSheet] = useState<'apply' | 'revert' | null>(null);
     const [busy, setBusy] = useState<'apply' | 'revert' | 'steps' | 'done' | 'keep' | null>(null);
     const [outcome, setOutcome] = useState<Outcome>(null);
@@ -155,8 +155,8 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
     const unlocks = (preset?.unlocks ?? []).slice(0, 2).map((id) => names[id] ?? id);
     const pending = status.pending ?? null;
     const canApply = status.method === 'apply';
-    // A null guided_value: nothing this PC can give, so no steps to show.
-    const canGuide = status.guided_value != null;
+    // guided_value null: nothing this PC can give, so no steps to show.
+    const canGuide = status.guided_value !== null;
 
     const showSteps = useCallback(async () => {
         setGuided(true);
@@ -165,10 +165,10 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
         setOutcome(null);
         try {
             const read = await api.getGpuMemory(target ?? undefined);
-            setGuidedValue(read.guided_value ?? null);
-            setGuidedSteps(read.guided_value != null ? read.guided_steps ?? [] : []);
+            setGuidedValue(read.guided_value);
+            setGuidedSteps(read.guided_value !== null ? read.guided_steps ?? [] : []);
         } catch (err) {
-            setGuidedValue(null);
+            setGuidedValue(undefined);
             setGuidedSteps([]);
             setOutcome({ kind: 'error', message: errorMessage(err) });
         } finally {
@@ -311,7 +311,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                     {preset && <p className="setup-hint" id={stepsId}>{t('gpu.guided.lede', { gb: formatSize(preset.gpu_gb) })}</p>}
                     {guidedSteps === null ? (
                         <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('gpu.guided.loading')}</p>
-                    ) : guidedValue == null ? (
+                    ) : guidedValue === null ? (
                         <p className="setup-hint">{t('gpu.noPresets')}</p>
                     ) : (
                         <ol className="gpu-steps" aria-labelledby={stepsId}>
@@ -332,7 +332,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                         </ol>
                     )}
                     <div className="setup-row">
-                        {!canApply && guidedValue != null && (
+                        {!canApply && guidedValue !== null && (
                             <button type="button" className="btn-primary" onClick={() => void doneByHand()} disabled={busy !== null || target == null}>
                                 {busy === 'done' && <Loader2 size={13} className="spin" aria-hidden="true" />} {t('gpu.guided.done')}
                             </button>
