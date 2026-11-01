@@ -320,9 +320,7 @@ std::string LemonadeClient::chatCompletions(const json& requestBody, int timeout
                         "Server context window too small: prompt is " +
                         std::to_string(nPrompt) + " tokens but server n_ctx=" +
                         std::to_string(nCtx) + ".\n" +
-                        "  Restart Lemonade with a larger context:\n" +
-                        "    set LEMONADE_CTX_SIZE=32768 in the environment before starting the server\n" +
-                        "  or via the helper script:\n" +
+                        "  Reload the model with a larger context via the helper script:\n" +
                         "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
                 } else if (!msg.empty()) {
                     errMsg = msg;
@@ -399,9 +397,7 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
                             "Server context window too small: prompt is " +
                             std::to_string(nPrompt) + " tokens but server n_ctx=" +
                             std::to_string(nCtx) + ".\n" +
-                            "  Restart Lemonade with a larger context:\n" +
-                            "    set LEMONADE_CTX_SIZE=32768 in the environment before starting the server\n" +
-                            "  or via the helper script:\n" +
+                            "  Reload the model with a larger context via the helper script:\n" +
                             "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
                     } else if (!msg.empty()) {
                         errMsg = msg;
