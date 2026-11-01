@@ -237,7 +237,7 @@ the allowlist, and nothing could write its output anywhere.
 |------|---------|--------------|
 | Shell operator block (`>`, `>>`, `<`, `&`, `` ` ``, `$()`, newline) | refused before parsing | parsed and executed |
 | Confirmation prompts | asked every call | pre-approved (unchanged behaviour) |
-| Per-binary read-only policy | `ALLOWED_COMMANDS` + the git / PowerShell / `find` / `sort` / `uniq` / `date` / `sysctl` / `hostname` / `ipconfig` / `file` / `less` sub-guards | replaced by `DEVELOPER_COMMANDS` |
+| Per-binary read-only policy | `ALLOWED_COMMANDS` + the git / PowerShell / `find` / `sort` / `uniq` / `date` / `sysctl` / `hostname` / `ipconfig` / `file` / `less` / `more` / `arch` sub-guards | replaced by `DEVELOPER_COMMANDS` |
 | Shell rate limit (10/min, 3/10s) | paced — a command over the cap waits its turn | lifted |
 
 Pipes and chaining (`\|`, `&&`, `\|\|`, `;`) were never blocked, or have since

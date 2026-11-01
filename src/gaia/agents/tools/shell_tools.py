@@ -331,29 +331,68 @@ def _ipconfig_changes_network(parts: list) -> Optional[str]:
     return None
 
 
+#: ``file`` short options whose value is the rest of the cluster or the next word.
+_FILE_VALUE_LETTERS = frozenset("eFfmP")
+
+
 def _file_compiles_magic(parts: list) -> Optional[str]:
     """Why ``file`` *parts* writes a compiled magic file, or None for a read."""
     for part in parts[1:]:
         if part.startswith("--"):
             if len(part.split("=", 1)[0]) > 3 and _long_flag_matches(part, "--compile"):
                 return "file --compile writes a compiled magic file"
-        elif part.startswith("-") and "C" in re.match(r"-[a-zA-Z]*", part).group(0):
-            return "file -C writes a compiled magic file"
+        elif part.startswith("-"):
+            for letter in part[1:]:
+                if letter == "C":
+                    return "file -C writes a compiled magic file"
+                if letter in _FILE_VALUE_LETTERS:
+                    break
     return None
 
 
+#: ``less`` short options whose value is the rest of the cluster or the next word.
+_LESS_VALUE_LETTERS = frozenset('pPtTD"')
+#: ``less`` long options that write a log file or load key bindings, which can
+#: set LESSOPEN and so run a program.
+_LESS_LONG_WRITES_OR_RUNS = (
+    "--log-file",
+    "--lesskey-file",
+    "--lesskey-src",
+    "--lesskey-content",
+)
+#: ``+N``, ``+G`` and ``+Ng`` only move to a line.
+_LESS_GOTO_LINE = re.compile(r"\+\d*[gG]?")
+
+
 def _less_writes_or_runs(parts: list) -> Optional[str]:
-    """Why ``less`` *parts* writes a log file or runs a command, or None."""
+    """Why ``less``/``more`` *parts* writes a log file or runs a command, or None.
+
+    ``more`` is checked too because on macOS it is ``less``.
+    """
     for part in parts[1:]:
         if part.startswith("--"):
-            if _long_flag_matches(part.lower(), "--log-file"):
-                return f"less '{part}' writes a log file"
+            lowered = part.lower()
+            if any(_long_flag_matches(lowered, f) for f in _LESS_LONG_WRITES_OR_RUNS):
+                return f"'{part}' writes a log file or loads key bindings"
         elif part.startswith("-") and part != "-":
-            if set(re.match(r"-[a-zA-Z]*", part).group(0)) & {"o", "O"}:
-                return f"less '{part}' writes a log file"
-        elif part.startswith("+"):
+            for letter in part[1:]:
+                if letter in "oOk":
+                    return f"'{part}' writes a log file or loads key bindings"
+                if letter in _LESS_VALUE_LETTERS:
+                    break
+        elif part.startswith("+") and not _LESS_GOTO_LINE.fullmatch(part):
             # A +command can be '!' or '|', which runs a shell command.
-            return f"less '{part}' runs a less command at startup"
+            return f"'{part}' runs a pager command at startup"
+    return None
+
+
+def _arch_runs_program(parts: list) -> Optional[str]:
+    """Why ``arch`` *parts* runs another program, or None for bare ``arch``.
+
+    On macOS ``arch -arm64 <cmd>`` runs *cmd*; only the bare read is unasked.
+    """
+    if len(parts) > 1:
+        return f"arch '{parts[1]}' can run another program"
     return None
 
 
@@ -366,6 +405,8 @@ STATE_CHANGING_FLAG_GUARDS = {
     "ipconfig": _ipconfig_changes_network,
     "file": _file_compiles_magic,
     "less": _less_writes_or_runs,
+    "more": _less_writes_or_runs,
+    "arch": _arch_runs_program,
 }
 
 # How a blocked command is blocked. Mirrors the three tiers in
@@ -4499,6 +4540,18 @@ class ShellToolsMixin:
                 part_lower = part.lower()
                 flag = part_lower.split("=", 1)[0]
                 is_output = False
+                if len(flag) > 2 and "--compress-program".startswith(flag):
+                    # --compress-program=PROG runs PROG on sort's temp files.
+                    return {
+                        "status": "error",
+                        "tier": TIER_CONFIRM,
+                        "error": (
+                            f"sort '{part}' runs another program, which is not "
+                            "allowed under the read-only command policy."
+                        ),
+                        "has_errors": True,
+                        "hint": "Drop --compress-program and read sort's result from stdout.",
+                    }
                 if len(flag) > 1 and "/output".startswith(flag):
                     # Windows sort: /o, /out, /output.
                     is_output = True
