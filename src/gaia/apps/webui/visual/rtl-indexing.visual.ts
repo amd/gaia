@@ -102,6 +102,15 @@ async function shot(page: Page, name: string): Promise<void> {
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png` });
 }
 
+/** Distinct inline-end edges of the Cancel buttons; one means they line up. */
+const cancelEdges = (page: Page): Promise<number[]> =>
+    page.locator('.doc-indexing-status .btn-cancel').evaluateAll((buttons) => [
+        ...new Set(buttons.map((b) => {
+            const box = b.getBoundingClientRect();
+            return Math.round(getComputedStyle(b).direction === 'rtl' ? box.left : box.right);
+        })),
+    ]);
+
 /** Whatever sticks out of the window, or scrolls the page sideways. */
 const overflow = (page: Page): Promise<string[]> =>
     page.evaluate(() => {
@@ -135,6 +144,7 @@ for (const locale of ['en', 'ar']) {
             await expect(page.locator('.index-indicator')).toHaveCount(0);
             await shot(page, `library-${locale}-${theme}`);
             expect(await overflow(page)).toEqual([]);
+            await expect.poll(() => cancelEdges(page)).toHaveLength(1);
         });
     }
 

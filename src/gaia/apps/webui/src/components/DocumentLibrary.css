@@ -193,10 +193,11 @@
     align-items: center;
     gap: 4px;
 }
+.doc-indexing-status .btn-cancel { margin-inline-start: auto; }
 
 /* Failed-doc status: badge + retry need breathing room between them */
 .doc-indexing-status {
-    display: inline-flex;
+    display: flex;
     align-items: center;
     gap: 8px;
 }
@@ -258,8 +259,5 @@
 }
 .doc-folder-notice > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
-/* The progress bar takes the row's width; the Cancel button stays beside it. */
-.doc-indexing-status .index-progress {
-    flex: 1 1 220px;
-    max-inline-size: 320px;
-}
+/* The progress bar takes the row's width; the Cancel button stays at its end. */
+.doc-indexing-status .index-progress { flex: 1 1 220px; }
