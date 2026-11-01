@@ -35,14 +35,45 @@ gaia init --profile npu
 This will:
 1. Verify NPU hardware is detected
 2. Install the FLM backend (`flm:npu`)
-3. Download the NPU-optimized models (`gemma4-it-e2b-FLM` for chat, `embed-gemma-300m-FLM` for documents and memory)
+3. Download `gemma4-it-e4b-FLM` (see [Which NPU model](#which-npu-model)) and `embed-gemma-300m-FLM` for documents and memory
 4. Install the [GAIA agent](/guides/gaia) if it is missing, the same agent a bare `gaia init` installs
 5. Run a verification test and make NPU the default device
 
 The Agent UI and terminal UI then have an agent to talk to. If GAIA's download server can't be
 reached, setup still downloads the models, then reports itself incomplete and exits
 `1` — run `gaia init --profile npu` again once the network is back. To return to the GPU, run
-`gaia config set default_device gpu`.
+`gaia config set default_model <id>` with a GPU model; picking one in the Agent UI or terminal
+UI model list changes only the model those open on.
+
+## Which NPU model
+
+You don't need the NPU profile to use the NPU. On any PC with a Ryzen AI NPU, a plain
+`gaia init` installs Lemonade's NPU backend, and `gemma4-it-e4b-FLM` then appears in the
+Agent UI and terminal UI model lists, ready to download on first use. The GPU model
+stays the default because it answers faster. Pick the NPU model in the model list and it
+stays picked: the Agent UI starts on it the next time it opens. `gaia init --profile npu`
+makes it the default from the start.
+
+`gemma4-it-e4b-FLM` is the same Gemma 4 E4B that GAIA runs on the GPU
+(`Gemma-4-E4B-it-GGUF`), built for the NPU by FastFlowLM. It is a 9.1 GB download, needs
+about 11 GB of system RAM (installed RAM less any GPU carve-out), sees images, calls
+tools natively, and loads with a 64K context window. The GPU stays free.
+
+Measured on a Ryzen AI MAX+ 395 (FLM v1.0.7, Lemonade 2026.43.3), a 31K-token prompt
+processes at 472 tokens/s and generates at 7 tokens/s, with a first answer in 67 s. In
+GAIA's agent evals on the same PC it scored close to its GPU twin (core conversation
+12/15, tool selection 3/7 against the GPU's 4/7).
+
+On the NPU, as on the GPU, Gemma runs with a [smaller tool set](/guides/gaia#smaller-models):
+no data scratchpad, email, image generation or skill installs.
+
+GAIA offers only NPU models whose agent evals have run. Qwen3.6's NPU build
+(`qwen3.6-moe-35b-a3b-FLM`) was tested and left out: its multi-step turns took several
+minutes each.
+
+The NPU trades speed for power: expect long first answers in a fresh chat. For the
+fastest replies, stay on the GPU (`gaia init`). The model lists show the NPU model
+only on a PC with an NPU whose RAM holds it.
 
 ## Usage
 
@@ -65,7 +96,7 @@ gaia prompt "Hello" --device npu
 ### Agent UI
 
 1. Launch with `gaia chat --ui`
-2. The Agent UI uses your default device. After `gaia init --profile npu` that is the NPU; switch with `gaia config set default_device gpu` (or `npu`)
+2. The Agent UI starts on the model you last picked. After `gaia init --profile npu` that is the NPU model; pick a GPU model in the model list to go back
 
 ### Evaluation
 
@@ -88,7 +119,7 @@ gaia eval agent --compare eval/results/run1/scorecard.json eval/results/run2/sco
 |--------|-------|---------|----------|
 | **GPU** (default) | Gemma-4-E4B-it-GGUF | llamacpp:vulkan | General use, best throughput |
 | **CPU** | Gemma-4-E4B-it-GGUF | llamacpp:cpu | No GPU available (slower) |
-| **NPU** | gemma4-it-e2b-FLM | flm:npu | Power efficiency, background tasks |
+| **NPU** | gemma4-it-e4b-FLM | flm:npu | Power efficiency, leaving the GPU free |
 
 ### Fallback Behavior
 
@@ -122,7 +153,7 @@ lemonade backends install flm:npu
 ### Model not available
 
 ```
-Error pulling model: No built-in model with the name 'gemma4-it-e2b-FLM' is registered.
+Error pulling model: No built-in model with the name 'gemma4-it-e4b-FLM' is registered.
 ```
 
 The FLM backend is missing, not the model. Lemonade discovers `*-FLM` models
@@ -131,7 +162,7 @@ exist to pull. Install the backend first, then pull by name:
 
 ```bash
 lemonade backends install flm:npu
-lemonade pull gemma4-it-e2b-FLM
+lemonade pull gemma4-it-e4b-FLM
 ```
 
 <Warning>

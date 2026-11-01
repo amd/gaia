@@ -432,6 +432,155 @@ def test_prepared_hub_artifact_sha256_matches_manifest(prepared_hub):
         assert len(payload) == artifact["size_bytes"]
 
 
+def _assert_one_whole_hub(hub_dir: Path) -> str:
+    """The hub is complete and every bundle in it came from ONE run.
+
+    Returns the key id that signed it.
+    """
+    index = json.loads((hub_dir / "index.json").read_text(encoding="utf-8"))
+    assert {entry["id"] for entry in index["agents"]} == HUB_CATALOG
+    signers = set()
+    for name in HUB_CATALOG:
+        manifest = json.loads(
+            (hub_dir / "skills" / name / "manifest.json").read_text(encoding="utf-8")
+        )
+        version = manifest["latest_version"]
+        artifact = manifest["versions"][version]["artifact"]
+        payload = (hub_dir / artifact["path"]).read_bytes()
+        assert hashlib.sha256(payload).hexdigest() == artifact["sha256"], name
+        assert (hub_dir / "skills" / name / version / "SKILL.md").is_file()
+        with zipfile.ZipFile(hub_dir / artifact["path"]) as bundle:
+            if "SIGNATURE.json" in bundle.namelist():
+                signers.add(json.loads(bundle.read("SIGNATURE.json"))["key_id"])
+    assert len(signers) == 1, f"bundles from several runs were mixed: {signers}"
+    return signers.pop()
+
+
+def _no_swap_leftovers(parent: Path, out_name: str) -> list[str]:
+    return sorted(
+        p.name
+        for p in parent.iterdir()
+        if p.name.startswith(f"{out_name}.build-")
+        or p.name.startswith(f"{out_name}.old-")
+    )
+
+
+def test_concurrent_prepares_from_processes_each_publish_a_whole_hub(tmp_path):
+    """pytest-xdist workers staging at once used to die with FileExistsError."""
+    hub_dir = tmp_path / "hub"
+    hub_dir.mkdir()
+    (hub_dir / "stale.txt").write_text("from an earlier run")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (str(FIXTURES.parents[2] / "src"), env.get("PYTHONPATH", "")) if p
+    )
+    runs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(FIXTURES / "prepare_fixture_hub.py"),
+                "--skills-root",
+                str(tmp_path / f"skills-{i}"),
+                "--out",
+                str(hub_dir),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+        )
+        for i in range(6)
+    ]
+    outputs = [run.communicate(timeout=300)[0] for run in runs]
+
+    for run, output in zip(runs, outputs):
+        assert run.returncode == 0, output
+    signer = _assert_one_whole_hub(hub_dir)
+    assert not (hub_dir / "stale.txt").exists()
+    trusted = set()
+    for i in range(6):
+        trust_file = tmp_path / f"skills-{i}" / "trusted-keys.json"
+        trust = json.loads(trust_file.read_text(encoding="utf-8"))
+        trusted |= {k["key_id"] for k in trust["keys"]}
+    assert signer in trusted
+    assert _no_swap_leftovers(tmp_path, "hub") == []
+
+
+def test_concurrent_prepares_racing_the_swap_each_publish_a_whole_hub(
+    tmp_path, monkeypatch
+):
+    """Every run reaches the swap at the same instant; none may fail or tear."""
+    module = _fixtures_import("prepare_fixture_hub")
+    runs = 6
+    at_swap = threading.Barrier(runs, timeout=120)
+    publish = module._publish
+
+    def racing_publish(build, out_dir):
+        at_swap.wait()
+        publish(build, out_dir)
+
+    monkeypatch.setattr(module, "_publish", racing_publish)
+    hub_dir = tmp_path / "hub"
+    results: dict[int, object] = {}
+
+    def run(i: int) -> None:
+        try:
+            results[i] = module.prepare(
+                tmp_path / f"skills-{i}",
+                hub_dir,
+                frozenset({"experimental-notes"}),
+                tampered=frozenset({"tampered-notes"}),
+            )
+        except BaseException as e:  # reported by the assert below
+            results[i] = e
+
+    threads = [threading.Thread(target=run, args=(i,)) for i in range(runs)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=300)
+
+    failures = {i: r for i, r in results.items() if isinstance(r, BaseException)}
+    assert not failures, failures
+    assert len(results) == runs
+    signer = _assert_one_whole_hub(hub_dir)
+    run_keys = {r["github-triage"]["key_id"] for r in results.values()}
+    assert signer in run_keys
+    assert _no_swap_leftovers(tmp_path, "hub") == []
+
+
+def test_a_failed_prepare_leaves_the_earlier_hub_whole(tmp_path, monkeypatch):
+    """A run that dies mid-build must not leave a partial hub that looks ready."""
+    module = _fixtures_import("prepare_fixture_hub")
+    hub_dir = tmp_path / "hub"
+    first = module.prepare(
+        tmp_path / "skills",
+        hub_dir,
+        frozenset({"experimental-notes"}),
+        tampered=frozenset({"tampered-notes"}),
+    )
+    zips = []
+    zip_dir = module._zip_dir
+
+    def dies_on_the_third_bundle(source_dir, destination):
+        zips.append(destination)
+        if len(zips) == 3:
+            raise OSError("disk full")
+        return zip_dir(source_dir, destination)
+
+    monkeypatch.setattr(module, "_zip_dir", dies_on_the_third_bundle)
+    with pytest.raises(OSError, match="disk full"):
+        module.prepare(
+            tmp_path / "skills",
+            hub_dir,
+            frozenset({"experimental-notes"}),
+            tampered=frozenset({"tampered-notes"}),
+        )
+
+    assert _assert_one_whole_hub(hub_dir) == first["github-triage"]["key_id"]
+    assert _no_swap_leftovers(tmp_path, "hub") == []
+
+
 @pytest.mark.allow_network  # loopback socket only (ephemeral port, never 4001)
 def test_signed_rss_digest_installs_cleanly_and_experimental_notes_refuses(
     prepared_hub, monkeypatch
