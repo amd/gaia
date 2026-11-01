@@ -45,15 +45,15 @@ An agent only sees the Git tools after you both **grant** it and **activate** th
 connector for it (activation defaults to OFF):
 
 ```bash
-gaia connectors grants grant mcp-git builtin:chat --scopes "*"
-gaia connectors activations activate mcp-git builtin:chat
+gaia connectors grants grant mcp-git installed:gaia --scopes "*"
+gaia connectors activations activate mcp-git installed:gaia
 ```
 
 (In the UI: the tile's **Per-agent** toggle flips both at once.) See the
 [connections security model](/security/connections) for why visibility and
 credential access are gated separately.
 
-Then ask the agent, for example: *"What changed in `C:\work\myrepo` since the last tag?"*
+Then ask the agent, for example: *"What changed in `~/work/myrepo` since the last tag?"*
 
 <Warning>
   `git_commit` and `git_add` change your repository. Grant only the agents you trust
@@ -74,7 +74,7 @@ path to the repository root (the folder that contains `.git`).
 
 ## Revoking access
 
-- **Per agent:** `gaia connectors grants revoke mcp-git builtin:chat`.
+- **Per agent:** `gaia connectors grants revoke mcp-git installed:gaia`.
 - **Entirely:** Settings → Connectors → Git → **Disconnect**, or
   `gaia connectors disconnect mcp-git`. The entry is dropped from `mcp_servers.json`.
 

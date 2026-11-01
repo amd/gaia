@@ -48,8 +48,8 @@ gaia connectors configure mcp-memory
 ## Step 2 — Grant and activate it for an agent
 
 ```bash
-gaia connectors grants grant mcp-memory builtin:chat --scopes "*"
-gaia connectors activations activate mcp-memory builtin:chat
+gaia connectors grants grant mcp-memory installed:gaia --scopes "*"
+gaia connectors activations activate mcp-memory installed:gaia
 ```
 
 (In the UI: the tile's **Per-agent** toggle flips both at once.) Activation defaults to
@@ -76,7 +76,7 @@ gaia connectors activations list mcp-memory
 
 ## Revoking access
 
-- **Per agent:** `gaia connectors grants revoke mcp-memory builtin:chat`.
+- **Per agent:** `gaia connectors grants revoke mcp-memory installed:gaia`.
 - **Entirely:** Settings → Connectors → Memory → **Disconnect**, or
   `gaia connectors disconnect mcp-memory`.
 
