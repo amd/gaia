@@ -346,7 +346,8 @@ def _take(pattern: str, s: str):
 def _reject_dates_and_one_offs(s: str) -> None:
     """Reject calendar dates and one-time phrasing: every schedule repeats."""
     one_time = (
-        "One-time tasks aren't supported yet — a schedule repeats. " + _RECURRING_HINT
+        "A schedule here repeats. To run a prompt once, use "
+        "'gaia schedule add --at' in a terminal. " + _RECURRING_HINT
     )
     for pattern, month_group, day_group in (
         (rf"\b({_MONTH_RE})\.? (\d{{1,2}})(?:st|nd|rd|th)?\b", 1, 2),
@@ -360,8 +361,8 @@ def _reject_dates_and_one_offs(s: str) -> None:
             if not 1 <= day <= calendar.monthrange(2024, month)[1]:
                 raise _ScheduleInputError(
                     f"{_MONTH_DISPLAY[month]} {day} isn't a date. "
-                    "One-time tasks aren't supported yet either — a schedule "
-                    "repeats. " + _RECURRING_HINT
+                    "A schedule here repeats, too. To run a prompt once, use "
+                    "'gaia schedule add --at' in a terminal. " + _RECURRING_HINT
                 )
             raise _ScheduleInputError(one_time)
     if re.search(r"\b(?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d{4}-\d{1,2}-\d{1,2})\b", s):

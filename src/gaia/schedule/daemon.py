@@ -3,8 +3,9 @@
 
 """Long-running scheduler daemon.
 
-Reads the schedule store, arms an APScheduler cron trigger per enabled schedule,
-and blocks until interrupted. Each trigger fires :func:`runner.fire`.
+Reads the schedule store, arms an APScheduler cron trigger per enabled
+schedule (or a date trigger per pending one-time schedule), and blocks until
+interrupted. Each trigger fires :func:`runner.fire`.
 """
 
 from __future__ import annotations
@@ -24,12 +25,14 @@ from apscheduler.events import (
 )
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 
 from gaia.logger import get_logger
 from gaia.schedule import runner
 from gaia.schedule.lock import daemon_lock
 from gaia.schedule.store import (
     DEFAULT_STORE_PATH,
+    ONE_SHOT_PENDING,
     MissedRuns,
     Schedule,
     ScheduleStore,
@@ -67,6 +70,43 @@ def _job(schedule: Schedule, store: ScheduleStore) -> None:
         datetime.now(timezone.utc).isoformat(),
         next_run=next_fire_time(schedule.cron),
     )
+
+
+def run_one_shot(schedule: Schedule, store: ScheduleStore) -> str:
+    """Run a one-time schedule this caller has claimed and record how it ended.
+
+    It is marked completed or failed either way and never runs again; a
+    failure is re-raised for the caller to report.
+    """
+    try:
+        output = runner.fire(schedule)
+    except BaseException:
+        store.finish_one_shot(
+            schedule.name, datetime.now(timezone.utc).isoformat(), ok=False
+        )
+        raise
+    store.finish_one_shot(
+        schedule.name, datetime.now(timezone.utc).isoformat(), ok=True
+    )
+    return output
+
+
+def _one_shot_job(schedule: Schedule, store: ScheduleStore) -> None:
+    try:
+        claimed = store.claim_one_shot(schedule.name, datetime.now(timezone.utc))
+        if claimed is None:
+            log.debug(
+                "skipping one-time %r: already run, paused, removed or not due",
+                schedule.name,
+            )
+            return
+        run_one_shot(claimed, store)
+    except Exception:
+        log.exception(
+            "one-time schedule %r failed; it is marked failed and will not run "
+            "again",
+            schedule.name,
+        )
 
 
 def _log_skipped_run(event: JobExecutionEvent | JobSubmissionEvent) -> None:
@@ -200,7 +240,8 @@ def _account(
     """Record what *name* missed before *until*; expect its next run after it."""
 
     def decide(schedule: Schedule) -> Optional[MissedRuns]:
-        if not schedule.enabled:
+        # A one-time schedule is never missed: it runs late instead.
+        if not schedule.enabled or schedule.one_shot:
             return None
         trigger = CronTrigger.from_crontab(schedule.cron)
         # In the trigger's zone: from UTC it returns the repeated DST hour again.
@@ -229,7 +270,7 @@ def catch_up_missed_runs(store: ScheduleStore, now: datetime) -> None:
     """At start: record the runs that came due while the daemon was not
     running. They are not run late; `gaia schedule show` lists them."""
     for name, schedule in store.load().items():
-        if schedule.enabled:
+        if schedule.enabled and not schedule.one_shot:
             _account(store, name, now, including_until=True)
 
 
@@ -265,36 +306,48 @@ def build_scheduler(store: ScheduleStore) -> BackgroundScheduler:
     return scheduler
 
 
+def _trigger(schedule: Schedule, now: datetime):
+    if not schedule.one_shot:
+        return CronTrigger.from_crontab(schedule.cron)
+    # Past due (the daemon was down at that time): run once, now.
+    return DateTrigger(run_date=max(schedule.due_at(), now))
+
+
 def refresh_schedules(scheduler: BackgroundScheduler, store: ScheduleStore) -> None:
     """Reconcile running timers with the schedules currently persisted on disk."""
     schedules = store.load()
-    enabled = {
-        name: schedule for name, schedule in schedules.items() if schedule.enabled
+    armed = {
+        name: schedule
+        for name, schedule in schedules.items()
+        if schedule.enabled
+        and (not schedule.one_shot or schedule.state == ONE_SHOT_PENDING)
     }
+    now = datetime.now(timezone.utc)
     # Validate all triggers before changing timers, so a bad edit fails loudly.
-    triggers = {
-        name: CronTrigger.from_crontab(schedule.cron)
-        for name, schedule in enabled.items()
-    }
+    triggers = {name: _trigger(schedule, now) for name, schedule in armed.items()}
     existing = {job.id: job for job in scheduler.get_jobs()}
-    for name in existing.keys() - enabled.keys():
+    for name in existing.keys() - armed.keys():
         scheduler.remove_job(name)
-    for schedule in schedules.values():
-        if not schedule.enabled:
-            continue
+    for schedule in armed.values():
         job = existing.get(schedule.name)
         if job is not None:
-            if job.args[0].cron != schedule.cron:
+            armed_as = job.args[0]
+            if (armed_as.cron, armed_as.at) == (schedule.cron, schedule.at):
+                continue
+            if armed_as.cron and schedule.cron:
                 scheduler.reschedule_job(schedule.name, trigger=triggers[schedule.name])
                 scheduler.modify_job(schedule.name, args=[schedule, store])
-            continue
+                continue
+            scheduler.remove_job(schedule.name)
         scheduler.add_job(
-            _job,
+            _one_shot_job if schedule.one_shot else _job,
             trigger=triggers[schedule.name],
             args=[schedule, store],
             id=schedule.name,
             name=schedule.name,
             replace_existing=True,
+            # A one-time run is never dropped for being late.
+            **({"misfire_grace_time": None} if schedule.one_shot else {}),
         )
 
 
@@ -339,6 +392,17 @@ def run_daemon(store_path: Path = DEFAULT_STORE_PATH) -> None:
         finally:
             scheduler.shutdown(wait=False)
             log.info("schedule daemon stopped")
+
+
+def next_fire(schedule: Schedule) -> Optional[str]:
+    """When *schedule* next runs (local time, ISO), or None if it never will."""
+    if not schedule.enabled:
+        return None
+    if schedule.one_shot:
+        if schedule.state != ONE_SHOT_PENDING:
+            return None
+        return schedule.due_at().astimezone().isoformat()
+    return next_fire_time(schedule.cron)
 
 
 def next_fire_time(cron: str) -> Optional[str]:
