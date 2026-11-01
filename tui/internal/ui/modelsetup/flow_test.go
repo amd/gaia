@@ -614,6 +614,9 @@ func TestResumeAndRetryStartTheSpeedOver(t *testing.T) {
 				if r := h.m.rates[qwen]; r.speed > 2*bps {
 					t.Fatalf("speed after %s = %.0f MB/s; the bytes on disk counted as downloaded", stop, r.speed/1e6)
 				}
+				if h.m.total.speed > 2*bps {
+					t.Fatalf("overall speed after %s = %.0f MB/s; the bytes on disk counted as downloaded", stop, h.m.total.speed/1e6)
+				}
 			}
 			r := h.m.rates[qwen]
 			if !r.showETA(h.clock) {
@@ -1285,5 +1288,43 @@ func TestGPUMessagesNameGPUMemoryNotTheSetting(t *testing.T) {
 	}
 	if got := h.m.poolFor(17); got != "the new GPU memory" {
 		t.Fatalf("poolFor(17) = %q; an unnamed setting must not read as GPU memory", got)
+	}
+}
+
+// Retrying a model that failed its load check downloads it again through the
+// download route; nothing on screen removes a model without the user's
+// explicit remove-and-confirm in /models.
+func TestRetryNeverRemovesAModel(t *testing.T) {
+	h := startedDownload(t)
+	kind := "verify"
+	msg := "Setup stopped before GAIA could check that Gemma-4-E4B-it-GGUF loads."
+	h.api.SetRunState(setupapi.RunFailed)
+	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateFailed, ErrorKind: &kind, Error: &msg,
+		BytesDone: total(gemma), BytesTotal: total(gemma)})
+	h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateReady, BytesDone: total(qwen), BytesTotal: total(qwen)})
+	h.api.Progress(setupapi.ModelProgress{ID: emb, State: setupapi.StateReady, BytesDone: total(emb), BytesTotal: total(emb)})
+	h.poll()
+	h.poll()
+	for i, r := range h.m.shownRows() {
+		if r.ID == gemma {
+			h.m.focus = i
+		}
+	}
+	before := len(h.api.CallList())
+	h.key("r")
+	h.key("R")
+	retried := false
+	for _, c := range h.api.CallList()[before:] {
+		if strings.HasPrefix(c, "run") || strings.HasPrefix(c, "download "+gemma) {
+			retried = true
+		}
+	}
+	if !retried {
+		t.Fatalf("neither r nor R retried: %v", h.api.CallList()[before:])
+	}
+	for _, c := range h.api.CallList() {
+		if strings.HasPrefix(c, "remove") {
+			t.Fatalf("a retry removed a model: %v", h.api.CallList())
+		}
 	}
 }
