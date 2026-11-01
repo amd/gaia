@@ -87,14 +87,14 @@ def _remove_stale_swap_dirs(out_dir: Path, *, keep: Path | None = None) -> None:
     """Remove abandoned build/retired hubs while the publish lock is held."""
     cutoff = time.time() - _STALE_SWAP_SECONDS
     for candidate in out_dir.parent.iterdir():
-        if candidate == keep:
+        if candidate == keep or not (
+            candidate.name.startswith(f"{out_dir.name}.build-")
+            or candidate.name.startswith(f"{out_dir.name}.old-")
+        ):
             continue
         if candidate.stat().st_mtime >= cutoff:
             continue
-        if candidate.name.startswith(f"{out_dir.name}.build-") or candidate.name.startswith(
-            f"{out_dir.name}.old-"
-        ):
-            shutil.rmtree(candidate)
+        shutil.rmtree(candidate)
 
 
 def _publish(build: Path, out_dir: Path) -> None:
@@ -118,7 +118,8 @@ def _publish(build: Path, out_dir: Path) -> None:
                 raise OSError(
                     f"Could not publish fixture hub at {out_dir}: {publish_error}; "
                     f"restoring previous hub from {retired} also failed: "
-                    f"{restore_error}. Both folders are named for manual recovery."
+                    f"{restore_error}. Move {retired} back to {out_dir} by hand, "
+                    "or delete it and re-run prepare_fixture_hub.py."
                 ) from publish_error
             raise
         if retired is not None and retired.exists():

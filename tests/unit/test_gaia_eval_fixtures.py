@@ -622,11 +622,11 @@ def test_fixture_hub_publish_names_both_folders_when_restore_fails(tmp_path, mon
         os.replace(source, target)
 
     monkeypatch.setattr("gaia.utils.file_lock.replace_retrying", replace_retrying)
-    with pytest.raises(OSError, match="Both folders are named") as excinfo:
+    with pytest.raises(OSError, match=r"Move .*hub.old-.* back to .*hub") as excinfo:
         module._publish(build, out_dir)
 
-    assert "hub.old-" in str(excinfo.value)
-    assert "hub" in str(excinfo.value)
+    assert str(out_dir) in str(excinfo.value)
+    assert any(part.name.startswith("hub.old-") for part in tmp_path.iterdir())
 
 
 @pytest.mark.allow_network  # loopback socket only (ephemeral port, never 4001)
