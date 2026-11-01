@@ -128,6 +128,16 @@ def test_the_status_workflow_never_touches_pr_code():
     assert checkout["with"]["ref"] == "${{ github.event.repository.default_branch }}"
 
 
+def test_the_merge_queue_commit_gets_the_same_status(verdict):
+    wf = yaml.safe_load((WORKFLOWS / "pr-review-verdict.yml").read_text("utf-8"))
+    assert "merge_group" in wf[True], "a required status would stall the queue"
+    job = wf["jobs"]["merge-queue"]
+    assert job["if"] == "github.event_name == 'merge_group'"
+    assert job["permissions"]["statuses"] == "write"
+    assert f'context="{verdict.CONTEXT}"' in job["steps"][0]["run"]
+    assert "merge_group" not in wf["jobs"]["verdict"]["if"]
+
+
 def test_the_workflow_name_it_listens_to_is_real():
     wf = yaml.safe_load((WORKFLOWS / "claude.yml").read_text("utf-8"))
     assert wf["name"] == "Claude AI Assistant"

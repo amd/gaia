@@ -7,7 +7,8 @@
 # workflow_run is what catches a new review: the review comment is posted with
 # GITHUB_TOKEN, so an issue_comment trigger would never fire. pull_request_target covers
 # pushes and the override label. Both run this file and the script from the default
-# branch, and the PR's code is never checked out.
+# branch, and the PR's code is never checked out. merge_group passes the queue's own
+# commit: a required status must exist there too, and a PR only enters the queue green.
 
 name: PR Review Verdict
 
@@ -17,11 +18,27 @@ on:
   workflow_run:
     workflows: ["Claude AI Assistant"]
     types: [completed]
+  merge_group:
 
 permissions:
   contents: read
 
 jobs:
+  merge-queue:
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      - name: Pass the queue commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          QUEUE_SHA: ${{ github.event.merge_group.head_sha }}
+        run: |
+          gh api "repos/$REPO/statuses/$QUEUE_SHA" -f state=success             -f context="PR review verdict"             -f description="Checked on the PR before it entered the queue"
+
   verdict:
     if: |
       github.repository == 'amd/gaia' &&
