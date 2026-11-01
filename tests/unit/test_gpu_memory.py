@@ -249,6 +249,8 @@ class TestLinuxSplit:
         result = gm.describe(linux_igpu(16, 7.75), LOCAL)
         assert result["setting"]["max_gb"] == 0
         assert result["presets"] == []
+        # No steps that would set the GPU to 0 GB.
+        assert result["guided_steps"] == [] and result["guided_value"] is None
 
     def test_128gb_reports_the_split_and_keeps_16gb_for_the_cpu(self, box):
         result = gm.describe(box.info, LOCAL)
@@ -810,6 +812,15 @@ class TestWindows:
 
     def test_no_gib_anywhere_in_the_response(self, box, windows):
         assert "GiB" not in json.dumps(gm.describe(box.info, LOCAL))
+
+    def test_without_shared_memory_the_reason_is_the_units(self, box, windows):
+        # Lemonade reporting the carve-out itself and no shared memory.
+        gpu = {**WINDOWS_IGPU["devices"]["amd_gpu"][0], "vram_gb": 8.0}
+        gpu["virtual_mem_gb"] = 0.0
+        box.info = {**WINDOWS_IGPU, "devices": {"amd_gpu": [gpu]}}
+        steps = gm.describe(box.info, LOCAL, setting_gb=64)["guided_steps"]
+        assert not any("shares with the GPU" in s for s in steps)
+        assert any("a little larger than GAIA's" in s for s in steps)
 
     def test_projection_matches_model_fit(self, box, windows):
         result = gm.describe(box.info, LOCAL)

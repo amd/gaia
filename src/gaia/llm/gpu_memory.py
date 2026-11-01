@@ -75,12 +75,21 @@ WINDOWS_STEPS = (
     "Right-click the desktop and open AMD Software: Adrenalin Edition.",
     "Go to Performance > Tuning and find Variable Graphics Memory.",
     "Choose Custom and set it to {amd} GB, as AMD Software shows it, or the "
-    "closest option above it. That is less than the {gpu} GB GPU total GAIA "
-    "shows, because the total also counts memory Windows shares with the GPU.",
+    "closest option above it. {why}",
     "Restart your PC, then come back here. GAIA reads the new split.",
     "No Variable Graphics Memory option? Set UMA Frame Buffer Size in your "
     "PC's BIOS to the same value instead. With AMD Software, leave the BIOS "
     "on Auto.",
+)
+#: Why the AMD value is smaller than the GPU total: with Windows' shared memory,
+#: and without it (AMD Software's "GB" are larger than GAIA's).
+WINDOWS_WHY_SHARED = (
+    "That is less than the {gpu} GB GPU total GAIA shows, because the total "
+    "also counts memory Windows shares with the GPU."
+)
+WINDOWS_WHY_UNITS = (
+    "AMD Software's GB are a little larger than GAIA's, so its number is a "
+    "little smaller than the {gpu} GB GAIA shows."
 )
 LINUX_MODPROBE_STEPS = (
     "Run: echo 'options {module} pages_limit={pages}' | "
@@ -568,7 +577,9 @@ def _guided_steps(
     if machine.os == "windows":
         amd = _fmt(math.ceil(gb * GB / GIB))
         gpu = _fmt(round(machine.gpu_gb_at(gb)))
-        return [s.format(amd=amd, gpu=gpu) for s in WINDOWS_STEPS], amd
+        shared = machine.gpu_gb_at(gb) - gb >= TOOK_EFFECT_TOLERANCE_GB
+        why = (WINDOWS_WHY_SHARED if shared else WINDOWS_WHY_UNITS).format(gpu=gpu)
+        return [s.format(amd=amd, why=why) for s in WINDOWS_STEPS], amd
     module = setup.module if setup else "ttm"
     pages = pages_for(gb)
     steps = {
@@ -799,7 +810,11 @@ def describe(
         or recommended
         or (presets[-1]["setting_gb"] if presets else machine.max_setting_gb)
     )
-    steps, guided_value = _guided_steps(machine, setup, steps_gb)
+    if steps_gb >= MIN_SETTING_GB:
+        steps, guided_value = _guided_steps(machine, setup, steps_gb)
+    else:
+        # Nothing this PC can give: steps for 0 GB would starve the GPU.
+        steps, guided_value = [], None
     return {
         "applies": True,
         "show_in_setup": recommended is not None,
