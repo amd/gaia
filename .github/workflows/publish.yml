@@ -1116,25 +1116,37 @@ jobs:
           path: release-assets
         continue-on-error: true
 
-      - name: Create GitHub Release
-        if: needs.validate.outputs.is_rc != 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            release-assets/*
-            dist/**
-          body_path: RELEASE_BODY.md
-
-      - name: Create GitHub pre-release (release candidate)
-        if: needs.validate.outputs.is_rc == 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            release-assets/*
-            dist/**
-          body_path: RELEASE_BODY.md
-          prerelease: true
-          make_latest: false
+      # Create the release as a draft, upload assets idempotently, then publish
+      # it. GitHub's installation API limit can be exhausted by the tag-triggered
+      # eval and benchmark workflows; the helper waits for the reported reset and
+      # resumes from the release's existing assets instead of restarting the
+      # whole release or failing after PyPI/npm have already published.
+      - name: Create GitHub Release with bounded rate-limit retry
+        shell: bash
+        env:
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+          IS_RC: ${{ needs.validate.outputs.is_rc }}
+        run: |
+          set -euo pipefail
+          assets=()
+          while IFS= read -r -d '' asset; do
+            assets+=(--asset "$asset")
+          done < <(find release-assets dist -type f -print0)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::no GitHub Release assets were built"
+            exit 1
+          fi
+          args=(
+            --repo "${GITHUB_REPOSITORY}"
+            --tag "${TAG_NAME}"
+            --title "${TAG_NAME}"
+            --notes-file RELEASE_BODY.md
+            "${assets[@]}"
+          )
+          if [ "${IS_RC}" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          python3 util/github_release_retry.py "${args[@]}"
 
   # ── Attach the terminal installers ─────────────────────────────────
   # The macOS .pkg and Linux .deb/.rpm, plus gaia-installers-SHA256SUMS.txt
