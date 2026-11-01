@@ -1181,17 +1181,33 @@ func TestDetailsDropPanelFrames(t *testing.T) {
 	}
 }
 
-// The value to enter is the backend's guided_value, in AMD Software's own
-// units, never a preset's setting turned into GiB here.
+// The value to enter is the backend's guided_value, in the units the place
+// it is entered counts in (AMD Software's GB on Windows, 4 KiB pages on
+// Linux), never read out of the steps' text or converted from a setting here.
 func TestTheValueToEnterIsTheBackendsGuidedValue(t *testing.T) {
-	g := gpuShared()
-	g.Method = setupapi.MethodGuided
-	v := "28"
-	g.GuidedValue = &v
-	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: g})
-	h.key("enter", "enter")
-	h.expect("Value: 28")
-	h.expectNot("Value: 30")
+	for _, tc := range []struct{ os, value, notShown string }{
+		{"windows", "28", "30"},
+		{"linux", "9765625", "30"},
+	} {
+		t.Run(tc.os, func(t *testing.T) {
+			g := gpuShared()
+			g.OS, g.Method = tc.os, setupapi.MethodGuided
+			v := tc.value
+			g.GuidedValue = &v
+			// A quoted number in the steps is not the value to copy.
+			g.GuidedSteps = append(g.GuidedSteps, "Or use a tool that counts in GiB: `amd-ttm --set 30`")
+			h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: g})
+			h.key("enter", "enter")
+			if h.m.Screen() != "gpu-guide" {
+				t.Fatalf("screen = %s, want the guide", h.m.Screen())
+			}
+			h.expect("Value: " + tc.value)
+			if got := h.m.copyValue(); got != tc.value {
+				t.Fatalf("copy value = %q, want %q", got, tc.value)
+			}
+			h.expectNot("Value: " + tc.notShown)
+		})
+	}
 }
 
 // No guided_value means the PC has nothing to give: no setup step, and /gpu
