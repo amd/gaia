@@ -97,17 +97,6 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
             "(no Azure app registration). Provider must support device code."
         ),
     )
-    p_conn.add_argument(
-        "--timeout",
-        type=int,
-        dest="timeout",
-        metavar="SECONDS",
-        help=(
-            "How long to wait for you to finish signing in before the link "
-            "stops working. Defaults to the oauth_signin_timeout_seconds config "
-            "key (900)."
-        ),
-    )
 
     # configure (generic dispatcher + OAuth-client convenience flags)
     p_cfg = sub.add_parser(
@@ -448,13 +437,6 @@ def _handle_connect(args: argparse.Namespace) -> int:
     if getattr(args, "device", False):
         return _handle_connect_device(args, scopes=scopes, grant_agents=grant_agents)
 
-    timeout_kwargs = {}
-    if getattr(args, "timeout", None) is not None:
-        from gaia.connectors.flow import signin_timeout_seconds
-
-        # Reject a bad --timeout before a browser opens on a link it would kill.
-        timeout_kwargs["timeout_seconds"] = signin_timeout_seconds(args.timeout)
-
     async def _run() -> dict:
         info = await start_authorization(
             args.connector_id, scopes=scopes, grant_agents=grant_agents
@@ -468,7 +450,7 @@ def _handle_connect(args: argparse.Namespace) -> int:
             "this loopback and the flow will time out.\n"
         )
         sys.stdout.flush()
-        result = await complete_authorization(info["flow_id"], **timeout_kwargs)
+        result = await complete_authorization(info["flow_id"])
         return result
 
     result = asyncio.run(_run())

@@ -1672,7 +1672,7 @@ gaia connectors <subcommand> [OPTIONS]
 | Subcommand | Description |
 |-----------|-------------|
 | `list` (alias `status`) | List connectors in the catalog with their status (`--json` for machine-readable output) |
-| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes. The sign-in link works for 15 minutes; `--timeout <seconds>` or the `oauth_signin_timeout_seconds` config key changes that |
+| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes. The sign-in link works for 15 minutes |
 | `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys, OAuth client creds) |
 | `test <id>` | Run a health check for a configured connector |
 | `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. |
@@ -1807,7 +1807,6 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `lemonade_mode` | _(unset)_ | `gaia` runs GAIA's own Lemonade Server; `external` uses yours at `lemonade_base_url` and never starts one. Unset means not chosen yet, which runs GAIA's own. Setting `external` checks the server first; either change tells a running daemon. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
 | `lemonade_base_url` | _(unset)_ | Your Lemonade Server's address, for `lemonade_mode external` |
 | `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
-| `oauth_signin_timeout_seconds` | `900` | How long a browser sign-in for an OAuth connector (`gaia connectors connect`, the Agent UI's **Connect**) waits for you to finish consent before its link stops working. `gaia connectors connect --timeout <seconds>` overrides it for one run |
 | `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui#undo-a-turn) |
 | `undo_max_mb` | `500` | Megabytes those copies may use; the oldest turns are removed first; the size limit never removes the newest |
 | `project_context` | _(unset = auto)_ | Whether the agent puts a repository's `CLAUDE.md`, `AGENTS.md` and `.claude/skills` in its prompt: `full`, `off`, or `auto` to decide per model (Claude gets them, other models don't). `GAIA_PROJECT_CONTEXT` overrides it — see [Project instructions and skills](/guides/project-map#project-instructions-and-skills) |

@@ -91,32 +91,7 @@ _ERROR_HTML = (
 
 # Long enough for a first-time user to read an unverified-app consent screen
 # and click through Google's interstitial.
-DEFAULT_SIGNIN_TIMEOUT_SECONDS = 900
-
-
-def signin_timeout_seconds(override: Optional[int] = None) -> int:
-    """The browser sign-in window: *override*, else the
-    ``oauth_signin_timeout_seconds`` config key, else the default.
-
-    Raises :class:`ConnectorsError` for a window under one second — it would
-    expire before anyone could click.
-    """
-    if override is None:
-        from gaia.config import GaiaConfig
-
-        value = GaiaConfig.load().oauth_signin_timeout_seconds
-        source = "the oauth_signin_timeout_seconds config key"
-    else:
-        value = override
-        source = "--timeout (timeout_seconds)"
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ConnectorsError(
-            f"OAuth sign-in timeout from {source} must be a whole number of "
-            f"seconds, 1 or more, but it is {value!r}. Set it with "
-            "`gaia config set oauth_signin_timeout_seconds <seconds>` "
-            f"(default {DEFAULT_SIGNIN_TIMEOUT_SECONDS})."
-        )
-    return value
+_FLOW_TIMEOUT_SECONDS = 900
 
 
 @dataclass
@@ -399,13 +374,9 @@ async def start_authorization(
     return {"flow_id": flow_id, "authorization_url": authorization_url}
 
 
-async def complete_authorization(
-    flow_id: str, *, timeout_seconds: Optional[int] = None
-) -> Dict[str, Any]:
+async def complete_authorization(flow_id: str) -> Dict[str, Any]:
     """
-    Wait for the loopback callback to fulfil the flow, for *timeout_seconds*
-    or else :func:`signin_timeout_seconds` (default 900; the
-    ``oauth_signin_timeout_seconds`` config key changes it).
+    Wait up to 15 minutes for the loopback callback to fulfil the flow.
 
     Returns a ``ConnectorState`` dict
     ``{provider, account_email, scopes, connected_at}`` once the token
@@ -423,17 +394,14 @@ async def complete_authorization(
         )
 
     try:
-        timeout = signin_timeout_seconds(timeout_seconds)
         try:
-            return await asyncio.wait_for(flow.future, timeout=timeout)
+            return await asyncio.wait_for(flow.future, timeout=_FLOW_TIMEOUT_SECONDS)
         except asyncio.TimeoutError as e:
             raise FlowTimeoutError(
                 f"Sign-in to {flow.provider_id} was not finished within "
-                f"{timeout}s, so the sign-in link you were given no longer "
-                f"works. Run `gaia connectors connect {flow.provider_id}` (or "
-                "click Connect again) for a fresh link. Need longer? Pass "
-                "--timeout <seconds>, or run `gaia config set "
-                "oauth_signin_timeout_seconds <seconds>`."
+                f"{_FLOW_TIMEOUT_SECONDS // 60} minutes, so the sign-in link you "
+                "were given no longer works. Run `gaia connectors connect "
+                f"{flow.provider_id}` (or click Connect again) for a fresh link."
             ) from e
     finally:
         await _teardown_flow(flow_id)
