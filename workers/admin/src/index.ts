@@ -6,17 +6,32 @@ import { authenticate, AuthError, type AuthEnv } from "./auth";
 import { collectAll, SOURCES, unknownSources, type CollectEnv } from "./collector";
 import { renderEvalsPage } from "./evalspage";
 import { renderGrowthPage } from "./growthpage";
-import { parseMaintainerGroups, parseMaintainers, renderCiPage, renderDevelopersPage, renderUsersPage } from "./page";
+import { renderCiPage, renderDevelopersPage, renderUsersPage } from "./page";
+import { coreTeam, formatPeople, parseCoreTeam, saveCoreTeam } from "./settings";
 
 type Env = CollectEnv & AuthEnv & { MAINTAINER_LOGINS?: string };
 
-const PAGES: Record<string, (env: Env) => string> = {
+const PAGES: Record<string, (env: Env) => string | Promise<string>> = {
   "/": renderUsersPage,
-  "/growth": (env) => renderGrowthPage(parseMaintainerGroups(env.MAINTAINER_LOGINS)),
-  "/developers": (env) => renderDevelopersPage(parseMaintainers(env.MAINTAINER_LOGINS)),
+  "/growth": async (env) => renderGrowthPage((await coreTeam(env.DB, env.MAINTAINER_LOGINS)).people),
+  "/developers": async (env) => renderDevelopersPage(await coreTeam(env.DB, env.MAINTAINER_LOGINS)),
   "/ci": renderCiPage,
   "/evals": renderEvalsPage,
 };
+
+/** A deliberate call from this site (a script, or the page's own fetch), never a cross-site form riding a signed-in browser. */
+function deliberate(req: Request, url: URL, action: string): boolean {
+  const origin = req.headers.get("origin");
+  const sameSite = (() => {
+    if (!origin) return true;
+    try {
+      return new URL(origin).hostname === url.hostname; // port ignored: wrangler dev rewrites Origin without it
+    } catch {
+      return false; // "null" (sandboxed frames, file:) or anything unparseable is not this site
+    }
+  })();
+  return req.headers.get("x-admin-action") === action && sameSite;
+}
 
 const text = (body: string, status: number, type = "text/plain"): Response =>
   new Response(body, { status, headers: { "content-type": `${type}; charset=utf-8`, "cache-control": "no-store" } });
@@ -25,8 +40,9 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname !== "/admin" && !url.pathname.startsWith("/admin/")) return text("Not found", 404);
+    let who: string;
     try {
-      await authenticate(req, env);
+      who = await authenticate(req, env);
     } catch (e) {
       if (e instanceof AuthError) return text(e.message, e.status);
       throw e;
@@ -35,21 +51,32 @@ export default {
     const path = url.pathname.slice("/admin".length) || "/";
     if (req.method === "GET") {
       const page = PAGES[path];
-      if (page) return text(page(env), 200, "text/html");
+      if (page) return text(await page(env), 200, "text/html");
+    }
+
+    if (path === "/api/core-team" && req.method === "POST") {
+      if (!deliberate(req, url, "core-team")) {
+        return text("Refused: send the header 'x-admin-action: core-team' from the same site.", 403);
+      }
+      let raw: unknown;
+      try {
+        raw = ((await req.json()) as { maintainers?: unknown }).maintainers;
+      } catch {
+        return text('Send JSON: {"maintainers": "alice+alice-work,bob"}.', 400);
+      }
+      if (typeof raw !== "string") return text('Send JSON: {"maintainers": "alice+alice-work,bob"}.', 400);
+      let people: string[][];
+      try {
+        people = parseCoreTeam(raw);
+      } catch (e) {
+        return text((e as Error).message, 400);
+      }
+      await saveCoreTeam(env.DB, people, who);
+      return text(JSON.stringify({ maintainers: formatPeople(people) }), 200, "application/json");
     }
 
     if (path === "/api/collect" && req.method === "POST") {
-      // Must be a deliberate call (curl or a script), never a cross-site form riding a signed-in browser.
-      const origin = req.headers.get("origin");
-      const sameSite = (() => {
-        if (!origin) return true;
-        try {
-          return new URL(origin).host === url.host;
-        } catch {
-          return false; // "null" (sandboxed frames, file:) or anything unparseable is not this site
-        }
-      })();
-      if (req.headers.get("x-admin-action") !== "collect" || !sameSite) {
+      if (!deliberate(req, url, "collect")) {
         return text("Refused: send the header 'x-admin-action: collect' from the same site (see README).", 403);
       }
       const days = Number(url.searchParams.get("days") ?? "3");
@@ -58,6 +85,7 @@ export default {
         return text("days must be 1-95 and skip 0-95 (whole numbers).", 400);
       }
       const only = url.searchParams.get("only")?.split(",").map((x) => x.trim()).filter(Boolean);
+      if (only && only.length === 0) return text(`only= names no source. Known: ${SOURCES.join(", ")}.`, 400);
       const unknown = unknownSources(only);
       if (unknown.length) return text(`Unknown source(s): ${unknown.join(", ")}. Known: ${SOURCES.join(", ")}.`, 400);
       try {

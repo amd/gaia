@@ -105,6 +105,7 @@ details.tv{border-top:1px solid var(--line)}details.tv summary{cursor:pointer;co
 table{border-collapse:collapse;width:100%;font-size:12.5px}
 td,th{padding:6px 10px;border-bottom:1px solid var(--line2);text-align:left;white-space:nowrap}
 th{font-family:"JetBrains Mono",monospace;color:var(--mute);font-weight:500;font-size:10px;letter-spacing:.1em;text-transform:uppercase;position:sticky;top:0;background:var(--bg)}
+th.sortable{cursor:pointer;user-select:none}th.sortable:hover,th.sortable:focus-visible{color:var(--ink2)}th[aria-sort=ascending]::after{content:" ▲"}th[aria-sort=descending]::after{content:" ▼"}
 .n{text-align:right;font-variant-numeric:tabular-nums}
 .trunc{max-width:340px;overflow:hidden;text-overflow:ellipsis}
 td.trunc.clipped{cursor:zoom-in}td.trunc.clipped:hover{color:var(--accent)}
@@ -122,6 +123,7 @@ td.trunc.wide{white-space:normal;max-width:none!important;overflow:visible;word-
 .legend span{cursor:pointer;user-select:none;border-radius:6px;padding:1px 4px;margin:-1px -4px}.legend span:hover{background:var(--surface2)}
 .legend span.off{opacity:.45;text-decoration:line-through}
 .chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.team{padding:12px 16px;margin:-6px 0 14px;display:flex;gap:8px 10px;flex-wrap:wrap;align-items:center}.team input{flex:1 1 320px;min-width:0;font:13px "JetBrains Mono",monospace;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}.team .ks{flex-basis:100%}
 .chip{border:1px solid var(--line);background:none;color:var(--ink2);border-radius:999px;padding:3px 10px;font:inherit;font-size:12px;cursor:pointer}
 .chip:hover{color:var(--ink);border-color:var(--accent-dim)}
 .chip[aria-pressed=true]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent-dim);font-weight:600}
@@ -202,7 +204,28 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){pinned=null
 function markClipped(root){(root||document).querySelectorAll('td.trunc').forEach(function(td){if(td.classList.contains('wide'))return;td.classList.toggle('clipped',td.scrollWidth>td.clientWidth+1);if(td.classList.contains('clipped')&&!td.title)td.title=td.textContent;});}
 document.addEventListener('click',function(e){var td=e.target.closest&&e.target.closest('td.trunc');if(!td||e.target.closest('a'))return;if(!td.classList.contains('clipped')&&!td.classList.contains('wide'))return;
   var col=td.cellIndex,on=!td.classList.contains('wide');td.closest('table').querySelectorAll('tr').forEach(function(tr){var c=tr.cells[col];if(c&&c.classList.contains('trunc'))c.classList.toggle('wide',on);});e.stopPropagation();markClipped(td.closest('table'));});
-new MutationObserver(function(){clearTimeout(markClipped.t);markClipped.t=setTimeout(function(){markClipped();},60);}).observe(document.querySelector('main'),{childList:true,subtree:true});
+/* Every table sorts by any column: first click ascending, second descending, third back to the original order. */
+var SORT={},UNIT={s:1,min:60,h:3600,d:86400,day:86400,days:86400,w:604800,week:604800,weeks:604800,k:1e3,M:1e6};
+/* A cell's sort value: numbers (with units: 54s < 5 min < 1.2 h < 3 days), else lower-case text; null for an empty cell. */
+function cellKey(td){if(!td)return null;var v=td.getAttribute('data-v'),t=(v!=null?v:td.textContent).trim();if(!t||t==='—'||t==='-')return null;
+  if(v!=null&&v!==''&&!isNaN(+v))return +v;
+  var m=/^\d{4}-\d\d-\d\d/.test(t)?null:t.replace(/,/g,'').match(/^([+\-−]?)\$?(\d*\.?\d+)\s*(%|×|min|s|h|days?|d|weeks?|w|k|M|pts)?(?![A-Za-z])/);
+  if(m)return parseFloat(m[2])*(m[1]&&m[1]!=='+'?-1:1)*(UNIT[m[3]]||1);
+  return t.toLowerCase();}
+function sortRows(t,ci,d){var rows=[].slice.call(t.rows).filter(function(r){return r._i!=null;});
+  rows.sort(function(a,b){if(!d)return a._i-b._i;var x=cellKey(a.cells[ci]),y=cellKey(b.cells[ci]);
+    if(x===null||y===null)return x===y?a._i-b._i:x===null?1:-1;
+    var c=typeof x===typeof y?(x<y?-1:x>y?1:0):(typeof x==='number'?-1:1);return c*d||a._i-b._i;});
+  rows.forEach(function(r){r.parentNode.appendChild(r);});
+  [].forEach.call(t.rows[0].cells,function(th,i){th.setAttribute('aria-sort',i===ci&&d?(d>0?'ascending':'descending'):'none');});}
+function sortable(root){(root||document).querySelectorAll('table').forEach(function(t){if(t._s)return;t._s=1;var head=t.rows[0];
+  if(!head||!head.querySelector('th'))return;var body=[].slice.call(t.rows,1);if(body.length<2)return;body.forEach(function(r,i){r._i=i;});
+  var c=t.closest('[id]'),key=(c?c.id:'')+'|'+[].map.call(head.cells,function(th){return th.textContent;}).join('|');
+  [].forEach.call(head.cells,function(th,ci){th.tabIndex=0;th.classList.add('sortable');th.setAttribute('aria-sort','none');
+    var go=function(e){if(e&&e.target!==th&&e.target.closest('a,button,input'))return;var s=SORT[key]||{c:-1,d:0},d=s.c===ci?(s.d>0?-1:s.d<0?0:1):1;SORT[key]={c:ci,d:d};sortRows(t,ci,d);};
+    th.addEventListener('click',go);th.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();go();}});});
+  var s=SORT[key];if(s&&s.d)sortRows(t,s.c,s.d);});}
+new MutationObserver(function(){sortable();clearTimeout(markClipped.t);markClipped.t=setTimeout(function(){markClipped();},60);}).observe(document.querySelector('main'),{childList:true,subtree:true});
 document.addEventListener('toggle',function(){markClipped();},true);
 function tableView(head,rows){return '<details class="tv"><summary>Table view</summary><div class="scroll"><table><tr>'+head.map(function(h,i){return '<th'+(i?' class="n"':'')+'>'+esc(h)+'</th>';}).join('')+'</tr>'+rows.map(function(r){return '<tr>'+r.map(function(c,i){return '<td'+(i?' class="n"':'')+'>'+c+'</td>';}).join('')+'</tr>';}).join('')+'</table></div></details>';}
 /* Place value labels without overlap: largest values first, skip any that would collide. */
@@ -490,7 +513,7 @@ var INFO={` + INFO_COMMON + String.raw`
 'split':['Core team and outside contributors','The same pull-request numbers for the core team (maintainer accounts plus organisation members and collaborators) and for everyone else, bots left out. Ignores the people filter above. Merge time uses LinearB’s bands, as above. Wait vs core shows how much longer outside PRs take, for context only: core PRs are often self-merged within the hour, so the ratio is large even when outside PRs merge quickly.'],
 'who':['Contributors in the range','Everyone who committed, opened a PR or opened an issue in the selected window. Lines come from GitHub’s per-contributor weekly statistics, so they cover whole weeks and count a merged branch’s commits for each author; their sum is larger than the repository total in the Lines of code chart. Untick a person, or use the buttons, to leave them out of every number on this page.'],
 'community':['Stars and forks','Rebuilt from GitHub’s dated stargazer and fork lists, so the full history is available. Total is the running count; New is how many were added in each period.']};
-var MINE=__MAINTAINERS__;
+var MINE=__MAINTAINERS__,TEAM=__TEAM__;
 var P={pm:qs.get('pm')||'active',comm:qs.get('comm')||'stars',cmode:qs.get('cmode')||'total',bots:qs.get('bots')!=='0',
   exclude:(qs.get('exclude')!==null?qs.get('exclude'):(function(){try{return localStorage.getItem('gaia-admin-exclude')||'';}catch(e){return '';}})()).split(',').filter(Boolean)};
 var HB=[[0,1/24,'<1h'],[1/24,6/24,'1–6h'],[6/24,1,'6–24h'],[1,3,'1–3d'],[3,7,'3–7d'],[7,14,'1–2w'],[14,30,'2–4w'],[30,90,'1–3mo'],[90,1e9,'3mo+']];
@@ -531,13 +554,29 @@ function drawSplit(){var m=D.momentum,box=el('split');if(!box)return;if(!m||!m.s
   var ol=level(x.outside.medianDaysToMerge,MERGE_MED);if(ol)ATTN.push({key:'split',label:'Outside PRs merge in',value:ddur(x.outside.medianDaysToMerge),lv:ol,why:'outside contributors’ PRs take a median '+ddur(x.outside.medianDaysToMerge)+' to merge'});
   box.innerHTML='<div class="scroll" style="max-height:none"><table><tr><th>Who</th><th class="n">PRs merged '+per+'</th><th class="n">Pace vs before</th><th class="n">Merge median</th><th class="n">Merge P90</th><th class="n">Wait vs core</th><th class="n">Open PRs</th><th class="n">Issues opened</th><th class="n">Open issues</th></tr>'
     +row('Core team',x.core,x.corePrevious,null)+row('Outside contributors',x.outside,x.outsidePrevious,ratio)+'</table></div>';}
+/* The core team is edited here and stored in the dashboard; it decides Hide maintainers and every core-versus-outside number. */
+function drawTeamEditor(){var box=el('team');if(!P.editTeam){box.innerHTML='';box.hidden=true;return;}box.hidden=false;if(el('team-in'))return;
+  var from=TEAM.source==='dashboard'?'Last changed by '+esc(TEAM.by||'unknown')+' on '+esc((TEAM.at||'').slice(0,10))+'.':'Set at deploy (MAINTAINER_LOGINS) until saved here.';
+  box.innerHTML='<label for="team-in" class="kl">Core team</label><input id="team-in" type="text" spellcheck="false" autocomplete="off" value="'+esc(TEAM.raw)+'" placeholder="alice+alice-work,bob">'
+    +'<button type="button" class="toggle" id="team-save">Save</button><button type="button" class="chip" id="team-cancel">Cancel</button>'
+    +'<div class="ks">GitHub logins separated by commas; join one person’s accounts with +, e.g. <code>alice+alice-work,bob</code>. Organisation members count as core team too. '+from+'</div><div id="team-msg" class="ks" role="status"></div>';
+  el('team-cancel').onclick=function(){P.editTeam=false;drawPeople();el('edit-team').focus();};
+  el('team-in').onkeydown=function(e){if(e.key==='Enter')el('team-save').click();if(e.key==='Escape')el('team-cancel').click();};
+  el('team-save').onclick=function(){var b=el('team-save');b.disabled=true;el('team-msg').textContent='Saving…';
+    fetch('/admin/api/core-team',{method:'POST',headers:{'content-type':'application/json','x-admin-action':'core-team'},body:JSON.stringify({maintainers:el('team-in').value})})
+      .then(function(r){return r.text().then(function(t){if(!r.ok)throw new Error(t);return t;});})
+      .then(function(){el('team-msg').textContent='Saved. Reloading…';location.reload();})
+      .catch(function(e){b.disabled=false;el('team-msg').innerHTML='<span class="bad">'+esc(e.message)+'</span>';});};}
 function drawPeople(){var m=D.momentum;
   var chips=(MINE.length?'<button type="button" class="chip" id="hide-mine" title="'+esc(MINE.join(', '))+'" aria-pressed="'+MINE.every(function(x){return P.exclude.indexOf(x)>=0;})+'">Hide maintainers</button>':'')
    +'<button type="button" class="chip" id="hide-bots" aria-pressed="'+!P.bots+'">Hide bots</button>'
+   +'<button type="button" class="chip" id="edit-team" aria-expanded="'+!!P.editTeam+'" title="Choose who counts as the core team">Core team…</button>'
    +P.exclude.map(function(x){return '<button type="button" class="chip" data-unex="'+esc(x)+'" title="Show '+esc(x)+' again">'+esc(x)+' ×</button>';}).join('');
   el('people-bar').innerHTML='<span class="kl" style="margin-right:4px">People</span>'+chips+(P.exclude.length||!P.bots?'<span class="ks">Hidden people are left out of every number on this page.</span>':'<span class="ks">Showing everyone.</span>');
   if(el('hide-mine'))el('hide-mine').onclick=function(){var all=MINE.every(function(x){return P.exclude.indexOf(x)>=0;});P.exclude=all?P.exclude.filter(function(x){return MINE.indexOf(x)<0;}):P.exclude.concat(MINE.filter(function(x){return P.exclude.indexOf(x)<0;}));savePeople();reload();};
   el('hide-bots').onclick=function(){P.bots=!P.bots;reload();};
+  el('edit-team').onclick=function(){P.editTeam=!P.editTeam;drawPeople();(P.editTeam?el('team-in'):el('edit-team')).focus();};
+  drawTeamEditor();
   el('people-bar').querySelectorAll('[data-unex]').forEach(function(b){b.onclick=function(){var x=b.getAttribute('data-unex');P.exclude=P.exclude.filter(function(y){return y!==x;});savePeople();reload();};});
   if(!m){el('who').innerHTML='';return;}
   var ex={};P.exclude.forEach(function(x){ex[x.toLowerCase()]=1;});
@@ -765,16 +804,18 @@ export function parseMaintainers(raw: string | undefined): string[] {
 }
 
 /** One list per person: `alice+alice-work,bob` is two people, the first with two accounts. */
-export function parseMaintainerGroups(raw: string | undefined): string[][] {
+export function parseMaintainerGroups(raw: string | undefined, label = "MAINTAINER_LOGINS"): string[][] {
   const groups = (raw ?? "").split(",").map((g) => g.split("+").map((x) => x.trim()).filter(Boolean)).filter((g) => g.length);
   const bad = groups.flat().filter((x) => !LOGIN.test(x));
-  if (bad.length) throw new Error(`MAINTAINER_LOGINS has entries that are not GitHub logins: ${bad.join(", ")}.`);
+  if (bad.length) throw new Error(`${label} has entries that are not GitHub logins: ${bad.join(", ")}.`);
   return groups;
 }
 
-export function renderDevelopersPage(maintainers: string[] = []): string {
+export function renderDevelopersPage(team: { people: string[][]; source: string; updatedAt: string | null; updatedBy: string | null } = { people: [], source: "deploy", updatedAt: null, updatedBy: null }): string {
+  const maintainers = team.people.flat();
   const body = `
 <div class="card chips" id="people-bar" style="padding:10px 16px;margin-bottom:14px"></div>
+<div class="card team" id="team" hidden></div>
 <div id="ov"><div class="skel"></div></div>
 <section class="stack"><div class="card"><div class="ch"><span class="t">Core team and outside contributors${infoBtn("split", "Core team and outside contributors")}</span><span class="d">The same pull-request numbers for each group, bots left out.</span></div><div id="split"></div></div></section>
 <section class="stack"><div class="head"><h2>Issues</h2></div>
@@ -795,7 +836,11 @@ ${card("community", "Stars and forks", "Growth of the GitHub community.", seg("c
     "Developers",
     "How fast the project moves and who moves it: issues, pull requests, commits, lines of code, contributors and the GitHub community.",
     body,
-    DEV_JS.replace("__MAINTAINERS__", JSON.stringify(maintainers)),
+    DEV_JS.replace("__MAINTAINERS__", () => JSON.stringify(maintainers)).replace(
+      "__TEAM__",
+      // < escaped so nothing in a saved value can close the script tag; a function so $ patterns stay literal.
+      () => JSON.stringify({ raw: team.people.map((g) => g.join("+")).join(","), source: team.source, at: team.updatedAt, by: team.updatedBy }).replace(/</g, "\\u003c"),
+    ),
   );
 }
 
