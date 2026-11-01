@@ -336,9 +336,9 @@ Google's own opaque failure page, shown **after** you complete the
 consent screen — not the "Google hasn't verified this app" interstitial
 from Step 5. GAIA never sees why: the browser lands on Google's error
 page instead of coming back to GAIA's loopback callback, so the callback
-handler never runs and the CLI/UI just times out after two minutes
-(`OAuth flow ... timed out after 120s. Restart the flow.`) — that
-message will not name the real cause.
+handler never runs and the CLI/UI just times out once the sign-in window
+closes (15 minutes by default; `Sign-in to google was not finished within
+900s ...`) — that message will not name the real cause.
 
 Nothing found while researching this guide ties this error page
 authoritatively to one cause for a loopback (Desktop-app) OAuth flow.

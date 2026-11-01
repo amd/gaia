@@ -15,7 +15,7 @@ Coverage:
 - A8: ``webbrowser.open`` is dispatched to ``run_in_executor`` so it does
   not block the event loop.
 - ``?error=access_denied`` resolves the flow with ``ConsentDeniedError``.
-- 120s timeout fires ``FlowTimeoutError`` and tears down the runner.
+- The sign-in timeout fires ``FlowTimeoutError`` and tears down the runner.
 """
 
 from __future__ import annotations
@@ -401,7 +401,9 @@ class TestConsentDenied:
 class TestTimeout:
     async def test_flow_timeout(self, google_provider, monkeypatch):
         # Squash the timeout to 0.5s so the test runs fast.
-        monkeypatch.setattr("gaia.connectors.flow._FLOW_TIMEOUT_SECONDS", 0.5)
+        monkeypatch.setattr(
+            "gaia.connectors.flow.signin_timeout_seconds", lambda override=None: 0.5
+        )
 
         info = await start_authorization("google", scopes=["openid"])
         with pytest.raises(FlowTimeoutError):

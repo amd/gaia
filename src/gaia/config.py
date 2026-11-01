@@ -150,6 +150,10 @@ class GaiaConfig:
         context_sizes: Context window, in tokens, the user chose per local
             model in the Agent UI (model id -> tokens). Every load of that
             model uses it; a model not listed gets GAIA's automatic size.
+        oauth_signin_timeout_seconds: How long a browser sign-in for an OAuth
+            connector (``gaia connectors connect``, the Agent UI's Connect
+            button) waits for the user to finish consent before its link
+            stops working. Must be at least 1.
         undo_retention_days: Keep the copies that let a turn's file changes be
             undone for this many days.
         undo_max_mb: Keep at most this many megabytes of those copies; the
@@ -174,6 +178,7 @@ class GaiaConfig:
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
     context_sizes: Dict[str, int] = field(default_factory=dict)
+    oauth_signin_timeout_seconds: int = 900
     undo_retention_days: int = 7
     undo_max_mb: int = 500
     skipped_models: List[str] = field(default_factory=list)
