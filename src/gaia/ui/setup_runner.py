@@ -520,6 +520,8 @@ class SetupRun:
     keep_trying: bool = False
     #: Only start the model server; the models are chosen and pulled after.
     server_only: bool = False
+    #: Models pulled beside the profile's; setup has no load check for them.
+    extra_models: List[str] = field(default_factory=list)
 
     def view(self) -> Dict[str, Any]:
         reached = PHASES.index(self.phase) if self.phase in PHASES else -1
@@ -650,6 +652,7 @@ class SetupRunner:
                 allow_low_disk=allow_low_disk,
                 keep_trying=keep_trying,
                 server_only=server_only,
+                extra_models=list(extra_models or []),
             )
             command = run_command(skip_chat_model, gaia_lemonade)
             try:
@@ -955,10 +958,10 @@ class SetupRunner:
         with self._lock:
             run.status = status
             loaded = {m["id"] for m in loads if m.get("loaded")}
-            # A model pulled beside the profile's (extra_models) has no load
-            # check: downloaded is as far as setup takes it.
+            # An extra the user ticked has no load check: downloaded is as far
+            # as setup takes it. Any other model the check skipped stays unverified.
             checked = {m["id"] for m in loads}
-            loaded |= {i for i in self._models if i not in checked}
+            loaded |= {i for i in run.extra_models if i not in checked}
             self._settle_models(
                 loaded if loads else None,
                 failed,

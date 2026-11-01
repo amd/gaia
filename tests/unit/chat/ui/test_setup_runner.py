@@ -543,6 +543,38 @@ def test_an_extra_model_with_no_load_check_ends_ready(monkeypatch):
     }
 
 
+def test_only_extras_skip_the_load_check(monkeypatch):
+    plan = json.dumps(
+        {
+            "event": "plan",
+            "models": [
+                {"id": "Gemma-4-E4B-it-GGUF", "bytes_total": 10, "downloaded": True},
+                {
+                    "id": "user.embeddinggemma-300m-GGUF",
+                    "bytes_total": 1,
+                    "downloaded": True,
+                },
+            ],
+        }
+    )
+    _popen(monkeypatch, _FakeProc(io.BytesIO((plan + chr(10)).encode())))
+    # The check reports Gemma only: the embedder was never verified.
+    monkeypatch.setattr(
+        sr,
+        "check",
+        lambda *_a, **_k: {
+            "ready": True,
+            "models": [{"id": "Gemma-4-E4B-it-GGUF", "loaded": True}],
+        },
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    states = {m["id"]: m["state"] for m in view["models"]}
+    assert states["Gemma-4-E4B-it-GGUF"] == "ready"
+    assert states["user.embeddinggemma-300m-GGUF"] != "ready"
+
+
 def test_a_failed_server_only_run_fails_like_any_run(monkeypatch):
     _popen(monkeypatch, _FakeProc(io.BytesIO("\u274c Port in use\n".encode()), 1))
     monkeypatch.setattr(sr, "server_problem", lambda: None)
