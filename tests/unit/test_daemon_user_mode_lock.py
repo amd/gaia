@@ -67,7 +67,7 @@ class _Manager:
 @pytest.fixture
 def daemon_lock(tmp_path, monkeypatch):
     lock = _write_lock(tmp_path / "daemon-checkout", "1.0.0")
-    monkeypatch.setattr(plat, "default_lock_path", lambda: lock)
+    monkeypatch.setattr(plat, "default_lock_path", lambda agent_id="email": lock)
     return lock
 
 
@@ -205,7 +205,7 @@ def test_daemon_without_a_lock_refuses_a_pinning_caller(
     registry, tmp_path, monkeypatch
 ):
     missing = spec_mod.agent_binary_lock_path(tmp_path / "wheel", "email")
-    monkeypatch.setattr(plat, "default_lock_path", lambda: missing)
+    monkeypatch.setattr(plat, "default_lock_path", lambda agent_id="email": missing)
     caller = _write_lock(tmp_path / "caller-checkout", "2.0.0")
     with pytest.raises(ModeConflictError, match="has no binaries.lock.json"):
         registry.ensure(
@@ -238,7 +238,9 @@ def test_mis_shaped_caller_path_is_rejected_not_guessed(registry, daemon_lock):
 
 def test_no_caller_digest_means_no_check_and_no_echo(registry, tmp_path, monkeypatch):
     monkeypatch.setattr(
-        plat, "default_lock_path", lambda: tmp_path / "absent" / "lock.json"
+        plat,
+        "default_lock_path",
+        lambda agent_id="email": tmp_path / "absent" / "lock.json",
     )
     entry = registry.ensure("email", mode="user")
     assert entry["state"] == "running"
@@ -419,3 +421,90 @@ def test_cli_in_dev_mode_never_sends_a_lock_digest(monkeypatch, tmp_path):
         mode="dev",
     )
     assert "binary_lock_sha256" not in post.bodies[0]
+
+
+# --- each agent is compared against its own lock ----------------------------
+
+
+_GAIA_SPEC = AgentSidecarSpec(
+    agent_id="gaia",
+    service_id="gaia-agent-gaia",
+    display_name="GAIA",
+    expected_api_major="2",
+    token_env_var="GAIA_LOCKTEST_GAIA_TOKEN",
+    mode_env_var="GAIA_LOCKTEST_GAIA_MODE",
+    cache_dir_name="gaia",
+)
+
+
+@pytest.fixture
+def daemon_checkout(tmp_path, monkeypatch):
+    """A daemon checkout whose email and gaia agents pin different binaries."""
+    repo = tmp_path / "daemon-checkout"
+    monkeypatch.setattr(
+        spec_mod,
+        "_default_email_src_dir",
+        lambda: spec_mod.agent_dev_src_dir(repo, "email"),
+    )
+    return {
+        "email": _write_lock(repo, "1.0.0"),
+        "gaia": _write_gaia_lock(repo, "9.9.9"),
+    }
+
+
+def _write_gaia_lock(repo_root: Path, version: str) -> Path:
+    lock = spec_mod.agent_binary_lock_path(repo_root, "gaia")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text('{"agentVersion": "%s", "binaries": {}}' % version)
+    return lock
+
+
+@pytest.fixture
+def two_agent_registry():
+    reg = SidecarRegistry({"email": _SPEC, "gaia": _GAIA_SPEC})
+    reg._manager_factory = _Manager
+    return reg
+
+
+def test_default_lock_path_is_per_agent(daemon_checkout):
+    assert plat.default_lock_path("gaia") == daemon_checkout["gaia"]
+    assert plat.default_lock_path() == daemon_checkout["email"]
+
+
+def test_gaia_from_the_daemons_own_checkout_is_served(
+    two_agent_registry, daemon_checkout
+):
+    gaia_lock = daemon_checkout["gaia"]
+    entry = two_agent_registry.ensure(
+        "gaia",
+        mode="user",
+        binary_lock_sha256=_sha(gaia_lock),
+        binary_lock_path=str(gaia_lock),
+    )
+    assert entry["binary_lock_sha256"] == _sha(gaia_lock)
+
+
+def test_gaia_is_never_compared_against_the_email_lock(
+    two_agent_registry, daemon_checkout
+):
+    email_lock = daemon_checkout["email"]
+    caller_gaia = str(daemon_checkout["gaia"])
+    with pytest.raises(ModeConflictError) as exc:
+        two_agent_registry.ensure(
+            "gaia",
+            mode="user",
+            binary_lock_sha256=_sha(email_lock),
+            binary_lock_path=caller_gaia,
+        )
+    assert str(daemon_checkout["gaia"]) in str(exc.value)
+    assert str(email_lock) not in str(exc.value)
+
+
+def test_cli_tells_the_user_an_old_daemon_left_the_agent_running(
+    monkeypatch, tmp_path, capsys
+):
+    with pytest.raises(SystemExit):
+        _run_cli(monkeypatch, tmp_path, _ok())
+    out = capsys.readouterr().out
+    assert "started agent 'email' anyway" in out
+    assert "gaia daemon stop-agent email" in out

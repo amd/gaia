@@ -9518,10 +9518,11 @@ def _handle_daemon_start_agent(args):
         if body.get("binary_lock_sha256") != caller_lock_sha256:
             print(
                 f"❌ the daemon did not confirm it checked the binary pin in "
-                f"{caller_lock} — it predates this check, so the agent may be "
-                "running a different binary than this checkout pins. Restart "
-                "the daemon from this checkout's Python environment, or "
-                "upgrade it."
+                f"{caller_lock} — it predates this check. It started agent "
+                f"'{args.agent_id}' anyway, possibly on a different binary than "
+                "this checkout pins. Stop it with `gaia daemon stop-agent "
+                f"{args.agent_id}`, then restart the daemon from this "
+                "checkout's Python environment, or upgrade it."
             )
             sys.exit(1)
 

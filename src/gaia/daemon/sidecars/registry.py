@@ -329,10 +329,12 @@ class SidecarRegistry:
 
         Returns the daemon's lock digest when the check ran and matched, else
         ``None``. Only digests are compared; *caller_path* is message text.
+        Like the dev-mode check, an attach compares against the lock on disk
+        now, not the pin the running sidecar was spawned from.
         """
         if caller_sha256 is None or self._resolve_mode(spec, mode) != "user":
             return None
-        daemon_lock = Path(manager.lock_path or plat.default_lock_path())
+        daemon_lock = Path(manager.lock_path or plat.default_lock_path(agent_id))
         try:
             daemon_sha256 = hashlib.sha256(daemon_lock.read_bytes()).hexdigest()
         except FileNotFoundError:

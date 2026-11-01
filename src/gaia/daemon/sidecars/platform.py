@@ -65,8 +65,9 @@ def current_platform_key(plat: Optional[str] = None, arch: Optional[str] = None)
     return f"{os_key}-{arch_key}"
 
 
-def default_lock_path() -> Path:
-    """Locate the repo's binaries.lock.json (npm package ships the canonical one).
+def default_lock_path(agent_id: str = "email") -> Path:
+    """Locate *agent_id*'s binaries.lock.json in the daemon's own checkout (the
+    agent's npm package ships the canonical one).
 
     Follows the Python environment that launched the DAEMON; a caller in a
     different checkout is compared against it in the registry (#2596).
@@ -78,7 +79,7 @@ def default_lock_path() -> Path:
     )
 
     repo_root = repo_root_from_agent_dev_src_dir(_default_email_src_dir(), "email")
-    return agent_binary_lock_path(repo_root, "email")
+    return agent_binary_lock_path(repo_root, agent_id)
 
 
 def load_lock(lock_path: Optional[Path] = None) -> BinaryLock:
