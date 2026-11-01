@@ -297,6 +297,96 @@ def test_dotenv_disabled_reads_the_startup_snapshot(monkeypatch):
     assert gaia_env.dotenv_disabled() is True
 
 
+# A console script or a wheel install runs a real file, so python-dotenv's
+# default lookup started from the installed package, not the user's directory.
+# ``python -c`` hid that: it counts as interactive and searches from the cwd.
+def _run_gaia_script_in(cwd, script_dir, extra_env):
+    script = Path(script_dir) / "probe_dotenv.py"
+    script.write_text(
+        "import os, gaia\n" "print(os.environ.get('FROM_DOTENV', '<unset>'))\n"
+    )
+    env = {k: v for k, v in os.environ.items() if k not in ("GAIA_NO_DOTENV",)}
+    env.pop("FROM_DOTENV", None)
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env.update(extra_env)
+    proc = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip().splitlines()[-1]
+
+
+def test_dotenv_is_found_from_the_cwd_when_run_from_a_file(tmp_path):
+    project = tmp_path / "project"
+    scripts = tmp_path / "elsewhere"
+    project.mkdir()
+    scripts.mkdir()
+    (project / ".env").write_text("FROM_DOTENV=loaded\n")
+
+    assert _run_gaia_script_in(project, scripts, {}) == "loaded"
+
+
+def test_dotenv_is_found_in_a_parent_of_the_cwd(tmp_path):
+    """Walks up like the TUI's readiness gate, which the child must agree with."""
+    deeper = tmp_path / "project" / "a" / "b"
+    deeper.mkdir(parents=True)
+    (tmp_path / "project" / ".env").write_text("FROM_DOTENV=loaded\n")
+
+    assert _run_gaia_script_in(deeper, tmp_path, {}) == "loaded"
+
+
+def test_dotenv_next_to_the_script_is_not_loaded(tmp_path):
+    """Only the cwd decides: a .env beside the running file is not the user's."""
+    project = tmp_path / "project"
+    scripts = tmp_path / "elsewhere"
+    project.mkdir()
+    scripts.mkdir()
+    (scripts / ".env").write_text("FROM_DOTENV=from-script-dir\n")
+
+    assert _run_gaia_script_in(project, scripts, {}) != "from-script-dir"
+
+
+def test_a_real_variable_beats_the_dotenv_value(tmp_path):
+    (tmp_path / ".env").write_text("FROM_DOTENV=from-file\n")
+
+    assert _run_gaia_script_in(tmp_path, tmp_path, {"FROM_DOTENV": "real"}) == "real"
+
+
+def test_gaia_no_dotenv_still_wins_over_a_cwd_dotenv(tmp_path):
+    (tmp_path / ".env").write_text("FROM_DOTENV=loaded\n")
+
+    assert _run_gaia_script_in(tmp_path, tmp_path, {"GAIA_NO_DOTENV": "1"}) == "<unset>"
+
+
+def test_load_env_asks_python_dotenv_for_the_cwd_lookup(monkeypatch, tmp_path):
+    monkeypatch.delitem(gaia._PRE_DOTENV_ENVIRON, "GAIA_NO_DOTENV", raising=False)
+    found = str(tmp_path / ".env")
+    find = Mock(return_value=found)
+    load = Mock(return_value=True)
+    monkeypatch.setattr(gaia_env.dotenv, "find_dotenv", find)
+    monkeypatch.setattr(gaia_env.dotenv, "load_dotenv", load)
+
+    assert gaia_env.load_env() is True
+    find.assert_called_once_with(usecwd=True)
+    load.assert_called_once_with(found)
+
+
+def test_load_env_without_a_dotenv_loads_nothing(monkeypatch):
+    monkeypatch.delitem(gaia._PRE_DOTENV_ENVIRON, "GAIA_NO_DOTENV", raising=False)
+    load = Mock()
+    monkeypatch.setattr(gaia_env.dotenv, "find_dotenv", Mock(return_value=""))
+    monkeypatch.setattr(gaia_env.dotenv, "load_dotenv", load)
+
+    assert gaia_env.load_env() is False
+    load.assert_not_called()
+
+
 # --------------------------------------------------------------------------
 # Guard: one place loads .env
 # --------------------------------------------------------------------------

@@ -46,11 +46,19 @@ def dotenv_disabled() -> bool:
 def load_env() -> bool:
     """Load ``.env`` into ``os.environ`` unless ``GAIA_NO_DOTENV`` is set.
 
-    Returns True when a ``.env`` file was found and loaded.
+    The file is the nearest ``.env`` at or above the working directory — the
+    same lookup the TUI's readiness gate makes, whatever way GAIA is installed.
+    Variables already set in the environment win. Returns True when a ``.env``
+    file was found and loaded.
     """
     if dotenv_disabled():
         return False
-    return dotenv.load_dotenv()
+    # Without usecwd, python-dotenv searches from this file's directory, which
+    # in a wheel install is site-packages, never the user's project.
+    path = dotenv.find_dotenv(usecwd=True)
+    if not path:
+        return False
+    return dotenv.load_dotenv(path)
 
 
 def is_internal_secret(name: str) -> bool:

@@ -27,6 +27,8 @@ export GAIA_API_STREAMING="1"  # stream LLM responses over the API
 # environment, so a project .env cannot switch it on.
 export GAIA_AUTO_APPROVE_TOOLS="1"
 
+# GAIA loads the nearest .env at or above the working directory; a variable
+# already set in the environment wins over it.
 # Skip loading .env files ("1", "true", "yes" or "on"). For an app that embeds
 # GAIA and supplies its own environment. Read from the startup environment, so
 # a .env file cannot turn it on or off.

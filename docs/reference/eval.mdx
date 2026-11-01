@@ -71,7 +71,8 @@ gaia eval sessions --dataset-only --out eval/results/sessions
   The dataset and results contain your own prompts and the answers Claude Code gave you. `eval/results/sessions*/` is gitignored for that reason; don't commit it or upload it as a CI artifact.
 </Warning>
 
-Judging uses Claude and needs `ANTHROPIC_API_KEY`; the repo's `.env` is read
+Judging uses Claude and needs `ANTHROPIC_API_KEY`; the nearest `.env` at or above
+the directory you run from (the repo's, when you run from the checkout) is read
 automatically.
 
 ### What gets scored
