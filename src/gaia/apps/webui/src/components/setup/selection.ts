@@ -16,6 +16,8 @@ export interface Selection {
     defaultChat: string | null;
     /** Models the user unticked by hand (not ones never ticked). */
     unticked: ReadonlySet<string>;
+    /** The user picked the chat model themselves, now or in an earlier setup. */
+    chatChosen: boolean;
 }
 
 export const catalogOf = (plan: SetupPlan | null): SetupCatalogEntry[] => plan?.catalog ?? [];
@@ -46,7 +48,7 @@ export function initialSelection(plan: SetupPlan): Selection {
     const ticked = new Set(
         catalog.filter((e) => e.selected || (e.gaia_model && e.downloaded && !e.skipped)).map((e) => e.id),
     );
-    return { ticked, defaultChat: plan.chat_model.id, unticked: new Set() };
+    return { ticked, defaultChat: plan.chat_model.id, unticked: new Set(), chatChosen: plan.chat_model.user_set };
 }
 
 /** The chat models the user can make the default: ticked, or already on this PC. */
@@ -72,7 +74,13 @@ export function toggle(sel: Selection, catalog: SetupCatalogEntry[], id: string,
         defaultChat = on && entry?.chat_choice ? id
             : (candidates.find((e) => e.recommended) ?? candidates[0])?.id ?? null;
     }
-    return { ticked, defaultChat, unticked };
+    return { ticked, defaultChat, unticked, chatChosen: sel.chatChosen };
+}
+
+/** Make *id* the default chat model by the user's choice, ticking it if it isn't on disk. */
+export function chooseChat(sel: Selection, catalog: SetupCatalogEntry[], id: string): Selection {
+    const onDisk = catalog.find((e) => e.id === id)?.downloaded;
+    return { ...sel, defaultChat: id, chatChosen: true, ticked: onDisk ? sel.ticked : new Set([...sel.ticked, id]) };
 }
 
 /** Back to the recommended set for this PC. */
@@ -83,7 +91,7 @@ export function recommendedSelection(plan: SetupPlan): Selection {
     const pick = plan.recommended_model && candidates.some((e) => e.id === plan.recommended_model)
         ? plan.recommended_model
         : (candidates.find((e) => e.recommended) ?? candidates[0])?.id ?? null;
-    return { ticked, defaultChat: pick, unticked: new Set() };
+    return { ticked, defaultChat: pick, unticked: new Set(), chatChosen: false };
 }
 
 /** Models the selection still has to download, largest first. */
@@ -159,19 +167,18 @@ export function extraModels(plan: SetupPlan, sel: Selection): string[] {
     return catalogOf(plan).filter((e) => sel.ticked.has(e.id) && !e.planned && !e.downloaded).map((e) => e.id);
 }
 
-/** Models a bigger GPU share would let run. */
-export function gpuUnlocks(gpu: GpuMemoryStatus | null): string[] {
-    return [...new Set((gpu?.presets ?? []).flatMap((p) => p.unlocks))];
-}
-
 /**
- * The GPU step shows on an integrated GPU only when a bigger share makes a
- * model the user ticked (or chose to chat with) fit; it never promotes one
- * they didn't pick.
+ * The GPU step shows on an integrated GPU when a bigger share makes a model
+ * fit that the user ticked or chats with, or GAIA's default chat model for
+ * this PC (unticked on a cold start because it doesn't fit yet) unless the
+ * user unticked it or picked their own chat model.
  */
 export function showGpuStep(gpu: GpuMemoryStatus | null, sel: Selection): boolean {
     if (!gpu?.applies || !gpu.show_in_setup) return false;
-    return gpuUnlocks(gpu).some((id) => sel.ticked.has(id) || id === sel.defaultChat);
+    return (gpu.models ?? []).some((m) => !m.fits_now && m.fits_at_setting_gb != null && (
+        sel.ticked.has(m.id) || m.id === sel.defaultChat
+        || (m.default && !sel.unticked.has(m.id) && !sel.chatChosen)
+    ));
 }
 
 /**

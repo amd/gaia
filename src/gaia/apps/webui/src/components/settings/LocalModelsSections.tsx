@@ -13,7 +13,7 @@ import { formatSize } from '../setup/format';
 import { GpuMemoryPanel } from '../setup/GpuMemoryPanel';
 import { driveName, ModelChecklist, SelectionSummary, tooBigText } from '../setup/ModelChecklist';
 import {
-    catalogOf, initialSelection, isVision, pendingDownloads, shortfall, skipChanges, toggle, tooBig,
+    catalogOf, chooseChat, initialSelection, isVision, pendingDownloads, shortfall, skipChanges, toggle, tooBig,
     type Selection,
 } from '../setup/selection';
 import '../setup/setup.css';
@@ -204,7 +204,7 @@ export function LocalModelsSections() {
                             plan={plan}
                             selection={selection}
                             onToggle={(id, on) => setSelection(toggle(selection, catalog, id, on))}
-                            onDefaultChat={(id) => setSelection({ ...selection, defaultChat: id, ticked: catalog.find((e) => e.id === id)?.downloaded ? selection.ticked : new Set([...selection.ticked, id]) })}
+                            onDefaultChat={(id) => setSelection(chooseChat(selection, catalog, id))}
                             labelledBy="settings-models-title"
                             disabled={busy}
                             progress={progress}

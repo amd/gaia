@@ -119,8 +119,17 @@ export function runStatus(models: SetupModelProgress[], over: Partial<SetupRunSt
 }
 
 /** Strix Halo on Linux with 128 GB: GAIA can apply a larger GPU share. */
+/** The backend's `models`, as describe() derives them from what each preset unlocks. */
+function modelsFromPresets(presets: GpuMemoryStatus['presets']): NonNullable<GpuMemoryStatus['models']> {
+    const at = new Map<string, number>();
+    for (const p of presets ?? []) for (const id of p.unlocks) if (!at.has(id)) at.set(id, p.setting_gb);
+    return [...at].map(([id, gb]) => ({
+        id, size_gb: 20, need_gb: 30, default: id === 'Qwen3.6-35B-A3B-GGUF', fits_now: false, fits_at_setting_gb: gb,
+    }));
+}
+
 export function gpuStatus(over: Partial<GpuMemoryStatus> = {}): GpuMemoryStatus {
-    return {
+    const status: GpuMemoryStatus = {
         applies: true,
         show_in_setup: true,
         hidden_reason: null,
@@ -140,7 +149,6 @@ export function gpuStatus(over: Partial<GpuMemoryStatus> = {}): GpuMemoryStatus 
             { setting_gb: 96, gpu_gb: 96, unlocks: ['Qwen3.6-35B-A3B-GGUF', 'gpt-oss-120b-mxfp4-GGUF'] },
         ],
         recommended_setting_gb: 64,
-        models: [],
         pending: null,
         revert: { available: false, previous_setting_gb: null },
         guided_steps: [
@@ -148,6 +156,8 @@ export function gpuStatus(over: Partial<GpuMemoryStatus> = {}): GpuMemoryStatus 
             'Rebuild the boot image. Ubuntu: sudo update-initramfs -u',
             'Restart your PC, then come back here. GAIA reads the new split.',
         ],
+        guided_value: '15625000',
         ...over,
     };
+    return { ...status, models: over.models ?? modelsFromPresets(status.presets) };
 }

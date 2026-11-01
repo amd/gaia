@@ -8,9 +8,9 @@ import type { GpuMemoryStatus, PreflightReport, SetupPlan } from '../types';
 import { ChecklistLoading, ModelChecklist, SelectionSummary, tooBigText } from './setup/ModelChecklist';
 import { formatSize } from './setup/format';
 import { Reveal } from './setup/Reveal';
-import { gpuGbAtSetting } from './setup/GpuMemoryPanel';
+import { gpuGbAtSetting, restartLine } from './setup/GpuMemoryPanel';
 import {
-    catalogOf, isEmbedding, isVision, pendingDownloads, shortfall, toggle, recommendedSelection,
+    catalogOf, chooseChat, isEmbedding, isVision, pendingDownloads, shortfall, toggle, recommendedSelection,
     type Selection,
 } from './setup/selection';
 
@@ -164,7 +164,7 @@ export function ModelsStep({
                 plan={plan}
                 selection={selection}
                 onToggle={(id, on) => onSelection(toggle(selection, catalog, id, on))}
-                onDefaultChat={(id) => onSelection({ ...selection, defaultChat: id, ticked: catalog.find((e) => e.id === id)?.downloaded ? selection.ticked : new Set([...selection.ticked, id]) })}
+                onDefaultChat={(id) => onSelection(chooseChat(selection, catalog, id))}
                 labelledBy={labelledBy}
                 cloud={cloud}
                 disabled={busy}
@@ -233,10 +233,10 @@ export function ReadySummary({ plan, chatModel, gpu }: ReadyProps) {
                 <div><dt>{t('setup.ready.notInstalled')}</dt><dd>{skipped.map((e) => e.name).join(', ')}</dd></div>
             )}
             {pending?.state === 'restart_required' && (
-                <div className="is-warn"><dt>{t('setup.ready.gpu')}</dt><dd><AlertTriangle size={13} aria-hidden="true" /> {t('gpu.pending.restart', { gb: formatSize(gpu ? gpuGbAtSetting(gpu, pending.setting_gb) : pending.setting_gb) })}</dd></div>
+                <div className="is-warn"><dt>{t('setup.ready.gpu')}</dt><dd><AlertTriangle size={13} aria-hidden="true" /> {restartLine(t, gpu ? gpuGbAtSetting(gpu, pending.setting_gb) : null)}</dd></div>
             )}
             {pending?.state === 'took_effect' && (
-                <div><dt>{t('setup.ready.gpu')}</dt><dd>{t('setup.ready.gpuNow', { gb: formatSize(gpu?.gpu_gb ?? pending.setting_gb), was: formatSize(pending.previous_setting_gb ?? 0) })}</dd></div>
+                <div><dt>{t('setup.ready.gpu')}</dt><dd>{gpu?.gpu_gb != null ? t('setup.ready.gpuNow', { gb: formatSize(gpu.gpu_gb) }) : t('setup.ready.gpuChanged')}</dd></div>
             )}
         </dl>
     );

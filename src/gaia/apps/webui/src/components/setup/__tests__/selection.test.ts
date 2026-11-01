@@ -4,9 +4,11 @@
 import { describe, expect, it } from 'vitest';
 import {
     chatCandidates, extraModels, initialSelection, installedOnlyRows, mainRows, moreRows, overallFromPlan, recommendedSelection,
-    shortfall, showGpuStep, skipChanges, toggle, tooBig, totals, visionSkipped,
+    chooseChat, shortfall, showGpuStep, skipChanges, toggle, tooBig, totals, visionSkipped,
 } from '../selection';
 import { COLD_BIG, EMBED, FLM, GEMMA, GPT_OSS, QWEN, entry, gpuStatus, plan, progress, runStatus } from './fixtures';
+import coldStrixHalo from './coldStrixHalo.json';
+import type { GpuMemoryStatus, SetupPlan } from '../../../types';
 
 describe('the selection a plan starts from', () => {
     it('ticks what setup plans, so the recommended set is preselected', () => {
@@ -192,5 +194,42 @@ describe('download totals from one source', () => {
         const p = plan([{ ...GEMMA, downloaded: true, size_gb: 0 }, { ...EMBED, downloaded: true, size_gb: 0 }]);
         const status = runStatus([progress({ id: GEMMA.id, state: 'verifying', bytes_done: 6e9, bytes_total: 6e9 })], { state: 'verifying' });
         expect(overallFromPlan(status, p)!.percent).toBe(100);
+    });
+});
+
+describe('the GPU step on a real cold start', () => {
+    // Read from the real /api/setup/plan and /api/gpu-memory: a Strix Halo with a
+    // 16 GB GPU share and nothing downloaded. Setup plans Gemma; Qwen doesn't fit yet.
+    const cold = coldStrixHalo as unknown as { plan: SetupPlan; gpu: GpuMemoryStatus };
+
+    it('offers a bigger share for the default model, though setup left it unticked', () => {
+        const sel = initialSelection(cold.plan);
+        expect(sel.ticked.has(QWEN.id)).toBe(false);
+        expect(sel.defaultChat).toBe(GEMMA.id);
+        expect(showGpuStep(cold.gpu, sel)).toBe(true);
+    });
+
+    it('hides it once the user unticks that model', () => {
+        const catalog = cold.plan.catalog!;
+        const sel = toggle(toggle(initialSelection(cold.plan), catalog, QWEN.id, true), catalog, QWEN.id, false);
+        expect(showGpuStep(cold.gpu, sel)).toBe(false);
+    });
+
+    it('hides it once the user picks their own chat model, unless a bigger share helps that one', () => {
+        const catalog = cold.plan.catalog!;
+        expect(showGpuStep(cold.gpu, chooseChat(initialSelection(cold.plan), catalog, GEMMA.id))).toBe(false);
+        expect(showGpuStep(cold.gpu, chooseChat(initialSelection(cold.plan), catalog, QWEN.id))).toBe(true);
+    });
+
+    it('never offers it for a non-default model the user did not tick', () => {
+        const gpu = { ...cold.gpu, models: cold.gpu.models!.filter((m) => !m.default) };
+        expect(gpu.models.some((m) => !m.fits_now && m.fits_at_setting_gb != null)).toBe(true);
+        expect(showGpuStep(gpu, initialSelection(cold.plan))).toBe(false);
+    });
+
+    it('ignores a model that already fits or that no share would fit', () => {
+        const sel = toggle(initialSelection(cold.plan), cold.plan.catalog!, GPT_OSS.id, true);
+        const gpu = { ...cold.gpu, models: cold.gpu.models!.filter((m) => m.fits_now || m.fits_at_setting_gb == null) };
+        expect(showGpuStep(gpu, sel)).toBe(false);
     });
 });

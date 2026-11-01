@@ -5,6 +5,7 @@ import { useCallback, useId, useRef, useState, type KeyboardEvent } from 'react'
 import { AlertTriangle, Check, Copy, Info, Loader2, RotateCcw } from 'lucide-react';
 import * as api from '../../services/api';
 import { useT } from '../../i18n/useT';
+import type { Say } from '../../i18n/registry';
 import type { GpuMemoryPreset, GpuMemoryStatus } from '../../types';
 import { ConfirmSheet } from './ConfirmSheet';
 import { formatSize } from './format';
@@ -24,12 +25,18 @@ export function copyableCommand(step: string): string | null {
 
 /**
  * The GPU's share once the knob is at `settingGb`, from the backend's presets,
- * so a message says the same number the split bar shows. The knob's own value
- * when no preset names it.
+ * so a message says the same number the split bar shows. Null when no preset
+ * names it: the knob's own value is not what the GPU gets, so it is never shown.
  */
-export function gpuGbAtSetting(status: GpuMemoryStatus, settingGb: number): number {
+export function gpuGbAtSetting(status: GpuMemoryStatus, settingGb: number): number | null {
     if (status.setting && Math.abs(status.setting.current_gb - settingGb) < 0.05 && status.gpu_gb != null) return status.gpu_gb;
-    return status.presets?.find((p) => Math.abs(p.setting_gb - settingGb) < 0.05)?.gpu_gb ?? settingGb;
+    return status.presets?.find((p) => Math.abs(p.setting_gb - settingGb) < 0.05)?.gpu_gb ?? null;
+}
+
+/** "Restart to use N GB", or without the size when the backend didn't name it. */
+export function restartLine(say: Say, gpuGb: number | null, applied = false): string {
+    if (gpuGb == null) return say(applied ? 'gpu.appliedAny' : 'gpu.pending.restartAny');
+    return say(applied ? 'gpu.applied' : 'gpu.pending.restart', { gb: formatSize(gpuGb) });
 }
 
 function errorMessage(err: unknown): string {
@@ -138,6 +145,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
     const [target, setTarget] = useState<number | null>(status.recommended_setting_gb ?? presets[0]?.setting_gb ?? null);
     const [guided, setGuided] = useState(false);
     const [guidedSteps, setGuidedSteps] = useState<string[] | null>(null);
+    const [guidedValue, setGuidedValue] = useState<string | null>(null);
     const [sheet, setSheet] = useState<'apply' | 'revert' | null>(null);
     const [busy, setBusy] = useState<'apply' | 'revert' | 'steps' | 'done' | 'keep' | null>(null);
     const [outcome, setOutcome] = useState<Outcome>(null);
@@ -145,9 +153,10 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
 
     const preset = presets.find((p) => p.setting_gb === target) ?? null;
     const unlocks = (preset?.unlocks ?? []).slice(0, 2).map((id) => names[id] ?? id);
-    const current = status.setting?.current_gb ?? 0;
     const pending = status.pending ?? null;
     const canApply = status.method === 'apply';
+    // A null guided_value: nothing this PC can give, so no steps to show.
+    const canGuide = status.guided_value != null;
 
     const showSteps = useCallback(async () => {
         setGuided(true);
@@ -156,14 +165,16 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
         setOutcome(null);
         try {
             const read = await api.getGpuMemory(target ?? undefined);
-            setGuidedSteps(read.guided_steps ?? []);
+            setGuidedValue(read.guided_value ?? null);
+            setGuidedSteps(read.guided_value != null ? read.guided_steps ?? [] : []);
         } catch (err) {
-            setGuidedSteps(status.guided_steps ?? []);
+            setGuidedValue(null);
+            setGuidedSteps([]);
             setOutcome({ kind: 'error', message: errorMessage(err) });
         } finally {
             setBusy(null);
         }
-    }, [target, status.guided_steps]);
+    }, [target]);
 
     const apply = async () => {
         if (target == null) return;
@@ -251,16 +262,14 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                     <Info size={14} aria-hidden="true" />
                     <span>
                         {t.compose((say) => [
-                            outcome?.kind === 'applied'
-                                ? say('gpu.applied', { gb: formatSize(gpuGbAtSetting(status, pending.setting_gb)) })
-                                : say('gpu.pending.restart', { gb: formatSize(gpuGbAtSetting(status, pending.setting_gb)) }),
+                            restartLine(say, gpuGbAtSetting(status, pending.setting_gb), outcome?.kind === 'applied'),
                             say('gpu.pending.restartHow'),
                             mode === 'setup' ? say('gpu.pending.downloadsFirst') : null,
                         ].filter(Boolean).join(' '))}
                     </span>
                     {pending.source === 'guided' && (
                         <button type="button" className="btn-secondary" onClick={() => void keepCurrent()} disabled={busy !== null}>
-                            {t('gpu.keep', { gb: formatSize(status.gpu_gb ?? current) })}
+                            {t('gpu.keep', { gb: formatSize(status.gpu_gb ?? 0) })}
                         </button>
                     )}
                 </div>
@@ -268,11 +277,11 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
             {pending?.state === 'not_applied' && (
                 <div className="gpu-notice is-warn" role="status">
                     <AlertTriangle size={14} aria-hidden="true" />
-                    <span>{t('gpu.pending.notApplied', { gb: formatSize(status.gpu_gb ?? current) })}</span>
+                    <span>{t('gpu.pending.notApplied', { gb: formatSize(status.gpu_gb ?? 0) })}</span>
                     <span className="setup-row">
                         {canApply && <button type="button" className="btn-primary" onClick={() => setSheet('apply')} disabled={busy !== null}>{t('gpu.tryAgain')}</button>}
-                        <button type="button" className="btn-secondary" onClick={() => void showSteps()} disabled={busy !== null}>{t('gpu.showMe')}</button>
-                        <button type="button" className="btn-secondary" onClick={() => void keepCurrent()} disabled={busy !== null}>{t('gpu.keep', { gb: formatSize(status.gpu_gb ?? current) })}</button>
+                        {canGuide && <button type="button" className="btn-secondary" onClick={() => void showSteps()} disabled={busy !== null}>{t('gpu.showMe')}</button>}
+                        <button type="button" className="btn-secondary" onClick={() => void keepCurrent()} disabled={busy !== null}>{t('gpu.keep', { gb: formatSize(status.gpu_gb ?? 0) })}</button>
                     </span>
                 </div>
             )}
@@ -299,9 +308,11 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
 
             {guided && (
                 <div className="gpu-guided">
-                    <p className="setup-hint" id={stepsId}>{t('gpu.guided.lede', { gb: preset ? formatSize(preset.gpu_gb) : formatSize(target ?? 0) })}</p>
+                    {preset && <p className="setup-hint" id={stepsId}>{t('gpu.guided.lede', { gb: formatSize(preset.gpu_gb) })}</p>}
                     {guidedSteps === null ? (
                         <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('gpu.guided.loading')}</p>
+                    ) : guidedValue == null ? (
+                        <p className="setup-hint">{t('gpu.noPresets')}</p>
                     ) : (
                         <ol className="gpu-steps" aria-labelledby={stepsId}>
                             {guidedSteps.map((step) => {
@@ -321,7 +332,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                         </ol>
                     )}
                     <div className="setup-row">
-                        {!canApply && (
+                        {!canApply && guidedValue != null && (
                             <button type="button" className="btn-primary" onClick={() => void doneByHand()} disabled={busy !== null || target == null}>
                                 {busy === 'done' && <Loader2 size={13} className="spin" aria-hidden="true" />} {t('gpu.guided.done')}
                             </button>
@@ -340,7 +351,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                     <span>{t('gpu.denied')}</span>
                     <span className="setup-row">
                         <button type="button" className="btn-primary" onClick={() => setSheet('apply')}>{t('gpu.tryAgain')}</button>
-                        <button type="button" className="btn-secondary" onClick={() => void showSteps()}>{t('gpu.showMe')}</button>
+                        {canGuide && <button type="button" className="btn-secondary" onClick={() => void showSteps()}>{t('gpu.showMe')}</button>}
                         {onSkip && <button type="button" className="btn-secondary" onClick={onSkip}>{t('gpu.skip')}</button>}
                     </span>
                 </div>
@@ -355,7 +366,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                             {t('gpu.apply')}
                         </button>
                     )}
-                    {!restartPending && presets.length > 0 && (
+                    {!restartPending && presets.length > 0 && canGuide && (
                         <button type="button" className={canApply ? 'btn-secondary' : 'btn-primary'} onClick={() => void showSteps()} disabled={busy !== null}>
                             {t('gpu.showMe')}
                         </button>
@@ -375,14 +386,14 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
 
             {sheet === 'apply' && target != null && (
                 <ConfirmSheet
-                    title={t('gpu.consent.title', { gb: formatSize(preset?.gpu_gb ?? target) })}
+                    title={preset ? t('gpu.consent.title', { gb: formatSize(preset.gpu_gb) }) : t('gpu.consent.titleAny')}
                     confirmLabel={t('setup.continue')}
                     cancelLabel={t('setup.cancel')}
                     onConfirm={() => void apply()}
                     onCancel={() => setSheet(null)}
                 >
-                    <p>{t('gpu.consent.body', { name: status.setting?.name ?? '', setting: formatSize(target), gb: formatSize(preset?.gpu_gb ?? target) })}</p>
-                    <p className="confirm-note">{t('gpu.consent.saved', { gb: formatSize(current) })}</p>
+                    <p>{preset ? t('gpu.consent.body', { name: status.setting?.name ?? '', gb: formatSize(preset.gpu_gb) }) : t('gpu.consent.bodyAny', { name: status.setting?.name ?? '' })}</p>
+                    <p className="confirm-note">{t('gpu.consent.saved', { gb: formatSize(status.gpu_gb ?? 0) })}</p>
                 </ConfirmSheet>
             )}
             {sheet === 'revert' && (
@@ -393,7 +404,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                     onConfirm={() => void revert()}
                     onCancel={() => setSheet(null)}
                 >
-                    <p>{t('gpu.revert.body', { gb: formatSize(status.revert?.previous_setting_gb ?? 0) })}</p>
+                    <p>{t('gpu.revert.body')}</p>
                 </ConfirmSheet>
             )}
         </div>

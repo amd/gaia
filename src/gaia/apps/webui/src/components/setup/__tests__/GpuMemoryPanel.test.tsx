@@ -72,7 +72,9 @@ describe('GPU memory: apply', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
         const sheet = screen.getByRole('alertdialog', { name: 'Give the GPU 64.0 GB?' });
         expect(sheet).toHaveTextContent('needs administrator permission and a restart');
-        expect(sheet).toHaveTextContent('Current setting: 32.0 GB, saved for undo.');
+        expect(sheet).toHaveTextContent('The GPU has 32.0 GB now. GAIA saves this setting so you can undo.');
+        // The knob's raw value (64 here) is not what the GPU gets, so the sheet never names it as a size.
+        expect(sheet).toHaveTextContent('GAIA will change GPU memory limit (GTT) so the GPU has 64.0 GB.');
         expect(within(sheet).getByRole('button', { name: 'Cancel' })).toHaveFocus();
         fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }));
         expect(mocked.applyGpuMemory).not.toHaveBeenCalled();
@@ -174,7 +176,7 @@ describe('GPU memory: after the restart', () => {
         expect(screen.getByText(/Restart your PC to use 64\.0 GB\./)).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
         const sheet = screen.getByRole('alertdialog', { name: 'Undo the GPU memory change?' });
-        expect(sheet).toHaveTextContent('GAIA will put the setting back to 32.0 GB. This needs administrator permission and a restart.');
+        expect(sheet).toHaveTextContent('GAIA will put GPU memory back the way it was before GAIA changed it. This needs administrator permission and a restart.');
         expect(within(sheet).getByRole('button', { name: 'Cancel' })).toHaveFocus();
         fireEvent.click(within(sheet).getByRole('button', { name: 'Continue' }));
         await waitFor(() => expect(mocked.revertGpuMemory).toHaveBeenCalled());
@@ -192,7 +194,14 @@ describe('GPU memory: one set of numbers', () => {
     it('words a setting as the GPU share the bar shows', () => {
         expect(gpuGbAtSetting(linux, 15.5)).toBe(16);
         expect(gpuGbAtSetting(linux, 32)).toBe(32.5);
-        expect(gpuGbAtSetting(linux, 70)).toBe(70);
+        // A setting no preset names has no known GPU share: never the knob's own value.
+        expect(gpuGbAtSetting(linux, 70)).toBeNull();
+    });
+
+    it('says restart without a size when the backend did not name the share', () => {
+        render(<Harness initial={{ ...linux, pending: { setting_gb: 70, previous_setting_gb: 15.5, source: 'apply', recorded_at: null, state: 'restart_required' } }} />);
+        expect(screen.getByText(/Restart your PC to use the new GPU memory\./)).toBeInTheDocument();
+        expect(screen.queryByText(/70\.0 GB/)).not.toBeInTheDocument();
     });
 
     it('says "still reports" and "Keep" in the same numbers as the split', () => {
@@ -200,5 +209,41 @@ describe('GPU memory: one set of numbers', () => {
         expect(screen.getByText(/^The PC still reports 16\.0 GB\./)).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Keep 16.0 GB' })).toBeInTheDocument();
         expect(screen.getByRole('img', { name: 'Memory split: CPU 112.0 GB, GPU 16.0 GB' })).toBeInTheDocument();
+    });
+});
+
+describe('GPU memory: the value to enter', () => {
+    const windows = (over: Partial<GpuMemoryStatus> = {}) => gpuStatus({
+        os: 'windows', method: 'guided', method_reason: '',
+        gpu_gb: 41, cpu_gb: 87, total_gb: 128,
+        setting: { name: 'Variable Graphics Memory', current_gb: 32, min_gb: 4, max_gb: 96 },
+        presets: [{ setting_gb: 48, gpu_gb: 59, unlocks: ['Qwen3.6-35B-A3B-GGUF'] }],
+        recommended_setting_gb: 48,
+        guided_value: '45',
+        ...over,
+    });
+
+    it('names the target as the GPU share and leaves the value to enter to the steps', async () => {
+        mocked.getGpuMemory.mockResolvedValue(windows({ guided_steps: ['Open AMD Software.', 'Set Variable Graphics Memory to 45 GB.'] }));
+        render(<Harness initial={windows()} />);
+        expect(screen.getByRole('radio', { name: 'GPU 59.0 GB' })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Show me how' }));
+        expect(await screen.findByText('Set Variable Graphics Memory to 45 GB.')).toBeInTheDocument();
+        expect(screen.getByText('To give the GPU 59.0 GB:')).toBeInTheDocument();
+        // The preset's setting_gb (48) is neither the GPU share nor the value to enter.
+        expect(document.body).not.toHaveTextContent(/\b48(\.0)? GB/);
+    });
+
+    it('offers no steps when the PC has nothing to give', () => {
+        render(<Harness initial={windows({ guided_value: null, guided_steps: [] })} />);
+        expect(screen.queryByRole('button', { name: 'Show me how' })).not.toBeInTheDocument();
+    });
+
+    it('shows no steps when the target turns out to have nothing to give', async () => {
+        mocked.getGpuMemory.mockResolvedValue(windows({ guided_value: null, guided_steps: [] }));
+        render(<Harness initial={windows()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Show me how' }));
+        expect(await screen.findByText(/can’t give the GPU more memory/)).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'I’ve done this' })).not.toBeInTheDocument();
     });
 });

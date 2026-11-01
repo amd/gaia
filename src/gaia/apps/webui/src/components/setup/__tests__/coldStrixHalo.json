@@ -1,0 +1,383 @@
+{
+  "plan": {
+    "profile": "gaia",
+    "lemonade": {
+      "mode": "gaia",
+      "url": "http://127.0.0.1:14262/api/v1",
+      "reachable": true
+    },
+    "chat_model": {
+      "id": "Gemma-4-E4B-it-GGUF",
+      "user_set": false,
+      "size_gb": 5.97,
+      "downloaded": false
+    },
+    "recommended_model": "Gemma-4-E4B-it-GGUF",
+    "decided_after_server": false,
+    "memory_gb": 17,
+    "memory_source": "AMD iGPU",
+    "capacity_gb": 17.2,
+    "disk": {
+      "path": "/home/you/.cache/huggingface/hub",
+      "free_gb": 400.0,
+      "source": "lemonade"
+    },
+    "download_gb": 6.3,
+    "disk_warning": null,
+    "skipped_models": [],
+    "options": [
+      {
+        "id": "Qwen3.6-35B-A3B-GGUF",
+        "size_gb": 23.3,
+        "fits": false,
+        "reason": "needs ~29 GB of memory; this PC has 17 GB (AMD iGPU)"
+      },
+      {
+        "id": "Gemma-4-E4B-it-GGUF",
+        "size_gb": 5.97,
+        "fits": true,
+        "reason": null
+      }
+    ],
+    "models": [
+      {
+        "id": "Gemma-4-E4B-it-GGUF",
+        "name": "Gemma 4 E4B (Multimodal)",
+        "roles": [
+          "chat",
+          "vision"
+        ],
+        "purpose": "Answers your messages and runs GAIA's tools; Reads images and screenshots",
+        "if_skipped": "Without Gemma-4-E4B-it-GGUF, GAIA has no local chat model, so pick another one or a cloud provider and GAIA can't read images or screenshots. Download it later in Settings or with `gaia init --download-model Gemma-4-E4B-it-GGUF`.",
+        "recipe": "llamacpp",
+        "size_gb": 5.97,
+        "full_size_gb": 5.97,
+        "partial": false,
+        "partial_gb": 0.0,
+        "downloaded": false,
+        "in_lemonade": true,
+        "recommended": true,
+        "planned": true,
+        "gaia_model": true,
+        "selected": true,
+        "skipped": false,
+        "chat_choice": true,
+        "fits": true,
+        "need_gb": 9.0,
+        "capacity_gb": 17.2,
+        "fit_reason": null,
+        "role": "chat"
+      },
+      {
+        "id": "user.embeddinggemma-300m-GGUF",
+        "name": "EmbeddingGemma 300M",
+        "roles": [
+          "embedding"
+        ],
+        "purpose": "Searches your documents and remembers things",
+        "if_skipped": "Without user.embeddinggemma-300m-GGUF, GAIA can't search your documents or remember things. Download it later in Settings or with `gaia init --download-model user.embeddinggemma-300m-GGUF`.",
+        "recipe": "llamacpp",
+        "size_gb": 0.33,
+        "full_size_gb": 0.33,
+        "partial": false,
+        "partial_gb": 0.0,
+        "downloaded": false,
+        "in_lemonade": true,
+        "recommended": true,
+        "planned": true,
+        "gaia_model": true,
+        "selected": true,
+        "skipped": false,
+        "chat_choice": false,
+        "fits": true,
+        "need_gb": 1.4,
+        "capacity_gb": 17.2,
+        "fit_reason": null,
+        "role": "embedding"
+      }
+    ],
+    "catalog": [
+      {
+        "id": "Gemma-4-E4B-it-GGUF",
+        "name": "Gemma 4 E4B (Multimodal)",
+        "roles": [
+          "chat",
+          "vision"
+        ],
+        "purpose": "Answers your messages and runs GAIA's tools; Reads images and screenshots",
+        "if_skipped": "Without Gemma-4-E4B-it-GGUF, GAIA has no local chat model, so pick another one or a cloud provider and GAIA can't read images or screenshots. Download it later in Settings or with `gaia init --download-model Gemma-4-E4B-it-GGUF`.",
+        "recipe": "llamacpp",
+        "size_gb": 5.97,
+        "full_size_gb": 5.97,
+        "partial": false,
+        "partial_gb": 0.0,
+        "downloaded": false,
+        "in_lemonade": true,
+        "recommended": true,
+        "planned": true,
+        "gaia_model": true,
+        "selected": true,
+        "skipped": false,
+        "chat_choice": true,
+        "fits": true,
+        "need_gb": 9.0,
+        "capacity_gb": 17.2,
+        "fit_reason": null
+      },
+      {
+        "id": "user.embeddinggemma-300m-GGUF",
+        "name": "EmbeddingGemma 300M",
+        "roles": [
+          "embedding"
+        ],
+        "purpose": "Searches your documents and remembers things",
+        "if_skipped": "Without user.embeddinggemma-300m-GGUF, GAIA can't search your documents or remember things. Download it later in Settings or with `gaia init --download-model user.embeddinggemma-300m-GGUF`.",
+        "recipe": "llamacpp",
+        "size_gb": 0.33,
+        "full_size_gb": 0.33,
+        "partial": false,
+        "partial_gb": 0.0,
+        "downloaded": false,
+        "in_lemonade": true,
+        "recommended": true,
+        "planned": true,
+        "gaia_model": true,
+        "selected": true,
+        "skipped": false,
+        "chat_choice": false,
+        "fits": true,
+        "need_gb": 1.4,
+        "capacity_gb": 17.2,
+        "fit_reason": null
+      },
+      {
+        "id": "Qwen3.6-35B-A3B-GGUF",
+        "name": "Qwen3.6 35B A3B (Multimodal)",
+        "roles": [
+          "chat"
+        ],
+        "purpose": "Answers your messages and runs GAIA's tools",
+        "if_skipped": null,
+        "recipe": "llamacpp",
+        "size_gb": 23.3,
+        "full_size_gb": 23.3,
+        "partial": false,
+        "partial_gb": 0.0,
+        "downloaded": false,
+        "in_lemonade": true,
+        "recommended": false,
+        "planned": false,
+        "gaia_model": true,
+        "selected": false,
+        "skipped": false,
+        "chat_choice": true,
+        "fits": false,
+        "need_gb": 28.8,
+        "capacity_gb": 17.2,
+        "fit_reason": "needs ~29 GB of memory; this PC has 17 GB (AMD iGPU)"
+      },
+      {
+        "id": "user.ggml-gpt-oss-20b-MXFP4-GGUF",
+        "name": "gpt-oss 20B",
+        "roles": [
+          "chat"
+        ],
+        "purpose": "Answers your messages and runs GAIA's tools",
+        "if_skipped": null,
+        "recipe": null,
+        "size_gb": 12.1,
+        "full_size_gb": 12.1,
+        "partial": false,
+        "partial_gb": 0.0,
+        "downloaded": false,
+        "in_lemonade": false,
+        "recommended": false,
+        "planned": false,
+        "gaia_model": true,
+        "selected": false,
+        "skipped": false,
+        "chat_choice": true,
+        "fits": true,
+        "need_gb": 16.4,
+        "capacity_gb": 17.2,
+        "fit_reason": null
+      },
+      {
+        "id": "gpt-oss-120b-mxfp-GGUF",
+        "name": "gpt-oss 120B",
+        "roles": [
+          "chat"
+        ],
+        "purpose": "Answers your messages and runs GAIA's tools",
+        "if_skipped": null,
+        "recipe": null,
+        "size_gb": 63.4,
+        "full_size_gb": 63.4,
+        "partial": false,
+        "partial_gb": 0.0,
+        "downloaded": false,
+        "in_lemonade": false,
+        "recommended": false,
+        "planned": false,
+        "gaia_model": true,
+        "selected": false,
+        "skipped": false,
+        "chat_choice": true,
+        "fits": false,
+        "need_gb": 75.1,
+        "capacity_gb": 17.2,
+        "fit_reason": "needs ~75 GB of memory; this PC has 17 GB (AMD iGPU)"
+      },
+      {
+        "id": "user.Qwen3.8-Flash-Next-GGUF",
+        "name": "Qwen3.8 Flash Next (Multimodal)",
+        "roles": [
+          "chat"
+        ],
+        "purpose": "Answers your messages and runs GAIA's tools",
+        "if_skipped": null,
+        "recipe": null,
+        "size_gb": 82.86,
+        "full_size_gb": 82.86,
+        "partial": false,
+        "partial_gb": 0.0,
+        "downloaded": false,
+        "in_lemonade": false,
+        "recommended": false,
+        "planned": false,
+        "gaia_model": true,
+        "selected": false,
+        "skipped": false,
+        "chat_choice": true,
+        "fits": false,
+        "need_gb": 96.2,
+        "capacity_gb": 17.2,
+        "fit_reason": "needs ~96 GB of memory; this PC has 17 GB (AMD iGPU)"
+      }
+    ]
+  },
+  "gpu": {
+    "applies": true,
+    "show_in_setup": true,
+    "hidden_reason": null,
+    "os": "linux",
+    "total_gb": 137.4,
+    "gpu_gb": 17.2,
+    "cpu_gb": 120.3,
+    "setting": {
+      "name": "GPU memory limit (GTT)",
+      "current_gb": 16.6,
+      "min_gb": 4.0,
+      "max_gb": 111.0
+    },
+    "reserve_gb": 16.0,
+    "method": "apply",
+    "method_reason": "",
+    "needs_admin": true,
+    "needs_restart": true,
+    "presets": [
+      {
+        "setting_gb": 32.0,
+        "gpu_gb": 32.5,
+        "unlocks": [
+          "Qwen3.6-35B-A3B-GGUF"
+        ]
+      },
+      {
+        "setting_gb": 48.0,
+        "gpu_gb": 48.5,
+        "unlocks": [
+          "Qwen3.6-35B-A3B-GGUF"
+        ]
+      },
+      {
+        "setting_gb": 64.0,
+        "gpu_gb": 64.5,
+        "unlocks": [
+          "Qwen3.6-35B-A3B-GGUF"
+        ]
+      },
+      {
+        "setting_gb": 80.0,
+        "gpu_gb": 80.5,
+        "unlocks": [
+          "Qwen3.6-35B-A3B-GGUF",
+          "gpt-oss-120b-mxfp-GGUF"
+        ]
+      },
+      {
+        "setting_gb": 96.0,
+        "gpu_gb": 96.5,
+        "unlocks": [
+          "Qwen3.6-35B-A3B-GGUF",
+          "gpt-oss-120b-mxfp-GGUF",
+          "user.Qwen3.8-Flash-Next-GGUF"
+        ]
+      },
+      {
+        "setting_gb": 111.0,
+        "gpu_gb": 111.5,
+        "unlocks": [
+          "Qwen3.6-35B-A3B-GGUF",
+          "gpt-oss-120b-mxfp-GGUF",
+          "user.Qwen3.8-Flash-Next-GGUF"
+        ]
+      }
+    ],
+    "recommended_setting_gb": 32.0,
+    "models": [
+      {
+        "id": "Qwen3.6-35B-A3B-GGUF",
+        "size_gb": 23.3,
+        "need_gb": 28.8,
+        "default": true,
+        "fits_now": false,
+        "fits_at_setting_gb": 29.0
+      },
+      {
+        "id": "Gemma-4-E4B-it-GGUF",
+        "size_gb": 5.97,
+        "need_gb": 9.0,
+        "default": true,
+        "fits_now": true,
+        "fits_at_setting_gb": null
+      },
+      {
+        "id": "user.ggml-gpt-oss-20b-MXFP4-GGUF",
+        "size_gb": 12.1,
+        "need_gb": 16.4,
+        "default": false,
+        "fits_now": true,
+        "fits_at_setting_gb": null
+      },
+      {
+        "id": "gpt-oss-120b-mxfp-GGUF",
+        "size_gb": 63.4,
+        "need_gb": 75.1,
+        "default": false,
+        "fits_now": false,
+        "fits_at_setting_gb": 75.0
+      },
+      {
+        "id": "user.Qwen3.8-Flash-Next-GGUF",
+        "size_gb": 82.86,
+        "need_gb": 96.2,
+        "default": false,
+        "fits_now": false,
+        "fits_at_setting_gb": 96.0
+      }
+    ],
+    "pending": null,
+    "revert": {
+      "available": false,
+      "previous_setting_gb": null
+    },
+    "guided_steps": [
+      "Run: echo 'options ttm pages_limit=7812500' | sudo tee /etc/modprobe.d/ttm.conf",
+      "Rebuild the boot image. Ubuntu: sudo update-initramfs -u · Fedora: sudo dracut --regenerate-all -f",
+      "Restart your PC, then come back here. GAIA reads the new split.",
+      "Or use AMD's tool, which counts in GiB: amd-ttm --set 29.8",
+      "Or raise UMA Frame Buffer Size in the BIOS. AMD recommends keeping that small on Linux and raising this limit instead."
+    ]
+  }
+}

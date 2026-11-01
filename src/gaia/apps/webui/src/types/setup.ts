@@ -114,4 +114,7 @@ export interface GpuMemoryStatus {
     pending?: GpuMemoryPending | null;
     revert?: { available: boolean; previous_setting_gb: number | null };
     guided_steps?: string[];
+    /** The one value the steps ask the user to enter (AMD Software's GB on Windows,
+     *  pages on Linux); null when this PC has nothing to give. */
+    guided_value?: string | null;
 }
