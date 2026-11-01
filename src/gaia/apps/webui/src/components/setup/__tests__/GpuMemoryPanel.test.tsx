@@ -25,9 +25,9 @@ const mocked = vi.mocked(api);
 
 const NAMES = { 'Qwen3.6-35B-A3B-GGUF': 'Qwen3.6-35B-A3B', 'gpt-oss-120b-mxfp4-GGUF': 'gpt-oss 120B' };
 
-function Harness({ initial, mode = 'setup', onSkip = vi.fn(), onContinue = vi.fn() }: { initial: GpuMemoryStatus; mode?: 'setup' | 'settings'; onSkip?: () => void; onContinue?: () => void }) {
+function Harness({ initial, mode = 'setup', onSkip = vi.fn(), onContinue = vi.fn(), headingId }: { initial: GpuMemoryStatus; mode?: 'setup' | 'settings'; onSkip?: () => void; onContinue?: () => void; headingId?: string }) {
     const [status, setStatus] = useState(initial);
-    return <GpuMemoryPanel status={status} onStatus={setStatus} mode={mode} names={NAMES} onSkip={onSkip} onContinue={onContinue} onBack={vi.fn()} />;
+    return <GpuMemoryPanel status={status} onStatus={setStatus} mode={mode} names={NAMES} onSkip={onSkip} onContinue={onContinue} onBack={vi.fn()} headingId={headingId} />;
 }
 
 const restartPending = (over: Partial<GpuMemoryStatus> = {}) => gpuStatus({
@@ -44,7 +44,7 @@ describe('GPU memory: what a bigger share unlocks', () => {
     it('shows the split, the target and the model it unlocks, preselecting the smallest that does', () => {
         render(<Harness initial={gpuStatus()} />);
         expect(screen.getByText(/This PC shares 128\.0 GB between the CPU and the GPU\. The GPU has 32\.0 GB now\./)).toBeInTheDocument();
-        expect(screen.getByRole('img', { name: 'Memory split: CPU 96.0 GB, GPU 32.0 GB' })).toBeInTheDocument();
+        expect(screen.getByRole('img', { name: 'Memory split after the change: CPU 64.0 GB, GPU 64.0 GB (now 32.0 GB)' })).toBeInTheDocument();
         expect(screen.getByRole('radio', { name: 'GPU 64.0 GB' })).toHaveAttribute('aria-checked', 'true');
         expect(screen.getByText('With 64.0 GB for the GPU, Qwen3.6-35B-A3B fits.')).toBeInTheDocument();
         expect(screen.getByText(/GAIA keeps at least 16\.0 GB for Linux and your apps\. Changing it needs administrator permission and a restart\./)).toBeInTheDocument();
@@ -94,16 +94,40 @@ describe('GPU memory: apply', () => {
         expect(onContinue).toHaveBeenCalled();
     });
 
-    it('says nothing changed when admin permission is refused, and offers three ways on', async () => {
+    it('says nothing changed when admin permission is refused, with one set of ways on and focus on the step', async () => {
         mocked.applyGpuMemory.mockRejectedValue(new api.ApiError('denied', 403, 'Permission was not given', null));
-        render(<Harness initial={gpuStatus()} />);
+        render(<><h3 id="gpu-heading" tabIndex={-1}>Give the GPU more memory</h3><Harness initial={gpuStatus()} headingId="gpu-heading" /></>);
         fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
         fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Continue' }));
         const alert = await screen.findByRole('alert');
         expect(alert).toHaveTextContent('Permission wasn’t given, so nothing changed.');
-        expect(within(alert).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
-        expect(within(alert).getByRole('button', { name: 'Show me how' })).toBeInTheDocument();
-        expect(within(alert).getByRole('button', { name: 'Skip for now' })).toBeInTheDocument();
+        expect(within(alert).queryByRole('button')).not.toBeInTheDocument();
+        // One of each: Apply becomes Try again, beside Show me how and Skip.
+        expect(screen.getAllByRole('button', { name: 'Try again' })).toHaveLength(1);
+        expect(screen.getAllByRole('button', { name: 'Show me how' })).toHaveLength(1);
+        expect(screen.getAllByRole('button', { name: 'Skip for now' })).toHaveLength(1);
+        expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'Give the GPU more memory' })).toHaveFocus();
+    });
+
+    it('moves focus to the step heading on entry in setup', () => {
+        render(<><h3 id="gpu-heading" tabIndex={-1}>Give the GPU more memory</h3><Harness initial={gpuStatus()} headingId="gpu-heading" /></>);
+        expect(screen.getByRole('heading', { name: 'Give the GPU more memory' })).toHaveFocus();
+    });
+
+    it('shows a split whose figures add up to the total', () => {
+        // 17.2 GPU now, 32.6 after: "Added 15.4" and CPU 104.9 sum to 137.4 (rounded once).
+        render(<Harness initial={gpuStatus({
+            total_gb: 137.4, gpu_gb: 17.2, cpu_gb: 120.2,
+            presets: [{ setting_gb: 32, gpu_gb: 32.6, unlocks: ['Qwen3.6-35B-A3B-GGUF'] }],
+            recommended_setting_gb: 32,
+        })} />);
+        const legend = document.querySelector('.gpu-legend')!;
+        expect(legend).toHaveTextContent('GPU 17.2 GB');
+        expect(legend).toHaveTextContent('Added 15.4 GB');
+        expect(legend).toHaveTextContent('CPU 104.8 GB');
+        expect(17.2 + 15.4 + 104.8).toBeCloseTo(137.4, 5);
+        expect(screen.getByRole('img', { name: 'Memory split after the change: CPU 104.8 GB, GPU 32.6 GB (now 17.2 GB)' })).toBeInTheDocument();
     });
 
     it("shows the backend's reason when the write fails", async () => {
@@ -165,8 +189,8 @@ describe('GPU memory: after the restart', () => {
             pending: { setting_gb: 64, previous_setting_gb: 32, source: 'apply', recorded_at: null, state: 'not_applied' },
         })} />);
         expect(screen.getByText('The PC still reports 32.0 GB. The change may not have applied. Try again, or follow the steps to set it yourself.')).toBeInTheDocument();
-        expect(screen.getAllByRole('button', { name: 'Try again' }).length).toBeGreaterThan(0);
-        expect(screen.getAllByRole('button', { name: 'Show me how' }).length).toBeGreaterThan(0);
+        expect(screen.getAllByRole('button', { name: 'Try again' })).toHaveLength(1);
+        expect(screen.getAllByRole('button', { name: 'Show me how' })).toHaveLength(1);
         fireEvent.click(screen.getByRole('button', { name: 'Keep 32.0 GB' }));
         await waitFor(() => expect(mocked.dismissGpuMemoryPending).toHaveBeenCalled());
     });

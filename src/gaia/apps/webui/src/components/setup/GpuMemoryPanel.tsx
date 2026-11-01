@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { AlertTriangle, Check, Copy, Info, Loader2, RotateCcw } from 'lucide-react';
 import * as api from '../../services/api';
 import { useT } from '../../i18n/useT';
@@ -46,30 +46,36 @@ function errorMessage(err: unknown): string {
 /** The memory split: CPU, the GPU's share now, and the share the user is picking. */
 function SplitBar({ status, targetGpuGb }: { status: GpuMemoryStatus; targetGpuGb: number | null }) {
     const t = useT();
-    const total = status.total_gb ?? 0;
-    const gpu = status.gpu_gb ?? 0;
-    const cpu = status.cpu_gb ?? Math.max(0, total - gpu);
-    const share = (gb: number) => (total > 0 ? Math.min(100, (gb / total) * 100) : 0);
-    const extra = targetGpuGb != null && targetGpuGb > gpu ? targetGpuGb - gpu : 0;
+    // Tenths, rounded once: the legend's figures then add up to the total shown.
+    const tenths = (gb: number) => Math.round(gb * 10);
+    const total = tenths(status.total_gb ?? 0);
+    const gpu = tenths(status.gpu_gb ?? 0);
+    const target = targetGpuGb != null && tenths(targetGpuGb) > gpu ? tenths(targetGpuGb) : null;
+    const extra = target != null ? target - gpu : 0;
+    const cpu = Math.max(0, total - gpu - extra);
+    const gb = (n: number) => formatSize(n / 10);
+    const share = (n: number) => (total > 0 ? Math.min(100, (n / total) * 100) : 0);
     const highlight = status.pending?.state === 'took_effect';
     return (
         <div className="gpu-split">
             <div
                 className={`gpu-bar${highlight ? ' is-new' : ''}`}
                 role="img"
-                aria-label={t('gpu.split.aria', { cpu: formatSize(cpu), gpu: formatSize(gpu) })}
+                aria-label={target != null
+                    ? t('gpu.split.ariaTarget', { cpu: gb(cpu), gpu: gb(target), now: gb(gpu) })
+                    : t('gpu.split.aria', { cpu: gb(cpu), gpu: gb(gpu) })}
             >
                 <span className="gpu-seg is-gpu" style={{ inlineSize: `${share(gpu)}%` }} />
                 <span className="gpu-seg is-target" style={{ inlineSize: `${share(extra)}%` }} />
                 <span className="gpu-seg is-cpu" />
-                {targetGpuGb != null && extra > 0 && (
-                    <span className="gpu-marker" style={{ insetInlineStart: `${share(targetGpuGb)}%` }} />
+                {target != null && (
+                    <span className="gpu-marker" style={{ insetInlineStart: `${share(target)}%` }} />
                 )}
             </div>
             <div className="gpu-legend" aria-hidden="true">
-                <span className="gpu-key is-gpu"><bdi>{t('gpu.split.gpu', { gb: formatSize(gpu) })}</bdi></span>
-                {extra > 0 && targetGpuGb != null && <span className="gpu-key is-target"><bdi>{t('gpu.split.target', { gb: formatSize(targetGpuGb) })}</bdi></span>}
-                <span className="gpu-key is-cpu"><bdi>{t('gpu.split.cpu', { gb: formatSize(Math.max(0, cpu - extra)) })}</bdi></span>
+                <span className="gpu-key is-gpu"><bdi>{t('gpu.split.gpu', { gb: gb(gpu) })}</bdi></span>
+                {target != null && <span className="gpu-key is-target"><bdi>{t('gpu.split.added', { gb: gb(extra) })}</bdi></span>}
+                <span className="gpu-key is-cpu"><bdi>{t('gpu.split.cpu', { gb: gb(cpu) })}</bdi></span>
             </div>
         </div>
     );
@@ -121,6 +127,8 @@ function PresetPicker({ presets, value, onChange, disabled }: PresetPickerProps)
 
 export interface GpuMemoryPanelProps {
     status: GpuMemoryStatus;
+    /** The heading to move focus to: on entry in setup, and after a refusal. */
+    headingId?: string;
     onStatus: (status: GpuMemoryStatus) => void;
     /** Setup offers Skip and Continue; Settings offers Undo. */
     mode: 'setup' | 'settings';
@@ -138,8 +146,14 @@ export interface GpuMemoryPanelProps {
  * AMD Software or the BIOS where it can't. Every reading comes from the backend
  * re-reading the machine, never from what was asked for.
  */
-export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContinue, onBack }: GpuMemoryPanelProps) {
+export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContinue, onBack, headingId }: GpuMemoryPanelProps) {
     const t = useT();
+    const focusHeading = useCallback(() => {
+        if (headingId) document.getElementById(headingId)?.focus();
+    }, [headingId]);
+    useEffect(() => {
+        if (mode === 'setup') focusHeading();
+    }, [mode, focusHeading]);
     const stepsId = useId();
     const presets = status.presets ?? [];
     const [target, setTarget] = useState<number | null>(status.recommended_setting_gb ?? presets[0]?.setting_gb ?? null);
@@ -185,7 +199,9 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
             onStatus(await api.applyGpuMemory(target));
             setOutcome({ kind: 'applied' });
         } catch (err) {
-            setOutcome(err instanceof api.ApiError && err.httpStatus === 403 ? { kind: 'denied' } : { kind: 'error', message: errorMessage(err) });
+            const denied = err instanceof api.ApiError && err.httpStatus === 403;
+            setOutcome(denied ? { kind: 'denied' } : { kind: 'error', message: errorMessage(err) });
+            if (denied) focusHeading();
         } finally {
             setBusy(null);
         }
@@ -278,11 +294,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                 <div className="gpu-notice is-warn" role="status">
                     <AlertTriangle size={14} aria-hidden="true" />
                     <span>{t('gpu.pending.notApplied', { gb: formatSize(status.gpu_gb ?? 0) })}</span>
-                    <span className="setup-row">
-                        {canApply && <button type="button" className="btn-primary" onClick={() => setSheet('apply')} disabled={busy !== null}>{t('gpu.tryAgain')}</button>}
-                        {canGuide && <button type="button" className="btn-secondary" onClick={() => void showSteps()} disabled={busy !== null}>{t('gpu.showMe')}</button>}
-                        <button type="button" className="btn-secondary" onClick={() => void keepCurrent()} disabled={busy !== null}>{t('gpu.keep', { gb: formatSize(status.gpu_gb ?? 0) })}</button>
-                    </span>
+                    <button type="button" className="btn-secondary" onClick={() => void keepCurrent()} disabled={busy !== null}>{t('gpu.keep', { gb: formatSize(status.gpu_gb ?? 0) })}</button>
                 </div>
             )}
 
@@ -349,11 +361,6 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                 <div className="gpu-notice is-warn" role="alert">
                     <AlertTriangle size={14} aria-hidden="true" />
                     <span>{t('gpu.denied')}</span>
-                    <span className="setup-row">
-                        <button type="button" className="btn-primary" onClick={() => setSheet('apply')}>{t('gpu.tryAgain')}</button>
-                        {canGuide && <button type="button" className="btn-secondary" onClick={() => void showSteps()}>{t('gpu.showMe')}</button>}
-                        {onSkip && <button type="button" className="btn-secondary" onClick={onSkip}>{t('gpu.skip')}</button>}
-                    </span>
                 </div>
             )}
             {outcome?.kind === 'error' && <p className="setup-error" role="alert">{outcome.message}</p>}
@@ -363,7 +370,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                     {mode === 'setup' && onBack && <button type="button" className="btn-secondary" onClick={onBack}>{t('setup.back')}</button>}
                     {!restartPending && canApply && presets.length > 0 && (
                         <button type="button" className="btn-primary" onClick={() => setSheet('apply')} disabled={busy !== null || target == null}>
-                            {t('gpu.apply')}
+                            {outcome?.kind === 'denied' || pending?.state === 'not_applied' ? t('gpu.tryAgain') : t('gpu.apply')}
                         </button>
                     )}
                     {!restartPending && presets.length > 0 && canGuide && (

@@ -185,12 +185,11 @@ def to_decimal_gb(model_fit_gb: float) -> float:
 
 
 def memory_reason(need_gb: float, capacity) -> str:
-    """Why a model may not fit, in the decimal GB the plan reports."""
-    from gaia.llm.model_fit import format_gb
-
+    """Why a model may not fit, in the decimal GB the plan reports, rounded to
+    0.1 like ``capacity_gb`` so the two never read differently."""
     return (
         f"needs ~{to_decimal_gb(need_gb):.0f} GB of memory; this PC has "
-        f"{format_gb(to_decimal_gb(capacity.memory_gb))} GB ({capacity.memory_source})"
+        f"{to_decimal_gb(capacity.memory_gb):.1f} GB ({capacity.memory_source})"
     )
 
 

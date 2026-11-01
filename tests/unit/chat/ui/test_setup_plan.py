@@ -493,8 +493,9 @@ def test_catalog_says_what_each_planned_model_is_for_and_costs(flm_box):
     qwen = _entry(plan, LARGE_DEFAULT_MODEL_NAME)
     assert not qwen["recommended"] and not qwen["selected"]
     assert qwen["fits"] is False and qwen["capacity_gb"] == round(12 * GB_PER_GIB, 1)
-    assert qwen["need_gb"] > 23 and "12.9 GB" not in qwen["fit_reason"]
-    assert "this PC has 13 GB" in qwen["fit_reason"]
+    assert qwen["need_gb"] > 23
+    # The sentence and capacity_gb read the same number.
+    assert "this PC has 12.9 GB" in qwen["fit_reason"]
 
 
 def test_big_pc_recommends_the_large_model_and_keeps_gemma_for_vision(running):
@@ -698,6 +699,24 @@ def test_run_endpoint_refuses_an_extra_model_nobody_has(client, flm_box, monkeyp
     assert r.status_code == 422 and "nope-GGUF" in r.json()["detail"]
 
 
+def test_a_failed_extras_check_is_not_a_422_and_leaks_nothing(client, monkeypatch):
+    def broken(_ids):
+        raise sp.SetupPlanError("secret path C:/Users/x/.gaia/config.json is broken")
+
+    monkeypatch.setattr(sp, "check_extra_models", broken)
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post(
+        "/api/setup/run", json={"extra_models": [DEFAULT_MODEL_NAME]}, headers=UI
+    )
+    assert r.status_code == 503
+    assert "secret path" not in r.json()["detail"]
+    assert "couldn't work out the setup plan" in r.json()["detail"]
+
+
 def test_server_only_run_skips_the_disk_check_and_takes_no_extras(
     client, flm_box, monkeypatch
 ):
@@ -725,6 +744,27 @@ def test_catalog_separates_gaias_models_from_ones_only_in_lemonade(flm_box):
     assert _entry(plan, DEFAULT_MODEL_NAME)["gaia_model"] is True
     assert _entry(plan, LARGE_DEFAULT_MODEL_NAME)["gaia_model"] is True
     assert _entry(plan, DEFAULT_EMBEDDING_MODEL)["gaia_model"] is True
+
+
+def test_each_model_has_the_name_the_picker_and_sidebar_show(flm_box):
+    from gaia.ui.local_models import friendly_name
+
+    flm_box()
+    for entry in sp.build_plan()["catalog"]:
+        assert entry["name"] == friendly_name(entry["id"]), entry["id"]
+    assert _entry(sp.build_plan(), DEFAULT_MODEL_NAME)["name"] == "Gemma 4 E4B"
+
+
+def test_a_lemonade_only_chat_model_stays_in_the_lemonade_list(flm_box):
+    flm_box()
+    sp.choose_chat_model(FLM)
+    plan = sp.build_plan()
+    assert plan["chat_model"]["id"] == FLM
+    entry = _entry(plan, FLM)
+    # Now planned (it is the chat model), but still not one of GAIA's own.
+    assert entry["planned"] is True and entry["gaia_model"] is False
+    assert _entry(plan, DEFAULT_EMBEDDING_MODEL)["gaia_model"] is True
+    assert _entry(plan, DEFAULT_MODEL_NAME)["gaia_model"] is True
 
 
 def test_plan_counts_a_model_downloaded_beside_the_profile(flm_box):

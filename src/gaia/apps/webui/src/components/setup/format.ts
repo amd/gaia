@@ -92,6 +92,14 @@ export class DownloadMeter {
             this.shownEta = null;
             return { speed: null, eta: null, stalledFor: 0 };
         }
+        if (this.lastBytes === 0 && bytesDone > 0) {
+            // A resume's first poll can read 0 before the bytes already on disk
+            // show up: measure from the first real figure, never the jump to it.
+            this.lastAt = now;
+            this.lastBytes = bytesDone;
+            this.movedAt = now;
+            return { speed: null, eta: null, stalledFor: 0 };
+        }
         const dt = (now - this.lastAt) / 1000;
         if (dt > 0) {
             const instant = (bytesDone - this.lastBytes) / dt;

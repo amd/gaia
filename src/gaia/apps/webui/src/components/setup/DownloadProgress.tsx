@@ -31,6 +31,7 @@ const STATE_KEY: Record<SetupModelState, Parameters<Translate>[0]> = {
     failed: 'setup.state.failed',
     skipped: 'setup.state.skipped',
     cancelled: 'setup.state.cancelled',
+    unchecked: 'setup.state.unchecked',
 };
 
 /** Whether anything is still moving: a run, or a single download. */
@@ -101,6 +102,8 @@ function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume,
                 : t('setup.progress.checkingLoad');
     } else if (m.state === 'ready') {
         detail = m.bytes_total ? formatBytes(m.bytes_total) : '';
+    } else if (m.state === 'unchecked') {
+        detail = t('setup.progress.unchecked');
     } else if (m.state === 'cancelled') {
         detail = m.bytes_done > 0 ? t('setup.progress.keptPartial', { done: formatBytes(m.bytes_done) }) : '';
     } else if (m.state === 'queued') {
@@ -121,7 +124,7 @@ function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume,
         <li className={`dl-row is-${m.state}${live ? ' is-live' : ''}${stalled >= STALL_NOTICE_S ? ' is-stalled' : ''}`}>
             <div className="dl-row-head">
                 <span className="dl-icon" aria-hidden="true">
-                    {m.state === 'ready' ? <Check size={14} /> : m.state === 'failed' ? <AlertCircle size={14} />
+                    {m.state === 'ready' || m.state === 'unchecked' ? <Check size={14} /> : m.state === 'failed' ? <AlertCircle size={14} />
                         : m.state === 'cancelled' ? <Pause size={13} /> : <span className="dl-dot" />}
                 </span>
                 <span className="dl-name"><bdi title={m.id}>{name}</bdi></span>
@@ -213,10 +216,18 @@ export function DownloadProgress({ status, names, freeGb = null, onCancel, onRet
     const visible = usePageVisible();
     const models = useMemo(() => sortedModels(status.models ?? []), [status.models]);
     const meters = useRef(new Map<string, DownloadMeter>());
+    const resumedFrom = useRef(new Map<string, number | null>());
     const overallMeter = useRef(new DownloadMeter());
     const wasMoving = useRef(false);
     const [now, setNow] = useState(() => Date.now());
     const [confirmCancel, setConfirmCancel] = useState(false);
+    // A model that failed its load check is deleted before it downloads again: ask first.
+    const [redownload, setRedownload] = useState<SetupModelProgress | null>(null);
+    const retry = onRetry && ((id: string, kind: SetupModelProgress['error_kind']) => {
+        const m = models.find((x) => x.id === id);
+        if (kind === 'verify' && m) setRedownload(m);
+        else onRetry(id, kind);
+    });
     const [announce, setAnnounce] = useState('');
     const [alert, setAlert] = useState('');
     const seen = useRef<{ states: Map<string, SetupModelState>; quarter: number } | null>(null);
@@ -241,9 +252,11 @@ export function DownloadProgress({ status, names, freeGb = null, onCancel, onRet
                 continue;
             }
             let meter = meters.current.get(m.id);
-            if (!meter) {
+            const before = m.downloaded_before_gb ?? null;
+            if (!meter || resumedFrom.current.get(m.id) !== before) {
                 meter = new DownloadMeter();
                 meters.current.set(m.id, meter);
+                resumedFrom.current.set(m.id, before);
             }
             out[m.id] = meter.update(m.bytes_done, m.bytes_total, at);
         }
@@ -331,7 +344,7 @@ export function DownloadProgress({ status, names, freeGb = null, onCancel, onRet
                         estimate={estimates[m.id]}
                         now={now}
                         freeGb={freeGb}
-                        onRetry={onRetry}
+                        onRetry={retry}
                         onResume={active ? undefined : onResume}
                         onSkip={onSkip}
                         onRestart={onRestart}
@@ -362,6 +375,17 @@ export function DownloadProgress({ status, names, freeGb = null, onCancel, onRet
                     onCancel={() => setConfirmCancel(false)}
                 >
                     <p>{t('setup.progress.cancelBody')}</p>
+                </ConfirmSheet>
+            )}
+            {redownload && (
+                <ConfirmSheet
+                    title={t('setup.redownload.title', { name: names[redownload.id] ?? redownload.id })}
+                    confirmLabel={t('setup.redownload.confirm')}
+                    cancelLabel={t('setup.redownload.keep')}
+                    onConfirm={() => { const m = redownload; setRedownload(null); onRetry?.(m.id, 'verify'); }}
+                    onCancel={() => setRedownload(null)}
+                >
+                    <p>{t('setup.redownload.body', { name: names[redownload.id] ?? redownload.id, size: formatBytes(redownload.bytes_total) })}</p>
                 </ConfirmSheet>
             )}
         </section>

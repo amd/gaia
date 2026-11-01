@@ -2466,12 +2466,14 @@ so the two can never disagree about whether GAIA is set up.
 
     `models` has one row per model of the run or of a single download: `id`,
     `roles`, `state` (`queued`, `downloading`, `verifying`, `ready`,
-    `failed`, `skipped`, `cancelled`), `bytes_done`, `bytes_total`,
-    `speed_bps`, `eta_s`, `error`, `error_kind` (`network`, `disk_full`,
-    `lemonade`, `verify`), `can_retry`, `retrying_until` (Unix time, while a
+    `failed`, `skipped`, `cancelled`, or `unchecked`: downloaded, but the run
+    stopped before its load check, so the model is kept and the next run
+    checks it), `bytes_done`, `bytes_total`, `speed_bps`, `eta_s`, `error`,
+    `error_kind` (`network`, `disk_full`, `lemonade`, or `verify` for a model
+    that downloaded but failed its load check), `can_retry`, `retrying_until` (Unix time, while a
     `keep_trying` wait runs), and `downloaded_before_gb` for a resumed
     download. `overall` sums them: `bytes_done`, `bytes_total`, `speed_bps`,
-    `eta_s`, `percent`, `failed`. With only a single download and no run,
+    `eta_s`, `percent`, `failed` (rows in `failed` only). With only a single download and no run,
     `state` is `idle` and `models` still reports it.
   </Accordion>
 

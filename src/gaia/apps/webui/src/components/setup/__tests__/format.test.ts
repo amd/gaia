@@ -108,3 +108,18 @@ describe('DownloadMeter', () => {
         expect(m.update(0, 1e9, 13_000)).toEqual({ speed: null, eta: null, stalledFor: 0 });
     });
 });
+
+describe('DownloadMeter after a resume', () => {
+    it('measures from the first real figure, not the jump from 0 to it', () => {
+        const m = new DownloadMeter();
+        m.update(0, 23.3e9, 0);
+        // The partial file shows up: 15 GB in one second is not a speed.
+        expect(m.update(15e9, 23.3e9, 1_000)).toMatchObject({ speed: null, eta: null });
+        let e = m.update(15e9, 23.3e9, 1_000);
+        for (let s = 2; s <= 12; s++) e = m.update(15e9 + (s - 1) * 150e6, 23.3e9, s * 1000);
+        expect(e.speed).toBeCloseTo(150e6, -6);
+        // 8.3 GB left - 1.65 GB done since = 6.65 GB at 150 MB/s, about 44 s.
+        expect(e.eta).toBeGreaterThan(40);
+        expect(e.eta).toBeLessThan(50);
+    });
+});

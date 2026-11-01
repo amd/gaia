@@ -255,8 +255,11 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
         )
     try:
         extras = plan_api.check_extra_models(body.extra_models)
-    except SetupPlanError as e:
+    except UnknownModel as e:
+        # Our own sentence naming the id the caller sent; nothing internal.
         raise HTTPException(status_code=422, detail=str(e)) from e
+    except SetupPlanError as e:
+        raise _plan_error(e, _PLAN_FAILED) from e
     try:
         # Switching to GAIA's own server: the user's server's disk is moot.
         if (

@@ -29,8 +29,10 @@ export function DownloadChip({ placement = 'sidebar' }: { placement?: 'sidebar' 
     const failed = models.some((m) => m.state === 'failed') && status?.state !== 'running';
     if (!moving && !failed) return null;
 
-    const count = models.length + queue.length;
-    const finished = models.filter((m) => m.state === 'ready' || m.state === 'verifying').length;
+    // A failed or cancelled row isn't downloading, so it isn't one of the "N of M".
+    const counted = models.filter((m) => m.state !== 'failed' && m.state !== 'cancelled');
+    const count = counted.length + queue.length;
+    const finished = counted.filter((m) => m.state === 'ready' || m.state === 'verifying' || m.state === 'unchecked').length;
     const pct = status?.overall?.percent ?? 0;
     return (
         <button

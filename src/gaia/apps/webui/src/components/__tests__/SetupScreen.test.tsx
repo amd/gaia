@@ -400,6 +400,50 @@ describe('SetupScreen: downloading', () => {
         await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: false }));
     });
 
+    it('keeps the models that downloaded when a later one fails, and deletes nothing', async () => {
+        const failed = runStatus([
+            progress({ id: EMBED.id, roles: ['embedding'], state: 'unchecked', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
+            progress({ id: QWEN.id, state: 'unchecked', bytes_done: 23.3e9, bytes_total: 23.3e9 }),
+            progress({ id: GEMMA.id, roles: ['vision'], state: 'failed', bytes_done: 1e9, bytes_total: 5.97e9, error_kind: 'network', error: 'Connection reset', can_retry: true }),
+        ], { state: 'failed', error: 'A model failed' });
+        mockedApi.startSetup.mockResolvedValue(failed);
+        mockedApi.downloadSetupModel.mockResolvedValue(failed);
+        await startLocal();
+        const qwen = (await screen.findByText('Qwen3.6-35B-A3B', { selector: '.dl-name bdi' })).closest('li')!;
+        expect(within(qwen).getByText('Downloaded and kept. GAIA checks that it loads when you finish setup.')).toBeInTheDocument();
+        expect(within(qwen).queryByRole('button')).not.toBeInTheDocument();
+        expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
+        fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(GEMMA.id, { keepTrying: false }));
+        expect(mockedApi.removeSetupModel).not.toHaveBeenCalled();
+    });
+
+    it('offers Finish setup once the only rows left are kept, unchecked models', async () => {
+        const stopped = runStatus([
+            progress({ id: EMBED.id, roles: ['embedding'], state: 'unchecked', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
+            progress({ id: QWEN.id, state: 'unchecked', bytes_done: 23.3e9, bytes_total: 23.3e9 }),
+        ], { state: 'failed', error: 'The model server stopped answering.' });
+        mockedApi.startSetup.mockResolvedValue(stopped);
+        await startLocal();
+        expect(await screen.findByRole('button', { name: /Finish setup/ })).toBeInTheDocument();
+        expect(mockedApi.removeSetupModel).not.toHaveBeenCalled();
+    });
+
+    it('deletes and re-downloads a model that failed its load check only after the user confirms', async () => {
+        const failed = runStatus([
+            progress({ id: QWEN.id, state: 'failed', bytes_done: 23.3e9, bytes_total: 23.3e9, error_kind: 'verify', error: 'would not load', can_retry: true }),
+        ], { state: 'failed', error: 'A model would not load' });
+        mockedApi.startSetup.mockResolvedValue(failed);
+        mockedApi.removeSetupModel.mockResolvedValue({ ...COLD_BIG(), freed_gb: 23.3 });
+        mockedApi.downloadSetupModel.mockResolvedValue(failed);
+        await startLocal();
+        fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+        expect(mockedApi.removeSetupModel).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole('button', { name: 'Delete and download again' }));
+        await waitFor(() => expect(mockedApi.removeSetupModel).toHaveBeenCalledWith(QWEN.id));
+        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: false }));
+    });
+
     it('asks before retrying past a disk that is still too full', async () => {
         const failed = runStatus([
             progress({ id: QWEN.id, state: 'failed', bytes_done: 22.6e9, bytes_total: 23.3e9, error_kind: 'disk_full', error: 'No space left on device' }),

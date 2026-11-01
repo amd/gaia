@@ -419,6 +419,8 @@ MODEL_STATES = (
     "failed",
     "skipped",
     "cancelled",
+    # Downloaded, but the run stopped before its load check: kept, never retried.
+    "unchecked",
 )
 
 
@@ -707,7 +709,15 @@ class SetupRunner:
                 raise SetupBusy(f"{model_id} is already downloading.")
             stop = threading.Event()
             self._pulls[model_id] = stop
-            self._models[model_id] = ModelProgress(id=model_id, state="downloading")
+            # Start from the bytes already down, so the first poll doesn't read 0
+            # and the next one jump to the partial size.
+            before = self._models.get(model_id)
+            self._models[model_id] = ModelProgress(
+                id=model_id,
+                state="downloading",
+                bytes_done=before.bytes_done if before else 0,
+                bytes_total=before.bytes_total if before else 0,
+            )
         threading.Thread(
             target=self._pull_one,
             args=(client, model_id, keep_trying, stop),
@@ -852,7 +862,9 @@ class SetupRunner:
         self, ready: Optional[set], failed: Dict[str, str], run_failed: bool = False
     ) -> None:
         """After a run: downloaded models become ready, or failed when their
-        load check failed or the run stopped before checking. Caller holds the lock."""
+        load check failed. When the run stopped before checking, they stay
+        downloaded as "unchecked": nothing is wrong with them, so nothing may
+        delete or re-download them. Caller holds the lock."""
         for entry in self._models.values():
             if entry.id in failed:
                 entry.state, entry.error_kind = "failed", "verify"
@@ -860,11 +872,7 @@ class SetupRunner:
             elif entry.state != "verifying":
                 continue
             elif run_failed:
-                entry.state, entry.error_kind = "failed", "verify"
-                entry.error = (
-                    f"Setup stopped before GAIA could check that {entry.id} loads. "
-                    "Fix the error above, then run setup again."
-                )
+                entry.state, entry.error_kind, entry.error = "unchecked", None, None
             elif ready is None or entry.id in ready:
                 entry.state = "ready"
 

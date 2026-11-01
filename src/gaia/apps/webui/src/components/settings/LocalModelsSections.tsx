@@ -6,6 +6,7 @@ import { Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useT } from '../../i18n/useT';
 import { scopedStatus, useSetupDownloads } from '../../stores/setupDownloadsStore';
+import { useModelStore } from '../../stores/modelStore';
 import type { GpuMemoryStatus, SetupCatalogEntry, SetupModelProgress, SetupPlan } from '../../types';
 import { ConfirmSheet } from '../setup/ConfirmSheet';
 import { DownloadProgress, downloadsActive } from '../setup/DownloadProgress';
@@ -149,6 +150,8 @@ export function LocalModelsSections() {
             const ids = pendingDownloads(catalogOf(latest), selection).map((e) => e.id).filter((id) => progress[id]?.state !== 'downloading');
             setPlan(latest);
             setSelection({ ...selection, defaultChat: latest.chat_model.id });
+            // "In use" and the sidebar read the model store; refresh it now, not on reload.
+            void useModelStore.getState().refresh();
             if (ids.length) await enqueue(ids, { acknowledgeLowDisk: true });
             setNotice({ ok: true, text: t('settings.models.applied') });
         } catch (err) {
@@ -206,6 +209,7 @@ export function LocalModelsSections() {
                             onToggle={(id, on) => setSelection(toggle(selection, catalog, id, on))}
                             onDefaultChat={(id) => setSelection(chooseChat(selection, catalog, id))}
                             labelledBy="settings-models-title"
+                            place="settings"
                             disabled={busy}
                             progress={progress}
                             rowActions={(e) => (e.downloaded && e.id !== selection.defaultChat ? (
@@ -236,9 +240,9 @@ export function LocalModelsSections() {
 
             {(gpu?.applies || gpuError) && (
                 <section className="settings-field models-pane-section" aria-labelledby="settings-gpu-title">
-                    <span className="settings-label" id="settings-gpu-title">{t('gpu.settingsTitle')}</span>
+                    <span className="settings-label" id="settings-gpu-title" tabIndex={-1}>{t('gpu.settingsTitle')}</span>
                     {gpuError && <p className="settings-error" role="alert">{gpuError}</p>}
-                    {gpu?.applies && <GpuMemoryPanel status={gpu} onStatus={setGpu} mode="settings" names={names} />}
+                    {gpu?.applies && <GpuMemoryPanel status={gpu} onStatus={setGpu} mode="settings" names={names} headingId="settings-gpu-title" />}
                 </section>
             )}
 

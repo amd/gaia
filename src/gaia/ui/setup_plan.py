@@ -202,13 +202,11 @@ def _profile_models(profile: str, client) -> List[str]:
     return client.get_required_models(config["agent"])
 
 
-def _display_name(model_id: str, entry: Optional[Dict[str, Any]]) -> str:
-    from gaia.llm.lemonade_client import find_model_requirement
+def _display_name(model_id: str) -> str:
+    """The name the model picker and the sidebar show, so a model reads the same everywhere."""
+    from gaia.ui.local_models import friendly_name
 
-    mr = find_model_requirement(model_id)
-    if mr and mr.display_name:
-        return mr.display_name
-    return str((entry or {}).get("name") or model_id.removeprefix("user."))
+    return friendly_name(model_id)
 
 
 def _catalog(
@@ -243,6 +241,13 @@ def _catalog(
 
     order: List[str] = []
     known = [*planned, *_known_chat_models()]
+    # GAIA's own models: a Lemonade-only model the user made the chat model is
+    # planned, but stays in the Lemonade list where they found it.
+    gaia_known = [
+        *(m for m in planned if not same(m, chat_id)),
+        *(INIT_PROFILES[profile]["models"] or []),
+        *_known_chat_models(),
+    ]
     for model_id in known:
         if not listed(model_id, order):
             order.append(model_id)
@@ -283,7 +288,7 @@ def _catalog(
         catalog.append(
             {
                 "id": model_id,
-                "name": _display_name(model_id, entry),
+                "name": _display_name(model_id),
                 "roles": roles,
                 "purpose": model_choice.purpose(roles),
                 "if_skipped": (
@@ -304,7 +309,7 @@ def _catalog(
                 ),
                 "planned": is_planned,
                 # GAIA's own model, not one only this Lemonade has.
-                "gaia_model": listed(model_id, known),
+                "gaia_model": listed(model_id, gaia_known),
                 "selected": listed(model_id, selected),
                 "skipped": model_choice.is_skipped(model_id, skipped),
                 "chat_choice": not is_embedding_model_id(model_id)
@@ -459,7 +464,7 @@ def check_extra_models(model_ids: List[str]) -> List[str]:
             (e for e in catalog if model_choice.ids_match(e["id"], model_id)), None
         )
         if entry is None:
-            raise SetupPlanError(
+            raise UnknownModel(
                 f"{model_id} is not a model GAIA knows or one in this Lemonade "
                 "Server, so setup can't download it."
             )

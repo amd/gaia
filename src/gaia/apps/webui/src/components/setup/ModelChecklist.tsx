@@ -52,11 +52,15 @@ export function tooBigText(e: SetupCatalogEntry, t: Translate): string {
         : t('setup.models.warn.tooBigNoNumbers', { reason: e.fit_reason ?? '' });
 }
 
-/** The caveat under an unticked model that turns a feature off. */
-function skipCaveat(e: SetupCatalogEntry, t: Translate): string | null {
-    if (isVision(e)) return t('setup.models.warn.vision', { name: e.name });
-    if (isEmbedding(e)) return t('setup.models.warn.documents', { name: e.name });
-    return null;
+/** The caveat under an unticked model that turns a feature off. In Settings an
+ *  unticked model on disk stays there, so it says that instead of "add it later". */
+function skipCaveat(e: SetupCatalogEntry, t: Translate, place: 'setup' | 'settings'): string | null {
+    if (!isVision(e) && !isEmbedding(e)) return null;
+    if (place === 'settings') {
+        if (e.downloaded) return t('settings.models.warn.kept', { name: e.name });
+        return t(isVision(e) ? 'settings.models.warn.vision' : 'settings.models.warn.documents', { name: e.name });
+    }
+    return t(isVision(e) ? 'setup.models.warn.vision' : 'setup.models.warn.documents', { name: e.name });
 }
 
 interface RowProps {
@@ -68,13 +72,14 @@ interface RowProps {
     progress?: SetupModelProgress;
     /** Extra controls at the row's end, e.g. Remove in Settings. */
     actions?: ReactNode;
+    place: 'setup' | 'settings';
 }
 
-function ModelRow({ entry: e, ticked, onToggle, disabled, progress, actions }: RowProps) {
+function ModelRow({ entry: e, ticked, onToggle, disabled, progress, actions, place }: RowProps) {
     const t = useT();
     const id = useId();
     const big = e.fits === false;
-    const caveat = !ticked ? skipCaveat(e, t) : null;
+    const caveat = !ticked ? skipCaveat(e, t, place) : null;
     const downloading = progress?.state === 'downloading' && progress.bytes_total > 0;
     const warning = big ? tooBigText(e, t) : caveat;
     const describedBy = [`${id}-status`, `${id}-note`, warning ? `${id}-warn` : null].filter(Boolean).join(' ');
@@ -212,6 +217,8 @@ export interface ModelChecklistProps {
     progress?: Record<string, SetupModelProgress>;
     /** Per-row extra controls (Settings' Remove). */
     rowActions?: (entry: SetupCatalogEntry) => ReactNode;
+    /** Where the list is: Settings words an unticked model on disk differently. */
+    place?: 'setup' | 'settings';
 }
 
 /**
@@ -219,7 +226,7 @@ export interface ModelChecklistProps {
  * chat models already in Lemonade; the default chat model; and the totals.
  * Setup's "Choose your models" and Settings > Models on this PC both use it.
  */
-export function ModelChecklist({ plan, selection, onToggle, onDefaultChat, labelledBy, cloud, disabled, progress, rowActions }: ModelChecklistProps) {
+export function ModelChecklist({ plan, selection, onToggle, onDefaultChat, labelledBy, cloud, disabled, progress, rowActions, place = 'setup' }: ModelChecklistProps) {
     const t = useT();
     const catalog = catalogOf(plan);
     const [query, setQuery] = useState('');
@@ -242,6 +249,7 @@ export function ModelChecklist({ plan, selection, onToggle, onDefaultChat, label
             disabled={disabled}
             progress={progress?.[e.id]}
             actions={rowActions?.(e)}
+            place={place}
         />
     );
 

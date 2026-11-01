@@ -123,6 +123,17 @@ describe('turning the selection into choices', () => {
         expect(skipChanges(p, sel)).toEqual([{ id: GEMMA.id, skipped: false }]);
     });
 
+    it('takes a removed model off the skip list when it is ticked again, so it downloads', () => {
+        // Removed in Settings: on the skip list, and not one setup plans.
+        const removed = { ...GPT_OSS, skipped: true, downloaded: false };
+        const p = plan([QWEN, GEMMA, EMBED, removed]);
+        const sel = toggle(initialSelection(p), p.catalog!, GPT_OSS.id, true);
+        expect(skipChanges(p, sel)).toEqual([{ id: GPT_OSS.id, skipped: false }]);
+        expect(extraModels(p, sel)).toEqual([GPT_OSS.id]);
+        // Left unticked, it stays skipped.
+        expect(skipChanges(p, initialSelection(p))).toEqual([]);
+    });
+
     it("pulls ticked models setup doesn't plan beside the plan's", () => {
         const p = COLD_BIG();
         expect(extraModels(p, toggle(initialSelection(p), p.catalog!, GPT_OSS.id, true))).toEqual([GPT_OSS.id]);

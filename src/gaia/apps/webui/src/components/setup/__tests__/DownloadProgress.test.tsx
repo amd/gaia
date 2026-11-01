@@ -177,7 +177,6 @@ describe('DownloadProgress', () => {
     it.each([
         ['network', 'The connection dropped while downloading Qwen3.6-35B-A3B. Press Retry to continue from where it stopped.'],
         ['disk_full', 'Ran out of disk space after 14.2 GB of Qwen3.6-35B-A3B. Free 7.1 GB and press Retry. Nothing was lost; the download continues from where it stopped.'],
-        ['verify', 'Qwen3.6-35B-A3B downloaded but didn’t pass its check. Retry downloads it again.'],
         ['lemonade', 'Lemonade couldn’t download Qwen3.6-35B-A3B. Details has its message.'],
     ] as const)('words a %s failure with what to do, and Retry works', (kind, text) => {
         const onRetry = vi.fn();
@@ -260,5 +259,84 @@ describe('DownloadProgress', () => {
         expect(live.textContent).toBe('Downloads 25 percent done.');
         rerender(<DownloadProgress status={st('failed', 3e9)} names={NAMES} />);
         expect(screen.getByRole('alert')).toHaveTextContent('Qwen3.6-35B-A3B failed to download.');
+    });
+});
+
+describe('a run that stopped before its load check', () => {
+    it('keeps the models that downloaded, with no Retry, and counts only real failures', () => {
+        const onRetry = vi.fn();
+        render(<DownloadProgress
+            status={runStatus([
+                progress({ id: EMBED.id, roles: ['embedding'], state: 'unchecked', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
+                progress({ id: QWEN.id, state: 'unchecked', bytes_done: 23.3e9, bytes_total: 23.3e9 }),
+                progress({ id: GEMMA.id, roles: ['vision'], state: 'failed', bytes_done: 1e9, bytes_total: 5.97e9, error_kind: 'network', can_retry: true }),
+            ], { state: 'failed', overall: { bytes_done: 24.6e9, bytes_total: 29.57e9, speed_bps: 0, eta_s: null, percent: 83, failed: 1 } })}
+            names={NAMES}
+            onRetry={onRetry}
+        />);
+        const qwen = rowOf('Qwen3.6-35B-A3B');
+        expect(within(qwen).getByText('Downloaded')).toBeInTheDocument();
+        expect(within(qwen).getByText('Downloaded and kept. GAIA checks that it loads when you finish setup.')).toBeInTheDocument();
+        expect(within(qwen).queryByRole('button')).not.toBeInTheDocument();
+        expect(screen.getByText(/Failed: 1/)).toBeInTheDocument();
+        expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
+    });
+});
+
+describe('a model that failed its load check', () => {
+    const failed = () => runStatus([
+        progress({ id: QWEN.id, state: 'failed', bytes_done: 23.3e9, bytes_total: 23.3e9, error: 'would not load', error_kind: 'verify', can_retry: true }),
+    ], { state: 'failed' });
+
+    it('says it will be deleted and asks before Retry deletes it', () => {
+        const onRetry = vi.fn();
+        render(<DownloadProgress status={failed()} names={NAMES} onRetry={onRetry} />);
+        const row = rowOf('Qwen3.6-35B-A3B');
+        expect(within(row).getByText('Qwen3.6-35B-A3B downloaded but didn’t load. Retry deletes it and downloads it again.')).toBeInTheDocument();
+        fireEvent.click(within(row).getByRole('button', { name: 'Retry' }));
+        expect(onRetry).not.toHaveBeenCalled();
+        const sheet = screen.getByRole('alertdialog', { name: 'Download Qwen3.6-35B-A3B again?' });
+        expect(sheet).toHaveTextContent('GAIA deletes the copy on this PC and downloads it again (23.3 GB).');
+        expect(within(sheet).getByRole('button', { name: 'Keep it' })).toHaveFocus();
+        fireEvent.click(within(sheet).getByRole('button', { name: 'Keep it' }));
+        expect(onRetry).not.toHaveBeenCalled();
+        fireEvent.click(within(row).getByRole('button', { name: 'Retry' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Delete and download again' }));
+        expect(onRetry).toHaveBeenCalledExactlyOnceWith(QWEN.id, 'verify');
+    });
+
+    it('retries a network failure at once, with no sheet', () => {
+        const onRetry = vi.fn();
+        render(<DownloadProgress
+            status={runStatus([progress({ id: QWEN.id, state: 'failed', bytes_done: 3e9, bytes_total: 23.3e9, error_kind: 'network', can_retry: true })], { state: 'failed' })}
+            names={NAMES}
+            onRetry={onRetry}
+        />);
+        fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+        expect(onRetry).toHaveBeenCalledWith(QWEN.id, 'network');
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+});
+
+describe('speed after a resume', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('never reads the jump from 0 to the bytes already on disk as speed', () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(0);
+        const at = (done: number, before: number | null = null): SetupRunStatus => runStatus([
+            progress({ id: QWEN.id, state: 'downloading', bytes_done: done, bytes_total: 23.3e9, downloaded_before_gb: before }),
+        ]);
+        // The first poll reads 0; the next jumps to 15 GB already on disk.
+        const { rerender } = render(<DownloadProgress status={at(0)} names={NAMES} />);
+        vi.setSystemTime(1000);
+        rerender(<DownloadProgress status={at(15e9, 15)} names={NAMES} />);
+        for (let s = 2; s <= 12; s++) {
+            vi.setSystemTime(s * 1000);
+            rerender(<DownloadProgress status={at(15e9 + (s - 1) * 150e6, 15)} names={NAMES} />);
+        }
+        const detail = within(rowOf('Qwen3.6-35B-A3B')).getByText(/MB\/s/);
+        expect(detail).toHaveTextContent('150 MB/s');
+        expect(detail.textContent).not.toMatch(/\d{4} MB\/s/);
     });
 });

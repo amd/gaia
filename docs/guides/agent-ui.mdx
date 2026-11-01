@@ -282,7 +282,9 @@ Pick the install path that fits you best:
     different chat model. Downloads then show
     per-model and overall progress with speed and time left; Cancel keeps
     what finished and what was partly downloaded, and **Retry** or **Resume**
-    continues from there. Tick **Keep trying if the connection drops** to wait
+    continues from there. If one model fails, the ones that already downloaded
+    are kept and checked when you finish setup; only a model that downloaded
+    but won't load is deleted and downloaded again, after you confirm. Tick **Keep trying if the connection drops** to wait
     out a dropped connection for up to two minutes; otherwise a dropped
     connection fails at once with Retry. If you choose a Lemonade Server you
     already run, setup uses it instead of installing GAIA's own. Running

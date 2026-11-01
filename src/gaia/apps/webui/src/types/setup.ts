@@ -3,7 +3,8 @@
 
 /** Model choice, download progress and the GPU memory split (/api/setup/*, /api/gpu-memory). */
 
-export type SetupModelState = 'queued' | 'downloading' | 'verifying' | 'ready' | 'failed' | 'skipped' | 'cancelled';
+/** `unchecked`: downloaded, but the run stopped before its load check; kept as is. */
+export type SetupModelState = 'queued' | 'downloading' | 'verifying' | 'ready' | 'failed' | 'skipped' | 'cancelled' | 'unchecked';
 
 /** One model's download in GET /api/setup/status. Sizes in bytes; speed in bytes/s. */
 export interface SetupModelProgress {

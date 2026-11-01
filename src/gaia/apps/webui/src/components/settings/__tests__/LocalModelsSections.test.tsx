@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
 import { useChatStore } from '../../../stores/chatStore';
+import { useModelStore } from '../../../stores/modelStore';
 import { resetSetupDownloads, scopedStatus, useSetupDownloads } from '../../../stores/setupDownloadsStore';
 import { NO_GPU_SPLIT } from '../../../test/setupApiMocks';
 import { DownloadChip } from '../../setup/DownloadChip';
@@ -176,5 +177,53 @@ describe('the download chip in the app chrome', () => {
         await waitFor(() => expect(mocked.getSetupStatus).toHaveBeenCalled());
         expect(screen.queryByRole('button', { name: /Model downloads/ })).not.toBeInTheDocument();
         expect(useSetupDownloads.getState().status).toEqual({ state: 'idle' });
+    });
+});
+
+describe('Settings > default chat model', () => {
+    it('refreshes "In use" and the sidebar right after the change, not on reload', async () => {
+        const refresh = vi.fn().mockResolvedValue(undefined);
+        useModelStore.setState({ refresh });
+        mocked.chooseSetupChatModel.mockResolvedValue(plan([on(QWEN), { ...GEMMA, skipped: true, selected: false }, on(EMBED), GPT_OSS], {
+            chat_model: { id: QWEN.id, user_set: true, size_gb: 0, downloaded: true },
+        }));
+        mocked.getSetupPlan.mockResolvedValue(plan([on(QWEN), { ...GEMMA, skipped: true, selected: false }, on(EMBED), on(GPT_OSS)], {
+            chat_model: { id: GPT_OSS.id, user_set: true, size_gb: 0, downloaded: true },
+        }));
+        render(<LocalModelsSections />);
+        fireEvent.change(await screen.findByRole('combobox', { name: 'Default chat model' }), { target: { value: QWEN.id } });
+        fireEvent.click(screen.getByRole('button', { name: /^Apply/ }));
+        await waitFor(() => expect(mocked.chooseSetupChatModel).toHaveBeenCalledWith(QWEN.id, false));
+        await waitFor(() => expect(refresh).toHaveBeenCalled());
+    });
+});
+
+describe('the download chip counts only what is downloading', () => {
+    it('leaves a failed row out of "N of M"', async () => {
+        mocked.getSetupStatus.mockResolvedValue(runStatus([
+            progress({ id: QWEN.id, state: 'downloading', bytes_done: 1e9, bytes_total: 3e9 }),
+            progress({ id: GEMMA.id, roles: ['vision'], state: 'failed', bytes_done: 0, bytes_total: 1e9, error_kind: 'network' }),
+        ], { state: 'idle' }));
+        useSetupDownloads.setState({ started: [QWEN.id, GEMMA.id] });
+        render(<DownloadChip />);
+        const chip = await screen.findByRole('button', { name: 'Model downloads. Open Settings to see them.' });
+        expect(chip).toHaveTextContent(/^Downloading 1 of 1 · /);
+        act(() => resetSetupDownloads());
+    });
+});
+
+describe('Settings words an unticked model for Settings', () => {
+    it('says a model on this PC stays there, instead of "add it later in Settings"', async () => {
+        mocked.getSetupPlan.mockResolvedValue(plan([on(QWEN), on(GEMMA), on(EMBED), GPT_OSS]));
+        render(<LocalModelsSections />);
+        fireEvent.click(await screen.findByRole('checkbox', { name: /Gemma-4-E4B-it/ }));
+        const note = screen.getByText(/Gemma-4-E4B-it stays on this PC/);
+        expect(note).toHaveTextContent('Unticking it only stops setup from downloading it again; Remove deletes it.');
+        expect(screen.queryByText(/later in Settings/)).not.toBeInTheDocument();
+    });
+
+    it('offers to download a missing one by ticking it', async () => {
+        render(<LocalModelsSections />);
+        expect(await screen.findByText('Without Gemma-4-E4B-it, GAIA can’t read images or screenshots. Tick it to download it.')).toBeInTheDocument();
     });
 });

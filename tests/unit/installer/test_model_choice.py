@@ -120,7 +120,8 @@ def test_fit_gives_the_numbers_behind_the_verdict():
     fit = mc.memory_fit(QWEN, 23.3, small)
     assert fit["fits"] is False
     assert fit["need_gb"] > 23.3 and fit["capacity_gb"] == round(16 * GB_PER_GIB, 1)
-    assert "this PC has 17 GB" in fit["fit_reason"]
+    # Rounded to 0.1, as capacity_gb is, so the sentence and the number agree.
+    assert f"this PC has {fit['capacity_gb']:.1f} GB" in fit["fit_reason"]
 
 
 def test_fit_ignores_disk_a_downloaded_model_no_longer_needs():

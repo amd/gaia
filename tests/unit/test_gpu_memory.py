@@ -889,8 +889,9 @@ class TestWindows:
 
     def test_the_explanation_names_the_gpu_total_for_that_setting(self, box, windows):
         result = gm.describe(box.info, LOCAL, setting_gb=64)
-        total = round(64 + (result["total_gb"] - 64) / 2)
-        assert any(f"{total} GB GPU total" in s for s in result["guided_steps"])
+        # The same 0.1 GB figure the preset button shows, not a whole-GB rounding.
+        shown = next(p["gpu_gb"] for p in result["presets"] if p["setting_gb"] == 64)
+        assert any(f"{shown:.1f} GB GPU total" in s for s in result["guided_steps"])
 
     def test_no_gib_anywhere_in_the_response(self, box, windows):
         assert "GiB" not in json.dumps(gm.describe(box.info, LOCAL))

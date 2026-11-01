@@ -244,7 +244,7 @@ function Step({ n, status, label, labelId, children }: StepProps) {
         <li className={`setup-step is-${status}`} aria-current={status === 'current' || status === 'active' ? 'step' : undefined}>
             <div className="setup-step-head">
                 <span className="setup-step-num">{icon}</span>
-                <span className="setup-step-label" id={labelId}>{label}</span>
+                <span className="setup-step-label" id={labelId} tabIndex={labelId ? -1 : undefined}>{label}</span>
             </div>
             {children && <div className="setup-step-body">{children}</div>}
         </li>
@@ -542,7 +542,8 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
         }
     }, [poll]);
 
-    /** One model again: Retry and Resume continue from the bytes on disk; a failed load re-downloads. */
+    /** One model again: Retry and Resume continue from the bytes on disk; a failed load
+     *  re-downloads, once the user confirmed it in the row's sheet. */
     const retryModel = useCallback(async (id: string, kind: SetupModelProgress['error_kind']) => {
         setActionError(null);
         setBusy(true);
@@ -648,7 +649,7 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
     const runFailed = run?.state === 'failed' || run?.state === 'cancelled';
     const downloadDone = fullRun && (fullRun.state === 'failed' || fullRun.state === 'cancelled')
         && (fullRun.models ?? []).length > 0
-        && (fullRun.models ?? []).every((m) => m.state === 'ready' || m.state === 'skipped' || m.state === 'verifying')
+        && (fullRun.models ?? []).every((m) => m.state === 'ready' || m.state === 'skipped' || m.state === 'verifying' || m.state === 'unchecked')
         && !moving;
 
     const lede = canFinish ? t('setup.lede.done') : run && running ? t('setup.lede.running') : t('setup.lede.start');
@@ -777,13 +778,14 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
                     </Step>
 
                     {gpuStep && (
-                        <Step n={num('gpu')} status={stepStatus('gpu')} label={t('gpu.title')}>
+                        <Step n={num('gpu')} status={stepStatus('gpu')} label={t('gpu.title')} labelId="setup-gpu-title">
                             {phase === 'gpu' && gpu && (
                                 <>
                                     <GpuMemoryPanel
                                         status={gpu}
                                         onStatus={setGpu}
                                         mode="setup"
+                                        headingId="setup-gpu-title"
                                         names={names}
                                         onBack={back}
                                         onSkip={() => download(ackDisk)}

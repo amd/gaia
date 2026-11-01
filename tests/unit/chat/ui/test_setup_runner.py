@@ -1398,8 +1398,94 @@ def test_a_failed_run_never_shows_unchecked_models_as_ready():
     with runner._lock:
         runner._settle_models(None, {}, run_failed=True)
     embed = _models(runner)[EMBED]
-    assert embed["state"] == "failed" and embed["error_kind"] == "verify"
-    assert "before GAIA could check" in embed["error"]
+    # Not ready, and not failed either: nothing is wrong with the file.
+    assert embed["state"] == "unchecked"
+    assert embed["error_kind"] is None and embed["error"] is None
+    assert not embed["can_retry"]
+    assert runner.status()["overall"]["failed"] == 0
+
+
+def test_a_later_download_failing_keeps_the_earlier_models(monkeypatch):
+    """gaia init exits 1 when any one pull fails; what already downloaded stays."""
+    lines = [
+        _plan_event(),
+        json.dumps({"event": "model_done", "model": QWEN, "downloaded": True}),
+        json.dumps(
+            {"event": "error", "model": GEMMA, "message": "Connection reset by peer"}
+        ),
+    ]
+    _popen(
+        monkeypatch,
+        _FakeProc(io.BytesIO((chr(10).join(lines) + chr(10)).encode()), returncode=1),
+    )
+    monkeypatch.setattr(
+        sr, "check", lambda *_a, **_k: pytest.fail("a failed run is not load-checked")
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    assert view["state"] == "failed"
+    rows = {m["id"]: m for m in view["models"]}
+    for kept in (QWEN, EMBED):
+        assert rows[kept]["state"] == "unchecked", rows[kept]
+        assert rows[kept]["error_kind"] is None and not rows[kept]["can_retry"]
+        assert rows[kept]["bytes_done"] == rows[kept]["bytes_total"]
+    assert rows[GEMMA]["state"] == "failed" and rows[GEMMA]["can_retry"]
+    # Only the real failure counts.
+    assert view["overall"]["failed"] == 1
+
+
+def test_a_load_check_that_never_ran_leaves_models_unchecked(monkeypatch):
+    lines = [_plan_event(), json.dumps({"event": "model_done", "model": QWEN})]
+    _popen(monkeypatch, _FakeProc(io.BytesIO((chr(10).join(lines) + chr(10)).encode())))
+
+    def broken(*_a, **_k):
+        raise sr.SetupError("The model server stopped answering.")
+
+    monkeypatch.setattr(sr, "check", broken)
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    assert view["state"] == "failed"
+    assert {m["id"]: m["state"] for m in view["models"]}[QWEN] == "unchecked"
+    assert view["overall"]["failed"] == 0
+
+
+def test_only_a_real_load_failure_is_a_verify_failure():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event({"event": "model_done", "model": QWEN})
+    with runner._lock:
+        runner._settle_models({EMBED}, {QWEN: "would not load"})
+    rows = _models(runner)
+    assert rows[QWEN]["state"] == "failed" and rows[QWEN]["error_kind"] == "verify"
+    assert rows[EMBED]["state"] == "ready"
+
+
+def test_a_resume_starts_from_the_bytes_already_down():
+    """The first poll after Resume must not read 0 and then jump to the partial."""
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event(
+        {
+            "event": "progress",
+            "model": QWEN,
+            "bytes_done": 9_000_000_000,
+            "bytes_total": 23_300_000_000,
+        }
+    )
+    runner.cancel(QWEN)
+    with runner._lock:
+        runner._models[QWEN].state = "cancelled"
+    gate = threading.Event()
+    runner.download_model(_PullClient([], gate=gate), QWEN)
+    try:
+        row = _models(runner)[QWEN]
+        assert row["state"] == "downloading"
+        assert row["bytes_done"] == 9_000_000_000
+        assert row["bytes_total"] == 23_300_000_000
+    finally:
+        gate.set()
 
 
 def test_remove_is_refused_while_setup_runs_or_under_another_spelling(client):

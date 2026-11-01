@@ -241,9 +241,10 @@
 .setup-models { display: flex; flex-direction: column; gap: 10px; }
 .setup-reset { align-self: flex-start; font-size: 12.5px; }
 
+/* Sticks to the window's edge, not the padding above it, so nothing scrolls by underneath. */
 .setup-models-footer {
     position: sticky;
-    inset-block-end: 0;
+    inset-block-end: calc(-1 * var(--setup-pad-block));
     z-index: 1;
     display: flex;
     flex-direction: column;
@@ -583,7 +584,13 @@
 
 /* ── Narrow windows and 200% zoom ──────────────────────────────── */
 @media (max-width: 480px) {
-    .setup { padding: 24px 12px; }
+    .setup { --setup-pad-block: 24px; padding: var(--setup-pad-block) 12px; }
+    /* On a phone a sticky footer with a disk warning would cover half the screen:
+       it sits at the end of the list instead, compact. */
+    .setup-models-footer { position: static; margin-inline: 0; padding-inline: 0; gap: 6px; }
+    .setup-models-footer .mc-summary-stats { flex-direction: row; gap: 2px 14px; }
+    .setup-models-footer .mc-disk-warn { font-size: 12px; }
+    .setup-models-footer .setup-keep-trying { font-size: 12.5px; }
     .setup-step-body { margin-inline-start: 0; }
     .mc-row-top { flex-wrap: wrap; }
     .mc-actions { padding: 0 12px 10px; padding-inline-start: 40px; }

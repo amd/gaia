@@ -149,7 +149,12 @@ export function visionSkipped(catalog: SetupCatalogEntry[], sel: Selection): Set
 export function skipChanges(plan: SetupPlan, sel: Selection): Array<{ id: string; skipped: boolean }> {
     const changes: Array<{ id: string; skipped: boolean }> = [];
     for (const e of catalogOf(plan)) {
-        if (!e.planned) continue;
+        if (!e.planned) {
+            // A model removed earlier is on the skip list, which drops it from
+            // every download: ticking it again takes it off.
+            if (e.skipped && sel.ticked.has(e.id)) changes.push({ id: e.id, skipped: false });
+            continue;
+        }
         // The chat model in use is never skipped: setup would then have none.
         if (e.id === plan.chat_model.id) {
             if (e.skipped) changes.push({ id: e.id, skipped: false });
