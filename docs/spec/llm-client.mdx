@@ -42,6 +42,8 @@ The LLM client package provides a unified interface for generating text from mul
 | `chat()` | ✓ | ✓ |
 | `embed()` | ✓ | ✗ |
 | `vision()` | ✓ | ✓ |
+| `generate_image()` | ✓ | ✗ |
+| `transcribe_audio()` | ✓ | ✗ |
 | `get_performance_stats()` | ✓ | ✓ |
 | `load_model()` | ✓ | ✗ |
 | `unload_model()` | ✓ | ✗ |
@@ -96,6 +98,8 @@ Historical release notes describe the providers that shipped in those releases.
    - **Optional methods** (raise `NotSupportedError` if not implemented):
      - `embed()` - Generate embeddings
      - `vision()` - Vision/image understanding
+     - `generate_image()` - Text-to-image generation
+     - `transcribe_audio()` - Speech-to-text from a WAV file
      - `get_performance_stats()` - Performance statistics
      - `load_model()` - Load a model
      - `unload_model()` - Unload current model
@@ -320,6 +324,30 @@ class LLMClient(ABC):
             Supported by: Lemonade, Claude
         """
         raise NotSupportedError(self.provider_name, "vision")
+
+    def generate_image(self, prompt: str, **kwargs) -> dict:
+        """
+        Generate an image from a text prompt.
+
+        Returns:
+            The server response; images are in ``data[].b64_json``
+
+        Note:
+            Only supported by: Lemonade
+        """
+        raise NotSupportedError(self.provider_name, "generate_image")
+
+    def transcribe_audio(self, audio_path: str, **kwargs) -> Any:
+        """
+        Transcribe a 16 kHz mono WAV file.
+
+        Returns:
+            A ``Transcript`` (segments, words, language, duration)
+
+        Note:
+            Only supported by: Lemonade
+        """
+        raise NotSupportedError(self.provider_name, "transcribe_audio")
 
     def get_performance_stats(self) -> dict:
         """

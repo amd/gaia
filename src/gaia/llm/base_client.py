@@ -3,7 +3,7 @@
 """Base LLM client interface."""
 
 from abc import ABC, abstractmethod
-from typing import Iterator, Optional, Union
+from typing import Any, Iterator, Optional, Union
 
 from .exceptions import NotSupportedError
 
@@ -53,6 +53,12 @@ class LLMClient(ABC):
 
     def vision(self, images: list[bytes], prompt: str, **kwargs) -> str:
         raise NotSupportedError(self.provider_name, "vision")
+
+    def generate_image(self, prompt: str, **kwargs) -> dict:
+        raise NotSupportedError(self.provider_name, "generate_image")
+
+    def transcribe_audio(self, audio_path: str, **kwargs) -> Any:
+        raise NotSupportedError(self.provider_name, "transcribe_audio")
 
     def get_performance_stats(self) -> dict:
         raise NotSupportedError(self.provider_name, "get_performance_stats")
