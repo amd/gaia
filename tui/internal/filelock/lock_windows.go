@@ -1,6 +1,9 @@
+// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //go:build windows
 
-package daemon
+package filelock
 
 import (
 	"errors"
@@ -9,9 +12,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// tryLock takes a non-blocking exclusive byte-range lock. (false, nil) means
-// "held by someone else, retry"; a non-nil error is a real failure.
-func tryLock(f *os.File) (bool, error) {
+// TryLock takes an exclusive lock on byte 0..1 of the file, the same byte range
+// Python's msvcrt.locking(fd, LK_NBLCK, 1) locks at offset 0.
+// (false, nil) means held by someone else.
+func TryLock(f *os.File) (bool, error) {
 	var ov windows.Overlapped
 	err := windows.LockFileEx(
 		windows.Handle(f.Fd()),
@@ -27,7 +31,8 @@ func tryLock(f *os.File) (bool, error) {
 	return false, err
 }
 
-func unlock(f *os.File) {
+// Unlock releases a lock taken with TryLock (closing the file also releases it).
+func Unlock(f *os.File) {
 	var ov windows.Overlapped
 	_ = windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &ov)
 }
