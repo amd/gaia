@@ -5465,8 +5465,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                 "status": "cleared",
                 **cleared,
                 "message": (
-                    "Everything is erased, past conversations included. This "
-                    "chat's own messages stay on screen until it is closed."
+                    "Everything is erased, past conversations included. Chats "
+                    "listed in the sidebar, this one included, are kept until "
+                    "you delete them there."
                 ),
             }
 
