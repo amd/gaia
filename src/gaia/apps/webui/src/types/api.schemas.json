@@ -664,6 +664,23 @@
     "title": "BrowseResponse",
     "type": "object"
   },
+  "CancelRequest": {
+    "properties": {
+      "model_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Id"
+      }
+    },
+    "title": "CancelRequest",
+    "type": "object"
+  },
   "CancelStreamRequest": {
     "properties": {
       "session_id": {
@@ -678,8 +695,13 @@
     "type": "object"
   },
   "ChatModelRequest": {
-    "description": "One of setup's default chat models.",
+    "description": "A chat model GAIA knows, or one already downloaded in Lemonade.",
     "properties": {
+      "acknowledge_no_fit": {
+        "default": false,
+        "title": "Acknowledge No Fit",
+        "type": "boolean"
+      },
       "model_id": {
         "title": "Model Id",
         "type": "string"
@@ -1279,24 +1301,6 @@
     "title": "DocumentUploadRequest",
     "type": "object"
   },
-  "DownloadModelRequest": {
-    "properties": {
-      "force": {
-        "default": false,
-        "title": "Force",
-        "type": "boolean"
-      },
-      "model_name": {
-        "title": "Model Name",
-        "type": "string"
-      }
-    },
-    "required": [
-      "model_name"
-    ],
-    "title": "DownloadModelRequest",
-    "type": "object"
-  },
   "DownloadProgress": {
     "description": "Progress of an in-flight Lemonade model download.\n\nPopulated from Lemonade's ``POST /v1/pull`` SSE event stream\n(``event: progress``). The frontend polls this on /api/system/status\nso the download banner can show real progress instead of a bare spinner.\n\n``state`` values:\n  - ``starting``    — pull request issued, waiting for first byte\n  - ``downloading`` — at least one progress event received\n  - ``complete``    — all files done (transient — entry expires soon)\n  - ``error``       — Lemonade returned an error event or the stream broke",
     "properties": {
@@ -1868,6 +1872,50 @@
       "status"
     ],
     "title": "GoalStatusUpdate",
+    "type": "object"
+  },
+  "GpuMemoryApplyRequest": {
+    "properties": {
+      "confirm": {
+        "default": false,
+        "title": "Confirm",
+        "type": "boolean"
+      },
+      "setting_gb": {
+        "description": "GPU memory to set, in decimal GB (10**9 bytes).",
+        "title": "Setting Gb",
+        "type": "number"
+      }
+    },
+    "required": [
+      "setting_gb"
+    ],
+    "title": "GpuMemoryApplyRequest",
+    "type": "object"
+  },
+  "GpuMemoryPendingRequest": {
+    "properties": {
+      "setting_gb": {
+        "description": "GPU memory to set, in decimal GB (10**9 bytes).",
+        "title": "Setting Gb",
+        "type": "number"
+      }
+    },
+    "required": [
+      "setting_gb"
+    ],
+    "title": "GpuMemoryPendingRequest",
+    "type": "object"
+  },
+  "GpuMemoryRevertRequest": {
+    "properties": {
+      "confirm": {
+        "default": false,
+        "title": "Confirm",
+        "type": "boolean"
+      }
+    },
+    "title": "GpuMemoryRevertRequest",
     "type": "object"
   },
   "GrantRequest": {
@@ -3136,6 +3184,19 @@
     "title": "QuickLink",
     "type": "object"
   },
+  "RemoveModelRequest": {
+    "properties": {
+      "model_id": {
+        "title": "Model Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_id"
+    ],
+    "title": "RemoveModelRequest",
+    "type": "object"
+  },
   "RestartRequest": {
     "description": "``confirm`` is required to reload a model on a server GAIA does not run.",
     "properties": {
@@ -3846,11 +3907,21 @@
     "type": "object"
   },
   "SetupRunRequest": {
-    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``gaia_lemonade`` to set up GAIA's own server instead of the user's.",
+    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``gaia_lemonade`` to set up GAIA's own server instead of the user's;\n``acknowledge_low_disk`` to download past a too-small model drive;\n``keep_trying`` to wait up to two minutes out a dropped connection.",
     "properties": {
+      "acknowledge_low_disk": {
+        "default": false,
+        "title": "Acknowledge Low Disk",
+        "type": "boolean"
+      },
       "gaia_lemonade": {
         "default": false,
         "title": "Gaia Lemonade",
+        "type": "boolean"
+      },
+      "keep_trying": {
+        "default": false,
+        "title": "Keep Trying",
         "type": "boolean"
       },
       "skip_chat_model": {
@@ -3860,6 +3931,24 @@
       }
     },
     "title": "SetupRunRequest",
+    "type": "object"
+  },
+  "SkipModelRequest": {
+    "properties": {
+      "model_id": {
+        "title": "Model Id",
+        "type": "string"
+      },
+      "skipped": {
+        "default": true,
+        "title": "Skipped",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "model_id"
+    ],
+    "title": "SkipModelRequest",
     "type": "object"
   },
   "SourceInfo": {
@@ -5086,6 +5175,47 @@
       "indexing"
     ],
     "title": "WorkInProgress",
+    "type": "object"
+  },
+  "gaia__ui__routers__setup__DownloadModelRequest": {
+    "properties": {
+      "acknowledge_low_disk": {
+        "default": false,
+        "title": "Acknowledge Low Disk",
+        "type": "boolean"
+      },
+      "keep_trying": {
+        "default": false,
+        "title": "Keep Trying",
+        "type": "boolean"
+      },
+      "model_id": {
+        "title": "Model Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_id"
+    ],
+    "title": "DownloadModelRequest",
+    "type": "object"
+  },
+  "gaia__ui__routers__system__DownloadModelRequest": {
+    "properties": {
+      "force": {
+        "default": false,
+        "title": "Force",
+        "type": "boolean"
+      },
+      "model_name": {
+        "title": "Model Name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_name"
+    ],
+    "title": "DownloadModelRequest",
     "type": "object"
   }
 }

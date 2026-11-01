@@ -58,6 +58,10 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   bundled with every module its code imports. A skill tool named like a
   confirmation-gated core tool (`write_file`, `run_python`) always asks first,
   and a skill's `write_*` / `edit_*` tool counts as a file change.
+- **The missing-watchdog hint no longer installs a broken watchdog.** Watching
+  a folder without watchdog told users to install `watchdog>=2.1.0`, which
+  pulls in 7.0.0, whose Windows reader withholds events while any nearby
+  file keeps changing. The hint now caps it at `<7` (#6236).
 
 ### Added
 

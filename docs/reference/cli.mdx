@@ -331,8 +331,15 @@ gaia init [OPTIONS]
 | `--check` | flag | false | Report whether the profile is already set up and exit — no install, no download. A stopped GAIA Lemonade Server is started through the GAIA daemon (started too if needed), as any GAIA command would. Exit code `0` means ready, `1` means `gaia init` still has work to do. Used by the Go TUI's first-boot check and `/setup` command |
 | `--load` | flag | false | With `--check`: once everything is downloaded, load each model once — the chat model at its context size, the embedding model with a one-word embedding — so "downloaded but will not load" is caught before first use. Exit code `3` means a downloaded model would not load; re-running setup will not fix that. Used by the Go TUI's readiness gate |
 | `--chat-model` | string | — | With `--check`: the local chat model to check instead of the profile default |
-| `--json` | flag | false | With `--check`: print the result as one JSON object — `ready`, `stage` (`setup` or `load`), `reasons`, and per-model `id`, `role`, `size_gb`, `loaded`, `error` |
+| `--json` | flag | false | With `--check`: print the result as one JSON object — `ready`, `stage` (`setup` or `load`), `reasons`, and per-model `id`, `role`, `size_gb`, `loaded`, `error`. With `--plan`: print the plan as one JSON object (see [Choosing models](#choosing-models)) |
 | `--progress-json` | flag | false | Also print setup steps and model download progress as one JSON object per line on stdout, for a tool that shows it (the desktop app's installer). Human output still prints around them. See [Progress events](#progress-events) |
+| `--plan` | flag | false | Print the models setup would download — size left to download, what each is for, whether it fits this PC, and the free space on the model drive — then exit. Downloads nothing |
+| `--use-model` | string | — | Use this chat model and save it as `default_model`: one GAIA knows, or any chat model already downloaded in Lemonade, FLM included. One that may not fit this PC exits `4` until you add `--acknowledge-no-fit` |
+| `--acknowledge-no-fit` | flag | false | With `--use-model`: save it even though it may not fit this PC |
+| `--skip-model` | string | — | Don't download this model, now or in later runs; saved in `skipped_models`. Repeatable |
+| `--download-model` | string | — | Download this model too, and take it off the skip list — e.g. the vision model after `--use-model` replaced it. Repeatable |
+| `--allow-low-disk` | flag | false | Download even when the models need more disk than the model drive has free, instead of stopping |
+| `--keep-trying` | flag | false | When a download's connection drops, retry it for up to two minutes before failing. Off by default |
 
 **Available Profiles:**
 
@@ -369,11 +376,52 @@ is already installed.
 Before it downloads anything, `gaia init` adds up what the models still need and checks
 it against the free space in Lemonade's model store. When they don't all fit, it stops
 before the first download with `Not enough disk space`, how much the models need, how much
-is free, and where, and exits `1`. Each model fitting on its own is not enough. What an
-interrupted download already left there counts as downloaded, so a retry asks only for
-the rest. When GAIA can't read that store (a remote server), a shortfall is a warning and
-the download goes ahead.
+is free, and where, and exits `1`; `--allow-low-disk` downloads anyway. Each model fitting
+on its own is not enough. What an interrupted download already left there counts as
+downloaded, so a retry asks only for the rest. When GAIA can't read that store (a remote
+server), a shortfall is a warning and the download goes ahead.
 </Note>
+
+#### Choosing models
+
+These flags show which models setup will download and save which ones you want. Every
+later `gaia init`, including `--yes`, downloads what you chose, and the same plan and
+choices are available to apps through the Agent UI server's `/api/setup/*` routes (see
+[Setup](/sdk/sdks/agent-ui#setup)):
+
+```bash
+gaia init --plan                              # what setup would download, and why
+gaia init --plan --use-model gemma4-it-e2b-FLM # chat on the NPU model you already have
+gaia init --skip-model Gemma-4-E4B-it-GGUF    # don't download the vision model
+gaia init --download-model Gemma-4-E4B-it-GGUF --yes   # changed your mind
+```
+
+Choices are saved in `~/.gaia/config.json` — the chat model as `default_model`, the
+models you don't want as `skipped_models` — and every later `gaia init`, including
+`--yes`, honors them. `gaia init --check` doesn't count a skipped model as missing, except
+the chat model: with that skipped it reports that there is no local chat model until you
+pick another one or a cloud provider.
+
+Skipping a model is allowed, and setup says what stops working:
+
+| Model | Without it |
+|-------|------------|
+| `Gemma-4-E4B-it-GGUF` | GAIA can't read images or screenshots: vision loads this model by name, whatever the chat model is. On PCs where it is also the chat model, there is no local chat model either |
+| `user.embeddinggemma-300m-GGUF` | GAIA can't search your documents or remember things |
+| The chat model | GAIA has no local chat model; pick another with `--use-model`, or a cloud provider |
+
+With `--plan --json`, the plan is one JSON object, the same one the Agent UI reads from
+`GET /api/setup/plan`. `catalog` lists every model you can pick: the profile's models,
+GAIA's other chat models, and each chat model already downloaded in Lemonade. Each entry
+has `id`, `roles` (`chat`, `vision`, `embedding`), `purpose`, `if_skipped`,
+`size_gb` (what is left to download, partial files subtracted), `full_size_gb`,
+`downloaded`, `recommended` (for this PC), `selected` (setup will download it),
+`skipped`, `chat_choice`, and `fits` (`null` when unknown) with `need_gb`,
+`capacity_gb` and `fit_reason` (memory figures as Lemonade reports them, which are GiB).
+`disk` is the model drive's `path` and `free_gb` (decimal GB, like every size);
+`download_gb` and `disk_warning` cover the selected models. A choice that needs
+confirming exits `4` and prints `{"needs_acknowledgement": {...}}` with the `code`
+(`no_fit`), the numbers, and the flag that confirms it.
 
 #### Progress events
 
@@ -384,8 +432,9 @@ not such an object, and any `event` you don't know.
 | `event` | Fields | When |
 |---------|--------|------|
 | `step` | `step`, `total`, `message` | A setup step starts |
-| `plan` | `models` (`id`, `bytes_total` or `null` when unknown, `downloaded`), `bytes_total` (what is left to download), `disk_free_bytes` (`null` when Lemonade does not report it) | Before the downloads |
+| `plan` | `models` (`id`, `bytes_total` or `null` when unknown, `downloaded`), `skipped` (ids left out because they are in `skipped_models`), `bytes_total` (what is left to download), `disk_free_bytes` (`null` when Lemonade does not report it) | Before the downloads |
 | `progress` | `model`, `index`, `count`, `bytes_done`, `bytes_total`, `speed_bps` | During a model's download, at most twice a second |
+| `retrying` | `model`, `until` (Unix time the wait ends) | With `--keep-trying`, a dropped connection is being waited out |
 | `model_done` | `model`, `downloaded` (`false` when it was already on disk) | A model is ready |
 | `done` | `ok` | The downloads finished, or one failed |
 | `error` | `message`, and `model` when one model failed | Something stopped setup |
@@ -1715,6 +1764,11 @@ does. `LEMONADE_AMD_API_KEY` in **Lemonade's** environment still takes
 precedence over a stored token; if both are set, Lemonade says so rather than
 silently choosing.
 
+Chat with Claude models (`amd.Claude-*`) skips Lemonade for the gateway's Anthropic route,
+which caches prompts; `test` uses that route for them too. Set
+`GAIA_GATEWAY_ANTHROPIC_BASE_URL` if your gateway isn't AMD's. See
+[Claude models and prompt caching](/guides/llm-gateway#claude-models-and-prompt-caching).
+
 When a gateway model answers HTTP 404, GAIA records it. `status` and `models` then
 mark it unavailable, and `chat`, `llm`, and `prompt` warn when it is your saved
 default. GAIA never switches models for you; pick another with `gaia gateway use <id>`.
@@ -1743,6 +1797,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `context_sizes` | _(empty)_ | Context window per local model, set in the Agent UI under **Settings → Model** (`gaia config set` refuses it). A model not listed gets GAIA's automatic size; `GAIA_CTX_SIZE` overrides it |
 | `custom_models` | _(empty)_ | Local models you added from a Hugging Face link, managed with [`gaia model`](#model-command), the Agent UI or the TUI (`gaia config set` refuses it) |
 | `profile` | `chat` | Last `gaia init` profile |
+| `skipped_models` | _(empty)_ | Models you chose not to download; `gaia init` and first-run setup leave them out. Comma-separated with `gaia config set`; also set by `gaia init --skip-model` and the setup screens. See [Choosing models](#choosing-models) |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, `rocm`, `metal`, `cpu`, or `auto` to let Lemonade choose. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
 | `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-tui`, restored on its next launch — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |

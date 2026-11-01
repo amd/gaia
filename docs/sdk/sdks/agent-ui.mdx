@@ -2344,6 +2344,10 @@ First-run setup. The Agent UI asks and runs the same `gaia init` the TUI does,
 so the two can never disagree about whether GAIA is set up.
 
 <AccordionGroup>
+  Error `detail` strings are fixed messages that say what failed and what to
+  do; the underlying error is written to the Agent UI server log, never sent
+  in a response.
+
   <Accordion title="GET /api/setup/check">
     Runs `gaia init --check --profile gaia --json` and returns its result plus
     the step list: `{"ready": bool, "stage": ..., "reasons": [...], "steps": [...]}`.
@@ -2372,23 +2376,67 @@ so the two can never disagree about whether GAIA is set up.
     its downloads aren't GAIA's. Loads and downloads
     nothing. **403** without `X-Gaia-UI: 1`; **503** when the plan can't be
     worked out.
+
+    The same plan also carries what the model picker needs: `catalog` (every
+    model the user can pick, with `roles`, `purpose`, `if_skipped`, `size_gb`
+    left to download, `downloaded`, `recommended`, `selected`, `skipped`,
+    `chat_choice`, and `fits` with `need_gb` / `capacity_gb` / `fit_reason`; memory
+    figures are Lemonade's own, in GiB, while sizes and disk are decimal GB),
+    `disk` (`path`, `free_gb`, `source`), `disk_warning`, and `skipped_models`.
+    `gaia init --plan --json` prints the same object; its
+    [CLI reference](/reference/cli#choosing-models) lists every field.
   </Accordion>
 
   <Accordion title="POST /api/setup/chat-model">
-    Pick setup's chat model before it starts. Body: `{"model_id": "..."}`, one
-    of the default chat models. Picking the recommendation clears
-    `default_model`, so setup keeps its own pick; any other is saved as
-    `default_model`. Returns the new plan. **422** when the model isn't one of
-    setup's, won't fit this PC, or the model server isn't running yet.
+    Pick the chat model. Body: `{"model_id": "...", "acknowledge_no_fit":
+    false}`: any chat model GAIA knows, or one already downloaded in Lemonade,
+    FLM included. Picking the recommendation clears `default_model`, so setup
+    keeps its own pick; any other is saved as `default_model`. Returns the new
+    plan. **409** with `detail` `{"code": "no_fit", "message", "need_gb",
+    "capacity_gb", "acknowledge": "acknowledge_no_fit"}` when it may not fit
+    this PC; send it again with that field set to use it anyway. **422** when
+    the model isn't a chat model GAIA or the server knows; **503** when the
+    model server isn't running yet.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/models/skip">
+    Body: `{"model_id": "...", "skipped": true}`. Adds one of setup's models to
+    `skipped_models`, or takes it off with `false`; setup and `gaia init` then
+    leave it out. Returns the new plan, whose `if_skipped` says what stops
+    working. **422** for a model setup doesn't download.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/models/download">
+    Download one model now: Retry, Resume, or one skipped at setup. Body:
+    `{"model_id": "...", "acknowledge_low_disk": false, "keep_trying":
+    false}`. Takes it off `skipped_models`; Lemonade resumes a partial file.
+    Follow it with `/api/setup/status`. **202** when started. **409** with a
+    `low_disk` `detail` (below) when the drive is too small, or when setup or
+    that model is already downloading. **422** for a model neither GAIA nor
+    the server knows; **503** when the model server isn't running yet.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/models/remove">
+    Body: `{"model_id": "..."}`. Deletes that model from Lemonade, on request
+    only, and adds it to `skipped_models` so setup doesn't download it again.
+    Returns the new plan plus `freed_gb`. **409** while it is downloading;
+    **422** when it isn't downloaded; **503** when the model server isn't
+    running yet.
   </Accordion>
 
   <Accordion title="POST /api/setup/run">
     Start `gaia init --profile gaia --yes` in the background; follow it with
     `/api/setup/status`. Body: `{"skip_chat_model": false, "gaia_lemonade":
-    false}`; `gaia_lemonade` runs `gaia init --gaia-lemonade`, which sets up
-    and saves GAIA's own server instead of the user's. **409** when setup is
-    already running, or `gaia_lemonade` is asked while `LEMONADE_BASE_URL`
-    picks the server.
+    false, "acknowledge_low_disk": false, "keep_trying": false}`;
+    `gaia_lemonade` runs `gaia init --gaia-lemonade`, which sets up and saves
+    GAIA's own server instead of the user's. `keep_trying` waits out a dropped
+    connection for up to two minutes before a model fails. **409** when setup
+    is already running, or `gaia_lemonade` is asked while `LEMONADE_BASE_URL`
+    picks the server. **409** with `detail` `{"code": "low_disk", "message",
+    "need_gb", "free_gb", "free_up_gb", "path", "drop", "acknowledge":
+    "acknowledge_low_disk"}` when the selected models need more disk than is
+    free; `drop` names the one model whose skip makes it fit, when there is
+    one. Send it again with `acknowledge_low_disk` to download anyway.
   </Accordion>
 
   <Accordion title="GET /api/setup/status">
@@ -2405,11 +2453,82 @@ so the two can never disagree about whether GAIA is set up.
     only unsetting it switches). The raw error stays in the output lines.
     `gaia_lemonade` is true for a run switching to GAIA's own, so a retry
     keeps switching.
+
+    `models` has one row per model of the run or of a single download: `id`,
+    `roles`, `state` (`queued`, `downloading`, `verifying`, `ready`,
+    `failed`, `skipped`, `cancelled`), `bytes_done`, `bytes_total`,
+    `speed_bps`, `eta_s`, `error`, `error_kind` (`network`, `disk_full`,
+    `lemonade`, `verify`), `can_retry`, `retrying_until` (Unix time, while a
+    `keep_trying` wait runs), and `downloaded_before_gb` for a resumed
+    download. `overall` sums them: `bytes_done`, `bytes_total`, `speed_bps`,
+    `eta_s`, `percent`, `failed`. With only a single download and no run,
+    `state` is `idle` and `models` still reports it.
   </Accordion>
 
   <Accordion title="POST /api/setup/cancel">
-    Stop a running setup. Anything already downloaded is kept. Returns
+    Stop a running setup, or one model's download with `{"model_id": "..."}`.
+    Finished models and partial files are kept, so a later run or
+    `/api/setup/models/download` continues from where it stopped. Returns
     `{"cancelled": bool}`.
+  </Accordion>
+</AccordionGroup>
+
+### GPU memory
+
+How an AMD integrated GPU (Strix Halo, Ryzen AI) shares memory with the CPU,
+which models a bigger share would fit, and changing it. See
+[Give the GPU more memory](/guides/ai-providers#give-the-gpu-more-memory). The
+TUI reads the same answers from the daemon at `/daemon/v1/gpu-memory`. Every
+route needs the `X-Gaia-UI: 1` header (**403** without it) and returns the
+status below, read fresh. **503** when the model server doesn't answer, since
+the split is read from it. Every `*_gb` field, in requests and responses, is
+decimal GB (10^9 bytes), converted from the GiB Lemonade reports. Only the
+`guided_steps` text converts, to the 4 KiB pages of `ttm.pages_limit` and to
+the GiB that AMD Software and `amd-ttm` count in.
+
+<AccordionGroup>
+  <Accordion title="GET /api/gpu-memory">
+    `applies` (an integrated AMD GPU on a local server; else only
+    `hidden_reason`, `os`, `method: "unsupported"` and `method_reason`),
+    `show_in_setup` (a bigger share fits a default chat model), `total_gb`,
+    `gpu_gb`, `cpu_gb`, `setting` (`name`, `current_gb`, `min_gb`, `max_gb`;
+    the GPU memory limit on Linux, Variable Graphics Memory on Windows),
+    `reserve_gb` (16, kept for the CPU), `method` (`apply` or `guided`) with
+    `method_reason`, `presets` (`setting_gb`, `gpu_gb`, `unlocks`),
+    `recommended_setting_gb`, `models` (`id`, `need_gb`, `default`,
+    `fits_now`, `fits_at_setting_gb`), `pending` (`setting_gb`,
+    `previous_setting_gb`, `source`, `state`: `restart_required`,
+    `took_effect` or `not_applied`), `revert` (`available`,
+    `previous_setting_gb`) and `guided_steps`. **Query:** `setting_gb` renders
+    `guided_steps` for that value (**422** outside `min_gb`–`max_gb`).
+  </Accordion>
+
+  <Accordion title="POST /api/gpu-memory/apply">
+    Linux only. Body: `{"setting_gb": 96, "confirm": true}`. Asks for
+    administrator permission through pkexec, writes the limit, and records the
+    previous one for undo. Takes effect after a restart; GAIA never restarts
+    the PC. **400** without `confirm`; **403** from another computer or over
+    mobile access, or when permission isn't given; **409** when the method
+    is `guided` or the value is already set; **422** when it would leave the
+    CPU less than 16 GB; **500** when the root step fails.
+  </Accordion>
+
+  <Accordion title="POST /api/gpu-memory/revert">
+    Body: `{"confirm": true}`. Puts back the setting GAIA replaced, after a
+    restart. **409** when GAIA has no record of a change, or the record holds
+    anything but GPU memory settings. Same **400**/**403** as apply.
+  </Accordion>
+
+  <Accordion title="POST /api/gpu-memory/pending">
+    Body: `{"setting_gb": 64}`. Records a value the user is setting by hand
+    (`guided`), so after the restart `pending.state` says whether it took
+    effect, judged from a fresh reading. **409** where GAIA can apply it
+    itself; **422** out of range.
+  </Accordion>
+
+  <Accordion title="DELETE /api/gpu-memory/pending">
+    Stops reporting the pending change ("Keep current"). Changes nothing on
+    the PC, and keeps what undo needs.
   </Accordion>
 </AccordionGroup>
 
