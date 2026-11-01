@@ -3238,6 +3238,22 @@ These positions indicate where to split the text."""
             return index, chunks, embeddings
         return index, chunks
 
+    def _index_without_rows(self, removed: set):
+        """A new index with every vector of ``self.index`` except rows *removed*.
+
+        Copies the stored vectors instead of re-embedding, and leaves
+        ``self.index`` untouched for readers holding a snapshot of it.
+        """
+        total = self.index.ntotal
+        if total != len(self.chunks):
+            raise RuntimeError(
+                f"Vector index holds {total} vectors for {len(self.chunks)} "
+                "chunks; re-index the documents to rebuild it."
+            )
+        keep = np.ones(total, dtype=bool)
+        keep[sorted(removed)] = False
+        return self._create_faiss_index(self.index.reconstruct_n(0, total)[keep])
+
     def _snapshot_query_state(self) -> Dict[str, Any]:
         """Capture a consistent read snapshot for query operations."""
         with self._state_lock:
@@ -3304,9 +3320,8 @@ These positions indicate where to split the text."""
                                 new_file_to_chunk_indices[owner] = []
                             new_file_to_chunk_indices[owner].append(new_idx)
 
-                    # Rebuild index only after the new chunk set is ready.
                     if new_chunks:
-                        new_index, new_chunks = self._create_vector_index(new_chunks)
+                        new_index = self._index_without_rows(chunk_indices_set)
                     else:
                         new_index = None
 
