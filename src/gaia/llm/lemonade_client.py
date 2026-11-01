@@ -528,6 +528,7 @@ NPU_CTX_SIZE = 32768  # NPU — gemma4-it-e2b-FLM (FastFlowLM ceiling)
 # host RAM — ~87s for a 30K-token Qwen3-30B context on a Radeon 8060S. A second
 # slot over one shared KV pool keeps the conversation resident, so the RAM copy
 # buys nothing; the similarity floor keeps a short side prompt off its slot.
+# Args the user saved for the model in Lemonade win (users_llamacpp_args).
 CHAT_LLAMACPP_ARGS = (
     "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5"
 )
@@ -537,6 +538,101 @@ CHAT_LLAMACPP_ARGS = (
 #: it lacks forever, so the side slot is used only when the load reports it.
 CONVERSATION_SLOT = 0
 SIDE_SLOT = 1
+
+#: Chat flags GAIA has saved into Lemonade's recipe_options.json itself: the
+#: current set and the single-slot set before it. Saved args outside this set
+#: are the user's, and a chat load keeps them instead of sending GAIA's.
+_GAIA_SAVED_CHAT_ARGS = frozenset({CHAT_LLAMACPP_ARGS, "--parallel 1"})
+
+
+def users_llamacpp_args(catalog_entry: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The llama.cpp args saved for a model in Lemonade by someone other than GAIA.
+
+    Read from the model's ``/models`` entry (``recipe_options.llamacpp_args``:
+    the model's registry options with ``recipe_options.json`` on top). None
+    when nothing is saved, the value is blank, or it is GAIA's own chat flags.
+    """
+    options = (catalog_entry or {}).get("recipe_options")
+    if not isinstance(options, dict):
+        return None
+    args = options.get("llamacpp_args")
+    if not isinstance(args, str) or not args.strip():
+        return None
+    if " ".join(args.split()) in _GAIA_SAVED_CHAT_ARGS:
+        return None
+    return args.strip()
+
+
+#: How long a load that crashed llama-server through all its retries is refused
+#: when asked again unchanged. Every chat turn asks for the load, so without
+#: this a model that can never start re-crashed llama-server on every message.
+MODEL_LOAD_CRASH_COOLDOWN_S = 120.0
+
+LOAD_CRASH_HELP_URL = "https://amd-gaia.ai/docs/reference/troubleshooting"
+
+#: (base_url, model, load options) -> (monotonic time it failed, its error).
+_CRASHED_LOADS: Dict[Tuple[str, str, str], Tuple[float, str]] = {}
+_CRASHED_LOADS_LOCK = threading.Lock()
+
+
+def _crashed_load_key(
+    base_url: str, request_data: Dict[str, Any], users_args: Optional[str]
+) -> tuple:
+    """Identify a load by everything that decides how llama-server starts,
+    including the args saved in Lemonade that a request without its own uses."""
+    model = (request_data.get("model_name") or "").lower().removeprefix("user.")
+    options = {
+        k: v for k, v in request_data.items() if k not in ("model_name", "save_options")
+    }
+    options["saved_llamacpp_args"] = users_args
+    return (base_url, model, json.dumps(options, sort_keys=True))
+
+
+def _remember_crashed_load(key: tuple, message: str) -> None:
+    with _CRASHED_LOADS_LOCK:
+        _CRASHED_LOADS[key] = (time.monotonic(), message)
+
+
+def _forget_crashed_loads(base_url: str, model_name: str) -> None:
+    """Drop every remembered crash of *model_name*: it has just loaded."""
+    model = (model_name or "").lower().removeprefix("user.")
+    with _CRASHED_LOADS_LOCK:
+        for key in [k for k in _CRASHED_LOADS if k[:2] == (base_url, model)]:
+            del _CRASHED_LOADS[key]
+
+
+def _recent_crash(key: tuple) -> Optional[Tuple[float, str]]:
+    """``(seconds since, error)`` if this exact load crashed within the cooldown."""
+    with _CRASHED_LOADS_LOCK:
+        seen = _CRASHED_LOADS.get(key)
+        if seen is None:
+            return None
+        ago = time.monotonic() - seen[0]
+        if ago >= MODEL_LOAD_CRASH_COOLDOWN_S:
+            del _CRASHED_LOADS[key]
+            return None
+        return ago, seen[1]
+
+
+def _load_args_hint(sent_args: Optional[str], users_args: Optional[str]) -> str:
+    """Which llama.cpp args the failed load used, and how the user changes them."""
+    if sent_args == CHAT_LLAMACPP_ARGS:
+        return (
+            f" GAIA started it with its chat flags (llamacpp_args "
+            f"'{CHAT_LLAMACPP_ARGS}'), which some models and llama.cpp builds "
+            "cannot start with. To use your own llama.cpp arguments instead, "
+            "save them for the model in Lemonade (its model settings, or a "
+            "load with save_options); GAIA then loads it with those. See "
+            f"{LOAD_CRASH_HELP_URL}"
+        )
+    if users_args:
+        return (
+            " It was started with the llama.cpp arguments saved for it in "
+            f"Lemonade ('{users_args}'); change them in the model's settings "
+            "in Lemonade."
+        )
+    return ""
+
 
 #: One request at a time per local model in this process. With --kv-unified
 #: every slot is promised the whole window from one shared pool, and two active
@@ -1934,6 +2030,79 @@ def defang_harmony_tokens(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return out
 
 
+_TRAILING_ASSISTANT_CONTINUATION = (
+    "Continue from the preceding assistant context and provide the next response."
+)
+
+
+def normalize_trailing_assistant_messages(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Normalize an invalid assistant-only request suffix.
+
+    Recovery paths can append a synthetic assistant message immediately after
+    the model's assistant reply. llama-server rejects two or more assistant
+    messages at the end of a request, and thinking models also reject an
+    assistant prefill. Coalesce only that invalid suffix; the request boundary
+    adds a continuation user turn after the coalesced history. User/tool order
+    before the suffix is untouched and the input is never mutated.
+    """
+    trailing_start = len(messages)
+    while trailing_start and messages[trailing_start - 1].get("role") == "assistant":
+        trailing_start -= 1
+    if len(messages) - trailing_start < 2:
+        return messages
+
+    merged: Dict[str, Any] = dict(messages[trailing_start])
+    text_parts: List[Any] = []
+    reasoning_parts: List[str] = []
+    tool_calls: List[Any] = []
+    saw_content = False
+    saw_reasoning = False
+    saw_tool_calls = False
+
+    for message in messages[trailing_start:]:
+        if "content" in message:
+            saw_content = True
+            content = message.get("content")
+            if content not in (None, ""):
+                text_parts.append(content)
+        if "reasoning_content" in message:
+            saw_reasoning = True
+            reasoning = message.get("reasoning_content")
+            if reasoning:
+                reasoning_parts.append(str(reasoning))
+        calls = message.get("tool_calls")
+        if calls:
+            saw_tool_calls = True
+            tool_calls.extend(calls)
+
+    if saw_content:
+        if all(isinstance(part, str) for part in text_parts):
+            merged["content"] = "\n\n".join(text_parts)
+        elif text_parts:
+            # OpenAI multimodal content is a flat list. Preserve existing
+            # parts and represent any text from a neighbouring turn as a text
+            # part instead of creating a nested list.
+            flattened: List[Any] = []
+            for part in text_parts:
+                if isinstance(part, list):
+                    flattened.extend(part)
+                elif isinstance(part, str):
+                    flattened.append({"type": "text", "text": part})
+                else:
+                    flattened.append(part)
+            merged["content"] = flattened
+        else:
+            merged["content"] = None
+    if saw_reasoning:
+        merged["reasoning_content"] = "\n\n".join(reasoning_parts) or None
+    if saw_tool_calls:
+        merged["tool_calls"] = tool_calls
+
+    return [*messages[:trailing_start], merged]
+
+
 # Define agent profiles with their model requirements
 AGENT_PROFILES = {
     "chat": AgentProfile(
@@ -2040,16 +2209,27 @@ def _free_memory_rules_out(client, requirement, capacity) -> Optional[str]:
     Judged at the smallest window a load shrinks to, so a model refused here
     is one setup's verify step would also refuse.
     """
-    from gaia.llm.model_fit import MIN_CONTEXT_TOKENS, ModelFitError
+    from gaia.llm.model_fit import ModelFitError
+
+    try:
+        return free_memory_shortfall(client, requirement, capacity)
+    except (ModelFitError, LemonadeClientError) as e:
+        return f"could not read this PC's free memory, so cannot confirm it would load: {e}"
+
+
+def free_memory_shortfall(client, requirement, capacity) -> Optional[str]:
+    """:func:`_free_memory_rules_out`'s reason, built from the numbers only.
+
+    Raises ``ModelFitError`` or ``LemonadeClientError`` when the free memory
+    cannot be read, so the caller decides what to show.
+    """
+    from gaia.llm.model_fit import MIN_CONTEXT_TOKENS
 
     url = getattr(client, "base_url", None)
     if not _is_local_url(url):
         return None
     window = min(MIN_CONTEXT_TOKENS, context_for_capacity(requirement, capacity))
-    try:
-        free, resident = _free_memory_snapshot(url)
-    except (ModelFitError, LemonadeClientError) as e:
-        return f"could not read this PC's free memory, so cannot confirm it would load: {e}"
+    free, resident = _free_memory_snapshot(url)
     verdict = _verdict_for(free, resident, requirement, window)
     if verdict is None or verdict.fits:
         return None
@@ -2607,6 +2787,25 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
             return True
         return bool(learned_tool_calling(model_id))
     return True  # Unknown GGUF: optimistic default per Tier 0 findings
+
+
+def uses_native_tool_calls(model_id: Optional[str]) -> bool:
+    """Whether an agent should hand *model_id* its tools as ``tools=`` schemas.
+
+    Local models and catalog-labelled cloud models: whenever they take tools.
+    Any other cloud model starts each session on the in-text format (~12K
+    fewer tokens per call, calls batched in a plan); an agent moves it to
+    native calls for that session only if it writes its own tool-call markup.
+    """
+    if not is_tool_calling_model(model_id):
+        return False
+    cloud = _CLOUD_MODELS.get(model_id)
+    if cloud is not None and cloud["tool_calling"]:
+        return True
+    # A gateway id is cloud before this process has read the catalog, too.
+    if cloud is None and cloud_model_provider(model_id) is None:
+        return True
+    return False
 
 
 def _usage_dict(usage: Any) -> Dict[str, Any]:
@@ -4251,6 +4450,32 @@ class LemonadeClient:
                 return model.get("recipe")
         return None
 
+    def _users_llamacpp_args(self, model_name: str) -> Optional[str]:
+        """The llama.cpp args the user saved for *model_name*, read fresh.
+
+        Fresh because the user may have saved them since this client last
+        listed the catalog. Sending args replaces the saved ones for the load.
+
+        Raises:
+            LemonadeClientError: If the catalog can't be read; loading with
+                GAIA's flags instead could override the user's.
+        """
+        try:
+            catalog = self.list_models(show_all=True)
+        except LemonadeAuthError:
+            raise
+        except LemonadeClientError as e:
+            raise LemonadeClientError(
+                f"Could not read the model catalog at {self.base_url}/models to "
+                f"check for llama.cpp arguments saved for {model_name}, so it "
+                f"was not loaded: {e} Check that Lemonade is running "
+                "(`gaia init --check`)."
+            ) from e
+        for entry in catalog.get("data", []):
+            if _model_ids_match(entry.get("id"), model_name):
+                return users_llamacpp_args(entry)
+        return None
+
     def slot_count(self, model_name: str) -> int:
         """How many llama.cpp slots the loaded *model_name* serves.
 
@@ -4618,7 +4843,9 @@ class LemonadeClient:
         over. Non-transient failures raise immediately.
         """
         try:
-            return self._send_request("post", url, request_data, timeout=timeout)
+            response = self._send_request("post", url, request_data, timeout=timeout)
+            _forget_crashed_loads(self.base_url, model_name)
+            return response
         except Exception as e:
             if not (load_retries > 0 and self._is_transient_load_error(e)):
                 raise
@@ -4636,6 +4863,7 @@ class LemonadeClient:
                     response = self._send_request(
                         "post", url, request_data, timeout=timeout
                     )
+                    _forget_crashed_loads(self.base_url, model_name)
                     self.log.info(
                         f"{_emoji('✅', '[OK]')} Loaded {model_name} after "
                         f"{retry_num} retr{'y' if retry_num == 1 else 'ies'}"
@@ -5080,6 +5308,19 @@ class LemonadeClient:
             # device profile can change between calls, and the budget follows them.
             timeout = request_budget_seconds()
 
+        normalized_messages = normalize_trailing_assistant_messages(messages)
+        if normalized_messages is not messages:
+            self.log.debug(
+                "Coalesced %d trailing assistant messages before chat request",
+                len(messages) - len(normalized_messages) + 1,
+            )
+            messages = [
+                *normalized_messages,
+                {
+                    "role": "user",
+                    "content": _TRAILING_ASSISTANT_CONTINUATION,
+                },
+            ]
         if uses_harmony_format(model):
             messages = defang_harmony_tokens(messages)
         if self.cloud_model_provider(model):
@@ -7830,6 +8071,9 @@ class LemonadeClient:
                          fail through to their normal handling immediately.
                          Applies to every load attempt in this call, including
                          the reload after an auto-download or corrupt repair.
+                         A load that still fails this way is refused, unsent,
+                         if asked for again unchanged within
+                         MODEL_LOAD_CRASH_COOLDOWN_S.
 
         Returns:
             Dict containing the status of the load operation
@@ -7843,6 +8087,7 @@ class LemonadeClient:
         self._check_free_memory(model_name, ctx_size)
 
         managed_embedder = manages_embedder_backend(model_name)
+        users_args: Optional[str] = None
         # An embedder load saves its options; never save the chat flags.
         if llamacpp_args is None and ctx_size is not None and not managed_embedder:
             # The chat flags are a speed-up; an unreadable catalog must not
@@ -7860,8 +8105,20 @@ class LemonadeClient:
                     "conversation cache."
                 )
             if recipe == "llamacpp":
-                llamacpp_args = CHAT_LLAMACPP_ARGS
-        if llamacpp_args is None and model_name in EMBEDDER_MODELS:
+                # Unlike the recipe, this read failing raises: guessing could
+                # send GAIA's flags over the user's own.
+                users_args = self._users_llamacpp_args(model_name)
+                if users_args:
+                    self.log.info(
+                        f"Loading {model_name} with the llama.cpp arguments saved "
+                        f"for it in Lemonade ('{users_args}') instead of GAIA's "
+                        "chat flags."
+                    )
+                else:
+                    llamacpp_args = CHAT_LLAMACPP_ARGS
+        # Saved args are left for Lemonade to apply, exactly as a load the user
+        # runs: request args would replace them and the architecture defaults.
+        if llamacpp_args is None and not users_args and model_name in EMBEDDER_MODELS:
             llamacpp_args = EMBEDDER_LLAMACPP_ARGS
 
         request_data = {"model_name": model_name}
@@ -7896,6 +8153,10 @@ class LemonadeClient:
             # Lemonade's auto-load after an eviction would otherwise auto-tune
             # the window, to 4096 for a model with no saved options.
             save_options = ctx_size is not None and not self.is_users_server()
+        if users_args:
+            # A save replaces the model's whole entry, so one the user
+            # configured is left alone whatever the caller asked for.
+            save_options = False
         if llamacpp_args:
             request_data["llamacpp_args"] = llamacpp_args
         if ctx_size is not None:
@@ -7903,6 +8164,20 @@ class LemonadeClient:
         if save_options:
             request_data["save_options"] = save_options
         url = f"{self.base_url}/load"
+
+        crash_key = _crashed_load_key(self.base_url, request_data, users_args)
+        crashed = _recent_crash(crash_key)
+        if crashed is not None:
+            ago, message = crashed
+            wait = int(MODEL_LOAD_CRASH_COOLDOWN_S - ago) + 1
+            self.log.warning(
+                f"Not loading {model_name}: the same load failed {int(ago)}s ago."
+            )
+            raise LemonadeClientError(
+                f"Not loading {model_name} again yet: the same load failed "
+                f"{int(ago)}s ago. {message} GAIA tries this load again in "
+                f"{wait}s, or at once if the model's load options change."
+            )
 
         try:
             if managed_embedder and request_data.get("llamacpp_backend") != "cpu":
@@ -8047,11 +8322,18 @@ class LemonadeClient:
                     ) from e
                 if self._is_transient_load_error(e):
                     # Outlived any retries, so name the likely cause.
-                    raise LemonadeClientError(
+                    message = (
                         f"Failed to load {model_name}: {original_error}. "
                         f"{backend_crash_remedy(model_name)}"
+                        f"{_load_args_hint(llamacpp_args, users_args)}"
                         f"{_chosen_backend_hint(chosen_backend)}"
-                    ) from e
+                    )
+                    # Re-keyed: an embedder's CPU fallback changes the backend.
+                    _remember_crashed_load(
+                        _crashed_load_key(self.base_url, request_data, users_args),
+                        message,
+                    )
+                    raise LemonadeClientError(message) from e
                 if chosen_backend and not isinstance(e, LemonadeAuthError):
                     raise LemonadeClientError(
                         f"Failed to load {model_name}: {original_error}."

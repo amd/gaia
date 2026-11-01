@@ -84,7 +84,7 @@ _FROM_RAG_EXTRA = {
     "pptx",
     "reportlab",
     "pypdf",
-    "pymupdf",
+    "pypdfium2",
     "numpy",
     "PIL",
 }

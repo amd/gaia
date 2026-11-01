@@ -269,18 +269,7 @@
             "subProcess": true,
             "stopOnEntry": false,
         },
-        {
-            "name": "JIRA Dashboard - Electron",
-            "type": "node",
-            "request": "launch",
-            "cwd": "${workspaceFolder}",
-            "runtimeExecutable": "npm",
-            "runtimeArgs": ["run", "app:jira:run:electron"],
-            "console": "integratedTerminal",
-            "env": {
-                "GAIA_APP_MODE": "development"
-            }
-        },
+
         {
             "name": "C++ Process Agent Debug",
             "type": "cppvsdbg",
