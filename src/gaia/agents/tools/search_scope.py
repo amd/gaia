@@ -42,7 +42,7 @@ SHALLOW_ROOT_DEPTH = 5
 #: so the model gets partial results and a hint instead of an abandoned call.
 SEARCH_TIME_BUDGET_S = 20.0
 
-#: Directory entries one search walk may examine before it stops (#3889).
+#: Directory entries one search walk may examine before it stops.
 SEARCH_ENTRY_BUDGET = 200_000
 
 #: The clock a :class:`SearchBudget` reads unless given one; patch it in tests.

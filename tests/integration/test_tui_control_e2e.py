@@ -310,7 +310,7 @@ def test_stale_control_file_is_rejected_after_the_tui_exits(live_tui):
     info, error = tui_mcp.discover()
     assert info is None
     assert error["status"] == "error"
-    assert "gaia tui --control" in error["detail"]
+    assert "gaia-tui --control" in error["detail"]
     assert stale["token"] not in error["detail"]
 
 

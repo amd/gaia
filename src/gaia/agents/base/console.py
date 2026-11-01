@@ -64,7 +64,7 @@ ANSI_MAGENTA = "\033[95m"
 ANSI_CYAN = "\033[96m"
 
 
-# === Confirmation-gated tools (#2210) ===
+# === Confirmation-gated tools ===
 #
 # Tools in ``Agent.confirmation_required_tools()`` must never execute without an
 # explicit human decision. A console that cannot reach a human DENIES. The only
