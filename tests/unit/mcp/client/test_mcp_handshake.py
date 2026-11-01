@@ -45,7 +45,7 @@ def _seen(log: Path) -> list:
 def _stdio_client(log: Path, *extra: str, env=None) -> MCPClient:
     transport = StdioTransport(
         sys.executable,
-        args=["-u", str(TOY), "--log", str(log), *extra],
+        args=["-I", "-u", str(TOY), "--log", str(log), *extra],
         env=env,
         timeout=20,
         name="toy",
@@ -152,7 +152,7 @@ def test_a_version_echoing_a_secret_is_redacted_from_the_error(tmp_path):
 def test_stdio_notification_has_no_id_and_gets_no_reply(tmp_path):
     log = tmp_path / "stdio.jsonl"
     transport = StdioTransport(
-        sys.executable, args=["-u", str(TOY), "--log", str(log)], timeout=20
+        sys.executable, args=["-I", "-u", str(TOY), "--log", str(log)], timeout=20
     )
     assert transport.connect()
     try:

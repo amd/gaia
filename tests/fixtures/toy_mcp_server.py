@@ -27,8 +27,10 @@ import argparse
 import json
 import os
 import sys
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from http.server import ThreadingHTTPServer
 
 SUPPORTED = ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25")
 _OMIT = "<omit>"
@@ -132,11 +134,15 @@ def make_http_server(
     log_path: Optional[str] = None,
     answer_version: Optional[str] = None,
     notification_body: str = "",
-) -> ThreadingHTTPServer:
+) -> "ThreadingHTTPServer":
     """A loopback HTTP server on a free port, answering each POST with its reply.
 
     Notifications get ``202`` and *notification_body* (empty, per the spec).
     """
+    # Imported here: run as a script, this directory's email/ package shadows
+    # the stdlib one that http.server needs.
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
     session = StrictSession(log_path, answer_version)
 
     class Handler(BaseHTTPRequestHandler):
