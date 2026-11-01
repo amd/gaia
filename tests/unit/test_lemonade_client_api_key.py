@@ -38,8 +38,13 @@ def test_root_conftest_redirects_default_embedded_paths_from_real_home(monkeypat
     real_home = Path.home().resolve()
     monkeypatch.delenv("GAIA_HOME", raising=False)
 
-    assert lc.EMBEDDED_LEMONADE_STATE != real_home / ".gaia" / "lemonade" / "state.json"
-    assert lemonade_embedded.gaia_home() != real_home / ".gaia"
+    real_state = real_home / ".gaia" / "lemonade" / "state.json"
+    if os.environ.get("GAIA_REQUIRE_SD") == "1":
+        assert lc.EMBEDDED_LEMONADE_STATE == real_state
+        assert lemonade_embedded.gaia_home() == real_home / ".gaia"
+    else:
+        assert lc.EMBEDDED_LEMONADE_STATE != real_state
+        assert lemonade_embedded.gaia_home() != real_home / ".gaia"
     assert EmbeddedLemonade().root == lemonade_embedded.gaia_home() / "lemonade"
 
 

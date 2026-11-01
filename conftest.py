@@ -309,14 +309,19 @@ def _allow_embedded_start(request, monkeypatch):
 
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_embedded_lemonade_paths():
-    """Keep tests off the caller's embedded Lemonade state and install.
+    """Keep ordinary tests off the caller's embedded Lemonade state.
 
-    ``EMBEDDED_LEMONADE_STATE`` is fixed when ``lemonade_client`` imports, and
-    ``lemonade_embedded.gaia_home()`` otherwise falls back to ``Path.home()``.
-    Neither follows the environment-backed state isolation above. Point both at
-    this session's throwaway state root instead; tests that exercise either
-    path can still patch them after this fixture has run.
+    The real SD integration lane opts in with ``GAIA_REQUIRE_SD=1`` after
+    ``gaia init --profile sd`` has started a server in the test process's
+    normal GAIA home. Its subprocess-created state must remain visible to the
+    client; all ordinary unit/integration runs still use the throwaway root.
     """
+    if os.environ.get("GAIA_REQUIRE_SD") == "1":
+        yield
+        return
+
+    # The remaining body is the ordinary test isolation path. The import-time
+    # state path and the Path.home fallback both need the same sandbox.
     from gaia.llm import lemonade_client, lemonade_embedded
 
     original_gaia_home = lemonade_embedded.gaia_home
