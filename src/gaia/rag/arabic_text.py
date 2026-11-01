@@ -13,9 +13,10 @@ _PRESENTATION_FORMS = re.compile("[ﭐ-﷿ﹰ-﻾]+")
 _ARABIC_YEH = "ي"
 _SHARED_GLYPH_LETTERS = str.maketrans({"ی": _ARABIC_YEH, "ھ": "ه"})
 
-_ARABIC_LETTER = re.compile("[؀-ۿﭐ-﷿ﹰ-﻾]")
+# The Arabic block holds digits too; those read left to right.
+_ARABIC_LETTER = re.compile("[؀-ٟ٪-ۯۺ-ۿﭐ-﷿ﹰ-﻾]")
 _LATIN_LETTER = re.compile("[A-Za-z]")
-_LTR_RUN = re.compile(r"[0-9A-Za-z٠-٩]")
+_LTR_RUN = re.compile(r"[0-9A-Za-z٠-٩۰-۹]")
 
 _CLOSING_MARKS = ".,:;!?%)،؛؟٪"
 _SHOW_TEXT_OPERATORS = (b"Tj", b"TJ", b"'", b'"')
