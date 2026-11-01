@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import gaia.config
+from gaia.llm.gpu_memory import GB_PER_GIB
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
@@ -148,7 +149,7 @@ def test_use_mine_on_a_big_pc_names_the_large_model_and_its_real_size(running):
     # The hardware's pick keeps Gemma beside it for images: what gaia init pulls.
     assert set(_plan_ids(plan)) >= {LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME}
     assert plan["download_gb"] == pytest.approx(23.3 + 5.6 + 0.3)
-    assert plan["memory_gb"] == 96
+    assert plan["memory_gb"] == round(96 * GB_PER_GIB)
 
 
 def test_an_already_downloaded_model_costs_nothing(running):
@@ -393,7 +394,8 @@ def test_chat_model_endpoint_asks_to_confirm_a_model_that_may_not_fit(client, ru
     r = client.post("/api/setup/chat-model", json=body, headers=UI)
     assert r.status_code == 409
     detail = r.json()["detail"]
-    assert detail["code"] == "no_fit" and detail["capacity_gb"] == 12
+    assert detail["code"] == "no_fit"
+    assert detail["capacity_gb"] == round(12 * GB_PER_GIB, 1)
     assert "may not run" in detail["message"]
     r = client.post(
         "/api/setup/chat-model",
@@ -490,8 +492,10 @@ def test_catalog_says_what_each_planned_model_is_for_and_costs(flm_box):
     assert "images" in gemma["if_skipped"]
     qwen = _entry(plan, LARGE_DEFAULT_MODEL_NAME)
     assert not qwen["recommended"] and not qwen["selected"]
-    assert qwen["fits"] is False and qwen["capacity_gb"] == 12
-    assert qwen["need_gb"] > 23 and "12 GB" in qwen["fit_reason"]
+    assert qwen["fits"] is False and qwen["capacity_gb"] == round(12 * GB_PER_GIB, 1)
+    assert qwen["need_gb"] > 23
+    # The sentence and capacity_gb read the same number.
+    assert "this PC has 12.9 GB" in qwen["fit_reason"]
 
 
 def test_big_pc_recommends_the_large_model_and_keeps_gemma_for_vision(running):
@@ -651,7 +655,116 @@ def test_run_endpoint_asks_before_downloading_past_the_free_space(
     assert seen == []
     r = client.post("/api/setup/run", json={"acknowledge_low_disk": True}, headers=UI)
     assert r.status_code == 200
-    assert seen == [{"allow_low_disk": True, "keep_trying": False}]
+    assert seen == [
+        {
+            "allow_low_disk": True,
+            "keep_trying": False,
+            "extra_models": [],
+            "server_only": False,
+        }
+    ]
+
+
+def test_run_endpoint_pulls_ticked_extras_and_counts_them_against_the_disk(
+    client, flm_box, monkeypatch
+):
+    flm_box(capacity=BIG_GPU, downloaded=(FLM, DEFAULT_MODEL_NAME), free_gb=10.0)
+    seen = []
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: seen.append(k) or {"state": "running"},
+    )
+    body = {"extra_models": [LARGE_DEFAULT_MODEL_NAME.lower()]}
+    r = client.post("/api/setup/run", json=body, headers=UI)
+    # Gemma is on disk; the ticked 23 GB model alone overflows 10 GB free.
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "low_disk"
+    assert LARGE_DEFAULT_MODEL_NAME in r.json()["detail"]["drop"]
+    r = client.post(
+        "/api/setup/run", json={**body, "acknowledge_low_disk": True}, headers=UI
+    )
+    assert r.status_code == 200
+    # Sent as the catalog names it, so `gaia init` matches it exactly.
+    assert seen[0]["extra_models"] == [LARGE_DEFAULT_MODEL_NAME]
+
+
+def test_run_endpoint_refuses_an_extra_model_nobody_has(client, flm_box, monkeypatch):
+    flm_box()
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post("/api/setup/run", json={"extra_models": ["nope-GGUF"]}, headers=UI)
+    assert r.status_code == 422 and "nope-GGUF" in r.json()["detail"]
+
+
+def test_a_failed_extras_check_is_not_a_422_and_leaks_nothing(client, monkeypatch):
+    def broken(_ids):
+        raise sp.SetupPlanError("secret path C:/Users/x/.gaia/config.json is broken")
+
+    monkeypatch.setattr(sp, "check_extra_models", broken)
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post(
+        "/api/setup/run", json={"extra_models": [DEFAULT_MODEL_NAME]}, headers=UI
+    )
+    assert r.status_code == 503
+    assert "secret path" not in r.json()["detail"]
+    assert "couldn't work out the setup plan" in r.json()["detail"]
+
+
+def test_server_only_run_skips_the_disk_check_and_takes_no_extras(
+    client, flm_box, monkeypatch
+):
+    flm_box(downloaded=(), free_gb=0.1)
+    seen = []
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: seen.append(k) or {"state": "running"},
+    )
+    r = client.post("/api/setup/run", json={"server_only": True}, headers=UI)
+    assert r.status_code == 200 and seen[0]["server_only"] is True
+    r = client.post(
+        "/api/setup/run",
+        json={"server_only": True, "extra_models": [DEFAULT_MODEL_NAME]},
+        headers=UI,
+    )
+    assert r.status_code == 422 and len(seen) == 1
+
+
+def test_catalog_separates_gaias_models_from_ones_only_in_lemonade(flm_box):
+    flm_box()
+    plan = sp.build_plan()
+    assert _entry(plan, FLM)["gaia_model"] is False
+    assert _entry(plan, DEFAULT_MODEL_NAME)["gaia_model"] is True
+    assert _entry(plan, LARGE_DEFAULT_MODEL_NAME)["gaia_model"] is True
+    assert _entry(plan, DEFAULT_EMBEDDING_MODEL)["gaia_model"] is True
+
+
+def test_each_model_has_the_name_the_picker_and_sidebar_show(flm_box):
+    from gaia.ui.local_models import friendly_name
+
+    flm_box()
+    for entry in sp.build_plan()["catalog"]:
+        assert entry["name"] == friendly_name(entry["id"]), entry["id"]
+    assert _entry(sp.build_plan(), DEFAULT_MODEL_NAME)["name"] == "Gemma 4 E4B"
+
+
+def test_a_lemonade_only_chat_model_stays_in_the_lemonade_list(flm_box):
+    flm_box()
+    sp.choose_chat_model(FLM)
+    plan = sp.build_plan()
+    assert plan["chat_model"]["id"] == FLM
+    entry = _entry(plan, FLM)
+    # Now planned (it is the chat model), but still not one of GAIA's own.
+    assert entry["planned"] is True and entry["gaia_model"] is False
+    assert _entry(plan, DEFAULT_EMBEDDING_MODEL)["gaia_model"] is True
+    assert _entry(plan, DEFAULT_MODEL_NAME)["gaia_model"] is True
 
 
 def test_plan_counts_a_model_downloaded_beside_the_profile(flm_box):
@@ -708,3 +821,87 @@ def test_unreadable_free_memory_is_fit_unknown_not_the_error_text(running, monke
     )
     assert large["fits"] is None
     assert "secret" not in large["reason"] and "free memory" in large["reason"]
+
+
+# ── units: the plan's memory numbers are decimal GB, verdicts unchanged ───
+
+
+@pytest.mark.parametrize("memory_gib", [6, 8, 12, 16, 24, 27, 32, 48, 64, 96, 120])
+@pytest.mark.parametrize(
+    "model_id, size_gb",
+    [
+        (LARGE_DEFAULT_MODEL_NAME, 23.3),
+        (DEFAULT_MODEL_NAME, 5.6),
+        ("Qwen3-VL-4B-Instruct-GGUF", 3.3),
+    ],
+)
+def test_decimal_numbers_keep_every_fit_verdict(memory_gib, model_id, size_gb):
+    from gaia.installer import model_choice
+    from gaia.llm.lemonade_client import find_model_requirement, kv_cache_for
+    from gaia.llm.model_fit import check_fit
+
+    capacity = MachineCapacity(memory_gib, "AMD iGPU", None)
+    mr = find_model_requirement(model_id)
+    kv = kv_cache_for(mr, capacity) if mr else 0.0
+    before = check_fit(size_gb, capacity, kv).fits
+    fit = model_choice.memory_fit(model_id, size_gb, capacity)
+    assert fit["fits"] is before
+    assert fit["capacity_gb"] == round(memory_gib * GB_PER_GIB, 1)
+    # The numbers shown agree with the verdict shown (to the 0.1 they round to).
+    if before:
+        assert fit["need_gb"] <= fit["capacity_gb"] + 0.1
+    else:
+        assert fit["need_gb"] >= fit["capacity_gb"] - 0.1
+
+
+class _IgpuLemonade(_FakeLemonade):
+    """A Strix Halo-class iGPU reporting its carve-out and shared memory, in GiB."""
+
+    def __init__(self, carve_gib, shared_gib):
+        super().__init__(MachineCapacity(carve_gib + shared_gib, "AMD iGPU", 500))
+        self.carve_gib, self.shared_gib = carve_gib, shared_gib
+
+    def get_system_info(self, timeout=None):
+        return {
+            "Physical Memory": "128 GB",
+            "devices": {
+                "amd_igpu": {
+                    "available": True,
+                    "name": "AMD Radeon 8060S",
+                    "vram_gb": self.carve_gib,
+                    "virtual_mem_gb": self.shared_gib,
+                }
+            },
+            "model_storage": {"free_bytes": 500e9},
+        }
+
+
+@pytest.mark.parametrize(
+    "carve_gib, shared_gib", [(16, 0), (0.5, 15.5), (32, 31.5), (64, 0)]
+)
+def test_plan_memory_matches_the_gpu_memory_pane(
+    running, monkeypatch, tmp_path, carve_gib, shared_gib
+):
+    from gaia.llm import gpu_memory
+
+    fake = _IgpuLemonade(carve_gib, shared_gib)
+    monkeypatch.setattr(sp, "_client", lambda url: fake)
+    monkeypatch.setattr(gpu_memory, "_load_state", lambda: None)
+    # The pane exists only on Windows and Linux; run it as Linux on any CI host.
+    monkeypatch.setattr(gpu_memory, "_platform", lambda: "linux")
+    (tmp_path / "meminfo").write_text(
+        "MemTotal:       124500000 kB\n", encoding="ascii"
+    )
+    monkeypatch.setattr(gpu_memory, "PATHS", gpu_memory.SystemPaths(proc=tmp_path))
+    monkeypatch.setattr(
+        gpu_memory,
+        "_linux_setup",
+        lambda: gpu_memory._LinuxSetup(
+            gpu_memory.METHOD_GUIDED, "", "ttm", "modprobe", None
+        ),
+    )
+    plan = sp.build_plan()
+    pane = gpu_memory.describe(fake.get_system_info())
+    assert pane["applies"] is True
+    # Settings shows both: the same machine must read the same number.
+    assert plan["capacity_gb"] == pane["gpu_gb"]

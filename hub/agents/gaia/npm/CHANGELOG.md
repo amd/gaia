@@ -17,11 +17,25 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   `chat`, `doc` or `file` agents get this agent instead; Agent UI chats saved
   under them stay read-only. MCP settings saved for `installed:chat` no
   longer apply (#6099).
+- **The binary ships no GPL or AGPL code.** PDF rendering and image
+  extraction moved from PyMuPDF (AGPL-3.0) to pypdfium2 (Apache-2.0 /
+  BSD-3-Clause), so `run_python` scripts get `pypdfium2` in place of
+  `pymupdf`. The binary also stopped carrying PyInstaller's own Python package,
+  GNU Readline and GNU dbm; scripts that `import readline` now get an
+  `ImportError`, and `shelve`/`dbm` keep working on `dbm.dumb`. The release
+  build fails if any of them come back.
 - **Reading a web page no longer dead-ends as early.** When a page splits a
   multi-word `fetch_page(find=...)` phrase across a table or sentence, the agent
   gets a labelled passage holding all its words instead of "no occurrence". A
   page with several links says how to list them, and `open_url` defers to the
   enforced network policy rather than having the model refuse on its own.
+- **With Claude, the agent follows a repository's own instructions.** Started in
+  a repository, a Claude model gets the project's `CLAUDE.md` / `AGENTS.md` in
+  its prompt and its `.claude/skills` in the skill list, as in Claude Code. Other
+  models get the prompt they had before, because they scored no better with it
+  and paid for it in tokens. `gaia config set project_context full|off|auto`
+  changes the choice.
+
 ### For integrators: contract 2.26
 
 - **"Always" answers can be listed and revoked** (contract **2.26**).
@@ -33,9 +47,18 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   own. An unknown session or key is a `404`.
 - **`needs_confirmation` carries `always_label`** beside `always_scope`: the
   same grant in plain words (`editing notes.md`), when there is one.
+- **`GET /v1/gaia/skills` can return `"source": "claude-project"`** for a skill
+  in the `.claude/skills` of the project the agent works in. A host that groups
+  rows by `source` must show a value it does not know ungrouped rather than
+  drop it: an Agent UI from before this release hides these skills.
 
 ### Fixed
 
+- **One stray tool-call reply no longer triples a gateway model's token use.**
+  A gateway model that wrote its own tool-call markup once was moved to native
+  tool schemas (~12K more tokens per call) for every later session, so a single
+  DeepSeek reply in its own format cost every run after it. The switch now
+  lasts only for the session that wrote the markup.
 - **The doc profile names a search tool it has.** Its discovery rules told the
   model to start with `find_files`, which that profile does not register, so the
   first discovery step failed. They now name `search_file`, which it does

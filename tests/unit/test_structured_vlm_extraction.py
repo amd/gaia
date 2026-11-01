@@ -13,7 +13,19 @@ misparsing here would corrupt every downstream consumer (e.g. the EMR flow).
 import pytest
 
 from gaia.llm import VLMExtractionError
+from gaia.utils import PdfRenderError
 from gaia.vlm.structured_extraction import StructuredVLMExtractor
+
+
+def _write_pdf(path, pages):
+    """A real *pages*-page PDF, so page counting goes through PDFium."""
+    canvas = pytest.importorskip("reportlab.pdfgen.canvas")
+    c = canvas.Canvas(str(path), pagesize=(200, 200))
+    for n in range(pages):
+        c.drawString(20, 100, f"page {n + 1}")
+        c.showPage()
+    c.save()
+    return path
 
 
 @pytest.fixture
@@ -422,13 +434,10 @@ def test_extract_refuses_pages_beyond_the_document(extractor, tmp_path):
 
 
 def test_extract_pdf_multipage_aggregates_timeline(extractor, tmp_path, mocker):
-    pdf_path = tmp_path / "report.pdf"
-    pdf_path.write_bytes(b"%PDF-fake")
+    import gaia.utils
 
-    fake_doc = mocker.MagicMock()
-    fake_doc.__len__.return_value = 2
-    mocker.patch("fitz.open", return_value=fake_doc)
-    mocker.patch("gaia.utils.pdf_page_to_image", return_value=b"rendered-page-bytes")
+    pdf_path = _write_pdf(tmp_path / "report.pdf", pages=2)
+    render = mocker.spy(gaia.utils, "pdf_page_to_image")
 
     extractor.vlm.extract_from_image.return_value = (
         '{"Active": "02:00:00", "Idle": "01:30:00"}'
@@ -451,7 +460,36 @@ def test_extract_pdf_multipage_aggregates_timeline(extractor, tmp_path, mocker):
         "Idle": 3.0,
     }
     assert progress_calls == [(1, 2), (2, 2)]
-    fake_doc.close.assert_called_once()
+    # Each page went through the real renderer and reached the VLM as a PNG.
+    assert render.call_count == 2
+    image_bytes = extractor.vlm.extract_from_image.call_args.args[0]
+    assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_a_corrupt_pdf_fails_loudly_naming_the_file(extractor, tmp_path):
+    pdf_path = tmp_path / "broken.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nnot actually a pdf\n")
+
+    with pytest.raises(PdfRenderError, match="broken.pdf") as excinfo:
+        extractor.extract(str(pdf_path))
+    assert ".." not in str(excinfo.value)
+    extractor.vlm.extract_from_image.assert_not_called()
+
+
+def test_a_page_that_will_not_render_is_failed_with_its_reason(
+    extractor, tmp_path, mocker
+):
+    pdf_path = _write_pdf(tmp_path / "doc.pdf", pages=2)
+    mocker.patch(
+        "gaia.utils.pdf_page_to_image",
+        side_effect=[b"png", PdfRenderError("could not render page 1: bad stream")],
+    )
+    extractor.vlm.extract_from_image.return_value = "text"
+
+    result = extractor.extract(str(pdf_path))
+
+    assert result["metadata"]["pages_failed"] == [2]
+    assert "bad stream" in result["pages"][1]["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -461,15 +499,8 @@ def test_extract_pdf_multipage_aggregates_timeline(extractor, tmp_path, mocker):
 
 @pytest.fixture
 def two_page_doc(tmp_path, mocker):
-    """A two-page PDF whose paging and rendering are stubbed."""
-    pdf = tmp_path / "doc.pdf"
-    pdf.write_bytes(b"%PDF-1.4\n")
-
-    doc = mocker.MagicMock()
-    doc.__len__.return_value = 2
-    mocker.patch.dict(
-        "sys.modules", {"fitz": mocker.MagicMock(open=mocker.Mock(return_value=doc))}
-    )
+    """A real two-page PDF whose rendering is stubbed."""
+    pdf = _write_pdf(tmp_path / "doc.pdf", pages=2)
     # Imported inside extract(), so patch it at its source module.
     mocker.patch("gaia.utils.pdf_page_to_image", return_value=b"fake-image")
     return pdf

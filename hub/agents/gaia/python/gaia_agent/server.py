@@ -94,7 +94,7 @@ AGENT_ID = "gaia"
 #: 2.24 added ``working_directory`` to ``/query``.
 #: 2.25 added ``/query``'s ``turns`` field and ``final.model_messages``.
 #: 2.26 added ``GET``/``DELETE /sessions/{id}/grants`` to list and revoke a
-#: session's "always" answers.
+#: session's "always" answers, and ``/skills``' ``claude-project`` source.
 API_VERSION = "2.26"
 
 #: How long ``final`` waits for the turn's context measurement before going without.

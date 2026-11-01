@@ -2341,7 +2341,11 @@ First-run hardware scan (issues #1726, #1727).
 ### Setup
 
 First-run setup. The Agent UI asks and runs the same `gaia init` the TUI does,
-so the two can never disagree about whether GAIA is set up.
+so the two can never disagree about whether GAIA is set up. The daemon serves
+these same handlers to the TUI under `/daemon/v1/setup/` (`plan`, `chat-model`,
+`models/skip`, `models/download`, `models/remove`, `run`, `status`, `cancel`),
+behind the daemon token instead of the `X-Gaia-UI` header, so both apps read one
+plan and make one set of choices.
 
 <AccordionGroup>
   Error `detail` strings are fixed messages that say what failed and what to
@@ -2380,8 +2384,11 @@ so the two can never disagree about whether GAIA is set up.
     The same plan also carries what the model picker needs: `catalog` (every
     model the user can pick, with `roles`, `purpose`, `if_skipped`, `size_gb`
     left to download, `downloaded`, `recommended`, `selected`, `skipped`,
-    `chat_choice`, and `fits` with `need_gb` / `capacity_gb` / `fit_reason`; memory
-    figures are Lemonade's own, in GiB, while sizes and disk are decimal GB),
+    `chat_choice`, `gaia_model` (GAIA's own model, not one only this
+    Lemonade has), and `fits` with `need_gb` / `capacity_gb` / `fit_reason`;
+    every `*_gb` field is decimal GB; the memory figures are converted from
+    the GiB Lemonade reports, the same way `/api/gpu-memory` converts them, so
+    the two read the same number for the same PC),
     `disk` (`path`, `free_gb`, `source`), `disk_warning`, and `skipped_models`.
     `gaia init --plan --json` prints the same object; its
     [CLI reference](/reference/cli#choosing-models) lists every field.
@@ -2427,10 +2434,17 @@ so the two can never disagree about whether GAIA is set up.
   <Accordion title="POST /api/setup/run">
     Start `gaia init --profile gaia --yes` in the background; follow it with
     `/api/setup/status`. Body: `{"skip_chat_model": false, "gaia_lemonade":
-    false, "acknowledge_low_disk": false, "keep_trying": false}`;
+    false, "acknowledge_low_disk": false, "keep_trying": false,
+    "extra_models": [], "server_only": false}`;
     `gaia_lemonade` runs `gaia init --gaia-lemonade`, which sets up and saves
     GAIA's own server instead of the user's. `keep_trying` waits out a dropped
-    connection for up to two minutes before a model fails. **409** when setup
+    connection for up to two minutes before a model fails. `extra_models`
+    pulls models the user ticked beside the plan's (`--download-model`), and
+    counts them in the disk check; a model nobody has is a **422**.
+    `server_only` starts the model server and stops there (`--skip-models`,
+    no load check), so a cold PC can choose its models against the server
+    before anything downloads; it takes no `extra_models` and skips the disk
+    check, and its status carries `server_only: true`. **409** when setup
     is already running, or `gaia_lemonade` is asked while `LEMONADE_BASE_URL`
     picks the server. **409** with `detail` `{"code": "low_disk", "message",
     "need_gb", "free_gb", "free_up_gb", "path", "drop", "acknowledge":
@@ -2452,16 +2466,19 @@ so the two can never disagree about whether GAIA is set up.
     own), and `switch_hint` (set when `LEMONADE_BASE_URL` picks the server, so
     only unsetting it switches). The raw error stays in the output lines.
     `gaia_lemonade` is true for a run switching to GAIA's own, so a retry
-    keeps switching.
+    keeps switching. `model_failed` is true when a model's download failed in
+    this run: its row already says why, so the run's own `error` adds nothing.
 
     `models` has one row per model of the run or of a single download: `id`,
     `roles`, `state` (`queued`, `downloading`, `verifying`, `ready`,
-    `failed`, `skipped`, `cancelled`), `bytes_done`, `bytes_total`,
-    `speed_bps`, `eta_s`, `error`, `error_kind` (`network`, `disk_full`,
-    `lemonade`, `verify`), `can_retry`, `retrying_until` (Unix time, while a
+    `failed`, `skipped`, `cancelled`, or `unchecked`: downloaded, but the run
+    stopped before its load check, so the model is kept and the next run
+    checks it), `bytes_done`, `bytes_total`, `speed_bps`, `eta_s`, `error`,
+    `error_kind` (`network`, `disk_full`, `lemonade`, or `verify` for a model
+    that downloaded but failed its load check), `can_retry`, `retrying_until` (Unix time, while a
     `keep_trying` wait runs), and `downloaded_before_gb` for a resumed
     download. `overall` sums them: `bytes_done`, `bytes_total`, `speed_bps`,
-    `eta_s`, `percent`, `failed`. With only a single download and no run,
+    `eta_s`, `percent`, `failed` (rows in `failed` only). With only a single download and no run,
     `state` is `idle` and `models` still reports it.
   </Accordion>
 
@@ -2482,24 +2499,37 @@ TUI reads the same answers from the daemon at `/daemon/v1/gpu-memory`. Every
 route needs the `X-Gaia-UI: 1` header (**403** without it) and returns the
 status below, read fresh. **503** when the model server doesn't answer, since
 the split is read from it. Every `*_gb` field, in requests and responses, is
-decimal GB (10^9 bytes), converted from the GiB Lemonade reports. Only the
-`guided_steps` text converts, to the 4 KiB pages of `ttm.pages_limit` and to
-the GiB that AMD Software and `amd-ttm` count in.
+decimal GB (10^9 bytes), converted from the GiB Lemonade reports. The one
+exception is `guided_value`, the value the steps ask the user to enter: 4 KiB
+pages for `ttm.pages_limit` on Linux, and on Windows the number AMD Software
+shows (it counts GiB and labels them GB). Front-ends should show `gpu_gb`
+for a target and `guided_value` as the value to enter, not a preset's
+`setting_gb`. Every preset and `fits_at_setting_gb` is a raise that apply and
+`pending` accept. With nothing to offer above the current setting (and no
+`setting_gb` asked for), `guided_steps` is empty and `guided_value` is null.
 
 <AccordionGroup>
   <Accordion title="GET /api/gpu-memory">
     `applies` (an integrated AMD GPU on a local server; else only
     `hidden_reason`, `os`, `method: "unsupported"` and `method_reason`),
     `show_in_setup` (a bigger share fits a default chat model), `total_gb`,
-    `gpu_gb`, `cpu_gb`, `setting` (`name`, `current_gb`, `min_gb`, `max_gb`;
+    `gpu_gb` (what models can use on the GPU, Windows' shared memory
+    included), `cpu_gb` (what the GPU can never use; `gpu_gb + cpu_gb =
+    total_gb`), `setting` (`name`, `current_gb`, `min_gb`, `max_gb`;
     the GPU memory limit on Linux, Variable Graphics Memory on Windows),
-    `reserve_gb` (16, kept for the CPU), `method` (`apply` or `guided`) with
+    `reserve_gb` (16: no preset or allowed value leaves `cpu_gb` below it), `method` (`apply` or `guided`) with
     `method_reason`, `presets` (`setting_gb`, `gpu_gb`, `unlocks`),
     `recommended_setting_gb`, `models` (`id`, `need_gb`, `default`,
     `fits_now`, `fits_at_setting_gb`), `pending` (`setting_gb`,
     `previous_setting_gb`, `source`, `state`: `restart_required`,
     `took_effect` or `not_applied`), `revert` (`available`,
-    `previous_setting_gb`) and `guided_steps`. **Query:** `setting_gb` renders
+    `previous_setting_gb`), `guided_steps` and `guided_value`. A model gains
+    from a bigger share when it has `fits_now: false` and a
+    `fits_at_setting_gb` (exactly the models some preset `unlocks`). Show the
+    step only when such a model is ticked, is the chosen chat model, or is a
+    `default` model the user hasn't unticked or passed over for a chat model
+    of their own. Setup can't tick that default model on a cold start because
+    it doesn't fit yet. **Query:** `setting_gb` renders
     `guided_steps` for that value (**422** outside `min_gb`–`max_gb`).
   </Accordion>
 

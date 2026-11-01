@@ -2474,6 +2474,8 @@ Do NOT wrap conversational replies in JSON.
         self._deliverable_cache: Dict[tuple, list] = {}
         # Step-budget notices already sent this turn, by threshold.
         self._budget_notices_sent: set = set()
+        # The model that wrote its own tool-call markup in this session, if any.
+        self._own_markup_model: Optional[str] = None
         self._budget_notices_on = budget_notices_enabled()
         self.conversation_history = (
             []
@@ -3045,8 +3047,14 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.llm.lemonade_client import uses_native_tool_calls
 
-        return bool(getattr(self, "_use_claude", False)) or uses_native_tool_calls(
-            getattr(self, "model_id", None)
+        model_id = getattr(self, "model_id", None)
+        return (
+            bool(getattr(self, "_use_claude", False))
+            or (
+                model_id is not None
+                and getattr(self, "_own_markup_model", None) == model_id
+            )
+            or uses_native_tool_calls(model_id)
         )
 
     def _hosted_native_tool_caller(self) -> bool:
@@ -3779,8 +3787,18 @@ Do NOT wrap conversational replies in JSON.
             return ""
         from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        catalog = render_catalog(self.skill_manager.discover())
+        catalog = render_catalog(
+            self.skill_manager.discover(), list_project=self._lists_project_skills()
+        )
         return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
+
+    def _lists_project_skills(self) -> bool:
+        """Whether the catalogue lists the project's ``.claude/skills``.
+
+        Off here; ``ProjectMapMixin`` turns it on for a model that gets the full
+        project context (:mod:`gaia.project_context`).
+        """
+        return False
 
     def _pin_skill_body(self, name: str, turns: Optional[int] = None) -> None:
         """Keep *name*'s body rendered for the next few filter refreshes.
@@ -4130,19 +4148,18 @@ Do NOT wrap conversational replies in JSON.
 
         # Captured code is inert until `gaia skill promote` — instructions
         # inject, tools.py is never imported (gaia.skills.capture).
-        from gaia.skills.capture import code_is_deferred
+        from gaia.skills.capture import code_is_deferred, deferred_remedy
 
         code_deferred = code_is_deferred(skill)
         if code_deferred:
             registered = {}
             logger.warning(
-                "Skill '%s' is captured and its code is not yet trusted: %d "
-                "tool(s) (%s) deferred — instructions loaded. Run "
-                "'gaia skill promote %s' in a terminal to enable them.",
+                "Skill '%s' is not yet trusted: %d tool(s) (%s) deferred — "
+                "instructions loaded. Run %s in a terminal to enable them.",
                 skill.name,
                 len(skill.gaia.tools),
                 ", ".join(skill.tool_names),
-                skill.name,
+                deferred_remedy(skill),
             )
         else:
             registered = register_skill_tools(skill)
@@ -4169,11 +4186,10 @@ Do NOT wrap conversational replies in JSON.
                     self.granted_binaries.grant(policy.binary, skill_name=skill.name)
             elif policies:
                 logger.warning(
-                    "Skill '%s' is captured and untrusted: binary grant(s) %s "
-                    "withheld until 'gaia skill promote %s'.",
+                    "Skill '%s' is untrusted: binary grant(s) %s withheld until %s.",
                     skill.name,
                     ", ".join(p.binary for p in policies),
-                    skill.name,
+                    deferred_remedy(skill),
                 )
 
             self.loaded_skills[name] = skill
@@ -4893,13 +4909,18 @@ Do NOT wrap conversational replies in JSON.
         }
 
     def _switch_to_native_tool_calls(self) -> None:
-        """Move a hosted model writing its own tool markup onto native tool calls."""
+        """Move a hosted model writing its own tool markup onto native tool calls.
+
+        For this agent's session only: a model that slips into its own markup
+        once (DeepSeek's DSML) must not pay ~12K tokens per call in every
+        later session, while one that always writes it (Claude's ``<invoke>``)
+        switches on its first reply anyway.
+        """
         from gaia.llm.lemonade_client import (
             cloud_model_info,
             cloud_model_provider,
             is_tool_calling_model,
             learned_tool_calling,
-            record_own_tool_markup,
         )
 
         model_id = getattr(self, "model_id", None)
@@ -4913,10 +4934,10 @@ Do NOT wrap conversational replies in JSON.
             or learned_tool_calling(model_id) is not True
         ):
             return
-        record_own_tool_markup(model_id)
+        self._own_markup_model = model_id
         logger.info(
-            "%s wrote its own tool-call markup; it gets native tool calls from "
-            "now on",
+            "%s wrote its own tool-call markup; it gets native tool calls for "
+            "the rest of this session",
             model_id,
         )
         # The text tool list and JSON format template leave the prompt.
