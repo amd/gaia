@@ -54,7 +54,7 @@ from gaia.llm.lemonade_client import (
     resolve_default_vision_model,
 )
 from gaia.logger import get_logger
-from gaia.rag.arabic_text import normalize_arabic_pdf_text
+from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
 from gaia.security import PathValidator
 from gaia.utils.document_formats import (
     UNSUPPORTED_DOCUMENTS,
@@ -1439,7 +1439,7 @@ class RAGSDK:
                 page_start = time_module.time()
 
                 # Step 1: Extract text with pypdf
-                pypdf_text = normalize_arabic_pdf_text(page.extract_text() or "")
+                pypdf_text = normalize_arabic_pdf_text(extract_pdf_page_text(page))
 
                 # Step 2: Check for images
                 has_imgs = False
