@@ -581,6 +581,54 @@ def test_a_failed_prepare_leaves_the_earlier_hub_whole(tmp_path, monkeypatch):
     assert _no_swap_leftovers(tmp_path, "hub") == []
 
 
+def test_fixture_hub_publish_restores_previous_hub_when_swap_fails(tmp_path, monkeypatch):
+    module = _fixtures_import("prepare_fixture_hub")
+    out_dir = tmp_path / "hub"
+    build = tmp_path / "hub.build-current"
+    out_dir.mkdir()
+    build.mkdir()
+    (out_dir / "index.json").write_text("old", encoding="utf-8")
+    (build / "index.json").write_text("new", encoding="utf-8")
+    calls = []
+
+    def replace_retrying(source, target):
+        calls.append((Path(source), Path(target)))
+        if len(calls) == 2:
+            raise OSError("publish rename failed")
+        os.replace(source, target)
+
+    monkeypatch.setattr("gaia.utils.file_lock.replace_retrying", replace_retrying)
+    with pytest.raises(OSError, match="publish rename failed"):
+        module._publish(build, out_dir)
+
+    assert (out_dir / "index.json").read_text(encoding="utf-8") == "old"
+    assert build.exists()
+    assert not list(tmp_path.glob("hub.old-*"))
+    assert len(calls) == 3
+
+
+def test_fixture_hub_publish_names_both_folders_when_restore_fails(tmp_path, monkeypatch):
+    module = _fixtures_import("prepare_fixture_hub")
+    out_dir = tmp_path / "hub"
+    build = tmp_path / "hub.build-current"
+    out_dir.mkdir()
+    build.mkdir()
+    (out_dir / "index.json").write_text("old", encoding="utf-8")
+    (build / "index.json").write_text("new", encoding="utf-8")
+
+    def replace_retrying(source, target):
+        if Path(source) == build or Path(target) == out_dir:
+            raise OSError("restore rename failed")
+        os.replace(source, target)
+
+    monkeypatch.setattr("gaia.utils.file_lock.replace_retrying", replace_retrying)
+    with pytest.raises(OSError, match="Both folders are named") as excinfo:
+        module._publish(build, out_dir)
+
+    assert "hub.old-" in str(excinfo.value)
+    assert "hub" in str(excinfo.value)
+
+
 @pytest.mark.allow_network  # loopback socket only (ephemeral port, never 4001)
 def test_signed_rss_digest_installs_cleanly_and_experimental_notes_refuses(
     prepared_hub, monkeypatch

@@ -44,6 +44,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -66,6 +67,7 @@ TAMPER_LINE = (
 # Fixed DOS timestamp: zip bytes depend only on content (incl. the per-run
 # signature), never on build wall-clock.
 _ZIP_DATE = (2026, 1, 1, 0, 0, 0)
+_STALE_SWAP_SECONDS = 24 * 60 * 60
 
 
 def _zip_dir(source_dir: Path, destination: Path) -> bytes:
@@ -81,21 +83,46 @@ def _zip_dir(source_dir: Path, destination: Path) -> bytes:
     return destination.read_bytes()
 
 
+def _remove_stale_swap_dirs(out_dir: Path, *, keep: Path | None = None) -> None:
+    """Remove abandoned build/retired hubs while the publish lock is held."""
+    cutoff = time.time() - _STALE_SWAP_SECONDS
+    for candidate in out_dir.parent.iterdir():
+        if candidate == keep:
+            continue
+        if candidate.stat().st_mtime >= cutoff:
+            continue
+        if candidate.name.startswith(f"{out_dir.name}.build-") or candidate.name.startswith(
+            f"{out_dir.name}.old-"
+        ):
+            shutil.rmtree(candidate)
+
+
 def _publish(build: Path, out_dir: Path) -> None:
-    """Swap the finished hub at *build* in as *out_dir*, replacing any earlier one.
+    """Atomically publish a complete hub and restore the old hub on failure."""
+    from gaia.utils.file_lock import file_lock, replace_retrying
 
-    Held under a cross-process lock so two runs never interleave their renames.
-    """
-    from gaia.utils.file_lock import file_lock
-
-    retired = None
+    retired: Path | None = None
     with file_lock(out_dir, timeout=PUBLISH_LOCK_SECONDS):
+        _remove_stale_swap_dirs(out_dir, keep=build)
         if out_dir.exists():
             retired = out_dir.with_name(f"{out_dir.name}.old-{uuid.uuid4().hex}")
-            os.rename(out_dir, retired)
-        os.rename(build, out_dir)
-    if retired is not None:
-        shutil.rmtree(retired)
+            replace_retrying(out_dir, retired)
+        try:
+            replace_retrying(build, out_dir)
+        except OSError as publish_error:
+            if retired is None or not retired.exists():
+                raise
+            try:
+                replace_retrying(retired, out_dir)
+            except OSError as restore_error:
+                raise OSError(
+                    f"Could not publish fixture hub at {out_dir}: {publish_error}; "
+                    f"restoring previous hub from {retired} also failed: "
+                    f"{restore_error}. Both folders are named for manual recovery."
+                ) from publish_error
+            raise
+        if retired is not None and retired.exists():
+            shutil.rmtree(retired)
 
 
 def prepare(
