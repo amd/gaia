@@ -384,10 +384,9 @@ server), a shortfall is a warning and the download goes ahead.
 
 #### Choosing models
 
-These flags show which models setup will download and save which ones you want. Every
-later `gaia init`, including `--yes`, downloads what you chose, and the same plan and
-choices are available to apps through the Agent UI server's `/api/setup/*` routes (see
-[Setup](/sdk/sdks/agent-ui#setup)):
+The Agent UI and the terminal UI ask which models to download on first launch, and let
+you change it later in Settings. `gaia init` never asks; it downloads what you chose
+there, and these flags make the same choices from a script:
 
 ```bash
 gaia init --plan                              # what setup would download, and why
