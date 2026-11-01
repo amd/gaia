@@ -1,9 +1,9 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Local GGUF models a user adds by pasting a Hugging Face link.
+"""Local models a user adds by pasting a Hugging Face link.
 
-A pasted link is checked before anything is saved or downloaded: the repo must
+A pasted link is checked before anything is saved or downloaded: a GGUF repo must
 be public and hold GGUF weights with a chat template, its architecture must be
 one the llama.cpp build Lemonade runs can load, and the chosen quantization
 must fit this PC. A model that passes is kept in ``config.json``'s
@@ -15,6 +15,11 @@ shows up in the others.
 The architecture check reads the architecture table of the exact llama.cpp
 release Lemonade reports in ``/system-info``, so it answers for the build that
 will load the model, not for llama.cpp in general.
+
+A FastFlowLM NPU repo (``.q4nx`` weights) is no registration: only models in the
+FastFlowLM release Lemonade runs can load, and Lemonade already names each one.
+So the link is looked up in that release's model list and the entry saved is
+that built-in, pulled by name like any other.
 """
 
 from __future__ import annotations
@@ -35,6 +40,10 @@ HF_API = "https://huggingface.co/api/models/{repo}?blobs=true"
 #: Where each llama.cpp release's architecture names live.
 LLAMA_ARCH_SOURCE = (
     "https://raw.githubusercontent.com/ggml-org/llama.cpp/{tag}/src/llama-arch.cpp"
+)
+#: What each FastFlowLM release can run, with the repo each tag comes from.
+FLM_MODEL_LIST = (
+    "https://raw.githubusercontent.com/ROCm/FastFlowLM/{tag}/src/model_list.json"
 )
 HTTP_TIMEOUT = 20
 #: Window an added model loads with (or its own, if smaller). Its KV cache per
@@ -88,6 +97,20 @@ _QUANT_RE = re.compile(
 _ARCH_ENTRY_RE = re.compile(r"\{\s*LLM_ARCH_\w+\s*,\s*\"([^\"]+)\"\s*\}")
 #: A llama.cpp release tag; it names a cache file and a URL path, so nothing else.
 _TAG_RE = re.compile(r"b\d{1,6}")
+#: A FastFlowLM release tag; a cache file and URL path too.
+_FLM_TAG_RE = re.compile(r"v\d{1,4}\.\d{1,4}\.\d{1,4}", re.ASCII)
+#: A Lemonade model id made from a FastFlowLM tag.
+_FLM_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*-FLM", re.ASCII)
+#: FastFlowLM labels of a build that cannot hold a conversation.
+_FLM_NOT_CHAT = frozenset(
+    {
+        "embeddings",
+        "realtime-transcription",
+        "single-turn",
+        "transcription",
+        "translation",
+    }
+)
 
 
 class CustomModelError(ValueError):
@@ -115,7 +138,7 @@ def parse_link(text: str) -> HFLink:
     """
     raw = (text or "").strip()
     if not raw:
-        raise CustomModelError("Paste a Hugging Face link to a GGUF model.")
+        raise CustomModelError("Paste a Hugging Face link to a model.")
     # The link is saved and shown in the TUI, so a control character is refused.
     if _CONTROL_RE.search(raw) or _CONTROL_RE.search(unquote(raw)):
         raise CustomModelError(
@@ -344,6 +367,122 @@ def supported_architectures(tag: str) -> frozenset:
     return frozenset(names)
 
 
+# ── FastFlowLM NPU builds ──────────────────────────────────────────────────
+
+
+def has_npu_weights(siblings: List[Dict[str, Any]]) -> bool:
+    """Whether a repo holds FastFlowLM's ``.q4nx`` NPU weights."""
+    return any(
+        str(s.get("rfilename") or "").lower().endswith(".q4nx") for s in siblings
+    )
+
+
+def flm_release(system_info: Dict[str, Any]) -> str:
+    """The FastFlowLM release tag (``v1.0.7``) Lemonade runs NPU models with."""
+    recipe = ((system_info or {}).get("recipes") or {}).get("flm") or {}
+    backend = (recipe.get("backends") or {}).get("npu") or {}
+    version = str(backend.get("version") or "")
+    if not version:
+        raise CustomModelError(
+            "Lemonade did not say which FastFlowLM release it runs, so GAIA cannot "
+            "check that it loads this model. Update GAIA, then try again."
+        )
+    tag = version if version.startswith("v") else f"v{version}"
+    if not _FLM_TAG_RE.fullmatch(tag):
+        raise CustomModelError(
+            f"Lemonade reports FastFlowLM version {version!r}, which is not a "
+            "release tag (like v1.0.7), so GAIA cannot look up which models it "
+            "runs. Report this at https://github.com/amd/gaia/issues."
+        )
+    return tag
+
+
+def _flm_builds(doc: Any) -> List[Dict[str, Any]]:
+    """One record per tag in a FastFlowLM ``model_list.json``."""
+    families = doc.get("models") if isinstance(doc, dict) else None
+    out: List[Dict[str, Any]] = []
+    for family, sizes in (families if isinstance(families, dict) else {}).items():
+        for size, model in (sizes if isinstance(sizes, dict) else {}).items():
+            if not isinstance(model, dict):
+                continue
+            model_id = f"{family}-{size}-FLM"
+            try:
+                repo = parse_link(str(model.get("url") or "")).repo
+            except CustomModelError:
+                continue
+            if not _FLM_ID_RE.fullmatch(model_id):
+                continue
+            label = model.get("label")
+            labels = [str(x) for x in label] if isinstance(label, list) else []
+            out.append(
+                {
+                    "tag": f"{family}:{size}",
+                    "model_id": model_id,
+                    "repo": repo,
+                    "name": _CONTROL_RE.sub("", str(model.get("name") or size)),
+                    "labels": labels,
+                    "size_gb": model.get("footprint"),
+                    "context_length": model.get("default_context_length"),
+                    "vision": bool(model.get("vlm")),
+                    "reasoning": "reasoning" in labels,
+                }
+            )
+    return out
+
+
+def _flm_cache_path(tag: str) -> Path:
+    from gaia.config import gaia_home
+
+    return gaia_home() / "cache" / "flm-models" / f"{tag}.json"
+
+
+def flm_builds(tag: str) -> List[Dict[str, Any]]:
+    """The models FastFlowLM release *tag* runs, cached per release."""
+    import requests
+
+    cache = _flm_cache_path(tag)
+    if cache.is_file():
+        try:
+            return json.loads(cache.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise CustomModelError(
+                f"The saved model list for FastFlowLM {tag} at {cache} is unreadable "
+                f"({e}). Delete that file and try again."
+            ) from e
+    url = FLM_MODEL_LIST.format(tag=tag)
+    try:
+        resp = _http_get(url)
+    except requests.RequestException as e:
+        raise CustomModelError(
+            f"Could not fetch FastFlowLM {tag}'s model list from GitHub ({e}), so "
+            "GAIA cannot check this model will load. Check your internet "
+            "connection and try again."
+        ) from e
+    if resp.status_code != 200:
+        raise CustomModelError(
+            f"GitHub answered HTTP {resp.status_code} for FastFlowLM {tag}'s model "
+            f"list ({url}), so GAIA cannot check this model will load. Try again "
+            "later."
+        )
+    try:
+        builds = _flm_builds(resp.json())
+    except ValueError as e:
+        raise CustomModelError(
+            f"FastFlowLM {tag}'s model list at {url} is not JSON ({e}). Report "
+            "this at https://github.com/amd/gaia/issues."
+        ) from e
+    if not builds:
+        raise CustomModelError(
+            f"FastFlowLM {tag}'s model list at {url} names no models; its layout "
+            "may have changed. Report this at https://github.com/amd/gaia/issues."
+        )
+    from gaia.utils.file_lock import write_text_atomic
+
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    write_text_atomic(cache, json.dumps(builds))
+    return builds
+
+
 # ── Checking a link ────────────────────────────────────────────────────────
 
 
@@ -456,13 +595,16 @@ def inspect_link(
         )
     _check(checks, "repo", "Public repository", True, link.repo)
 
-    variants, projectors = gguf_variants(info.get("siblings") or [])
+    siblings = info.get("siblings") or []
+    variants, projectors = gguf_variants(siblings)
+    if not variants and has_npu_weights(siblings):
+        return _inspect_npu_repo(link, report, fail, system_info, variant, catalog)
     if not variants:
         return fail(
             "gguf",
             "GGUF weights",
-            f"{link.repo} has no GGUF files, which is the format GAIA runs. Look "
-            "for a repo whose name ends in -GGUF.",
+            f"{link.repo} has no GGUF files or FastFlowLM NPU weights, the formats "
+            "GAIA runs. Look for a repo whose name ends in -GGUF or -NPU2.",
         )
     try:
         chosen_hint = _find_variant(variants, link.variant) if link.variant else None
@@ -575,29 +717,32 @@ def inspect_link(
             "can't use tools (files, web, documents) through it."
         )
 
+    listed = _already_listed(report, catalog)
+    if listed:
+        return fail("new", "Not already listed", listed)
+    report["ok"] = True
+    return report
+
+
+def _already_listed(
+    report: Dict[str, Any], catalog: Optional[List[Dict[str, Any]]]
+) -> Optional[str]:
+    """Why the model in *report* can't be added beside what is listed, if so."""
     from gaia.llm.lemonade_client import MODELS, _model_ids_match
 
     for req in MODELS.values():
         if _model_ids_match(req.model_id, report["model_id"]) or (
             req.checkpoint and req.checkpoint.lower() == report["checkpoint"].lower()
         ):
-            return fail(
-                "new",
-                "Not already listed",
-                f"GAIA already offers this model as {req.display_name}.",
-            )
+            return f"GAIA already offers this model as {req.display_name}."
     added = find_custom_model(report["model_id"])
     if added is not None:
         same = added["checkpoint"].lower() == report["checkpoint"].lower()
-        return fail(
-            "new",
-            "Not already listed",
-            (
-                f"You already added {report['display_name']}."
-                if same
-                else f"You already added a model named {report['model_id']} from "
-                f"{added['source_url']}. Remove it first to add this one."
-            ),
+        return (
+            f"You already added {report['display_name']}."
+            if same
+            else f"You already added a model named {report['model_id']} from "
+            f"{added['source_url']}. Remove it first to add this one."
         )
     for m in catalog or []:
         listed = str(m.get("id") or "")
@@ -605,12 +750,155 @@ def inspect_link(
         if _model_ids_match(listed, report["model_id"]) and (
             theirs.lower() != report["checkpoint"].lower()
         ):
+            return (
+                f"Lemonade already has another model named {listed}, so this "
+                "one can't be added under the same name."
+            )
+    return None
+
+
+def _inspect_npu_repo(
+    link: HFLink,
+    report: Dict[str, Any],
+    fail: Callable[[str, str, str], Dict[str, Any]],
+    system_info: Dict[str, Any],
+    variant: Optional[str],
+    catalog: Optional[List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """:func:`inspect_link` for a FastFlowLM repo, which resolves to a built-in."""
+    from gaia.llm.lemonade_client import (
+        NPU_CHAT_MODELS,
+        _model_ids_match,
+        find_model_requirement,
+    )
+    from gaia.llm.model_device import recipe_unavailable_reason
+    from gaia.llm.model_fit import (
+        ModelFitError,
+        capacity_from_system_info,
+        check_fit,
+        npu_capacity,
+    )
+
+    checks = report["checks"]
+    if variant or link.variant:
+        return fail(
+            "npu",
+            "NPU build",
+            f"{link.repo} is one NPU build, with no quantizations to choose from. "
+            "Paste the link on its own.",
+        )
+    reason = recipe_unavailable_reason("flm", system_info)
+    if reason:
+        return fail("npu", "NPU on this PC", f"This model {reason}.")
+    try:
+        npu = npu_capacity(capacity_from_system_info(system_info))
+    except ModelFitError as e:
+        return fail("fit", "Fits this PC", str(e))
+    if npu is None:
+        return fail(
+            "npu",
+            "NPU on this PC",
+            "This model runs on a Ryzen AI NPU, and Lemonade reports none on this PC.",
+        )
+    _check(checks, "npu", "NPU on this PC", True, "Ryzen AI NPU")
+
+    try:
+        tag = flm_release(system_info)
+        builds = [b for b in flm_builds(tag) if b["repo"].lower() == link.repo.lower()]
+    except CustomModelError as e:
+        return fail("flm", "FastFlowLM build", str(e))
+    report["flm_version"] = tag
+    if not builds:
+        return fail(
+            "flm",
+            "FastFlowLM build",
+            f"FastFlowLM {tag}, the build your Lemonade runs, has no model from "
+            f"{link.repo}. It may need a newer FastFlowLM, which comes with a newer "
+            "GAIA.",
+        )
+    # One repo can back several tags: a chat build and a single-turn one.
+    chats = [b for b in builds if not _FLM_NOT_CHAT & set(b["labels"])]
+    if not chats:
+        return fail(
+            "chat",
+            "Chat model",
+            f"{link.repo} is not a chat model ({', '.join(builds[0]['labels'])}), so "
+            "it can't hold a conversation.",
+        )
+    build = max(chats, key=lambda b: "tool-calling" in b["labels"])
+    _check(checks, "flm", "FastFlowLM build", True, f"{build['tag']} in {tag}")
+    _check(checks, "chat", "Chat model", True, "holds a conversation")
+
+    size = build["size_gb"]
+    if not isinstance(size, (int, float)) or isinstance(size, bool) or size <= 0:
+        return fail(
+            "fit",
+            "Fits this PC",
+            f"FastFlowLM {tag} doesn't say how much memory {build['tag']} needs, so "
+            "GAIA can't check it fits. Report this at "
+            "https://github.com/amd/gaia/issues.",
+        )
+    tool_calling = "tool-calling" in build["labels"]
+    report.update(
+        {
+            "model_id": build["model_id"],
+            "display_name": f"{re.sub(r'-NPU2$', '', build['name'])} NPU".replace(
+                "-", " "
+            ),
+            "quant": None,
+            "file": None,
+            "checkpoint": build["tag"],
+            "recipe": "flm",
+            "mmproj": None,
+            "vision": build["vision"],
+            "reasoning": build["reasoning"],
+            "tool_calling": tool_calling,
+            "size_gb": size,
+            "context_length": build["context_length"],
+        }
+    )
+    fit = check_fit(size, npu)
+    if not fit.fits:
+        return fail("fit", "Fits this PC", f"{size} GB {fit.reason}.")
+    _check(checks, "fit", "Fits this PC", True, f"{size} GB, in system RAM")
+    if not tool_calling:
+        report["warnings"].append(
+            "It has no tool support, so GAIA can chat with it but can't use tools "
+            "(files, web, documents) through it."
+        )
+    window = build["context_length"]
+    if isinstance(window, int) and window < ADDED_MODEL_CTX:
+        report["warnings"].append(
+            f"It loads with a {window:,}-token window, which GAIA's instructions and "
+            "tools can fill on their own, so its answers may fail or cut off."
+        )
+
+    offered = next(
+        (m for m in NPU_CHAT_MODELS if _model_ids_match(m, build["model_id"])), None
+    )
+    name = (
+        find_model_requirement(offered).display_name
+        if offered
+        else report["display_name"]
+    )
+    for m in catalog or []:
+        if m.get("downloaded") and _model_ids_match(
+            str(m.get("id") or ""), build["model_id"]
+        ):
             return fail(
                 "new",
                 "Not already listed",
-                f"Lemonade already has another model named {listed}, so this "
-                "one can't be added under the same name.",
+                f"{name} is already downloaded. Pick it from your model list.",
             )
+    if offered:
+        return fail(
+            "new",
+            "Not already listed",
+            f"{name} is already in your model list. Download it from there.",
+        )
+    listed = _already_listed(report, catalog)
+    if listed:
+        return fail("new", "Not already listed", listed)
     report["ok"] = True
     return report
 
@@ -632,15 +920,16 @@ def validate_entries(value: Any, where: Path) -> List[Dict[str, Any]]:
     if not isinstance(value, list) or not all(
         isinstance(e, dict)
         and all(isinstance(e.get(k), t) and e.get(k) for k, t in _ENTRY_KEYS.items())
-        and str(e["id"]).startswith("user.")
+        and (str(e["id"]).startswith("user.") or _FLM_ID_RE.fullmatch(e["id"]))
         for e in value
     ):
         from gaia.config import GaiaConfigError
 
         raise GaiaConfigError(
             f"GAIA config at {where}: '{CONFIG_KEY}' must be a list of added "
-            "models, each with id (starting 'user.'), display_name, checkpoint, "
-            "recipe and source_url. Fix it by hand, or delete the key to forget "
+            "models, each with id (starting 'user.', or ending '-FLM'), "
+            "display_name, checkpoint, recipe and source_url. Fix it by hand, or "
+            "delete the key to forget "
             "every added model."
         )
     return value
@@ -778,7 +1067,8 @@ def listed_entry(catalog: List[Dict[str, Any]], entry: Dict[str, Any]) -> Option
     """The id Lemonade lists *entry* under, matched by name and checkpoint.
 
     The checkpoint keeps a remove from deleting another model that happens to
-    share the name without its ``user.`` prefix.
+    share the name without its ``user.`` prefix. Lemonade lists an FLM built-in
+    whether or not it is downloaded, and has nothing to delete until it is.
     """
     from gaia.llm.lemonade_client import _model_ids_match
 
@@ -787,5 +1077,7 @@ def listed_entry(catalog: List[Dict[str, Any]], entry: Dict[str, Any]) -> Option
         if _model_ids_match(listed, entry["id"]) and (
             str(m.get("checkpoint") or "").lower() == entry["checkpoint"].lower()
         ):
+            if entry.get("recipe") == "flm" and not m.get("downloaded"):
+                return None
             return listed
     return None

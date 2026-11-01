@@ -18,6 +18,12 @@ type Recommended struct {
 	Provider string `json:"provider"`
 	Label    string `json:"label"`
 	Note     string `json:"note"`
+	// Device is "npu" for a FastFlowLM model, which loads into system RAM
+	// rather than GPU memory; empty for the rest.
+	Device string `json:"device"`
+	// Option marks a model shown with the other models, never under
+	// "Recommended" (Gemma on the NPU is only ever the user's pick).
+	Option bool `json:"option"`
 
 	// Registration for a model that is not a Lemonade built-in. Empty for
 	// built-ins, which Lemonade pulls by name.

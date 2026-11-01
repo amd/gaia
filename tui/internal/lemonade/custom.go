@@ -57,8 +57,10 @@ func parseCustomModels(raw []byte, path string) ([]Recommended, error) {
 	}
 	out := make([]Recommended, 0, len(doc.Custom))
 	for _, c := range doc.Custom {
-		if !strings.HasPrefix(c.ID, "user.") || c.Checkpoint == "" || c.Recipe == "" {
-			return nil, fmt.Errorf("%s: an entry in custom_models has no user. id, checkpoint or recipe "+
+		// An FLM entry names a Lemonade built-in, which never registers.
+		builtin := strings.HasSuffix(c.ID, "-FLM")
+		if (!strings.HasPrefix(c.ID, "user.") && !builtin) || c.Checkpoint == "" || c.Recipe == "" {
+			return nil, fmt.Errorf("%s: an entry in custom_models has no user. or -FLM id, checkpoint or recipe "+
 				"(%q). Remove it with `gaia model remove`, or fix the file by hand", path, c.ID)
 		}
 		ctx := int64(customFloorCtx)
@@ -69,12 +71,17 @@ func parseCustomModels(raw []byte, path string) ([]Recommended, error) {
 		if label == "" {
 			label = strings.TrimPrefix(c.ID, "user.")
 		}
+		registerAs, device := c.ID, ""
+		if builtin {
+			registerAs, device = "", "npu"
+		}
 		out = append(out, Recommended{
 			ID:         c.ID,
 			Provider:   "local",
 			Label:      label,
 			Note:       "added by you from " + c.SourceURL,
-			RegisterAs: c.ID,
+			Device:     device,
+			RegisterAs: registerAs,
 			SizeGB:     c.SizeGB,
 			Checkpoint: c.Checkpoint,
 			Recipe:     c.Recipe,

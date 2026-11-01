@@ -145,3 +145,31 @@ func TestAddedModelsOnlyJoinTheLocalList(t *testing.T) {
 		}
 	}
 }
+
+// The shape gaia.llm.custom_models writes for a FastFlowLM link: a built-in id.
+const addedFLMConfig = `{"custom_models": [{"id": "qwen3.5-4b-FLM", "display_name": "Qwen3.5 4B NPU",
+  "checkpoint": "qwen3.5:4b", "recipe": "flm", "size_gb": 5.0, "context_length": 32768,
+  "source_url": "https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2"}]}`
+
+func TestAnFLMEntryIsABuiltInThatNeverRegisters(t *testing.T) {
+	writeConfig(t, addedFLMConfig)
+	got, err := ReadCustomModels()
+	if err != nil || len(got) != 1 {
+		t.Fatalf("got=%v err=%v", got, err)
+	}
+	r := got[0]
+	if r.RegisterAs != "" || r.Device != "npu" || !r.Custom {
+		t.Fatalf("entry: %+v", r)
+	}
+	body := PullRequest(Entry{Model: Model{ID: r.ID}, Recommended: &r})
+	if _, ok := body["recipe"]; ok || body["model_name"] != "qwen3.5-4b-FLM" {
+		t.Fatalf("a built-in pull must go by name only (#1655): %v", body)
+	}
+}
+
+func TestAnEntryThatIsNeitherUserNorFLMIsRefused(t *testing.T) {
+	writeConfig(t, `{"custom_models": [{"id": "Gemma-4-E4B-it-GGUF", "checkpoint": "a", "recipe": "llamacpp"}]}`)
+	if _, err := ReadCustomModels(); err == nil {
+		t.Fatal("want an error for a saved id that is neither user. nor -FLM")
+	}
+}

@@ -41,6 +41,27 @@
       "kv_bytes_per_token": 16384
     },
     {
+      "id": "gemma4-it-e4b-FLM",
+      "provider": "local",
+      "label": "Gemma 4 E4B NPU",
+      "note": "Gemma 4 E4B on the Ryzen AI NPU, in system RAM; slower than the GPU, but leaves it free",
+      "device": "npu",
+      "option": true,
+      "size_gb": 9.1,
+      "vision": true,
+      "min_ctx_size": 32768
+    },
+    {
+      "id": "gemma4-it-e2b-FLM",
+      "provider": "local",
+      "label": "Gemma 4 E2B NPU",
+      "note": "the smaller Gemma 4 on the Ryzen AI NPU, for 16 GB PCs",
+      "device": "npu",
+      "option": true,
+      "size_gb": 6.0,
+      "min_ctx_size": 32768
+    },
+    {
       "id": "ggml-gpt-oss-20b-MXFP4-GGUF",
       "register_as": "user.ggml-gpt-oss-20b-MXFP4-GGUF",
       "provider": "local",

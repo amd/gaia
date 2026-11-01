@@ -367,12 +367,14 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
         find_model_requirement,
         kv_cache_for,
         lemonade_server_version,
+        runs_on_npu,
     )
     from gaia.llm.model_fit import (
         ModelFitError,
         capacity_from_system_info,
         check_fit,
         check_server_supports,
+        npu_capacity,
     )
 
     size = None
@@ -386,6 +388,14 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
     size = size or (mr.size_gb if mr else None)
     if size:
         capacity = capacity_from_system_info(client.get_system_info(timeout=15))
+        if runs_on_npu(model_id):
+            capacity = npu_capacity(capacity)
+            if capacity is None:
+                raise ModelFitError(
+                    f"default_model {model_id} runs on an AMD NPU, and Lemonade "
+                    "reports none on this PC. Choose a GPU model with `gaia config "
+                    "set default_model <id>`, then re-run `gaia init`."
+                )
         verdict = check_fit(
             float(size), capacity, kv_cache_for(mr, capacity) if mr else 0.0
         )

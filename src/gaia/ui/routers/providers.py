@@ -366,6 +366,9 @@ def _with_network(view: Dict[str, Any]) -> Dict[str, Any]:
 
 def _is_chat_model(model: Dict[str, Any]) -> bool:
     labels = {str(label).lower() for label in model.get("labels") or []}
+    if "single-turn" in labels:
+        # FLM builds that answer one message at a time cannot hold a conversation.
+        return False
     # ``chat`` wins: FLM omni models are labeled both ``chat`` and ``audio``.
     return "chat" in labels or not labels & _NON_CHAT_LABELS
 
@@ -392,6 +395,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
         _model_ids_match,
         catalog_context_window,
         find_model_requirement,
+        runs_on_npu,
     )
     from gaia.llm.recommended_models import rank
 
@@ -437,12 +441,12 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
                 "price": None if provider == LOCAL else price_card(model_id),
             }
         )
-    # A custom model Lemonade has not registered yet is not in its list; a
-    # missing built-in is one this Lemonade cannot pull, so it stays out.
+    # A custom model Lemonade has not registered yet is not in its list, nor is
+    # an FLM model before the NPU backend is in (its download installs that). Any
+    # other missing built-in is one this Lemonade cannot pull, so it stays out.
     for model_id in offered:
-        if model_id.startswith("user.") and not any(
-            _model_ids_match(model_id, m["id"]) for m in out
-        ):
+        unlisted = model_id.startswith("user.") or runs_on_npu(model_id)
+        if unlisted and not any(_model_ids_match(model_id, m["id"]) for m in out):
             req = find_model_requirement(model_id)
             out.append(
                 {
@@ -483,7 +487,10 @@ def _added_models() -> List[Dict[str, Any]]:
 
 def _optional_models_that_fit() -> List[str]:
     """Optional local models to offer for download: only those this PC holds."""
-    from gaia.llm.lemonade_client import optional_chat_models_that_fit
+    from gaia.llm.lemonade_client import (
+        npu_chat_models_that_fit,
+        optional_chat_models_that_fit,
+    )
     from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
 
     status, info = _lemonade("GET", "system-info")
@@ -495,7 +502,10 @@ def _optional_models_that_fit() -> List[str]:
         # Not offering what may not fit; downloaded models still list.
         logger.warning("Not offering optional local models: %s", e)
         return []
-    return optional_chat_models_that_fit(capacity)
+    return [
+        *optional_chat_models_that_fit(capacity),
+        *npu_chat_models_that_fit(capacity),
+    ]
 
 
 def _rank_gateway_models(models: List[Dict[str, Any]]) -> None:

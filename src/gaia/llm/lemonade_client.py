@@ -559,6 +559,7 @@ DEFAULT_CONTEXT_SIZE = 32768
 # GPU doc-Q&A at 32K and re-open the #1030 context overflow.
 GPU_CTX_SIZE = 65536  # GPU/CPU — Gemma-4-E4B-it-GGUF (llama.cpp)
 NPU_CTX_SIZE = 32768  # NPU — gemma4-it-e2b-FLM (FastFlowLM ceiling)
+NPU_BACKEND_INSTALL_TIMEOUT = 600  # seconds; the FastFlowLM release download
 
 # llama.cpp flags for a chat model. One slot meant every side request with its
 # own prompt (memory extraction, titles) first saved the conversation's cache to
@@ -875,6 +876,17 @@ def _free_memory_snapshot(url: str):
     return free, resident
 
 
+def _free_memory_for(url: str, model_id: str):
+    """:func:`_free_memory_snapshot` on the pool *model_id* loads into: the
+    NPU's system RAM for an FLM model, not the GPU's memory."""
+    if not runs_on_npu(model_id):
+        return _free_memory_snapshot(url)
+    from gaia.llm.model_fit import npu_free_memory, read_os_memory
+
+    _, resident = _free_memory_snapshot(url)
+    return npu_free_memory(_system_info(url), read_os_memory()), resident
+
+
 def _footprint_gb(requirement: "ModelRequirement", ctx: int) -> float:
     """Memory *requirement*'s model holds when loaded with a *ctx* window."""
     from gaia.llm.model_fit import kv_cache_gb, required_memory_gb
@@ -904,7 +916,9 @@ def free_memory_verdict(url: str, requirement: "ModelRequirement", window: int):
     disagree with it. None when this machine does not report free memory for
     that pool. Raises like :func:`_free_memory_snapshot`.
     """
-    return _verdict_for(*_free_memory_snapshot(url), requirement, window)
+    return _verdict_for(
+        *_free_memory_for(url, requirement.model_id), requirement, window
+    )
 
 
 def _verdict_for(free, resident, requirement: "ModelRequirement", window: int):
@@ -1024,7 +1038,7 @@ def fit_ctx_to_free_memory(
             return _FITTED_CTX_CACHE[key]
     log = get_logger(__name__)
     try:
-        free, resident = _free_memory_snapshot(url)
+        free, resident = _free_memory_for(url, requirement.model_id)
     except (LemonadeClientError, ModelFitError) as e:
         # Not a guess: the load re-reads free memory and refuses if it cannot.
         log.warning(
@@ -1727,9 +1741,23 @@ MODELS = {
     "gemma-4-e2b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="gemma4-it-e2b-FLM",
-        display_name="Gemma 4 E2B (NPU/FLM)",
+        display_name="Gemma 4 E2B NPU",
         min_ctx_size=NPU_CTX_SIZE,
         tool_calling=False,
+        recipe="flm",
+        size_gb=6.0,
+    ),
+    # The NPU build of GAIA's default model. Native tool calls verified on
+    # hardware with FastFlowLM 1.0.7.
+    "gemma-4-e4b-npu": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="gemma4-it-e4b-FLM",
+        display_name="Gemma 4 E4B NPU",
+        min_ctx_size=NPU_CTX_SIZE,
+        tool_calling=True,
+        recipe="flm",
+        size_gb=9.1,
+        vision=True,
     ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
     "qwen3.5-35b": ModelRequirement(
@@ -2227,6 +2255,26 @@ DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
 OPTIONAL_CHAT_MODELS = (GPT_OSS_20B_MODEL_NAME, "gpt-oss-120b-mxfp-GGUF")
 
 
+#: Gemma's NPU builds, offered for download on a PC with an NPU they fit. Lemonade
+#: lists no FLM model until its NPU backend is installed, so these are named here.
+NPU_CHAT_MODELS = ("gemma4-it-e4b-FLM", "gemma4-it-e2b-FLM")
+NPU_BACKEND_SPEC = "flm:npu"
+
+
+def npu_chat_models_that_fit(capacity: Any) -> List[str]:
+    """``NPU_CHAT_MODELS`` this PC's NPU holds; none on a PC without one."""
+    from gaia.llm.model_fit import check_fit, npu_capacity
+
+    npu = npu_capacity(capacity)
+    if npu is None:
+        return []
+    return [
+        model_id
+        for model_id in NPU_CHAT_MODELS
+        if check_fit(find_model_requirement(model_id).size_gb, npu).fits
+    ]
+
+
 def optional_chat_models_that_fit(capacity: Any) -> List[str]:
     """``OPTIONAL_CHAT_MODELS`` that fit *capacity*, KV cache at their floor included."""
     from gaia.llm.model_fit import check_fit, kv_cache_gb
@@ -2266,7 +2314,7 @@ def free_memory_shortfall(client, requirement, capacity) -> Optional[str]:
     if not _is_local_url(url):
         return None
     window = min(MIN_CONTEXT_TOKENS, context_for_capacity(requirement, capacity))
-    free, resident = _free_memory_snapshot(url)
+    free, resident = _free_memory_for(url, requirement.model_id)
     verdict = _verdict_for(free, resident, requirement, window)
     if verdict is None or verdict.fits:
         return None
@@ -2823,6 +2871,12 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
         if cloud["tool_calling"]:
             return True
         return bool(learned_tool_calling(model_id))
+    from gaia.llm.custom_models import find_custom_model
+
+    added = find_custom_model(model_id)
+    if added is not None:
+        # An FLM server 500s on a tools payload for a model without tool support.
+        return bool(added.get("tool_calling", True))
     return True  # Unknown GGUF: optimistic default per Tier 0 findings
 
 
@@ -6728,6 +6782,26 @@ class LemonadeClient:
         *,
         allow_catalog_lookup: bool = True,
     ) -> Optional[int]:
+        """The largest window *model_id* can load with.
+
+        An FLM model stops at ``NPU_CTX_SIZE`` whatever it was trained for, so
+        nothing reloads it at a GPU profile's window. Otherwise its
+        :meth:`_trained_context_window`.
+        """
+        ceiling = self._trained_context_window(
+            model_id, status, allow_catalog_lookup=allow_catalog_lookup
+        )
+        if runs_on_npu(model_id):
+            return min(ceiling or NPU_CTX_SIZE, NPU_CTX_SIZE)
+        return ceiling
+
+    def _trained_context_window(
+        self,
+        model_id: str,
+        status: Optional["LemonadeStatus"] = None,
+        *,
+        allow_catalog_lookup: bool = True,
+    ) -> Optional[int]:
         """Trained context ceiling for *model_id* (Lemonade's ``max_context_window``).
 
         The value is read from the model's own GGUF metadata, not GAIA's
@@ -6804,6 +6878,7 @@ class LemonadeClient:
                 "a discovered model with /model."
             )
         self.log.info(f"Installing {model_name}")
+        self.ensure_npu_backend(model_name)
 
         request_data = {"model_name": model_name}
 
@@ -6865,6 +6940,26 @@ class LemonadeClient:
             return response
         except Exception as e:
             raise LemonadeClientError(f"Failed to install backend {spec}: {e}") from e
+
+    def ensure_npu_backend(self, model_name: str) -> None:
+        """Install the FLM backend *model_name* needs, if it is an FLM model.
+
+        Lemonade knows no FLM model until the backend is in, and answers a pull
+        for one with a misleading ``user`` namespace error. Raises
+        :class:`LemonadeClientError` on a PC that cannot run the backend.
+        """
+        from gaia.llm.model_device import recipe_unavailable_reason
+
+        if not runs_on_npu(model_name):
+            return
+        info = self.get_system_info()
+        reason = recipe_unavailable_reason("flm", info)
+        if reason:
+            raise LemonadeClientError(f"{model_name} {reason}.")
+        recipe = (info.get("recipes") or {}).get("flm") or {}
+        backend = (recipe.get("backends") or {}).get("npu") or {}
+        if backend.get("state") in ("installable", "update_required"):
+            self.install_backend(NPU_BACKEND_SPEC, timeout=NPU_BACKEND_INSTALL_TIMEOUT)
 
     def uninstall_backend(self, spec: str, timeout: int = 120) -> Dict[str, Any]:
         """Uninstall a Lemonade backend.
@@ -6969,6 +7064,7 @@ class LemonadeClient:
                 "a discovered model with /model."
             )
         self.log.info(f"Installing {model_name} with streaming progress")
+        self.ensure_npu_backend(model_name)
 
         if not checkpoint:
             # A user. model Lemonade has not seen needs its registration on the

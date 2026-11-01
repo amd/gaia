@@ -67,6 +67,8 @@ gaia prompt "Hello" --device npu
 1. Launch with `gaia chat --ui`
 2. The Agent UI uses your default device. After `gaia init --profile npu` that is the NPU; switch with `gaia config set default_device gpu` (or `npu`)
 
+You don't need the NPU profile to try a model on the NPU. On a PC with an NPU, Settings › Model lists Gemma 4 E4B NPU and Gemma 4 E2B NPU when they fit its memory. **Download** installs Lemonade's FLM backend if it is missing, then fetches the model. The terminal UI's model picker does the same. To add another FastFlowLM model, paste its Hugging Face link under [Add a model from Hugging Face](/guides/ai-providers#add-a-model-from-hugging-face).
+
 ### Evaluation
 
 Compare agent quality across devices:
@@ -127,7 +129,9 @@ Error pulling model: No built-in model with the name 'gemma4-it-e2b-FLM' is regi
 
 The FLM backend is missing, not the model. Lemonade discovers `*-FLM` models
 through the FLM runtime itself, so until `flm:npu` is installed none of them
-exist to pull. Install the backend first, then pull by name:
+exist to pull. Downloading the model from Settings › Model or the terminal UI's
+picker installs the backend for you. From a terminal, install it first, then pull by
+name:
 
 ```bash
 lemonade backends install flm:npu
