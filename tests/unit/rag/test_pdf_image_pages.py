@@ -11,9 +11,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
-from gaia.rag.sdk import IMAGE_PAGE_TEXT_LIMIT, RAGSDK, RAGConfig
+pytest.importorskip("reportlab")
 
-fitz = pytest.importorskip("pymupdf")
+from reportlab.lib.utils import ImageReader  # noqa: E402
+from reportlab.pdfgen import canvas  # noqa: E402
+
+from gaia.rag.sdk import IMAGE_PAGE_TEXT_LIMIT, RAGSDK, RAGConfig  # noqa: E402
 
 
 def _png() -> bytes:
@@ -24,13 +27,17 @@ def _png() -> bytes:
 
 def _pdf(path: Path, *page_texts: str) -> Path:
     """One page per text, each holding the same picture."""
-    doc = fitz.open()
+    c = canvas.Canvas(str(path), pagesize=(600, 800))
+    picture = ImageReader(io.BytesIO(_png()))
     for text in page_texts:
-        page = doc.new_page()
-        page.insert_textbox(fitz.Rect(40, 40, 560, 300), text, fontsize=8)
-        page.insert_image(fitz.Rect(40, 320, 440, 620), stream=_png())
-    doc.save(path)
-    doc.close()
+        lines = c.beginText(40, 760)
+        lines.setFont("Helvetica", 8)
+        for start in range(0, len(text), 100):
+            lines.textLine(text[start : start + 100])
+        c.drawText(lines)
+        c.drawImage(picture, 40, 80, width=400, height=300)
+        c.showPage()
+    c.save()
     return path
 
 
