@@ -111,6 +111,15 @@ def _denied_family(text: str) -> str | None:
     return None
 
 
+# MPL-2.0's own definition of the licences it is compatible with names the GPL family.
+_MPL_SECONDARY = re.compile(r'"?Secondary License"? means either the GNU .*?later versions of those licenses\.', re.I)
+
+
+def _copyleft_in_text(text: str) -> str | None:
+    """A copyleft family named anywhere in licence text, however long or multi-line."""
+    return _denied_family(_MPL_SECONDARY.sub("", " ".join(text.split())))
+
+
 def _normalise(term: str) -> str | None:
     """Map an SPDX id or a known free-text name to an allowed SPDX id, else None."""
     term = term.strip().strip("()").strip()
@@ -317,10 +326,16 @@ def scan_python() -> list[Finding]:
         meta = dist.metadata
         expression = meta.get("License-Expression") or ""
         raw = meta.get("License") or ""
+        first_line = raw.strip().splitlines()[0] if raw.strip() else ""
         # Long License fields are the full licence text; keep the first line only.
-        licence = expression or (raw.strip().splitlines()[0] if raw.strip() and len(raw) < 200 else "")
+        licence = expression or (first_line if len(raw) < 200 else "")
         classifiers = [c for c in (meta.get_all("Classifier") or []) if c.startswith("License ::")]
         classifiers = [c for c in classifiers if c != "License :: OSI Approved"]
+        # Copyleft named past the first line ("MIT ... bundles libfoo under LGPL") still counts.
+        family = None if expression or ("python", key) in REVIEWED else _copyleft_in_text(raw)
+        if family:
+            findings.append(Finding("python", key, dist.version, first_line, "denied", f"License field names {family}"))
+            continue
         if not licence and raw and len(raw) >= 200 and ("python", key) not in REVIEWED:
             # The field holds the full licence text: identify it the same way as a LICENSE file.
             licence = _licence_from_text(raw)
@@ -349,10 +364,10 @@ def scan_npm(lockfile: Path, production_only: bool = False) -> list[Finding]:
 
 def _licence_from_text(text: str) -> str:
     """Identify a full licence text (LICENSE file or long metadata field)."""
-    flat = " ".join(text.split())[:6000]
-    family = _denied_family(flat[:600])
+    family = _copyleft_in_text(text)
     if family:
         return family
+    flat = " ".join(text.split())[:6000]
     if "Permission is hereby granted, free of charge" in flat:
         return "MIT"
     if "Apache License" in flat and "Version 2.0" in flat:

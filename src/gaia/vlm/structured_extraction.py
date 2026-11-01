@@ -135,6 +135,7 @@ class StructuredVLMExtractor:
         from pathlib import Path
 
         from gaia.utils import PdfRenderError, pdf_page_to_image
+        from gaia.utils.parsing import PDFIUM_LOCK
 
         doc_path = Path(document_path)
         if not doc_path.exists():
@@ -147,18 +148,19 @@ class StructuredVLMExtractor:
         if is_pdf:
             import pypdfium2 as pdfium
 
-            try:
-                doc = pdfium.PdfDocument(str(doc_path))
-            except pdfium.PdfiumError as e:
-                raise PdfRenderError(
-                    f"could not open {doc_path}: {str(e).rstrip('.')}. The file "
-                    "may be damaged or password-protected; re-save it from a PDF "
-                    "viewer and try again."
-                ) from e
-            try:
-                total_pages = len(doc)
-            finally:
-                doc.close()
+            with PDFIUM_LOCK:
+                try:
+                    doc = pdfium.PdfDocument(str(doc_path))
+                except pdfium.PdfiumError as e:
+                    raise PdfRenderError(
+                        f"could not open {doc_path}: {str(e).rstrip('.')}. The "
+                        "file may be damaged or password-protected; re-save it "
+                        "from a PDF viewer and try again."
+                    ) from e
+                try:
+                    total_pages = len(doc)
+                finally:
+                    doc.close()
         else:
             total_pages = 1
 

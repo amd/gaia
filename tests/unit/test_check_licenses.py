@@ -316,3 +316,73 @@ def test_npm_production_only_skips_dev_entries(tmp_path):
     }
     assert full == {"runtime": "ok", "packager": "unknown"}
     assert prod == {"runtime": "ok"}
+
+
+_MIT_TEXT = (
+    "MIT License\n\nPermission is hereby granted, free of charge, to any person "
+    "obtaining a copy of this software.\n"
+)
+
+
+def test_copyleft_deep_in_a_licence_text_is_found():
+    text = (
+        _MIT_TEXT
+        + "x " * 2000
+        + "\nlibfoo is bundled under the GNU Lesser General Public License."
+    )
+    assert check_licenses._licence_from_text(text) == "LGPL"
+
+
+def test_mpl_text_naming_its_secondary_licences_stays_mpl():
+    text = (
+        'Mozilla Public License Version 2.0\n1.12. "Secondary License"\n    means either '
+        "the GNU General Public License, Version 2.0, the GNU Lesser General\n    Public "
+        "License, Version 2.1, the GNU Affero General Public License,\n    Version 3.0, or "
+        "any later versions of those licenses.\n"
+    )
+    assert check_licenses._licence_from_text(text) == "MPL-2.0"
+
+
+def _fake_distribution(name, licence):
+    from email.message import Message
+
+    meta = Message()
+    meta["Name"] = name
+    meta["License"] = licence
+
+    class Dist:
+        metadata = meta
+        version = "1.0"
+
+    return Dist()
+
+
+@pytest.mark.parametrize(
+    "licence",
+    [
+        "MIT\nbundles libfoo under LGPL-2.1",
+        "MIT\n\nCopyright (c) Someone\nThe bundled libbar is GPL-2.0.",
+        _MIT_TEXT + "y " * 400 + "\nIt also bundles libbaz (AGPL-3.0).",
+    ],
+    ids=["short-multiline", "short-third-line", "long-text"],
+)
+def test_python_scan_reads_the_whole_licence_field(monkeypatch, licence):
+    from importlib import metadata
+
+    monkeypatch.setattr(
+        metadata, "distributions", lambda: [_fake_distribution("libpkg", licence)]
+    )
+    [finding] = check_licenses.scan_python()
+    assert finding.verdict == "denied", finding
+
+
+def test_python_scan_still_passes_a_multiline_permissive_field(monkeypatch):
+    from importlib import metadata
+
+    monkeypatch.setattr(
+        metadata,
+        "distributions",
+        lambda: [_fake_distribution("libpkg", "MIT\n\nCopyright (c) Someone")],
+    )
+    [finding] = check_licenses.scan_python()
+    assert finding.verdict == "ok", finding

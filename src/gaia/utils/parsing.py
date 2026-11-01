@@ -9,12 +9,18 @@ document conversion, and field change detection.
 """
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+#: PDFium is not thread-safe, even across documents, and pypdfium2 releases the
+#: GIL. Hold this from opening a document until it and every page, bitmap and
+#: object handle from it are closed.
+PDFIUM_LOCK = threading.RLock()
 
 
 class PdfRenderError(RuntimeError):
@@ -164,28 +170,40 @@ def pdf_page_to_image(
             'pip install "amd-gaia[rag]"'
         ) from e
 
-    try:
-        pdf = pdfium.PdfDocument(str(path))
-    except pdfium.PdfiumError as e:
-        raise PdfRenderError(
-            f"could not open {path}: {str(e).rstrip('.')}. The file may be "
-            "damaged or password-protected; re-save it from a PDF viewer and "
-            "try again."
-        ) from e
-    try:
-        if not 0 <= page < len(pdf):
-            raise PdfRenderError(
-                f"page {page} is not in {path} (it has {len(pdf)} pages)"
-            )
+    with PDFIUM_LOCK:
         try:
-            image = pdf[page].render(scale=scale).to_pil()
+            pdf = pdfium.PdfDocument(str(path))
         except pdfium.PdfiumError as e:
-            raise PdfRenderError(f"could not render page {page} of {path}: {e}") from e
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        return buffer.getvalue()
-    finally:
-        pdf.close()
+            raise PdfRenderError(
+                f"could not open {path}: {str(e).rstrip('.')}. The file may be "
+                "damaged or password-protected; re-save it from a PDF viewer and "
+                "try again."
+            ) from e
+        try:
+            if not 0 <= page < len(pdf):
+                raise PdfRenderError(
+                    f"page {page} is not in {path} (it has {len(pdf)} pages)"
+                )
+            try:
+                pdf_page = pdf[page]
+                try:
+                    bitmap = pdf_page.render(scale=scale)
+                    try:
+                        # to_pil() shares the bitmap's buffer; copy before closing.
+                        image = bitmap.to_pil().copy()
+                    finally:
+                        bitmap.close()
+                finally:
+                    pdf_page.close()
+            except pdfium.PdfiumError as e:
+                raise PdfRenderError(
+                    f"could not render page {page} of {path}: {e}"
+                ) from e
+        finally:
+            pdf.close()
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def detect_field_changes(

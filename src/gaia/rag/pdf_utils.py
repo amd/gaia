@@ -13,6 +13,7 @@ import io
 from typing import List, Tuple
 
 from gaia.logger import get_logger
+from gaia.utils.parsing import PDFIUM_LOCK
 
 logger = get_logger(__name__)
 
@@ -122,8 +123,9 @@ class PdfImageExtractionError(RuntimeError):
 def _open_pdf_page(pdf_path, page_index: int):
     """Open *pdf_path* with PDFium and return ``(document, page)``.
 
-    The caller closes the document. Raises :class:`PdfImageExtractionError`
-    naming the file and page when either cannot be opened.
+    The caller holds ``PDFIUM_LOCK`` and closes both before releasing it.
+    Raises :class:`PdfImageExtractionError` naming the file and page when
+    either cannot be opened.
     """
     import pypdfium2 as pdfium
 
@@ -144,7 +146,14 @@ def _open_pdf_page(pdf_path, page_index: int):
             f"page {page_index + 1} is not in {pdf_path} (it has {pages} pages)",
             page_index + 1,
         )
-    return pdf, pdf[page_index]
+    try:
+        return pdf, pdf[page_index]
+    except pdfium.PdfiumError as e:
+        pdf.close()
+        raise PdfImageExtractionError(
+            f"could not read page {page_index + 1} of {pdf_path}: {e}",
+            page_index + 1,
+        ) from e
 
 
 def extract_images_from_page_pdfium(pdf_path: str, page_num: int) -> List[dict]:
@@ -167,31 +176,46 @@ def extract_images_from_page_pdfium(pdf_path: str, page_num: int) -> List[dict]:
     import pypdfium2 as pdfium
     import pypdfium2.raw as pdfium_c
 
-    pdf, page = _open_pdf_page(pdf_path, page_num - 1)
-    images: List[dict] = []
     failures: List[str] = []
-    seen = set()
-    try:
-        image_objects = page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE])
-        for img_index, obj in enumerate(image_objects, 1):
+    decoded = []
+    with PDFIUM_LOCK:
+        pdf, page = _open_pdf_page(pdf_path, page_num - 1)
+        try:
             try:
-                pil = obj.get_bitmap(render=False).to_pil()
-                # One image placed twice is one image to the VLM.
-                key = (pil.size, pil.mode, hashlib.sha256(pil.tobytes()).digest())
-                if key in seen:
-                    continue
-                seen.add(key)
-                image = prepare_pil_image_for_vlm(pil)
-            except (pdfium.PdfiumError, ValueError, OSError) as e:
-                failures.append(f"image {img_index}: {e}")
-                continue
-            images.append(image)
-            logger.debug(
-                f"Extracted image {img_index}: "
-                f"{image['width']}x{image['height']}, {image['size_kb']:.1f}KB"
-            )
-    finally:
-        pdf.close()
+                image_objects = page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE])
+                for img_index, obj in enumerate(image_objects, 1):
+                    try:
+                        bitmap = obj.get_bitmap(render=False)
+                        try:
+                            # to_pil() shares the bitmap's buffer; copy before closing.
+                            decoded.append((img_index, bitmap.to_pil().copy()))
+                        finally:
+                            bitmap.close()
+                    except (pdfium.PdfiumError, ValueError, OSError) as e:
+                        failures.append(f"image {img_index}: {e}")
+            finally:
+                page.close()
+        finally:
+            pdf.close()
+
+    images: List[dict] = []
+    seen = set()
+    for img_index, pil in decoded:
+        # One image placed twice is one image to the VLM.
+        key = (pil.size, pil.mode, hashlib.sha256(pil.tobytes()).digest())
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            image = prepare_pil_image_for_vlm(pil)
+        except (ValueError, OSError) as e:
+            failures.append(f"image {img_index}: {e}")
+            continue
+        images.append(image)
+        logger.debug(
+            f"Extracted image {img_index}: "
+            f"{image['width']}x{image['height']}, {image['size_kb']:.1f}KB"
+        )
 
     if failures:
         raise PdfImageExtractionError(
@@ -293,24 +317,28 @@ def get_image_positions_on_page(pdf_path: str, page_num: int) -> List[dict]:
     """
     import pypdfium2.raw as pdfium_c
 
-    pdf, page = _open_pdf_page(pdf_path, page_num)
-    try:
-        page_height = page.get_height()
-        positions: List[dict] = []
-        image_objects = page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE])
-        for img_index, obj in enumerate(image_objects):
-            # PDFium bounds are bottom-left origin; callers sort top-down.
-            left, bottom, right, top = obj.get_bounds()
-            y0 = page_height - top
-            positions.append(
-                {
-                    "image_index": img_index,
-                    "bbox": [left, y0, right, page_height - bottom],
-                    "position_y": y0,
-                    "width": int(right - left),
-                    "height": int(top - bottom),
-                }
-            )
-        return positions
-    finally:
-        pdf.close()
+    with PDFIUM_LOCK:
+        pdf, page = _open_pdf_page(pdf_path, page_num)
+        try:
+            try:
+                page_height = page.get_height()
+                positions: List[dict] = []
+                image_objects = page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE])
+                for img_index, obj in enumerate(image_objects):
+                    # PDFium bounds are bottom-left origin; callers sort top-down.
+                    left, bottom, right, top = obj.get_bounds()
+                    y0 = page_height - top
+                    positions.append(
+                        {
+                            "image_index": img_index,
+                            "bbox": [left, y0, right, page_height - bottom],
+                            "position_y": y0,
+                            "width": int(right - left),
+                            "height": int(top - bottom),
+                        }
+                    )
+                return positions
+            finally:
+                page.close()
+        finally:
+            pdf.close()
