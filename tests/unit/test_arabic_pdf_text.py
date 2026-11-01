@@ -21,6 +21,7 @@ _GLYPHS = {
     "B": "ي",  # ي
     "C": "ع",  # ع
     "D": "ﻻ",  # ﻻ  lam-alef ligature (presentation form)
+    "E": "٦",  # ٦  Arabic-Indic six
 }
 
 
@@ -122,6 +123,12 @@ def test_english_line_quoting_an_arabic_word_is_not_touched():
     content = _line((50, b"net total"), (120, b"AB"))
 
     assert _page_text(content) == _extract(content)
+
+
+def test_arabic_digit_counts_as_a_number_when_reordering():
+    text = _page_text(_line((50, b"BC"), (100, b"E"), (150, b"AB")))
+
+    assert text.split() == ["يب", "٦", "عي"]
 
 
 def test_lines_are_repaired_on_their_own():
