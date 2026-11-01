@@ -155,6 +155,8 @@ type SSEClient struct {
 	// Close() waits on it so a process exiting right after abandoning a run
 	// still delivers that cancel.
 	runs sync.WaitGroup
+	// cancelErrs are abandoned runs whose cancel did not land; Close reports them.
+	cancelErrs []error
 
 	mu         sync.Mutex
 	inst       *daemon.Instance
@@ -602,7 +604,11 @@ func (s *SSEClient) consume(
 	cancelPosted = true
 	go func() {
 		defer s.runs.Done()
-		s.cancelRun(handle)
+		if err := s.cancelRun(handle); err != nil {
+			s.mu.Lock()
+			s.cancelErrs = append(s.cancelErrs, err)
+			s.mu.Unlock()
+		}
 	}()
 }
 
@@ -803,12 +809,14 @@ func (s *SSEClient) postCancel(ctx context.Context, inst *daemon.Instance, runID
 // context so a cancelled caller context cannot kill the cancel itself, and it
 // lives here rather than in the daemon package because the cancel path is part
 // of the AGENT wire contract, not the daemon control plane.
-func (s *SSEClient) cancelRun(handle *runHandle) {
+//
+// The error is for Close, which reports it; nothing on the turn's path waits on it.
+func (s *SSEClient) cancelRun(handle *runHandle) error {
 	s.mu.Lock()
 	inst := s.inst
 	s.mu.Unlock()
 	if inst == nil {
-		return
+		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), cancelTimeout)
@@ -818,7 +826,8 @@ func (s *SSEClient) cancelRun(handle *runHandle) {
 	if err != nil {
 		s.opts.Logf("sse: best-effort cancel for '%s' run_id=%s failed: %v",
 			s.agentID, handle.runID, err)
-		return
+		return fmt.Errorf("could not tell the '%s' agent to stop run %s, so it may still be running "+
+			"— check `gaia daemon status`: %w", s.agentID, handle.runID, err)
 	}
 	defer resp.Body.Close()
 	// 404 is the documented answer for a run that is no longer in flight — which
@@ -827,12 +836,15 @@ func (s *SSEClient) cancelRun(handle *runHandle) {
 	if resp.StatusCode == http.StatusNotFound {
 		s.opts.Logf("sse: '%s' run_id=%s had already finished; nothing to cancel",
 			s.agentID, handle.runID)
-		return
+		return nil
 	}
 	if resp.StatusCode != http.StatusOK {
 		s.opts.Logf("sse: cancel for '%s' run_id=%s answered HTTP %d",
 			s.agentID, handle.runID, resp.StatusCode)
+		return fmt.Errorf("the '%s' agent refused to stop run %s (%s), so it may still be running "+
+			"— check `gaia daemon status`", s.agentID, handle.runID, daemon.ErrorDetail(resp))
 	}
+	return nil
 }
 
 // Cancel implements client.AgentCanceler (#2901). It asks the server to stop
@@ -1109,7 +1121,8 @@ func (s *SSEClient) ensureSessionID() (string, error) {
 const closeCancelWait = cancelTimeout + 2*time.Second
 
 // Close cancels any in-flight run, waits (bounded) until the relay has been
-// asked to drop every abandoned run, and refuses further sends.
+// asked to drop every abandoned run, and refuses further sends. It returns an
+// error for any abandoned run the relay could not be told to drop.
 func (s *SSEClient) Close() error {
 	s.mu.Lock()
 	alreadyClosed := s.closed
@@ -1132,7 +1145,11 @@ func (s *SSEClient) Close() error {
 	}()
 	select {
 	case <-settled:
-		return nil
+		s.mu.Lock()
+		errs := s.cancelErrs
+		s.cancelErrs = nil
+		s.mu.Unlock()
+		return errors.Join(errs...)
 	case <-time.After(closeCancelWait):
 		return fmt.Errorf(
 			"the '%s' agent was not told to stop within %s, so its last run may still be "+

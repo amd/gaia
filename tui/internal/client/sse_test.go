@@ -96,6 +96,8 @@ type fakeRelay struct {
 	onCancelPost func()
 	// cancelDelay holds a POST .../cancel before it is recorded: a slow daemon.
 	cancelDelay time.Duration
+	// cancelStatus overrides the status POST .../cancel answers with; zero is 200.
+	cancelStatus int
 
 	// followUpStatus overrides the status POST .../followup answers with.
 	// Zero means 200. The interesting values are the two refusals the real
@@ -298,6 +300,10 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.cancelled = append(f.cancelled, parts[len(parts)-2])
 		f.mu.Unlock()
+		if f.cancelStatus != 0 {
+			w.WriteHeader(f.cancelStatus)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		if f.onCancelPost != nil {
 			// Real /cancel returns before the worker thread notices anything

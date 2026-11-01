@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -102,5 +103,75 @@ func TestSSEClientCloseAfterACompletedRunDoesNotWait(t *testing.T) {
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Fatalf("Close after a completed run waited %s", d)
+	}
+}
+
+// abandonOneRun starts a run that never ends and closes the client mid-run.
+func abandonOneRun(t *testing.T, f *fakeRelay) error {
+	t.Helper()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"status","message":"thinking"}`)
+		flush()
+		close(started)
+		<-release
+	}
+	c := f.client(t)
+	if _, err := c.Send(context.Background(), "triage"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	<-started
+	return c.Close()
+}
+
+// A cancel the daemon refuses is not a delivered cancel: Close says the run
+// may still be running instead of reporting a clean exit.
+func TestSSEClientCloseReportsARefusedCancel(t *testing.T) {
+	f := newFakeRelay(t)
+	f.cancelStatus = http.StatusInternalServerError
+	err := abandonOneRun(t, f)
+	if err == nil {
+		t.Fatal("Close returned nil although the daemon refused the cancel")
+	}
+	for _, want := range []string{"refused to stop run " + f.lastQuery().RunID, "may still be running", "gaia daemon status"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Close error %q lacks %q", err, want)
+		}
+	}
+}
+
+// 404 is the documented answer for a run that already ended: nothing failed.
+func TestSSEClientCloseTreatsAnAlreadyEndedRunAsStopped(t *testing.T) {
+	f := newFakeRelay(t)
+	f.cancelStatus = http.StatusNotFound
+	if err := abandonOneRun(t, f); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+// A daemon that is gone by exit time cannot be told anything; Close says so.
+func TestSSEClientCloseReportsAnUndeliverableCancel(t *testing.T) {
+	f := newFakeRelay(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"status","message":"thinking"}`)
+		flush()
+		close(started)
+		<-release
+	}
+	c := f.client(t)
+	if _, err := c.Send(context.Background(), "triage"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	<-started
+	f.srv.CloseClientConnections()
+	f.srv.Listener.Close()
+	err := c.Close()
+	if err == nil || !strings.Contains(err.Error(), "could not tell the 'email' agent to stop run") {
+		t.Fatalf("Close error = %v, want an undeliverable-cancel report", err)
 	}
 }
