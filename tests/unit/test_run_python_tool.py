@@ -134,6 +134,22 @@ def test_the_snippet_never_lands_in_the_workspace(
     assert not list(temp_dir.rglob("gaia-run-*"))
 
 
+def test_a_stray_module_in_temp_does_not_shadow_the_snippets_imports(
+    make_run_python, project, tmp_path, monkeypatch
+):
+    temp_dir = tmp_path / "system-temp"
+    temp_dir.mkdir()
+    (temp_dir / "stray_module.py").write_text("print('hijacked')\n", encoding="utf-8")
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_dir))
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(code="import stray_module")
+
+    assert "hijacked" not in result["stdout"]
+    assert "ModuleNotFoundError" in result["stderr"]
+
+
 def test_the_snippet_is_removed_even_when_it_times_out(
     make_run_python, project, tmp_path, monkeypatch
 ):
