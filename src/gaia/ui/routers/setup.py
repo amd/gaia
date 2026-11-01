@@ -40,7 +40,8 @@ router = APIRouter(tags=["setup"])
 
 # Fixed words for each failure: what failed, what to do, where the details are.
 # Exception text stays in the server log, never in a response.
-_LOG = "Details are in the Agent UI server log."
+# Neutral: the daemon serves these same handlers to the TUI.
+_LOG = "Details are in the GAIA server log."
 _SERVER_DOWN = (
     "The model server isn't running yet. Start setup first, then try again. " + _LOG
 )
