@@ -75,7 +75,7 @@ class SidecarRegistry:
         max_live: int = MAX_LIVE_SIDECARS,
         *,
         on_spawn: Optional[Callable[[str, AgentSidecarManager], None]] = None,
-        on_stop: Optional[Callable[[str], None]] = None,
+        on_stop: Optional[Callable[[str, Optional[int]], None]] = None,
         on_started: Optional[Callable[[str, AgentSidecarManager], None]] = None,
         custody_auth=None,
         custody_base_url: Optional[str] = None,
@@ -141,10 +141,11 @@ class SidecarRegistry:
 
         # A single reaped hook fires both the ledger removal and the custody
         # revoke so a crashed/killed sidecar's secret stops resolving the moment
-        # its process is confirmed gone.
-        def _on_reaped(_aid=agent_id) -> None:
+        # its process is confirmed gone. It names the reaped pid so an earlier
+        # spawn that outlived its shutdown keeps its ledger entry.
+        def _on_reaped(_aid=agent_id, _m=manager) -> None:
             if self._on_stop is not None:
-                self._on_stop(_aid)
+                self._on_stop(_aid, _m.pid)
             self._revoke_custody(_aid)
 
         manager.on_process_reaped = _on_reaped
