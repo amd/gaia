@@ -43,6 +43,8 @@ def checklist(pr_review) -> str:
     "claim",
     [
         "README",
+        "SPEC.md",
+        "SKILL.md",
         "tools_count",
         "`models`",
         "`interfaces`",
