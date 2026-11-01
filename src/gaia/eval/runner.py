@@ -17,6 +17,7 @@ Usage:
 
 import contextlib
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -854,8 +855,8 @@ def find_scenarios(
             sid = data.get("id")
             if sid in scenarios_by_id:
                 prev_path = scenarios_by_id[sid][0]
-                logger.info(
-                    "Scenario '%s' from %s overrides built-in at %s",
+                logger.warning(
+                    "Scenario '%s' from %s overrides %s",
                     sid,
                     path,
                     prev_path,
@@ -880,6 +881,102 @@ def find_scenarios(
             continue
         scenarios.append((path, data))
     return scenarios
+
+
+def _is_builtin_scenario(path) -> bool:
+    try:
+        Path(path).resolve().relative_to(SCENARIOS_DIR.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _builtin_scenario_ids() -> set:
+    ids = set()
+    for path in sorted(SCENARIOS_DIR.rglob("*.yaml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as e:
+            raise RuntimeError(f"Failed to parse scenario YAML {path}: {e}") from e
+        if isinstance(data, dict):
+            ids.add(data.get("id"))
+    return ids
+
+
+def _scenario_digest(data) -> str:
+    """SHA-256 of the scenario as parsed — what ran, independent of formatting."""
+    canonical = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def scenario_provenance(scenarios) -> dict:
+    """Where each scenario came from, and a digest of what was run.
+
+    Recorded in the scorecard so a run on locally substituted questions — a
+    ``~/.gaia/eval/scenarios`` or ``--scenario-dir`` copy of a built-in id — is
+    distinguishable from a clean one after the fact.
+    """
+    builtin_ids = None
+    entries = []
+    overridden = []
+    for path, data in scenarios:
+        path = Path(path)
+        sid = data.get("id")
+        builtin = _is_builtin_scenario(path)
+        entry = {
+            "id": sid,
+            "source": "builtin" if builtin else "local",
+            "path": (
+                "eval/scenarios/"
+                + path.resolve().relative_to(SCENARIOS_DIR.resolve()).as_posix()
+                if builtin
+                else str(path)
+            ),
+            "sha256": _scenario_digest(data),
+        }
+        if not builtin:
+            if builtin_ids is None:
+                builtin_ids = _builtin_scenario_ids()
+            if sid in builtin_ids:
+                entry["overrides_builtin"] = True
+                overridden.append(sid)
+        entries.append(entry)
+    return {
+        "scenarios": entries,
+        "overridden_builtins": sorted(overridden),
+        "builtin_only": all(e["source"] == "builtin" for e in entries),
+    }
+
+
+def scenario_set_warnings(baseline: dict, current: dict) -> list:
+    """Why two scorecards may not have asked the same questions.
+
+    A scorecard written before provenance was recorded contributes nothing.
+    """
+    warnings = []
+    digests = {}
+    for name, card in (("baseline", baseline), ("current", current)):
+        prov = (card.get("config") or {}).get("scenario_provenance") or {}
+        overridden = prov.get("overridden_builtins") or []
+        if overridden:
+            warnings.append(
+                f"the {name} run replaced {len(overridden)} built-in scenario(s) "
+                f"with local copies: {', '.join(overridden)}"
+            )
+        digests[name] = {
+            e.get("id"): e.get("sha256") for e in prov.get("scenarios") or []
+        }
+    changed = sorted(
+        sid
+        for sid, digest in digests["current"].items()
+        if sid in digests["baseline"] and digests["baseline"][sid] != digest
+    )
+    if changed:
+        warnings.append(
+            f"{len(changed)} scenario file(s) differ between the runs: "
+            + ", ".join(changed)
+        )
+    return warnings
 
 
 def unmatched_scenario_errors(
@@ -2811,6 +2908,7 @@ def compare_scorecards(baseline_path, current_path):
     current = json.loads(current_path.read_text(encoding="utf-8"))
 
     check_comparable(baseline_path, baseline, current)
+    set_warnings = scenario_set_warnings(baseline, current)
 
     # Build per-scenario maps
     def scenario_map(sc):
@@ -3067,6 +3165,8 @@ def compare_scorecards(baseline_path, current_path):
 
     partial = current.get("partial") or {}
     print(f"\n{'='*70}")
+    for warning in set_warnings:
+        print(f"[WARN] Different questions: {warning}.")
     if partial:
         # The run stopped part-way; its NOT_RUN scenarios are excluded above,
         # so whatever follows describes only the part that ran.
@@ -3112,6 +3212,7 @@ def compare_scorecards(baseline_path, current_path):
         "unmeasured": unmeasured,
         "not_run": not_run,
         "incomplete": partial or None,
+        "scenario_set_warnings": set_warnings,
     }
 
 
@@ -3708,6 +3809,18 @@ class AgentEvalRunner:
             # Marks a targeted run, so compare and the integrity gate judge it
             # against only these baseline scenarios and name the rest as not run.
             config["scenario_filter"] = list(requested_ids)
+        provenance = scenario_provenance(scenarios)
+        config["scenario_provenance"] = provenance
+        if provenance["overridden_builtins"]:
+            print(
+                f"[WARN] {len(provenance['overridden_builtins'])} built-in "
+                "scenario(s) replaced by local copies (recorded in the "
+                "scorecard; not comparable to a baseline):",
+                file=sys.stderr,
+            )
+            for entry in provenance["scenarios"]:
+                if entry.get("overrides_builtin"):
+                    print(f"  - {entry['id']}: {entry['path']}", file=sys.stderr)
 
         # ---- Phase A: Run initial eval ----
         results, aborted, outage = self._execute(
