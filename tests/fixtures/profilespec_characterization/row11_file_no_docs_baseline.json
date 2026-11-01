@@ -13,6 +13,7 @@
     "file_info",
     "find_files",
     "forget",
+    "forget_everything",
     "get_file_info",
     "get_shell_state",
     "get_system_info",

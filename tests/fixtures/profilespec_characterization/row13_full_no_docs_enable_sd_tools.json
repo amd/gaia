@@ -20,6 +20,7 @@
     "file_info",
     "find_files",
     "forget",
+    "forget_everything",
     "generate_image",
     "get_file_info",
     "get_generation_history",

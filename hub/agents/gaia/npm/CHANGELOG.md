@@ -67,6 +67,14 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **"Forget everything" forgets everything.** It deleted each memory a plain
+  `recall` listed, but that listing holds back sensitive ones, so a saved PIN
+  survived while the agent said memory was empty. The next session then rebuilt
+  the whole profile, a trip the user had asked it to forget included, from past
+  conversations. The new `forget_everything` tool erases all memory and the
+  stored conversations, after the user approves it. A plain `recall` now says
+  how many sensitive entries it held back, and `search_past_conversations`
+  leaves out turns that mention something forgotten after they were said.
 - **A slide request gets a slide file, not a picture.** Asked for a slide or
   deck, the agent ran Stable Diffusion and handed back a blurry image of one.
   It now asks whether you want PowerPoint (.pptx) or HTML when you didn't say,

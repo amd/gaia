@@ -303,6 +303,8 @@ const messages: Messages = {
     'tool.update_memory.active': 'تحديث الذاكرة',
     'tool.forget.done': 'حذف من الذاكرة',
     'tool.forget.active': 'الحذف من الذاكرة',
+    'tool.forget_everything.done': 'محا الذاكرة كلها',
+    'tool.forget_everything.active': 'محو الذاكرة كلها',
     'tool.search_past_conversations.done': 'بحث في المحادثات السابقة',
     'tool.search_past_conversations.active': 'البحث في المحادثات السابقة',
     'tool.request_user_input.done': 'طرح سؤالًا عليك',

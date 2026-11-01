@@ -67,7 +67,14 @@ class _MinimalCalendarBackend:
 # ---------------------------------------------------------------------------
 
 _MEMORY_TOOL_NAMES = frozenset(
-    {"remember", "recall", "update_memory", "forget", "search_past_conversations"}
+    {
+        "remember",
+        "recall",
+        "update_memory",
+        "forget",
+        "forget_everything",
+        "search_past_conversations",
+    }
 )
 
 EMBEDDING_DIM = 768
@@ -180,7 +187,7 @@ class TestMemoryToolsRegistered:
             registered = set(_TOOL_REGISTRY.keys())
             # Spot-check an email-specific tool
             assert "list_inbox" in registered, "email tool list_inbox missing"
-            # And all 5 memory tools
+            # And all 6 memory tools
             assert _MEMORY_TOOL_NAMES.issubset(registered), (
                 f"Memory tools not a subset of registry. Missing: "
                 f"{_MEMORY_TOOL_NAMES - registered}"
