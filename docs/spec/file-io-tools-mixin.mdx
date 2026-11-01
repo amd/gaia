@@ -440,6 +440,10 @@ Runs the same write guardrails as `write_file`: allowlist, blocked
 directories and sensitive files, the size limit, read-before-overwrite, a backup
 of an existing `GAIA.md`, and an audit entry for every outcome.
 
+As with `write_file`, overwriting an existing `GAIA.md` in `gaia chat` on a real
+terminal now asks "Overwrite this file?" first; the Agent UI and TUI
+auto-approve it.
+
 **Returns:**
 ```python
 {
