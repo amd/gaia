@@ -935,11 +935,11 @@ func (l localRunner) downloadStep(models []gaiainit.Model) string {
 	case l.asksWhereChatRuns():
 		return "download what your choice needs"
 	case size != "":
-		return fmt.Sprintf("download the models (%s)", size)
+		return fmt.Sprintf("choose and download the models (%s)", size)
 	case l.skipChatModel():
 		return embeddingStep
 	}
-	return "download the models (" + gaiainit.ProfileSize + ")"
+	return "choose and download the models (" + gaiainit.ProfileSize + ")"
 }
 
 // embeddingStep is the model step when chat does not run on a local model.

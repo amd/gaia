@@ -92,7 +92,7 @@ GAIA_API std::vector<std::string> splitIntoSentences(const std::string& text);
 /// and source/markup/config files (see supportedExtensions()).
 ///
 /// **Out of scope: PDF, DOCX, XLSX, PPTX.** Those need a document-parsing
-/// backend of PyMuPDF's weight, which the native coding-agent target does not
+/// backend of PDFium's weight, which the native coding-agent target does not
 /// need. They are not silently returned as empty text — extractFile throws and
 /// names the type. To add one, register a handler with registerExtractor().
 ///
@@ -125,7 +125,7 @@ GAIA_API std::vector<std::string> chunkFile(const std::string& filePath,
 /// This is how a consumer that *does* want PDF or DOCX links its own parser in:
 ///
 ///   gaia::registerExtractor(".pdf", [](const std::string& p) {
-///       return myPdfBackend::toText(p);   // e.g. a PyMuPDF/Poppler wrapper
+///       return myPdfBackend::toText(p);   // e.g. a PDFium wrapper
 ///   });
 ///
 /// Registering an extension already handled by the core overrides it. The
