@@ -154,11 +154,11 @@ STRUCTURED_DOCUMENT_EXTENSIONS = frozenset(
     {".pdf", ".pptx", ".docx", ".xlsx", ".csv", ".json", ".epub"}
 )
 
-#: What a folder walk indexes. Images need the vision model, so they are
-#: indexed only when picked one at a time.
+#: What a folder walk indexes. Images need the vision model, and *.env files
+#: hold secrets, so both are indexed only when picked one at a time.
 FOLDER_INDEX_EXTENSIONS = (
     STRUCTURED_DOCUMENT_EXTENSIONS | TEXT_DOCUMENT_EXTENSIONS | CODE_EXTENSIONS
-)
+) - {".env"}
 
 
 def folder_index_skip_reason(file_path) -> Optional[str]:
@@ -169,6 +169,11 @@ def folder_index_skip_reason(file_path) -> Optional[str]:
         return None
     if ext in UNSUPPORTED_DOCUMENTS:
         return unsupported_document_message(path.name, ext)
+    if ext == ".env":
+        return (
+            ".env files usually hold secrets and are not indexed from a folder; "
+            "index the file on its own if it is safe to."
+        )
     if ext in IMAGE_EXTENSIONS:
         return (
             f"{ext} images are read by the vision model and are not indexed "

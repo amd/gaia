@@ -22,7 +22,14 @@ from gaia.utils.image_formats import IMAGE_EXTENSIONS
 OFFICE = ["report.docx", "slides.pptx", "data.xlsx"]
 TEXT = ["notes.txt", "readme.md", "guide.rst", "table.csv", "records.json"]
 CODE = ["main.py", "app.ts", "lib.go", "mod.rs", "style.css", "conf.yaml"]
-UNSUPPORTED = ["legacy.doc", "old.xls", "photo.png", "archive.zip", "Makefile"]
+UNSUPPORTED = [
+    "legacy.doc",
+    "old.xls",
+    "photo.png",
+    "archive.zip",
+    "Makefile",
+    "prod.env",
+]
 
 
 @pytest.fixture(autouse=True)
@@ -82,6 +89,7 @@ class TestSelection:
         assert "vision model" in reasons["photo.png"]
         assert ".zip" in reasons["archive.zip"]
         assert "no file extension" in reasons["Makefile"]
+        assert "secrets" in reasons["prod.env"]
 
     def test_recursive_walk_reaches_nested_office_files(self, tmp_path):
         names = ["top.docx", "a/b/deep.pptx", "a/sheet.xlsx", "a/b/skip.bin"]
@@ -90,7 +98,7 @@ class TestSelection:
         assert result["skipped_files"] == [
             {
                 "file": "a/b/skip.bin",
-                "reason": ".bin files are not a supported " "document type",
+                "reason": ".bin files are not a supported document type",
             }
         ]
 
@@ -152,9 +160,10 @@ class TestFailureStaysAFailure:
 class TestContract:
     """The folder set and the extractor dispatch cannot drift apart."""
 
-    def test_folder_set_excludes_unreadable_and_image_types(self):
+    def test_folder_set_excludes_unreadable_image_and_secret_types(self):
         assert not FOLDER_INDEX_EXTENSIONS & set(UNSUPPORTED_DOCUMENTS)
         assert not FOLDER_INDEX_EXTENSIONS & set(IMAGE_EXTENSIONS)
+        assert ".env" not in FOLDER_INDEX_EXTENSIONS
 
     @pytest.mark.parametrize("ext", sorted(FOLDER_INDEX_EXTENSIONS))
     def test_every_folder_extension_has_a_dedicated_extractor(self, ext):

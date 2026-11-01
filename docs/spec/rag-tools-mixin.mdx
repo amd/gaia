@@ -342,8 +342,8 @@ class RAGToolsMixin:
         Indexes the same formats as index_document: PDF, Word (.docx),
         PowerPoint (.pptx), Excel (.xlsx), CSV, JSON, EPUB, text, Markdown
         and source-code files (gaia.rag.sdk.FOLDER_INDEX_EXTENSIONS).
-        Images are indexed only one at a time; every skipped file is listed
-        with its reason.
+        Images and *.env files are indexed only one at a time; every skipped
+        file is listed with its reason.
 
         Args:
             directory_path: Path to directory
