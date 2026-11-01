@@ -1,6 +1,7 @@
 package gaiainit
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -123,6 +124,20 @@ func processAlive(pid int) bool {
 		return err == nil && strings.Contains(string(out), fmt.Sprintf(",%q,", strconv.Itoa(pid)))
 	}
 	return exec.Command("kill", "-0", strconv.Itoa(pid)).Run() == nil
+}
+
+func TestMissingCLIIsClassifiedSeparately(t *testing.T) {
+	oldBinary := Binary
+	Binary = func() (string, error) { return "", fmt.Errorf("%w: lookup failed", ErrNoCLI) }
+	t.Cleanup(func() { Binary = oldBinary })
+
+	_, _, err := Start(false)
+	if err == nil || !errors.Is(err, ErrNoCLI) {
+		t.Fatalf("Start error = %v, want ErrNoCLI", err)
+	}
+	if errors.Is(err, ErrUnanswered) {
+		t.Fatalf("Start error = %v, Start does not wrap readiness probes", err)
+	}
 }
 
 // The TUI never loads the browser Agent UI, and that build step only runs in a

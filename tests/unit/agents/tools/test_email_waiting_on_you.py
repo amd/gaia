@@ -11,6 +11,7 @@ positive is re-run against both providers.
 """
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -276,15 +277,27 @@ def test_an_unclosed_blockquote_hides_the_rest(api):
     assert _asks(api, body, html=True) == []
 
 
+def _parse_seconds(body):
+    message = {"body": body, "body_content_type": "html"}
+    started = time.perf_counter()
+    waiting.new_text(message, waiting.quoted_lines([message]))
+    waiting.strip_quoted_text(body.replace("<", "a"))
+    return time.perf_counter() - started
+
+
+# A builder's divisor scales its input: 1 is full size, _SHRINK a fraction.
+_SHRINK = 8
+
+
 @pytest.mark.parametrize(
-    "body",
+    "build",
     [
-        "<" * 300_000 + "\nFrom: x" * 25_000,
-        "<" + "appendonsend " * 40_000,
-        "<" + "divRplyFwdMsg moz-cite-prefix " * 17_000,
-        "<blockquote " * 40_000,
-        "<br " * 120_000,
-        ("<div id=appendonsend>" + "<" * 20) * 12_000,
+        lambda d: "<" * (300_000 // d) + "\nFrom: x" * (25_000 // d),
+        lambda d: "<" + "appendonsend " * (40_000 // d),
+        lambda d: "<" + "divRplyFwdMsg moz-cite-prefix " * (17_000 // d),
+        lambda d: "<blockquote " * (40_000 // d),
+        lambda d: "<br " * (120_000 // d),
+        lambda d: ("<div id=appendonsend>" + "<" * 20) * (12_000 // d),
     ],
     ids=[
         "unclosed-and-headers",
@@ -295,14 +308,22 @@ def test_an_unclosed_blockquote_hides_the_rest(api):
         "marker-tags-and-unclosed",
     ],
 )
-def test_large_malformed_html_and_header_lines_stay_fast(body):
-    import time
-
-    message = {"body": body, "body_content_type": "html"}
-    started = time.perf_counter()
-    waiting.new_text(message, waiting.quoted_lines([message]))
-    waiting.strip_quoted_text(body.replace("<", "a"))
-    assert time.perf_counter() - started < 1
+def test_large_malformed_html_and_header_lines_stay_fast(build):
+    # Timed against the same input at 1/8 size, so runner speed cancels out:
+    # linear work grows ~8x, quadratic ~64x.
+    small, large = build(_SHRINK), build(1)
+    best_small = best_large = float("inf")
+    for _ in range(3):
+        best_small = min(best_small, _parse_seconds(small))
+        best_large = min(best_large, _parse_seconds(large))
+        if best_large < 3 * _SHRINK * best_small:
+            break
+    assert best_large < 3 * _SHRINK * best_small, (
+        f"{len(large):,} chars took {best_large:.3f}s, "
+        f"{best_large / best_small:.0f}x the {best_small:.4f}s for 1/{_SHRINK} "
+        f"of it; linear parsing would be ~{_SHRINK}x"
+    )
+    assert best_large < 15, f"{len(large):,} chars took {best_large:.1f}s"
 
 
 def test_an_outlook_plain_text_header_block_is_not_a_new_request(api):
