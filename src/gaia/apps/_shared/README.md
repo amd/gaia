@@ -33,7 +33,7 @@ node src/gaia/apps/_shared/dev-server.js example
 ### Important Notes
 
 - This server is for **web development mode** only
-- For **Electron desktop apps**, use the app-specific Electron entry point from the app's own package
+- For **Electron desktop apps**, run `npm start` (electron-forge) from the app's `webui/` directory, for example `src/gaia/apps/example/webui`
 - The MCP server provides proper CORS headers, so no proxy endpoints are needed
 - Apps should read `window.ENV?.GAIA_MCP_URL` to get the configured MCP server URL
 
