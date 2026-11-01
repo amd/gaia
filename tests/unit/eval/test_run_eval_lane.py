@@ -120,6 +120,29 @@ def test_a_category_home_that_already_exists_is_refused(tmp_path):
         run_eval_lane.category_home(tmp_path / "gaia_rag", tmp_path / "_staged")
 
 
+def test_children_import_this_checkout_first():
+    env = run_eval_lane.pin_checkout({"PYTHONPATH": "/elsewhere"})
+
+    entries = env["PYTHONPATH"].split(os.pathsep)
+    assert entries[0] == str(REPO_ROOT / "src")
+    assert str(REPO_ROOT / "hub" / "agents" / "gaia" / "python") in entries
+    assert entries[-1] == "/elsewhere"
+    run_eval_lane.require_checkout_imports({**os.environ, **env})
+
+
+def test_an_agent_package_from_another_checkout_is_refused(tmp_path):
+    for name in run_eval_lane.ANCHOR_MODULES:
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "__init__.py").write_text("")
+    env = {**os.environ, "PYTHONPATH": str(tmp_path)}
+    env.pop("GAIA_ALLOW_EXTERNAL_IMPORTS", None)
+
+    with pytest.raises(SystemExit, match="gaia_agent ->"):
+        run_eval_lane.require_checkout_imports(env)
+
+    run_eval_lane.require_checkout_imports({**env, "GAIA_ALLOW_EXTERNAL_IMPORTS": "1"})
+
+
 class _FakeSubprocess:
     """Stands in for ``subprocess`` in run_eval_lane: the eval writes a scorecard."""
 
