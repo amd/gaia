@@ -81,6 +81,10 @@ _RENDER_TOOL_TO_LANG: Dict[str, str] = {
     # #2765: a generic ``table`` card (no new client code) so the thread
     # view renders straight from tool data instead of model prose.
     "get_thread": "table",
+    "generate_image": "media",
+    "generate_music": "media",
+    "generate_sound_effect": "media",
+    "text_to_speech": "media",
 }
 
 # HTTP-style status codes for the canonical ``error`` event's ``status`` field.

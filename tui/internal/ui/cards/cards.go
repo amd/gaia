@@ -54,6 +54,8 @@ func RenderDeduped(renderKey string, data json.RawMessage, width int, seen map[s
 		return renderList(data, width), nil
 	case "image":
 		return renderImage(data, width), nil
+	case "media":
+		return renderMedia(data, width), nil
 	default:
 		return renderUnsupported(key, data, width), nil
 	}

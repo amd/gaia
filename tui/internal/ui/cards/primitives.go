@@ -379,10 +379,75 @@ type imagePayload struct {
 	Caption string `json:"caption"`
 }
 
+type mediaPayload struct {
+	Kind              string  `json:"kind"`
+	Path              string  `json:"path"`
+	MediaType         string  `json:"media_type"`
+	SizeBytes         int64   `json:"size_bytes"`
+	Model             string  `json:"model"`
+	Size              string  `json:"size"`
+	Voice             string  `json:"voice"`
+	Format            string  `json:"format"`
+	DurationSeconds   float64 `json:"duration_seconds"`
+	DurationRequested float64 `json:"duration_requested"`
+	GenerationTimeS   float64 `json:"generation_time_s"`
+}
+
 // renderImage degrades rather than draws: `image.src` is inline base64 raster
 // (§4.3 forbids SVG and remote URLs), which a terminal cannot display. A
 // sixel/kitty path is deliberately out of scope, so the caption carries the
 // information and the card says plainly why there is no picture.
+func renderMedia(data json.RawMessage, width int) string {
+	var p mediaPayload
+	if err := json.Unmarshal(data, &p); err != nil {
+		return renderInvalid("media", err.Error(), data, width)
+	}
+	if p.Path == "" || p.MediaType == "" {
+		return renderInvalid("media", "path and media_type are required", data, width)
+	}
+	if p.MediaType != "image" && p.MediaType != "audio" {
+		return renderInvalid("media", "media_type must be image or audio", data, width)
+	}
+	title := "Generated image"
+	if p.MediaType == "audio" {
+		title = "Generated audio"
+	}
+	b := newBox(title, width)
+	b.addWrapped("  ", "File: "+p.Path)
+	if p.SizeBytes > 0 {
+		b.addWrapped("  ", "Size: "+formatMediaBytes(p.SizeBytes))
+	}
+	if p.Size != "" {
+		b.addWrapped("  ", "Dimensions: "+p.Size)
+	}
+	if p.Voice != "" {
+		b.addWrapped("  ", "Voice: "+p.Voice)
+	}
+	if p.Format != "" {
+		b.addWrapped("  ", "Format: "+p.Format)
+	}
+	if p.DurationSeconds > 0 {
+		b.addWrapped("  ", fmt.Sprintf("Duration: %.1fs", p.DurationSeconds))
+	} else if p.DurationRequested > 0 {
+		b.addWrapped("  ", fmt.Sprintf("Requested duration: %.1fs", p.DurationRequested))
+	}
+	if p.Model != "" {
+		b.addWrapped("  ", "Model: "+p.Model)
+	}
+	b.addWrapped("  ", "Ctrl+F opens · Ctrl+G reveals in the file manager.")
+	return b.render()
+}
+
+func formatMediaBytes(n int64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	if n < 1024*1024 {
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	}
+	return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+}
+
 func renderImage(data json.RawMessage, width int) string {
 	var p imagePayload
 	if err := json.Unmarshal(data, &p); err != nil {

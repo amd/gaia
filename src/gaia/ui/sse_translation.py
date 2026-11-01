@@ -416,6 +416,7 @@ class CanonicalTranslator:
     def _on_tool_result(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         self._result_seen_since_call = True
         data = event.get("result_data")
+        has_card_payload = isinstance(data, dict) and bool(data)
         if data is None:
             # The handler's tool_result event is a summary view; carry the
             # available structured bits so the generic result card has content.
@@ -423,6 +424,11 @@ class CanonicalTranslator:
             for key in SUMMARY_VIEW_KEYS:
                 if key in event:
                     data[key] = event[key]
+        if not isinstance(data, dict):
+            data = {"summary": str(data)}
+        for key in ("status", "file_path", "image_path", "audio_path"):
+            if key in event:
+                data[key] = event[key]
         tool = self._last_tool or "unknown"
         canonical: Dict[str, Any] = {
             "type": "tool_result",
@@ -434,7 +440,7 @@ class CanonicalTranslator:
             "preview": derive_preview(tool, event),
         }
         render = self._render_tool_map.get(self._last_tool or "")
-        if render:
+        if render and has_card_payload:
             canonical["render"] = render
         return [canonical]
 
