@@ -40,9 +40,9 @@ _STATE_LOCK = "rag-image-state"
 _READER_LOCK = "rag-image-reader"
 _READER_WAIT_S = 2.0
 _IDLE_POLL_S = 1.0
-#: A vision read makes the next question wait and evicts the chat's prompt from
-#: the model, so reading stays away until the user has stopped asking.
-_AFTER_TURN_S = 60.0
+#: One vision read evicts the chat's prompt from the model, which adds about 50 s
+#: to the next answer, so reading stays away until the user has stopped asking.
+_AFTER_TURN_S = 300.0
 #: How long a document waits after the vision model turns out to be missing.
 _BLOCKED_RETRY_S = 300.0
 #: How long a page waits after a failed read, before another go.
