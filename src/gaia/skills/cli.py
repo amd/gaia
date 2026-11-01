@@ -43,7 +43,7 @@ from gaia.skills.format import (
     SkillTool,
 )
 from gaia.skills.lock import forget_skill
-from gaia.skills.manager import SkillManager
+from gaia.skills.manager import SkillManager, default_project_dir
 from gaia.skills.migrate import (
     VENDORS,
     MigrationOutcome,
@@ -106,7 +106,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--root",
         default=None,
         help="Only show skills from this discovery root "
-        "(agent-bundled | user | claude-import)",
+        "(agent-bundled | user | claude-project | claude-import)",
     )
 
     p_info = sub.add_parser("info", help="Show one skill's manifest in detail")
@@ -503,7 +503,7 @@ def handle(args: argparse.Namespace) -> int:
 
 
 def _manager() -> SkillManager:
-    return SkillManager()
+    return SkillManager(project_dir=default_project_dir())
 
 
 def _handle_list(args: argparse.Namespace) -> int:

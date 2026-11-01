@@ -4,7 +4,8 @@
 .setup {
     flex: 1;
     overflow-y: auto;
-    padding: 48px 16px;
+    --setup-pad-block: 48px;
+    padding: var(--setup-pad-block) 16px;
     background: var(--bg-primary);
 }
 
@@ -91,7 +92,8 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    margin: 10px 0 4px 34px;
+    margin-block: 10px 4px;
+    margin-inline: 34px 0;
 }
 
 .setup-choices {
@@ -108,7 +110,7 @@
     border: 1px solid var(--border-light);
     border-radius: var(--radius-lg);
     color: var(--text-primary);
-    text-align: left;
+    text-align: start;
 }
 
 .setup-choice svg {

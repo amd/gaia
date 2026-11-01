@@ -307,6 +307,52 @@ def test_real_watcher_reports_a_copied_file_once_complete(tmp_path, clock):
     assert seen == ["".join(f"line {i}\n" for i in range(5))]
 
 
+def test_a_document_is_seen_while_another_file_in_the_folder_keeps_changing(
+    tmp_path,
+):
+    """watchdog 7's Windows reader held every event back until the folder went
+    quiet for a second, so a log written beside a document starved it (#6236)."""
+    doc_seen = threading.Event()
+    stop = threading.Event()
+
+    def only_the_doc(path):
+        if Path(path).name == "doc.txt":
+            doc_seen.set()
+            return True
+        return False
+
+    def keep_logging():
+        log = tmp_path / "app.log"
+        while not stop.is_set():
+            with log.open("a") as f:
+                f.write("tick\n")
+            stop.wait(0.02)
+
+    watcher = FileWatcher(
+        tmp_path,
+        on_created=lambda p: None,
+        on_modified=lambda p: None,
+        filter_func=only_the_doc,
+        debounce_seconds=HOUR,
+    )
+    logger_thread = threading.Thread(target=keep_logging, daemon=True)
+    with watcher:
+        logger_thread.start()
+        try:
+            doc = tmp_path / "doc.txt"
+
+            def doc_arrived():
+                if doc_seen.is_set():
+                    return True
+                doc.write_text(str(time.monotonic()))  # each write is an event
+                return False
+
+            _wait_until(doc_arrived, "the watcher to see doc.txt beside a busy log")
+        finally:
+            stop.set()
+            logger_thread.join(10)
+
+
 def test_a_file_still_locked_by_its_writer_is_retried(tmp_path):
     """An exclusive open (Windows) makes the reader's read fail with
     PermissionError even though the file has settled."""
