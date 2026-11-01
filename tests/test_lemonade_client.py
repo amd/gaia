@@ -18,6 +18,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     create_lemonade_client,
+    is_llm_model_entry,
 )
 
 # Test constants - override via GAIA_TEST_MODEL env var for different platforms
@@ -136,9 +137,9 @@ class TestLemonadeClientIntegration(unittest.TestCase):
         # Any loaded LLM may be the one get_status() reports (a cloud model
         # counts too), so it must match one of them, not necessarily ours.
         llm_windows = {
-            m["recipe_options"]["ctx_size"]
+            m.get("recipe_options", {}).get("ctx_size")
             for m in health["all_models_loaded"]
-            if m.get("type") == "llm"
+            if is_llm_model_entry(m) and m.get("recipe_options", {}).get("ctx_size")
         }
         status = self.client.get_status()
         self.assertTrue(status.running)
@@ -443,8 +444,14 @@ class TestLemonadeClientIntegration(unittest.TestCase):
                 f"embedding=True was not recorded: {entry}",
             )
         finally:
-            if pulled:
+            # A pull that failed partway may still have registered the model.
+            try:
                 self.client.delete_model(model_name)
+            except LemonadeClientError:
+                # Nothing to delete after a failed pull; that failure is the one
+                # to report. After a successful pull, a failed delete is a bug.
+                if pulled:
+                    raise
 
     def test_integration_pull_rejects_a_recipe_outside_the_user_namespace(self):
         """Registration fields on a name without the user. prefix are refused.
@@ -452,13 +459,18 @@ class TestLemonadeClientIntegration(unittest.TestCase):
         That is the contract GAIA's pull path relies on to never send a recipe
         for a built-in model.
         """
-        with self.assertRaises(LemonadeClientError):
+        model_name = f"gaia-it-unprefixed-{uuid.uuid4().hex[:8]}"
+        try:
             self.client.pull_model(
-                model_name=f"gaia-it-unprefixed-{uuid.uuid4().hex[:8]}",
+                model_name=model_name,
                 checkpoint=COLD_PULL_CHECKPOINT,
                 recipe="llamacpp",
                 embedding=True,
             )
+        except LemonadeClientError:
+            return
+        self.client.delete_model(model_name)
+        self.fail(f"Lemonade registered {model_name} without the user. prefix")
 
     def test_integration_responses_endpoint(self):
         """Integration test for responses API endpoint."""
