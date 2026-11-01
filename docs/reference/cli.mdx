@@ -1524,6 +1524,7 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `agent` | Invoke the MCP orchestrator agent (positional `request` arg + `--domain`, `--context`) |
 | `serve` | Start the Agent UI MCP server (wraps the Agent UI backend) |
 | `tui` | Start the TUI control MCP server (drives a running `gaia-tui --control`) |
+| `code-index` | Serve semantic search over a repository's code to Claude Code, Cursor, or any MCP client (stdio) |
 
 #### `gaia mcp start` options
 
@@ -1650,6 +1651,27 @@ running with `gaia-tui --control`; the server finds it through
 | `--port` | `8767` | HTTP MCP port |
 
 [→ Full TUI Control MCP Guide](/guides/mcp/tui)
+
+#### `gaia mcp code-index` options
+
+Serves GAIA's semantic code search for one repository over stdio, so an
+external code assistant can find code by meaning. Embeddings run on your local
+Lemonade Server, and the index is cached in `~/.gaia/code_index/`. It needs
+the `[mcp]` and `[rag]` extras.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--repo` | current directory | Repository to index and search. Your home directory is refused |
+
+```bash
+claude mcp add gaia-code-index -- gaia mcp code-index --repo /path/to/repo
+```
+
+The server offers `search_code(query, scope, top_k)`, `get_index_status()`,
+and `rebuild_index(max_files, model)`. Searching before an index exists returns
+an error telling the client to call `rebuild_index` first.
+
+[→ Code Index MCP Server](/sdk/infrastructure/mcp)
 
 [→ Full MCP Integration Guide](/integrations/mcp)
 
