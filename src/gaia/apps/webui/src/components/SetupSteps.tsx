@@ -1,12 +1,18 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useState } from 'react';
-import { Check, Info, Loader2 } from 'lucide-react';
-import * as api from '../services/api';
-import { shortModelName } from '../stores/modelStore';
-import { formatGb } from '../utils/modelLabels';
-import type { PreflightReport, SetupPlan } from '../types';
+import { useEffect, useRef, useState } from 'react';
+import { AlertTriangle, Check, Info, Loader2 } from 'lucide-react';
+import { useT } from '../i18n/useT';
+import type { GpuMemoryStatus, PreflightReport, SetupPlan } from '../types';
+import { ChecklistLoading, ModelChecklist, SelectionSummary, tooBigText } from './setup/ModelChecklist';
+import { formatSize } from './setup/format';
+import { Reveal } from './setup/Reveal';
+import { gpuGbAtSetting } from './setup/GpuMemoryPanel';
+import {
+    catalogOf, isEmbedding, isVision, pendingDownloads, shortfall, toggle, recommendedSelection,
+    type Selection,
+} from './setup/selection';
 
 /** One line of the system check: what was found, or that it is checked later. */
 function CheckRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
@@ -69,107 +75,170 @@ export function SystemCheck({ hardware, error }: { hardware: PreflightReport | n
     );
 }
 
-interface ChatModelProps {
+interface ModelsStepProps {
     plan: SetupPlan | null;
     planError: string | null;
-    /** The model a running (or finished) setup reported choosing. */
-    chosen: string | null;
-    /** Setup has started, so the choice is fixed. */
-    locked: boolean;
-    onPlan: (plan: SetupPlan) => void;
+    onRetryPlan: () => void;
+    /** Setup's own plan, used when the model list can't be read. */
+    onUseRecommended: () => void;
+    selection: Selection | null;
+    onSelection: (selection: Selection) => void;
+    cloud: boolean;
+    keepTrying: boolean;
+    onKeepTrying: (on: boolean) => void;
+    labelledBy: string;
+    onBack: () => void;
+    /** `acknowledgeLowDisk`: the user pressed Continue anyway past a disk shortfall. */
+    onContinue: (acknowledgeLowDisk: boolean) => void;
+    busy: boolean;
+    error: string | null;
 }
 
-/** Which chat model setup downloads, named before it starts, with a way to pick another. */
-export function ChatModelChoice({ plan, planError, chosen, locked, onPlan }: ChatModelProps) {
-    const [busy, setBusy] = useState<string | null>(null);
-    const [error, setError] = useState<string | null>(null);
-    // A model the user picked here, or set beforehand, is theirs, not setup's.
-    const [picked, setPicked] = useState(false);
-
-    if (chosen) {
-        const theirs = picked || (plan?.chat_model.user_set && plan.chat_model.id === chosen);
-        return (
-            <p className="setup-hint">
-                {theirs ? 'You chose ' : 'Setup chose '}
-                <strong>{shortModelName(chosen)}</strong>{theirs ? '.' : ' for this PC.'}
-            </p>
-        );
-    }
-    if (planError) {
-        return <p className="setup-hint">Setup names the chat model once it has checked this PC ({planError}).</p>;
-    }
-    if (!plan) {
-        return (
-            <p className="setup-hint" role="status">
-                <Loader2 size={13} className="spin" aria-hidden="true" /> Working out which model fits this PC…
-            </p>
-        );
-    }
-    const chat = plan.chat_model;
-    const name = shortModelName(chat.id);
-    if (plan.decided_after_server) {
-        const ladder = plan.options.map((o) => shortModelName(o.id));
-        return (
-            <p className="setup-hint">
-                Picked once the model server is running: the largest model your GPU holds
-                {ladder.length > 1 ? ` (${ladder.slice(0, -1).join(', ')}, or else ${ladder[ladder.length - 1]})` : ''}.
-                It&rsquo;s named here as soon as setup chooses.
-            </p>
-        );
+/**
+ * Step "Choose your models": the checklist, the totals against free disk,
+ * the opt-in keep-trying, and Continue. Nothing downloads until Continue.
+ */
+export function ModelsStep({
+    plan, planError, onRetryPlan, onUseRecommended, selection, onSelection, cloud, keepTrying, onKeepTrying,
+    labelledBy, onBack, onContinue, busy, error,
+}: ModelsStepProps) {
+    const t = useT();
+    const listRef = useRef<HTMLDivElement>(null);
+    const [changing, setChanging] = useState(false);
+    const ready = !!plan && !!selection && !!plan.catalog;
+    // Decided once, from what the user arrived with: later ticks never swap the screen.
+    const arrivedComplete = useRef<boolean | null>(null);
+    if (ready && arrivedComplete.current === null) {
+        arrivedComplete.current = !cloud && pendingDownloads(catalogOf(plan), selection).length === 0
+            && !!selection.defaultChat && catalogOf(plan).some((e) => e.downloaded);
     }
 
-    const pick = async (id: string) => {
-        setBusy(id);
-        setError(null);
-        try {
-            onPlan(await api.chooseSetupChatModel(id));
-            setPicked(true);
-        } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
-        } finally {
-            setBusy(null);
-        }
-    };
-    const fit = plan.memory_gb != null ? ` This PC has ${plan.memory_gb} GB for models (${plan.memory_source}).` : '';
-    const size = chat.downloaded ? 'already downloaded' : chat.size_gb != null ? formatGb(chat.size_gb) : null;
-    // A model the user set that isn't one of setup's stays theirs; Settings changes it.
-    const own = chat.user_set && !plan.options.some((o) => o.id === chat.id);
-    const choosable = !locked && !own && plan.lemonade.reachable
-        && plan.options.filter((o) => o.fits !== false).length > 1;
+    // On entry, focus the first model, announced with the step heading.
+    useEffect(() => {
+        if (!ready) return;
+        listRef.current?.querySelector<HTMLInputElement>('input:not([disabled])')?.focus();
+    }, [ready, changing]);
+
+    if (planError && !ready) {
+        return (
+            <div className="setup-models-error">
+                <p className="setup-error" role="alert">{t('setup.models.listFailed', { reason: planError })}</p>
+                <div className="setup-row">
+                    <button type="button" className="btn-primary" onClick={onRetryPlan}>{t('setup.tryAgain')}</button>
+                    <button type="button" className="btn-secondary" onClick={onUseRecommended}>{t('setup.models.useRecommended')}</button>
+                </div>
+                <p className="setup-hint">{t('setup.models.useRecommendedNote')}</p>
+            </div>
+        );
+    }
+    if (!ready) return <ChecklistLoading />;
+
+    const catalog = catalogOf(plan);
+    const pending = pendingDownloads(catalog, selection);
+    const noChat = !cloud && !selection.defaultChat;
+    const short = shortfall(plan, selection);
+    const big = cloud ? [] : catalog.filter((e) => e.fits === false && selection.ticked.has(e.id));
+    const allPresent = !changing && !!arrivedComplete.current && pending.length === 0;
+    const continueLabel = short ? t('setup.continueAnyway') : t('setup.continue');
+
+    if (allPresent) {
+        return (
+            <div className="setup-present" role="status">
+                <p><Check size={14} aria-hidden="true" /> {t('setup.models.allPresent')}</p>
+                <div className="setup-row">
+                    <button type="button" className="btn-secondary" onClick={onBack} disabled={busy}>{t('setup.back')}</button>
+                    <button type="button" className="btn-primary" onClick={() => onContinue(false)} disabled={busy}>
+                        {busy && <Loader2 size={13} className="spin" aria-hidden="true" />} {t('setup.finish')}
+                    </button>
+                    <button type="button" className="link-btn" onClick={() => setChanging(true)}>{t('setup.models.change')}</button>
+                </div>
+                {error && <p className="setup-error" role="alert">{error}</p>}
+            </div>
+        );
+    }
 
     return (
-        <>
-            <p className="setup-hint">
-                <strong>{name}</strong> will answer your chats{size ? ` (${size})` : ''}.{fit}
-                {own && ' It’s your default_model; change it in Settings → Model after setup.'}
-            </p>
-            {choosable && (
-                <div className="setup-choices" role="radiogroup" aria-label="Chat model">
-                    {plan.options.map((o) => (
-                        <button
-                            key={o.id}
-                            type="button"
-                            role="radio"
-                            aria-checked={o.id === chat.id}
-                            className={`setup-choice${o.id === chat.id ? ' is-active' : ''}`}
-                            disabled={o.fits === false || busy !== null}
-                            onClick={() => { if (o.id !== chat.id) void pick(o.id); }}
-                        >
-                            {busy === o.id && <Loader2 size={14} className="spin" aria-hidden="true" />}
-                            <span>
-                                <span className="setup-choice-title">
-                                    {shortModelName(o.id)}
-                                    {o.id === plan.recommended_model ? ' (recommended)' : ''}
-                                </span>
-                                <span className="setup-choice-note">
-                                    {o.fits === false ? o.reason : o.size_gb != null ? formatGb(o.size_gb) : 'Size unknown'}
-                                </span>
-                            </span>
-                        </button>
-                    ))}
-                </div>
+        <div className="setup-models" ref={listRef}>
+            <p className="setup-hint">{cloud ? t('setup.models.cloudLede') : t('setup.models.lede')}</p>
+            <ModelChecklist
+                plan={plan}
+                selection={selection}
+                onToggle={(id, on) => onSelection(toggle(selection, catalog, id, on))}
+                onDefaultChat={(id) => onSelection({ ...selection, defaultChat: id, ticked: catalog.find((e) => e.id === id)?.downloaded ? selection.ticked : new Set([...selection.ticked, id]) })}
+                labelledBy={labelledBy}
+                cloud={cloud}
+                disabled={busy}
+            />
+            {!cloud && (
+                <button type="button" className="link-btn setup-reset" onClick={() => onSelection(recommendedSelection(plan))} disabled={busy}>
+                    {t('setup.models.resetRecommended')}
+                </button>
             )}
-            {error && <p className="setup-error" role="alert">{error}</p>}
-        </>
+            <div className="setup-models-footer">
+                <SelectionSummary plan={plan} selection={selection} />
+                <label className="setup-keep-trying">
+                    <input type="checkbox" checked={keepTrying} onChange={(e) => onKeepTrying(e.target.checked)} disabled={busy} />
+                    <span>{t('setup.keepTrying')}</span>
+                </label>
+                <Reveal open={noChat}>
+                    <p className="setup-error" id="setup-no-chat">{t('setup.models.noChatReason')}</p>
+                </Reveal>
+                {big.length > 0 && <span className="visually-hidden">{big.map((e) => tooBigText(e, t)).join(' ')}</span>}
+                {error && <p className="setup-error" role="alert">{error}</p>}
+                <div className="setup-row setup-nav">
+                    <button type="button" className="btn-secondary" onClick={onBack} disabled={busy}>{t('setup.back')}</button>
+                    <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => onContinue(!!short)}
+                        disabled={busy || noChat}
+                        aria-describedby={noChat ? 'setup-no-chat' : undefined}
+                    >
+                        {busy && <Loader2 size={13} className="spin" aria-hidden="true" />} {continueLabel}
+                    </button>
+                </div>
+            </div>
+        </div>
     );
 }
+
+interface ReadyProps {
+    plan: SetupPlan | null;
+    chatModel: string | null;
+    gpu: GpuMemoryStatus | null;
+}
+
+/** What setup left on this PC: chat, vision, documents, what was skipped, and the GPU share. */
+export function ReadySummary({ plan, chatModel, gpu }: ReadyProps) {
+    const t = useT();
+    if (!plan?.catalog) return null;
+    const catalog = plan.catalog;
+    const name = (id: string | null) => (id ? catalog.find((e) => e.id === id)?.name ?? id : null);
+    const vision = catalog.find((e) => isVision(e) && e.gaia_model);
+    const docs = catalog.find((e) => isEmbedding(e) && e.downloaded);
+    const skipped = catalog.filter((e) => e.gaia_model && e.planned && e.skipped);
+    const pending = gpu?.pending;
+    const chat = catalog.find((e) => e.id === chatModel);
+    return (
+        <dl className="setup-summary-list">
+            {chatModel && (
+                <div><dt>{t('setup.ready.chat')}</dt><dd><bdi>{name(chatModel)}</bdi>{chat?.recipe === 'flm' ? ` (${t('setup.models.npu')})` : ''}</dd></div>
+            )}
+            <div>
+                <dt>{t('setup.ready.vision')}</dt>
+                <dd>{vision?.downloaded ? <bdi>{vision.name}</bdi> : t('setup.ready.visionOff', { name: vision?.name ?? 'Gemma-4-E4B-it' })}</dd>
+            </div>
+            {docs && <div><dt>{t('setup.ready.documents')}</dt><dd><bdi>{docs.name}</bdi></dd></div>}
+            {skipped.length > 0 && (
+                <div><dt>{t('setup.ready.notInstalled')}</dt><dd>{skipped.map((e) => e.name).join(', ')}</dd></div>
+            )}
+            {pending?.state === 'restart_required' && (
+                <div className="is-warn"><dt>{t('setup.ready.gpu')}</dt><dd><AlertTriangle size={13} aria-hidden="true" /> {t('gpu.pending.restart', { gb: formatSize(gpu ? gpuGbAtSetting(gpu, pending.setting_gb) : pending.setting_gb) })}</dd></div>
+            )}
+            {pending?.state === 'took_effect' && (
+                <div><dt>{t('setup.ready.gpu')}</dt><dd>{t('setup.ready.gpuNow', { gb: formatSize(gpu?.gpu_gb ?? pending.setting_gb), was: formatSize(pending.previous_setting_gb ?? 0) })}</dd></div>
+            )}
+        </dl>
+    );
+}
+

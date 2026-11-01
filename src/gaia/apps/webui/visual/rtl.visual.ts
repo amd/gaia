@@ -238,6 +238,96 @@ test.describe('English', () => {
     });
 });
 
+/** A Strix Halo on first run: Qwen won't fit 16 GB, an FLM model is installed, the disk is tight. */
+const SETUP_ENTRY = (over: Record<string, unknown>) => ({
+    roles: ['chat'], purpose: '', if_skipped: null, recipe: 'llamacpp', size_gb: 1, full_size_gb: 1, partial: false,
+    partial_gb: 0, downloaded: false, in_lemonade: true, recommended: false, planned: false, gaia_model: true,
+    selected: false, skipped: false, chat_choice: true, fits: true, need_gb: 2, capacity_gb: 16, fit_reason: null, ...over,
+});
+const SETUP_CATALOG = [
+    SETUP_ENTRY({ id: 'Gemma-4-E4B-it-GGUF', name: 'Gemma 4 E4B (Multimodal)', roles: ['chat', 'vision'], size_gb: 5.97, full_size_gb: 5.97, recommended: true, planned: true, selected: true, need_gb: 8.3 }),
+    SETUP_ENTRY({ id: 'user.embeddinggemma-300m-GGUF', name: 'EmbeddingGemma 300M', roles: ['embedding'], size_gb: 0.33, full_size_gb: 0.33, recommended: true, planned: true, selected: true, chat_choice: false, need_gb: 1.3 }),
+    SETUP_ENTRY({ id: 'Qwen3.6-35B-A3B-GGUF', name: 'Qwen3.6 35B A3B (Multimodal)', size_gb: 23.3, full_size_gb: 23.3, fits: false, need_gb: 26.8 }),
+    SETUP_ENTRY({ id: 'gemma4-it-e2b-FLM', name: 'Gemma 4 E2B (NPU)', recipe: 'flm', size_gb: 0, downloaded: true, gaia_model: false, fits: null, need_gb: null, capacity_gb: null }),
+];
+const SETUP_PLAN = {
+    profile: 'gaia', lemonade: { mode: 'gaia', url: 'http://127.0.0.1:13305/api/v1', reachable: true },
+    chat_model: { id: 'Gemma-4-E4B-it-GGUF', user_set: false, size_gb: 5.97, downloaded: false },
+    recommended_model: 'Gemma-4-E4B-it-GGUF', decided_after_server: false, memory_gb: 16, memory_source: 'AMD iGPU',
+    capacity_gb: 16, disk: { path: 'C:\\Users\\you\\.cache\\huggingface\\hub', free_gb: 25.3, source: 'lemonade' },
+    download_gb: 6.3, disk_warning: null, skipped_models: [], options: [], models: [], catalog: SETUP_CATALOG,
+};
+const SETUP_GPU = {
+    applies: true, show_in_setup: true, hidden_reason: null, os: 'windows', method: 'guided',
+    method_reason: 'On Windows this is set in AMD Software.', total_gb: 128, gpu_gb: 16, cpu_gb: 112,
+    setting: { name: 'Variable Graphics Memory', current_gb: 16, min_gb: 4, max_gb: 96 }, reserve_gb: 16,
+    needs_admin: true, needs_restart: true,
+    presets: [{ setting_gb: 32, gpu_gb: 32, unlocks: ['Qwen3.6-35B-A3B-GGUF'] }, { setting_gb: 48, gpu_gb: 48, unlocks: ['Qwen3.6-35B-A3B-GGUF'] }],
+    recommended_setting_gb: 32, models: [], pending: null, revert: { available: false, previous_setting_gb: null },
+    guided_steps: ['Open AMD Software.', 'Set Variable Graphics Memory to 30 GiB.'],
+};
+const SETUP_ROW = (id: string, roles: string[], state: string, done: number, total: number, extra: Record<string, unknown> = {}) => ({
+    id, roles, state, bytes_done: done, bytes_total: total, speed_bps: 0, eta_s: null, error: null, error_kind: null,
+    can_retry: state === 'failed', retrying_until: null, downloaded_before_gb: null, ...extra,
+});
+const SETUP_RUNNING = {
+    state: 'running', text: 'Downloading the models', chat_model: 'Gemma-4-E4B-it-GGUF', skip_chat_model: false,
+    steps: [], log_tail: [], command: 'gaia init --profile gaia',
+    models: [
+        SETUP_ROW('user.embeddinggemma-300m-GGUF', ['embedding'], 'verifying', 330e6, 330e6),
+        SETUP_ROW('Gemma-4-E4B-it-GGUF', ['chat', 'vision'], 'failed', 2e9, 5.97e9, { error: 'Connection reset by peer', error_kind: 'network' }),
+        SETUP_ROW('Qwen3.6-35B-A3B-GGUF', ['chat'], 'downloading', 7.6e9, 23.3e9),
+    ],
+    overall: { bytes_done: 9.93e9, bytes_total: 29.6e9, speed_bps: 0, eta_s: null, percent: 33, failed: 1 },
+};
+
+/** First-run setup, with the model screen's data from the backend shapes. */
+async function withSetup(page: Page, status: object = { state: 'idle' }): Promise<void> {
+    const answers: Record<string, unknown> = {
+        'GET /setup/check': { ready: false, stage: 'setup', reasons: [], steps: [{ key: 'server', label: 'Install the local model server', detail: 'about 1 minute' }] },
+        'GET /setup/plan': SETUP_PLAN,
+        'GET /setup/status': status,
+        'GET /gpu-memory': SETUP_GPU,
+        'GET /onboarding/preflight': { compatible: true, blockers: [], warnings: [], ram_gb: 128, gpu_name: 'AMD Radeon 8060S', npu_detected: true, disk_free_gb: 25, lemonade_running: true },
+        'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: null, saved_base_url: null, api_key_stored: false, offer: false, what_gaia_does: '' },
+    };
+    await page.route('**/api/**', async (route) => {
+        const url = new URL(route.request().url());
+        const key = `${route.request().method()} ${url.pathname.replace(/^\/api/, '')}`;
+        if (key in answers) await route.fulfill({ json: answers[key] });
+        else await route.fallback();
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`first-run setup (${locale})`, () => {
+        test('choosing models, with the won\'t-fit and disk warnings', async ({ page }) => {
+            await open(page, '', locale, (p) => withSetup(p));
+            await page.locator('.setup-step.is-current .btn-primary').click();
+            await expect(page.locator('.mc-list').first()).toBeVisible();
+            await page.locator('.mc-more summary').first().click();
+            await page.locator('.mc-more').first().getByRole('checkbox').first().click();
+            await expect(page.locator('.mc-disk-warn')).toBeVisible();
+            await expect(page.locator('.mc-warn.is-big')).toBeVisible();
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('downloading, one row failed', async ({ page }) => {
+            await open(page, '', locale, (p) => withSetup(p, SETUP_RUNNING));
+            await expect(page.locator('.dl-row.is-failed')).toBeVisible();
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('narrow window: no sideways scroll', async ({ page }) => {
+            await page.setViewportSize({ width: 320, height: 720 });
+            await open(page, '', locale, (p) => withSetup(p));
+            await page.locator('.setup-step.is-current .btn-primary').click();
+            await expect(page.locator('.mc-list').first()).toBeVisible();
+            expect(await audit(page)).toEqual([]);
+        });
+    });
+}
+
 test('window controls take the color of the sidebar beneath them', async ({ page }) => {
     await page.addInitScript(() => {
         const calls: unknown[] = [];
