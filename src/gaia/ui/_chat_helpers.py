@@ -5719,7 +5719,8 @@ async def _index_document(
 
     def _page_read() -> None:
         _step()
-        pages["done"] += 1
+        # A scan reads pages for its first text as well, so the count can run over.
+        pages["done"] = min(pages["done"] + 1, pages["total"] or pages["done"] + 1)
         _report("reading", pages["done"], pages["total"])
 
     def _embedded(done: int, total: int) -> None:
