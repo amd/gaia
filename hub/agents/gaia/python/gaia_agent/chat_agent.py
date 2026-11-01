@@ -97,7 +97,6 @@ from gaia.llm.inference_location import InferenceLocation, resolve_inference_loc
 from gaia.llm.lemonade_client import (
     _endpoint_label,
     configured_lemonade_url,
-    is_tool_calling_model,
     resolve_default_chat_model,
     resolve_lemonade_base_url,
 )
@@ -1491,9 +1490,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         # built a loader for it (the "doc" and "full" profiles).
         load_tools_menu = ""
         loader = getattr(self, "tool_loader", None)
-        if loader is not None and is_tool_calling_model(
-            getattr(self, "model_id", None)
-        ):
+        if loader is not None and self._uses_native_tool_calls():
             load_tools_menu = (
                 "\n\n==== LOADABLE TOOL BUNDLES ====\n"
                 "Your visible tools are trimmed to what this turn needs. If a "
@@ -1959,7 +1956,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 project's packages. Any other script runs from its own folder.
                 Relative paths resolve against that working directory.
 
-                Has pypdf, pymupdf, docx, pptx, openpyxl, xlsxwriter,
+                Has pypdf, pypdfium2, docx, pptx, openpyxl, xlsxwriter,
                 reportlab, pandas, numpy, matplotlib; no pip.
 
                 Args:
@@ -2088,7 +2085,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 No access to your tools: `from gaia import <tool>` fails —
                 call it directly as a tool.
 
-                Has pypdf, pymupdf, docx, pptx, openpyxl, xlsxwriter,
+                Has pypdf, pypdfium2, docx, pptx, openpyxl, xlsxwriter,
                 reportlab, pandas, numpy, matplotlib; no pip.
 
                 Args:
@@ -3081,9 +3078,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             f" search_web={'registered' if has_perplexity else 'skipped (no PERPLEXITY_API_KEY, or Local only)'}"
         )
 
-    def _index_documents(self, documents: List[str]) -> None:
-        """Index initial documents."""
+    def _index_documents(self, documents: List[str]) -> List[str]:
+        """Index initial documents and return any user-facing failure messages."""
+        failures = []
         for doc in documents:
+            doc_name = os.path.basename(doc)
             try:
                 if os.path.exists(doc):
                     # Naming a file to index is the grant to read it; a folder is never granted.
@@ -3100,13 +3099,17 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     else:
                         error = result.get("error", "Unknown error")
                         logger.error(f"Failed to index {doc}: {error}")
+                        failures.append(f"Failed to index {doc_name}: {error}")
                 else:
                     logger.warning(f"Document not found: {doc}")
+                    failures.append(f"Failed to index {doc_name}: file not found")
             except Exception as e:
                 logger.error(f"Failed to index {doc}: {e}")
+                failures.append(f"Failed to index {doc_name}: {e}")
 
         # Update system prompt after indexing to include the new documents
         self.rebuild_system_prompt()
+        return failures
 
     def _start_watching(self) -> None:
         """Start watching directories for changes."""
@@ -3122,7 +3125,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 "Please install the required dependencies:\n"
                 '  uv pip install -e ".[dev]"\n\n'
                 "Or install watchdog directly:\n"
-                '  uv pip install "watchdog>=2.1.0"\n'
+                '  uv pip install "watchdog>=2.1.0,<7"\n'
             )
             logger.error(error_msg)
             raise ImportError(error_msg)
