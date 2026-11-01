@@ -458,7 +458,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             : { steps: agentSteps, echoed: false }),
         [agentSteps, message.content, message.role, isStreaming],
     );
-    const isError = message.role === 'assistant' && (echo.echoed || isErrorContent(message.content));
+    const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
         : undefined;

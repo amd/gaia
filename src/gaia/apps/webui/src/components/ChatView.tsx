@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, RotateCw, X } from 'lucide-react';
 import { MessageBubble, isErrorContent } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
@@ -15,7 +15,7 @@ import { refreshActiveRuns } from '../services/activeRuns';
 import { claimView, dispatchNext, idleByPoll, isBusyError, markActivity, requeueRefused, type QueuedSend, type SendOutcome } from '../services/queueDispatch';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
-import { describeStreamError, isStreamInterrupted, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
+import { classifyChatError, isStreamInterrupted, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
 import { ConnectorRetryBanner } from './ConnectorRetryBanner';
 import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } from '../types';
@@ -1158,7 +1158,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     } else {
                         settleQueued(isBusyError(err)
                             ? { kind: 'busy' }
-                            : { kind: 'failed', error: describeStreamError(err) ?? (err.message || 'Unknown error') });
+                            : { kind: 'failed', error: classifyChatError(err).text });
                         streamEndedAtRef.current = Date.now();
                         endStopWait();
                         if (streamRafRef.current !== null) {
@@ -1240,32 +1240,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     clearCards();
                     return;
                 }
-                // Provide a user-friendly error message based on the error type
-                // Each error includes a GitHub link for reporting issues
-                let errorContent: string;
-                const msg = err.message || '';
-                const issueFooter = '\n\n---\n*Unexpected error?* '
-                    + `[Report it on GitHub](${bugReportUrl(msg.slice(0, 80))})`;
-                const described = describeStreamError(err);
-
-                if (described) {
-                    errorContent = described;
-                } else if (msg.includes('Lemonade') || msg.includes('LLM') || msg.includes('Could not get response')) {
-                    errorContent =
-                        'The model server did not answer. Open Settings → Model to check it, '
-                        + 'then send your message again.\n\n'
-                        + `Details: ${msg}` + issueFooter;
-                } else if (err instanceof TypeError || msg.includes('fetch') || msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-                    errorContent =
-                        'Lost the connection to GAIA. Check that GAIA is still running, then send '
-                        + 'your message again.' + issueFooter;
-                } else if (msg.includes('timed out') || msg.includes('timeout') || msg.includes('Timeout')) {
-                    errorContent =
-                        'The request timed out. Try a shorter question, or a faster model in '
-                        + 'Settings → Model.' + issueFooter;
-                } else {
-                    errorContent = `Error: ${msg}` + issueFooter;
-                }
+                // Plain cause + next step; the raw text stays in the log above.
+                const { kind, text } = classifyChatError(err);
+                const errorContent = kind === 'stream'
+                    ? text
+                    : text + '\n\n---\n*Unexpected error?* '
+                        + `[Report it on GitHub](${bugReportUrl((err.message || '').slice(0, 80))})`;
                 const errMsg: Message = {
                     id: Date.now() + 2,
                     session_id: sessionId,
@@ -1273,6 +1253,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     content: errorContent,
                     created_at: new Date().toISOString(),
                     rag_sources: null,
+                    failed: true,
                 };
                 addMessage(errMsg);
                 setStreaming(false);
@@ -1692,7 +1673,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             : undefined;
                         const canRetry = !busy && !comparison && !retiredAgent && !streamEnding
                             && msg.role === 'assistant' && idx === messages.length - 1
-                            && !msg.stopState && !isErrorContent(msg.content);
+                            && !msg.stopState && !msg.failed && !isErrorContent(msg.content);
+                        const canTryAgain = msg.failed === true && !busy && !retiredAgent && !streamEnding
+                            && idx === messages.length - 1;
                         const latency = msg.stats?.seconds != null ? msg.stats.seconds * 1000 : latencyByMsgId.get(msg.id);
                         return (
                             <div
@@ -1712,6 +1695,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                             answeredBy={msg.stats?.model ?? session?.effective_model}
                                             onPick={(model) => handleRetryWith(msg, model)}
                                         />
+                                    ) : canTryAgain ? (
+                                        <button
+                                            className="msg-action-btn"
+                                            onClick={handleRetryLast}
+                                            title="Try again"
+                                            aria-label="Try again"
+                                        >
+                                            <RotateCw size={12} />
+                                        </button>
                                     ) : undefined}
                                     latencyMs={latency}
                                 />

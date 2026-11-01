@@ -48,3 +48,52 @@ export function describeStreamError(err: Error): string | null {
     }
     return null;
 }
+
+export type ChatErrorKind = 'stream' | 'context' | 'model_server' | 'connection' | 'timeout' | 'unknown';
+
+const CONTEXT_RE = /context (window|size|length|limit)|exceeds the available context|maximum context|too many tokens/i;
+const MODEL_SERVER_RE = /lemonade|\bLLM\b|could not get response/i;
+const CONNECTION_RE = /failed to fetch|networkerror|\bfetch\b/i;
+const TIMEOUT_RE = /timed out|timeout/i;
+
+/**
+ * What a failed chat turn tells the user: the cause in plain words and what to
+ * do next. Never the raw error text, which goes to the console log instead.
+ */
+export function classifyChatError(err: Error): { kind: ChatErrorKind; text: string } {
+    const described = describeStreamError(err);
+    if (described) return { kind: 'stream', text: described };
+    const msg = err.message || '';
+    if (CONTEXT_RE.test(msg)) {
+        return {
+            kind: 'context',
+            text: 'This conversation is longer than the model can read at once. '
+                + 'Start a new chat, or ask about fewer documents, then ask again.',
+        };
+    }
+    if (MODEL_SERVER_RE.test(msg)) {
+        return {
+            kind: 'model_server',
+            text: 'The model server did not answer. Open Settings → Model to check it, '
+                + 'then try again.',
+        };
+    }
+    if (err instanceof TypeError || CONNECTION_RE.test(msg)) {
+        return {
+            kind: 'connection',
+            text: 'Lost the connection to GAIA. Check that GAIA is still running, then try again.',
+        };
+    }
+    if (TIMEOUT_RE.test(msg)) {
+        return {
+            kind: 'timeout',
+            text: 'The request timed out. Try a shorter question, or a faster model in '
+                + 'Settings → Model.',
+        };
+    }
+    return {
+        kind: 'unknown',
+        text: 'Something went wrong while GAIA was answering. Try again; if it keeps '
+            + 'happening, report it with the link below.',
+    };
+}
