@@ -1076,14 +1076,21 @@ def build_parser():
         "current folder without asking. Implies --dangerously-skip-permissions",
     )
 
-    # Create a parent parser for common arguments
-    parent_parser = argparse.ArgumentParser(add_help=False)
-    parent_parser.add_argument(
+    # --stats is split out so a command whose handler never reads it (email)
+    # can take the rest without accepting a silent no-op.
+    base_flags_parser = argparse.ArgumentParser(add_help=False)
+    base_flags_parser.add_argument(
         "--logging-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         default="INFO",
         help="Set the logging level (default: INFO)",
     )
+    base_flags_parser.add_argument(
+        "--no-lemonade-check",
+        action="store_true",
+        help="Skip Lemonade server check (for CI/testing without Lemonade)",
+    )
+    parent_parser = argparse.ArgumentParser(add_help=False, parents=[base_flags_parser])
     # Shared --config flag. Attached only to commands that read the persistent
     # config (chat/llm/prompt + the `gaia config` subcommands).
     config_path_parser = argparse.ArgumentParser(add_help=False)
@@ -1101,11 +1108,6 @@ def build_parser():
         action="store_true",
         dest="show_stats",
         help="Show performance statistics",
-    )
-    parent_parser.add_argument(
-        "--no-lemonade-check",
-        action="store_true",
-        help="Skip Lemonade server check (for CI/testing without Lemonade)",
     )
 
     # Backend flags live on separate parents so each command accepts only the
@@ -1367,7 +1369,7 @@ def build_parser():
             "(Settings → Connectors)."
         ),
         parents=[
-            parent_parser,
+            base_flags_parser,
             model_parser,
             base_url_parser,
             trace_parser,
@@ -1395,14 +1397,6 @@ def build_parser():
             "Verbose mode — emit structured logs for every triage decision "
             "and tool call (recommended when benchmarking against other "
             "email agents)."
-        ),
-    )
-    email_parser.add_argument(
-        "--debug",
-        action="store_true",
-        help=(
-            "Debug mode — adds full prompt + LLM response logging to "
-            "verbose output. Sensitive payloads in logs."
         ),
     )
     email_parser.add_argument(
@@ -6504,7 +6498,7 @@ def handle_email_command(args):
         if not success:
             sys.exit(1)
 
-    verbose = bool(getattr(args, "verbose", False) or getattr(args, "debug", False))
+    verbose = bool(getattr(args, "verbose", False))
     query = getattr(args, "query", None)
     interactive = getattr(args, "interactive", False)
 

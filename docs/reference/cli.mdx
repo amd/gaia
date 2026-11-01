@@ -1310,7 +1310,9 @@ gaia email autonomy status                           # autonomy level and trust 
 | `-q, --query` | One-shot query; non-interactive |
 | `-i, --interactive` | Read queries from stdin in a loop |
 | `--model` | Model ID (default: chosen per device) |
-| `-v, --verbose` / `--debug` | Log every triage decision and tool call / add full prompt and response logging (sensitive payloads) |
+| `-v, --verbose` | Log every triage decision and tool call |
+| `--trace` | Save a JSON trace of each run |
+| `--logging-level` | Log level for this CLI process only; the agent runs in the daemon's email sidecar, whose logs are in `gaia daemon logs --agent email` |
 | `--spec` | Write the HTML endpoint spec to disk (`--output PATH`, default `~/.gaia/email/endpoint-spec.html`) and open it; needs no LLM |
 
 `gaia email autonomy` takes `status`, `trust`, `set-level`, `pause`, `resume`, `kill` and `run`.
