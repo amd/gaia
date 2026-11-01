@@ -143,7 +143,6 @@ func (h *harness) run(cmd tea.Cmd) {
 	h.t.Helper()
 	for depth := 0; cmd != nil && depth < 50; depth++ {
 		msgs := collect(cmd)
-		cmd = nil
 		var next []tea.Cmd
 		for _, msg := range msgs {
 			var c tea.Cmd
