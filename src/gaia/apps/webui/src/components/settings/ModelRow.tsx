@@ -59,7 +59,7 @@ export function ModelRow({ model: m, label, current, remote, busy, confirmingRem
                     )}
                 </div>
                 {remote && (
-                    <span className={`model-row-meta${m.price ? '' : ' is-unknown-price'}`}><bdi>{formatPrice(m.price)}</bdi></span>
+                    <span className={`model-row-meta${m.price ? '' : ' is-unknown-price'}`}>{formatPrice(m.price, t)}</span>
                 )}
                 {m.placement?.warning && <span className="model-row-meta is-warning" role="alert"><bdi>{m.placement.warning}</bdi></span>}
                 {m.unavailable_reason && <span className="model-row-meta">{t('settings.model.cantRun', { reason: m.unavailable_reason })}</span>}

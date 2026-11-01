@@ -163,7 +163,7 @@ export function AdvancedSettings() {
                                     : status.lemonade_error ? t('settings.advanced.unavailable') : t('settings.advanced.notRunning')}
                                 ok={status.lemonade_running}
                                 hint={!status.lemonade_running
-                                    ? (status.lemonade_error ? t('settings.advanced.queryFailed', { reason: status.lemonade_error }) : (status.start_command ? `Run: ${status.start_command}` : (status.start_instruction ?? t('settings.advanced.notRunningHint'))))
+                                    ? (status.lemonade_error ? t('settings.advanced.queryFailed', { reason: status.lemonade_error }) : t('settings.advanced.notRunningHint'))
                                     : undefined}
                             />
                             <StatusRow
@@ -406,7 +406,7 @@ function StatusRow({ label, value, ok, hint }: { label: string; value: ReactNode
             <span className="status-label">{label}</span>
             <div className="status-value-wrap">
                 <span className={`status-value ${ok ? 'ok' : 'warn'}`}>{value}</span>
-                {hint && <span className="status-hint"><code>{hint}</code></span>}
+                {hint && <span className="status-hint">{hint}</span>}
             </div>
         </div>
     );

@@ -106,7 +106,7 @@ const DOCUMENTS = {
     total_chunks: 108,
 };
 
-const SYSTEM_STATUS = {
+export const SYSTEM_STATUS = {
     lemonade_running: true, lemonade_error: null, model_loaded: 'Gemma-4-E4B-it-GGUF', embedding_model_loaded: true,
     disk_space_gb: 1293.2, memory_available_gb: 38.5, initialized: true, version: '0.25.0',
     start_instruction: null, start_command: null, lemonade_version: '10.9.1', model_size_gb: 4.9, model_device: 'gpu',

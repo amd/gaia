@@ -293,7 +293,9 @@ function ConnectorTile({
                     aria-expanded={expanded}
                 >
                     <bdi className="connector-tile-name">{connector.display_name}</bdi>
-                    <span className="connector-tile-type">{connector.type === 'oauth_pkce' ? 'OAuth' : 'MCP'}</span>
+                    {connector.configured && (
+                        <span className="connector-tile-type">{connector.type === 'oauth_pkce' ? 'OAuth' : 'MCP'}</span>
+                    )}
                     {renderStatus()}
                     <span className="connector-tile-chevron">
                         {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}

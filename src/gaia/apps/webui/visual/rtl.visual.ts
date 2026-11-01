@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MODEL_LIST, NOW, mockApi, useLocale, useTheme, withConnectors, withModelPage, withSettingsPanes } from './fixtures';
+import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, mockApi, useLocale, useTheme, withConnectors, withModelPage, withSettingsPanes } from './fixtures';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -523,6 +523,129 @@ for (const locale of ['ar', 'en']) {
         });
     });
 }
+
+/** Visible text left in English on an Arabic screen; names and paths sit in <bdi>. */
+const untranslated = (page: Page): Promise<string[]> =>
+    page.evaluate(() => {
+        const root = document.querySelector('.settings-scroll') as Element;
+        const left = new Set<string>();
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+            const text = n.textContent?.trim() ?? '';
+            const el = n.parentElement as Element;
+            if (!/[A-Za-z]{3}/.test(text) || /[\u0600-\u06ff]/.test(text) || !el.checkVisibility()) continue;
+            if (el.closest('.i18n-gloss, code, bdi, kbd, select, .provider-tab, .skill-row-name, .connector-tile-type, .beta-badge, .status-label, .status-value')) continue;
+            left.add(text.slice(0, 60));
+        }
+        return [...left];
+    });
+
+for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
+    test(`settings ${section} pane has no leftover English`, async ({ page }) => {
+        await open(page, '', 'ar', withSettingsPanes);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator(`[data-section="${section}"]`).click();
+        await expect(page.locator('.settings-pane-title')).toBeVisible();
+        await expect(page.locator('.loading-text, .spin')).toHaveCount(0);
+        await page.locator('.settings-disclosure:not([open]) > summary, .settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+        await page.waitForTimeout(100);
+        expect(await untranslated(page)).toEqual([]);
+    });
+}
+
+const RAW_SERVER_ERROR = "The local model server is not reachable at http://127.0.0.1:59987/api/v1 (HTTPConnectionPool(host='127.0.0.1', port=59987): Max retries exceeded)";
+
+for (const locale of ['ar', 'en']) {
+    test(`model server down: one plain notice, no raw error on show (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+            await p.route(/\/api\/providers\/local\/(models|context)/, (route) =>
+                route.fulfill({ status: 503, json: { detail: RAW_SERVER_ERROR } }));
+            await p.route(/\/api\/providers(\?|$)/, (route) => route.fulfill({
+                json: { providers: [{ id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC.' }], lemonade_error: RAW_SERVER_ERROR },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="model"]').click();
+        await expect(page.locator('.settings-notice')).toHaveCount(1);
+        await expect(page.getByText('HTTPConnectionPool')).toBeHidden();
+        await expect(page.locator('.settings-notice .btn-secondary')).toBeVisible();
+        await shot(page, `model-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a stopped server's hint wraps inside its row and names no command (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/system/status', (route) => route.fulfill({
+                json: { ...SYSTEM_STATUS, lemonade_running: false, model_loaded: null, start_command: 'gaia init', start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.' },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const row = page.locator('.status-row--has-hint').first();
+        await expect(row).toBeVisible();
+        await expect(row).not.toContainText('gaia init');
+        const clipped = await page.locator('.status-hint').evaluateAll((els) => els.filter((el) => {
+            const box = el.getBoundingClientRect();
+            const card = (el.closest('.status-row') as Element).getBoundingClientRect();
+            return box.left < card.left || box.right > card.right;
+        }).length);
+        expect(clipped).toBe(0);
+        await shot(page, `advanced-${locale}-stopped`);
+    });
+}
+
+test('a keyboard user can reach and open a section, and sees where focus is', async ({ page }) => {
+    await open(page, '', 'en', withSettingsPanes);
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+    const summary = page.locator('.settings-disclosure > summary').first();
+    await expect(summary).toBeVisible();
+    await summary.focus();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    expect(await page.evaluate(() => {
+        const el = document.activeElement as Element;
+        const style = getComputedStyle(el);
+        return `${el.tagName} ${el.matches(':focus-visible')} ${style.outlineStyle} ${style.outlineWidth}`;
+    })).toMatch(/^SUMMARY true solid [23]px$/);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.settings-disclosure').first()).toHaveAttribute('open', '');
+    await page.keyboard.press('Space');
+    await expect(page.locator('.settings-disclosure').first()).not.toHaveAttribute('open', '');
+});
+
+test('every disclosure is a comfortable target', async ({ page }) => {
+    await open(page, '', 'en', withSettingsPanes);
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    for (const section of ['general', 'permissions', 'skills', 'privacy', 'advanced']) {
+        await page.getByRole('dialog').locator(`[data-section="${section}"]`).click();
+        await expect(page.locator('.settings-pane-title')).toBeVisible();
+        const small = await page.locator('.settings-disclosure > summary, .settings-more > summary').evaluateAll((els) =>
+            els.filter((el) => el.checkVisibility() && el.getBoundingClientRect().height < 24).map((el) => el.textContent));
+        expect(small).toEqual([]);
+    }
+});
+
+test('a long data folder wraps at phone width instead of scrolling sideways', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, '', 'en', async (p) => {
+        await withSettingsPanes(p);
+        await p.route('**/api/system/status', (route) => route.fulfill({
+            json: { ...SYSTEM_STATUS, data_dir: `C:/Users/you/${'a-very-long-folder-name/'.repeat(5)}.gaia/chat` },
+        }));
+    });
+    await page.getByRole('button', { name: /Open sidebar/ }).click();
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+    await expect(page.locator('.setting-path').first()).toBeVisible();
+    const overflow = await page.locator('.settings-scroll').evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    expect(await audit(page)).toEqual([]);
+});
 
 /** A Strix Halo on first run: Qwen won't fit 16 GB, an FLM model is installed, the disk is tight. */
 const SETUP_ENTRY = (over: Record<string, unknown>) => ({

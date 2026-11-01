@@ -4,11 +4,9 @@
 import { useState } from 'react';
 import { getUpdaterBridge, useUpdateStatus } from '../../hooks/useUpdateStatus';
 import type { GaiaUpdaterBridge, UpdateState } from '../../hooks/useUpdateStatus';
+import { tEn, useT, type Translate } from '../../i18n/useT';
 import { log } from '../../utils/logger';
 import { VersionPicker } from '../VersionPicker';
-
-const AUTO_LABEL = 'Install updates automatically';
-const RC_LABEL = 'Include release candidates';
 
 /** "0.25.2-rc.3" is a release candidate; "0.25.2" is not. */
 export function isReleaseCandidate(version: string | null): boolean {
@@ -16,24 +14,25 @@ export function isReleaseCandidate(version: string | null): boolean {
 }
 
 /** One line saying where updates stand. */
-export function describeUpdateStatus(s: UpdateState): string {
+export function describeUpdateStatus(s: UpdateState, t: Translate = tEn): string {
+    const version = s.version ?? '';
     switch (s.status) {
         case 'checking':
-            return 'Checking for updates…';
+            return t('settings.updates.checking');
         case 'available':
-            return `GAIA ${s.version ?? ''} is available.`;
+            return t('settings.updates.available', { version });
         case 'downloading':
-            return `Downloading GAIA ${s.version ?? ''}… ${s.progress}%`;
+            return t('settings.updates.downloading', { version, percent: s.progress });
         case 'downloaded':
-            return `GAIA ${s.version ?? ''} is ready — restart to finish installing.`;
+            return t('settings.updates.ready', { version });
         case 'error':
-            return `Update check failed: ${s.error ?? 'unknown error'}`;
+            return t('settings.updates.failed', { reason: s.error ?? t.bare('settings.advanced.unknown') });
         case 'no-channel':
-            return s.error ?? 'No GAIA release publishes a desktop update for this platform yet.';
+            return s.error ?? t('settings.updates.noChannel');
         case 'disabled':
-            return 'Updates are turned off for this install (GAIA_DISABLE_UPDATE=1).';
+            return t('settings.updates.disabled');
         default:
-            return 'GAIA is up to date.';
+            return t('settings.updates.current');
     }
 }
 
@@ -44,6 +43,7 @@ export function describeUpdateStatus(s: UpdateState): string {
  * Shown only in the desktop app, which owns updating.
  */
 export function UpdatesSection() {
+    const t = useT();
     const update = useUpdateStatus();
     const bridge = getUpdaterBridge();
     const [busy, setBusy] = useState(false);
@@ -60,7 +60,7 @@ export function UpdatesSection() {
             await call(bridge);
         } catch (err) {
             log.system.error(`${what} failed`, err);
-            setError(`${what} failed: ${err instanceof Error ? err.message : String(err)}`);
+            setError(t('settings.updates.actionFailed', { what, reason: err instanceof Error ? err.message : String(err) }));
         } finally {
             setBusy(false);
         }
@@ -71,48 +71,47 @@ export function UpdatesSection() {
 
     return (
         <div className="settings-field" role="group" aria-labelledby="updates-label">
-            <span className="settings-label" id="updates-label">Updates</span>
+            <span className="settings-label" id="updates-label">{t('settings.updates.title')}</span>
             <p className="settings-hint" role="status">
-                Running GAIA {update.currentVersion ?? 'unknown'}. {describeUpdateStatus(update)}
+                {t('settings.updates.running', { version: update.currentVersion ?? t.bare('settings.advanced.unknown') })} {describeUpdateStatus(update, t)}
             </p>
 
             <label className="setting-row">
-                <span>{AUTO_LABEL}</span>
+                <span>{t('settings.updates.auto')}</span>
                 <span className="toggle-switch">
                     <input
                         type="checkbox"
                         role="switch"
                         checked={update.autoUpdate}
                         aria-describedby="updates-auto-hint"
-                        aria-label={AUTO_LABEL}
+                        aria-label={t('settings.updates.auto')}
                         aria-busy={busy}
                         disabled={disabled}
                         onChange={() => {
-                            if (!busy) void run('Saving the auto-update setting', (b) => b.setAutoUpdate(!update.autoUpdate));
+                            if (!busy) void run(t.bare('settings.updates.savingAuto'), (b) => b.setAutoUpdate(!update.autoUpdate));
                         }}
                     />
                     <span className="toggle-track" />
                 </span>
             </label>
             <p className="settings-hint" id="updates-auto-hint">
-                Off by default while GAIA is changing quickly — you choose when to update.
-                The Terminal UI follows the same setting.
+                {t('settings.updates.autoHint')}
             </p>
 
             <label className="setting-row">
-                <span>{RC_LABEL}</span>
+                <span>{t('settings.updates.rc')}</span>
                 <span className="toggle-switch">
                     <input
                         type="checkbox"
                         role="switch"
                         checked={Boolean(update.includePrereleases)}
                         aria-describedby="updates-rc-hint"
-                        aria-label={RC_LABEL}
+                        aria-label={t('settings.updates.rc')}
                         aria-busy={busy}
                         disabled={disabled}
                         onChange={() => {
                             if (!busy) {
-                                void run('Saving the release-candidate setting', (b) =>
+                                void run(t.bare('settings.updates.savingRc'), (b) =>
                                     b.setIncludePrereleases(!update.includePrereleases));
                             }
                         }}
@@ -121,21 +120,20 @@ export function UpdatesSection() {
                 </span>
             </label>
             <p className="settings-hint" id="updates-rc-hint">
-                Also offer test builds (vX.Y.Z-rcN) before they become a final release. Off by default.
-                {isReleaseCandidate(update.currentVersion) &&
-                    ' This is a release candidate, so newer ones are offered either way.'}
+                {t('settings.updates.rcHint')}
+                {isReleaseCandidate(update.currentVersion) && ` ${t('settings.updates.rcCurrent')}`}
             </p>
 
             {update.pinnedVersion && (
                 <p className="settings-hint">
-                    Pinned to {update.pinnedVersion}, so updates are paused.{' '}
+                    {t('settings.updates.pinned', { version: update.pinnedVersion })}{' '}
                     <button
                         type="button"
                         className="btn-secondary"
                         disabled={busy}
-                        onClick={() => void run('Resuming updates', (b) => b.resumeUpdates())}
+                        onClick={() => void run(t.bare('settings.updates.resuming'), (b) => b.resumeUpdates())}
                     >
-                        Unpin
+                        {t('settings.updates.unpin')}
                     </button>
                 </p>
             )}
@@ -146,9 +144,9 @@ export function UpdatesSection() {
                         type="button"
                         className="btn-primary"
                         disabled={busy}
-                        onClick={() => void run('Downloading the update', (b) => b.downloadUpdate())}
+                        onClick={() => void run(t.bare('settings.updates.fetching'), (b) => b.downloadUpdate())}
                     >
-                        Update to {update.version}
+                        {t('settings.updates.updateTo', { version: update.version ?? '' })}
                     </button>
                 )}
                 {update.status === 'downloaded' && (
@@ -156,18 +154,18 @@ export function UpdatesSection() {
                         type="button"
                         className="btn-primary"
                         disabled={busy}
-                        onClick={() => void run('Restarting to install', (b) => b.restart())}
+                        onClick={() => void run(t.bare('settings.updates.restarting'), (b) => b.restart())}
                     >
-                        Restart to install
+                        {t('settings.updates.restart')}
                     </button>
                 )}
                 <button
                     type="button"
                     className="btn-secondary"
                     disabled={working || disabled}
-                    onClick={() => void run('Checking for updates', (b) => b.check())}
+                    onClick={() => void run(t.bare('settings.updates.check'), (b) => b.check())}
                 >
-                    Check for updates
+                    {t('settings.updates.check')}
                 </button>
                 <button
                     type="button"
@@ -175,7 +173,7 @@ export function UpdatesSection() {
                     disabled={working || disabled}
                     onClick={() => setShowPicker(true)}
                 >
-                    Install a specific version…
+                    {t('settings.updates.pick')}
                 </button>
             </div>
 

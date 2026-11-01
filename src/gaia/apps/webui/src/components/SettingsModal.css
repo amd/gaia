@@ -35,7 +35,7 @@
 }
 .status-row--has-hint { align-items: flex-start; }
 .status-label { font-size: 13px; font-family: var(--font-sans); flex-shrink: 0; padding-top: 1px; }
-.status-value-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 0; }
+.status-value-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 0; text-align: end; overflow-wrap: anywhere; }
 .status-value { font-size: 13px; font-weight: 600; font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
 }
@@ -49,16 +49,6 @@
     color: var(--text-muted);
     font-weight: 400;
 }
-.status-hint code {
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    padding: 1px 5px;
-    border-radius: 2px;
-    background: var(--tint-hover);
-    color: var(--text-secondary);
-    white-space: nowrap;
-}
-[data-theme="dark"] .status-hint code { background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
 
 .status-error {
     padding: 20px;

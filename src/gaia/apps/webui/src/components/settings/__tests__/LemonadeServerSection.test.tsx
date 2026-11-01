@@ -44,7 +44,7 @@ describe('LemonadeServerSection', () => {
         await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith(
             { mode: 'external', base_url: 'http://localhost:13305', api_key: 'sk-secret' },
         ));
-        expect(await screen.findByText('http://localhost:13305/api/v1', { selector: 'p[role="status"] code' })).toBeInTheDocument();
+        expect(await screen.findByText(/http:\/\/localhost:13305\/api\/v1/, { selector: 'p[role="status"]' })).toBeInTheDocument();
         expect(screen.getByLabelText('Lemonade API key')).toHaveValue('');
         expect(document.body.innerHTML).not.toContain('sk-secret');
     });
@@ -90,7 +90,7 @@ describe('LemonadeServerSection', () => {
         mockedApi.getLemonadeTarget.mockResolvedValue({ ...MINE, source: 'env', base_url: 'http://box:13305/api/v1' });
         render(<LemonadeServerSection />);
 
-        expect(await screen.findByText('http://box:13305/api/v1')).toBeInTheDocument();
+        expect(await screen.findByText(/http:\/\/box:13305\/api\/v1/)).toBeInTheDocument();
         expect(screen.getByText(/Unset/)).toHaveTextContent('Unset LEMONADE_BASE_URL and restart GAIA to change this here.');
         expect(screen.queryByLabelText('Lemonade Server address')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Use GAIA.s own/ })).not.toBeInTheDocument();

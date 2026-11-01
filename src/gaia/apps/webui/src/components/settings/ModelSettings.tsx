@@ -8,6 +8,7 @@ import { useModelStore, displayModelName, distinctModelLabels, sameModelId } fro
 import { useChatStore } from '../../stores/chatStore';
 import { useT, type Translate } from '../../i18n/useT';
 import { AddCustomModel } from './AddCustomModel';
+import { ErrorNotice, isServerDown } from './ErrorNotice';
 import { LocalModelsSections } from './LocalModelsSections';
 import { ModelInUse } from './ModelInUse';
 import { ModelRow } from './ModelRow';
@@ -311,7 +312,9 @@ export function ModelSettings() {
                 ))}
             </div>
 
-            {loadError && <p className="settings-error" role="alert">{loadError}</p>}
+            {loadError && (
+                <ErrorNotice message={loadError} onRetry={() => { void loadProviders(); void loadModels(chosen); }} />
+            )}
 
             {provider && (
                 <section className="settings-card" aria-label={provider.name}>
@@ -470,9 +473,9 @@ export function ModelSettings() {
                                     aria-label={t('settings.model.search')}
                                 />
                             )}
-                            {modelsError && <p className="settings-error" role="alert">{modelsError}</p>}
+                            {modelsError && !(loadError && isServerDown(modelsError)) && <ErrorNotice message={modelsError} />}
                             {!models && !modelsError && <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}
-                            {models && filtered.length === 0 && (
+                            {models && filtered.length === 0 && !modelsError && (
                                 <p className="settings-hint">{searching || !local ? t('settings.model.noMatch') : t('settings.model.noModels')}</p>
                             )}
                             {local ? (

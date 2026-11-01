@@ -53,7 +53,7 @@ export function PrivacySettings() {
                         : place ? t('settings.privacy.local') : t('settings.privacy.unknown')}
                 </p>
                 {dataDir && (
-                    <div className="setting-row">
+                    <div className="setting-row setting-row-path">
                         <span>{t('settings.privacy.dataFolder')}</span>
                         <bdi dir="ltr" className="setting-path">{dataDir}</bdi>
                     </div>
@@ -63,7 +63,9 @@ export function PrivacySettings() {
                 <UndoHistorySettings />
             </SettingsDisclosure>
             <section className="settings-card" aria-label={t('settings.privacy.deleteTitle')}>
-                <p className="danger-warning">{t('settings.privacy.deleteWarning')}</p>
+                <p className="danger-warning">
+                    {sessions.length === 0 ? t('settings.privacy.nothingToDelete') : t('settings.privacy.deleteWarning')}
+                </p>
                 <button type="button" className="btn-danger" onClick={() => void clearAll()} disabled={sessions.length === 0}>
                     {confirm ? t('settings.privacy.deleteConfirm') : t('settings.privacy.delete')}
                 </button>

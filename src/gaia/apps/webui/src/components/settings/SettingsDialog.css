@@ -639,10 +639,33 @@
 }
 
 /* A quiet "more about this" line: long explanations wait here. */
+.settings-notice {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 12px;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    background: var(--bg-card);
+    border: 1px solid var(--accent-yellow);
+    border-radius: var(--radius-md);
+}
+
+.settings-notice-raw {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
 .settings-more > summary {
     display: inline-flex;
+    align-self: flex-start;
     align-items: center;
     gap: 4px;
+    min-height: 26px;
     color: var(--text-secondary);
     font-size: 12.5px;
     cursor: pointer;

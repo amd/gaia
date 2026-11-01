@@ -7,6 +7,7 @@ import * as api from '../../services/api';
 import { ref } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
 import { ctxLabel } from '../modelMeta';
+import { isServerDown } from './ErrorNotice';
 import type { ContextChoice } from '../../types';
 
 const AUTOMATIC = 'auto';
@@ -54,7 +55,10 @@ export function ModelContextSize({ model }: { model: string }) {
         }
     }, [model, t]);
 
-    if (error && !view) return <p className="settings-error" role="alert">{error}</p>;
+    if (error && !view) {
+        if (isServerDown(error)) return <p className="settings-hint">{t('settings.ctx.serverDown')}</p>;
+        return <p className="settings-error" role="alert">{error}</p>;
+    }
     if (!view) return <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.ctx.checking')}</p>;
 
     const selected = view.chosen != null ? String(view.chosen) : AUTOMATIC;

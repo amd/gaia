@@ -18,6 +18,7 @@ import {
     catalogOf, chooseChat, initialSelection, isVision, pendingDownloads, shortfall, skipChanges, toggle, tooBig,
     type Selection,
 } from '../setup/selection';
+import { isServerDown } from './ErrorNotice';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../setup/setup.css';
 
@@ -258,7 +259,7 @@ export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLEle
                 </section>
             </SettingsDisclosure>
 
-            {(gpu?.applies || gpuError) && (
+            {(gpu?.applies || (gpuError && !isServerDown(gpuError))) && (
                 <SettingsDisclosure title={t('gpu.settingsTitle')} titleId="settings-gpu-title" defaultOpen={!!gpu?.pending || !!gpuError}>
                     <section className="settings-field models-pane-section" aria-labelledby="settings-gpu-title">
                         {gpuError && <p className="settings-error" role="alert">{gpuError}</p>}

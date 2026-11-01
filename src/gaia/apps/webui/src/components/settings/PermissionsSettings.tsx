@@ -104,7 +104,7 @@ export function PermissionsSettings() {
                 {rows.map((r) => (
                     <section key={r.session_id} className="settings-field permission-chat" aria-label={title(r.session_id)}>
                         <div className="settings-row settings-row-between">
-                            <span className="settings-label">{title(r.session_id)}</span>
+                            <bdi className="settings-label">{title(r.session_id)}</bdi>
                             {r.mode === 'full_access' && (
                                 <button
                                     type="button"
