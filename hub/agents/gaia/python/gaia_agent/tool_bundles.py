@@ -576,6 +576,31 @@ FULL_BUNDLES = [
             "recording."
         ),
     ),
+    ToolBundle(
+        name="guide",
+        members=frozenset(
+            {
+                "show_recipe",
+                "show_workout",
+                "show_how_to",
+                "show_checklist",
+                "show_itinerary",
+            }
+        ),
+        description=(
+            "Show a recipe, workout, how-to, checklist or itinerary as a card: "
+            "cooking and baking, exercise routines, fixing or setting something "
+            "up, shopping, packing or to-do lists, and trip plans."
+        ),
+    ),
+    ToolBundle(
+        name="calculator",
+        members=frozenset({"show_tip_calculator", "show_loan_calculator"}),
+        description=(
+            "Show a tip or loan calculator card that does the math: tips and "
+            "splitting a bill, mortgages, car loans and monthly payments."
+        ),
+    ),
 ]
 
 # Bundle members a healthy ``full`` registry may legitimately lack. Handed to
@@ -587,8 +612,8 @@ FULL_BUNDLES = [
 #    on PATH; ChatAgent skips it rather than register a tool whose backend
 #    always fails. (``search_web`` is NOT optional here: the browser mixin
 #    registers it unconditionally for this profile.)
-# 2. Subclass-provided mixins -- the skill-library, skill-learning, and
-#    code-index tools come from GaiaAgent, so a plain ChatAgent on
+# 2. Subclass-provided mixins -- the skill-library, skill-learning, code-index,
+#    guide, and calculator tools come from GaiaAgent, so a plain ChatAgent on
 #    prompt_profile="full" has none.
 # 3. Memory. MemoryMixin registers nothing when the embedder is unreachable, so
 #    a degraded-but-running agent has a store and no memory tools. Selection
@@ -646,6 +671,13 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "generate_music",
         "generate_sound_effect",
         "list_audio_generation_models",
+        "show_recipe",
+        "show_workout",
+        "show_how_to",
+        "show_checklist",
+        "show_itinerary",
+        "show_tip_calculator",
+        "show_loan_calculator",
     }
 )
 

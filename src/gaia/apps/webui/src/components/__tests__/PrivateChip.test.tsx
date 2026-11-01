@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrivateChip } from '../PrivateChip';
@@ -78,7 +78,8 @@ describe('PrivateChip', () => {
         getSettings.mockResolvedValue(memory(false));
         render(<PrivateChip />);
         await screen.findByRole('button', { name: 'Memory off' });
-        expect(useChatStore.getState().draftPrivate).toBe(false);
+        // The chip shows before its effect clears the draft; a loaded runner can read in between.
+        await waitFor(() => expect(useChatStore.getState().draftPrivate).toBe(false));
     });
 
     it('keeps a Private choice while memory is on', async () => {

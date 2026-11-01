@@ -305,14 +305,13 @@ class TestTranslatorNarration:
 
     def test_render_map_result_still_gets_a_preview(self):
         """``data`` is the card payload for a render tool; preview comes from the source."""
-        translator = CanonicalTranslator(
-            RUN_ID, agent_id="gaia", render_tool_map={"draw_chart": "chart"}
-        )
+        translator = _tr()
         translator.translate({"type": "tool_start", "tool": "draw_chart"})
         translator.translate({"type": "tool_args", "args": {}})
         (result,) = translator.translate(
             {
                 "type": "tool_result",
+                "render": "chart",
                 "result_data": {"type": "chart", "points": [1, 2]},
                 "summary": "chart rendered",
                 "latency_ms": 8,

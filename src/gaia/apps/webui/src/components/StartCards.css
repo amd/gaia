@@ -48,6 +48,45 @@
     font-size: 12.5px;
 }
 
+.try-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 14px;
+}
+
+.try-chips-label {
+    margin-right: 2px;
+    color: var(--text-muted);
+    font-size: 12.5px;
+}
+
+.try-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 12px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-full);
+    color: var(--text-secondary);
+    font-size: 12.5px;
+}
+
+.try-chip:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.try-chip:disabled {
+    opacity: 0.6;
+}
+
+.try-chip svg {
+    color: var(--accent-solid);
+}
+
 /* Halves of a bracketed label wrap between, never inside, each other. */
 .start-card-part {
     display: inline-block;

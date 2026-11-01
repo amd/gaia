@@ -990,6 +990,8 @@ class SSEOutputHandler(OutputHandler):
         # set last so it always wins over the generic result_data shapes above.
         if render_card is not None:
             event["result_data"] = render_card
+            event["render"] = self._RENDER_TOOL_TO_LANG[self._last_tool_name]
+            event["data"] = render_card
 
         self._emit(event)
 
@@ -1073,6 +1075,13 @@ class SSEOutputHandler(OutputHandler):
         # #2765: a generic ``table`` card (no new client code) so the thread
         # view renders straight from tool data instead of model prose.
         "get_thread": "table",
+        "show_recipe": "guide",
+        "show_workout": "guide",
+        "show_how_to": "guide",
+        "show_checklist": "guide",
+        "show_itinerary": "guide",
+        "show_tip_calculator": "calculator",
+        "show_loan_calculator": "calculator",
     }
 
     def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:

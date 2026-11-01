@@ -361,7 +361,7 @@ unknown `render` degrades to the generic result card (see §7).
 
 ### 4.3 Generic render primitives (#2108)
 
-Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers five
+Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers seven
 **generic primitives** any agent can emit on `tool_result.render` without
 shipping its own frontend component. `data` must match the schema for the key:
 
@@ -372,6 +372,8 @@ shipping its own frontend component. `data` must match the schema for the key:
 | `list` | `{ title?: string, ordered?: boolean, items: Array<string\|number> }` |
 | `image` | `{ src: string, alt?: string, caption?: string }` |
 | `diff` | `{ title?: string, unified: string }` — a unified-diff text; lines are styled by their `+` / `-` / `@@` prefix |
+| `guide` | `{ kind: "guide", guideType: "recipe"\|"workout"\|"howto"\|"checklist"\|"itinerary", title: string, description: string, notes: string, servings: integer\|null, items: string[], steps: string[] }` — `items` are the ingredients, equipment, materials, checklist entries or packing list; `steps` are the recipe steps, exercises, how-to steps or one line per day ("Day 1 - Lisbon: …"), and `[]` for a checklist; `servings` is set only for a recipe. The flagship's `show_recipe`, `show_workout`, `show_how_to`, `show_checklist` and `show_itinerary` emit it |
+| `calculator` | `{ kind: "calculator", calculator: "tip", title: string, currency: string, inputs: { bill: number, tipPercent: number, people: integer } }` or `{ kind: "calculator", calculator: "loan", title: string, currency: string, inputs: { amount: number, annualRatePercent: number, years: number, downPayment: number } }` — starting numbers only; the card computes the tip, total and per-person share, or the monthly payment, total paid and interest, and recomputes as the person edits them. `title` may be `""`; `currency` is an ISO 4217 code such as `"EUR"`. The flagship's `show_tip_calculator` and `show_loan_calculator` emit it |
 
 Rules every receiver implements and every producer can rely on:
 
@@ -776,6 +778,8 @@ turns are hidden than in the last reported view (the newest turn moved the cut,
 or a smaller model or longer prompt shrank the budget), so a stable cut is
 reported once.
 
-Over stdio the agent never sends `tool_result.render`,
-`needs_confirmation.confirm_url` or `error.source`. The TUI decodes them for
-other transports, and it sets `source` itself on an error it synthesizes.
+Over stdio the agent never sends `needs_confirmation.confirm_url` or
+`error.source`. The TUI decodes them for other transports, and it sets `source`
+itself on an error it synthesizes. It does send `tool_result.render` for the
+card tools (`guide`, `calculator`); the TUI has no renderer for those keys yet
+and draws its unknown-card fallback.

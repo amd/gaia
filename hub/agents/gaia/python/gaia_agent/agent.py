@@ -65,8 +65,10 @@ from gaia.agents.base.skill_loader import (
     SkillLoader,
     dynamic_skills_env_override,
 )
+from gaia.agents.tools.calculator_tools import CalculatorToolsMixin
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
+from gaia.agents.tools.guide_tools import GuideToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
 from gaia.connectors.providers.base import ConnectorRequirement
@@ -369,6 +371,8 @@ class GaiaAgent(
     SkillLearningToolsMixin,
     CodeIndexToolsMixin,
     EmailToolsMixin,
+    GuideToolsMixin,
+    CalculatorToolsMixin,
 ):
     """The flagship GAIA agent — conversation, documents, data, web, and skills."""
 
@@ -508,6 +512,8 @@ class GaiaAgent(
             self._init_code_index_state(repo_path=index_root, ceiling_paths=allowed)
             self.register_code_index_tools()
             self.register_email_tools()
+            self.register_guide_tools()
+            self.register_calculator_tools()
         super()._register_tools()
         if engineering_tools:
             # Keep developer closures out of the process-global registry even

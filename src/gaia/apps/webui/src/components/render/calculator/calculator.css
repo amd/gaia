@@ -1,0 +1,122 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* The `calculator` card. Its shell, title and icon buttons are the guide
+ * card's (`render-guide*` in guide.css); this adds only the fields and results. */
+
+.render-calc__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.render-calc__fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 14px 20px;
+    margin-top: 14px;
+}
+
+.render-calc__field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.render-calc__label {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 6px 10px;
+    font-size: var(--fs-body);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.render-calc__box {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.render-calc__box input {
+    width: 8ch;
+    min-width: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
+.render-calc__box input::-webkit-outer-spin-button,
+.render-calc__box input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.render-calc__affix {
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+}
+
+.render-calc__slider {
+    width: 100%;
+    margin: 0;
+    accent-color: var(--accent-solid);
+}
+
+.render-calc__results {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    margin: 18px 0 0;
+    padding: 14px;
+    border-radius: var(--radius-md);
+    background: var(--bg-recessed);
+}
+
+.render-calc__result {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.render-calc__result dt {
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+}
+
+.render-calc__result dd {
+    margin: 0;
+    font-size: var(--fs-body);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+
+.render-calc__result.is-primary dd {
+    font-size: var(--fs-title);
+    color: var(--text-primary);
+}
+
+/* The headline number leads the results on its own row. */
+.render-calc__result.is-primary {
+    grid-column: 1 / -1;
+    order: -1;
+}
