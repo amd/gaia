@@ -37,7 +37,8 @@ jobs:
           REPO: ${{ github.repository }}
           QUEUE_SHA: ${{ github.event.merge_group.head_sha }}
         run: |
-          gh api "repos/$REPO/statuses/$QUEUE_SHA" -f state=success -f context="PR review verdict" \n            -f description="Checked on the PR before it entered the queue"
+          description="Checked on the PR before it entered the queue"
+          gh api "repos/$REPO/statuses/$QUEUE_SHA" -f state=success -f context="PR review verdict" -f description="$description"
 
   verdict:
     if: |

@@ -134,7 +134,9 @@ def test_the_merge_queue_commit_gets_the_same_status(verdict):
     job = wf["jobs"]["merge-queue"]
     assert job["if"] == "github.event_name == 'merge_group'"
     assert job["permissions"]["statuses"] == "write"
-    assert f'context="{verdict.CONTEXT}"' in job["steps"][0]["run"]
+    run = job["steps"][0]["run"]
+    assert f'context="{verdict.CONTEXT}"' in run
+    assert "\\n" not in run, "a literal backslash-n would break the gh call"
     assert "merge_group" not in wf["jobs"]["verdict"]["if"]
 
 
