@@ -581,7 +581,9 @@ def test_a_failed_prepare_leaves_the_earlier_hub_whole(tmp_path, monkeypatch):
     assert _no_swap_leftovers(tmp_path, "hub") == []
 
 
-def test_fixture_hub_publish_restores_previous_hub_when_swap_fails(tmp_path, monkeypatch):
+def test_fixture_hub_publish_restores_previous_hub_when_swap_fails(
+    tmp_path, monkeypatch
+):
     module = _fixtures_import("prepare_fixture_hub")
     out_dir = tmp_path / "hub"
     build = tmp_path / "hub.build-current"
@@ -607,7 +609,9 @@ def test_fixture_hub_publish_restores_previous_hub_when_swap_fails(tmp_path, mon
     assert len(calls) == 3
 
 
-def test_fixture_hub_publish_names_both_folders_when_restore_fails(tmp_path, monkeypatch):
+def test_fixture_hub_publish_names_both_folders_when_restore_fails(
+    tmp_path, monkeypatch
+):
     module = _fixtures_import("prepare_fixture_hub")
     out_dir = tmp_path / "hub"
     build = tmp_path / "hub.build-current"
