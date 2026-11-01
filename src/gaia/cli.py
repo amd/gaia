@@ -488,6 +488,8 @@ async def async_main(action, **kwargs):
                 return {"response": response, "stats": stats}
         return {"response": response}
     elif action == "chat":
+        if kwargs.get("agent") not in (None, "gaia"):
+            return _run_registered_agent(kwargs["agent"], kwargs)
         # `gaia chat` runs the flagship; it ships as the gaia-agent-gaia wheel.
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -741,6 +743,124 @@ async def async_main(action, **kwargs):
 
 def run_cli(action, **kwargs):
     return asyncio.run(async_main(action, **kwargs))
+
+
+# Flags only the flagship reads; another agent would silently ignore them.
+_FLAGSHIP_ONLY_CHAT_FLAGS = {
+    "ui": "--ui",
+    "index": "--index",
+    "watch": "--watch",
+    "chunk_size": "--chunk-size",
+    "max_chunks": "--max-chunks",
+    "allowed_paths": "--allowed-paths",
+    "max_indexed_files": "--max-indexed-files",
+    "max_total_chunks": "--max-total-chunks",
+    "mcp_tool_limit": "--mcp-tool-limit",
+    "no_learned_skills": "--no-learned-skills",
+}
+
+
+def _reject_flagship_only_flags(args) -> None:
+    """Exit 2 if ``gaia chat --agent <id>`` was given a flagship-only flag."""
+    if getattr(args, "agent", None) in (None, "gaia"):
+        return
+    defaults = vars(build_parser().parse_args(["chat"]))
+    used = [
+        flag
+        for dest, flag in _FLAGSHIP_ONLY_CHAT_FLAGS.items()
+        if getattr(args, dest, None) != defaults.get(dest)
+    ]
+    if used:
+        print(
+            f"❌ {', '.join(used)} only applies to the flagship agent, not "
+            f"--agent {args.agent}.\n"
+            "   Drop the flag, or run `gaia chat` without --agent. The Agent UI "
+            "(`gaia chat --ui`) picks agents from its own selector.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
+def _run_registered_agent(agent_id: str, kwargs: dict) -> int:
+    """Run ``gaia chat --agent <id>`` through the same registry the Agent UI
+    and ``gaia agent status`` use."""
+    from gaia.cli_agent import _build_registry
+
+    registry = _build_registry()
+    if registry.get(agent_id) is None:
+        ids = sorted(reg.id for reg in registry.list())
+        print(
+            f"❌ No agent registered as '{agent_id}'. "
+            f"Registered agents: {', '.join(ids) or '(none)'}.\n"
+            "   Custom agents live in ~/.gaia/agents/<id>/agent.py; "
+            "`gaia agent status` lists every agent and its health.\n"
+            "   See https://amd-gaia.ai/docs/guides/custom-agent",
+            file=sys.stderr,
+        )
+        return 2
+
+    debug = kwargs.get("debug", False)
+    create_kwargs = {
+        "use_claude": kwargs.get("use_claude", False),
+        "claude_model": kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
+        "base_url": kwargs.get("base_url") or resolve_lemonade_base_url(),
+        "streaming": kwargs.get("stream", False),
+        "show_prompts": kwargs.get("show_prompts", False),
+        "show_stats": kwargs.get("show_stats", False),
+        "silent_mode": not debug,
+        "debug": debug,
+    }
+    for src, dest in (
+        ("model", "model_id"),
+        ("max_steps", "max_steps"),
+        ("device", "device"),
+    ):
+        if kwargs.get(src) is not None:
+            create_kwargs[dest] = kwargs[src]
+
+    try:
+        agent = registry.create_agent(agent_id, **create_kwargs)
+    except Exception as e:
+        get_logger(__name__).debug("create_agent(%s) failed", agent_id, exc_info=True)
+        print(
+            f"❌ Agent '{agent_id}' is registered but failed to start: {e}\n"
+            f"   Run `gaia agent health {agent_id}` for details.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if kwargs.get("list_tools", False):
+        agent.list_tools(verbose=True)
+        return 0
+
+    trace = kwargs.get("trace", False)
+    show_stats = kwargs.get("show_stats", False)
+
+    def _ask(text: str) -> bool:
+        result = agent.process_query(text, trace=trace)
+        if show_stats and result.get("duration"):
+            agent.console.display_stats(result)
+        return result.get("status") == "success"
+
+    query = kwargs.get("query")
+    try:
+        if query:
+            return 0 if _ask(query) else 1
+
+        print(f"{agent_id} — interactive. Enter a query, or '/quit' to exit.\n")
+        while True:
+            try:
+                text = input("You: ").strip()
+            except EOFError:
+                print()
+                return 0
+            if text in ("/quit", "/exit", "/q"):
+                return 0
+            if text:
+                _ask(text)
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user", file=sys.stderr)
+        return 130
 
 
 def _ensure_webui_built(log=None):
@@ -1222,6 +1342,13 @@ def build_parser():
         "-q",
         type=str,
         help="Single query to execute (defaults to interactive mode if not provided)",
+    )
+    chat_parser.add_argument(
+        "--agent",
+        metavar="ID",
+        default=None,
+        help="Run a registered agent instead of the flagship, e.g. a custom "
+        "agent in ~/.gaia/agents/<id>/. `gaia agent status` lists the ids.",
     )
 
     # Agent configuration
@@ -4822,6 +4949,9 @@ def main():
                 args.model = resolved
                 log.debug("Using default_model from config: %s", resolved)
                 _warn_if_default_model_unavailable(resolved)
+
+    if args.action == "chat":
+        _reject_flagship_only_flags(args)
 
     # Handle chat --ui: launch Agent UI server (backward compat)
     if args.action == "chat" and getattr(args, "ui", False):
