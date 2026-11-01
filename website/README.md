@@ -3,7 +3,7 @@
 Developer-focused landing page for GAIA - Local AI Agents framework.
 
 Serves `amd-gaia.ai` (the landing page, its downloads, and `/hub`, the published
-skills). `/roadmap` redirects to the docs roadmap (`public/serve.json`). The `/docs` tab is Mintlify, a
+skills). `/roadmap` redirects to the docs roadmap and the retired `/hub/<agent>` pages to `/hub` (`public/serve.json`). The `/docs` tab is Mintlify, a
 separate origin — see [Deployment](#deployment) for how the two are stitched
 together.
 
@@ -64,7 +64,7 @@ website/
 │   ├── favicon.ico
 │   ├── gaia-icon.png
 │   ├── robots.txt
-│   └── serve.json                   # `serve` redirects (/roadmap → /docs/roadmap)
+│   └── serve.json                   # `serve` redirects (/roadmap, retired /hub/<agent>)
 ├── scripts/
 ├── src/
 │   ├── components/                  # Astro components (Downloads, Header, Footer, …)

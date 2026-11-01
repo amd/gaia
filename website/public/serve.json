@@ -1,5 +1,6 @@
 {
   "redirects": [
+    { "source": "/hub/:page", "destination": "/hub", "type": 301 },
     { "source": "/roadmap", "destination": "/docs/roadmap", "type": 301 }
   ]
 }
