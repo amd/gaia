@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata as md
+import os
 import shutil
 import subprocess
 import sys
+import sysconfig
 from typing import Iterator
 
 import pytest
@@ -202,8 +204,10 @@ def test_console_script_minimum_count() -> None:
     reason="package not installed; run `pip install -e .` to enable binary PATH checks",
 )
 def test_gaia_binary_on_path(binary: str) -> None:
-    """Every `gaia*` console_scripts shim is reachable on PATH after `pip install`."""
-    assert shutil.which(binary) is not None, (
+    """Every `gaia*` console_scripts shim is reachable after `pip install`."""
+    # The running env's scripts dir: a venv's python can run with it off PATH.
+    search = os.pathsep.join([sysconfig.get_path("scripts"), os.environ["PATH"]])
+    assert shutil.which(binary, path=search) is not None, (
         f"Binary {binary!r} not found on PATH. The console_scripts shim "
         f"from setup.py may not have been installed. Run `pip install -e .`"
     )

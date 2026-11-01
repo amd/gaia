@@ -1252,7 +1252,7 @@ gaia telegram stop
 | `start` | `--allowed-users` (required) | – | Comma-separated numeric user IDs permitted to interact. Starting without one is refused — a bot with no allowlist is reachable by every Telegram user. |
 | `start` | `--background` | false | Run as a daemon (writes PID + health endpoint). |
 | `start` | `--health-port` | 8768 | Health server port (background mode). |
-| `stop` | `--force` | false | Force stop if graceful shutdown fails. |
+| `stop` | `--force` | false | Kill the adapter immediately (SIGKILL / taskkill /F). |
 | `status` | `--health-host` | 127.0.0.1 | Health server host. |
 | `status` | `--health-port` | 8768 | Health server port. |
 
@@ -3061,9 +3061,10 @@ Skills are discovered from these roots, highest precedence first:
     | `publisher` | `community` | A publisher you trust |
     | `amd` | `verified` | The AMD signing root |
 
-    The trust store ships **empty** — no AMD key is bundled. Until an operator adds
-    one, every skill installs at `experimental`, which is the honest floor rather
-    than a placeholder that would make `verified` look anchored when it is not.
+    GAIA trusts one key out of the box: the AMD key that signs the skills GAIA
+    publishes (`hub/skills/`), listed as `AMD (built-in)`. It cannot be removed;
+    adding it yourself with `--role publisher` demotes it on your machine. Every
+    other key installs at `experimental` until you trust it.
   </Tab>
 </Tabs>
 

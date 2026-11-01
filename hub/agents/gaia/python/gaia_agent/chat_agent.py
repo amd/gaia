@@ -364,6 +364,7 @@ class ChatAgentConfig:
 
     # Optional capability flags (disabled by default to keep document Q&A focused)
     enable_sd_tools: bool = False  # Lemonade image generation
+    enable_3d_tools: bool = False  # Opt-in Lemonade TRELLIS image-to-3D
     enable_audio_generation_tools: bool = False  # Lemonade music and sound effects
 
     # MCP settings.
@@ -2211,16 +2212,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         os.pathsep.join([project, existing]) if existing else project
                     )
 
-                # The system temp dir keeps the snippet out of the workspace.
-                with tempfile.NamedTemporaryFile(
-                    "w",
-                    suffix=".py",
-                    prefix="gaia-run-",
-                    delete=False,
-                    encoding="utf-8",
-                ) as handle:
-                    handle.write(code)
-                    snippet = Path(handle.name)
+                # Temp keeps the snippet out of the workspace. Its own folder,
+                # because a script's folder comes first on sys.path and any
+                # stray temp/h2.py would otherwise replace the real module.
+                snippet_dir = Path(tempfile.mkdtemp(prefix="gaia-run-"))
+                snippet = snippet_dir / "snippet.py"
+                snippet.write_text(code, encoding="utf-8")
                 cmd = python_command(snippet)
                 detail = describe_code(code)
                 writes = may_write_files(code)
@@ -2262,7 +2259,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     logger.error("run_python could not start in %s: %s", run_dir, e)
                     return _start_failure(cmd[0], Path(run_dir), e)
                 finally:
-                    snippet.unlink(missing_ok=True)
+                    try:
+                        shutil.rmtree(snippet_dir)
+                    except OSError as e:
+                        # A process the snippet started can still hold it open.
+                        logger.warning(
+                            "run_python: could not remove %s: %s", snippet_dir, e
+                        )
                 notes = [finished_job_note(job)]
                 if moved_from is not None:
                     notes.append(
@@ -2315,7 +2318,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             # cwd, which for a daemon-launched sidecar is the package directory.
             sd_output_dir = GAIA_CONFIG_DIR / "cache" / "sd" / "images"
             try:
-                self.init_sd(output_dir=str(sd_output_dir))
+                self.init_sd(
+                    output_dir=str(sd_output_dir),
+                    enable_3d_tools=getattr(self.config, "enable_3d_tools", False),
+                )
                 logger.debug(
                     "SD tools registered (generate_image, list_sd_models, "
                     "get_generation_history), output=%s",

@@ -1595,7 +1595,7 @@ def build_parser():
     t_stop.add_argument(
         "--force",
         action="store_true",
-        help="Force stop even if graceful shutdown fails",
+        help="Kill the adapter immediately (SIGKILL / taskkill /F)",
     )
 
     # Status subcommand
@@ -4937,9 +4937,32 @@ def main():
                     with contextlib.suppress(FileNotFoundError):
                         os.remove(pid_path)
                     return
-                # The adapter removes its own PID file once polling stops.
-                os.kill(pid, signal.SIGTERM)
-                print(f"Sent SIGTERM to Telegram adapter (pid {pid}).")
+                if getattr(args, "force", False):
+                    # Identity-checked above; taskkill /T also reaps adapter children.
+                    if os.name == "nt":
+                        result = subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(pid)],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            timeout=30,
+                        )
+                        if result.returncode:
+                            detail = (result.stderr or result.stdout).strip()
+                            raise OSError(
+                                f"taskkill exited {result.returncode}"
+                                + (f": {detail}" if detail else "")
+                            )
+                    else:
+                        os.kill(pid, signal.SIGKILL)
+                    print(f"Force-stopped Telegram adapter (pid {pid}).")
+                    # A hard-killed adapter cannot clean up its PID file.
+                    with contextlib.suppress(FileNotFoundError):
+                        os.remove(pid_path)
+                else:
+                    # The adapter removes its own PID file once polling stops.
+                    os.kill(pid, signal.SIGTERM)
+                    print(f"Sent SIGTERM to Telegram adapter (pid {pid}).")
             except ProcessLookupError:
                 print("Process not found; removing stale PID file.")
                 with contextlib.suppress(FileNotFoundError):

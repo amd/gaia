@@ -284,6 +284,12 @@ test.describe('English', () => {
     });
 });
 
+const lastColor = (page: Page): Promise<string> =>
+    page.evaluate(() => (window as unknown as { __colors: { color: string }[] }).__colors.at(-1)?.color ?? '');
+
+const brightness = (hex: string): number =>
+    [1, 3, 5].reduce((sum, at) => sum + parseInt(hex.slice(at, at + 2), 16), 0);
+
 for (const locale of ['ar', 'en']) {
     test(`settings close button stays pinned while the pane scrolls (${locale})`, async ({ page }) => {
         await open(page, '', locale);
@@ -438,4 +444,49 @@ test('window controls take the color of the sidebar beneath them', async ({ page
         getComputedStyle(document.documentElement).getPropertyValue('--bg-sidebar').trim(),
     ]);
     expect(last).toBe(sidebar);
+
+    await page.locator('.sb').getByRole('button', { name: /الإعدادات/ }).first().click();
+    await expect(page.locator('.settings-overlay')).toBeVisible();
+    await expect.poll(async () => brightness(await lastColor(page))).toBeLessThan(brightness(sidebar));
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.settings-overlay')).toHaveCount(0);
+    await expect.poll(() => lastColor(page)).toBe(sidebar);
+});
+
+test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
+    await open(page);
+    await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
+    await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
+});
+
+test('composer chips stay whole at phone width', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 780 });
+    await open(page);
+    const row = page.locator('.composer-chip').first();
+    await expect(row).toBeVisible();
+    const boxes = await page.locator('.composer-chip, .composer-send').evaluateAll((els) =>
+        els.map((el) => {
+            const { left, right, width } = el.getBoundingClientRect();
+            return { left, right, width };
+        }).filter((box) => box.width > 0),
+    );
+    expect(boxes.filter((box) => box.width < 24)).toEqual([]);
+    const sorted = [...boxes].sort((x, y) => x.left - y.left);
+    expect(sorted.filter((box, i) => i > 0 && box.left < sorted[i - 1].right - 1)).toEqual([]);
+});
+
+test('the library path row fits a phone', async ({ page }) => {
+    await open(page);
+    await page.locator('.sb').getByRole('button', { name: /المستندات/ }).click();
+    await page.setViewportSize({ width: 390, height: 780 });
+    const form = page.locator('.path-input-form');
+    await expect(form).toBeVisible();
+    const clipped = await form.locator('button, input').evaluateAll((els) =>
+        els.filter((el) => {
+            const box = el.getBoundingClientRect();
+            return box.left < 0 || box.right > innerWidth;
+        }).length,
+    );
+    expect(clipped).toBe(0);
 });

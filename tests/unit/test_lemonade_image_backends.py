@@ -2,12 +2,24 @@
 # SPDX-License-Identifier: MIT
 """TheNoise image models must not inherit hard-coded legacy SD defaults."""
 
+import base64
+import io
 from unittest.mock import MagicMock
 
 import pytest
+from PIL import Image
 
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 from gaia.sd import SDToolsMixin
+
+
+def _png_b64() -> str:
+    """A real two-colour PNG; the mixin rejects undecodable or flat images."""
+    img = Image.new("RGB", (8, 8), (200, 30, 30))
+    img.paste((20, 20, 220), (0, 0, 4, 8))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
 
 
 def _client():
@@ -88,11 +100,8 @@ def test_mixin_thenoise_does_not_force_legacy_defaults(tmp_path):
     mixin.sd_default_steps = None
     mixin.sd_default_cfg = None
     mixin.sd_generations = []
-    fake_png = b"\x89PNG\r\n\x1a\n" + b"x" * 30
-    import base64
-
     mixin.sd_client.generate_image = MagicMock(
-        return_value={"data": [{"b64_json": base64.b64encode(fake_png).decode()}]}
+        return_value={"data": [{"b64_json": _png_b64()}]}
     )
     mixin.sd_client.load_model = MagicMock()
     result = mixin._generate_image("a forest", model="Qwen-Image-2.1-TheNoise")
@@ -116,8 +125,6 @@ def test_image_save_sanitizes_model_name(tmp_path):
 
 
 def _mixin(tmp_path, downloaded):
-    import base64
-
     mixin = SDToolsMixin()
     mixin.sd_client = _client()
     mixin.sd_client.list_sd_models = MagicMock(return_value=downloaded)
@@ -127,9 +134,8 @@ def _mixin(tmp_path, downloaded):
     mixin.sd_default_steps = None
     mixin.sd_default_cfg = None
     mixin.sd_generations = []
-    png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"x" * 30).decode()
     mixin.sd_client.generate_image = MagicMock(
-        return_value={"data": [{"b64_json": png}]}
+        return_value={"data": [{"b64_json": _png_b64()}]}
     )
     mixin.sd_client.load_model = MagicMock()
     return mixin
