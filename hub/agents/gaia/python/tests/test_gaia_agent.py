@@ -27,6 +27,8 @@ only thing that can move these counts is a real config change.
 from __future__ import annotations
 
 import contextlib
+import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -88,6 +90,119 @@ def manifest():
     return yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
 
 
+def test_re_registering_tools_keeps_the_repo_selected_for_code_index(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "workspace"
+    selected_repo = workspace / "selected-repo"
+    selected_repo.mkdir(parents=True)
+
+    with _isolated_registry():
+        monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+        agent = GaiaAgent(
+            config=GaiaAgentConfig(silent_mode=True, allowed_paths=[str(workspace)])
+        )
+        agent._repo_path = str(selected_repo)
+        indexed_sdk = object()
+        agent._code_index_sdk = indexed_sdk
+
+        # Cached Agent UI turns re-register the flagship tool surface.  That
+        # refresh must retain the repo selected by index_codebase.
+        agent._register_tools()
+
+    assert agent._repo_path == str(selected_repo)
+    assert agent._code_index_sdk is indexed_sdk
+    assert agent._code_index_ceilings == (str(workspace),)
+
+
+def test_re_registering_tools_drops_repo_outside_narrowed_allowed_paths(
+    tmp_path, monkeypatch
+):
+    outside = tmp_path / "outside" / "repo"
+    workspace = tmp_path / "workspace"
+    outside.mkdir(parents=True)
+    workspace.mkdir()
+
+    with _isolated_registry():
+        monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+        agent = GaiaAgent(
+            config=GaiaAgentConfig(silent_mode=True, allowed_paths=[str(tmp_path)])
+        )
+        agent._repo_path = str(outside)
+        agent._code_index_sdk = object()
+        agent.config.allowed_paths = [str(workspace)]
+
+        agent._register_tools()
+
+    assert agent._repo_path != str(outside)
+    assert agent._code_index_sdk is None
+    assert agent._code_index_ceilings == (str(workspace),)
+
+
+def _retained_repo_after_narrowing(tmp_path, repo, workspace):
+    with _isolated_registry():
+        agent = GaiaAgent(
+            config=GaiaAgentConfig(silent_mode=True, allowed_paths=[str(tmp_path)])
+        )
+        agent._repo_path = str(repo)
+        agent._code_index_sdk = object()
+        agent.config.allowed_paths = [str(workspace)]
+        agent._register_tools()
+    return agent
+
+
+def test_re_registering_tools_drops_a_sibling_sharing_the_ceiling_prefix(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+    workspace = tmp_path / "work"
+    sibling = tmp_path / "work-evil" / "repo"
+    workspace.mkdir()
+    sibling.mkdir(parents=True)
+
+    agent = _retained_repo_after_narrowing(tmp_path, sibling, workspace)
+
+    assert agent._repo_path != str(sibling)
+    assert agent._code_index_sdk is None
+
+
+def test_re_registering_tools_drops_a_link_inside_the_ceiling_pointing_out(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    link = workspace / "link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        if sys.platform != "win32":
+            pytest.skip("creating a directory symlink needs privileges here")
+        import _winapi
+
+        _winapi.CreateJunction(str(outside), str(link))
+
+    agent = _retained_repo_after_narrowing(tmp_path, link, workspace)
+
+    assert agent._repo_path != str(link)
+    assert agent._code_index_sdk is None
+
+
+def test_re_registering_tools_with_dotdot_escape_drops_the_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+    workspace = tmp_path / "workspace"
+    (tmp_path / "outside").mkdir()
+    workspace.mkdir()
+    escaped = workspace / ".." / "outside"
+
+    agent = _retained_repo_after_narrowing(tmp_path, escaped, workspace)
+
+    assert agent._repo_path != str(escaped)
+    assert agent._code_index_sdk is None
+
+
 # --------------------------------------------------------------------------
 # Capability breadth — the reason this agent exists
 # --------------------------------------------------------------------------
@@ -100,6 +215,11 @@ CAPABILITIES = {
     "scratchpad (data-explore)": ("create_table", "list_tables"),
     "browser (research-report)": ("fetch_page", "fetch_webpage"),
     "file io (research-report)": ("read_file", "write_file"),
+    "audio generation (music-gen)": (
+        "list_audio_generation_models",
+        "generate_music",
+        "generate_sound_effect",
+    ),
 }
 
 
@@ -156,10 +276,16 @@ def test_manifest_tools_count_matches_real_registry(manifest, registered_tools):
     headline feature and it is on by default. ``core_tools`` (5 fewer) is the
     degraded-embedder floor, not what the hub page should advertise.
     """
-    assert manifest["tools_count"] == len(registered_tools), (
+    # The Context7 tool is only registered when npx is installed. Pin the
+    # advertised full-capability count rather than the machine's PATH.
+    has_npx = shutil.which("npx") is not None
+    assert ("search_documentation" in registered_tools) == has_npx
+    full_count = len(registered_tools) + int(not has_npx)
+    assert manifest["tools_count"] == full_count, (
         f"gaia-agent.yaml tools_count={manifest['tools_count']} but the real "
-        f"registry has {len(registered_tools)}. Hand-typed drift — the hub page "
-        f"would over- or under-claim what this agent can do."
+        f"registry has {len(registered_tools)} tools "
+        f"(npx available: {has_npx}). Hand-typed drift — the hub page "
+        "would over- or under-claim what this agent can do."
     )
 
 
@@ -262,7 +388,7 @@ def test_flagship_step_limit_env_and_explicit_values_win(monkeypatch):
 
 def test_an_unset_step_limit_resolves_to_the_flagship_default(monkeypatch):
     """The CLI passes ``max_steps=None`` when --max-steps is not given."""
-    from gaia_agent_chat.agent import ChatAgent
+    from gaia_agent.chat_agent import ChatAgent
 
     seen = {}
 

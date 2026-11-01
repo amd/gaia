@@ -83,7 +83,7 @@ def test_fireworks_model_id(model, expected):
 def test_main_writes_ready_false_and_exits_zero_on_a_pr_outage(tmp_path, monkeypatch):
     out, summary = tmp_path / "out", tmp_path / "summary"
     codes = iter([404, 404])
-    monkeypatch.setattr(pf, "probe", lambda *a, **k: next(codes))
+    monkeypatch.setattr(pf, "probe", lambda *a, **k: (next(codes), ""))
     monkeypatch.setattr(pf, "register_fireworks", lambda *a, **k: None)
     for k, v in {
         "SWE_MODEL": MODEL,
@@ -102,7 +102,7 @@ def test_main_writes_ready_false_and_exits_zero_on_a_pr_outage(tmp_path, monkeyp
 
 def test_main_exits_one_on_a_dispatch_outage(tmp_path, monkeypatch):
     codes = iter([404, 404])
-    monkeypatch.setattr(pf, "probe", lambda *a, **k: next(codes))
+    monkeypatch.setattr(pf, "probe", lambda *a, **k: (next(codes), ""))
     monkeypatch.setattr(pf, "register_fireworks", lambda *a, **k: None)
     for k, v in {
         "SWE_MODEL": MODEL,
@@ -119,7 +119,8 @@ def test_main_exits_one_on_a_dispatch_outage(tmp_path, monkeypatch):
 
 
 def test_probe_reports_zero_when_nothing_answers():
-    assert pf.probe("http://127.0.0.1:1/chat/completions", "k", MODEL, timeout=2) == 0
+    status, _ = pf.probe("http://127.0.0.1:1/chat/completions", "k", MODEL, timeout=2)
+    assert status == 0
 
 
 def _env(monkeypatch, tmp_path, event="pull_request"):
@@ -158,7 +159,7 @@ def test_a_refused_registration_fails_even_on_a_pr(status, tmp_path, monkeypatch
     _env(monkeypatch, tmp_path)
     monkeypatch.setattr(pf, "_post", lambda *a, **k: (status, "nope"))
     probed = []
-    monkeypatch.setattr(pf, "probe", lambda *a, **k: probed.append(a) or 200)
+    monkeypatch.setattr(pf, "probe", lambda *a, **k: probed.append(a) or (200, ""))
     assert pf.main() == 1
     assert not probed, "no model probe after Lemonade refused the provider"
     assert (tmp_path / "out").read_text() == "ready=false\n"
@@ -172,7 +173,8 @@ def test_main_probes_lemonade_then_fireworks_with_the_right_keys(tmp_path, monke
     monkeypatch.setattr(
         pf,
         "probe",
-        lambda url, key, model, **k: calls.append((url, key, model)) or next(codes),
+        lambda url, key, model, **k: calls.append((url, key, model))
+        or (next(codes), ""),
     )
     assert pf.main() == 1  # Fireworks serves it, Lemonade does not: GAIA's problem
     assert calls == [
@@ -183,3 +185,46 @@ def test_main_probes_lemonade_then_fireworks_with_the_right_keys(tmp_path, monke
             "accounts/fireworks/models/deepseek-v4p1-flash",
         ),
     ]
+
+
+def test_the_probe_matches_the_run_and_leaves_room_to_answer(monkeypatch):
+    """max_tokens=1 left a reasoning model no room to answer: Fireworks returned
+    null content and Lemonade's chat route failed on it with HTTP 500."""
+    sent = {}
+
+    def fake_post(url, key, payload, timeout):
+        sent.update(payload)
+        return 200, "{}"
+
+    monkeypatch.setattr(pf, "_post", fake_post)
+    status, _ = pf.probe("http://127.0.0.1:1/api/v1/chat/completions", "k", MODEL)
+    assert status == 200
+    assert not sent.get("stream")  # the SWE-bench run is non-streaming
+    assert sent["max_tokens"] >= 256
+
+
+@pytest.mark.parametrize("event", ["pull_request", "workflow_dispatch"])
+def test_a_null_content_reply_is_named_not_blamed_on_discovery(event):
+    body = (
+        '{"error":"[json.exception.type_error.302] type must be string, but is null"}'
+    )
+    d = pf.decide(event, MODEL, 500, 200, body)
+    assert d.fail and not d.ready
+    assert "no content" in d.title
+    assert "does not route it" not in d.message
+
+
+def test_any_other_lemonade_500_is_still_a_routing_failure():
+    d = pf.decide("pull_request", MODEL, 500, 200, '{"error":"model not found"}')
+    assert d.fail and "does not route it" in d.message
+
+
+def test_main_passes_lemonades_reply_to_the_diagnosis(tmp_path, monkeypatch, capsys):
+    _env(monkeypatch, tmp_path)
+    monkeypatch.setattr(pf, "register_fireworks", lambda *a, **k: None)
+    crash = '{"error":"type must be string, but is null"}'
+    replies = iter([(500, crash), (200, "{}")])
+    monkeypatch.setattr(pf, "probe", lambda *a, **k: next(replies))
+    assert pf.main() == 1
+    annotation = capsys.readouterr().out
+    assert "::error title=SWE-bench model reply has no content::" in annotation

@@ -62,8 +62,16 @@ from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_defaul
 from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.logger import get_logger
 from gaia.security import BackupError
+from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
+
+#: Root-level operating-system trees a deep search walks last, so they cannot
+#: spend the budget before user folders. Applied only at a filesystem root,
+#: never to a named folder such as ``~/Library``.
+_DEEP_SYSTEM_DIRS = frozenset(
+    {"System", "Library", "private", "usr", "opt", "proc", "sys", "dev", "run", "snap"}
+)
 
 #: Version-control and dependency folders content search does not descend into
 #: (thousands of files, none the user wrote); searching one directly still works.
@@ -478,6 +486,8 @@ class FileSearchToolsMixin:
                         ".json",
                         ".xlsx",
                         ".xls",
+                        ".pptx",
+                        ".epub",
                         ".py",
                         ".js",
                         ".ts",
@@ -639,7 +649,12 @@ class FileSearchToolsMixin:
                 walked = set()
                 guard = ProtectedFolders(self)
 
-                def search_location(location: Path, max_depth: int = 999):
+                def search_location(
+                    location: Path,
+                    max_depth: int = 999,
+                    defer_root_dirs=frozenset(),
+                    deferred=None,
+                ):
                     """Search a specific location up to max_depth."""
                     if guard.blocks(location) or not location.exists():
                         return
@@ -683,6 +698,14 @@ class FileSearchToolsMixin:
                                 if item.name.startswith(
                                     (".", "$", "Windows", "Program Files")
                                 ):
+                                    continue
+                                if (
+                                    deferred is not None
+                                    and current_path == location
+                                    and item.name in defer_root_dirs
+                                    and item.is_dir()
+                                ):
+                                    deferred.append(item)
                                     continue
                                 # Skip build/package directories
                                 if item.is_dir() and item.name in _SKIP_DIRS:
@@ -781,7 +804,7 @@ class FileSearchToolsMixin:
                     common_locations = confine_roots(
                         self,
                         [
-                            home / "Documents",
+                            documents_dir(home),
                             home / "Downloads",
                             home / "Desktop",
                             home / "OneDrive",
@@ -850,7 +873,7 @@ class FileSearchToolsMixin:
                 # exactly this result.
                 if not deep_search or directory:
                     # Name the places that were searched. A bare zero reads as
-                    # "there are none", and the model relays it that way (#3576).
+                    # "there are none", and the model relays it that way.
                     where = ", ".join(str(r) for r in roots) or "nowhere"
                     return with_truncation(
                         {
@@ -886,6 +909,15 @@ class FileSearchToolsMixin:
 
                 logger.debug("Phase 2: Deep search across drive(s)...")
 
+                # Search the user's home first. A root-first walk can spend its
+                # entire budget in /System, /Library, or /usr before reaching
+                # the files the user actually means by "my computer".
+                for home_root in confine_roots(self, [home]):
+                    logger.debug("Searching home first: %s", home_root)
+                    search_location(home_root, max_depth=999)
+                    if len(matching_files) >= 10:
+                        break
+
                 if platform.system() == "Windows":
                     import string
 
@@ -896,11 +928,36 @@ class FileSearchToolsMixin:
                     ]
                 else:
                     drives = [Path("/")]
-                for drive in confine_roots(self, drives):
-                    logger.debug("Searching %s...", drive)
-                    search_location(drive, max_depth=999)
-                    if len(matching_files) >= 10:
-                        break
+                if len(matching_files) < 10:
+                    for drive in confine_roots(self, drives):
+                        drive = Path(drive)
+                        # GAIA_ALLOWED_PATHS can confine "/" and home to the
+                        # same folder; walking it twice would list each hit twice.
+                        if any(drive.is_relative_to(done) for done in walked):
+                            continue
+                        logger.debug("Searching %s...", drive)
+                        # A sandbox may confine ``/`` to a user-selected child
+                        # directory. Only the actual filesystem root has OS
+                        # trees to defer; a selected folder named Library is data.
+                        deferred: List[Path] = []
+                        search_location(
+                            drive,
+                            max_depth=999,
+                            defer_root_dirs=(
+                                _DEEP_SYSTEM_DIRS
+                                if drive == Path(drive.anchor)
+                                else frozenset()
+                            ),
+                            deferred=deferred,
+                        )
+                        # Walked last, not skipped: one the budget never reaches
+                        # is reported in unfinished_paths, not counted as searched.
+                        for os_tree in deferred:
+                            if len(matching_files) >= 10:
+                                break
+                            search_location(os_tree, max_depth=999)
+                        if len(matching_files) >= 10:
+                            break
 
                 # Stop progress indicator
                 if hasattr(self, "console") and hasattr(self.console, "stop_progress"):
@@ -1075,7 +1132,7 @@ class FileSearchToolsMixin:
 
                 # os.path.exists() is true for a directory too, so without this
                 # check open() below raises IsADirectoryError into the generic
-                # except Exception handler as a raw errno string (amd/gaia#3890).
+                # except Exception handler as a raw errno string.
                 if os.path.isdir(file_path):
                     return {
                         "status": "error",
@@ -1235,7 +1292,7 @@ class FileSearchToolsMixin:
             id_rsa, *.pem...) are never searched.
             """
             try:
-                # Relative to the workspace, not this process's cwd (#3576).
+                # Relative to the workspace, not this process's cwd.
                 directory, unresolved = self._resolve_search_directory(
                     directory or ".", allow_file=True
                 )
@@ -1670,17 +1727,23 @@ class FileSearchToolsMixin:
             else:
                 return dt.strftime("%Y-%m-%d")
 
-        def _read_tabular_file(file_path: str) -> tuple:
+        def _read_tabular_file(file_path: str, sheet: Optional[str] = None) -> tuple:
             """
             Read a tabular data file (CSV, TSV, or Excel) into a list of dicts.
 
+            Args:
+                file_path: The file to read.
+                sheet: For a workbook, the sheet to read (default: the active one).
+
             Returns:
-                Tuple of (rows: List[Dict], columns: List[str], error: str or None)
+                Tuple of (rows: List[Dict], columns: List[str], error: str or None,
+                sheets: workbook sheet names and the one read, or None for CSV/TSV)
             """
             ext = Path(file_path).suffix.lower()
             rows: List[Dict[str, Any]] = []
             columns: List[str] = []
             error = None
+            sheets = None
 
             if ext in (".xlsx", ".xls"):
                 try:
@@ -1689,11 +1752,28 @@ class FileSearchToolsMixin:
                     wb = openpyxl.load_workbook(
                         file_path, read_only=True, data_only=True
                     )
-                    ws = wb.active
+                    names = list(wb.sheetnames)
+                    if sheet is None:
+                        ws = wb.active
+                    else:
+                        wanted = sheet.strip().lower()
+                        match = next(
+                            (n for n in names if n.strip().lower() == wanted), None
+                        )
+                        if match is None:
+                            wb.close()
+                            return (
+                                [],
+                                [],
+                                f"No sheet named {sheet!r}. Sheets: {', '.join(names)}",
+                                {"sheets": names},
+                            )
+                        ws = wb[match]
+                    sheets = {"sheet": ws.title, "sheets": names}
                     ws_rows = list(ws.iter_rows(values_only=True))
                     wb.close()
                     if not ws_rows:
-                        return [], [], None
+                        return [], [], None, sheets
                     header = _header_row_index(ws_rows)
                     columns = [
                         str(c) if c is not None else f"Column_{i}"
@@ -1729,7 +1809,7 @@ class FileSearchToolsMixin:
                         continue
                 if content is None:
                     error = "Could not decode file with any supported encoding (utf-8, latin-1, cp1252)"
-                    return [], [], error
+                    return [], [], error, None
 
                 try:
                     # Use csv.Sniffer to detect delimiter if possible
@@ -1747,7 +1827,7 @@ class FileSearchToolsMixin:
                 except Exception as e:
                     error = f"Error parsing CSV/TSV file: {e}"
 
-            return rows, columns, error
+            return rows, columns, error, sheets
 
         def _infer_column_type(values: list) -> str:
             """Infer the data type of a column from its values."""
@@ -1856,7 +1936,7 @@ class FileSearchToolsMixin:
                     # Validate write access (skip overwrite prompt since we're editing).
                     # Pass the *actual* size of the replacement string so
                     # MAX_WRITE_SIZE_BYTES is enforced — passing 0 here would
-                    # silently bypass the size guardrail (#495 review feedback).
+                    # silently bypass the size guardrail.
                     is_allowed, reason = path_validator.validate_write(
                         str(resolved_path),
                         content_size=len(new_content.encode("utf-8")),
@@ -2351,12 +2431,15 @@ class FileSearchToolsMixin:
             columns: str = None,
             group_by: str = None,
             date_range: str = None,
+            sheet: str = None,
         ) -> Dict[str, Any]:
             """
             Parse and analyze tabular data files with multiple analysis modes.
 
             Supports CSV, TSV, XLSX, and XLS files. Provides summary statistics,
             spending categorization, and trend analysis for financial data.
+            A workbook is read one sheet at a time; the result's ``sheets``
+            lists them all, so check it before saying data is not in the file.
 
             Args:
                 file_path: Path to the data file
@@ -2367,6 +2450,8 @@ class FileSearchToolsMixin:
                 date_range: Keep only rows dated in this period (optional).
                     A quarter ('2025-Q1', "Q1'25"), year, month ('2025-03'),
                     day, or range ('2025-01 to 2025-06'). Else an error.
+                sheet: Workbook sheet to analyze (optional; default the sheet
+                    the workbook opens on). Ignored for CSV/TSV.
 
             Returns:
                 Dictionary with analysis results based on the requested type
@@ -2454,7 +2539,20 @@ class FileSearchToolsMixin:
                     }
 
                 # Read the file (use resolved fp path in case of fallback)
-                rows, all_columns, read_error = _read_tabular_file(str(fp))
+                rows, all_columns, read_error, sheet_info = _read_tabular_file(
+                    str(fp), sheet
+                )
+                sheet_fields = {}
+                if sheet_info and "sheet" in sheet_info:
+                    read, names = sheet_info["sheet"], sheet_info["sheets"]
+                    sheet_fields = {"sheet": read, "sheets": names}
+                    others = [n for n in names if n != read]
+                    if others:
+                        sheet_fields["other_sheets_note"] = (
+                            f"This covers sheet {read!r} only. The workbook also "
+                            f"has {', '.join(repr(n) for n in others)}; pass "
+                            "sheet=<name> to analyze one."
+                        )
 
                 if read_error:
                     return {
@@ -2470,6 +2568,7 @@ class FileSearchToolsMixin:
                         "file": fp.name,
                         "row_count": 0,
                         "columns": all_columns,
+                        **sheet_fields,
                         "message": "File is empty or contains only headers.",
                     }
 
@@ -2576,6 +2675,7 @@ class FileSearchToolsMixin:
                     "status": "success",
                     "file": fp.name,
                     "file_path": str(fp.resolve()),
+                    **sheet_fields,
                     "row_count": len(rows),
                     "columns": all_columns,
                     "column_count": len(all_columns),
@@ -3154,11 +3254,11 @@ class FileSearchToolsMixin:
 
                 # Determine directories to scan
                 location_map = {
-                    "documents": [home / "Documents"],
+                    "documents": [documents_dir(home)],
                     "downloads": [home / "Downloads"],
                     "desktop": [home / "Desktop"],
                     "all": [
-                        home / "Documents",
+                        documents_dir(home),
                         home / "Downloads",
                         home / "Desktop",
                         home / "OneDrive",
@@ -3186,6 +3286,7 @@ class FileSearchToolsMixin:
                         ".pptx",
                         ".ppt",
                         ".odt",
+                        ".epub",
                         ".rtf",
                         ".html",
                         ".xml",

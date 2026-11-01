@@ -82,8 +82,8 @@ triggering event.
 | 7 | **Auto-fix** | `bug` label added | `claude.yml` auto-fix | Branch → fix → validate (lint+unit) → PR (draft if unvalidatable) → comment |
 | 8 | **Release notes** | release tag published | `claude.yml` release-notes | Generate notes + MDX, bump version, update nav |
 | 9 | **PR postmortem** | PR merged | repo-manager (existing) | Retrospective analysis of merged work |
-| 10 | **Proactive audit** | weekly/monthly cron | `claude-weekly-audit.yml` | 5-dimension fan-out → ranked triage issues, human-gated, dedup keys |
-| 11 | **Live doc walkthrough** | weekly cron | `claude-weekly-doc-walkthrough.yml` | Runs the product for real on a self-hosted runner (out of scope v1 — see §11) |
+| 10 | **Proactive audit** | every 3rd night (rotation) | `claude-nightly-audit.yml` | 5-dimension fan-out → ranked triage issues, human-gated, dedup keys |
+| 11 | **Live doc walkthrough** | every 3rd night (rotation) | `claude-weekly-doc-walkthrough.yml` | Runs the product for real on a self-hosted runner (out of scope v1 — see §11) |
 | 12 | **Auth/health canary** | monthly cron | `claude-auth-canary.yml` | Cheap liveness probe; opens issue if auth broken |
 
 > **Plain English.** Think of it as one worker that knows how to do a dozen repo chores. Which

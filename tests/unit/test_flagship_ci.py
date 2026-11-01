@@ -36,7 +36,7 @@ def triggers():
     "changed_path",
     [
         "hub/agents/gaia/python/gaia_agent/stdio.py",
-        "hub/agents/chat/python/gaia_agent_chat/agent.py",
+        "hub/agents/gaia/python/gaia_agent/chat_agent.py",
         "src/gaia/ui/sse_translation.py",
         "src/gaia/ui/sse_handler.py",
         "src/gaia/llm/lemonade_client.py",

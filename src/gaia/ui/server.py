@@ -69,6 +69,7 @@ from .routers import documents as documents_router_mod
 from .routers import environment as environment_router_mod
 from .routers import files as files_router_mod
 from .routers import goals as goals_router_mod
+from .routers import gpu_memory as gpu_memory_router_mod
 from .routers import hub as hub_router_mod
 from .routers import lemonade as lemonade_router_mod
 from .routers import mcp as mcp_router_mod
@@ -560,9 +561,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         # These chats talk to their agents directly, so the daemon cannot see
         # them; an update's daemon restart has to wait for them.
         from gaia.daemon.client import add_local_work, remove_local_work
-        from gaia.ui._chat_helpers import relayed_turns_in_flight
+        from gaia.ui._chat_helpers import active_turns_in_flight
 
-        add_local_work(relayed_turns_in_flight)
+        add_local_work(active_turns_in_flight)
 
         # ── Agent Registry ──────────────────────────────────────────────
         from gaia.agents.registry import AgentRegistry
@@ -856,7 +857,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         yield
 
         # Shutdown
-        remove_local_work(relayed_turns_in_flight)
+        remove_local_work(active_turns_in_flight)
         await scheduler.shutdown()
         logger.info("Task scheduler stopped")
         await agent_loop.stop()
@@ -972,6 +973,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(system_router_mod.router)
     app.include_router(onboarding_router_mod.router)
     app.include_router(setup_router_mod.router)
+    app.include_router(gpu_memory_router_mod.router)
     app.include_router(lemonade_router_mod.router)
     app.include_router(providers_router_mod.router)
     app.include_router(spending_router_mod.router)
@@ -1239,8 +1241,10 @@ def main():
     """Run the Agent UI server."""
     import argparse
 
+    from gaia.logger import configure
     from gaia.tls import use_os_trust_store
 
+    configure()
     use_os_trust_store()
 
     import uvicorn

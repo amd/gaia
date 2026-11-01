@@ -10,7 +10,9 @@ Three sources of truth, each edited by hand and nowhere else:
     chat      hub/agents/chat/python/pyproject.toml  ([project] version)
 
 Every other field in ``TARGETS`` follows one of them. The flagship and chat
-agents keep their own versions until they join core's (#5172).
+agents keep their own versions until they join core's (#5172). The chat package
+is a deprecated re-export shim of the flagship (#6099), so its gaia-agent-gaia
+floor follows the flagship's version.
 
 Usage::
 
@@ -57,6 +59,7 @@ _TOML_VERSION = re.compile(r'(?m)^(version\s*=\s*")([^"\r\n]*)(")')
 _YAML_VERSION = re.compile(r"(?m)^(version:[ \t]*)([^\s#]+)()")
 _YAML_MIN_GAIA = re.compile(r"""(?m)^(min_gaia_version:[ \t]*["']?)([^"'\s#]+)()""")
 _GAIA_FLOOR = re.compile(r'("amd-gaia(?:\[[^\]"]*\])?>=)([^",\s]+)(")')
+_FLAGSHIP_FLOOR = re.compile(r'("gaia-agent-gaia>=)([^",\s]+)(")')
 _JSON_TOP_VERSION = re.compile(r'(?m)^(  "version":\s*")([^"]*)(")')
 _NAV_GAIA = re.compile(r'("label":\s*"v)([^"\s]+)(\s*(?:\\u00b7|·)\s*Lemonade\s)')
 _NAV_LEMONADE = re.compile(
@@ -190,6 +193,14 @@ TARGETS: tuple[Target, ...] = (
         "hub/agents/gaia/npm/binaries.lock.json",
         "sidecar baseUrl",
         re.compile(r'("baseUrl":\s*"https?://[^"]*?/agents/gaia/)([^"/]+)(/?")'),
+        "flagship",
+    ),
+    # The chat shim requires the flagship it re-exports (#6099).
+    Target(CHAT_PYPROJECT, "gaia-agent-gaia floor", _FLAGSHIP_FLOOR, "flagship"),
+    Target(
+        "hub/agents/chat/python/gaia-agent.yaml",
+        "gaia-agent-gaia floor",
+        _FLAGSHIP_FLOOR,
         "flagship",
     ),
     # Chat agent: follows its pyproject.toml.

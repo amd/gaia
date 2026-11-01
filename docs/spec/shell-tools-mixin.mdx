@@ -426,9 +426,10 @@ if cmd_base not in ALLOWED_COMMANDS:
 
 ### Bypass Permissions
 
-Off by default. Turned on only by the flagship sidecar's `--bypass-permissions`
-launch flag or the TUI's `/bypass`, both of which set `full_access` on
-the session's output handler. `full_access_active()` reads that attribute live,
+Off by default. Turned on only by the flagship sidecar's `--full-access`
+launch flag or the TUI's `/full-access confirm` (a bare `/full-access` only
+explains the mode), both of which set `full_access` on the session's output
+handler. `full_access_active()` reads that attribute live,
 so a mid-session toggle takes effect on the next command.
 
 When on, `_validate_command` short-circuits the whole read-only policy above and
@@ -444,8 +445,9 @@ DEVELOPER_COMMANDS = frozenset({
 })   # "rm" deliberately excluded
 ```
 
-`git` is in the set, so its binary policy's outright refusals — push, reset,
-rebase — do not apply under bypass. That drops a tripwire, not a boundary:
+`git` is in the set, so the binary policy that holds `git push`, `git reset` and
+`git rebase` does not apply under bypass. Without bypass those commands ask once
+instead of failing. That drops a tripwire, not a boundary:
 `python` and `make` reach git by shelling out regardless. Leaving it out would
 also have made bypass *stricter* than the default tier, where git's read-only
 floor still runs `git status`.

@@ -22,7 +22,6 @@ from gaia.env import load_env
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
-    DEFAULT_HOST,
     DEFAULT_LEMONADE_URL,
     DEFAULT_MODEL_NAME,
     DEFAULT_PORT,
@@ -44,6 +43,7 @@ from gaia.mcp.ports import (
 )
 from gaia.perf_analysis import run_perf_visualization
 from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
+from gaia.print_mode import READ_STDIN
 from gaia.tls import use_os_trust_store
 from gaia.version import version
 
@@ -231,127 +231,6 @@ def _lemonade_answers(base_url: str | None = None) -> bool:
     else:
         client = LemonadeClient(keep_alive=True, verbose=False)
     return _probe(client)
-
-
-def ensure_agent_models(
-    agent: str,
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
-    quiet: bool = False,
-    _timeout: int = 1800,  # Reserved for future use
-) -> bool:
-    """
-    Ensure all models required for an agent are downloaded.
-
-    This function checks if models are available and downloads them with
-    streaming progress if needed. Called before starting agents to provide
-    user feedback during model downloads.
-
-    Args:
-        agent: Agent name (chat, rag, talk, vlm, minimal, mcp)
-        host: Lemonade server host
-        port: Lemonade server port
-        quiet: Suppress output (only errors)
-        timeout: Timeout per model in seconds
-
-    Returns:
-        bool: True if all models are available, False on error
-    """
-    log = get_logger(__name__)
-
-    try:
-        client = LemonadeClient(host=host, port=port, verbose=False)
-
-        # Get required models for this agent
-        model_ids = client.get_required_models(agent)
-
-        if not model_ids:
-            return True
-
-        # Check which models need downloading
-        models_to_download = []
-        for model_id in model_ids:
-            if not client.check_model_available(model_id):
-                models_to_download.append(model_id)
-
-        if not models_to_download:
-            log.debug(f"All models for {agent} agent already available")
-            return True
-
-        # Use AgentConsole for nicely formatted progress display
-        console = AgentConsole()
-
-        if not quiet:
-            console.print_info(
-                f"Downloading {len(models_to_download)} model(s) for {agent} agent"
-            )
-
-        # Download each model with progress display
-        for model_id in models_to_download:
-            if not quiet:
-                console.print_download_start(model_id)
-
-            try:
-                event_count = 0
-                last_bytes = 0
-                last_time = time.time()
-
-                for event in client.pull_model_stream(model_name=model_id):
-                    event_count += 1
-                    event_type = event.get("event")
-
-                    if event_type == "progress":
-                        # Skip first 2 spurious events from Lemonade
-                        if event_count <= 2 or quiet:
-                            continue
-
-                        # Calculate download speed
-                        current_bytes = event.get("bytes_downloaded", 0)
-                        current_time = time.time()
-                        time_delta = current_time - last_time
-
-                        speed_mbps = 0.0
-                        if time_delta > 0.1 and current_bytes > last_bytes:
-                            bytes_delta = current_bytes - last_bytes
-                            speed_mbps = (bytes_delta / time_delta) / (1024 * 1024)
-                            last_bytes = current_bytes
-                            last_time = current_time
-
-                        console.print_download_progress(
-                            percent=event.get("percent", 0),
-                            bytes_downloaded=current_bytes,
-                            bytes_total=event.get("bytes_total", 0),
-                            speed_mbps=speed_mbps,
-                        )
-
-                    elif event_type == "complete":
-                        if not quiet:
-                            console.print_download_complete(model_id)
-
-                    elif event_type == "error":
-                        if not quiet:
-                            console.print_download_error(
-                                event.get("error", "Unknown error"), model_id
-                            )
-                        log.error(f"Failed to download {model_id}")
-                        return False
-
-            except LemonadeClientError as e:
-                log.error(f"Failed to download {model_id}: {e}")
-                if not quiet:
-                    console.print_download_error(str(e), model_id)
-                return False
-
-        if not quiet:
-            console.print_success(f"All models ready for {agent} agent")
-
-        return True
-
-    except Exception as e:
-        log.error(f"Failed to ensure models for {agent}: {e}")
-        if not quiet:
-            print(f"❌ Error checking/downloading models: {e}", file=sys.stderr)
-        return False
 
 
 def _cli_error_text(e: BaseException) -> str:
@@ -551,8 +430,9 @@ async def async_main(action, **kwargs):
     log = get_logger(__name__)
 
     if action == "chat":
-        from gaia.logger import log_manager
+        from gaia.logger import configure
 
+        log_manager = configure()
         log_manager.configure_agent_console(debug=kwargs.get("debug", False))
 
     # Map actions to agent profiles for Lemonade initialization
@@ -611,7 +491,7 @@ async def async_main(action, **kwargs):
         # `gaia chat` runs the flagship; it ships as the gaia-agent-gaia wheel.
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent_chat.app import interactive_mode
+            from gaia_agent.interactive import interactive_mode
         except ImportError as e:
             raise RuntimeError(
                 agent_import_error_message(
@@ -966,8 +846,9 @@ def _launch_interactive_cli(log=None):
     if log is None:
         log = get_logger(__name__)
 
-    from gaia.logger import log_manager
+    from gaia.logger import configure
 
+    log_manager = configure()
     log_manager.configure_agent_console(debug=False)
 
     try:
@@ -977,7 +858,7 @@ def _launch_interactive_cli(log=None):
 
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent_chat.app import interactive_mode
+            from gaia_agent.interactive import interactive_mode
         except ImportError as e:
             raise RuntimeError(
                 agent_import_error_message(
@@ -1076,6 +957,21 @@ HIDDEN_TOP_LEVEL_COMMANDS = ("hub",)
 HIDDEN_AGENT_COMMANDS = ("init", "version", "pack", "publish", "login")
 
 
+def _positive_int(value: str) -> int:
+    """argparse type: an integer of at least 1."""
+    import argparse
+
+    try:
+        number = int(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(
+            f"expected a whole number, got {value!r}"
+        ) from e
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {number}")
+    return number
+
+
 def build_parser():
     """Build and return the root argparse parser."""
     import argparse
@@ -1122,8 +1018,62 @@ def build_parser():
         default=None,
         help=(
             "Remote Lemonade server base URL (e.g. https://host:13305/api/v1)."
-            " Used with --ui."
+            " Used with --ui and -p."
         ),
+    )
+    parser.add_argument(
+        "-p",
+        "--print",
+        dest="print_prompt",
+        nargs="?",
+        const=READ_STDIN,
+        default=None,
+        metavar="PROMPT",
+        help="Run the GAIA agent once on PROMPT, print the answer and exit "
+        "(reads the prompt from stdin when PROMPT is omitted)",
+    )
+    # Own dests, so a subcommand's same-named flag can't silently overwrite them.
+    parser.add_argument(
+        "--model",
+        dest="print_model",
+        default=None,
+        help="Model id for -p (default: config default_model, else the agent's)",
+    )
+    parser.add_argument(
+        "--output-format",
+        dest="print_output_format",
+        choices=["text", "json"],
+        default=None,
+        help="With -p: text (default) prints the answer; json prints one result object "
+        "with steps, tool calls and tokens",
+    )
+    parser.add_argument(
+        "--verbose",
+        dest="print_verbose",
+        action="store_true",
+        help="With -p --output-format json: include the full conversation",
+    )
+    parser.add_argument(
+        "--max-steps",
+        dest="print_max_steps",
+        type=_positive_int,
+        default=None,
+        help="With -p: cap on agent steps (default: the agent's own limit)",
+    )
+    parser.add_argument(
+        "--dangerously-skip-permissions",
+        dest="print_skip_permissions",
+        action="store_true",
+        help="With -p: run confirmation-gated tools (file writes, shell) without "
+        "asking. Without it they are denied, since nobody is there to approve",
+    )
+    parser.add_argument(
+        "--full-access",
+        dest="print_full_access",
+        action="store_true",
+        help="With -p: full access, as the TUI's /full-access: lifts the shell "
+        "guardrails (test runners, build tools run) and grants paths outside the "
+        "current folder without asking. Implies --dangerously-skip-permissions",
     )
 
     # Create a parent parser for common arguments
@@ -1907,7 +1857,7 @@ Examples:
   # Delete all downloaded GAIA models (free up disk space)
   gaia download --clear-cache
 
-Available agents: chat, talk, rag, vlm, minimal, mcp
+Available agents: chat, bash, talk, rag, vlm, minimal, mcp, sd
         """,
     )
     download_parser.add_argument(
@@ -3195,7 +3145,7 @@ Examples:
 
     mcp_tui_parser = mcp_subparsers.add_parser(
         "tui",
-        help="Start TUI control MCP server (drives a running `gaia tui --control`)",
+        help="Start TUI control MCP server (drives a running `gaia-tui --control`)",
     )
     mcp_tui_parser.add_argument(
         "--host", default="localhost", help="Host to bind to (default: localhost)"
@@ -3617,6 +3567,11 @@ Examples:
 
     skills_cli.add_subparser(subparsers)
 
+    # Local GGUF models added from a Hugging Face link (shared with the Agent UI and TUI).
+    from gaia.llm import custom_models_cli
+
+    custom_models_cli.add_subparser(subparsers)
+
     # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
     # users don't have to pass --model on every chat/llm/prompt (issue #98).
     config_parser = subparsers.add_parser(
@@ -3884,7 +3839,55 @@ Examples:
     init_parser.add_argument(
         "--json",
         action="store_true",
-        help="With --check: print the result as one JSON object on stdout.",
+        help="With --check or --plan: print the result as one JSON object on stdout.",
+    )
+    models_group = init_parser.add_argument_group(
+        "model choices",
+        "Saved in ~/.gaia/config.json (default_model, skipped_models); every "
+        "later `gaia init` and first-run setup honors them.",
+    )
+    models_group.add_argument(
+        "--plan",
+        action="store_true",
+        help="Print the models setup would download (size, purpose, whether "
+        "each fits this PC, free disk) and exit. Downloads nothing.",
+    )
+    models_group.add_argument(
+        "--use-model",
+        metavar="MODEL",
+        default=None,
+        help="Use this chat model (one GAIA knows, or one already in Lemonade, "
+        "FLM included) and save it as default_model.",
+    )
+    models_group.add_argument(
+        "--acknowledge-no-fit",
+        action="store_true",
+        help="With --use-model: save it even though it may not fit this PC.",
+    )
+    models_group.add_argument(
+        "--skip-model",
+        metavar="MODEL",
+        action="append",
+        default=[],
+        help="Don't download this model now or in later runs (repeatable).",
+    )
+    models_group.add_argument(
+        "--download-model",
+        metavar="MODEL",
+        action="append",
+        default=[],
+        help="Download this model too, taking it off the skip list (repeatable).",
+    )
+    models_group.add_argument(
+        "--allow-low-disk",
+        action="store_true",
+        help="Download even when the models need more disk than is free.",
+    )
+    models_group.add_argument(
+        "--keep-trying",
+        action="store_true",
+        help="When a download's connection drops, retry it for up to two "
+        "minutes before failing.",
     )
 
     # Install command (install specific components)
@@ -4592,7 +4595,100 @@ def _handle_schedule(args):
     )
 
 
+#: `gaia init --plan` / a model choice that needs the user to confirm it.
+INIT_NEEDS_ACK_EXIT = 4
+#: The `gaia init` flag that confirms each acknowledgement the plan can ask for.
+_INIT_ACK_FLAGS = {
+    "acknowledge_no_fit": "--acknowledge-no-fit",
+    "acknowledge_low_disk": "--allow-low-disk",
+}
+
+
+def _print_init_plan(plan: dict) -> None:
+    """`gaia init --plan` for a person: what setup downloads and why."""
+    chat = plan["chat_model"]["id"]
+    print(f"Chat model: {chat}")
+    for model in plan["catalog"]:
+        left_out = (
+            model["if_skipped"] and not model["selected"] and not model["downloaded"]
+        )
+        if not (model["planned"] or model["downloaded"] or left_out):
+            continue
+        if model["skipped"]:
+            status = "skipped"
+        elif left_out:
+            status = "not downloading"
+        elif model["downloaded"]:
+            status = "on this PC"
+        elif model["size_gb"] is None:
+            status = "size unknown"
+        else:
+            status = f"download {model['size_gb']:.1f} GB"
+        fit = ""
+        if model["fits"] is False:
+            fit = f"  [!] {model['fit_reason']}"
+        print(f"  {model['id']:<36} {status:<18} {model['purpose']}{fit}")
+        if left_out:
+            print(f"      {model['if_skipped']}")
+    disk = plan["disk"]
+    free = (
+        f"{disk['free_gb']:.1f} GB free"
+        if disk["free_gb"] is not None
+        else "free space unknown"
+    )
+    total = plan["download_gb"]
+    print(
+        f"Download: {'unknown' if total is None else f'{total:.1f} GB'} · "
+        f"{free}{' on ' + disk['path'] if disk['path'] else ''}"
+    )
+    if plan["disk_warning"]:
+        print(f"[!] {plan['disk_warning']}")
+
+
+def _init_model_choices(args, profile: str):
+    """Apply `gaia init`'s model-choice flags; with --plan, print the plan.
+
+    Returns the exit code to stop with, or None to go on and run setup.
+    """
+    from gaia.ui import setup_plan
+
+    try:
+        for model_id in args.skip_model:
+            setup_plan.set_model_skipped(model_id, True, profile)
+        for model_id in args.download_model:
+            setup_plan.set_model_skipped(model_id, False, profile)
+        if args.use_model:
+            setup_plan.choose_chat_model(args.use_model, args.acknowledge_no_fit)
+        if not args.plan:
+            return None
+        plan = setup_plan.build_plan(
+            profile, args.skip_chat_model, extra_models=args.download_model
+        )
+    except setup_plan.NeedsAcknowledgement as e:
+        if args.json:
+            print(json.dumps({"needs_acknowledgement": e.detail}))
+        else:
+            print(
+                f"{e.detail['message']} Re-run with "
+                f"{_INIT_ACK_FLAGS[e.detail['acknowledge']]} to go ahead anyway.",
+                file=sys.stderr,
+            )
+        return INIT_NEEDS_ACK_EXIT
+    except setup_plan.SetupPlanError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(plan))
+    else:
+        _print_init_plan(plan)
+    return 0
+
+
 def main():
+    from gaia.logger import configure
+
+    log_manager = configure()
+
     use_os_trust_store()
     parser = build_parser()
     log = get_logger(__name__)
@@ -4612,6 +4708,52 @@ def main():
         from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
 
         parser.error(REMOVED_PROVIDER_MESSAGE)
+
+    print_only = {
+        "--model": args.print_model is not None,
+        "--output-format": args.print_output_format is not None,
+        "--verbose": args.print_verbose,
+        "--max-steps": args.print_max_steps is not None,
+        "--dangerously-skip-permissions": args.print_skip_permissions,
+        "--full-access": args.print_full_access,
+    }
+    if args.print_prompt is None and any(print_only.values()):
+        used = ", ".join(flag for flag, given in print_only.items() if given)
+        parser.error(
+            f"{used} before a subcommand only applies to -p. Pass it after the "
+            'subcommand (`gaia chat --model X`) or use `gaia -p "<prompt>" --model X`.'
+        )
+    if args.print_prompt is not None:
+        if args.action:
+            parser.error("-p runs one prompt on its own; it takes no subcommand.")
+        launcher_flags = [
+            flag
+            for flag, given in (
+                ("--ui", args.ui),
+                ("--cli", args.cli),
+                ("--ui-dist", args.ui_dist is not None),
+                ("--ui-port", args.ui_port != 4200),
+            )
+            if given
+        ]
+        if launcher_flags:
+            parser.error(f"-p runs headless; {', '.join(launcher_flags)} cannot apply.")
+        if args.print_verbose and args.print_output_format != "json":
+            parser.error("--verbose adds the conversation to --output-format json.")
+        from gaia.print_mode import run as run_print_mode
+
+        sys.exit(
+            run_print_mode(
+                args.print_prompt,
+                model=args.print_model,
+                output_format=args.print_output_format or "text",
+                verbose=args.print_verbose,
+                max_steps=args.print_max_steps,
+                skip_permissions=args.print_skip_permissions,
+                full_access=args.print_full_access,
+                base_url=args.base_url,
+            )
+        )
 
     # Check if action is specified
     if not args.action:
@@ -4642,8 +4784,6 @@ def main():
         return
 
     # Set logging level using the GaiaLogger manager (if provided)
-    from gaia.logger import log_manager
-
     if hasattr(args, "logging_level"):
         log_manager.set_level("gaia", getattr(logging, args.logging_level))
 
@@ -4724,6 +4864,7 @@ def main():
                     TelegramAllowlistError,
                     run_telegram,
                 )
+                from gaia.messaging.telegram_api import TelegramTokenError
             except Exception as e:  # pragma: no cover - runtime import error
                 print(f"❌ Telegram support is not available: {e}", file=sys.stderr)
                 sys.exit(1)
@@ -4758,7 +4899,7 @@ def main():
                     background=getattr(args, "background", False),
                     health_port=getattr(args, "health_port", TELEGRAM_HEALTH_PORT),
                 )
-            except TelegramAllowlistError as e:
+            except (TelegramAllowlistError, TelegramTokenError) as e:
                 # Show the remedy rather than a traceback.
                 print(f"❌ {e}", file=sys.stderr)
                 sys.exit(2)
@@ -5880,6 +6021,11 @@ Let me know your answer!
         handle_hub_command(args)
         return
 
+    if args.action == "model":
+        from gaia.llm import custom_models_cli  # pylint: disable=reimported
+
+        sys.exit(custom_models_cli.handle(args))
+
     # Handle Config command
     if args.action == "config":
         handle_config_command(args)
@@ -5961,7 +6107,7 @@ Let me know your answer!
             flag
             for flag, value in (
                 ("--load", getattr(args, "load", False)),
-                ("--json", getattr(args, "json", False)),
+                ("--json", getattr(args, "json", False) and not args.plan),
                 ("--chat-model", getattr(args, "chat_model", None)),
             )
             if value
@@ -5973,6 +6119,26 @@ Let me know your answer!
                 file=sys.stderr,
             )
             sys.exit(2)
+
+        if args.acknowledge_no_fit and not args.use_model:
+            print(
+                "Error: --acknowledge-no-fit only applies with --use-model.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        chooses = bool(args.use_model or args.skip_model or args.download_model)
+        if args.check and (chooses or args.plan):
+            print(
+                "Error: --check only reports. Run the model choices (--plan, "
+                "--use-model, --skip-model, --download-model) without it.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        if chooses or args.plan:
+            log_manager.configure_agent_console(debug=getattr(args, "verbose", False))
+            exit_code = _init_model_choices(args, profile)
+            if exit_code is not None:
+                sys.exit(exit_code)
 
         if args.check:
             from gaia.config import GaiaConfigError
@@ -6027,6 +6193,9 @@ Let me know your answer!
             lemonade_url=getattr(args, "lemonade_url", None),
             gaia_lemonade=getattr(args, "gaia_lemonade", False),
             progress_json=getattr(args, "progress_json", False),
+            allow_low_disk=args.allow_low_disk,
+            keep_trying=args.keep_trying,
+            extra_models=args.download_model,
         )
         sys.exit(exit_code)
 
@@ -6777,6 +6946,14 @@ def handle_config_command(args):
         for key in cfg.field_names():
             value = cfg.get(key)
             print(f"  {key} = {value if value is not None else '(unset)'}")
+        from gaia.llm import local_only
+
+        print(f"Policy file: {local_only.policy_path()}")
+        print(f"  {local_only.POLICY_KEY} = {local_only.effective_policy().value}")
+        return
+
+    if args.key == "network_policy":
+        _handle_network_policy(action, args.value if action == "set" else None)
         return
 
     if action == "get":
@@ -6805,6 +6982,52 @@ def handle_config_command(args):
         print(f"✅ Set {args.key} = {cfg.get(args.key)}")
         print(f"   Saved to {config_file}")
         return
+
+
+def _handle_network_policy(action, value) -> None:
+    """``gaia config get|set network_policy``: lives in policy.json, not config.json."""
+    from gaia.config import GaiaConfigError
+    from gaia.llm import local_only
+
+    if action == "get":
+        print(local_only.effective_policy().value)
+        return
+    try:
+        stored = local_only.set_policy(value)
+    except (ValueError, OSError) as e:
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"✅ Set network_policy = {stored.value}")
+    print(f"   Saved to {local_only.policy_path()}")
+    if stored is not local_only.NetworkPolicy.LOCAL_AI_ONLY:
+        return
+    print("   No GAIA AI request will reach a cloud model.")
+    try:
+        cleared = local_only.clear_saved_cloud_models()
+    except GaiaConfigError as e:
+        print(f"⚠️  Saved models were not checked: {e}", file=sys.stderr)
+        return
+    if cleared:
+        from gaia.llm.lemonade_client import resolve_default_chat_model
+
+        for key, model in cleared:
+            print(f"   Cleared {key} (was {model}): it is a cloud model.")
+        print(f"   GAIA now uses {resolve_default_chat_model()} by default.")
+    from gaia.llm.cloud_keys import CloudKeyError, drop_runtime_keys
+
+    try:
+        dropped = drop_runtime_keys()
+    except CloudKeyError as e:
+        print(
+            f"⚠️  Lemonade still holds any cloud key GAIA gave it ({e}). GAIA "
+            "won't use it; restart Lemonade to drop it.",
+            file=sys.stderr,
+        )
+        return
+    # Names come from a fixed table, never from the key-handling call.
+    for provider, name in (("fireworks", "Fireworks AI"), ("amd", "AMD LLM Gateway")):
+        if provider in dropped:
+            print(f"   Removed the {name} key from the running Lemonade Server.")
 
 
 #: Keys that pick which Lemonade GAIA uses; setting one probes and switches.
@@ -6965,6 +7188,35 @@ def _resolve_gateway_token(args, *, prompt: str) -> str:
     return getpass.getpass(prompt)
 
 
+def _test_gateway_claude(model, source, prompt):
+    """``gaia gateway test`` for a Claude model, on the route agents use for it.
+
+    Agents send gateway Claude to the gateway's Anthropic route, not through
+    Lemonade, so a Lemonade round trip would test the wrong path.
+    """
+    from gaia.llm.gateway import GatewayError
+
+    print(f"Testing {model} ({source}) on the gateway's Anthropic route ...\n")
+    try:
+        client = create_client("lemonade", model=model)
+        content = client.chat([{"role": "user", "content": prompt}], max_tokens=256)
+    except (GatewayError, RuntimeError, ImportError) as e:
+        print(f"❌ Testing {model} failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    print(content)
+    usage = client.get_last_usage() or {}
+    if usage:
+        print(
+            f"\n[{usage.get('prompt_tokens', '?')} prompt "
+            f"({usage.get('cached_tokens', 0)} from cache) + "
+            f"{usage.get('completion_tokens', '?')} completion tokens]"
+        )
+    print(
+        "\nThis checked the gateway only. Agents also need Lemonade running; "
+        "`gaia gateway status` checks it."
+    )
+
+
 def handle_gateway_command(args):
     """Handle `gaia gateway ...` (AMD LLM gateway via Lemonade cloud offload)."""
     from gaia.config import GaiaConfigError
@@ -6977,6 +7229,7 @@ def handle_gateway_command(args):
         GatewayState,
         describe_unavailable,
         forget_token,
+        gateway_claude_upstream_id,
         recall_token,
         remember_token,
     )
@@ -7056,11 +7309,45 @@ def handle_gateway_command(args):
                 auth_header_prefix=args.auth_header_prefix,
                 allow_insecure_http=args.allow_insecure_http,
             )
+            auth = result.get("auth_state") or {}
+            restored = False
+            remembered = None
+            # The stored token was issued for the previously registered URL and
+            # is not bound to it, so a new URL must drop it: every later
+            # ensure_authenticated() would otherwise hand it to the new gateway.
+            url_changed = base_url.rstrip("/").lower() != (
+                (state.base_url or "").rstrip("/").lower()
+            )
+            dropped = url_changed and recall_token() is not None and forget_token()
+            needs_token = not (auth.get("env_var_set") or auth.get("runtime_key_set"))
+            if needs_token and not url_changed:
+                remembered = recall_token()
+                if remembered:
+                    # A fresh install must also restore a token saved by `gateway auth`.
+                    restored = manager.ensure_authenticated(recall=lambda: remembered)
+                    if restored:
+                        status = manager.status()
+                        needs_token = not (status.env_var_set or status.runtime_key_set)
+                        result["models_discovered"] = status.models_discovered
             print(
                 f"✅ Registered. Models discovered: {result.get('models_discovered', 0)}"
             )
-            auth = result.get("auth_state") or {}
-            if not (auth.get("env_var_set") or auth.get("runtime_key_set")):
+            if restored:
+                print(
+                    "   Restored the remembered gateway token from the OS credential store."
+                )
+            elif remembered:
+                print(
+                    "\n  The remembered gateway token was not accepted — run "
+                    "`gaia gateway auth` with a current one."
+                )
+            elif dropped:
+                print(
+                    "\n  The gateway URL changed, so GAIA forgot the token remembered "
+                    "for the old one — run `gaia gateway auth` with a token for "
+                    "this gateway."
+                )
+            elif needs_token:
                 print(
                     "\n  No token yet — run `gaia gateway auth` so Lemonade can "
                     "discover models."
@@ -7234,6 +7521,9 @@ def handle_gateway_command(args):
                     model = discovered[0].id
                 print(f"No active model set; using {model}.\n")
             source = "from --model" if args.model else "the active gateway model"
+            if gateway_claude_upstream_id(model):
+                _test_gateway_claude(model, source, args.prompt)
+                return
             # Deliberately goes through the ordinary client so this exercises
             # the same path agents use, cloud short-circuits included.
             manager.client.refresh_cloud_models()
@@ -7611,7 +7901,11 @@ def _offer_first_boot_onboarding() -> None:
 
     if answer in ("n", "no"):
         # Declining is an answer — record it so the intro is not re-offered.
-        _mark_onboarding_completed()
+        try:
+            _mark_onboarding_completed()
+        except RuntimeError as e:
+            # A persistence failure must not cost the user their chat session.
+            print(f"Could not record your choice: {e}")
         return
 
     # Onboarding is optional; chat is not. A failure to store must not cost
@@ -8874,7 +9168,10 @@ def handle_agent_import(args):
             print("Agents in bundle:")
             for aid in bundle_agent_ids:
                 print(f"  - {aid}")
-        answer = input("[y/N] Continue? ").strip().lower()
+        try:
+            answer = input("[y/N] Continue? ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
         if answer not in ("y", "yes"):
             print("Import cancelled.")
             sys.exit(0)
@@ -10596,7 +10893,7 @@ def handle_mcp_serve(args):
 
 
 def handle_mcp_tui(args):
-    """Start the TUI control MCP server (drives a running `gaia tui --control`)."""
+    """Start the TUI control MCP server (drives a running `gaia-tui --control`)."""
     log = get_logger(__name__)
 
     try:
@@ -10616,7 +10913,7 @@ def handle_mcp_tui(args):
             print("=" * 60)
             print("🖥️  GAIA TUI Control MCP Server")
             print("=" * 60)
-            print("   Target  : the running `gaia tui --control` session")
+            print("   Target  : the running `gaia-tui --control` session")
             print(f"   MCP     : http://{args.host}:{args.port}/mcp")
             try:
                 tool_count = len(

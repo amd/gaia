@@ -258,7 +258,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.25"`                  |
+| Contract version   | `API_VERSION = "2.26"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -277,6 +277,8 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
 | `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
 | `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.23) |
+| `GET`  | `/v1/gaia/sessions/{session_id}/grants` | The session's "always" answers, `{ key, label }` each (≥ 2.26) |
+| `DELETE` | `/v1/gaia/sessions/{session_id}/grants` | Revoke one (`?key=`) or all of them (≥ 2.26) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 #### `/query` request body
@@ -340,8 +342,8 @@ the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
 
 `internet_off` (contract ≥ 2.23) is `true` when the caller's chat has the
 Internet switched off and `false` when it is on. With `true` the turn refuses
-web search and page fetches, the browser, connector (MCP), mailbox and Agent
-Hub tools and any call or shell command that contacts a host other than the agent's own machine, and
+web search and page fetches, the browser, connector (MCP) and Agent Hub
+tools, mailbox reads, and any call or shell command that contacts a host other than the agent's own machine, and
 the refusal tells the model the internet is off for this chat. A retained
 session keeps the last value, so send it every turn; omit it to leave the
 agent as it is. Pre-2.23 binaries `422` the field, so a caller whose chat has
@@ -448,10 +450,12 @@ paths call the same `build_memory_dump()` and return the identical shape.
 the same roots the agent does — its bundled skills, `~/.gaia/skills`, Claude
 Code skill folders — so a host without the Python package (the bundled skills
 live inside the binary) can still show them. `source` names the root a skill
-came from: `agent-bundled`, `user` or `claude-import`, or `null` for any other
-root. An agent that predates `source` omits the field; a host must treat a list
-where any skill lacks it as ungrouped and show it flat, not drop the skill. A skill root that cannot be read is a `500`
-naming it.
+came from: `agent-bundled`, `user`, `claude-project` (contract ≥ 2.26: the
+`.claude/skills` of the project the agent works in) or `claude-import` (other
+Claude Code skill folders), or `null` for any other root. An agent that predates
+`source` omits the field; a host must treat a list where any skill lacks it, or
+carries a value the host does not know, as ungrouped and show it flat, never
+drop the skill. A skill root that cannot be read is a `500` naming it.
 
 `/query` streams the answer as `token` events before its terminal `final`. A
 run cancelled mid-answer (`/cancel`, or a dropped connection) ends with an
@@ -662,7 +666,7 @@ keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model
 remotely, so a local server URL alone does not establish local inference.
 
-`--bypass-permissions` turns off more than the prompt. It also lifts the shell
+`--full-access` turns off more than the prompt. It also lifts the shell
 tool's own guardrails for the session: the shell-only operators — redirection
 (`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`) and the
 newline — parse and run, chaining (`&&`, `||`, `;`, `|`) already ran by
@@ -670,8 +674,10 @@ default, the read-only binary allowlist is replaced by a developer set
 (`node`, `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`,
 `timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`/`git`,
 which already had their own paths), and the shell rate limit is dropped. `git`
-being in that set means its policy's outright refusals — push, reset, rebase —
-also stop applying under bypass. That is
+being in that set means the policy that holds `git push`, `git reset` and
+`git rebase` also stops applying under bypass. Without bypass those commands ask
+the user once, and are refused only on a run nobody can answer; the destructive
+forms (`git push --force`, `git reset --hard`) are refused with no prompt. That is
 arbitrary code execution in the working directory, which is why it exists only
 on this transport: one local parent process on a private pipe. It is **not**
 reachable over HTTP, and the request body cannot ask for it —

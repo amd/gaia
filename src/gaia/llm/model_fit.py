@@ -31,6 +31,7 @@ run the machine out of memory.
 
 from __future__ import annotations
 
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -156,7 +157,11 @@ def largest_context(
 
 
 def _num(value: Any) -> float:
-    return float(value) if isinstance(value, (int, float)) else 0.0
+    """A plausible finite GiB value, or zero when the report is unusable."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    number = float(value)
+    return number if math.isfinite(number) and 0.0 <= number <= 1024.0 else 0.0
 
 
 def _physical_memory_gb(info: Dict[str, Any]) -> float:
@@ -255,6 +260,64 @@ def _windows_adapter_memory_gb(name: Any) -> float:
             return int(size) / 1024**3 if isinstance(size, int) else 0.0
 
 
+@dataclass(frozen=True)
+class IgpuMemory:
+    """An AMD integrated GPU's memory, in GB: the pool is their sum."""
+
+    #: Reserved for the GPU at boot (BIOS UMA / Windows Variable Graphics Memory).
+    carve_out_gb: float
+    #: System RAM it may also use: GTT on Linux, WDDM shared memory on Windows.
+    shared_gb: float
+    #: ``"lemonade"`` when Lemonade reported the split, ``"windows"`` from the driver.
+    reported_by: str
+
+
+def _igpu_memory(gpu: Dict[str, Any], physical_gb: float) -> Optional[IgpuMemory]:
+    if _num(gpu.get("vram_gb")):
+        return IgpuMemory(
+            _num(gpu.get("vram_gb")), _num(gpu.get("virtual_mem_gb")), "lemonade"
+        )
+    carve_out = _windows_adapter_memory_gb(gpu.get("name"))
+    if not carve_out:
+        return None
+    if physical_gb <= 0:
+        raise ModelFitError(
+            f"Lemonade reports an AMD integrated GPU ({gpu.get('name')}) "
+            "but not this PC's 'Physical Memory', and the GPU's BIOS "
+            "carve-out alone is not the memory it loads into, so GAIA "
+            "cannot tell which models fit. Update Lemonade (`gaia init`) "
+            "and retry, or choose the model yourself with "
+            "`gaia config set default_model <model>`."
+        )
+    return IgpuMemory(carve_out, _windows_shared_gb(physical_gb, carve_out), "windows")
+
+
+def integrated_gpu_memory(info: Dict[str, Any]) -> Optional[IgpuMemory]:
+    """The first AMD integrated GPU's memory split, or ``None`` when there is none.
+
+    The same split :func:`capacity_from_system_info` sums into the pool.
+    """
+    if not isinstance(info, dict):
+        raise ModelFitError("Lemonade /system-info did not return an object")
+    physical = _physical_memory_gb(info)
+    for vendor, integrated, gpu in _gpu_entries(info.get("devices") or {}):
+        if vendor == "AMD" and integrated:
+            split = _igpu_memory(gpu, physical)
+            if split is not None:
+                return split
+    return None
+
+
+def physical_memory_gb(info: Dict[str, Any]) -> float:
+    """Installed RAM from ``/system-info``, or 0 when Lemonade did not say."""
+    return _physical_memory_gb(info) if isinstance(info, dict) else 0.0
+
+
+def windows_shared_gb(physical_gb: float, carve_out_gb: float) -> float:
+    """System RAM Windows lets an integrated GPU use beyond a carve-out."""
+    return _windows_shared_gb(physical_gb, carve_out_gb)
+
+
 def _gpu_pool(
     devices: Dict[str, Any], physical_gb: float
 ) -> Optional[Tuple[float, str]]:
@@ -268,23 +331,9 @@ def _gpu_pool(
     for vendor, integrated, gpu in entries:
         if vendor != "AMD" or not integrated:
             continue
-        if _num(gpu.get("vram_gb")):
-            return (
-                _num(gpu.get("vram_gb")) + _num(gpu.get("virtual_mem_gb")),
-                "AMD iGPU",
-            )
-        carve_out = _windows_adapter_memory_gb(gpu.get("name"))
-        if carve_out:
-            if physical_gb <= 0:
-                raise ModelFitError(
-                    f"Lemonade reports an AMD integrated GPU ({gpu.get('name')}) "
-                    "but not this PC's 'Physical Memory', and the GPU's BIOS "
-                    "carve-out alone is not the memory it loads into, so GAIA "
-                    "cannot tell which models fit. Update Lemonade (`gaia init`) "
-                    "and retry, or choose the model yourself with "
-                    "`gaia config set default_model <model>`."
-                )
-            return carve_out + _windows_shared_gb(physical_gb, carve_out), "AMD iGPU"
+        split = _igpu_memory(gpu, physical_gb)
+        if split is not None:
+            return split.carve_out_gb + split.shared_gb, "AMD iGPU"
     for vendor, _, gpu in entries:
         if _num(gpu.get("vram_gb")):
             return _num(gpu.get("vram_gb")), f"{vendor} GPU"

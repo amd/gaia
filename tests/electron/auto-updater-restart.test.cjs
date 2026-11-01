@@ -63,7 +63,13 @@ test("restarts when nothing would be lost", async () => {
   expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
 });
 
+function saveConfig(cfg) {
+  fs.mkdirSync(path.join(tmpHome, ".gaia"), { recursive: true });
+  fs.writeFileSync(path.join(tmpHome, ".gaia", "update-config.json"), JSON.stringify(cfg));
+}
+
 test("Keep running puts the restart off; the update installs on the next quit", async () => {
+  saveConfig({ autoUpdate: true });
   const confirmRestart = jest.fn(async () => false);
   initUpdater({ confirmRestart });
   await downloadedAndRestartChosen();
@@ -110,4 +116,212 @@ test("main.cjs hands init the restart check", () => {
     "utf8"
   );
   expect(main).toContain("autoUpdater.init(mainWindow, { confirmRestart: confirmUpdateRestart })");
+});
+
+test("turning auto-update off stops an unasked download from installing on quit", async () => {
+  saveConfig({ autoUpdate: true });
+  const m = initUpdater({ confirmRestart: jest.fn(async () => false) });
+  await downloadedAndRestartChosen();
+  await m.setAutoUpdate(false);
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+  expect(mockUpdater.autoDownload).toBe(false);
+});
+
+test("auto-update switched off by the Terminal UI stops the next download", async () => {
+  saveConfig({ autoUpdate: true });
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  expect(mockUpdater.autoDownload).toBe(true);
+  saveConfig({ autoUpdate: false, feedUrl: "https://example.test/feed/" });
+  await m.checkForUpdates();
+  expect(mockUpdater.autoDownload).toBe(false);
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+  expect(m.getState().autoUpdate).toBe(false);
+});
+
+test("an unreadable settings file pauses checks instead of ignoring a pin", async () => {
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  fs.mkdirSync(path.join(tmpHome, ".gaia"), { recursive: true });
+  fs.writeFileSync(path.join(tmpHome, ".gaia", "update-config.json"), "{ not json");
+  mockUpdater.checkForUpdates = jest.fn(async () => null);
+  await m.checkForUpdates();
+  expect(mockUpdater.checkForUpdates).not.toHaveBeenCalled();
+  expect(m.getState().status).toBe("error");
+  expect(m.getState().error).toMatch(/cannot be read/);
+});
+
+test("a save waits for the Terminal UI's lock, then fails loudly if it is held", async () => {
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  saveConfig({ tuiPinnedVersion: "v0.24.0" });
+  const lock = path.join(tmpHome, ".gaia", "update-config.json.lock");
+  fs.writeFileSync(lock, "");
+  await expect(m.setAutoUpdate(true)).rejects.toThrow(/busy/);
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lock, old, old); // a crashed app's lock is taken over
+  await m.setAutoUpdate(true);
+  const saved = JSON.parse(fs.readFileSync(path.join(tmpHome, ".gaia", "update-config.json"), "utf8"));
+  expect(saved).toEqual({ tuiPinnedVersion: "v0.24.0", autoUpdate: true });
+  expect(fs.existsSync(lock)).toBe(false);
+});
+
+test("an update the user asked for still installs on quit with auto-update off", async () => {
+  const m = initUpdater({ confirmRestart: jest.fn(async () => false) });
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+  mockUpdater.downloadUpdate = jest.fn(async () => null);
+  mockUpdater.emit("update-available", { version: "0.26.0" });
+  await flush();
+  await m.downloadUpdate();
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
+  expect(mockUpdater.autoDownload).toBe(false);
+});
+
+test("a pin in a file that was broken at launch is honoured once the file is fixed", async () => {
+  fs.mkdirSync(path.join(tmpHome, ".gaia"), { recursive: true });
+  fs.writeFileSync(path.join(tmpHome, ".gaia", "update-config.json"), "{ half-writ");
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  mockUpdater.checkForUpdates = jest.fn(async () => null);
+  global.fetch = jest.fn();
+  saveConfig({ autoUpdate: true, pinnedVersion: "v0.24.0" });
+  await m.checkForUpdates();
+  expect(m.getState().pinnedVersion).toBe("v0.24.0");
+  expect(mockUpdater.autoDownload).toBe(false);
+  expect(global.fetch).not.toHaveBeenCalled(); // stays on the pinned feed
+});
+
+test("auto-update switched off in the Terminal UI after a download stops the install on quit", async () => {
+  saveConfig({ autoUpdate: true });
+  initUpdater({ confirmRestart: jest.fn(async () => false) });
+  await downloadedAndRestartChosen();
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
+  saveConfig({ autoUpdate: false });
+  electronMock.app.emit("before-quit");
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+});
+
+describe("a settings folder that refuses the lock file", () => {
+  function denyLock(code) {
+    const realOpen = fs.openSync;
+    return jest.spyOn(fs, "openSync").mockImplementation((p, flags, ...rest) => {
+      if (String(p).endsWith(".lock")) {
+        const err = new Error(`${code}: permission denied, open '${p}'`);
+        err.code = code;
+        throw err;
+      }
+      return realOpen(p, flags, ...rest);
+    });
+  }
+
+  function onPlatform(value, fn) {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value });
+    return Promise.resolve(fn()).finally(() => Object.defineProperty(process, "platform", platform));
+  }
+
+  test("fails at once on Linux, naming permissions, not busy", async () => {
+    const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+    const spy = denyLock("EACCES");
+    try {
+      await onPlatform("linux", async () => {
+        const start = Date.now();
+        const err = await m.setAutoUpdate(true).catch((e) => e);
+        expect(err.message).toMatch(/permissions/);
+        expect(err.message).not.toMatch(/busy/);
+        expect(Date.now() - start).toBeLessThan(400);
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("on Windows waits for a lock being deleted, then names the real error", async () => {
+    const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+    const spy = denyLock("EPERM");
+    try {
+      await onPlatform("win32", async () => {
+        const err = await m.setAutoUpdate(true).catch((e) => e);
+        expect(err.message).toMatch(/Cannot lock .*EPERM/);
+        expect(err.message).not.toMatch(/busy/);
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("a crashed app's lock that cannot be moved aside", () => {
+  function staleLock() {
+    const dir = path.join(tmpHome, ".gaia");
+    fs.mkdirSync(dir, { recursive: true });
+    const lock = path.join(dir, "update-config.json.lock");
+    fs.writeFileSync(lock, "");
+    const hourAgo = new Date(Date.now() - 3600 * 1000);
+    fs.utimesSync(lock, hourAgo, hourAgo);
+    return lock;
+  }
+
+  // Throws `code` for the lock's rename; after 2,000 tries a non-retryable
+  // error breaks a loop that would otherwise spin forever.
+  function failRename(code, onCall) {
+    const realRename = fs.renameSync;
+    let calls = 0;
+    const spy = jest.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (!String(from).endsWith(".lock")) return realRename(from, to);
+      if (++calls > 2000) {
+        const loop = new Error("rename retried without end");
+        loop.code = "ELOOPED";
+        throw loop;
+      }
+      if (onCall) onCall(from);
+      const err = new Error(`${code}: operation not permitted, rename '${from}'`);
+      err.code = code;
+      throw err;
+    });
+    return { spy, calls: () => calls };
+  }
+
+  for (const code of ["EACCES", "EPERM"]) {
+    test(`gives up within the wait and names permissions (${code})`, async () => {
+      const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+      const lock = staleLock();
+      const { spy } = failRename(code);
+      try {
+        const start = Date.now();
+        const err = await m.setAutoUpdate(true).catch((e) => e);
+        expect(err.message).toMatch(/Cannot remove .*update-config\.json\.lock/);
+        expect(err.message).toMatch(/permissions/);
+        expect(err.message).not.toMatch(/busy|retried without end/);
+        expect(Date.now() - start).toBeLessThan(2000);
+        expect(fs.existsSync(lock)).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  }
+
+  test("a lock another app already moved aside is not an error", async () => {
+    const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+    staleLock();
+    const { spy } = failRename("ENOENT", (from) => fs.rmSync(from, { force: true }));
+    try {
+      await m.setAutoUpdate(false);
+    } finally {
+      spy.mockRestore();
+    }
+    const saved = JSON.parse(
+      fs.readFileSync(path.join(tmpHome, ".gaia", "update-config.json"), "utf8")
+    );
+    expect(saved.autoUpdate).toBe(false);
+  });
+
+  test("an unexpected rename error surfaces at once", async () => {
+    const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+    staleLock();
+    const { spy, calls } = failRename("EIO");
+    try {
+      const err = await m.setAutoUpdate(true).catch((e) => e);
+      expect(err.message).toMatch(/EIO/);
+      expect(calls()).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

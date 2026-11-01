@@ -112,7 +112,6 @@ def _registered_tool_names() -> set:
         "src/gaia/sd",
         "src/gaia/vlm",
         "src/gaia/agents/code_index",
-        "hub/agents/chat/python",
         "hub/agents/gaia/python",
     ]
 
@@ -243,6 +242,9 @@ class _FakeProxy:
         return self._init_result
 
 
+_NO_FOLLOWUPS = {"type": "followup_unavailable"}
+
+
 class _FakeHandle:
     def __init__(self, api_version="2.13", init_result=(200, {})):
         self.api_version = api_version
@@ -291,7 +293,8 @@ class TestGaiaDispatch:
             {"role": "user", "content": "a"},
             {"role": "assistant", "content": "b"},
         ]
-        assert handler.events == []
+        # 2.13 takes no mid-turn messages, so the chat is told not to offer one.
+        assert handler.events == [_NO_FOLLOWUPS]
 
     def test_old_binary_is_refused_with_gaia_copy(self, monkeypatch):
         _, calls = self._patch(monkeypatch, _FakeHandle(api_version="2.11"))
@@ -325,7 +328,7 @@ class TestGaiaDispatch:
         _dispatch_sidecar_query(handler, request, [], "m", "gaia")
 
         assert len(calls) == 1, "a not-ready probe must not cancel the turn"
-        assert len(handler.events) == 1
+        assert handler.events[1:] == [_NO_FOLLOWUPS]
         assert handler.events[0]["type"] == "status"
         message = handler.events[0]["message"]
         # Framed as a probe result, not asserted as fact — it is wrong often
@@ -364,7 +367,7 @@ class TestGaiaDispatch:
         )
 
         assert len(calls) == 1
-        assert handler.events == []
+        assert handler.events == [_NO_FOLLOWUPS]
 
     def test_a_missing_model_the_turn_uses_still_blocks(self, monkeypatch):
         body = self._init_body(reachable=True, present=False, hint="not downloaded")

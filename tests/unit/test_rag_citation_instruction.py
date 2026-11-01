@@ -25,7 +25,9 @@ def test_paged_file_instruction_is_unchanged():
         "Your answer MUST start with: 'According to report.pdf, page X:' where X is "
         "the page number from the chunk's 'page' field.\n\nExample: If chunk has "
         "'page': 2, say 'According to report.pdf, page 2:'\nIf info from multiple "
-        "pages, say 'According to report.pdf, pages 2 and 5:'"
+        "pages, say 'According to report.pdf, pages 2 and 5:'\n"
+        "A chunk's 'page' is where it starts; text after a '[Page N]' marker inside "
+        "it is on page N, so cite N for facts that follow the marker."
     )
 
 
@@ -39,7 +41,9 @@ def test_paged_documents_instruction_is_unchanged():
         "Format: 'According to <absolute_path> (page X):'\n"
         "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
         "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf "
-        "(pages 2, 5):'\n\n"
+        "(pages 2, 5):'\n"
+        "A chunk's 'page' is where it starts; text after a '[Page N]' marker inside "
+        "it is on page N, so cite N for facts that follow the marker.\n\n"
         "IMPORTANT: Always use the full path exactly as given in source_file. "
         "Do NOT shorten it to just the filename."
     )

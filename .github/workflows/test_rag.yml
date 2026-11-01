@@ -45,6 +45,7 @@ on:
       - 'src/gaia/vlm/**'
       - 'src/gaia/chat/**'
       - 'src/gaia/agents/tools/rag_tools.py'
+      - 'src/gaia/agents/tools/document_text.py'
       - 'src/gaia/agents/tools/__init__.py'
       - 'src/gaia/agents/base/tools.py'
       - 'src/gaia/ui/routers/sessions.py'
@@ -52,7 +53,7 @@ on:
       # The integration job runs `python -m gaia.cli eval retrieval`.
       - 'src/gaia/cli.py'
       - 'src/gaia/eval/retrieval/**'
-      - 'hub/agents/chat/python/**'
+      - 'hub/agents/gaia/python/**'
       - 'eval/retrieval/**'
       - 'eval/corpus/**'
       - 'data/pdf/**'
@@ -106,6 +107,7 @@ on:
       - 'src/gaia/vlm/**'
       - 'src/gaia/chat/**'
       - 'src/gaia/agents/tools/rag_tools.py'
+      - 'src/gaia/agents/tools/document_text.py'
       - 'src/gaia/agents/tools/__init__.py'
       - 'src/gaia/agents/base/tools.py'
       - 'src/gaia/ui/routers/sessions.py'
@@ -113,7 +115,7 @@ on:
       # The integration job runs `python -m gaia.cli eval retrieval`.
       - 'src/gaia/cli.py'
       - 'src/gaia/eval/retrieval/**'
-      - 'hub/agents/chat/python/**'
+      - 'hub/agents/gaia/python/**'
       - 'eval/retrieval/**'
       - 'eval/corpus/**'
       - 'data/pdf/**'
@@ -191,9 +193,9 @@ jobs:
       uses: ./.github/actions/setup-venv
       with:
         python-version: '3.12'
-        # The chat agent package provides query_documents' search-key expansion,
-        # which the retrieval gate scores as the agent pipeline.
-        install-package: '.[dev,rag] ./hub/agents/chat/python'
+        # The flagship package's ChatAgent provides query_documents' search-key
+        # expansion, which the retrieval gate scores as the agent pipeline.
+        install-package: '.[dev,rag] ./hub/agents/gaia/python'
 
     - name: Install additional test dependencies
       shell: powershell

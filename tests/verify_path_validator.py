@@ -9,13 +9,13 @@ sys.path.append(os.path.join(os.getcwd(), "src"))
 
 # DockerAgent and CodeAgent were removed in the agent-collapse (#1102,
 # #1397); the chat/rag cases below still exercise the shared PathValidator
-# contract here. ChatAgent ships as the standalone gaia-agent-chat wheel
-# (#1102).
+# contract here. ChatAgent ships in the flagship gaia-agent-gaia wheel
+# (#6099).
 try:
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 except ImportError:
     raise SystemExit(
-        "gaia-agent-chat is not installed — run: pip install gaia-agent-chat"
+        "gaia-agent-gaia is not installed — run: pip install -e hub/agents/gaia/python"
     )
 
 from gaia.rag.sdk import RAGSDK, RAGConfig

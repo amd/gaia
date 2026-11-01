@@ -1,0 +1,75 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# The only scheduler for the proactive Claude audits: ONE audit a night, in a fixed
+# rotation, so each runs every len(ROTATION) nights (every 3rd night with three).
+#
+# Why one a night: running the code audit, security audit and doc walkthrough every
+# night spent the Claude subscription's WEEKLY cap mid-week. Both daily audits failed
+# 5 of 10 nights in October 2026 on "You've hit your weekly limit", and the Monday
+# walkthrough alone spent ~$190 of API-equivalent usage in one day.
+#
+# The pick is days-since-epoch (UTC) mod len(ROTATION) — see
+# scripts/audit/audit_rotation.py. Adding an audit = append it there. Any audit still
+# runs on demand with `gh workflow run <file>`; only runs started here (run-name
+# "... rotation night N") count as history for the carry-over scoping in
+# scripts/audit/audit_history.py, so a skipped or failed night is covered on that
+# audit's next turn rather than lost.
+name: Claude Audit Rotation
+
+on:
+  schedule:
+    # 10:13 UTC = 03:13 PDT / 02:13 PST. GitHub cron is UTC-only with no DST, and only
+    # 10:00-11:00 UTC lands inside 2-4am Pacific all year. Off :00/:30, the busiest
+    # slots on the shared Actions fleet. The walkthrough's ~10 guides finish by ~6am
+    # Pacific, before PR CI fills the Strix Point pool.
+    - cron: "13 10 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Run the audit that owns this UTC date (YYYY-MM-DD). Empty = today"
+        default: ""
+      dry_run:
+        description: "Only report which audit would run; dispatch nothing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-audit-rotation
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    if: github.repository == 'amd/gaia'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # `gh workflow run` with GITHUB_TOKEN: workflow_dispatch is the one event a
+      # GITHUB_TOKEN may trigger.
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Pick tonight's audit
+        id: pick
+        env:
+          PICK_DATE: ${{ github.event.inputs.date || '' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/audit/audit_rotation.py --date "$PICK_DATE" \
+            --summary "$GITHUB_STEP_SUMMARY" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Start it
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WORKFLOW: ${{ steps.pick.outputs.workflow }}
+          NIGHT: ${{ steps.pick.outputs.night }}
+        run: |
+          set -euo pipefail
+          gh workflow run "$WORKFLOW" --repo "${{ github.repository }}" --ref main \
+            -f rotation_night="$NIGHT"
+          echo "Started \`$WORKFLOW\` for rotation night $NIGHT: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/$WORKFLOW" >> "$GITHUB_STEP_SUMMARY"
