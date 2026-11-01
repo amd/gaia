@@ -105,6 +105,19 @@ if (!APPIMAGE) {
         );
       });
 
+      // GAIA ships no GPL/LGPL code; scripts/strip-appimage-copyleft.cjs
+      // removes these from electron-builder's bundled usr/lib.
+      test("licence: usr/lib has no GPL/LGPL desktop-integration libraries", () => {
+        const libDir = path.join(squashRoot, "usr", "lib");
+        const present = fs.existsSync(libDir) ? fs.readdirSync(libDir) : [];
+        const forbidden = present.filter((name) =>
+          ["libindicator", "libappindicator", "libgconf", "libnotify"].some((p) =>
+            name.startsWith(p),
+          ),
+        );
+        assert.deepEqual(forbidden, [], `copyleft libraries shipped in usr/lib: ${forbidden}`);
+      });
+
       // ── AC2 / T2b: .desktop Exec= MUST pass --no-sandbox ─────────────
       // linux.executableArgs propagates into the generated .desktop file.
       // This covers the AppArmor-restricted userns case on 24.04.1+ for

@@ -10,6 +10,7 @@ import { SetupScreen } from './components/SetupScreen';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
+import { DownloadChip } from './components/setup/DownloadChip';
 import { NotificationCenter } from './components/NotificationCenter';
 import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
 import { useChatStore } from './stores/chatStore';
@@ -78,6 +79,7 @@ function App() {
     const showMemoryDashboard = useChatStore((s) => s.showMemoryDashboard);
     const showSchedules = useChatStore((s) => s.showSchedules);
     const sidebarOpen = useChatStore((s) => s.sidebarOpen);
+    const sidebarCollapsed = useChatStore((s) => s.sidebarCollapsed);
     const setSidebarOpen = useChatStore((s) => s.setSidebarOpen);
     const setSystemStatus = useChatStore((s) => s.setSystemStatus);
     const setBackendConnected = useChatStore((s) => s.setBackendConnected);
@@ -629,7 +631,7 @@ function App() {
     if (setup.state === 'needed') {
         return (
             <div className="app">
-                <SetupScreen initial={setup.check} onReady={finishSetup} />
+                <SetupScreen onReady={finishSetup} />
             </div>
         );
     }
@@ -669,6 +671,8 @@ function App() {
                         <button type="button" className="link-btn" onClick={() => void checkSetup()}>Check again</button>
                     </div>
                 )}
+                {/* Model downloads, here when the sidebar that usually shows them is closed or collapsed. */}
+                {(!sidebarOpen || sidebarCollapsed) && <DownloadChip placement="main" />}
                 {flagshipMissing && <FlagshipAgentNotice onInstalled={loadAgents} />}
                 {restoreNotice && (
                     <div className={`app-notice${restoreNotice.ok ? '' : ' is-warning'}`} role="status">
