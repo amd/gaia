@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from gaia.code_index.sdk import CodeChunk, CodeIndexConfig, IndexResult, SearchResult
+from gaia.llm.lemonade_client import LemonadeClientError
 from gaia.mcp.servers.code_index_mcp import (
     MAX_TOP_K,
     SNIPPET_CHARS,
@@ -241,14 +242,14 @@ def test_bad_rebuild_arguments_build_nothing(repo, kwargs, match):
 
 def test_a_failed_rebuild_keeps_the_old_index_and_can_be_retried(repo, monkeypatch):
     service = _indexed(repo)
-    failure = RuntimeError("Lemonade Server not reachable")
+    failure = LemonadeClientError("Request failed: connection refused")
     monkeypatch.setattr(
         FakeSDK,
         "configure",
         staticmethod(lambda sdk: setattr(sdk, "fail_build", failure)),
     )
 
-    with pytest.raises(RuntimeError, match="Lemonade"):
+    with pytest.raises(LemonadeClientError, match="connection refused"):
         service.rebuild_index(model="other-model")
     monkeypatch.undo()
 

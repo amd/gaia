@@ -156,13 +156,21 @@ def create_code_index_mcp(service: CodeIndexService) -> "MCPServer":
     from mcp.server import MCPServer
     from mcp.server.mcpserver.exceptions import ToolError
 
+    from gaia.llm.lemonade_client import LemonadeClientError
+
     server = MCPServer(name="gaia-code-index")
 
     async def _run(fn: Callable[..., Any], *args: Any) -> Any:
         try:
             return await anyio.to_thread.run_sync(fn, *args)
         # The SDK hides any other exception's text; these carry the remedy.
-        except (ValueError, RuntimeError, ImportError, OSError) as e:
+        except (
+            ValueError,
+            RuntimeError,
+            ImportError,
+            OSError,
+            LemonadeClientError,
+        ) as e:
             raise ToolError(str(e)) from e
 
     @server.tool()

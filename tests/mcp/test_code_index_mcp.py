@@ -35,10 +35,11 @@ def repo(tmp_path_factory):
     return repo
 
 
-def _client(tmp_path, *argv) -> MCPClient:
+def _client(tmp_path, *argv, **extra_env) -> MCPClient:
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     env = {
+        **extra_env,
         # The child must import this checkout, not whichever one is installed.
         "PYTHONPATH": SRC,
         "HOME": str(home),
@@ -109,6 +110,29 @@ def test_bad_arguments_come_back_as_tool_errors(client, tool, args, needle):
     assert needle in result["content"][0]["text"]
     # The server is still up for the next call.
     assert not client.call_tool("get_index_status", {}).get("isError")
+
+
+def test_rebuild_with_lemonade_down_says_why(tmp_path, repo):
+    pytest.importorskip("faiss", reason="faiss not installed ([rag] extra)")
+    client = _client(
+        tmp_path,
+        "-m",
+        "gaia.mcp.servers.code_index_mcp",
+        "--repo",
+        str(repo),
+        # Nothing listens on the discard port, so the embedder can't connect.
+        LEMONADE_BASE_URL="http://127.0.0.1:9/api/v1",
+    )
+    try:
+        assert client.connect(), client.last_error
+        result = client.call_tool("rebuild_index", {})
+    finally:
+        client.disconnect()
+
+    assert result.get("isError") is True
+    text = result["content"][0]["text"]
+    assert "Verify Lemonade Server is running" in text
+    assert "port=9" in text
 
 
 def test_cli_entry_point_serves_the_same_tools(tmp_path, repo):
