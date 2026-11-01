@@ -755,7 +755,7 @@ func (m Model) guideView(w int) (body, foot []string) {
 	}
 	if m.busy != "" && len(m.gpu.GuidedSteps) == 0 {
 		body = append(body, pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
-	} else if m.busy == "" && m.gpu.GuidedValue == nil {
+	} else if m.busy == "" && m.gpu.GuidedValue == nil && len(m.gpu.GuidedSteps) == 0 {
 		body = append(body, indentAll(wrapStyled(dimStyle, gpuNothingToGive, width), indentW)...)
 	}
 	for i, step := range m.gpu.GuidedSteps {

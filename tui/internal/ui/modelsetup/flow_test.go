@@ -1229,6 +1229,13 @@ func TestNothingToGiveHidesTheStepsAndTheValue(t *testing.T) {
 		t.Fatalf("/gpu enter went to %s, want the guide", h2.m.Screen())
 	}
 	h2.expect(gpuNothingToGive)
+
+	// Steps without a value are never captioned "nothing to give".
+	g2 := gpuShared()
+	g2.Method, g2.GuidedValue = setupapi.MethodGuided, nil
+	h3 := newHarness(t, ModeGPU, &f.Fake{P: coldPlan(), G: g2})
+	h3.key("enter")
+	h3.expectNot(gpuNothingToGive)
 	h2.expectNot("Value:")
 	h2.expectNot("copy value")
 }
