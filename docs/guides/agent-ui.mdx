@@ -644,14 +644,13 @@ reads nothing.
     shell tool, even under full access and even inside a wider folder, until
     you add it back. A document attached to the chat is removed from the
     document bar instead, which also takes it out of the chat's search.
-  - **Internet:** turn it off and GAIA won't search the web, open pages,
-    use the browser, connectors or your mailbox, search or install skills
-    from the Agent Hub, or run commands that go online (such as
-    `git push`, `pip install` or `npx`). Commands that talk only to this PC,
-    such as `curl http://localhost:3000`, still run. The check reads what a
-    command names, so a script that connects to the internet by itself (for
-    example `python fetch.py`) can still reach it. The message box says the
-    chat is offline, with a button to turn it back on.
+  - **Internet:** this is a filter, not a firewall. Turn it off and GAIA
+    refuses recognised web, browser, connector, mailbox, Agent Hub and
+    network-command tools (such as `git push`, `pip install` or `npx`).
+    Commands that talk only to this PC, such as `curl http://localhost:3000`,
+    still run. Skill tools, scripts and commands that hide their destination
+    may still reach the network because GAIA cannot inspect every operation.
+    The message box says the chat is offline, with a button to turn it back on.
   - **Phone access:** turns mobile access on or off, shows the QR code, and
     names the phone that connected.
   - **Permission mode:** Ask or Full access, the same setting as the shield in
