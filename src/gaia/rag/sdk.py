@@ -886,7 +886,8 @@ class RAGSDK:
         """``<path hash>_<content hash>``: the shared stem of a document's cache files.
 
         The content hash (not mtime/size) makes same-size edits and sub-second
-        rewrites invalidate; the path hash keeps identical files apart. An
+        rewrites invalidate; the path hash names each path's own entry, though
+        :meth:`_cache_of_same_bytes` reuses another path's for identical bytes. An
         unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
         then fails at extraction.
 
@@ -938,6 +939,25 @@ class RAGSDK:
         return os.path.join(
             self.config.cache_dir, f"{key}_{self._chunking_fingerprint()}.json"
         )
+
+    def _cache_of_same_bytes(self, cache_path: str, content_key: str) -> str:
+        """``cache_path``, or the entry another path of these exact bytes left.
+
+        The library indexes an upload's temp copy and chats index the original,
+        so without this a chat reads every page again, images included.
+        """
+        if os.path.exists(cache_path):
+            return cache_path
+        content_hash = content_key.rsplit("_", 1)[-1]
+        if content_hash == "notfound":
+            return cache_path
+        suffix = f"_{content_hash}_{self._chunking_fingerprint()}.json"
+        try:
+            names = sorted(os.listdir(self.config.cache_dir))
+        except FileNotFoundError:
+            return cache_path
+        match = next((name for name in names if name.endswith(suffix)), None)
+        return os.path.join(self.config.cache_dir, match) if match else cache_path
 
     def _extracted_markdown_path(self, content_key: str) -> str:
         """Extracted text depends on content alone, so no chunking fingerprint."""
@@ -3697,7 +3717,9 @@ These positions indicate where to split the text."""
             content_key = self._content_key(file_path, raise_locked=True)
         except PermissionError as e:
             return self._document_locked(stats, file_path, e)
-        cache_path = self._get_cache_path(file_path, content_key)
+        cache_path = self._cache_of_same_bytes(
+            self._get_cache_path(file_path, content_key), content_key
+        )
         md_cache_path = self._extracted_markdown_path(content_key)
 
         if os.path.exists(cache_path):
