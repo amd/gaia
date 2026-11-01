@@ -786,7 +786,7 @@ gaia agent test [--lint | --live] [--path DIR] [--timeout SECONDS]
 
 Use `--layout hub` when authoring a package for this repo's `hub/agents/` tree, which nests the implementation under a language directory (`hub/agents/<id>/python/`). Standalone packages outside the repo want the default `flat` layout.
 
-**`version`** bumps the SemVer in `gaia-agent.yaml` and keeps `pyproject.toml` / `__init__.py` in sync.
+**`version`** bumps the SemVer in `gaia-agent.yaml` and moves every other version declaration with it: `pyproject.toml`, the package's `__version__` / `version.py`, and — when the package ships a `packaging/stamp_version.py`, as the hub agents do — the npm `package.json`, `package-lock.json` and `binaries.lock.json` through that stamper, whose `--check` must then pass. If any declaration can't be moved (a computed `__version__`, a `pyproject.toml` without a version, an npm package with no stamper), the command names it and exits without changing any file.
 
 **`test`** runs quality gates in two modes:
 
