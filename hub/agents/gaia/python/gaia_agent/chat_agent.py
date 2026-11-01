@@ -1818,10 +1818,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         """Auto-save current session (called after important operations)."""
         try:
             if self.current_session:
-                self.save_current_session()
-                if self.debug:
-                    logger.debug(
-                        f"Auto-saved session: {self.current_session.session_id}"
+                if self.save_current_session():
+                    if self.debug:
+                        logger.debug(
+                            f"Auto-saved session: {self.current_session.session_id}"
+                        )
+                else:
+                    logger.warning(
+                        "Auto-save failed for session %s; retry saving before exit.",
+                        self.current_session.session_id,
                     )
         except Exception as e:
             logger.warning(f"Auto-save failed: {e}")
