@@ -169,7 +169,7 @@ applies the new model's level. With the full context:
   tool result (about 15,000 on NPU, 30,000 on GPU), so a long file cannot crowd
   a small window.
   Past the cap, the agent gets the first whole lines and the line to continue
-  from with `read_file`.
+  from with `read_file`; the rest of the file is never read into memory.
 - **`.claude/skills/<name>/SKILL.md`** under the project root are listed in the
   skill catalogue, so the agent can load one by name when the work matches. A
   Claude Code skill GAIA's own format would reject — an uppercase or underscored

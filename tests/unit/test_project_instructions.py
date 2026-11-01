@@ -114,7 +114,7 @@ def test_a_large_file_shows_whole_lines_and_where_to_resume(repo):
     shown = [ln for ln in text.splitlines() if ln.startswith("rule ")]
     # Whole lines, in order, from the top, and the resume line is the next one.
     assert shown == lines[: len(shown)] and 90 <= len(shown) <= 100
-    assert f"lines 1-{len(shown)} of 2000" in text
+    assert f"CLAUDE.md continues past line {len(shown)}." in text
     assert f"start_line={len(shown) + 1})" in text
     assert (repo / "CLAUDE.md").as_posix() in text
 
@@ -124,7 +124,7 @@ def test_the_cap_is_shared_across_files(repo):
     (repo / "CLAUDE.md").write_text("claude rules\n", encoding="utf-8")
     text = render_project_instructions(repo, char_cap=60)
     assert "a" * 50 in text and "b" * 50 not in text
-    assert "CLAUDE.md (1 lines) does not fit here" in text
+    assert "CLAUDE.md does not fit here" in text
     assert "claude rules" not in text
 
 
@@ -132,6 +132,69 @@ def test_a_single_overlong_line_points_at_the_file(repo):
     (repo / "CLAUDE.md").write_text("x" * 500, encoding="utf-8")
     text = render_project_instructions(repo, char_cap=100)
     assert "x" * 100 not in text and "does not fit here" in text
+
+
+class _CountingReads:
+    """Wraps an open text file and counts the characters read from it."""
+
+    def __init__(self, f, counter):
+        self._f, self._counter = f, counter
+
+    def read(self, size=-1):
+        chunk = self._f.read(size)
+        self._counter.append(len(chunk))
+        return chunk
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._f.close()
+
+
+def test_a_huge_file_is_never_read_whole(repo, monkeypatch):
+    (repo / "CLAUDE.md").write_text("rule line\n" * 1_000_000, encoding="utf-8")
+    real_open = pathlib.Path.open
+    reads = []
+    monkeypatch.setattr(
+        pathlib.Path,
+        "open",
+        lambda self, *a, **k: _CountingReads(real_open(self, *a, **k), reads),
+    )
+    text = render_project_instructions(repo, char_cap=1_000)
+    assert "CLAUDE.md continues past line" in text and "start_line=" in text
+    # 10 MB on disk; only the cap, the slack and a one-character peek are read.
+    assert 0 < sum(reads) <= 1_000 + project_map._INSTRUCTIONS_READ_SLACK + 1
+
+
+@pytest.mark.parametrize("char", ["é", "中", "\U0001f600"])
+def test_the_cap_never_splits_a_multibyte_character(repo, char):
+    # No newlines, so the cap lands inside the line, and on any byte offset.
+    (repo / "CLAUDE.md").write_text(char * 50_000, encoding="utf-8")
+    for cap in (1, 2, 3, 7, 100):
+        text = render_project_instructions(repo, char_cap=cap)
+        assert "�" not in text and "does not fit here" in text
+
+
+def test_multibyte_text_under_the_cap_is_shown_exactly(repo):
+    body = "\n".join(["règle 中文 \U0001f600"] * 200)
+    (repo / "CLAUDE.md").write_text(body, encoding="utf-8")
+    text = render_project_instructions(repo, char_cap=len(body))
+    assert body in text and "continues" not in text
+
+
+def test_a_file_one_character_over_the_cap_is_truncated(repo):
+    (repo / "CLAUDE.md").write_bytes(b"a\nb\nc")
+    assert "continues" not in render_project_instructions(repo, char_cap=5)
+    text = render_project_instructions(repo, char_cap=4)
+    assert "CLAUDE.md continues past line 2." in text and "start_line=3" in text
+
+
+def test_identical_files_past_the_cap_are_shown_once(repo):
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        (repo / name).write_text("same rule\n" * 100_000, encoding="utf-8")
+    text = render_project_instructions(repo, char_cap=1_000)
+    assert text.count("--- end of") == 1
 
 
 def test_a_file_under_the_cap_is_not_truncated(repo):
@@ -213,7 +276,7 @@ def test_an_unreadable_file_is_named_not_hidden(repo, monkeypatch, caplog):
     def _deny(self, *a, **k):
         raise PermissionError("denied by test")
 
-    monkeypatch.setattr(pathlib.Path, "read_text", _deny)
+    monkeypatch.setattr(pathlib.Path, "open", _deny)
     text = render_project_instructions(repo)
     assert "could not be read (denied by test)" in text
     assert "denied by test" in caplog.text
@@ -321,7 +384,7 @@ def test_huge_files_on_a_local_model_stay_within_its_share(repo):
     text = agent.get_project_instructions_system_prompt()
     assert len(text) < 15_000 + 1_500  # the cap plus framing and pointers
     # The first file took the whole share; the second is a pointer, not dropped.
-    assert 'read_file(file_path="' in text and "CLAUDE.md (400000 lines)" in text
+    assert 'read_file(file_path="' in text and "CLAUDE.md does not fit here" in text
 
 
 @pytest.mark.parametrize("threshold", [0, 1, 10_000_000])

@@ -687,15 +687,34 @@ PROJECT_INSTRUCTIONS_CHAR_CAP = 60_000
 PROJECT_INSTRUCTIONS_HEADER = "==== PROJECT INSTRUCTIONS ===="
 
 
+#: Characters read past a file's share of the cap: leading blank lines are
+#: stripped before the cap applies, and a symlinked copy is compared by content.
+_INSTRUCTIONS_READ_SLACK = 4_096
+
+
+def _read_head(path: Path, limit: int) -> Tuple[str, bool]:
+    """At most *limit* characters of *path*, and whether that is all of it.
+
+    Text-mode reads count decoded characters, so a multi-byte UTF-8 sequence
+    is never split. A file larger than the cap is never read whole.
+    """
+    with path.open(encoding="utf-8-sig", errors="replace") as f:
+        head = f.read(limit)
+        complete = len(head) < limit or not f.read(1)
+    return head, complete
+
+
 def render_project_instructions(
     root: os.PathLike | str, char_cap: int = PROJECT_INSTRUCTIONS_CHAR_CAP
 ) -> str:
     """*root*'s AGENTS.md and CLAUDE.md as one prompt section; ``""`` if neither.
 
-    Read the way Claude Code reads CLAUDE.md: whole, at session start. A file
-    identical to one already shown (CLAUDE.md symlinked to AGENTS.md) is shown
-    once. A file that cannot be read is named, not skipped, so the model knows
-    instructions exist. A link that leads outside *root* is named and not read.
+    Read the way Claude Code reads CLAUDE.md: at session start, whole when it
+    fits. A file identical to one already shown (CLAUDE.md symlinked to
+    AGENTS.md) is shown once. A file that cannot be read is named, not skipped,
+    so the model knows instructions exist. A link that leads outside *root* is
+    named and not read. A file is read only up to *char_cap* plus a little
+    slack, never whole; past the cap the prompt says which line to resume from.
     """
     root_path = Path(root)
     resolved_root = root_path.resolve()
@@ -718,31 +737,31 @@ def render_project_instructions(
             )
             continue
         try:
-            text = path.read_text(encoding="utf-8-sig", errors="replace")
+            # The same limit for every file, so identical files read identically.
+            text, complete = _read_head(path, char_cap + _INSTRUCTIONS_READ_SLACK)
         except OSError as e:
             logger.warning("[project-instructions] cannot read %s: %s", path, e)
             sections.append(f"{path} exists but could not be read ({e}).")
             continue
-        text = text.strip("\n")
+        text = text.strip("\n") if complete else text.lstrip("\n")
         if not text.strip() or text in shown:
             continue
         shown.append(text)
-        if len(text) > budget:
+        if not complete or len(text) > budget:
             head = text[:budget]
             # Whole lines only, so the resume line below is exact.
             head = head[: head.rfind("\n")] if "\n" in head else ""
             shown_lines = head.count("\n") + 1 if head else 0
-            total_lines = text.count("\n") + 1
             if shown_lines:
                 text = (
-                    f"{head}\n[{name} continues: this is lines 1-{shown_lines} "
-                    f"of {total_lines}. Read the rest with read_file(file_path="
-                    f'"{path.as_posix()}", start_line={shown_lines + 1}) before relying on it.]'
+                    f"{head}\n[{name} continues past line {shown_lines}. Read the "
+                    f'rest with read_file(file_path="{path.as_posix()}", '
+                    f"start_line={shown_lines + 1}) before relying on it.]"
                 )
             else:
                 text = (
-                    f"[{name} ({total_lines} lines) does not fit here. Read it "
-                    f'with read_file(file_path="{path.as_posix()}") before relying on it.]'
+                    f"[{name} does not fit here. Read it with read_file(file_path="
+                    f'"{path.as_posix()}") before relying on it.]'
                 )
         budget = max(0, budget - len(text))
         sections.append(f"--- {path} ---\n{text}\n--- end of {name} ---")
