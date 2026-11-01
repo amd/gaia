@@ -2050,7 +2050,11 @@ class RAGSDK:
             raise
 
     def _read_page_images(
-        self, file_path: str, page_num: int, min_cover: float = 0.0
+        self,
+        file_path: str,
+        page_num: int,
+        min_cover: float = 0.0,
+        before_each: Optional[Callable[[], None]] = None,
     ) -> list:
         """Read one PDF page or slide's images with the vision model.
 
@@ -2084,7 +2088,13 @@ class RAGSDK:
             images = extract_images_from_page_pymupdf(
                 file_path, page_num=page_num, min_cover=min_cover, strict=True
             )
-        return vlm.extract_from_page_images(images, page_num=page_num) if images else []
+        if not images:
+            return []
+        if before_each is None:
+            return vlm.extract_from_page_images(images, page_num=page_num)
+        return vlm.extract_from_page_images(
+            images, page_num=page_num, before_each=before_each
+        )
 
     def _keep_for_images(
         self, converted: str, metadata: Dict[str, Any]
@@ -2164,6 +2174,7 @@ class RAGSDK:
                 image_pass.source_file(cache_dir, state),
                 number,
                 min_cover=0.0 if page["short"] else MIN_IMAGE_PAGE_COVER,
+                before_each=image_pass.give_way,
             )
         )
         if not image_texts:

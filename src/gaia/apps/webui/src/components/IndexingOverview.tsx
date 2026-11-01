@@ -109,7 +109,7 @@ export function IndexingIndicator() {
     const eta = active ? timeLeftLabel(overview.seconds_left, overview.estimate, t) : null;
     const Icon = active ? Loader : hasProblem(overview) ? AlertCircle : CheckCircle2;
     const iconClass = active ? 'doc-spin' : hasProblem(overview) ? 'is-problem' : 'is-done';
-    return (
+    const batch = (
         <div className="index-indicator">
             <button
                 type="button"
@@ -135,6 +135,12 @@ export function IndexingIndicator() {
                 </div>
             )}
         </div>
+    );
+    return (
+        <>
+            {batch}
+            <ImagesReadingLine onOpen={() => setShowDocLibrary(true)} />
+        </>
     );
 }
 

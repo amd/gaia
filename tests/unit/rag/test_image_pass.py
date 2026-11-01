@@ -21,6 +21,11 @@ from gaia.utils.turn_activity import chat_turn
 fitz = pytest.importorskip("pymupdf")
 
 
+@pytest.fixture(autouse=True)
+def no_hold_off_after_a_turn(monkeypatch):
+    monkeypatch.setattr(image_pass, "_AFTER_TURN_S", 0.0)
+
+
 def _vector(text: str) -> np.ndarray:
     seed = int.from_bytes(hashlib.sha256(text.encode()).digest()[:4], "big")
     vector = np.random.default_rng(seed).standard_normal(8).astype("float32")
@@ -47,7 +52,9 @@ def _sdk(cache: Path, read=None) -> RAGSDK:
     sdk._load_embedder = lambda: None
     sdk.vision_calls = []
 
-    def read_images(_path, number, min_cover=0.0):
+    def read_images(_path, number, min_cover=0.0, before_each=None):
+        if before_each:
+            before_each()
         sdk.vision_calls.append((number, min_cover))
         return (read or _reads_a_chart)(number)
 
@@ -197,7 +204,7 @@ def test_reading_survives_the_temporary_upload_being_deleted(tmp_path):
     sdk.index_document(str(upload))
     seen = []
 
-    def read(path, number, min_cover=0.0):  # pylint: disable=unused-argument
+    def read(path, number, min_cover=0.0, **_kwargs):  # pylint: disable=unused-argument
         seen.append(Path(path).read_bytes()[:4])
         return _reads_a_chart(number)
 
@@ -457,6 +464,74 @@ def test_a_relayed_turn_carries_the_notice_and_counts_as_a_turn():
     from gaia.ui.email_sidecar import relay
 
     assert inspect.unwrap(relay.relay_query) is not relay.relay_query
+
+
+def test_reading_stays_away_while_a_conversation_is_going(tmp_path, monkeypatch):
+    monkeypatch.setattr(image_pass, "_AFTER_TURN_S", 0.5)
+    sdk = _sdk(tmp_path / "cache")
+    sdk.index_document(str(_pdf(tmp_path / "doc.pdf", TEXT)))
+    with chat_turn():
+        pass
+
+    worker = threading.Thread(
+        target=image_pass._work,
+        args=(sdk.config.cache_dir, sdk._read_queued_page),
+        daemon=True,
+    )
+    worker.start()
+    time.sleep(0.2)
+    assert sdk.vision_calls == []
+    worker.join(timeout=10)
+
+    assert len(sdk.vision_calls) == 1
+
+
+def test_a_question_interrupts_a_page_without_counting_as_a_failure(tmp_path):
+    sdk = _sdk(tmp_path / "cache")
+    sdk.index_document(str(_pdf(tmp_path / "doc.pdf", TEXT)))
+    cache = sdk.config.cache_dir
+    key = next(iter(sdk.file_metadata.values()))["image_pass_key"]
+    state = image_pass.status(cache, key)
+    page = state["pages"][0]
+
+    with chat_turn():
+        image_pass._read_one(cache, key, page, sdk._read_queued_page)
+
+    after = image_pass.status(cache, key)
+    assert sdk.vision_calls == []
+    assert after["attempts"] == {} and after["failed"] == {}
+    assert after["done"] == [] and after["state"] == image_pass.READING
+
+
+def test_vision_reading_stops_between_images_when_asked():
+    from gaia.llm.vlm_client import VLMClient
+
+    vlm = VLMClient.__new__(VLMClient)
+    vlm.extract_from_image = lambda **_: "text"
+    images = [{"image_bytes": b"x", "width": 1, "height": 1, "size_kb": 1}] * 3
+    seen = []
+
+    def before():
+        seen.append(1)
+        if len(seen) == 2:
+            raise image_pass.ReadPaused()
+
+    with pytest.raises(image_pass.ReadPaused):
+        vlm.extract_from_page_images(images, page_num=1, before_each=before)
+    assert len(seen) == 2
+
+
+def test_estimate_covers_documents_not_started_yet(tmp_path):
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    keys = {name: name * 32 + "_abcdef01" for name in "ab"}
+    for name, key in keys.items():
+        path = _pdf(tmp_path / f"{name}.pdf", TEXT)
+        pages = [{"page": n, "short": True} for n in (1, 2)]
+        image_pass.register(str(cache), key, str(path), path.name, "", pages)
+    image_pass._commit(str(cache), keys["a"], lambda s: s.update(seconds_per_page=10.0))
+
+    assert image_pass.overview(str(cache))["seconds_left"] == 40
 
 
 def test_reading_waits_for_a_chat_turn_to_finish(tmp_path):

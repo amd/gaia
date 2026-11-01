@@ -122,6 +122,21 @@ describe('statusEventLabel', () => {
 });
 
 describe('IndexingIndicator', () => {
+    it('keeps saying images are being read while a finished batch is on screen', () => {
+        useChatStore.setState({
+            indexing: {
+                ...RUNNING,
+                active: false,
+                done: 7,
+                images: { documents: 2, names: ['a.pdf', 'b.pdf'], pages_done: 1, pages_total: 9, seconds_left: null, blocked: null },
+            } as api.IndexingOverview,
+            showDocLibrary: false,
+        });
+        render(<IndexingIndicator />);
+        expect(screen.getByText(en.plural('docs.overall.done', 7, { n: 7 }))).toBeTruthy();
+        expect(screen.getByText(en.plural('docs.images.overall', 2, { name: 'a.pdf' }))).toBeTruthy();
+    });
+
     it('stays out of the way from the cold, empty state', () => {
         const { container } = render(<IndexingIndicator />);
         expect(container).toBeEmptyDOMElement();

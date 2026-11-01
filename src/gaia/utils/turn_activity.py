@@ -5,10 +5,12 @@
 
 import functools
 import threading
+import time
 from contextlib import contextmanager
 from typing import Callable, Iterator, TypeVar
 
 _count = [0]
+_last_ended = [float("-inf")]
 _lock = threading.Lock()
 
 F = TypeVar("F", bound=Callable)
@@ -24,6 +26,7 @@ def chat_turn() -> Iterator[None]:
     finally:
         with _lock:
             _count[0] -= 1
+            _last_ended[0] = time.monotonic()
 
 
 def is_chat_turn(fn: F) -> F:
@@ -37,5 +40,6 @@ def is_chat_turn(fn: F) -> F:
     return wrapper  # type: ignore[return-value]
 
 
-def turn_running() -> bool:
-    return _count[0] > 0
+def turn_running(within: float = 0.0) -> bool:
+    """Whether a turn is running, or ended less than *within* seconds ago."""
+    return _count[0] > 0 or time.monotonic() - _last_ended[0] < within

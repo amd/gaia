@@ -40,6 +40,9 @@ _STATE_LOCK = "rag-image-state"
 _READER_LOCK = "rag-image-reader"
 _READER_WAIT_S = 2.0
 _IDLE_POLL_S = 1.0
+#: A vision read makes the next question wait and evicts the chat's prompt from
+#: the model, so reading stays away until the user has stopped asking.
+_AFTER_TURN_S = 60.0
 #: How long a document waits after the vision model turns out to be missing.
 _BLOCKED_RETRY_S = 300.0
 #: How long a page waits after a failed read, before another go.
@@ -56,6 +59,10 @@ BLOCKED = "blocked"
 _workers: Dict[str, threading.Thread] = {}
 _workers_lock = threading.Lock()
 _parsed: Dict[str, Tuple[int, str]] = {}
+
+
+class ReadPaused(Exception):
+    """A question came in part way through a page; the page is read again later."""
 
 
 class VisionUnavailable(RuntimeError):
@@ -197,12 +204,23 @@ def overview(cache_dir: str) -> Dict[str, Any]:
     """Everything still being read, for a status line."""
     states = _all_states(cache_dir)
     running = [p for p in map(progress, states) if p]
-    known = [p["seconds_left"] for p in running if p["seconds_left"] is not None]
+    rates = [
+        state["seconds_per_page"]
+        for state in states
+        if state.get("seconds_per_page") and _pending(state)
+    ]
+    if rates:
+        # A document nothing has been read from yet goes at its neighbours' speed.
+        average = sum(rates) / len(rates)
+        for p in running:
+            if p["seconds_left"] is None:
+                left = p["pages_total"] - p["pages_done"]
+                p["seconds_left"] = round(average * left)
     return {
         "documents": len(running),
         "pages_done": sum(p["pages_done"] for p in running),
         "pages_total": sum(p["pages_total"] for p in running),
-        "seconds_left": sum(known) if len(known) == len(running) and known else None,
+        "seconds_left": sum(p["seconds_left"] for p in running) if rates else None,
         "blocked": next((p["reason"] for p in running if p["reason"]), None),
         "names": sorted(p["name"] for p in running),
         "details": running,
@@ -279,6 +297,12 @@ def _commit(cache_dir: str, key: str, update: Callable[[Dict[str, Any]], None]) 
         _save(path, state)
 
 
+def give_way() -> None:
+    """Between two images: stop reading this page if a question has come in."""
+    if turn_running():
+        raise ReadPaused()
+
+
 def _read_one(
     cache_dir: str, key: str, page: Dict[str, Any], read_page: Callable
 ) -> None:
@@ -291,6 +315,8 @@ def _read_one(
 
     try:
         added = read_page(state, number)
+    except ReadPaused:
+        return
     except VisionUnavailable as e:
         reason = str(e)
         _commit(cache_dir, key, lambda s: _block(s, reason, _BLOCKED_RETRY_S))
@@ -329,7 +355,7 @@ def _read_one(
 def _work(cache_dir: str, read_page: Callable) -> None:
     while True:
         try:
-            while turn_running():
+            while turn_running(_AFTER_TURN_S):
                 time.sleep(_IDLE_POLL_S)
             # Decided under the state lock, so a document queued as this worker
             # stops is either seen here or starts a new worker.

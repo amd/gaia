@@ -236,6 +236,15 @@ for (const locale of ['en', 'ar']) {
         });
     }
 
+    test(`a finished batch leaves the images line up, ${locale}`, async ({ page }, info) => {
+        test.skip(info.project.name !== 'light');
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await open(page, { ...IMAGES_READING, batch_id: 'b1', active: false, total: 5, done: 5, failed: 0, cancelled: 0 }, 'light', locale);
+        await expect(page.locator('.index-indicator')).toHaveCount(2);
+        await shot(page, `images-after-batch-${locale}`);
+        expect(await overflow(page)).toEqual([]);
+    });
+
     test(`images at phone width, ${locale}`, async ({ page }, info) => {
         test.skip(info.project.name !== 'light');
         await page.setViewportSize({ width: 390, height: 780 });
