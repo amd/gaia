@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import stat
 import zipfile
 from pathlib import Path
@@ -665,8 +666,6 @@ def test_export_agent_with_only_bytecode_extras_round_trips(
 
     out = tmp_path / "export.zip"
     export_custom_agents(out)
-
-    import shutil
 
     shutil.rmtree(agent_dir)
     import_agent_bundle(out)
