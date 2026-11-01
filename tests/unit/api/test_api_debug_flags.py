@@ -77,9 +77,8 @@ class TestStepThroughRemoved:
         params = inspect.signature(api_app.start_server).parameters
         assert "step_through" not in params
         with pytest.raises(TypeError):
-            api_app.start_server(
-                step_through=True
-            )  # pylint: disable=unexpected-keyword-arg
+            # pylint: disable-next=unexpected-keyword-arg
+            api_app.start_server(step_through=True)
         run.assert_not_called()
 
 
