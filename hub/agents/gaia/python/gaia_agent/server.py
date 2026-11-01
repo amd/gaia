@@ -1777,7 +1777,11 @@ async def query(request: QueryRequest):
         translator = CanonicalTranslator(
             request.run_id,
             agent_id=AGENT_ID,
-            render_tool_map=SSEOutputHandler._RENDER_TOOL_TO_LANG,
+            render_tool_map={
+                tool: render
+                for tool, render in SSEOutputHandler._RENDER_TOOL_TO_LANG.items()
+                if render == "media"
+            },
             reasoning=request.reasoning,
         )
         terminated = False
