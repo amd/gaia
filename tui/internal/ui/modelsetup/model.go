@@ -245,6 +245,24 @@ func (m Model) Downloading() (bool, int) {
 	return true, m.overallPercent()
 }
 
+// Outcome says how a download that stopped ended, for a host that hid the
+// screen: "lost" (GAIA stopped answering; /models reconnects), "failed"
+// (with what failed, in words), or "done".
+func (m Model) Outcome() (kind, detail string) {
+	if m.lost != nil {
+		return "lost", m.lost.Error()
+	}
+	for _, r := range m.shownRows() {
+		if m.shownState(r) == setupapi.StateFailed {
+			return "failed", shortName(r.ID)
+		}
+		if r.State == setupapi.StateCancelled {
+			return "failed", shortName(r.ID)
+		}
+	}
+	return "done", ""
+}
+
 // IsMsg reports whether msg belongs to these screens, so a host that hides
 // them can still forward their ticks and status reads.
 func IsMsg(msg tea.Msg) bool {

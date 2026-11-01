@@ -833,7 +833,11 @@ class SetupRunner:
 
     def _settle_models(self, failed: Dict[str, str], run_failed: bool = False) -> None:
         """After a run: downloaded models become ready, or failed when their
-        load check failed or the run stopped before checking. Caller holds the lock."""
+        load check failed or the run stopped before checking.
+
+        "ready" means downloaded: a model the check did not load (Gemma, once a
+        chat model is saved) is ready without a load check of its own. Caller
+        holds the lock."""
         for entry in self._models.values():
             if entry.id in failed:
                 entry.state, entry.error_kind = "failed", "verify"

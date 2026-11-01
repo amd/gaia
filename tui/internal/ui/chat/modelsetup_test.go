@@ -40,10 +40,19 @@ func withSetupAPI(t *testing.T, api setupapi.API) {
 	t.Cleanup(func() { newChatSetupAPI = prev })
 }
 
-// feed runs cmd and delivers what the setup screens produce, a few levels deep.
+// feedSetup runs cmd and delivers what the setup screens produce, a few
+// levels deep.
 func feedSetup(t *testing.T, m ChatModel, cmd tea.Cmd) ChatModel {
 	t.Helper()
-	for depth := 0; cmd != nil && depth < 8; depth++ {
+	m, _ = pumpSetup(t, m, cmd, 8)
+	return m
+}
+
+// pumpSetup is feedSetup for rounds rounds, returning what is still to run so
+// a test can keep the screens' tick chain going.
+func pumpSetup(t *testing.T, m ChatModel, cmd tea.Cmd, rounds int) (ChatModel, tea.Cmd) {
+	t.Helper()
+	for depth := 0; cmd != nil && depth < rounds; depth++ {
 		var msgs []tea.Msg
 		var collect func(c tea.Cmd)
 		collect = func(c tea.Cmd) {
@@ -74,7 +83,7 @@ func feedSetup(t *testing.T, m ChatModel, cmd tea.Cmd) ChatModel {
 		}
 		cmd = tea.Batch(next...)
 	}
-	return m
+	return m, cmd
 }
 
 func TestModelsOpensTheSettingsChecklist(t *testing.T) {
@@ -204,5 +213,61 @@ func TestFinishingFirstRunSetupSaysSo(t *testing.T) {
 	}
 	if last := m.messages[len(m.messages)-1]; !strings.Contains(last.Content, "Setup complete") {
 		t.Fatalf("finish not announced: %q", last.Content)
+	}
+}
+
+// A hidden download that loses GAIA, or fails, is not reported as finished:
+// the chat says what happened and /models picks it back up.
+func TestAHiddenDownloadThatFailsIsNotCalledFinished(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		end   func(api *setupapitest.Fake)
+		words string
+	}{
+		{"lost", func(api *setupapitest.Fake) { api.SetStatusErr(errNotOnPath) }, "Lost touch with the model download"},
+		{"failed", func(api *setupapitest.Fake) {
+			api.Progress(setupapi.ModelProgress{ID: "gpt-oss-20b-GGUF", State: setupapi.StateFailed, BytesTotal: 12e9})
+		}, "gpt-oss-20b didn't finish downloading"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := setupFake()
+			withSetupAPI(t, api)
+			m := gaiaTestModel(t)
+			updated, cmd := m.submit("/models")
+			m = feedSetup(t, updated.(ChatModel), cmd)
+			var pending tea.Cmd
+			for _, k := range []tea.KeyMsg{
+				{Type: tea.KeyDown}, {Type: tea.KeyDown},
+				{Type: tea.KeySpace, Runes: []rune{' '}},
+				{Type: tea.KeyRunes, Runes: []rune("a")},
+				{Type: tea.KeyEsc},
+			} {
+				updated, cmd = m.Update(k)
+				m, pending = pumpSetup(t, updated.(ChatModel), tea.Batch(pending, cmd), 2)
+			}
+			if m.modelSetupOpen || m.modelSetup == nil {
+				t.Fatal("the download should be running in the background")
+			}
+			tc.end(api)
+			// The screens' own ticks poll the backend and notice the ending.
+			for i := 0; i < 20 && pending != nil; i++ {
+				m, pending = pumpSetup(t, m, pending, 1)
+				if busy, _ := m.modelSetup.Downloading(); !busy {
+					break
+				}
+			}
+			last := m.messages[len(m.messages)-1].Content
+			if !strings.Contains(last, tc.words) || strings.Contains(last, "finished. Type") {
+				t.Fatalf("hidden ending reported as %q", last)
+			}
+			if m.modelSetup == nil {
+				t.Fatal("the screens were dropped; /models could not pick the download back up")
+			}
+			updated, _ = m.submit("/models")
+			m = updated.(ChatModel)
+			if !m.modelSetupOpen || m.modelSetup.Screen() != "download" {
+				t.Fatalf("/models should reopen the stopped download, got %q", m.modelSetup.Screen())
+			}
+		})
 	}
 }

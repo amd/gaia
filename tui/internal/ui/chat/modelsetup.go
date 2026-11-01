@@ -54,6 +54,12 @@ func (m ChatModel) openModelSetup(mode modelsetup.Mode) (tea.Model, tea.Cmd) {
 			}
 			return m.statusNote("A model download is still running. Type /models to see it, and try again when it finishes."), nil
 		}
+		if mode == modelsetup.ModeModels && m.modelSetup.Mode() == modelsetup.ModeModels {
+			// A download that stopped while hidden: show it as it ended, so
+			// a failure can be retried and a lost connection reconnected.
+			m.modelSetupOpen = true
+			return m, nil
+		}
 	}
 	s := modelsetup.New(newChatSetupAPI(), modelsetup.Options{
 		Mode:         mode,
@@ -119,9 +125,19 @@ func (m ChatModel) updateModelSetup(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	s, cmd := m.modelSetup.Update(msg)
 	m.modelSetup = &s
 	if now, _ := s.Downloading(); was && !now && !m.modelSetupOpen {
-		// Finished while hidden: say so where the user is looking.
-		m.modelSetup = nil
-		m.messages = append(m.messages, Message{Role: RoleStatus, Content: "Model downloads finished. Type /models to see them."})
+		// Ended while hidden: say how, where the user is looking. Only a
+		// clean finish lets the screens go; /models picks the rest back up.
+		switch kind, detail := s.Outcome(); kind {
+		case "lost":
+			m.messages = append(m.messages, Message{Role: RoleError,
+				Content: "Lost touch with the model download: " + detail + ". Type /models to reconnect."})
+		case "failed":
+			m.messages = append(m.messages, Message{Role: RoleError,
+				Content: detail + " didn't finish downloading. Type /models to see why and retry it."})
+		default:
+			m.modelSetup = nil
+			m.messages = append(m.messages, Message{Role: RoleStatus, Content: "Model downloads finished. Type /models to see them."})
+		}
 		m.updateViewport()
 		return m, nil, true
 	}
