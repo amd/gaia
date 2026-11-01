@@ -189,6 +189,91 @@ export async function mockApi(page: Page): Promise<string[]> {
     return unhandled;
 }
 
+const modelRow = (id: string, over: Record<string, unknown>) => ({
+    id, context_length: null, downloaded: true, labels: [], rank: null, note: null, evidence: null, state: 'downloaded',
+    available: true, unavailable_reason: null, fits: true, custom: false,
+    placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'expected', warning: null },
+    ...over,
+});
+
+/** A Strix Halo with models on disk, more to download, an added one, and two it can't run. */
+export const MODEL_LIST = [
+    modelRow('Gemma-4-E4B-it-GGUF', {
+        display_name: 'Gemma 4 E4B (Multimodal)', state: 'loaded', size_gb: 4.9, tokens_per_second: 41.2,
+        placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'reported', warning: null },
+        evidence: 'Eval: 128 of 218 scenarios passed on this model',
+    }),
+    modelRow('Qwen3.6-35B-A3B-GGUF', { display_name: 'Qwen3.6 35B A3B (Multimodal)', size_gb: 23.3 }),
+    modelRow('gemma4-it-e4b-FLM', {
+        display_name: 'Gemma 4 E4B (NPU)', size_gb: 9.1,
+        placement: { device: 'npu', backend: 'flm', label: 'NPU · FLM', source: 'expected', warning: null },
+    }),
+    modelRow('user.Qwen3-4B-Instruct-2507-Q4_K_M-GGUF', {
+        display_name: 'Qwen3-4B-Instruct-2507 Q4_K_M with a very long name from Hugging Face', size_gb: 2.5, custom: true,
+        source_url: 'https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/tree/main',
+    }),
+    ...['gpt-oss 20B', 'Qwen3-VL-4B Instruct', 'SDXL-Turbo', 'Kokoro TTS', 'Whisper Large v3'].map((name, i) =>
+        modelRow(`${name.replace(/ /g, '-')}-GGUF`, { display_name: name, downloaded: false, state: 'not_downloaded', size_gb: 3 + i * 4.5 })),
+    modelRow('Qwen3.8-Flash-Next-GGUF', {
+        display_name: 'Qwen3.8 Flash Next', downloaded: false, state: 'not_downloaded', size_gb: 82.9, fits: false,
+        placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'expected', warning: 'Lemonade reports this model on the CPU, not the GPU.' },
+    }),
+    modelRow('gemma4-it-e2b-FLM', {
+        display_name: 'Gemma 4 E2B (NPU)', downloaded: false, state: 'not_downloaded', available: false, fits: true,
+        unavailable_reason: 'needs an AMD Ryzen AI NPU and its driver (No NPU)',
+        placement: { device: 'npu', backend: 'flm', label: 'NPU · FLM', source: 'expected', warning: null },
+    }),
+    modelRow('CPU-Only-GGUF', { display_name: 'A model too big for this PC', downloaded: false, state: 'not_downloaded', available: false, unavailable_reason: 'needs 180 GB of memory; this PC has 96 GB' }),
+];
+
+const FIREWORKS_MODELS = [
+    { id: 'fireworks.glm-5p3-flash', context_length: 202752, downloaded: true, labels: [], rank: 1, note: 'fast, strong tools', evidence: 'Eval: 171 of 218 scenarios passed',
+        price: { input_per_million: 0.4, cached_input_per_million: 0.1, output_per_million: 1.6, source: 'list price' } },
+    { id: 'fireworks.deepseek-v4p1', context_length: 131072, downloaded: true, labels: [], rank: 2, note: 'long documents', evidence: null, price: null },
+    { id: 'fireworks.other-model', context_length: 65536, downloaded: true, labels: [], rank: null, note: null, evidence: null, price: null },
+];
+
+export const MODEL_CONTEXT = {
+    model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B (Multimodal)', chosen: null, automatic: 131072, min: 32768,
+    max_fit: 131072, options: [32768, 65536, 131072], loaded_ctx: 131072, memory_source: 'AMD iGPU', note: null,
+};
+
+export const FAILED_LINK_CHECK = {
+    ok: false, url: 'https://huggingface.co/unsloth/flint-GGUF',
+    checks: [
+        { id: 'link', label: 'Hugging Face link', ok: true, detail: 'unsloth/flint-GGUF' },
+        { id: 'architecture', label: 'Supported architecture', ok: false, detail: "This model's architecture, 'flint', is not supported by llama.cpp b10825" },
+    ],
+    error: "This model's architecture, 'flint', is not supported by llama.cpp b10825",
+    warnings: ['This repository has no license file.'], variants: [],
+};
+
+/** Settings > Model with `models` on the Local tab; every other answer stays as in ROUTES. */
+export async function withModelPage(page: Page, models: unknown[], plan: unknown, status: unknown = { state: 'idle' }): Promise<void> {
+    const answers: Record<string, unknown> = {
+        'GET /providers/local/models': { provider: 'local', models, memory_gb: 96, memory_source: 'AMD iGPU', capacity_error: null },
+        'GET /providers/local/context': MODEL_CONTEXT,
+        'POST /providers/local/custom/check': FAILED_LINK_CHECK,
+        'GET /setup/plan': plan,
+        'GET /setup/status': status,
+        'GET /gpu-memory': { applies: false },
+        'GET /providers': {
+            providers: [
+                { id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' },
+                { id: 'fireworks', name: 'Fireworks AI', remote: true, models_discovered: true, key_source: 'stored', key_hint: 'a1b2', env_var: 'FIREWORKS_API_KEY', privacy_notice: 'Chat history is sent to Fireworks AI.' },
+            ],
+        },
+        'GET /providers/fireworks/models': { provider: 'fireworks', models: FIREWORKS_MODELS },
+        'GET /spending': { month: '2026-10', total_usd: 1.25, turns: 12, unpriced_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price' },
+    };
+    await page.route('**/api/**', async (route: Route) => {
+        const url = new URL(route.request().url());
+        const key = `${route.request().method()} ${url.pathname.replace(/^\/api/, '')}`;
+        if (key in answers) await route.fulfill({ json: answers[key] });
+        else await route.fallback();
+    });
+}
+
 /** Pick the theme before the app's first paint, the way a returning user would. */
 export async function useTheme(page: Page, theme: 'light' | 'dark'): Promise<void> {
     await page.addInitScript((t) => {

@@ -291,10 +291,10 @@ Pick the install path that fits you best:
     `gaia init` yourself beforehand also works.
 
     Every choice can be changed later in **Settings → Model**: the default chat
-    model, **Models on this PC** (tick a skipped model and **Apply** to
-    download it; **Remove** deletes one only after you confirm), **GPU memory**
-    on integrated-GPU PCs, and the downloads in progress, which also show in
-    the sidebar while they run.
+    model and the models on this PC under **Manage downloads and disk space**
+    (tick a skipped model and **Apply** to download it; **Remove** deletes one
+    only after you confirm), **GPU memory** on integrated-GPU PCs, and the
+    downloads in progress, which also show in the sidebar while they run.
   </Tab>
 </Tabs>
 
@@ -748,13 +748,18 @@ Connectors, Memory, Notifications, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).
 
-**Settings → Model** lists each local model with where it runs, such as
-"GPU · Vulkan" or "NPU · FLM". You don't pick the device: each model is built
-for one. A loaded model shows the device Lemonade reports for it, and says so
-plainly if that isn't the expected one (a GPU model that fell back to the CPU
-runs slowly). Each row also shows whether the model fits this PC, its download
-size and the speed measured here. Models this PC can't run are under **Not
-available on this PC**, with the reason. **Context size** goes up to the
+**Settings → Model** opens on the **Model in use** card: the model, what it runs
+on, **Switch model** for the models ready to use, and **Context size**. Below
+it, models sit in groups you can open and close: **Downloaded**, **Available to
+download** and **Not available on this PC**, with the reason. A search opens
+every group it matches.
+
+Each row shows chips for the device (GPU or NPU), whether it's loaded and
+whether it fits this PC. **Details** has where it runs, such as "GPU · Vulkan"
+or "NPU · FLM", and the speed measured here. You don't pick the device: each
+model is built for one. A loaded model shows the device Lemonade reports for
+it, and says so plainly if that isn't the expected one (a GPU model that fell
+back to the CPU runs slowly). **Context size** goes up to the
 largest window that fits; **Automatic** is GAIA's choice, and a size you pick
 is kept for that model. For a model GAIA has no memory figures for, you can
 pick from 32K up to the window it was trained for. GAIA can't check those fit

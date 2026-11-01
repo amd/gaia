@@ -87,9 +87,11 @@ beforeEach(() => {
     mockedApi.getActiveModel.mockResolvedValue(ACTIVE);
 });
 
+const ROW_NAME = { selector: '.model-row-name' };
+
 async function paste(url: string) {
     render(<ModelSettings />);
-    await screen.findByText('Gemma 4 E4B');
+    await screen.findByText('Gemma 4 E4B', ROW_NAME);
     fireEvent.change(screen.getByLabelText('Add a model from Hugging Face'), { target: { value: url } });
     fireEvent.click(screen.getByRole('button', { name: 'Check' }));
 }
@@ -116,6 +118,8 @@ describe('ModelSettings custom models', () => {
         const row = (await screen.findByText('Added by you')).closest('li') as HTMLElement;
         expect(within(row).getByText(`From ${URL}`)).toBeInTheDocument();
         expect(within(row).getByRole('button', { name: /Download/ })).toBeInTheDocument();
+        // A new model lands in a group that starts closed; the user must see it.
+        expect((row.closest('details') as HTMLDetailsElement).open).toBe(true);
         expect(screen.getByRole('status')).toHaveTextContent('Added Qwen3-4B-Instruct-2507 Q4_K_M');
     });
 
@@ -155,9 +159,9 @@ describe('ModelSettings custom models', () => {
             return { removed: ADDED, display_name: 'Qwen3-4B Q4_K_M', cleared: [] };
         });
         render(<ModelSettings />);
-        await screen.findByText('Qwen3-4B Q4_K_M');
+        await screen.findByText('Qwen3-4B Q4_K_M', ROW_NAME);
         // Built-in models have no Remove.
-        const gemma = screen.getByText('Gemma 4 E4B').closest('li') as HTMLElement;
+        const gemma = screen.getByText('Gemma 4 E4B', ROW_NAME).closest('li') as HTMLElement;
         expect(within(gemma).queryByRole('button', { name: /Remove/ })).not.toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('button', { name: 'Remove Qwen3-4B Q4_K_M' }));
@@ -166,6 +170,6 @@ describe('ModelSettings custom models', () => {
 
         await waitFor(() => expect(mockedApi.removeCustomModel).toHaveBeenCalledWith(ADDED));
         expect(await screen.findByText('Removed Qwen3-4B Q4_K_M and its download.')).toBeInTheDocument();
-        await waitFor(() => expect(screen.queryByText('Qwen3-4B Q4_K_M')).not.toBeInTheDocument());
+        await waitFor(() => expect(screen.queryByText('Qwen3-4B Q4_K_M', ROW_NAME)).not.toBeInTheDocument());
     });
 });

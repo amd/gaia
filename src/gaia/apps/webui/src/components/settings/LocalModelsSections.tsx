@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useT } from '../../i18n/useT';
@@ -17,6 +18,7 @@ import {
     catalogOf, chooseChat, initialSelection, isVision, pendingDownloads, shortfall, skipChanges, toggle, tooBig,
     type Selection,
 } from '../setup/selection';
+import { SettingsDisclosure } from './SettingsDisclosure';
 import '../setup/setup.css';
 
 function errorText(err: unknown): string {
@@ -37,9 +39,9 @@ type Sheet =
  * Settings > Model, for models on this PC: the setup checklist with live state
  * (Apply downloads what is ticked and missing; nothing is deleted except by an
  * explicit Remove), the GPU memory split on an integrated GPU, and the
- * downloads in progress.
+ * downloads in progress, shown in `downloadsSlot` when the page gives one.
  */
-export function LocalModelsSections() {
+export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLElement | null }) {
     const t = useT();
     const [plan, setPlan] = useState<SetupPlan | null>(null);
     const [planError, setPlanError] = useState<string | null>(null);
@@ -191,76 +193,82 @@ export function LocalModelsSections() {
     const showDownloads = !!status && (status.models?.length ?? 0) > 0 && (downloadsActive(status)
         || status.models!.some((m) => m.state !== 'skipped'));
 
+    const downloads = showDownloads && status && (
+        <section className="settings-field models-pane-section" aria-labelledby="settings-downloads-title">
+            <span className="settings-label" id="settings-downloads-title">{t('settings.models.downloads')}</span>
+            <DownloadProgress
+                status={status}
+                names={names}
+                freeGb={plan?.disk?.free_gb ?? null}
+                onCancel={() => void cancelDownload()}
+                onRetry={retry}
+                onResume={(id) => void enqueue([id])}
+                onResumeAll={() => void enqueue((status.models ?? []).filter((m) => m.state === 'cancelled').map((m) => m.id))}
+            />
+            {storeError && <p className="settings-error" role="alert">{storeError}</p>}
+        </section>
+    );
+
     return (
         <>
-            <section className="settings-field models-pane-section" aria-labelledby="settings-models-title">
-                <span className="settings-label" id="settings-models-title">{t('settings.models.title')}</span>
-                <p className="settings-hint">{t('settings.models.lede')}</p>
-                {planError && <p className="settings-error" role="alert">{planError}</p>}
-                {plan && !plan.lemonade.reachable && (
-                    <p className="settings-hint">{t('settings.models.unavailable')}</p>
-                )}
-                {!plan && !planError && <p className="settings-hint"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.models.loading')}</p>}
-                {plan && plan.lemonade.reachable && selection && (
-                    <>
-                        <ModelChecklist
-                            plan={plan}
-                            selection={selection}
-                            onToggle={(id, on) => setSelection(toggle(selection, catalog, id, on))}
-                            onDefaultChat={(id) => setSelection(chooseChat(selection, catalog, id))}
-                            labelledBy="settings-models-title"
-                            place="settings"
-                            disabled={busy}
-                            progress={progress}
-                            rowActions={(e) => (e.downloaded && e.id !== selection.defaultChat ? (
-                                <button
-                                    type="button"
-                                    className="btn-secondary"
-                                    onClick={() => setSheet({ kind: 'remove', entry: e })}
-                                    disabled={busy || progress[e.id]?.state === 'downloading'}
-                                    aria-label={t('settings.models.removeAria', { name: e.name })}
-                                >
-                                    {t('settings.models.remove')}
+            <SettingsDisclosure title={t('settings.models.manage')} hint={t('settings.models.manageHint')} forceOpen={!!planError || notice?.ok === false}>
+                <section className="settings-field models-pane-section" aria-labelledby="settings-models-title">
+                    <span className="visually-hidden" id="settings-models-title">{t('settings.models.title')}</span>
+                    <p className="settings-hint">{t('settings.models.lede')}</p>
+                    {planError && <p className="settings-error" role="alert">{planError}</p>}
+                    {plan && !plan.lemonade.reachable && (
+                        <p className="settings-hint">{t('settings.models.unavailable')}</p>
+                    )}
+                    {!plan && !planError && <p className="settings-hint"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.models.loading')}</p>}
+                    {plan && plan.lemonade.reachable && selection && (
+                        <>
+                            <ModelChecklist
+                                plan={plan}
+                                selection={selection}
+                                onToggle={(id, on) => setSelection(toggle(selection, catalog, id, on))}
+                                onDefaultChat={(id) => setSelection(chooseChat(selection, catalog, id))}
+                                labelledBy="settings-models-title"
+                                place="settings"
+                                disabled={busy}
+                                progress={progress}
+                                rowActions={(e) => (e.downloaded && e.id !== selection.defaultChat ? (
+                                    <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        onClick={() => setSheet({ kind: 'remove', entry: e })}
+                                        disabled={busy || progress[e.id]?.state === 'downloading'}
+                                        aria-label={t('settings.models.removeAria', { name: e.name })}
+                                    >
+                                        {t('settings.models.remove')}
+                                    </button>
+                                ) : null)}
+                            />
+                            <SelectionSummary plan={plan} selection={selection} />
+                            <div className="models-apply">
+                                <button type="button" className="btn-primary" disabled={!staged || busy} onClick={() => void apply(false, false)}>
+                                    {busy && <Loader2 size={13} className="spin" aria-hidden="true" />}
+                                    {busy ? t('settings.models.applying') : toDownload.length > 0
+                                        ? t('settings.models.applyDownload', { size: formatSize(Math.round(downloadGb * 10) / 10) })
+                                        : t('settings.models.apply')}
                                 </button>
-                            ) : null)}
-                        />
-                        <SelectionSummary plan={plan} selection={selection} />
-                        <div className="models-apply">
-                            <button type="button" className="btn-primary" disabled={!staged || busy} onClick={() => void apply(false, false)}>
-                                {busy && <Loader2 size={13} className="spin" aria-hidden="true" />}
-                                {busy ? t('settings.models.applying') : toDownload.length > 0
-                                    ? t('settings.models.applyDownload', { size: formatSize(Math.round(downloadGb * 10) / 10) })
-                                    : t('settings.models.apply')}
-                            </button>
-                        </div>
-                    </>
-                )}
-                {notice && <p className={notice.ok ? 'settings-ok' : 'settings-error'} role={notice.ok ? 'status' : 'alert'}>{notice.text}</p>}
-            </section>
+                            </div>
+                        </>
+                    )}
+                    {notice && <p className={notice.ok ? 'settings-ok' : 'settings-error'} role={notice.ok ? 'status' : 'alert'}>{notice.text}</p>}
+                </section>
+            </SettingsDisclosure>
 
             {(gpu?.applies || gpuError) && (
-                <section className="settings-field models-pane-section" aria-labelledby="settings-gpu-title">
-                    <span className="settings-label" id="settings-gpu-title" tabIndex={-1}>{t('gpu.settingsTitle')}</span>
-                    {gpuError && <p className="settings-error" role="alert">{gpuError}</p>}
-                    {gpu?.applies && <GpuMemoryPanel status={gpu} onStatus={setGpu} mode="settings" names={names} headingId="settings-gpu-title" />}
-                </section>
+                <SettingsDisclosure title={t('gpu.settingsTitle')} defaultOpen={!!gpu?.pending || !!gpuError}>
+                    <section className="settings-field models-pane-section" aria-labelledby="settings-gpu-title">
+                        <span className="visually-hidden" id="settings-gpu-title" tabIndex={-1}>{t('gpu.settingsTitle')}</span>
+                        {gpuError && <p className="settings-error" role="alert">{gpuError}</p>}
+                        {gpu?.applies && <GpuMemoryPanel status={gpu} onStatus={setGpu} mode="settings" names={names} headingId="settings-gpu-title" />}
+                    </section>
+                </SettingsDisclosure>
             )}
 
-            {showDownloads && status && (
-                <section className="settings-field models-pane-section" aria-labelledby="settings-downloads-title">
-                    <span className="settings-label" id="settings-downloads-title">{t('settings.models.downloads')}</span>
-                    <DownloadProgress
-                        status={status}
-                        names={names}
-                        freeGb={plan?.disk?.free_gb ?? null}
-                        onCancel={() => void cancelDownload()}
-                        onRetry={retry}
-                        onResume={(id) => void enqueue([id])}
-                        onResumeAll={() => void enqueue((status.models ?? []).filter((m) => m.state === 'cancelled').map((m) => m.id))}
-                    />
-                    {storeError && <p className="settings-error" role="alert">{storeError}</p>}
-                </section>
-            )}
+            {downloadsSlot ? createPortal(downloads, downloadsSlot) : downloads}
 
             {sheet?.kind === 'remove' && (
                 <ConfirmSheet

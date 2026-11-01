@@ -2,30 +2,33 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Cloud, Cpu, Loader2, Trash2 } from 'lucide-react';
+import { ChevronDown, Cloud, Cpu, Loader2, Trash2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useModelStore, displayModelName, distinctModelLabels, sameModelId } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
-import { ModelContextSize } from './ModelContextSize';
+import { useT, type Translate } from '../../i18n/useT';
 import { AddCustomModel } from './AddCustomModel';
 import { LocalModelsSections } from './LocalModelsSections';
-import { STATE_LABELS, isDownloading, placementText } from '../modelMeta';
+import { ModelInUse } from './ModelInUse';
+import { ModelRow } from './ModelRow';
+import { SettingsDisclosure } from './SettingsDisclosure';
+import { isDownloading } from '../modelMeta';
 import '../ModelPicker.css';
 import { CloudPrices } from './CloudPrices';
 import { SpendingLimit } from './SpendingLimit';
-import { formatPrice } from './cloudPrice';
 import './CloudSpending.css';
 import type { ProviderId, ProviderInfo, ProviderModel } from '../../types';
 
 const DOWNLOAD_POLL_MS = 2000;
 
-function maskedKey(p: ProviderInfo): string {
-    if (p.key_source === 'environment') return `Set in ${p.env_var}`;
+function maskedKey(p: ProviderInfo, t: Translate): string {
+    if (p.key_source === 'environment') return t('settings.key.setIn', { name: p.env_var ?? '' });
     return `••••••••••••••••••••${p.key_hint ? ` ${p.key_hint}` : ''}`;
 }
 
 /** Local vs Fireworks AI vs AMD LLM Gateway, keys, and the model list — the TUI's /provider. */
 export function ModelSettings() {
+    const t = useT();
     const active = useModelStore((s) => s.active);
     const selectModel = useModelStore((s) => s.select);
     const refreshActive = useModelStore((s) => s.refresh);
@@ -47,6 +50,9 @@ export function ModelSettings() {
     const [memory, setMemory] = useState<string | null>(null);
     const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
     const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+    const [justAdded, setJustAdded] = useState(false);
+    const [inUseRow, setInUseRow] = useState<ProviderModel | null>(null);
+    const [downloadsSlot, setDownloadsSlot] = useState<HTMLDivElement | null>(null);
 
     // A connect waiting on an OS prompt stops once the user picks another provider or leaves.
     const chosenRef = useRef(chosen);
@@ -104,6 +110,7 @@ export function ModelSettings() {
         setNotice(null);
         setQuery('');
         setShowAllFireworksModels(false);
+        setJustAdded(false);
     }, [chosen]);
     useEffect(() => {
         if (connected) void loadModels(chosen);
@@ -131,9 +138,9 @@ export function ModelSettings() {
             setNotice({
                 ok: true,
                 text: r.remember_error
-                    ? `Connected for this session only — the key could not be kept: ${r.remember_error}`
-                    : r.known_models ? `${provider.name} can't list its models right now. Your key still works, so GAIA connected using models it already knows.`
-                    : r.remembered ? 'Connected. The key is kept for next time.' : 'Connected.',
+                    ? t('settings.key.sessionOnly', { reason: r.remember_error })
+                    : r.known_models ? t('settings.key.knownModels', { name: provider.name })
+                    : r.remembered ? t('settings.key.kept') : t('settings.key.connectedDone'),
             });
             await loadProviders();
         } catch (err) {
@@ -143,7 +150,7 @@ export function ModelSettings() {
         } finally {
             if (mounted.current) setBusy(null);
         }
-    }, [amd, chosen, key, loadProviders, provider]);
+    }, [amd, chosen, key, loadProviders, provider, t]);
 
     const forget = useCallback(async () => {
         setBusy('forget');
@@ -151,7 +158,7 @@ export function ModelSettings() {
         setNotice(null);
         try {
             await api.forgetProviderKey(chosen);
-            setNotice({ ok: true, text: 'Key cleared, here and for future sessions. An environment key, if set, stays active.' });
+            setNotice({ ok: true, text: t('settings.key.cleared') });
             await loadProviders();
             await refreshActive();
         } catch (err) {
@@ -159,24 +166,26 @@ export function ModelSettings() {
         } finally {
             setBusy(null);
         }
-    }, [chosen, loadProviders, refreshActive]);
+    }, [chosen, loadProviders, refreshActive, t]);
 
     const use = useCallback(async (model: string) => {
         setBusy(model);
         setNotice(null);
         try {
             await selectModel(model);
-            setNotice({ ok: true, text: `New messages use ${displayModelName(model)}. It is remembered across restarts.` });
+            setNotice({ ok: true, text: t('settings.model.switched', { name: displayModelName(model) }) });
+            await loadModels(chosen, true);
         } catch (err) {
             setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
         } finally {
             setBusy(null);
         }
-    }, [selectModel]);
+    }, [chosen, loadModels, selectModel, t]);
 
     const download = useCallback(async (model: string) => {
         setBusy(`dl:${model}`);
         setNotice(null);
+        setJustAdded(false);
         try {
             await api.downloadModel(model);
             await loadModels('local', true);
@@ -193,10 +202,9 @@ export function ModelSettings() {
         try {
             const r = await api.removeCustomModel(model);
             setConfirmRemove(null);
-            const cleared = r.cleared.includes('last_model')
-                ? ' New messages use your default model.'
-                : r.cleared.includes('default_model') ? " It was your default model, so GAIA's own default takes its place." : '';
-            setNotice({ ok: true, text: `Removed ${r.display_name} and its download.${cleared}` });
+            const removed = r.cleared.includes('last_model') ? 'settings.model.removedLast'
+                : r.cleared.includes('default_model') ? 'settings.model.removedDefault' : 'settings.model.removed';
+            setNotice({ ok: true, text: t(removed, { name: r.display_name }) });
             await loadModels('local', true);
             await refreshActive();
         } catch (err) {
@@ -204,20 +212,32 @@ export function ModelSettings() {
         } finally {
             setBusy(null);
         }
-    }, [loadModels, refreshActive]);
+    }, [loadModels, refreshActive, t]);
 
     const added = useCallback(async (name: string) => {
-        setNotice({ ok: true, text: `Added ${name}. Choose Download to fetch it, then Use.` });
+        setNotice({ ok: true, text: t('settings.model.added', { name }) });
+        setJustAdded(true);
         await loadModels('local', true);
-    }, [loadModels]);
+    }, [loadModels, t]);
 
     // Poll while a download runs so its row shows progress, then its new state.
     const anyDownloading = !!models?.some(isDownloading);
+    // A finished download can be the model in use, so "Not downloaded" must clear.
+    useEffect(() => {
+        if (anyDownloading) return () => { void refreshActive(); };
+    }, [anyDownloading, refreshActive]);
     useEffect(() => {
         if (chosen !== 'local' || !anyDownloading) return;
         const t = setInterval(() => { void loadModels('local', true); }, DOWNLOAD_POLL_MS);
         return () => clearInterval(t);
     }, [anyDownloading, chosen, loadModels]);
+
+    // Keeps the in-use model's device and size on screen while another provider's tab is open.
+    const activeModel = active?.model;
+    useEffect(() => {
+        const row = models?.find((m) => sameModelId(activeModel, m.id));
+        if (row) setInUseRow(row);
+    }, [models, activeModel]);
 
     const filtered = useMemo(() => {
         const q = query.trim().toLowerCase();
@@ -233,90 +253,46 @@ export function ModelSettings() {
     const hiddenFireworksModels = fireworksCollapsed ? runnable.filter((m) => !inCollapsedView(m)) : [];
     const unavailable = filtered.filter((m) => m.available === false);
     const labels = distinctModelLabels(models ?? []);
-    const activeLocal = active && !active.remote && active.model ? active.model : null;
+    const searching = !!query.trim();
+    const isCurrent = (m: ProviderModel) => sameModelId(active?.model, m.id);
+    const local = provider?.id === 'local';
+    const onThisPc = visibleRunnable.filter((m) => m.downloaded).sort((a, b) => Number(isCurrent(b)) - Number(isCurrent(a)));
+    const toDownload = visibleRunnable.filter((m) => !m.downloaded);
+    const readyModels = (models ?? []).filter((m) => m.available !== false && m.downloaded);
+    const ranked = readyModels.filter(inCollapsedView);
+    const switchChoices = chosen === 'fireworks' && ranked.some((m) => m.rank !== null) ? ranked : readyModels;
 
-    const renderRow = (m: ProviderModel) => {
-        const current = sameModelId(active?.model, m.id);
-        const progress = isDownloading(m) ? m.download_progress : null;
-        const meta = [
-            placementText(m.placement),
-            m.size_gb ? `${m.size_gb} GB ${m.downloaded ? 'on disk' : 'download'}` : null,
-            m.tokens_per_second ? `${Math.round(m.tokens_per_second)} tok/s measured here` : null,
-            !m.placement && m.context_length ? `Context ${m.context_length.toLocaleString()} tokens` : null,
-        ].filter(Boolean).join(' · ');
-        return (
-            <li key={m.id} className={`model-row${current ? ' is-current' : ''}`}>
-                <div className="model-row-text">
-                    <span className="model-row-name" title={m.id}>
-                        {labels[m.id]}
-                        {m.rank && <span className="model-row-rank">#{m.rank} {m.note}</span>}
-                        {m.state === 'loaded' && <span className="model-badge is-loaded">{STATE_LABELS.loaded}</span>}
-                        {m.fits === true && m.available !== false && <span className="model-badge is-fit">Fits this PC</span>}
-                        {m.custom && <span className="model-badge is-custom">Added by you</span>}
-                    </span>
-                    {provider?.remote && (
-                        <span className={`model-row-meta${m.price ? '' : ' is-unknown-price'}`}>{formatPrice(m.price)}</span>
-                    )}
-                    {m.display_name && <span className="model-row-meta">{m.id}</span>}
-                    {meta && <span className="model-row-meta">{meta}</span>}
-                    {m.placement?.warning && <span className="model-row-meta is-warning" role="alert">{m.placement.warning}</span>}
-                    {m.unavailable_reason && <span className="model-row-meta">Can't run here: {m.unavailable_reason}</span>}
-                    {m.evidence && <span className="model-row-meta">Measured: {m.evidence}</span>}
-                    {progress && (
-                        <progress max={100} value={progress.percent} aria-label={`Downloading ${labels[m.id]}`} />
-                    )}
-                    {m.custom && m.source_url && (
-                        <span className="model-row-meta">From {m.source_url}</span>
-                    )}
-                </div>
-                {m.custom && !current && !progress && (
-                    confirmRemove === m.id ? (
-                        <span className="model-row-confirm">
-                            <button type="button" className="btn-danger" onClick={() => void remove(m.id)} disabled={busy !== null}>
-                                {busy === `rm:${m.id}` ? <Loader2 size={13} className="spin" /> : null}
-                                {m.downloaded ? 'Remove and delete download' : 'Remove'}
-                            </button>
-                            <button type="button" className="btn-secondary" onClick={() => setConfirmRemove(null)} disabled={busy !== null}>
-                                Keep
-                            </button>
-                        </span>
-                    ) : (
-                        <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => setConfirmRemove(m.id)}
-                            disabled={busy !== null}
-                            aria-label={`Remove ${labels[m.id]}`}
-                        >
-                            Remove
-                        </button>
-                    )
-                )}
-                {current ? (
-                    <span className="model-row-current"><Check size={13} aria-hidden="true" /> In use</span>
-                ) : m.available === false ? null : progress ? (
-                    <span className="model-row-current"><Loader2 size={13} className="spin" /> {Math.round(progress.percent)}%</span>
-                ) : !m.downloaded ? (
-                    <button type="button" className="btn-secondary" onClick={() => void download(m.id)} disabled={busy !== null} aria-label={`Download ${labels[m.id]}`}>
-                        {busy === `dl:${m.id}` ? <Loader2 size={13} className="spin" /> : null} Download
-                    </button>
-                ) : (
-                    <button type="button" className="btn-secondary" onClick={() => void use(m.id)} disabled={busy !== null} aria-label={`Use ${labels[m.id]}`}>
-                        {busy === m.id ? <Loader2 size={13} className="spin" /> : null} Use
-                    </button>
-                )}
-            </li>
-        );
-    };
+    const renderRow = (m: ProviderModel) => (
+        <ModelRow
+            key={m.id}
+            model={m}
+            label={labels[m.id]}
+            current={isCurrent(m)}
+            remote={!!provider?.remote}
+            busy={busy}
+            confirmingRemove={confirmRemove === m.id}
+            onUse={() => void use(m.id)}
+            onDownload={() => void download(m.id)}
+            onAskRemove={() => setConfirmRemove(m.id)}
+            onKeep={() => setConfirmRemove(null)}
+            onRemove={() => void remove(m.id)}
+        />
+    );
 
     return (
         <div className="settings-pane">
-            <h2 className="settings-pane-title">Model</h2>
-            <p className="settings-pane-lede">
-                GAIA runs on this PC by default. Cloud providers are used only when you pick one of their models.
-            </p>
+            <h2 className="settings-pane-title">{t('settings.section.model')}</h2>
 
-            <div className="provider-tabs" role="radiogroup" aria-label="Where GAIA runs">
+            <ModelInUse
+                row={sameModelId(inUseRow?.id, active?.model) ? inUseRow : null}
+                providerName={providers?.find((p) => p.id === active?.provider)?.name ?? null}
+                choices={connected ? switchChoices : []}
+                labels={labels}
+                disabled={busy !== null}
+                onSwitch={(model) => void use(model)}
+            />
+
+            <div className="provider-tabs" role="radiogroup" aria-label={t('settings.model.whereRuns')}>
                 {(providers ?? [{ id: 'local', name: 'Local', remote: false } as ProviderInfo]).map((p) => (
                     <button
                         key={p.id}
@@ -330,7 +306,7 @@ export function ModelSettings() {
                     >
                         {p.remote ? <Cloud size={14} aria-hidden="true" /> : <Cpu size={14} aria-hidden="true" />}
                         <span>{p.name}</span>
-                        {p.remote && p.models_discovered && <span className="provider-tab-dot" aria-label="connected" />}
+                        {p.remote && p.models_discovered && <span className="provider-tab-dot" aria-label={t('settings.key.connectedDot')} />}
                     </button>
                 ))}
             </div>
@@ -339,18 +315,19 @@ export function ModelSettings() {
 
             {provider && (
                 <section className="settings-card" aria-label={provider.name}>
-                    <p className="settings-note">{provider.privacy_notice}</p>
+                    {provider.remote && <p className="settings-note"><bdi>{provider.privacy_notice}</bdi></p>}
 
-                    {provider.id === 'local' && (
-                        <p className="settings-hint">
-                            Each model runs where it was built to: GGUF models on the GPU, FLM models on the NPU.
-                            {memory && ` Memory for models: ${memory}.`}
-                        </p>
-                    )}
+                    <details className="settings-more">
+                        <summary><ChevronDown size={13} className="settings-disclosure-chevron" aria-hidden="true" /> {t('settings.model.howItWorks')}</summary>
+                        <p className="settings-hint">{t('settings.model.lede')}</p>
+                        {local && <p className="settings-hint"><bdi>{provider.privacy_notice}</bdi></p>}
+                        {local && <p className="settings-hint">{t('settings.model.devices')}</p>}
+                        {local && memory && <p className="settings-hint">{t('settings.model.memory', { memory })}</p>}
+                    </details>
 
                     {provider.remote && !connected && (
                         <div className="settings-field">
-                            <span className="settings-label">Prices</span>
+                            <span className="settings-label">{t('settings.model.prices')}</span>
                             <CloudPrices provider={provider.id} />
                         </div>
                     )}
@@ -359,7 +336,7 @@ export function ModelSettings() {
                         <div className="settings-field">
                             <p className="settings-error" role="alert">{provider.network?.detail}</p>
                             <button type="button" className="btn-secondary" onClick={() => void loadProviders()}>
-                                Check again
+                                {t('settings.key.checkAgain')}
                             </button>
                         </div>
                     )}
@@ -370,35 +347,35 @@ export function ModelSettings() {
                             onSubmit={(e) => { e.preventDefault(); void connect(); }}
                         >
                             <div className="settings-row settings-row-between">
-                                <span className="settings-label">API key</span>
+                                <span className="settings-label">{t('settings.key.title')}</span>
                                 {provider.key_source && (
                                     <span className={`settings-key-status ${connected ? 'settings-ok' : 'settings-error'}`}>
-                                        {connected ? 'Connected' : 'Not connected'}
+                                        {connected ? t('settings.key.connected') : t('settings.key.notConnected')}
                                     </span>
                                 )}
                             </div>
                             {!provider.key_source && (
                                 <span className="settings-hint">
                                     {provider.key_state === 'waiting_for_os_permission'
-                                        ? provider.key_message ?? 'Waiting for the OS to allow reading the saved key.'
-                                        : 'No key yet.'}
+                                        ? provider.key_message ?? t('settings.key.waitingOs')
+                                        : t('settings.key.none')}
                                 </span>
                             )}
                             {provider.id === 'amd' && (!provider.key_source || replacingKey) && (
                                 <div className="settings-grid">
                                     <input
                                         className="settings-input"
-                                        placeholder="Gateway URL (default https://llm-api.amd.com/Unified/v1)"
+                                        placeholder={t('settings.key.gatewayPlaceholder')}
                                         value={amd.base_url}
                                         onChange={(e) => setAmd({ ...amd, base_url: e.target.value })}
-                                        aria-label="Gateway URL"
+                                        aria-label={t('settings.key.gatewayUrl')}
                                     />
                                     <input
                                         className="settings-input"
-                                        placeholder="Auth header (default Ocp-Apim-Subscription-Key)"
+                                        placeholder={t('settings.key.headerPlaceholder')}
                                         value={amd.auth_header_name}
                                         onChange={(e) => setAmd({ ...amd, auth_header_name: e.target.value })}
-                                        aria-label="Auth header name"
+                                        aria-label={t('settings.key.headerName')}
                                     />
                                 </div>
                             )}
@@ -407,31 +384,31 @@ export function ModelSettings() {
                                     <input
                                         className="settings-input settings-key-masked"
                                         readOnly
-                                        value={maskedKey(provider)}
-                                        aria-label={`Saved ${provider.name} API key`}
+                                        value={maskedKey(provider, t)}
+                                        aria-label={t('settings.key.savedAria', { name: provider.name })}
                                     />
                                     {!connected && (
                                         <button type="submit" className="btn-primary" disabled={busy !== null}>
                                             {busy === 'connect' ? <Loader2 size={13} className="spin" /> : null}
-                                            Reconnect
+                                            {t('settings.key.reconnect')}
                                         </button>
                                     )}
                                     {provider.key_source !== 'environment' && (confirmForget ? (
                                         <>
-                                            <span className="settings-hint">Remove this key?</span>
-                                            <button type="button" className="btn-danger" onClick={() => void forget()} disabled={busy !== null}>Remove</button>
-                                            <button type="button" className="btn-secondary" onClick={() => setConfirmForget(false)}>Keep</button>
+                                            <span className="settings-hint">{t('settings.key.removeAsk')}</span>
+                                            <button type="button" className="btn-danger" onClick={() => void forget()} disabled={busy !== null}>{t('settings.models.remove')}</button>
+                                            <button type="button" className="btn-secondary" onClick={() => setConfirmForget(false)}>{t('settings.models.keep')}</button>
                                         </>
                                     ) : (
                                         <>
-                                            <button type="button" className="btn-secondary" onClick={() => setReplacingKey(true)} disabled={busy !== null}>Replace</button>
+                                            <button type="button" className="btn-secondary" onClick={() => setReplacingKey(true)} disabled={busy !== null}>{t('settings.key.replace')}</button>
                                             <button
                                                 type="button"
                                                 className="btn-secondary settings-key-remove"
                                                 onClick={() => setConfirmForget(true)}
                                                 disabled={busy !== null}
-                                                aria-label="Remove key"
-                                                title="Remove key"
+                                                aria-label={t('settings.key.remove')}
+                                                title={t('settings.key.remove')}
                                             >
                                                 <Trash2 size={14} aria-hidden="true" />
                                             </button>
@@ -448,16 +425,16 @@ export function ModelSettings() {
                                         autoFocus={replacingKey}
                                         value={key}
                                         onChange={(e) => setKey(e.target.value)}
-                                        placeholder={replacingKey ? 'Paste your new key' : 'Paste API key'}
-                                        aria-label={`${provider.name} API key`}
+                                        placeholder={replacingKey ? t('settings.key.pasteNew') : t('settings.key.paste')}
+                                        aria-label={t('settings.key.fieldAria', { name: provider.name })}
                                     />
                                     <button type="submit" className="btn-primary" disabled={busy !== null || !key}>
                                         {busy === 'connect' ? <Loader2 size={13} className="spin" /> : null}
-                                        {replacingKey ? 'Save key' : 'Connect'}
+                                        {replacingKey ? t('settings.key.save') : t('settings.key.connect')}
                                     </button>
                                     {replacingKey && (
                                         <button type="button" className="btn-secondary" onClick={() => { setKey(''); setReplacingKey(false); }} disabled={busy !== null}>
-                                            Cancel
+                                            {t('settings.key.cancel')}
                                         </button>
                                     )}
                                 </div>
@@ -474,61 +451,84 @@ export function ModelSettings() {
 
                     {provider.known_models && (
                         <p className="settings-hint" role="status">
-                            {provider.name} can't list its models right now, so GAIA is showing models it already knows. Your key still works, but this list may be out of date.
+                            {t('settings.key.knownList', { name: provider.name })}
                         </p>
                     )}
 
-                    {provider.id === 'local' && activeLocal && active?.downloaded !== false && (
-                        <ModelContextSize model={activeLocal} />
-                    )}
+                    {local && <div className="models-downloads-slot" ref={setDownloadsSlot} />}
 
                     {connected && (
                         <div className="settings-field">
-                            <span className="settings-label">Models</span>
+                            <span className="settings-label">{t('settings.model.models')}</span>
                             {(models?.length ?? 0) > 6 && (
                                 <input
                                     className="settings-input"
                                     type="search"
                                     value={query}
                                     onChange={(e) => setQuery(e.target.value)}
-                                    placeholder="Search models"
-                                    aria-label="Search models"
+                                    placeholder={t('settings.model.search')}
+                                    aria-label={t('settings.model.search')}
                                 />
                             )}
                             {modelsError && <p className="settings-error" role="alert">{modelsError}</p>}
-                            {!models && !modelsError && <p className="settings-hint"><Loader2 size={13} className="spin" /> Loading…</p>}
-                            {models && filtered.length === 0 && <p className="settings-hint">No models match.</p>}
-                            <ul className="model-list">{visibleRunnable.map(renderRow)}</ul>
+                            {!models && !modelsError && <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}
+                            {models && filtered.length === 0 && (
+                                <p className="settings-hint">{searching || !local ? t('settings.model.noMatch') : t('settings.model.noModels')}</p>
+                            )}
+                            {local ? (
+                                <>
+                                    {onThisPc.length > 0 && (
+                                        <SettingsDisclosure title={t('settings.model.groupDownloaded')} count={onThisPc.length} defaultOpen forceOpen={searching}>
+                                            <ul className="model-list">{onThisPc.map(renderRow)}</ul>
+                                        </SettingsDisclosure>
+                                    )}
+                                    {toDownload.length > 0 && (
+                                        <SettingsDisclosure
+                                            title={t('settings.model.groupAvailable')}
+                                            count={toDownload.length}
+                                            defaultOpen={onThisPc.length === 0}
+                                            forceOpen={searching || justAdded || toDownload.some(isDownloading)}
+                                        >
+                                            <ul className="model-list">{toDownload.map(renderRow)}</ul>
+                                        </SettingsDisclosure>
+                                    )}
+                                </>
+                            ) : (
+                                <ul className="model-list">{visibleRunnable.map(renderRow)}</ul>
+                            )}
                             {fireworksCollapsed && hiddenFireworksModels.length > 0 && (
                                 <button
                                     type="button"
                                     className="btn-secondary"
                                     onClick={() => setShowAllFireworksModels(true)}
                                 >
-                                    Show all models
+                                    {t('settings.model.showAll')}
                                 </button>
                             )}
-                            {chosen === 'fireworks' && showAllFireworksModels && !query.trim() && (
+                            {chosen === 'fireworks' && showAllFireworksModels && !searching && (
                                 <button
                                     type="button"
                                     className="btn-secondary"
                                     onClick={() => setShowAllFireworksModels(false)}
                                 >
-                                    Show recommended models
+                                    {t('settings.model.showRecommended')}
                                 </button>
                             )}
                             {unavailable.length > 0 && (
-                                <details className="model-unavailable">
-                                    <summary>Not available on this PC ({unavailable.length})</summary>
+                                <SettingsDisclosure title={t('settings.model.groupUnavailable')} count={unavailable.length} forceOpen={searching}>
                                     <ul className="model-list">{unavailable.map(renderRow)}</ul>
-                                </details>
+                                </SettingsDisclosure>
                             )}
                         </div>
                     )}
 
-                    {provider.id === 'local' && connected && <AddCustomModel onAdded={(name) => void added(name)} />}
+                    {local && connected && (
+                        <SettingsDisclosure title={t('settings.custom.title')}>
+                            <AddCustomModel onAdded={(name) => void added(name)} />
+                        </SettingsDisclosure>
+                    )}
 
-                    {provider.id === 'local' && connected && <LocalModelsSections />}
+                    {local && connected && <LocalModelsSections downloadsSlot={downloadsSlot} />}
 
                     {provider.remote && <SpendingLimit />}
                 </section>
