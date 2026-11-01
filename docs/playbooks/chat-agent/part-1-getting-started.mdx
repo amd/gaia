@@ -104,7 +104,7 @@ Get a working agent running to understand the basic flow.
         ```
 
         <Info>
-        Create your agent scripts in this folder. `ChatAgent` ships in the flagship `gaia-agent-gaia` package (`gaia_agent.chat_agent`); its PyPI publishing is paused ([#2240](https://github.com/amd/gaia/issues/2240)), so install it from the repository subdirectory. The `rag` extra adds document-processing dependencies (faiss, PyMuPDF).
+        Create your agent scripts in this folder. `ChatAgent` ships in the flagship `gaia-agent-gaia` package (`gaia_agent.chat_agent`); its PyPI publishing is paused ([#2240](https://github.com/amd/gaia/issues/2240)), so install it from the repository subdirectory. The `rag` extra adds document-processing dependencies (faiss, pypdf, pypdfium2).
         </Info>
 
         <Note>
@@ -171,7 +171,7 @@ Get a working agent running to understand the basic flow.
     ```
 
     **What happens:**
-    1. PDF text extraction (PyMuPDF)
+    1. PDF text extraction (pypdf)
     2. Chunking into 500-token segments
     3. Embedding generation (EmbeddingGemma 300M running on NPU/iGPU)
     4. FAISS index creation
@@ -603,7 +603,7 @@ Add RAG capability to enable document search and retrieval.
 DocQAAgent(documents=["manual.pdf"])
   → RAGSDK instance created
   → For each PDF:
-      → PyMuPDF extracts text
+      → pypdf extracts text
       → Text split into 500-token chunks (100 overlap)
       → EmbeddingGemma 300M generates embeddings (768 dimensions, runs on NPU/iGPU)
       → Embeddings stored in FAISS index (in-memory)

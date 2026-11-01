@@ -246,7 +246,7 @@ def test_code_that_may_write_is_flagged(code):
         "from mylib import process\nprocess('a.csv')",
         "from . import helper",
         "import xlsxwriter",
-        "import fitz\nfitz.open('a.pdf').save('b.pdf')",
+        "import pypdfium2\npypdfium2.PdfDocument('a.pdf').save('b.pdf')",
         # a module name shadowed to dodge an exemption
         "import numpy as p\np = __import__('pathlib').Path('a')\np.rename('b')",
         "import json\njson = open('a', 'w')\njson.dump({}, json)",

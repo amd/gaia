@@ -25,6 +25,7 @@ type scriptedRunner struct {
 func (s scriptedRunner) Label() string                        { return "scripted" }
 func (s scriptedRunner) Rows(Config) []Row                    { return append([]Row(nil), s.rep.Rows...) }
 func (s scriptedRunner) Check(context.Context, Config) Report { return s.rep }
+
 // scriptedFixesMu serialises Fix: a test that mashes keys can start a fix
 // while an earlier one's goroutine is still recording.
 var scriptedFixesMu sync.Mutex

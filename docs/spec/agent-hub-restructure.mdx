@@ -75,10 +75,10 @@ The current codebase has cross-agent tool dependencies that block independent pa
 
 | Mixin | Currently in | Used by | New location |
 |-------|-------------|---------|--------------|
-| `RAGToolsMixin` | `agents/chat/tools/rag_tools.py` | ChatAgent, DocQAAgent | `agents/tools/rag_tools.py` |
-| `FileIOToolsMixin` | `agents/code/tools/file_io.py` | ChatAgent, CodeAgent, DocQA, FileIO | `agents/tools/file_io_tools.py` |
-| `ShellToolsMixin` | `agents/chat/tools/shell_tools.py` | ChatAgent, FileIOAgent | `agents/tools/shell_tools.py` |
-| `CodeIndexToolsMixin` | `agents/code_index/tools/mixin.py` | CodeAgent | `agents/tools/code_index_tools.py` |
+| `RAGToolsMixin` | `agents/chat/tools/rag_tools.py` | ChatAgent | `agents/tools/rag_tools.py` |
+| `FileIOToolsMixin` | `agents/code/tools/file_io.py` | ChatAgent | `agents/tools/file_io_tools.py` |
+| `ShellToolsMixin` | `agents/chat/tools/shell_tools.py` | ChatAgent | `agents/tools/shell_tools.py` |
+| `CodeIndexToolsMixin` | `agents/code_index/tools/mixin.py` | GaiaAgent | `agents/tools/code_index_tools.py` |
 
 After promotion, every `KNOWN_TOOLS` entry in `registry.py` points to `gaia.agents.tools.*`. No agent-specific tool paths remain. Old paths get deprecated re-exports for backward compatibility.
 
@@ -126,7 +126,7 @@ Not every hub package is an agent. `type` discriminates them, and two ship today
 
 | Package | `type` | `language` | What it is |
 |---------|--------|------------|------------|
-| `terminal-hub` (moving to `tui`) | `component` | `go` | The `gaia tui` binary — six platform builds |
+| `terminal-hub` (moving to `tui`) | `component` | `go` | The `gaia-tui` binary — six platform builds |
 | `agent-ui` | `app` | `typescript` | The Electron desktop app installers |
 
 Their manifests live in `hub/components/<id>/gaia-agent.yaml` and publish through
@@ -280,8 +280,8 @@ Remove agent packages from `setup.py`. Remove `gaia-emr`/`gaia-code` console scr
 Replace ~16 direct agent imports in `cli.py`, `ui/_chat_helpers.py`, `ui/agent_loop.py`, and apps with `registry.create_agent(id)`.
 </Step>
 <Step title="Add framework generic server">
-`src/gaia/agents/base/server.py` wraps any Agent into REST API + MCP server. Enables `gaia agent run <id> --api` and `--mcp`, and serves the agent's [inherited init](#inherited-init) routes.
-The REST API admits loopback browser origins only and enforces `GAIA_API_KEY` on every route but `/health` when it is set; `--api` on a non-loopback `--host` is refused without one (see [API server authentication](/sdk/infrastructure/api-server#authentication)).
+`src/gaia/agents/base/server.py` wraps any Agent into a REST API + MCP server, and serves the agent's [inherited init](#inherited-init) routes.
+The REST API admits loopback browser origins only and enforces `GAIA_API_KEY` on every route but `/health` when it is set; a non-loopback `--host` is refused without one (see [API server authentication](/sdk/infrastructure/api-server#authentication)).
 </Step>
 <Step title="Add CI/CD workflow">
 `.github/workflows/build_agents.yml` matrix-builds the C++ agent binaries.
@@ -308,8 +308,8 @@ the deleted agent code.
 
 ## Cross-Agent Dependencies (superseded)
 
-This section tracked agent-to-agent couplings (e.g. `RoutingAgent` depending
-on `CodeAgent`) that the hub-package split needed to resolve. Both agents in
+This section tracked agent-to-agent couplings (e.g. a routing agent depending
+on a deleted agent) that the hub-package split needed to resolve. Both agents in
 that example are deleted, so the coupling no longer exists. The mixin
 promotion this section also depended on (RAG, FileIO, Shell, CodeIndex moving
 to `src/gaia/agents/tools/`) already landed and still holds — see
@@ -333,7 +333,7 @@ python -m pytest tests/ -x
 
 # Step 3 — first agent works as standalone package
 pip install -e hub/agents/email/python/
-gaia agent run email --prompt "Triage my inbox"
+gaia-tui chat --agent email --query "Triage my inbox"
 python -m pytest hub/agents/email/python/tests/ -xvs
 
 # Step 5 — core wheel is framework-only
@@ -341,13 +341,13 @@ pip install -e ".[dev]"        # framework
 pip install -e ".[agents]"     # framework + all agents
 
 # Step 8 — generic server
-gaia agent run chat --api --port 8080
+gaia api start
 curl http://localhost:8080/v1/chat/completions \
   -d '{"messages":[{"role":"user","content":"hello"}]}'
 
 # Full integration
 gaia agent list
-gaia agent run chat --prompt "hello"
+gaia-tui chat --agent gaia --query "hello"
 ```
 
 ## Related
