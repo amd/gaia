@@ -1001,3 +1001,16 @@ func TestALoadCheckFailureUsesTheBackendsWords(t *testing.T) {
 	h.expect("Setup stopped before GAIA could check that Gemma-4-E4B-it-GGUF loads.")
 	h.expect("Press r to try again.")
 }
+
+// When a run ends with failures, the cursor lands on the one that caused it
+// (the full disk), not on a model the run merely stopped before checking.
+func TestTheCursorLandsOnTheRootCause(t *testing.T) {
+	h := startedDownload(t)
+	stopped := "Setup stopped before GAIA could check that it loads."
+	h.api.Progress(setupapi.ModelProgress{ID: emb, State: setupapi.StateFailed, ErrorKind: strp("verify"), Error: &stopped, BytesTotal: total(emb)})
+	h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateFailed, ErrorKind: strp("disk_full"), BytesDone: 2e9, BytesTotal: total(qwen)})
+	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateFailed, ErrorKind: strp("verify"), Error: &stopped, BytesTotal: total(gemma)})
+	h.api.SetRunState(setupapi.RunFailed)
+	h.poll()
+	h.expect("Ran out of disk space on C:")
+}

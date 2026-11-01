@@ -942,7 +942,30 @@ func (m Model) advance() (Model, tea.Cmd) {
 		m = m.checkFinished()
 		return m.refreshPlan()
 	}
+	m.focus = m.rootCause()
 	return m, nil
+}
+
+// rootCause is the row to put the cursor on when a download ends with
+// failures: the first one that failed for a reason of its own (a full disk, a
+// dropped connection), ahead of models the run merely stopped before checking.
+func (m Model) rootCause() int {
+	first := -1
+	for i, r := range m.shownRows() {
+		if m.shownState(r) != setupapi.StateFailed {
+			continue
+		}
+		if r.ErrorKind == nil || *r.ErrorKind != setupapi.ErrVerify {
+			return i
+		}
+		if first < 0 {
+			first = i
+		}
+	}
+	if first < 0 {
+		return m.focus
+	}
+	return first
 }
 
 // checkFinished moves a finished download on: the ready summary in setup, a
