@@ -54,6 +54,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **A rate-limited page now says how long to wait.** `fetch_webpage` on an
+  HTTP 429 or 503 with `Retry-After` returns the wait as `retry_after` with a
+  hint not to fetch again before then. It returned only the status line, so
+  the agent re-fetched at once and could not tell the user when the limit
+  resets.
 - **One stray tool-call reply no longer triples a gateway model's token use.**
   A gateway model that wrote its own tool-call markup once was moved to native
   tool schemas (~12K more tokens per call) for every later session, so a single

@@ -479,9 +479,11 @@ memory holds, up to 262,144 tokens: 256K on a Strix Halo, about 88K on a 32 GB G
 (see [Context length follows memory](/guides/ai-providers#context-length-follows-memory)). Gemma is
 still downloaded, since vision and document-image extraction load it by name. Every
 smaller PC gets Gemma alone. A `default_model` you set yourself always wins and is
-downloaded instead of Gemma; questions about images then ask you to download Gemma
-(~6 GB) with `gaia download --agent vlm` first, and `gaia init` says so. `--check`
-asks for the same models `gaia init` would download.
+downloaded instead of Gemma; if Lemonade explicitly reports the configured
+vision model as missing, image questions ask you to download it first (for the
+built-in VLM, use `gaia download --agent vlm`) instead of silently starting the
+download during image analysis. Gemma is about 6 GB, and `gaia init` also warns
+when it is missing. `--check` asks for the same models `gaia init` would download.
 </Note>
 
 <Note>
@@ -2374,7 +2376,7 @@ gaia eval agent --save-baseline
 ```
 
 ```bash Compare Against Baseline
-gaia eval agent --compare eval/results/latest/scorecard.json
+gaia eval agent --compare eval/results/eval-20261021-141300/scorecard.json
 ```
 
 ```bash Explicit Two-File Comparison
