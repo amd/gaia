@@ -2334,7 +2334,7 @@ gaia eval agent [OPTIONS]
 | `--budget` | string | `2.00` | Maximum USD spend per scenario |
 | `--timeout` | integer | `900` | Per-scenario timeout in seconds (auto-scaled for complex scenarios) |
 | `--audit-only` | flag | false | Run architecture audit without LLM calls (free) |
-| `--generate-corpus` | flag | false | Regenerate corpus documents and validate `manifest.json` |
+| `--generate-corpus` | flag | false | Validate the committed corpus documents against `manifest.json`; fails if a listed file is missing |
 | `--fix` | flag | false | Auto-invoke Claude Code to diagnose and repair failures, then re-evaluate |
 | `--max-fix-iterations` | integer | `3` | Maximum repair cycles in `--fix` mode |
 | `--target-pass-rate` | float | `0.90` | Stop fix iterations when judged pass rate reaches this threshold |

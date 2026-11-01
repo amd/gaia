@@ -3868,57 +3868,20 @@ class AgentEvalRunner:
 
 
 # ---------------------------------------------------------------------------
-# --generate-corpus: regenerate corpus documents and validate manifest
+# --generate-corpus: validate the committed corpus against manifest.json
 # ---------------------------------------------------------------------------
 
 
 def generate_corpus():
-    """Regenerate corpus documents and validate manifest.json.
+    """Validate the committed corpus documents against ``manifest.json``.
 
-    Steps:
-    1. Re-run CSV generator (gen_sales_csv_v2.py) with deterministic seed
-    2. Scan corpus/documents/ and corpus/adversarial/ for all files
-    3. Validate manifest.json facts are still reachable
-    4. Print a summary report
+    The corpus is committed ground truth — the manifest's facts were written
+    from these exact files — so nothing here rewrites it. Lists the documents,
+    then raises ``RuntimeError`` when the manifest is absent or names a file
+    that is not on disk.
     """
-    print("[CORPUS] Starting corpus regeneration...")
+    print("[CORPUS] Validating corpus against manifest.json...")
 
-    # Step 1: Regenerate CSV via gen_sales_csv_v2.py
-    gen_scripts = [
-        CORPUS_DIR / "gen_sales_csv_v2.py",
-        CORPUS_DIR / "gen_sales_csv.py",
-    ]
-    ran_generator = False
-    for script in gen_scripts:
-        if script.exists():
-            print(f"[CORPUS] Running CSV generator: {script.name}")
-            result = subprocess.run(
-                [sys.executable, str(script)],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                cwd=str(CORPUS_DIR),
-                check=False,
-            )
-            if result.returncode == 0:
-                print("[CORPUS] CSV generator OK")
-                ran_generator = True
-            else:
-                print(
-                    f"[CORPUS] CSV generator failed (exit {result.returncode}):",
-                    file=sys.stderr,
-                )
-                print(result.stderr[:300], file=sys.stderr)
-            break
-
-    if not ran_generator:
-        print(
-            "[CORPUS] No CSV generator found — skipping CSV regeneration",
-            file=sys.stderr,
-        )
-
-    # Step 2: Scan corpus directories
     docs_dir = CORPUS_DIR / "documents"
     adv_dir = CORPUS_DIR / "adversarial"
     all_files = []
@@ -3933,13 +3896,11 @@ def generate_corpus():
     for rel, size in all_files:
         print(f"  {str(rel):<45} {size:>8,} bytes")
 
-    # Step 3: Validate manifest
     if not MANIFEST.exists():
-        print(
-            f"\n[CORPUS] WARNING: manifest.json not found at {MANIFEST}",
-            file=sys.stderr,
+        raise RuntimeError(
+            f"Corpus manifest not found at {MANIFEST}. It is committed with the "
+            "repo; restore it with `git checkout -- eval/corpus/manifest.json`."
         )
-        return
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     doc_list = manifest.get("documents", [])
@@ -3952,22 +3913,19 @@ def generate_corpus():
 
     # Check every manifest file exists on disk
     missing = []
-    for doc in doc_list:
-        fn = doc.get("filename", "")
-        if not (docs_dir / fn).exists():
-            missing.append(fn)
-    for doc in adv_list:
-        fn = doc.get("filename", "")
-        if not (adv_dir / fn).exists():
-            missing.append(fn)
+    for base, entries in ((docs_dir, doc_list), (adv_dir, adv_list)):
+        for doc in entries:
+            fn = doc.get("filename") or ""
+            if not fn or not (base / fn).is_file():
+                missing.append(fn or f"<entry '{doc.get('id', '?')}' has no filename>")
 
     if missing:
-        print(f"[CORPUS] WARNING: {len(missing)} manifest file(s) missing from disk:")
-        for fn in missing:
-            print(f"  MISSING: {fn}")
-    else:
-        print("[CORPUS] All manifest files present on disk [OK]")
-
+        raise RuntimeError(
+            f"{len(missing)} file(s) named in {MANIFEST} are missing from "
+            f"{CORPUS_DIR}: {', '.join(missing)}. Restore them from git, or fix "
+            "the manifest entry if the document was renamed."
+        )
+    print("[CORPUS] All manifest files present on disk [OK]")
     print(f"\n[CORPUS] Done. Corpus at: {CORPUS_DIR}")
 
 
