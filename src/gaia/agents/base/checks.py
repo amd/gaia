@@ -21,8 +21,9 @@ from __future__ import annotations
 import ast
 import hashlib
 import re
+import shlex
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, FrozenSet, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 #: Result key a command-running tool sets on every call that ran:
 #: ``CheckResult.to_dict()`` for a check, ``None`` for anything else.
@@ -339,20 +340,31 @@ _RUNNER_CALLS: FrozenSet[str] = frozenset(
     }
 )
 
-#: Calls that start another program or module, which may be a runner.
-_LAUNCH_CALLS: FrozenSet[str] = frozenset(
-    {
-        "subprocess.run",
-        "subprocess.call",
-        "subprocess.check_call",
-        "subprocess.check_output",
-        "subprocess.Popen",
-        "os.system",
-        "os.popen",
-        "runpy.run_module",
-        "runpy.run_path",
-    }
-)
+#: Calls that start a program, by how their first argument names it: ``argv``
+#: is an argv list or a command string, ``shell`` a command string, ``module`` a
+#: module run as ``python -m``, ``path`` a script, ``varargs`` the argv itself.
+_LAUNCH_CALLS: Dict[str, str] = {
+    "subprocess.run": "argv",
+    "subprocess.call": "argv",
+    "subprocess.check_call": "argv",
+    "subprocess.check_output": "argv",
+    "subprocess.Popen": "argv",
+    "os.system": "shell",
+    "os.popen": "shell",
+    "asyncio.create_subprocess_shell": "shell",
+    "asyncio.create_subprocess_exec": "varargs",
+    "runpy.run_module": "module",
+    "runpy.run_path": "path",
+}
+
+#: A word that stands for the Python interpreter when it starts an argv.
+_PYTHON_EXPRESSIONS = frozenset({"sys.executable"})
+#: Shell text between these runs as a separate command.
+_SHELL_COMMAND_BREAK_RE = re.compile(r"&&|\|\||[;|&\n]")
+#: ``NAME=value`` in front of a shell command sets its environment.
+_LEADING_ENV_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+#: A word whose value the code does not fix.
+_UNKNOWN = "\0"
 
 
 def _dotted(node: ast.AST, aliases: Dict[str, str]) -> Optional[str]:
@@ -367,14 +379,134 @@ def _dotted(node: ast.AST, aliases: Dict[str, str]) -> Optional[str]:
     return ".".join(reversed(parts))
 
 
+class _LaunchReader:
+    """What a launch call in one parsed snippet would run."""
+
+    def __init__(self, tree: ast.AST, aliases: Dict[str, str]):
+        self.aliases = aliases
+        # Last assignment in source order wins: ``cmd = [...]; run(cmd)``.
+        self.assigned: Dict[str, ast.AST] = {}
+        assigns = [
+            n for n in ast.walk(tree) if isinstance(n, (ast.Assign, ast.AnnAssign))
+        ]
+        for node in sorted(assigns, key=lambda n: (n.lineno, n.col_offset)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if node.value is not None and len(targets) == 1:
+                if isinstance(targets[0], ast.Name):
+                    self.assigned[targets[0].id] = node.value
+
+    def _resolve(self, node: ast.AST, depth: int = 0) -> ast.AST:
+        while isinstance(node, ast.Name) and node.id in self.assigned and depth < 8:
+            node = self.assigned[node.id]
+            depth += 1
+        return node
+
+    def text(self, node: ast.AST) -> Optional[str]:
+        """The string *node* evaluates to; ``_UNKNOWN`` marks parts left open."""
+        node = self._resolve(node)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.JoinedStr):
+            return "".join(
+                v.value if isinstance(v, ast.Constant) else _UNKNOWN
+                for v in node.values
+            )
+        if isinstance(node, ast.Call):
+            name = _dotted(node.func, self.aliases)
+            if name == "shutil.which" and node.args:
+                return self.text(node.args[0])
+        return None
+
+    def word(self, node: ast.AST) -> str:
+        """One argv word; the interpreter for ``sys.executable``."""
+        if _dotted(node, self.aliases) in _PYTHON_EXPRESSIONS:
+            return "python"
+        text = self.text(node)
+        return _UNKNOWN if text is None else text
+
+    def argv(self, node: ast.AST) -> Optional[List[str]]:
+        """*node* as an argv list, or None when it is not one."""
+        node = self._resolve(node)
+        if isinstance(node, (ast.List, ast.Tuple)):
+            return [self.word(item) for item in node.elts]
+        if not isinstance(node, ast.Call):
+            return None
+        if _dotted(node.func, self.aliases) == "shlex.split" and node.args:
+            text = self.text(node.args[0])
+            return None if text is None else _split_words(text)
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "split"
+            and not node.args
+        ):
+            text = self.text(node.func.value)
+            return None if text is None else text.split()
+        return None
+
+
+def _split_words(text: str) -> List[str]:
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return text.split()
+
+
+def _argv_runs_check(argv: Sequence[str]) -> bool:
+    """True when *argv* starts a check runner.
+
+    An unknown program followed by ``-m`` is an interpreter path the code
+    computed, such as ``os.path.join(venv, 'python')``.
+    """
+    words = list(argv)
+    if len(words) > 1 and words[0] == _UNKNOWN and words[1] == "-m":
+        words[0] = "python"
+    return argv_check_label(words) is not None
+
+
+def _shell_runs_check(text: str) -> bool:
+    """True when one command in shell *text* is a check runner."""
+    for command in _SHELL_COMMAND_BREAK_RE.split(text):
+        words = _split_words(command)
+        while words and _LEADING_ENV_RE.match(words[0]):
+            words = words[1:]
+        if words and argv_check_label(words) is not None:
+            return True
+    return False
+
+
+def _launch_runs_check(call: ast.Call, how: str, reader: _LaunchReader) -> bool:
+    """True when *call*, a launch of kind *how*, starts a check runner."""
+    if how == "varargs":
+        return bool(call.args) and _argv_runs_check([reader.word(a) for a in call.args])
+    target = call.args[0] if call.args else None
+    if target is None:
+        target = next((k.value for k in call.keywords if k.arg == "args"), None)
+    if target is None:
+        return False
+    if how == "module":
+        module = reader.text(target)
+        return module is not None and _argv_runs_check(["python", "-m", module])
+    if how == "path":
+        path = reader.text(target)
+        return path is not None and _argv_runs_check([path])
+    if how == "argv":
+        argv = reader.argv(target)
+        if argv is not None:
+            return _argv_runs_check(argv)
+    text = reader.text(target)
+    return text is not None and _shell_runs_check(text)
+
+
 def invokes_test_runner(source: str) -> bool:
     """True when Python *source* runs a test runner, not just prints its output.
 
     A runner's summary line in the output is only evidence when the code
     could have produced it: it calls ``pytest.main`` / ``unittest.main`` /
     a ``TextTestRunner``, or launches a process (``subprocess``, ``os.system``,
-    ``runpy``) in code that names a check command. Printing a saved log does
-    neither. Unparseable source never ran, so it is not a runner.
+    ``runpy``) whose program is itself the runner (:func:`argv_check_label`).
+    ``subprocess.run(['cat', 'pytest.log'])`` launches ``cat``, so it is not.
+    Printing a saved log does neither. Unparseable source never ran, so it is
+    not a runner.
     """
     try:
         tree = ast.parse(source or "")
@@ -390,29 +522,15 @@ def invokes_test_runner(source: str) -> bool:
         elif isinstance(node, ast.ImportFrom) and node.module:
             for name in node.names:
                 aliases[name.asname or name.name] = f"{node.module}.{name.name}"
-    launches = False
+    reader = _LaunchReader(tree, aliases)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         name = _dotted(node.func, aliases)
         if name in _RUNNER_CALLS:
             return True
-        launches = launches or name in _LAUNCH_CALLS
-    if not launches:
-        return False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            text = node.value
-        elif isinstance(node, (ast.List, ast.Tuple)):
-            # An argv list: ['cargo', 'test'] names the command across items.
-            text = " ".join(
-                item.value
-                for item in node.elts
-                if isinstance(item, ast.Constant) and isinstance(item.value, str)
-            )
-        else:
-            continue
-        if _CHECK_COMMAND_RE.search(text):
+        how = _LAUNCH_CALLS.get(name or "")
+        if how is not None and _launch_runs_check(node, how, reader):
             return True
     return False
 

@@ -1050,9 +1050,12 @@ itself is the runner (`pytest -q`, `python -m pytest`, `uv run pytest`), so
 code, so `pytest | tail` that failed reads as failed. A `run_python` snippet or an
 `execute_python_file` script counts only when its code invokes a runner —
 `pytest.main()`, `unittest.main()`, a `TextTestRunner`, or a `subprocess` /
-`os.system` / `runpy` call naming a check command — and its output carries that
-runner's summary. Printing a saved log (`print(open('ci.log').read())`) is not a
-test run, whatever the log says.
+`os.system` / `runpy` call whose program is itself the runner — and its output
+carries that runner's summary. Printing a saved log is not a test run, whatever
+the log says or is named: `print(open('ci.log').read())` and
+`subprocess.run(['cat', 'pytest.log'])` both read a file. A runner reached only
+through a helper the snippet imports (`from mytests import run_all`) does not
+count either; the run is reported as unverified rather than guessed.
 
 Results that carry no `check_result` — MCP tools, hub agents built before the
 field existed — are still classified from their text: a tool named `run_tests`,
