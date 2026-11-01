@@ -73,9 +73,9 @@ def _repair_visual_order_lines(text: str, pieces: list) -> str:
         if not _is_visual_order(line):
             continue
         stored = r"\s*".join(re.escape(piece[2].strip()) for piece in line)
-        # A callable keeps backslashes in the text from reading as group refs.
-        reading = _reading_order(line)
-        text = re.sub(stored, lambda _match: reading, text, count=1)
+        # Escaped so backslashes in the text can't read as group refs.
+        reading = _reading_order(line).replace("\\", r"\\")
+        text = re.sub(stored, reading, text, count=1)
     return text
 
 
@@ -85,24 +85,25 @@ def _is_visual_order(line: list) -> bool:
     if len(_ARABIC_LETTER.findall(joined)) <= len(_LATIN_LETTER.findall(joined)):
         return False
 
-    previous = None
+    previous_x = None
+    previous_arabic = False
     moved_right = False
     for x, _y, piece_text in line:
         arabic = bool(_ARABIC_LETTER.search(piece_text))
         # Quote marks and full stops sit either side of a run in any writer.
         if not arabic and not _LTR_RUN.search(piece_text):
             continue
-        if previous is not None and arabic != previous[1]:
-            if x < previous[0]:
+        if previous_x is not None and arabic != previous_arabic:
+            if x < previous_x:
                 return False
             moved_right = True
-        previous = (x, arabic)
+        previous_x, previous_arabic = x, arabic
     return moved_right
 
 
 def _reading_order(line: list) -> str:
     """Join a visual-order line right to left, keeping numbers left to right."""
-    parts = []
+    parts: list[str] = []
     for index, (_x, _y, raw) in enumerate(line):
         piece = raw.strip()
         previous = line[index - 1][2] if index else ""
