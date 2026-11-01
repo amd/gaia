@@ -26,10 +26,18 @@ function isImmutableAsset(pathname) {
   return pathname.startsWith("/_astro/");
 }
 
-// Never let an error or a 404 inherit the long TTL: a Railway restart mid-deploy
-// would otherwise pin a broken /_astro/* asset at the edge for a year.
-function cacheTtlByStatus(okTtl) {
-  return { "200-299": okTtl, "404": 1, "500-599": 0 };
+// Railway sends no Cache-Control, so the router states the policy itself — for
+// browsers and for the edge cache (the Cache API honours this header).
+function cacheControlFor(pathname, status) {
+  if (status >= 200 && status < 300) {
+    return isImmutableAsset(pathname)
+      ? `public, max-age=${ASSET_CACHE_TTL}, immutable`
+      : `public, max-age=${HTML_CACHE_TTL}`;
+  }
+  // Never let an error or a 404 be cached: a Railway restart mid-deploy would
+  // otherwise pin a broken /_astro/* asset for a year.
+  if (status >= 400) return "no-store";
+  return null;
 }
 
 function upstreamError(label, origin, detail, hint) {
@@ -48,13 +56,10 @@ function upstreamError(label, origin, detail, hint) {
   );
 }
 
-async function proxy(target, request, { label, origin, hint, cf }) {
+async function proxy(target, request, { label, origin, hint }) {
   let response;
   try {
-    response = await fetch(
-      new Request(target, request),
-      cf ? { cf } : undefined
-    );
+    response = await fetch(new Request(target, request));
   } catch (err) {
     return upstreamError(label, origin, err, hint);
   }
@@ -105,7 +110,7 @@ function resolveWebsiteOrigin(env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     // Docs: same-zone fetch -> Cloudflare sends it to the origin (Mintlify),
@@ -132,20 +137,32 @@ export default {
     target.hostname = websiteOrigin;
     target.port = "";
 
-    const cacheable = request.method === "GET";
-
-    return proxy(target.toString(), request, {
+    const railway = {
       label: "Railway",
       origin: websiteOrigin,
       hint: "Check the Railway 'website' service in project gaia-agent-hub.",
-      cf: cacheable
-        ? {
-            cacheEverything: true,
-            cacheTtlByStatus: cacheTtlByStatus(
-              isImmutableAsset(url.pathname) ? ASSET_CACHE_TTL : HTML_CACHE_TTL
-            ),
-          }
-        : undefined,
-    });
+    };
+    if (request.method !== "GET") {
+      return proxy(target.toString(), request, railway);
+    }
+
+    // The Cache API, not fetch()'s cf options: those left HTML uncached at the
+    // edge (cf-cache-status: DYNAMIC) on this third-party origin.
+    const cache = caches.default;
+    const cacheKey = new Request(target.toString(), { method: "GET" });
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+
+    const upstream = await proxy(target.toString(), request, railway);
+    const cacheControl = cacheControlFor(url.pathname, upstream.status);
+    if (cacheControl === null) return upstream;
+
+    const response = new Response(upstream.body, upstream);
+    response.headers.set("cache-control", cacheControl);
+    // Only a full 200: the Cache API rejects a 206 partial response.
+    if (upstream.status === 200) {
+      ctx.waitUntil(cache.put(cacheKey, response.clone()));
+    }
+    return response;
   },
 };
