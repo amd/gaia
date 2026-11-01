@@ -7,6 +7,7 @@ import types
 
 import pytest
 
+from gaia.agents.install_hints import pip_install_hint
 from gaia.agents.tools.screenshot_tools import ScreenshotToolsMixin
 
 
@@ -68,7 +69,7 @@ def test_an_installed_mss_that_is_refused_is_not_reported_as_missing(
     assert "PermissionError" in result["error"]
     assert "screen recording not permitted" in result["error"]
     assert "could not create image" in result["error"]
-    assert "pip install mss" not in result["error"]
+    assert pip_install_hint("mss") not in result["error"]
 
 
 def test_the_install_hint_appears_only_when_no_backend_is_installed(
@@ -80,4 +81,4 @@ def test_the_install_hint_appears_only_when_no_backend_is_installed(
 
     assert result["status"] == "error"
     assert "mss is not installed" in result["error"]
-    assert "pip install mss" in result["error"]
+    assert pip_install_hint("mss") in result["error"]

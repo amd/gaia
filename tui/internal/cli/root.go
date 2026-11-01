@@ -334,11 +334,11 @@ func init() {
 
 // Execute runs the CLI.
 //
-// A leading `tui` word is accepted and dropped. This binary is addressed as
-// `gaia tui …` everywhere it is documented, but its own root command is the
-// binary's own name, so without this `gaia tui run email` — the exact spelling
-// the docs use — would fail with "unknown command". Both spellings work; only
-// the first argument is considered, so an agent named "tui" is unaffected.
+// A leading `tui` word is accepted and dropped. The binary is `gaia-tui` (the
+// Python `gaia` CLI has no `tui` subcommand), but older docs and scripts spell
+// it `gaia tui …`, so `gaia-tui tui run email` would otherwise fail with
+// "unknown command". Both spellings work; only the first argument is
+// considered, so an agent named "tui" is unaffected.
 func Execute() error {
 	rootCmd.Use = binaryName(os.Args[0])
 	args := os.Args[1:]

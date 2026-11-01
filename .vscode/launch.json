@@ -187,46 +187,6 @@
             "stopOnEntry": false,
         },
         {
-            "name": "Code Agent Debug (CLI)",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "gaia.cli",
-            "args": [
-                "code",
-                "${input:codeAgentPrompt}",
-                "--debug"
-            ],
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "subProcess": true,
-            "stopOnEntry": false
-        },
-        {
-            "name": "Code Agent Debug (API)",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "gaia.cli",
-            "args": [
-                "code",
-                "${input:codeAgentPrompt}",
-                "--debug",
-                "--use-api"
-            ],
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}",
-                "GAIA_API_URL": "${input:apiUrl}"
-            },
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "subProcess": true,
-            "stopOnEntry": false
-        },
-        {
             "name": "GAIA Pytest Debug",
             "type": "debugpy",
             "request": "launch",
@@ -268,18 +228,6 @@
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": false,
-        },
-        {
-            "name": "JIRA Dashboard - Electron",
-            "type": "node",
-            "request": "launch",
-            "cwd": "${workspaceFolder}",
-            "runtimeExecutable": "npm",
-            "runtimeArgs": ["run", "app:jira:run:electron"],
-            "console": "integratedTerminal",
-            "env": {
-                "GAIA_APP_MODE": "development"
-            }
         },
         {
             "name": "C++ Process Agent Debug",
@@ -361,12 +309,6 @@
             "type": "promptString",
             "description": "GAIA MCP Server URL",
             "default": "http://localhost:8765"
-        },
-        {
-            "id": "codeAgentPrompt",
-            "type": "promptString",
-            "description": "Code Agent task/prompt",
-            "default": "Create a simple calculator function"
         },
         {
             "id": "cliArgs",

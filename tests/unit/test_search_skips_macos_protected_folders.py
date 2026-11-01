@@ -252,12 +252,22 @@ class TestSearchDirectoryOnMacOS:
         assert "skipped_folders" in result, result
 
 
+def _link_folder(link: Path, target: Path) -> None:
+    """A folder link: a junction on Windows (no privilege needed), else a symlink."""
+    if os.name == "nt":  # sys.platform is patched here
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
 class TestAnAliasOfAGuardedFolder:
     """A walk of / reaches ~/Music as /System/Volumes/Data/Users/<u>/Music."""
 
     def test_is_skipped_under_its_other_path(self, home, on_macos, tmp_path):
         alias = tmp_path / "Data"
-        alias.symlink_to(home.parent)
+        _link_folder(alias, home.parent)
         guard = ProtectedFolders(_FakeHost(home))
 
         assert guard.blocks(alias / home.name / "Music")

@@ -38,7 +38,7 @@ var runCmd = &cobra.Command{
 		"on. That is what makes it usable from a script or from CI.\n\n" +
 		"  exit 0  the agent answered and nothing reported a failure\n" +
 		"  exit 1  an error, or a tool failed and nothing recovered it — even when " +
-		"the agent still wrote an answer, so `gaia tui run … && next-step` does not " +
+		"the agent still wrote an answer, so `gaia-tui run … && next-step` does not " +
 		"fire over work that never happened\n" +
 		"  exit 3  a confirmation gate held back a destructive action this run has " +
 		"no way to approve: nothing broke, and nothing was done\n" +

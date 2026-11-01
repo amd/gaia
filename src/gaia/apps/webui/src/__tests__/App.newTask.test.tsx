@@ -375,12 +375,18 @@ describe('first-run setup', () => {
         expect(screen.queryByText('Starting GAIA…')).not.toBeInTheDocument();
     });
 
+    /** Where GAIA runs, then setup's own model set (this suite has no plan to choose from). */
+    async function runSetup() {
+        await userEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+        await userEvent.click(await screen.findByRole('button', { name: 'Use the recommended set' }));
+    }
+
     async function finishSetupWith(card: StartCard) {
         mocked.checkSetup.mockResolvedValue(NOT_READY);
         mocked.startSetup.mockResolvedValue({ state: 'ready', steps: [] });
         mocked.getStartScreen.mockResolvedValue({ cards: [card], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
         render(<App />);
-        await userEvent.click(await screen.findByRole('button', { name: 'Start setup' }));
+        await runSetup();
         await userEvent.click(await screen.findByRole('button', { name: new RegExp(card.title) }));
     }
 
@@ -406,7 +412,7 @@ describe('first-run setup', () => {
             agents: [{ id: 'gaia', name: 'GAIA', namespaced_agent_id: 'installed:gaia' }] as never, total: 1,
         });
 
-        await userEvent.click(await screen.findByRole('button', { name: 'Start setup' }));
+        await runSetup();
         await userEvent.click(await screen.findByRole('button', { name: 'Start chatting' }));
 
         expect(await screen.findByLabelText('Message')).toBeInTheDocument();

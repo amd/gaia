@@ -477,14 +477,13 @@ for search_key in search_keys:
     all_chunks.extend(chunks)
     all_scores.extend(scores)
 
-# 2. Keyword boost
-important_terms = [w for w in query_words if w not in stop_words]
-for chunk_idx, chunk_text in enumerate(self.rag.chunks):
-    matching_terms = [t for t in important_terms if t in chunk_lower]
-    if matching_terms:
-        boost_score = 0.6 + (0.2 * match_ratio)
-        all_chunks.append(chunk_text)
-        all_scores.append(boost_score)
+# 2. Keyword boost: the five best matches in any language, scored 0.6-0.9.
+# Rare words count for more, and query words side by side in a chunk count again.
+for chunk_idx, boost_score, _words in rank_keyword_chunks(
+    query, enumerate(self.rag.chunks)
+):
+    all_chunks.append(self.rag.chunks[chunk_idx])
+    all_scores.append(boost_score)
 
 # 3. Hash-based deduplication (O(1))
 unique_chunks = {}

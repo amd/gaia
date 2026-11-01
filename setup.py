@@ -32,6 +32,7 @@ setup(
     author="AMD",
     url="https://github.com/amd/gaia",
     license="MIT",
+    license_files=["LICENSE.md", "THIRD_PARTY_NOTICES.md", "licenses/*"],
     package_dir={"": "src"},
     packages=[
         "gaia",
@@ -146,7 +147,10 @@ setup(
         # honours CA files loaded on top (certifi), so nothing stops verifying.
         "truststore>=0.10.0",
         "beautifulsoup4",
-        "watchdog>=2.1.0",
+        # watchdog 7.0.0 starves Windows change delivery while a neighbouring
+        # file is written continuously; stay on the known-good 6.x line until
+        # upstream fixes its DirectoryChangeReader.
+        "watchdog>=2.1.0,<7",
         "pillow>=9.0.0",
         # Cron-based scheduler (issue #892): apscheduler drives the daemon;
         # tomli/tomli-w read+write ~/.gaia/schedules.toml (tomllib is stdlib on 3.11+).
@@ -160,6 +164,10 @@ setup(
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
         "keyring>=24.0.0,<26.0.0",
         "tavily-python>=0.5.0",
+        # Gateway Claude models (amd.Claude-*) call the gateway's Anthropic
+        # route through this SDK, so a base install can pick one. 0.49 is the
+        # first to export Omit, which keeps Anthropic credentials off that wire.
+        "anthropic>=0.49.0,<3.0.0",
         # Ed25519 signature verification for `gaia skill install` (#2467). Core,
         # not an extra: a skill's security tier rests on its signature, and a
         # build that cannot verify one would have to either refuse every signed
@@ -212,12 +220,12 @@ setup(
             # the OS credential store (macOS Keychain, Windows DPAPI, Linux
             # SecretService). Pinned upper bound per supply-chain advisory.
             "keyring>=24.0.0,<26.0.0",
-            # RAG runtime deps — gaia.rag.sdk uses faiss/pypdf/pymupdf/numpy and
+            # RAG runtime deps — gaia.rag.sdk uses faiss/pypdf/pypdfium2/numpy and
             # embeds via Lemonade (NOT sentence-transformers). See #845.
             # Version specifiers match the standalone "rag" extra.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
-            "pymupdf>=1.24.0,<2",
+            "pypdfium2>=5.0.0,<6",
             "pypdf>=6.20.0",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
@@ -243,7 +251,6 @@ setup(
             "uvicorn",
         ],
         "telegram": [
-            "python-telegram-bot>=20.3",
             "psutil>=5.9.0",
         ],
         "slack": [
@@ -287,7 +294,6 @@ setup(
             "jsonschema>=4.0.0,<5.0.0",
         ],
         "eval": [
-            "anthropic",
             "bs4",
             "numpy>=2.0,<2.3.0",
             "pypdf>=6.20.0",
@@ -314,9 +320,9 @@ setup(
             # RAG embeds via Lemonade, not sentence-transformers — do NOT add it.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
-            # 2.x ships no macOS x86_64 wheel and its sdist doesn't build. No
-            # platform marker: `gaia init` refuses to evaluate one (install_hints).
-            "pymupdf>=1.24.0,<2",
+            # PDF rendering and image extraction (PDFium; Apache-2.0/BSD-3).
+            # PyMuPDF is AGPL-3.0 and must not come back.
+            "pypdfium2>=5.0.0,<6",
             "pypdf>=6.20.0",
             # Reading AND writing the common office formats. The read half is
             # what RAG needs; the write half is what the document skills need,

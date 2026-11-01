@@ -26,7 +26,8 @@ function getGaiaVersion(): string {
 const gaiaVersion = getGaiaVersion();
 
 export default defineConfig({
-    plugins: [react()],
+    plugins: [react({ jsxImportSource: '@gaia/jsx' })],
+    resolve: { alias: { '@gaia/jsx': resolve(__dirname, 'src/i18n/jsx') } },
     base: './',
     define: {
         __APP_VERSION__: JSON.stringify(gaiaVersion),
