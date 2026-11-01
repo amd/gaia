@@ -235,7 +235,7 @@ func awaitExitError(t *testing.T, bin string, watchdog time.Duration) event.Agen
 				got = &ae
 			}
 		case <-timer.C:
-			t.Fatalf("the turn did not end within %s of the child exiting", watchdog)
+			t.Fatalf("the turn did not end within %s of Send", watchdog)
 		}
 	}
 }
