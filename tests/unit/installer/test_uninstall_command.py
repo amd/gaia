@@ -1440,7 +1440,10 @@ class TestDeferredWindowsVenvRemoval:
         command = args[0][-1]
         assert "Wait-Process -Id $pidToWait" in command
         assert "Get-Process -Id $parentPidToWait" in command
-        assert "$parent.Path.StartsWith($target, [StringComparison]::OrdinalIgnoreCase)" in command
+        assert (
+            "$parent.Path.StartsWith($target, [StringComparison]::OrdinalIgnoreCase)"
+            in command
+        )
         assert "Wait-Process -Id $parentPidToWait" in command
         assert "$pidToWait = 101" in command
         assert "$parentPidToWait = 202" in command
@@ -1511,10 +1514,14 @@ class TestDeferredWindowsVenvRemoval:
         monkeypatch.setattr(
             uc,
             "_remove_path",
-            lambda *_args, **_kwargs: pytest.fail("active venv must not be removed first"),
+            lambda *_args, **_kwargs: pytest.fail(
+                "active venv must not be removed first"
+            ),
         )
         monkeypatch.setattr(uc, "_is_running_from_venv", lambda _path: True)
-        monkeypatch.setattr(uc, "_defer_windows_venv_removal", lambda *_args, **_kwargs: False)
+        monkeypatch.setattr(
+            uc, "_defer_windows_venv_removal", lambda *_args, **_kwargs: False
+        )
 
         assert (
             uc.execute_plan(plan, allowed_roots=[venv.parent], home=tmp_path)

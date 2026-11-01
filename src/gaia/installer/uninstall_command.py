@@ -1594,11 +1594,7 @@ def execute_plan(
         # Windows cannot delete the active venv's interpreter or extension
         # modules. Defer this known GAIA-owned path before rmtree can leave a
         # partially deleted environment for later purge steps to import from.
-        if (
-            path == venv_path
-            and _is_windows()
-            and _is_running_from_venv(path)
-        ):
+        if path == venv_path and _is_windows() and _is_running_from_venv(path):
             if not _defer_windows_venv_removal(path, printer=printer):
                 all_ok = False
             return
