@@ -1961,7 +1961,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 project's packages. Any other script runs from its own folder.
                 Relative paths resolve against that working directory.
 
-                Has pypdf, pymupdf, docx, pptx, openpyxl, xlsxwriter,
+                Has pypdf, pypdfium2, docx, pptx, openpyxl, xlsxwriter,
                 reportlab, pandas, numpy, matplotlib; no pip.
 
                 Args:
@@ -2090,7 +2090,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 No access to your tools: `from gaia import <tool>` fails —
                 call it directly as a tool.
 
-                Has pypdf, pymupdf, docx, pptx, openpyxl, xlsxwriter,
+                Has pypdf, pypdfium2, docx, pptx, openpyxl, xlsxwriter,
                 reportlab, pandas, numpy, matplotlib; no pip.
 
                 Args:

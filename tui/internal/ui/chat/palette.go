@@ -35,6 +35,8 @@ var paletteCommands = []paletteCommand{
 	{"/memory", "View this agent's memory"},
 	{"/full-access", "Run every tool without asking first — shows a warning before it turns on"},
 	{"/setup", "Run first-time setup (gaia flagship agent only)"},
+	{"/models", "Choose the models on this PC: download, skip, or pick the chat model"},
+	{"/gpu", "Give the GPU more memory so bigger models fit (integrated-GPU PCs)"},
 	{"/slack", "Connect this agent to Slack, or show the connection's status"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
