@@ -6678,11 +6678,7 @@ def handle_email_autonomy_command(args) -> None:
     through the daemon the same way every other ``gaia email`` command does
     (:mod:`gaia.daemon.agent_control`) — no second auth scheme.
     """
-    from gaia.daemon.agent_control import (
-        AgentHTTPError,
-        AgentResponseTimeoutError,
-        relay_json,
-    )
+    from gaia.daemon.agent_control import may_still_be_running, relay_json
     from gaia.daemon.errors import DaemonError
 
     log = get_logger(__name__)
@@ -6768,10 +6764,7 @@ def handle_email_autonomy_command(args) -> None:
         # is cosmetic; a missing log record is not.
         log.error("email autonomy %s failed: %s", action, e)
         print(f"❌ {e}", file=sys.stderr)
-        unanswered = isinstance(e, AgentResponseTimeoutError) or (
-            isinstance(e, AgentHTTPError) and e.status_code >= 500
-        )
-        if action == "run" and unanswered:
+        if action == "run" and may_still_be_running(e):
             print(
                 "   If the cycle started, it keeps running on the agent. Run "
                 f"`gaia email autonomy status --session-id {session_id}` to "

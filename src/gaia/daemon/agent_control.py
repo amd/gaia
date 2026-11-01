@@ -48,6 +48,14 @@ class AgentHTTPError(DaemonError):
         self.status_code = status_code
 
 
+def may_still_be_running(exc: Exception) -> bool:
+    """True when *exc* leaves open that the agent is still doing the work:
+    the read timed out, or the relay itself failed (5xx) after accepting it."""
+    if isinstance(exc, AgentResponseTimeoutError):
+        return True
+    return isinstance(exc, AgentHTTPError) and exc.status_code >= 500
+
+
 def relay_json(
     agent_id: str,
     method: str,
@@ -110,4 +118,9 @@ def relay_json(
         ) from e
 
 
-__all__ = ["AgentHTTPError", "AgentResponseTimeoutError", "relay_json"]
+__all__ = [
+    "AgentHTTPError",
+    "AgentResponseTimeoutError",
+    "may_still_be_running",
+    "relay_json",
+]
