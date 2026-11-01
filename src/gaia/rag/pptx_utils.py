@@ -6,12 +6,11 @@
 PowerPoint (.pptx) extraction utilities for multi-modal RAG.
 
 Extracts text, tables, speaker notes, and embedded images from PPTX slides.
-Image processing mirrors ``pdf_utils.py`` (resize, compress, same dict format).
+Images go through ``pdf_utils.prepare_image_for_vlm``, same as PDF images.
 """
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import platform
@@ -23,10 +22,6 @@ from gaia.env import child_env
 
 logger = logging.getLogger(__name__)
 
-# Shared constants (same as pdf_utils.py)
-MAX_DIMENSION = 1600
-MAX_SIZE_KB = 300
-MAX_ITERATIONS = 5
 MAX_GROUP_DEPTH = 5
 
 
@@ -34,7 +29,7 @@ def extract_images_from_slide(slide, slide_num: int) -> list[dict]:
     """
     Extract embedded images from a PPTX slide.
 
-    Iterates picture shapes, extracts image blobs, and processes with PIL
+    Iterates picture shapes, extracts image blobs, and prepares them for the VLM
     (resize / compress) identically to ``pdf_utils.extract_images_from_page_pdfium``.
 
     Args:
@@ -45,12 +40,12 @@ def extract_images_from_slide(slide, slide_num: int) -> list[dict]:
         List of image dicts::
 
             [{"image_bytes": bytes, "width": int, "height": int,
-              "format": "png", "size_kb": float}, ...]
+              "format": "png" or "jpeg", "size_kb": float}, ...]
     """
     images: list[dict] = []
 
     try:
-        from PIL import Image
+        from gaia.rag.pdf_utils import prepare_image_for_vlm
     except ImportError:
         logger.error("Pillow not installed. Install: uv pip install Pillow")
         return images
@@ -62,83 +57,16 @@ def extract_images_from_slide(slide, slide_num: int) -> list[dict]:
         try:
             image_blob = shape.image.blob
 
-            img = Image.open(io.BytesIO(image_blob))
-
-            width, height = img.size
-            size_kb = len(image_blob) / 1024
-
-            # Convert to RGB if needed
-            if img.mode not in ("RGB", "RGBA"):
-                logger.debug("Converting %s to RGB", img.mode)
-                img = img.convert("RGB")
-
-            # Resize if too large
-            if width > MAX_DIMENSION or height > MAX_DIMENSION:
-                scale = min(MAX_DIMENSION / width, MAX_DIMENSION / height)
-                new_width = int(width * scale)
-                new_height = int(height * scale)
-                logger.info(
-                    "   Resizing: %dx%d -> %dx%d", width, height, new_width, new_height
-                )
-                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-            # Save as optimized PNG
-            png_buffer = io.BytesIO()
-            img.save(png_buffer, format="PNG", optimize=True, compress_level=6)
-            png_bytes = png_buffer.getvalue()
-            size_kb = len(png_bytes) / 1024
-
-            # Iteratively compress until target size is reached
-            compression_iterations = 0
-            while size_kb > MAX_SIZE_KB and compression_iterations < MAX_ITERATIONS:
-                compression_iterations += 1
-                logger.info(
-                    "   Compressing (iteration %d): %.0fKB -> <%dKB",
-                    compression_iterations,
-                    size_kb,
-                    MAX_SIZE_KB,
-                )
-                img = img.resize(
-                    (img.width // 2, img.height // 2), Image.Resampling.LANCZOS
-                )
-                png_buffer = io.BytesIO()
-                img.save(png_buffer, format="PNG", optimize=True, compress_level=9)
-                png_bytes = png_buffer.getvalue()
-                size_kb = len(png_bytes) / 1024
-
-            if size_kb <= MAX_SIZE_KB:
-                logger.info(
-                    "   Compressed to %.0fKB (%dx%d) in %d iteration(s)",
-                    size_kb,
-                    img.width,
-                    img.height,
-                    compression_iterations,
-                )
-            else:
-                logger.warning(
-                    "   Could not compress below %dKB after %d iterations (final: %.0fKB)",
-                    MAX_SIZE_KB,
-                    MAX_ITERATIONS,
-                    size_kb,
-                )
-
-            images.append(
-                {
-                    "image_bytes": png_bytes,
-                    "width": img.width,
-                    "height": img.height,
-                    "format": "png",
-                    "size_kb": size_kb,
-                }
-            )
+            image = prepare_image_for_vlm(image_blob)
+            images.append(image)
 
             logger.debug(
                 "Extracted image %d from slide %d: %dx%d, %.1fKB",
                 shape_index + 1,
                 slide_num,
-                img.width,
-                img.height,
-                size_kb,
+                image["width"],
+                image["height"],
+                image["size_kb"],
             )
 
         except Exception as e:
