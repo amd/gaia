@@ -296,4 +296,26 @@ describe('a persisted policy block after reload', () => {
         // A reload replays history; it must not re-raise the toast.
         expect(toast()).toBeNull();
     });
+
+    it('says the receipt is unavailable when the saved block has none', async () => {
+        const reply = {
+            id: 2, session_id: SESSION.id, role: 'assistant', content: 'Blocked.',
+            created_at: '2026-06-10T00:00:02Z', rag_sources: null,
+            agent_steps: [{
+                id: 1, type: 'policy_alert', label: 'Policy blocked write_file',
+                tool: 'write_file', decision: 'BLOCK', reason: 'Writes are disabled.',
+                ruleIds: [], active: false, success: false, timestamp: 1,
+            }],
+        };
+        mockedApi.getMessages.mockResolvedValue({ messages: [reply] as never, total: 1 });
+
+        render(<Harness />);
+
+        const card = await waitFor(() => {
+            const el = document.querySelector('.flow-policy-alert') as HTMLElement | null;
+            expect(el).not.toBeNull();
+            return el!;
+        });
+        expect(within(card).getByText('Receipt unavailable')).toBeInTheDocument();
+    });
 });
