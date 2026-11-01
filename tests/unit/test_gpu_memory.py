@@ -249,6 +249,8 @@ class TestLinuxSplit:
         result = gm.describe(linux_igpu(16, 7.75), LOCAL)
         assert result["setting"]["max_gb"] == 0
         assert result["presets"] == []
+        # No steps that would set the GPU to 0 GB.
+        assert result["guided_steps"] == [] and result["guided_value"] is None
 
     def test_128gb_reports_the_split_and_keeps_16gb_for_the_cpu(self, box):
         result = gm.describe(box.info, LOCAL)
@@ -310,8 +312,9 @@ class TestLinuxSplit:
         assert gm.gb_for(gm.pages_for(96)) == pytest.approx(96, abs=1e-3)
         steps = gm.describe(box.info, LOCAL, setting_gb=96)["guided_steps"]
         assert any("pages_limit=23437500" in s for s in steps)
-        # amd-ttm counts GiB: 96 GB is 89.4 GiB.
-        assert any("counts in GiB: amd-ttm --set 89.4" in s for s in steps)
+        assert gm.describe(box.info, LOCAL, setting_gb=96)["guided_value"] == (
+            "23437500"
+        )
 
     def test_guided_steps_never_render_a_starving_value(self, box):
         with pytest.raises(gm.OutOfRange):
@@ -535,6 +538,149 @@ class TestAfterRestart:
         assert result["revert"]["available"] is True
 
 
+class TestTheSplitAddsUp:
+    """cpu_gb is memory the GPU can never use, so the two add up to the total."""
+
+    @pytest.mark.parametrize("total,gtt", [(32, 15.5), (64, 31.5), (128, 62.5)])
+    def test_linux(self, box, total, gtt):
+        result = gm.describe(linux_igpu(total, gtt), LOCAL)
+        self.check(result)
+
+    @pytest.mark.parametrize(
+        "physical,carve", [("32.00 GB", 10.0), ("64.00 GB", 16.0), ("128.00 GB", 0.5)]
+    )
+    def test_windows(self, box, windows, physical, carve):
+        box.info = {**WINDOWS_IGPU, "Physical Memory": physical}
+        windows["gb"] = carve
+        self.check(gm.describe(box.info, LOCAL))
+
+    @staticmethod
+    def check(result):
+        assert result["gpu_gb"] + result["cpu_gb"] == pytest.approx(
+            result["total_gb"], abs=0.11
+        )
+        # Every offered target leaves the CPU at least the reserve.
+        for p in result["presets"]:
+            assert result["total_gb"] - p["gpu_gb"] >= result["reserve_gb"] - 0.05
+
+    def test_shot_57_no_longer_offers_a_target_that_breaks_the_reserve(
+        self, box, windows
+    ):
+        # 32 GiB Windows PC with a ~10 GiB carve-out: GPU 22 GB, CPU 12 GB.
+        box.info = {**WINDOWS_IGPU, "Physical Memory": "32.00 GB"}
+        windows["gb"] = 9.6
+        result = gm.describe(box.info, LOCAL)
+        assert result["cpu_gb"] < result["reserve_gb"]
+        assert result["presets"] == [] and result["show_in_setup"] is False
+        with pytest.raises(gm.OutOfRange):
+            gm.record_pending(16)
+
+
+def windows_igpu(physical_gib: int, vram_gib=None, shared_gib=None) -> dict:
+    """Windows /system-info; with *vram_gib*, Lemonade reports the split itself."""
+    gpu = dict(WINDOWS_IGPU["devices"]["amd_gpu"][0])
+    if vram_gib is not None:
+        gpu["vram_gb"] = vram_gib
+        gpu["virtual_mem_gb"] = shared_gib or 0.0
+    return {"Physical Memory": f"{physical_gib}.00 GB", "devices": {"amd_gpu": [gpu]}}
+
+
+#: (os, /system-info, Windows driver carve-out in GiB) across the sizes GAIA meets.
+SWEEP = (
+    [
+        ("linux", linux_igpu(total, gtt), None)
+        for total, gtt in [
+            (16, 7.75),
+            (32, 15.5),
+            (48, 23.75),
+            (64, 16),
+            (64, 31.5),
+            (128, 30),
+            (128, 62.5),
+            (128, 110),
+        ]
+    ]
+    + [
+        ("windows", windows_igpu(physical), carve)
+        for physical in (32, 64, 128)
+        for carve in (0.5, 8, 16, 48, 96)
+        if carve < physical
+    ]
+    + [
+        ("windows", windows_igpu(32, 8, 12), None),
+        ("windows", windows_igpu(64, 16, 24), None),
+    ]
+)
+
+
+@pytest.fixture(params=SWEEP, ids=lambda c: f"{c[0]}-{c[1]['Physical Memory']}-{c[2]}")
+def swept(request, box, monkeypatch):
+    os_name, info, carve = request.param
+    box.os = os_name
+    box.info = info
+    monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda n: carve or 0.0)
+    return gm.describe(info, LOCAL)
+
+
+class TestEveryOfferIsAccepted:
+    def test_presets_and_fit_points_pass_validation(self, swept):
+        limits = swept["setting"]
+        offers = [p["setting_gb"] for p in swept["presets"]] + [
+            m["fits_at_setting_gb"]
+            for m in swept["models"]
+            if m["fits_at_setting_gb"] is not None
+        ]
+        for value in offers:
+            assert gm._check_range(value, limits["min_gb"], limits["max_gb"]) == value
+            assert value > limits["current_gb"]
+
+    def test_no_steps_that_would_lower_the_setting(self, swept):
+        if not swept["presets"]:
+            assert swept["guided_steps"] == [] and swept["guided_value"] is None
+
+    def test_hide_rule_matches_unlocks(self, swept):
+        for m in swept["models"]:
+            in_some_preset = any(m["id"] in p["unlocks"] for p in swept["presets"])
+            benefits = not m["fits_now"] and m["fits_at_setting_gb"] is not None
+            assert in_some_preset == benefits, m
+
+    def test_the_split_adds_up_and_offers_keep_the_reserve(self, swept):
+        assert swept["gpu_gb"] + swept["cpu_gb"] == pytest.approx(
+            swept["total_gb"], abs=0.11
+        )
+        for p in swept["presets"]:
+            assert swept["total_gb"] - p["gpu_gb"] >= swept["reserve_gb"] - 0.05
+
+
+class TestNothingToOffer:
+    def test_32gb_windows_at_the_default_carve_out(self, box, windows):
+        box.info = windows_igpu(32)
+        windows["gb"] = 0.5
+        result = gm.describe(box.info, LOCAL)
+        assert result["setting"]["max_gb"] < result["setting"]["min_gb"]
+        assert result["presets"] == []
+        assert result["guided_steps"] == [] and result["guided_value"] is None
+
+    def test_64gb_windows_already_above_the_cap_is_not_told_to_lower_it(
+        self, box, windows
+    ):
+        box.info = windows_igpu(64)
+        windows["gb"] = 48.0
+        result = gm.describe(box.info, LOCAL)
+        assert result["presets"] == []
+        assert result["guided_steps"] == [] and result["guided_value"] is None
+
+    def test_32gb_windows_when_lemonade_reports_the_split(self, box, windows):
+        box.info = windows_igpu(32, 8, 12)
+        result = gm.describe(box.info, LOCAL)
+        assert result["presets"] == []
+        assert result["guided_steps"] == [] and result["guided_value"] is None
+
+    def test_asking_for_a_value_still_renders_its_steps(self, box):
+        result = gm.describe(box.info, LOCAL, setting_gb=96)
+        assert result["guided_value"] == str(gm.pages_for(96))
+
+
 class TestEveryNumberIsTheSameUnit:
     @pytest.mark.parametrize(
         "total,gtt", [(16, 7.75), (32, 15.5), (48, 23.75), (64, 31.5), (128, 62.5)]
@@ -731,11 +877,32 @@ class TestWindows:
         steps = " ".join(result["guided_steps"])
         assert "Performance > Tuning" in steps and "BIOS" in steps
 
-    def test_amd_software_steps_are_in_gib_and_say_so(self, box, windows):
+    def test_one_value_in_amd_softwares_own_units(self, box, windows):
+        result = gm.describe(box.info, LOCAL, setting_gb=64)
+        steps = result["guided_steps"]
+        # 64 GB is 59.6 GiB, which AMD Software rounds up and shows as "60 GB".
+        assert result["guided_value"] == "60"
+        assert sum(" 60 GB" in s for s in steps) == 1
+        assert not any("GiB" in s for s in steps)
+        # The GPU total GAIA shows includes Windows' shared memory.
+        assert any("shares with the GPU" in s for s in steps)
+
+    def test_the_explanation_names_the_gpu_total_for_that_setting(self, box, windows):
+        result = gm.describe(box.info, LOCAL, setting_gb=64)
+        total = round(64 + (result["total_gb"] - 64) / 2)
+        assert any(f"{total} GB GPU total" in s for s in result["guided_steps"])
+
+    def test_no_gib_anywhere_in_the_response(self, box, windows):
+        assert "GiB" not in json.dumps(gm.describe(box.info, LOCAL))
+
+    def test_without_shared_memory_the_reason_is_the_units(self, box, windows):
+        # Lemonade reporting the carve-out itself and no shared memory.
+        gpu = {**WINDOWS_IGPU["devices"]["amd_gpu"][0], "vram_gb": 8.0}
+        gpu["virtual_mem_gb"] = 0.0
+        box.info = {**WINDOWS_IGPU, "devices": {"amd_gpu": [gpu]}}
         steps = gm.describe(box.info, LOCAL, setting_gb=64)["guided_steps"]
-        # 64 GB is 59.6 GiB; AMD Software's next whole value is 60.
-        assert any("set it to 60 GiB" in s and "64 GB" in s for s in steps)
-        assert any("60 GiB (shown as 60 GB)" in s for s in steps)
+        assert not any("shares with the GPU" in s for s in steps)
+        assert any("a little larger than GAIA's" in s for s in steps)
 
     def test_projection_matches_model_fit(self, box, windows):
         result = gm.describe(box.info, LOCAL)
@@ -771,7 +938,7 @@ class TestWindows:
     def test_following_the_steps_exactly_counts(self, box, windows, target):
         steps = gm.record_pending(target)["guided_steps"]
         gib = math.ceil(target * 1e9 / 2**30)
-        assert any(f"set it to {gib} GiB" in s for s in steps)
+        assert any(f"set it to {gib} GB, as AMD Software shows it" in s for s in steps)
         box.reboot()
         windows["gb"] = float(gib)  # what the driver reads after the restart
         assert (
@@ -818,7 +985,10 @@ class TestWindows:
         box.info = {**WINDOWS_IGPU, "Physical Memory": "32.00 GB"}
         windows["gb"] = 4.0
         result = gm.describe(box.info, LOCAL)
-        assert result["setting"]["max_gb"] == 18  # 34.4 GB less the 16 GB reserve
+        # Windows shares half of what the carve-out leaves, so keeping 16 GB the
+        # GPU can never use caps the setting at 34.4 - 32 = 2 GB: nothing to offer.
+        assert result["setting"]["max_gb"] == 2
+        assert result["presets"] == []
         assert result["show_in_setup"] is False
 
 

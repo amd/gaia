@@ -234,13 +234,15 @@ class GatewayState:
     non_streaming_models: List[str] = field(default_factory=list)
     # Native tool calling, learned by one probe per model when the catalog's
     # labels don't say: the AMD gateway labels no model ``tool-calling``, yet
-    # most take ``tools=``. Running a capable model on the in-text JSON format
-    # costs it accuracy on every tool call.
+    # most take ``tools=``.
     tool_calling_models: List[str] = field(default_factory=list)
     no_tool_calling_models: List[str] = field(default_factory=list)
     # When a model's tool-calling probe last failed, ``{model_id: "<UTC ISO>"}``,
     # so a down gateway is not re-probed at every start.
     tool_calling_probe_failures: Dict[str, str] = field(default_factory=dict)
+    # Native-capable models seen writing their own tool-call markup on the
+    # in-text format; only these get ``tools=``, the rest stay in-text.
+    own_tool_markup_models: List[str] = field(default_factory=list)
     # Models whose last call came back "not found" (HTTP 404) from the cloud
     # provider, keyed by id: ``{"status": 404, "at": "<UTC ISO time>"}``. A
     # later successful call clears the entry. Nothing switches models on it —
@@ -266,6 +268,12 @@ class GatewayState:
                 f"Gateway settings at {target} could not be read: {e}. "
                 f"Delete the file to start fresh, then re-run `gaia gateway install`."
             ) from e
+        if not isinstance(raw, dict):
+            raise GatewayError(
+                f"Gateway settings at {target} hold a JSON "
+                f"{type(raw).__name__}, not an object. Fix the file or delete it "
+                f"to start fresh, then re-run `gaia gateway install`."
+            )
         return cls(
             base_url=raw.get("base_url") or DEFAULT_GATEWAY_BASE_URL,
             enabled_models=list(raw.get("enabled_models") or []),
@@ -277,6 +285,7 @@ class GatewayState:
                 str(k): str(v)
                 for k, v in (raw.get("tool_calling_probe_failures") or {}).items()
             },
+            own_tool_markup_models=list(raw.get("own_tool_markup_models") or []),
             unavailable_models={
                 str(k): dict(v)
                 for k, v in (raw.get("unavailable_models") or {}).items()
@@ -297,6 +306,7 @@ class GatewayState:
             "tool_calling_probe_failures": dict(
                 sorted(self.tool_calling_probe_failures.items())
             ),
+            "own_tool_markup_models": sorted(self.own_tool_markup_models),
             "unavailable_models": dict(sorted(self.unavailable_models.items())),
         }
         # Another GAIA process reading mid-write must never see half a file.
