@@ -311,7 +311,7 @@ func (m Model) checklistLines(labelW, lineW, w int) (checklist, remedy []string,
 			bodyStyle = dimStyle
 		}
 		if row.State == StateChecking {
-			line = m.spin.View() + " " + line
+			line = m.spinPrefix() + line
 		}
 		if row.State == StatePending && row.Detail != "" {
 			line = row.Line + "  " + row.Detail
@@ -328,7 +328,7 @@ func (m Model) checklistLines(labelW, lineW, w int) (checklist, remedy []string,
 		switch {
 		case provisioning && row.Key == m.provision.Row:
 			markerText, st, bodyStyle = StateChecking.Marker(), keyStyle, labelStyle
-			line = m.spin.View() + " " + lowerFirst(m.provision.Text) + "…"
+			line = m.spinPrefix() + lowerFirst(m.provision.Text) + "…"
 		case provisioning && m.provisionDone[row.Key]:
 			markerText, st, bodyStyle = StateOK.Marker(), okStyle, dimStyle
 			line = "done"
@@ -371,7 +371,7 @@ func (m Model) trailerLines(w int) []string {
 		}
 		return []string{
 			"",
-			pad(noteStyle.Render(truncate(m.spin.View()+" "+m.progressLine(), w-2*indentW))),
+			pad(noteStyle.Render(truncate(m.spinPrefix()+m.progressLine(), w-2*indentW))),
 			pad(dimStyle.Render(leaving)),
 		}
 	case m.HeldForReview() && m.rep.Ready():

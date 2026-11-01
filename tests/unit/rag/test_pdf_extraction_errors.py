@@ -101,12 +101,11 @@ def _write_owner_only_pdf(path: Path, text: str) -> None:
     This is how permission-restricted PDFs (e.g. most SEC filings) ship: every
     viewer opens them without a prompt, but pypdf still reports is_encrypted.
     """
-    pymupdf = pytest.importorskip("pymupdf")
-    doc = pymupdf.open()
-    doc.new_page().insert_text((72, 72), text)
+    canvas = pytest.importorskip("reportlab.pdfgen.canvas")
     plain = path.with_suffix(".plain.pdf")
-    doc.save(str(plain))
-    doc.close()
+    c = canvas.Canvas(str(plain))
+    c.drawString(72, 720, text)
+    c.save()
 
     writer = PdfWriter(clone_from=str(plain))
     writer.encrypt(user_password="", owner_password="owner-secret")

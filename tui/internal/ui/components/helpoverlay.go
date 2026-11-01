@@ -128,7 +128,10 @@ func renderCommandsSection(text string, commands []string) string {
 	for i := 0; i < len(lines); i++ {
 		if strings.HasPrefix(lines[i], helpCommandsLabel) {
 			out = append(out, wrapCommandLines(commands)...)
-			i++ // skip the fixed layout's second Commands line
+			// Skip the fixed layout's own continuation lines.
+			for i+1 < len(lines) && strings.HasPrefix(lines[i+1], helpCommandsIndent) {
+				i++
+			}
 			continue
 		}
 		out = append(out, lines[i])
@@ -286,11 +289,11 @@ const chatHelpText = `  GAIA Chat
 
   Commands    /help /clear /full-access /slack /setup
               /memory /model /provider /gateway /agents
+              /models /gpu
   /cost       Session spend · /cost help for rates
   /update     New GAIA release? · /update now
-  /           On an empty line, browse commands —
-              hover/click or ↑/↓ to pick, Enter or
-              click to run, Esc or click out to close
+  /           Browse commands on an empty line: ↑/↓ or
+              click to pick, Enter to run, Esc to close
 
   Scroll        ↑ / ↓ line · PgUp/PgDn page
   Home / End    Top / bottom, if the composer is

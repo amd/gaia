@@ -223,7 +223,6 @@ class TestAuth:
             "tool_calling_models",
             "no_tool_calling_models",
             "tool_calling_probe_failures",
-            "own_tool_markup_models",
             "unavailable_models",
         }
 

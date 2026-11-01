@@ -114,7 +114,12 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
         kv_cache_for,
         lemonade_server_version,
     )
-    from gaia.llm.model_fit import ModelFitError, check_fit, check_server_supports
+    from gaia.llm.model_fit import (
+        ModelFitError,
+        check_fit,
+        check_server_supports,
+        required_memory_gb,
+    )
 
     catalog: Dict[str, float] = {}
     server_version = None
@@ -132,10 +137,13 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
         fits: Optional[bool] = None
         reason = None
         if capacity is not None and size:
-            verdict = check_fit(
-                size, capacity, kv_cache_for(mr, capacity) if mr else 0.0
-            )
+            kv = kv_cache_for(mr, capacity) if mr else 0.0
+            verdict = check_fit(size, capacity, kv)
             fits, reason = verdict.fits, verdict.reason or None
+            need = required_memory_gb(size, kv)
+            if need > capacity.memory_gb:
+                # The memory reason in the plan's decimal GB, like its numbers.
+                reason = model_choice.memory_reason(need, capacity)
         if fits and client is not None and mr and mr.min_lemonade_version:
             supported = check_server_supports(mr.min_lemonade_version, server_version)
             if not supported.fits:
@@ -194,13 +202,11 @@ def _profile_models(profile: str, client) -> List[str]:
     return client.get_required_models(config["agent"])
 
 
-def _display_name(model_id: str, entry: Optional[Dict[str, Any]]) -> str:
-    from gaia.llm.lemonade_client import find_model_requirement
+def _display_name(model_id: str) -> str:
+    """The name the model picker and the sidebar show, so a model reads the same everywhere."""
+    from gaia.ui.local_models import friendly_name
 
-    mr = find_model_requirement(model_id)
-    if mr and mr.display_name:
-        return mr.display_name
-    return str((entry or {}).get("name") or model_id.removeprefix("user."))
+    return friendly_name(model_id)
 
 
 def _catalog(
@@ -220,6 +226,7 @@ def _catalog(
         INIT_PROFILES,
         bytes_already_on_disk,
         is_embedding_model_id,
+        remaining_download_gb,
     )
 
     same = model_choice.ids_match
@@ -234,7 +241,15 @@ def _catalog(
         return any(same(model_id, m) for m in ids)
 
     order: List[str] = []
-    for model_id in [*planned, *_known_chat_models()]:
+    known = [*planned, *_known_chat_models()]
+    # GAIA's own models: a Lemonade-only model the user made the chat model is
+    # planned, but stays in the Lemonade list where they found it.
+    gaia_known = [
+        *(m for m in planned if not same(m, chat_id)),
+        *(INIT_PROFILES[profile]["models"] or []),
+        *_known_chat_models(),
+    ]
+    for model_id in known:
         if not listed(model_id, order):
             order.append(model_id)
     for e in lemonade_list:
@@ -263,18 +278,15 @@ def _catalog(
         if not isinstance(full, (int, float)):
             full = _registry_size(model_id)
         partial_gb = 0.0 if downloaded else round((on_disk.get(model_id) or 0) / 1e9, 2)
-        if downloaded:
-            remaining: Optional[float] = 0.0
-        elif full is None:
-            remaining = None
-        else:
-            remaining = round(max(0.0, float(full) - partial_gb), 2)
+        remaining: Optional[float] = (
+            0.0 if downloaded else remaining_download_gb(full, on_disk.get(model_id))
+        )
         is_planned = listed(model_id, planned)
         roles = model_choice.roles_for(model_id, chat_id)
         catalog.append(
             {
                 "id": model_id,
-                "name": _display_name(model_id, entry),
+                "name": _display_name(model_id),
                 "roles": roles,
                 "purpose": model_choice.purpose(roles),
                 "if_skipped": (
@@ -294,6 +306,8 @@ def _catalog(
                     or listed(model_id, base)
                 ),
                 "planned": is_planned,
+                # GAIA's own model, not one only this Lemonade has.
+                "gaia_model": listed(model_id, gaia_known),
                 "selected": listed(model_id, selected),
                 "skipped": model_choice.is_skipped(model_id, skipped),
                 "chat_choice": not is_embedding_model_id(model_id)
@@ -402,9 +416,15 @@ def build_plan(
         "chat_model": chat,
         "recommended_model": recommended,
         "decided_after_server": client is None and not chat["user_set"],
-        "memory_gb": round(capacity.memory_gb) if capacity else None,
+        "memory_gb": (
+            round(model_choice.to_decimal_gb(capacity.memory_gb)) if capacity else None
+        ),
         "memory_source": capacity.memory_source if capacity else None,
-        "capacity_gb": round(capacity.memory_gb, 1) if capacity else None,
+        "capacity_gb": (
+            round(model_choice.to_decimal_gb(capacity.memory_gb), 1)
+            if capacity
+            else None
+        ),
         "disk": disk,
         "download_gb": (
             round(sum(s for s in sizes if s), 1)
@@ -420,13 +440,34 @@ def build_plan(
 
 
 def run_disk_warning(
-    profile: str = PROFILE, skip_chat_model: bool = False
+    profile: str = PROFILE,
+    skip_chat_model: bool = False,
+    extra_models: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """The low-disk warning for the selected downloads, or None when they fit."""
-    plan = build_plan(profile, skip_chat_model)
+    plan = build_plan(profile, skip_chat_model, extra_models)
     return model_choice.disk_shortfall(
         [(m["id"], m["size_gb"]) for m in plan["models"]], plan["disk"]
     )
+
+
+def check_extra_models(model_ids: List[str]) -> List[str]:
+    """*model_ids* as the catalog names them; raises for one nobody has."""
+    if not model_ids:
+        return []
+    catalog = build_plan()["catalog"]
+    out = []
+    for model_id in model_ids:
+        entry = next(
+            (e for e in catalog if model_choice.ids_match(e["id"], model_id)), None
+        )
+        if entry is None:
+            raise UnknownModel(
+                f"{model_id} is not a model GAIA knows or one in this Lemonade "
+                "Server, so setup can't download it."
+            )
+        out.append(entry["id"])
+    return out
 
 
 def _require_client(action: str):
