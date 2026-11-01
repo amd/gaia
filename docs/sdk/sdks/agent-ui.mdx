@@ -1559,7 +1559,11 @@ Used to reach the UI from a phone.
   <Accordion title="GET /api/tunnel/status">
     Current tunnel status — active/inactive, public URL, provider, uptime, and
     `device`: `{"name": "iPhone", "lastSeen": "..."}` for the latest
-    authenticated request through the tunnel, or null.
+    authenticated request through the tunnel, or null. When ngrok is not
+    installed, `reason` is `"ngrok_not_installed"` and `installCommands` lists
+    this OS's install commands (empty where none is known); `error` still
+    carries the same instructions as text. Both `start` and `status` return
+    this shape.
   </Accordion>
 </AccordionGroup>
 

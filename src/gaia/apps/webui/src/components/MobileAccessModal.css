@@ -43,6 +43,10 @@
     background: var(--danger);
 }
 
+.tunnel-status .status-dot.setup {
+    background: var(--accent-yellow);
+}
+
 .tunnel-status .status-dot.inactive {
     background: var(--text-muted);
 }
@@ -80,6 +84,41 @@
 .tunnel-error a {
     color: var(--danger);
     text-decoration: underline;
+}
+
+/* ngrok not installed: a neutral one-time setup step */
+.tunnel-setup {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.tunnel-setup p {
+    margin: 0;
+}
+
+.tunnel-setup-title {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.tunnel-setup-command input {
+    font-family: var(--font-mono);
+}
+
+.tunnel-setup-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent);
+    font-size: var(--fs-label);
 }
 
 /* QR Code area */
