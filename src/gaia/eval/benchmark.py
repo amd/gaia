@@ -753,6 +753,36 @@ def _verify_ctx_readback(client: Any, model_id: str, requested_ctx: int) -> int:
     return readback
 
 
+def context_overflow_detail(
+    error_text: str, ctx_size: int | None, limit: int
+) -> dict[str, Any] | None:
+    """Explain an experiment that failed because its prompt outgrew the window.
+
+    Such a row has no measurement at all, so it must not read like a quality
+    result: it carries ``error_kind="context_overflow"``, the token counts the
+    backend reported (when it did), and a ``remedy`` naming ``--ctx-size``.
+    Returns ``None`` for every other failure.
+    """
+    from gaia.agents.base.context_eviction import overflow_numbers
+    from gaia.llm.lemonade_client import is_context_overflow_error
+
+    if not is_context_overflow_error(error_text):
+        return None
+    detail: dict[str, Any] = {"error_kind": "context_overflow"}
+    numbers = overflow_numbers(error_text)
+    if numbers:
+        detail["requested_tokens"], detail["available_tokens"] = numbers
+        need = f"needed {numbers[0]} tokens but the window is {numbers[1]}"
+    else:
+        need = f"outgrew the {ctx_size or 'loaded'}-token window"
+    detail["remedy"] = (
+        f"Context overflow, not a quality result: triaging {limit} emails {need}. "
+        "Re-run with a smaller --limit, or a larger --ctx-size (e.g. 32768, the "
+        "envelope max — not comparable to a 16384 baseline)."
+    )
+    return detail
+
+
 def _close_agent_db(agent: Any) -> None:
     """Release ``agent``'s SQLite state.db, tolerating agents with none.
 
@@ -913,7 +943,12 @@ def run_benchmark(
                 )
                 row["status"] = "ERRORED"
                 row["error"] = f"{type(exc).__name__}: {exc}"
+                overflow = context_overflow_detail(row["error"], stamp_ctx, limit)
+                if overflow:
+                    row.update(overflow)
                 print(f"[ERRORED] experiment {exp}/{experiments}: {row['error']}")
+                if overflow:
+                    print(f"[CTX] {overflow['remedy']}")
                 results.append(row)
                 _close_agent_db(agent)
                 continue

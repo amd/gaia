@@ -2544,7 +2544,7 @@ gaia eval benchmark [OPTIONS]
 | `--output-dir` | str | — | Write `scorecard.json` / `summary.md` / `variance.json` |
 | `--compare` | path | — | Compare throughput against a saved baseline (non-gating for throughput; a ctx-window mismatch vs the baseline is a hard error) |
 | `--save-baseline` | flag | off | Save this run's scorecard as the throughput baseline |
-| `--ctx-size` | int | `16384` | Exact ctx window to pin the model load to (#1892 envelope: 16384 target / 32768 max). Verified by readback and stamped into `scorecard.json` / `quality.json`; values above the envelope max are allowed but warned loudly |
+| `--ctx-size` | int | `16384` | Exact ctx window to pin the model load to (#1892 envelope: 16384 target / 32768 max). Verified by readback and stamped into `scorecard.json` / `quality.json`; values above the envelope max are allowed but warned loudly. A run whose triage prompt outgrows the window exits 1 with the token counts instead of reporting 0% accuracy |
 
 <CodeGroup>
 ```bash Benchmark the primary model

@@ -264,6 +264,7 @@ gaia eval benchmark \
   --mbox-path tests/fixtures/email/synthetic_inbox.mbox \
   --ground-truth tests/fixtures/email/ground_truth.json \
   --limit 220 \
+  --ctx-size 16384 \
   --output-dir /tmp/email-eval
 
 PYTHONPATH="$(pwd)" \
@@ -273,6 +274,11 @@ python hub/agents/email/python/packaging/gen_scorecard.py \
 ```
 
 This writes `hub/agents/email/npm/SCORECARD.md` in place.
+
+Pass the same `--ctx-size` as the committed card's `ctx_size`, or the new card is not
+comparable to it. If the triage prompt outgrows that window, the benchmark exits 1 with
+`Context overflow, not a quality result` and the token counts. It does not write a
+scorecard with 0% accuracy.
 
 ## Release gate
 

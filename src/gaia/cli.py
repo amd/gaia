@@ -5918,6 +5918,19 @@ Let me know your answer!
                     ctx_size=args.ctx_size,
                 )
 
+            # An overflowed run measured nothing; summarizing it would print a
+            # 0.0 accuracy that reads like a quality collapse.
+            overflowed = [
+                r for r in results if r.get("error_kind") == "context_overflow"
+            ]
+            if overflowed:
+                print(
+                    f"[ERROR] {len(overflowed)} of {len(results)} experiment(s) hit "
+                    f"the context window. {overflowed[0]['remedy']}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
             run_id = f"bench-{args.model.replace('/', '-').lower()}"
             summary = summarize_benchmark(results, run_id=run_id)
             perf = summary["scorecard"]["performance"]
