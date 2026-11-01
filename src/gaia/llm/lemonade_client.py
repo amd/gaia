@@ -2031,16 +2031,22 @@ def defang_harmony_tokens(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return out
 
 
+_TRAILING_ASSISTANT_CONTINUATION = (
+    "Continue from the preceding assistant context and provide the next response."
+)
+
+
 def normalize_trailing_assistant_messages(
     messages: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Coalesce a trailing run of assistant messages into one request turn.
+    """Normalize an invalid assistant-only request suffix.
 
-    Some agent recovery paths append a synthetic assistant message immediately
-    after the model's assistant reply. llama-server rejects a request whose
-    message list ends with two or more assistant messages, so normalize only
-    that invalid suffix while leaving all user/tool ordering untouched.
-    The input is never mutated.
+    Recovery paths can append a synthetic assistant message immediately after
+    the model's assistant reply. llama-server rejects two or more assistant
+    messages at the end of a request, and thinking models also reject an
+    assistant prefill. Coalesce only that invalid suffix; the request boundary
+    adds a continuation user turn after the coalesced history. User/tool order
+    before the suffix is untouched and the input is never mutated.
     """
     trailing_start = len(messages)
     while trailing_start and messages[trailing_start - 1].get("role") == "assistant":
@@ -2076,7 +2082,18 @@ def normalize_trailing_assistant_messages(
         if all(isinstance(part, str) for part in text_parts):
             merged["content"] = "\n\n".join(text_parts)
         elif text_parts:
-            merged["content"] = text_parts
+            # OpenAI multimodal content is a flat list. Preserve existing
+            # parts and represent any text from a neighbouring turn as a text
+            # part instead of creating a nested list.
+            flattened: List[Any] = []
+            for part in text_parts:
+                if isinstance(part, list):
+                    flattened.extend(part)
+                elif isinstance(part, str):
+                    flattened.append({"type": "text", "text": part})
+                else:
+                    flattened.append(part)
+            merged["content"] = flattened
         else:
             merged["content"] = None
     if saw_reasoning:
@@ -5326,7 +5343,19 @@ class LemonadeClient:
             # device profile can change between calls, and the budget follows them.
             timeout = request_budget_seconds()
 
-        messages = normalize_trailing_assistant_messages(messages)
+        normalized_messages = normalize_trailing_assistant_messages(messages)
+        if normalized_messages is not messages:
+            self.log.debug(
+                "Coalesced %d trailing assistant messages before chat request",
+                len(messages) - len(normalized_messages) + 1,
+            )
+            messages = [
+                *normalized_messages,
+                {
+                    "role": "user",
+                    "content": _TRAILING_ASSISTANT_CONTINUATION,
+                },
+            ]
         if uses_harmony_format(model):
             messages = defang_harmony_tokens(messages)
         if self.cloud_model_provider(model):
