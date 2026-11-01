@@ -172,6 +172,8 @@ type ChatModel struct {
 	// whether it is on screen.
 	modelSetup     *modelsetup.Model
 	modelSetupOpen bool
+	// setupChoices are first-run model choices left with esc, for /setup.
+	setupChoices *modelsetup.Choices
 	// gpuApplies is whether /gpu means anything on this PC (an integrated GPU).
 	gpuApplies bool
 	// agentsPanel is the in-chat "/agents" listing (nil unless open). It only

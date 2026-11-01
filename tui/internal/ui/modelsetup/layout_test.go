@@ -393,3 +393,61 @@ func TestRateIgnoresAResetAndHoldsUntilTenSeconds(t *testing.T) {
 		t.Fatal("a restarted pull kept the old ETA")
 	}
 }
+
+// The ETA follows the measured speed both ways, smoothed but never pinned to
+// an early guess: one slow first second can't leave "37 min" on screen while
+// the download is minutes from done.
+func TestRateETATracksTheMeasuredSpeed(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	const total = int64(30e9)
+	type step struct {
+		secs int
+		bps  int64
+	}
+	for _, tc := range []struct {
+		name  string
+		start int64 // bytes the first read reports (a resume)
+		jump  int64 // bytes that appear in one read before the speed (on disk)
+		steps []step
+		at    int // seconds after the start to check
+		bps   int64
+	}{
+		{name: "slow first second then fast", steps: []step{{1, 1e6}, {40, 150e6}}, at: 12, bps: 150e6},
+		{name: "fast then slow", steps: []step{{20, 150e6}, {60, 20e6}}, at: 60, bps: 20e6},
+		{name: "slow then fast", steps: []step{{30, 10e6}, {40, 150e6}}, at: 55, bps: 150e6},
+		{name: "resume after cancel", jump: 13_700_000_000, steps: []step{{30, 150e6}}, at: 12, bps: 150e6},
+		{name: "resume that reports its bytes at once", start: 13_700_000_000, steps: []step{{30, 150e6}}, at: 12, bps: 150e6},
+		{name: "retry after failure", start: 18e9, jump: -4_300_000_000, steps: []step{{30, 150e6}}, at: 13, bps: 150e6},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var r rate
+			now := t0
+			done := tc.start
+			r.observe(now, done, total)
+			if tc.jump != 0 {
+				now = now.Add(time.Second)
+				done += tc.jump
+				r.observe(now, done, total)
+			}
+			sec := 0
+			for _, st := range tc.steps {
+				for i := 0; i < st.secs && sec < tc.at; i++ {
+					now = now.Add(time.Second)
+					done += st.bps
+					sec++
+					r.observe(now, done, total)
+					if r.speed > 2*150e6 {
+						t.Fatalf("speed %.0f MB/s at %ds: bytes already on disk counted as speed", r.speed/1e6, sec)
+					}
+				}
+			}
+			if !r.showETA(now) {
+				t.Fatalf("no ETA at %ds", sec)
+			}
+			want := time.Duration(float64(total-done) / float64(tc.bps) * float64(time.Second))
+			if r.eta < want*7/10 || r.eta > want*13/10 {
+				t.Fatalf("ETA %v at %ds, want about %v", r.eta.Round(time.Second), sec, want.Round(time.Second))
+			}
+		})
+	}
+}

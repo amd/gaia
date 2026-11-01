@@ -23,6 +23,7 @@ type rowEntry struct {
 	skipped     bool
 	downloaded  bool
 	partial     bool
+	partialGB   float64  // already on disk from an interrupted pull
 	leftGB      *float64 // still to download; nil when unknown
 	fullGB      float64
 	fits        *bool
@@ -47,6 +48,7 @@ func entryFrom(e setupapi.CatalogEntry) rowEntry {
 		skipped:     e.Skipped,
 		downloaded:  e.IsDownloaded(),
 		partial:     e.Partial,
+		partialGB:   e.PartialGB,
 		leftGB:      e.SizeGB,
 		fits:        e.Fits,
 		needGB:      e.NeedGB,
@@ -341,22 +343,6 @@ func (s selection) wants(id string) bool {
 		}
 	}
 	return sameID(id, s.chat) && s.chat != ""
-}
-
-// gaveUp reports whether the user unticked every one of ids that started ticked.
-func (s selection) gaveUp(ids []string) bool {
-	started := false
-	for _, id := range ids {
-		for k := range s.initial {
-			if sameID(k, id) {
-				started = true
-				if s.wants(k) {
-					return false
-				}
-			}
-		}
-	}
-	return started
 }
 
 // dirty reports whether anything differs from what the backend has saved.

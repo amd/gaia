@@ -271,3 +271,29 @@ func TestAHiddenDownloadThatFailsIsNotCalledFinished(t *testing.T) {
 		})
 	}
 }
+
+// Leaving first-run setup with esc and coming back with /setup keeps the ticks.
+func TestSetupComesBackWithTheChoiceLeft(t *testing.T) {
+	api := setupFake()
+	api.P.Catalog[0] = setupapitest.Entry("Gemma-4-E4B-it-GGUF", []string{"chat", "vision"}, 5.97, false, true, true, setupapitest.Bool(true), 8, 32)
+	api.P.Catalog[1] = setupapitest.Entry("user.embeddinggemma-300m-GGUF", []string{"embedding"}, 0.33, false, true, true, setupapitest.Bool(true), 1, 32)
+	withSetupAPI(t, api)
+	m := gaiaTestModel(t)
+	updated, cmd := m.submit("/setup")
+	m = feedSetup(t, updated.(ChatModel), cmd)
+	if !strings.Contains(ansi.Strip(m.View()), "[x] embeddinggemma-300m") {
+		t.Fatalf("embedder not ticked to start:\n%s", ansi.Strip(m.View()))
+	}
+	for _, k := range []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeySpace, Runes: []rune{' '}}, {Type: tea.KeyEsc}} {
+		updated, cmd = m.Update(k)
+		m = feedSetup(t, updated.(ChatModel), cmd)
+	}
+	if m.modelSetupOpen {
+		t.Fatal("esc did not leave setup")
+	}
+	updated, cmd = m.submit("/setup")
+	m = feedSetup(t, updated.(ChatModel), cmd)
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "[ ] embeddinggemma-300m") {
+		t.Fatalf("the untick was lost on coming back:\n%s", view)
+	}
+}

@@ -10,9 +10,8 @@ import (
 
 // Rates and ETAs are smoothed on this side: the backend reports a 2 s window,
 // which jumps. The rules come from the setup spec: speed is a 5 s moving
-// average; the ETA appears only after 10 s of data and while bytes move; it
-// never counts down faster than real time; and a download with no new bytes
-// for 15 s says so, then after 60 s offers a retry.
+// average; the ETA appears only after 10 s of data and while bytes move; and a
+// download with no new bytes for 15 s says so, then after 60 s offers a retry.
 const (
 	speedWindow = 5 * time.Second
 	etaAfter    = 10 * time.Second
@@ -22,14 +21,15 @@ const (
 
 // rate follows one download (or the overall total) across status reads.
 type rate struct {
-	started   time.Time // first read that saw bytes move
-	lastAt    time.Time
-	lastBytes int64
-	movedAt   time.Time // last read whose bytes grew
-	speed     float64   // smoothed bytes per second
-	eta       time.Duration
-	etaAt     time.Time
-	hasETA    bool
+	started    time.Time // first read that saw bytes move; speed counts from here
+	startBytes int64
+	lastAt     time.Time
+	lastBytes  int64
+	movedAt    time.Time // last read whose bytes grew
+	speed      float64   // smoothed bytes per second
+	eta        time.Duration
+	etaAt      time.Time
+	hasETA     bool
 }
 
 // observe folds in one status read: bytes done of total at now.
@@ -44,36 +44,45 @@ func (r *rate) observe(now time.Time, done, total int64) {
 	}
 	delta := done - r.lastBytes
 	if delta < 0 {
-		// A resumed or restarted pull: start the average over.
+		// A restarted pull: start the average over.
 		*r = rate{lastAt: now, lastBytes: done, movedAt: now}
 		return
 	}
-	if delta > 0 {
-		if r.started.IsZero() {
-			r.started = r.lastAt
+	if r.started.IsZero() {
+		if delta > 0 {
+			// The first growth is the baseline, not a speed: a resumed pull
+			// reports the bytes already on disk in one jump.
+			r.started, r.startBytes, r.movedAt = now, done, now
 		}
+		r.lastAt, r.lastBytes = now, done
+		return
+	}
+	if delta > 0 {
 		r.movedAt = now
 	}
-	inst := float64(delta) / dt.Seconds()
-	alpha := 1 - math.Exp(-dt.Seconds()/speedWindow.Seconds())
-	if r.speed == 0 {
-		r.speed = inst
+	if since := now.Sub(r.started); since <= speedWindow {
+		// Too little data for a moving average: the mean since the start,
+		// so one slow first second doesn't linger.
+		r.speed = float64(done-r.startBytes) / since.Seconds()
 	} else {
+		inst := float64(delta) / dt.Seconds()
+		alpha := 1 - math.Exp(-dt.Seconds()/speedWindow.Seconds())
 		r.speed += alpha * (inst - r.speed)
 	}
 	r.lastAt, r.lastBytes = now, done
 	r.updateETA(now, total-done)
 }
 
-// updateETA moves the shown ETA toward the measured one without ever counting
-// down faster than the clock: a burst of speed can't make it leap.
+// updateETA moves the shown ETA toward the measured one, smoothed so it
+// doesn't jump with every read but free to move either way. Until it is shown
+// it simply tracks the measurement.
 func (r *rate) updateETA(now time.Time, left int64) {
 	if r.speed <= 0 || left <= 0 {
 		r.hasETA = false
 		return
 	}
 	target := time.Duration(float64(left) / r.speed * float64(time.Second))
-	if !r.hasETA {
+	if !r.hasETA || !r.showETA(now) {
 		r.eta, r.etaAt, r.hasETA = target, now, true
 		return
 	}
@@ -81,9 +90,6 @@ func (r *rate) updateETA(now time.Time, left int64) {
 	counted := r.eta - elapsed
 	k := math.Min(1, elapsed.Seconds()/speedWindow.Seconds())
 	next := counted + time.Duration(float64(target-counted)*k)
-	if next < counted {
-		next = counted
-	}
 	if next < 0 {
 		next = 0
 	}

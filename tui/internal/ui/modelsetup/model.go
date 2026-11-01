@@ -13,6 +13,7 @@ package modelsetup
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -64,8 +65,9 @@ type (
 	// FinishedMsg: first-run setup is done and the user pressed enter on the
 	// ready summary. The host re-checks and starts the agent.
 	FinishedMsg struct{}
-	// BackMsg: esc on the first screen of first-run setup.
-	BackMsg struct{}
+	// BackMsg: esc on the first screen of first-run setup. Choices are what
+	// the user had ticked, for the host to pass back as Options.Keep.
+	BackMsg struct{ Choices *Choices }
 	// ClosedMsg: /models or /gpu was closed. Downloading says downloads keep
 	// going in the background.
 	ClosedMsg struct{ Downloading bool }
@@ -88,6 +90,12 @@ type Options struct {
 	// these screens, so the count carries on rather than restarting. Zero
 	// means one: where GAIA runs.
 	StepsBefore int
+	// StepsTotal is the host's step count, so the header agrees with it.
+	// Zero means these screens are the last step.
+	StepsTotal int
+	// Keep is a choice the user made on an earlier visit, put back once the
+	// plan loads so leaving and coming back loses nothing.
+	Keep *Choices
 	// Now is the clock, for tests.
 	Now func() time.Time
 }
@@ -491,6 +499,10 @@ func (m Model) loaded(msg loadedMsg) (Model, tea.Cmd) {
 	}
 	m.loadErr = nil
 	m = m.withPlan(msg.plan, false)
+	if m.opts.Keep != nil {
+		m = m.applyChoices(*m.opts.Keep)
+		m.opts.Keep = nil
+	}
 	if !msg.plan.Lemonade.Reachable {
 		m.scr = scrNoServer
 		return m, nil
@@ -531,6 +543,41 @@ func anyDownloading(st setupapi.Status) bool {
 		}
 	}
 	return false
+}
+
+// Choices is the user's staged choice on "Choose your models".
+type Choices struct {
+	Ticked     map[string]bool
+	Chat       string
+	KeepTrying bool
+}
+
+func (m Model) choices() *Choices {
+	if m.plan == nil {
+		return nil
+	}
+	c := &Choices{Ticked: map[string]bool{}, Chat: m.sel.chat, KeepTrying: m.keepTry}
+	for id, v := range m.sel.ticked {
+		c.Ticked[id] = v
+	}
+	return c
+}
+
+// applyChoices puts back an earlier visit's choice on a fresh plan: models
+// the plan still lists, and a chat model that can still chat.
+func (m Model) applyChoices(c Choices) Model {
+	for id, v := range c.Ticked {
+		if r, ok := m.sel.find(id); ok && !r.installed {
+			m.sel.ticked[r.id] = v
+		}
+	}
+	if c.Chat != "" && m.sel.canChat(c.Chat) {
+		m.sel.chat = c.Chat
+	} else if !m.sel.canChat(m.sel.chat) {
+		m.sel.chat = m.sel.fallbackChat()
+	}
+	m.keepTry = c.KeepTrying
+	return m
 }
 
 // withPlan takes a new plan. keep carries the user's staged ticks over a
@@ -673,20 +720,38 @@ func (m Model) gpuStepShown() bool {
 	if m.gpu == nil || !m.gpu.Applies || !m.gpu.ShowInSetup || m.gpu.Method == setupapi.MethodUnsupported {
 		return false
 	}
-	var gain []string
+	// Only when a model the user wants gains from it: offering more GPU
+	// memory for a model they didn't tick is noise.
 	for _, g := range m.gpu.Models {
-		if !g.FitsNow && g.FitsAtSettingGB != nil {
-			gain = append(gain, g.ID)
+		if !g.FitsNow && g.FitsAtSettingGB != nil && m.sel.wants(g.ID) {
+			return true
 		}
 	}
-	return !m.sel.gaveUp(gain)
+	return false
 }
 
-// stepTotal and stepOf number the steps after the ones the host already
-// showed (where GAIA runs, and installing the server when it had to): the
-// models, then GPU memory and the download when they apply.
-func (m Model) stepTotal() int {
+// These screens are one step of the host's setup ("choose and download the
+// models"), so they keep its number and count; the models, GPU memory and the
+// download are parts of that step.
+func (m Model) stepLabel(s screen) string {
+	part := m.partOf(s)
+	if part == 0 {
+		return ""
+	}
 	n := m.before() + 1
+	of := n
+	if m.opts.StepsTotal > of {
+		of = m.opts.StepsTotal
+	}
+	label := fmt.Sprintf("step %d of %d", n, of)
+	if parts := m.partCount(); parts > 1 {
+		label += fmt.Sprintf(" · part %d of %d", part, parts)
+	}
+	return label
+}
+
+func (m Model) partCount() int {
+	n := 1
 	if m.gpuStepShown() {
 		n++
 	}
@@ -696,18 +761,17 @@ func (m Model) stepTotal() int {
 	return n
 }
 
-func (m Model) stepOf(s screen) int {
-	b := m.before()
+func (m Model) partOf(s screen) int {
 	switch s {
 	case scrModels, scrChatPick:
-		return b + 1
+		return 1
 	case scrGPU, scrGuide:
-		return b + 2
+		return 2
 	case scrDownload:
 		if m.gpuStepShown() {
-			return b + 3
+			return 3
 		}
-		return b + 2
+		return 2
 	}
 	return 0
 }
@@ -822,6 +886,8 @@ func (m Model) started(msg startedMsg) (Model, tea.Cmd) {
 		m.note = msg.err.Error()
 		return m.nextSingle()
 	}
+	// A new run or a resume: the overall speed starts over with it.
+	m.total = rate{}
 	return m, m.startPolling()
 }
 
@@ -864,6 +930,10 @@ func (m Model) statusArrived(msg statusMsg) (Model, tea.Cmd) {
 			m.rates[row.ID] = r
 		}
 		if row.State == setupapi.StateDownloading {
+			if wasNot(prev, row.ID, setupapi.StateDownloading) {
+				// Resumed or retried: the last attempt's speed says nothing.
+				*r = rate{}
+			}
 			r.observe(msg.at, row.BytesDone, row.BytesTotal)
 		}
 		if _, seen := m.shown[row.ID]; !seen {
@@ -1095,19 +1165,44 @@ func (m Model) failedCount() int {
 	return n
 }
 
-// overallBytes is bytes-weighted across the models this step downloads.
+// Sizes on these screens all come from the plan, so the download screen
+// counts the same gigabytes "Choose your models" promised. The backend's byte
+// counts give only how far each download is.
+
+// sizeOf is a model's full size in bytes: the plan's, else what the download
+// reports.
+func (m Model) sizeOf(r setupapi.ModelProgress) int64 {
+	if e, ok := m.sel.find(r.ID); ok && e.fullGB > 0 {
+		return int64(e.fullGB * 1e9)
+	}
+	return r.BytesTotal
+}
+
+// inPlanBytes rescales bytes the download reports to the plan's size.
+func (m Model) inPlanBytes(r setupapi.ModelProgress, b int64) int64 {
+	size := m.sizeOf(r)
+	if r.BytesTotal <= 0 || size == r.BytesTotal {
+		return b
+	}
+	return int64(frac(b, r.BytesTotal) * float64(size))
+}
+
+// overallBytes is what this step downloads, in the plan's "Download" figure:
+// each model's size still to download when the step began, and how much of it
+// has arrived since.
 func (m Model) overallBytes() (done, total int64) {
 	for _, r := range m.shownRows() {
 		if !m.counts(r.ID) {
 			continue
 		}
-		t := r.BytesTotal
-		if t == 0 {
-			if e, ok := m.sel.find(r.ID); ok {
-				t = int64(e.left() * 1e9)
-			}
+		var t, before int64
+		if e, ok := m.sel.find(r.ID); ok && e.leftGB != nil {
+			t = int64(e.left() * 1e9)
+			before = int64(e.partialGB * 1e9)
+		} else {
+			t = r.BytesTotal
 		}
-		d := m.doneBytes(r)
+		d := m.inPlanBytes(r, m.doneBytes(r)) - before
 		if st := m.shownState(r); st == setupapi.StateReady || st == setupapi.StateVerifying {
 			// Downloaded: the backend reports a model already on disk with no
 			// byte count, and a resumed run must not drop the bar back.
@@ -1115,6 +1210,9 @@ func (m Model) overallBytes() (done, total int64) {
 		}
 		if d > t {
 			d = t
+		}
+		if d < 0 {
+			d = 0
 		}
 		done += d
 		total += t

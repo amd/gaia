@@ -39,7 +39,7 @@ func TestColdMachineShowsThePlanBeforeAnyDownload(t *testing.T) {
 	h.expect("23.3 GB")
 	h.expect("330 MB")
 	h.expect("Download 29.6 GB · free on C: 412.0 GB · after 382.4 GB")
-	h.expect("step 2 of 3")
+	h.expect("step 2 of 2 · part 1 of 2")
 }
 
 // Already-downloaded rows say so; a partial one shows what is left.
@@ -317,27 +317,27 @@ func TestBackPreservesTheSelection(t *testing.T) {
 func TestDiscreteGPUHasNoGPUStepAndContiguousNumbers(t *testing.T) {
 	api := &f.Fake{P: coldPlan(), G: discreteGPU()}
 	h := newHarness(t, ModeFirstRun, api)
-	h.expect("step 2 of 3")
+	h.expect("step 2 of 2 · part 1 of 2")
 	h.key("enter")
 	if h.m.Screen() != "download" {
 		t.Fatalf("screen = %s, want download", h.m.Screen())
 	}
-	h.expect("step 3 of 3")
+	h.expect("step 2 of 2 · part 2 of 2")
 }
 
 func TestUnknownGPUHasNoGPUStep(t *testing.T) {
 	api := &f.Fake{P: coldPlan(), GPUErr: errDropped}
 	h := newHarness(t, ModeFirstRun, api)
-	h.expect("step 2 of 3")
+	h.expect("part 1 of 2")
 }
 
 func TestIntegratedGPUShowsTheStepWithConsentAndCancelByDefault(t *testing.T) {
 	api := &f.Fake{P: coldPlan(), G: gpuShared()}
 	h := newHarness(t, ModeFirstRun, api)
-	h.expect("step 2 of 4")
+	h.expect("step 2 of 2 · part 1 of 3")
 	h.key("enter")
 	h.expect("Give the GPU more memory")
-	h.expect("step 3 of 4")
+	h.expect("step 2 of 2 · part 2 of 3")
 	h.expect("This PC shares 128 GB between the CPU and the GPU. The GPU has 24 GB now.")
 	h.expect("CPU 104 GB  |  GPU 24 GB")
 	// The GPU memory the user reads, and the setting that gives it.
@@ -348,7 +348,10 @@ func TestIntegratedGPUShowsTheStepWithConsentAndCancelByDefault(t *testing.T) {
 
 	h.key("right")
 	h.expect("Target: GPU 72 GB")
-	h.expect("With 72 GB for the GPU, Qwen3.6-35B-A3B and gpt-oss-120b-mxfp fit.")
+	// Setup names only what the user chose: gpt-oss-120b also fits at 72 GB,
+	// but nobody ticked it.
+	h.expect("With 72 GB for the GPU, Qwen3.6-35B-A3B fits.")
+	h.expectNot("gpt-oss-120b")
 	h.key("left")
 
 	h.key("enter")
@@ -392,7 +395,32 @@ func TestStepHiddenWhenTheUserGaveUpEveryModelThatGains(t *testing.T) {
 	h.key("space") // Qwen unticked; the default moves to Gemma? no: to oss? none ticked
 	h.focusID(oss)
 	h.key("space")
-	h.expect("step 2 of 3")
+	h.expect("part 1 of 2")
+}
+
+// A model that would gain from more GPU memory but that the user never ticked
+// is no reason for the step: on an NPU pick, offering GPU memory for Qwen the
+// user didn't choose is noise.
+func TestStepHiddenWhenNoTickedModelGains(t *testing.T) {
+	p := coldPlan()
+	p.ChatModel = setupapi.ChatModel{ID: gemma}
+	for i := range p.Catalog {
+		if p.Catalog[i].ID == qwen {
+			p.Catalog[i].Selected = false
+		}
+	}
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: p, G: gpuShared()})
+	h.expect("[ ] Qwen3.6-35B-A3B")
+	h.expect("part 1 of 2")
+	h.key("enter")
+	if h.m.Screen() == "gpu" {
+		t.Fatal("the GPU step was offered for a model nobody ticked")
+	}
+	// Ticking it back brings the step back.
+	h2 := newHarness(t, ModeFirstRun, &f.Fake{P: p, G: gpuShared()})
+	h2.focusID(qwen)
+	h2.key("space")
+	h2.expect("part 1 of 3")
 }
 
 // "I've done this" re-reads the split; it never trusts the claim.
@@ -489,12 +517,12 @@ func TestProgressShowsEveryStateInWords(t *testing.T) {
 	h.expect("1 failed")
 }
 
-func TestSpeedAndETAAppearAfterTenSecondsAndNeverJump(t *testing.T) {
+func TestSpeedAndETAAppearAfterTenSecondsAndMoveSmoothly(t *testing.T) {
 	h := startedDownload(t)
 	var done int64
 	var etas []time.Duration
 	speeds := []int64{40e6, 40e6, 200e6, 10e6, 40e6, 40e6, 300e6, 40e6, 40e6, 40e6, 40e6, 40e6, 40e6, 40e6}
-	for i, s := range speeds {
+	for _, s := range speeds {
 		done += s
 		h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateDownloading, BytesDone: done, BytesTotal: total(qwen), SpeedBPS: s})
 		h.tick(time.Second)
@@ -505,18 +533,60 @@ func TestSpeedAndETAAppearAfterTenSecondsAndNeverJump(t *testing.T) {
 		if h.clock.Sub(r.started) < etaAfter && r.showETA(h.clock) {
 			t.Fatalf("ETA shown after only %v", h.clock.Sub(r.started))
 		}
-		if r.hasETA {
+		if r.showETA(h.clock) {
 			etas = append(etas, r.eta)
 		}
-		_ = i
 	}
 	h.expect("MB/s")
 	h.expect("min")
 	for i := 1; i < len(etas); i++ {
-		// One second passes per read: the shown ETA may drop by at most that.
-		if etas[i] < etas[i-1]-time.Second-time.Millisecond {
-			t.Fatalf("ETA jumped down faster than real time: %v -> %v", etas[i-1], etas[i])
+		// Smoothed: one read with a burst or a dip moves the shown time by
+		// a fraction of itself, in either direction.
+		if d := etas[i] - etas[i-1]; d > etas[i-1]/3 || -d > etas[i-1]/3 {
+			t.Fatalf("ETA jumped on one read: %v -> %v", etas[i-1], etas[i])
 		}
+	}
+}
+
+// Resumed after a cancel, or retried after a failure: the row's speed and the
+// overall time left start over instead of counting the bytes already on disk
+// as one second's download.
+func TestResumeAndRetryStartTheSpeedOver(t *testing.T) {
+	for _, stop := range []string{setupapi.StateCancelled, setupapi.StateFailed} {
+		t.Run(stop, func(t *testing.T) {
+			h := startedDownload(t)
+			const bps = 150e6
+			done := int64(0)
+			for i := 0; i < 15; i++ {
+				done += bps
+				h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateDownloading, BytesDone: done, BytesTotal: total(qwen)})
+				h.tick(time.Second)
+			}
+			h.api.Progress(setupapi.ModelProgress{ID: qwen, State: stop, BytesDone: done, BytesTotal: total(qwen)})
+			h.tick(time.Second)
+			// The new pull reports nothing yet, then everything on disk at once.
+			h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateDownloading, BytesTotal: total(qwen)})
+			h.tick(time.Second)
+			h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateDownloading, BytesDone: done, BytesTotal: total(qwen)})
+			h.tick(time.Second)
+			for i := 0; i < 12; i++ {
+				done += bps
+				h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateDownloading, BytesDone: done, BytesTotal: total(qwen)})
+				h.tick(time.Second)
+				if r := h.m.rates[qwen]; r.speed > 2*bps {
+					t.Fatalf("speed after %s = %.0f MB/s; the bytes on disk counted as downloaded", stop, r.speed/1e6)
+				}
+			}
+			r := h.m.rates[qwen]
+			if !r.showETA(h.clock) {
+				t.Fatal("no ETA 12 s after the restart")
+			}
+			want := time.Duration(float64(total(qwen)-done) / bps * float64(time.Second))
+			if r.eta < want*8/10 || r.eta > want*12/10 {
+				t.Fatalf("ETA %v, want about %v", r.eta, want)
+			}
+			h.expectNot("GB/s")
+		})
 	}
 }
 
@@ -599,7 +669,12 @@ func TestLostContactNeverShowsStaleProgress(t *testing.T) {
 	h.poll()
 	h.api.SetStatusErr(errDropped)
 	h.poll()
-	h.expect("Lost contact with GAIA: connection refused. Press r to reconnect.")
+	// One plain sentence; what failed waits behind d.
+	h.expect(lostContact)
+	h.expectNot("connection refused")
+	h.key("d")
+	h.expect("connection refused")
+	h.key("d")
 	h.expect("last known: downloading")
 	h.expectNot("Overall")
 	h.expectNot("%")
@@ -902,16 +977,24 @@ func TestUnknownFitKeepsItsWordsWhenTheRowIsTight(t *testing.T) {
 	}
 }
 
-// The count carries on from the host's checklist: after "where chat runs" and
-// "install the server", the models are step 3.
+// The count is the host's: after "where chat runs" and "install the server",
+// the models are step 3 of the host's 3, and the GPU memory and the download
+// are parts of it, never steps the host didn't count.
 func TestStepsCarryOnFromTheHost(t *testing.T) {
 	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: gpuShared()},
-		func(o *Options) { o.StepsBefore = 2 })
-	h.expect("step 3 of 5")
+		func(o *Options) { o.StepsBefore = 2; o.StepsTotal = 3 })
+	h.expect("step 3 of 3 · part 1 of 3")
 	h.key("enter")
-	h.expect("step 4 of 5")
+	h.expect("step 3 of 3 · part 2 of 3")
 	h.key("s")
-	h.expect("step 5 of 5")
+	h.expect("step 3 of 3 · part 3 of 3")
+}
+
+// A host with steps after this one keeps its total.
+func TestTheHostsTotalIsKept(t *testing.T) {
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: discreteGPU()},
+		func(o *Options) { o.StepsBefore = 1; o.StepsTotal = 4 })
+	h.expect("step 2 of 4 · part 1 of 2")
 }
 
 // A single pull stops at its next chunk, after the cancel call returns. The
@@ -1013,4 +1096,85 @@ func TestTheCursorLandsOnTheRootCause(t *testing.T) {
 	h.api.SetRunState(setupapi.RunFailed)
 	h.poll()
 	h.expect("Ran out of disk space on C:")
+}
+
+// esc hands the choice back; reopening with it finds the same ticks, default
+// chat model and keep-trying toggle, even on a plan read afresh.
+func TestLeavingAndComingBackKeepsTheChoice(t *testing.T) {
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: discreteGPU()})
+	h.focusID(oss)
+	h.key("space") // tick gpt-oss-20b
+	h.focusID(emb)
+	h.key("space") // untick the embedder
+	h.key("t")
+	h.m.sel.chat = oss
+	var back *BackMsg
+	_, cmd := h.m.Update(keyMsg("esc"))
+	for _, msg := range collect(cmd) {
+		if b, ok := msg.(BackMsg); ok {
+			back = &b
+		}
+	}
+	if back == nil || back.Choices == nil {
+		t.Fatal("esc did not hand the choice back")
+	}
+	h2 := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: discreteGPU()},
+		func(o *Options) { o.Keep = back.Choices })
+	h2.expect("[x] gpt-oss-20b")
+	h2.expect("[ ] embeddinggemma-300m")
+	h2.expect("Default chat: gpt-oss-20b")
+	h2.expect("[x] Keep trying")
+	// A model the new plan no longer lists is simply not there.
+	gone := coldPlan()
+	gone.Catalog = gone.Catalog[:3]
+	h3 := newHarness(t, ModeFirstRun, &f.Fake{P: gone, G: discreteGPU()},
+		func(o *Options) { o.Keep = back.Choices })
+	h3.expectNot("gpt-oss-20b")
+	if !h3.m.sel.canChat(h3.m.sel.chat) {
+		t.Fatalf("chat model %q can't chat on the new plan", h3.m.sel.chat)
+	}
+}
+
+// A stopped row and the footer use one verb.
+func TestACancelledRowAndTheFooterBothSayResume(t *testing.T) {
+	h := startedDownload(t)
+	h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateDownloading, BytesDone: 5e9, BytesTotal: total(qwen)})
+	h.poll()
+	h.api.SetRunState(setupapi.RunCancelled)
+	h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateCancelled, BytesDone: 5e9, BytesTotal: total(qwen)})
+	h.poll()
+	h.key("down")
+	h.expect("Press r to resume")
+	h.expect("r resume")
+	h.expectNot("r retry")
+}
+
+// The download screen counts the gigabytes "Choose your models" promised,
+// even when the pull reports a slightly different size.
+func TestTheDownloadTotalIsThePlansFigure(t *testing.T) {
+	h := startedDownload(t)
+	h.expect("0.0/29.6 GB")
+	// Lemonade reports Qwen as 22.4 GB; the plan said 23.3.
+	h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateDownloading, BytesDone: 11_200_000_000, BytesTotal: 22_400_000_000})
+	h.poll()
+	h.expect("11.7/23.3 GB")
+	h.expect("/29.6 GB")
+	h.expectNot("22.4")
+}
+
+// Raw setup output in the details reads as words: no panel frames cut into
+// stray rules and corners.
+func TestDetailsDropPanelFrames(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"──────────┘", ""},
+		{"│ Step 1/5: Starting Lemonade Server... │", "Step 1/5: Starting Lemonade Server..."},
+		{"\x1b[32m✓ Using Lemonade\x1b[0m", "✓ Using Lemonade"},
+		{"   ", ""},
+		{"a\tb", "a    b"},
+	} {
+		got, ok := cleanLogLine(tc.in)
+		if ok != (tc.want != "") || (ok && got != tc.want) {
+			t.Errorf("cleanLogLine(%q) = %q, %v; want %q", tc.in, got, ok, tc.want)
+		}
+	}
 }

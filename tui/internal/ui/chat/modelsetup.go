@@ -61,12 +61,16 @@ func (m ChatModel) openModelSetup(mode modelsetup.Mode) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	s := modelsetup.New(newChatSetupAPI(), modelsetup.Options{
+	opts := modelsetup.Options{
 		Mode:         mode,
 		Cloud:        m.skipLocalChatSetup(),
 		Motion:       chatSetupMotion(),
 		OfferInstall: mode == modelsetup.ModeFirstRun,
-	})
+	}
+	if mode == modelsetup.ModeFirstRun {
+		opts.Keep = m.setupChoices
+	}
+	s := modelsetup.New(newChatSetupAPI(), opts)
 	s, _ = s.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
 	m.modelSetup = &s
 	m.modelSetupOpen = true
@@ -85,6 +89,7 @@ func (m ChatModel) updateModelSetup(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return m, m.releaseAfterSetupGate(), true
 	case modelsetup.BackMsg:
 		m.modelSetup, m.modelSetupOpen = nil, false
+		m.setupChoices = msg.Choices
 		m.messages = append(m.messages, Message{Role: RoleStatus, Content: setupLeftNotice})
 		m.updateViewport()
 		return m, m.releaseAfterSetupGate(), true
@@ -130,7 +135,7 @@ func (m ChatModel) updateModelSetup(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		switch kind, detail := s.Outcome(); kind {
 		case "lost":
 			m.messages = append(m.messages, Message{Role: RoleError,
-				Content: "Lost touch with the model download: " + detail + ". Type /models to reconnect."})
+				Content: "Lost touch with the model download. Type /models to reconnect; d there shows what went wrong."})
 		case "failed":
 			m.messages = append(m.messages, Message{Role: RoleError,
 				Content: detail + " didn't finish downloading. Type /models to see why and retry it."})

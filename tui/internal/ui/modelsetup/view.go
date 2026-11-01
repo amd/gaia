@@ -104,9 +104,7 @@ func (m Model) View() string {
 		body, foot = m.readyView(w)
 	}
 	if m.opts.Mode == ModeFirstRun {
-		if n := m.stepOf(m.scr); n > 0 {
-			right = fmt.Sprintf("step %d of %d", n, m.stepTotal())
-		}
+		right = m.stepLabel(m.scr)
 	}
 	if m.details {
 		body = m.detailLines(w)
@@ -709,6 +707,10 @@ func (m Model) gpuView(w int) (body, foot []string) {
 func (m Model) unlocks() []string {
 	var out []string
 	for _, id := range m.targetPreset().Unlocks {
+		if m.opts.Mode != ModeGPU && !m.sel.wants(id) {
+			// Setup names only what the user chose; /gpu names everything.
+			continue
+		}
 		out = append(out, shortName(id))
 		if len(out) == 2 {
 			break
@@ -809,7 +811,7 @@ func (m Model) downloadView(w int) (body, foot []string) {
 		body = append(body, m.overallLine(w, now))
 	}
 	if m.lost != nil {
-		body = append(body, indentAll(wrapStyled(failStyle, "[!] "+fmt.Sprintf(lostContactFmt, strings.TrimSuffix(m.lost.Error(), ".")), width), indentW)...)
+		body = append(body, indentAll(wrapStyled(failStyle, "[!] "+lostContact, width), indentW)...)
 	}
 	if m.status != nil && m.status.State == setupapi.RunFailed && m.status.Error != nil && m.failedCount() == 0 && !m.dl.active {
 		body = append(body, indentAll(wrapStyled(failStyle, "[!] Setup stopped: "+*m.status.Error+" Press r to try again, d for details.", width), indentW)...)
@@ -844,7 +846,12 @@ func (m Model) downloadView(w int) (body, foot []string) {
 			keys = append(keys, [2]string{"s", "skip this model"})
 		}
 		if m.focusRetryable(rows) || m.stuck(rows) {
-			keys = append(keys, [2]string{"r", "retry"})
+			// One verb with the row's own line: a stopped download resumes.
+			verb := "retry"
+			if m.focus < len(rows) && rows[m.focus].State == setupapi.StateCancelled {
+				verb = "resume"
+			}
+			keys = append(keys, [2]string{"r", verb})
 		}
 		if m.dl.active {
 			keys = append(keys, [2]string{"c", "cancel"})
@@ -912,7 +919,7 @@ func (m Model) progressLine(i int, r setupapi.ModelProgress, w int, now time.Tim
 	switch m.shownState(r) {
 	case setupapi.StateQueued:
 		text = dimStyle.Render("queued")
-		if done := m.doneBytes(r); done > 0 {
+		if done := m.inPlanBytes(r, m.doneBytes(r)); done > 0 {
 			text += dimStyle.Render(", " + formatGB(bytesGB(done)) + " already here")
 		}
 	case setupapi.StateDownloading:
@@ -946,7 +953,7 @@ func (m Model) progressLine(i int, r setupapi.ModelProgress, w int, now time.Tim
 		text = failStyle.Render("failed")
 	case setupapi.StateCancelled:
 		text = dimStyle.Render("cancelled")
-		if done := m.doneBytes(r); done > 0 {
+		if done := m.inPlanBytes(r, m.doneBytes(r)); done > 0 {
 			text += dimStyle.Render(", " + formatGB(bytesGB(done)) + " kept")
 		}
 	}
@@ -970,7 +977,7 @@ func (m Model) downloadingText(r setupapi.ModelProgress, room int, now time.Time
 		return infoStyle.Render(startingLine)
 	}
 	rt := m.rates[r.ID]
-	nums := fmt.Sprintf("%.1f/%s", bytesGB(r.BytesDone), formatGB(bytesGB(r.BytesTotal)))
+	nums := fmt.Sprintf("%.1f/%s", bytesGB(m.inPlanBytes(r, r.BytesDone)), formatGB(bytesGB(m.sizeOf(r))))
 	tail := ""
 	if rt != nil {
 		switch stall := rt.stalled(now); {
@@ -1030,7 +1037,8 @@ func (m Model) progressNote(r setupapi.ModelProgress, width int) []string {
 		if r.ErrorKind != nil {
 			kind = *r.ErrorKind
 		}
-		line := failureLine(kind, shortName(r.ID), m.drive(), bytesGB(r.BytesDone), bytesGB(r.BytesTotal-r.BytesDone))
+		got := m.inPlanBytes(r, r.BytesDone)
+		line := failureLine(kind, shortName(r.ID), m.drive(), bytesGB(got), bytesGB(m.sizeOf(r)-got))
 		if kind == setupapi.ErrVerify && r.Error != nil && *r.Error != "" {
 			// The load check says which of its cases this is (would not load,
 			// or setup stopped before checking), in plain words.
@@ -1249,11 +1257,19 @@ func (m Model) detailLines(w int) []string {
 	if m.gpuErr != nil {
 		raw = append(raw, "GPU memory: "+m.gpuErr.Error())
 	}
+	if m.lost != nil {
+		raw = append(raw, "Lost contact with GAIA:")
+		raw = append(raw, strings.Split(m.lost.Error(), "\n")...)
+	}
 	if len(raw) == 0 {
 		raw = []string{noDetails}
 	}
 	var out []string
 	for _, l := range raw {
+		l, ok := cleanLogLine(l)
+		if !ok {
+			continue
+		}
 		out = append(out, indentAll(wrapStyled(dimStyle, l, width), indentW)...)
 	}
 	// The newest lines matter most: keep the tail when it is long.
@@ -1261,6 +1277,20 @@ func (m Model) detailLines(w int) []string {
 		out = out[len(out)-budget:]
 	}
 	return out
+}
+
+// boxRunes are the frame characters `gaia init` draws its panels with. In the
+// details they arrive cut to the log's width, as rules and corners on their
+// own, so they are dropped and the words kept.
+const boxRunes = "─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬╭╮╯╰━┃┏┓┗┛"
+
+// cleanLogLine is one line of setup output as plain words: no colour codes, no
+// panel frame, no tabs. ok is false for a line with nothing left to read.
+func cleanLogLine(l string) (string, bool) {
+	l = ansi.Strip(l)
+	l = strings.ReplaceAll(l, "\t", "    ")
+	l = strings.Trim(l, boxRunes+" ")
+	return l, strings.TrimSpace(l) != ""
 }
 
 // --- shared bits --------------------------------------------------------------

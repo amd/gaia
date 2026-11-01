@@ -251,13 +251,15 @@ specific model rather than the default.
 
 #### Choose your models
 
-`Enter` on the last step opens the plan before anything downloads: every model
+`Enter` on the last step opens the plan before anything downloads. The models,
+the GPU memory and the download are parts of that one step, so the header keeps
+the checklist's count. The plan shows every model
 setup would fetch, its size still to download, what it is for, whether it fits
 this PC's memory, and the free space on the drive Lemonade stores models on.
 The models recommended for this PC are ticked.
 
 ```
-  Choose your models                                               step 2 of 3
+  Choose your models                                 step 3 of 3 · part 1 of 2
   ────────────────────────────────────────────────────────────────────────────
   > [x] Gemma-4-E4B-it         Chat+Vision  6.0 GB    * recommended
         Reads images. Skip it and GAIA can't look at pictures. Needs about 8.3
@@ -284,7 +286,7 @@ The models recommended for this PC are ticked.
 | `t` | Keep trying for up to 2 minutes when the connection drops, instead of failing straight away (off until you turn it on) |
 | `d` | The raw facts behind the screen: memory, model drive, fit reasons |
 | `Enter` | Continue |
-| `Esc` | Back to the steps |
+| `Esc` | Back to the steps. Coming back finds the ticks and the chat model as you left them |
 
 Unticking never deletes a model. Every warning is a caveat with numbers, not a
 block:
@@ -303,16 +305,16 @@ the screen says "Pick at least one chat model, or choose a cloud provider in
 step 1." A cloud provider downloads only the embedding model.
 
 On a PC with an integrated GPU (Strix Halo class), where a bigger GPU share would
-let a larger model fit, the next step is **Give the GPU more memory**: the split
+let a model you ticked fit, the next part is **Give the GPU more memory**: the split
 now, a target (`←`/`→`), and what it unlocks. It needs administrator rights and
 a restart, and asks first (`n` is the default). Where GAIA can't change the
 setting itself (Windows), `Enter` shows the exact steps in AMD Software, and
-"I've done this" re-reads the split instead of trusting it. `s` skips the step.
+"I've done this" re-reads the split instead of trusting it. `s` skips it.
 
 Then the download, one row per model:
 
 ```
-  Downloading models                                               step 3 of 3
+  Downloading models                                 step 3 of 3 · part 2 of 2
   ────────────────────────────────────────────────────────────────────────────
   > [..] ⣟ Gemma-4-E4B-it       ██████▎░░░░░░░░░░░  2.1/6.0 GB  149 MB/s  27 sec
     [ ]    embeddinggemma-300m  queued
@@ -328,7 +330,8 @@ Each row names its state in words — queued, downloading, checking the file,
 ready, failed, cancelled. Speed and time left appear after 10 seconds of data
 ("Estimating…" before), and a download with no data for 15 seconds says so. `c`
 stops it (asking first once over 1 GB is in); finished models and partial files
-stay, and `R` resumes from where it stopped. A failed row says why — the
+stay, and `r` on a stopped row (or `R` for all of them) resumes from where it
+stopped. A failed row says why — the
 connection dropped, the disk filled up (with how much to free), or the file
 failed its check — and `r` retries it. `Esc` leaves, which cancels the download.
 Once every model is ready, a summary names the chat, vision and documents models

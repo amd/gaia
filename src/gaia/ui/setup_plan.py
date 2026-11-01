@@ -220,6 +220,7 @@ def _catalog(
         INIT_PROFILES,
         bytes_already_on_disk,
         is_embedding_model_id,
+        remaining_download_gb,
     )
 
     same = model_choice.ids_match
@@ -263,12 +264,9 @@ def _catalog(
         if not isinstance(full, (int, float)):
             full = _registry_size(model_id)
         partial_gb = 0.0 if downloaded else round((on_disk.get(model_id) or 0) / 1e9, 2)
-        if downloaded:
-            remaining: Optional[float] = 0.0
-        elif full is None:
-            remaining = None
-        else:
-            remaining = round(max(0.0, float(full) - partial_gb), 2)
+        remaining: Optional[float] = (
+            0.0 if downloaded else remaining_download_gb(full, on_disk.get(model_id))
+        )
         is_planned = listed(model_id, planned)
         roles = model_choice.roles_for(model_id, chat_id)
         catalog.append(

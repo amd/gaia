@@ -58,6 +58,8 @@ func (m Model) openModelSetup() (tea.Model, tea.Cmd) {
 		Cloud:       cloud,
 		Motion:      m.motion,
 		StepsBefore: before,
+		StepsTotal:  m.rep.StepCount(),
+		Keep:        m.setupChoices,
 	})
 	s, _ = s.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
 	m.setup = &s
@@ -88,6 +90,8 @@ func (m Model) updateSetup(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return m, tea.Batch(m.checkCmd(), m.spin.Tick), true
 	case modelsetup.BackMsg:
 		m.setup = nil
+		// Coming back to the step finds the ticks and chat model as left.
+		m.setupChoices = msg.Choices
 		return m, nil, true
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height

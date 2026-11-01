@@ -467,6 +467,22 @@ class ModelProgress:
         }
 
 
+def _bytes_on_disk(client, model_id: str) -> Optional[int]:
+    """Bytes an interrupted pull of *model_id* left in Lemonade's store, the
+    same count the setup plan's ``partial_gb`` comes from. None when unknown."""
+    from gaia.installer.init_command import bytes_already_on_disk
+    from gaia.llm.lemonade_client import LemonadeClientError
+    from gaia.llm.model_fit import model_store_free_gb
+
+    try:
+        _free, store = model_store_free_gb(client.get_system_info(timeout=15))
+        return bytes_already_on_disk(client, [model_id], store).get(model_id)
+    except LemonadeClientError as e:
+        # Only the "resumed" note depends on it; the download itself goes on.
+        logger.warning("Could not read what %s left on disk: %s", model_id, e)
+        return None
+
+
 def overall(models: List[ModelProgress]) -> Dict[str, Any]:
     """Bytes-weighted progress across the models being set up."""
     counted = [m for m in models if m.state != "skipped"]
@@ -680,6 +696,7 @@ class SetupRunner:
     ) -> Dict[str, Any]:
         """Pull one model now, in this process: Retry, Resume, or a model the
         user skipped at setup and now wants. Lemonade resumes a partial file."""
+        before = _bytes_on_disk(client, model_id)
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
                 raise SetupBusy(
@@ -690,7 +707,9 @@ class SetupRunner:
                 raise SetupBusy(f"{model_id} is already downloading.")
             stop = threading.Event()
             self._pulls[model_id] = stop
-            self._models[model_id] = ModelProgress(id=model_id, state="downloading")
+            self._models[model_id] = ModelProgress(
+                id=model_id, state="downloading", bytes_before=before or None
+            )
         threading.Thread(
             target=self._pull_one,
             args=(client, model_id, keep_trying, stop),
@@ -784,6 +803,7 @@ class SetupRunner:
                         id=planned["id"],
                         state="verifying" if planned.get("downloaded") else "queued",
                         bytes_total=planned.get("bytes_total") or 0,
+                        bytes_before=planned.get("bytes_on_disk") or None,
                     )
                     if planned.get("downloaded"):
                         entry.bytes_done = entry.bytes_total
@@ -799,8 +819,6 @@ class SetupRunner:
             entry = self._models.setdefault(model_id, ModelProgress(id=model_id))
             if kind == "progress":
                 if entry.state in ("queued", "cancelled", "failed", "downloading"):
-                    if entry.bytes_before is None:
-                        entry.bytes_before = int(event.get("bytes_done") or 0)
                     entry.state = "downloading"
                 entry.bytes_done = int(event.get("bytes_done") or 0)
                 entry.bytes_total = int(event.get("bytes_total") or entry.bytes_total)
@@ -866,7 +884,7 @@ class SetupRunner:
                     run.state = "failed"
                     run.error = (
                         "Setup stopped on an unexpected error. Details are in "
-                        "the Agent UI backend log."
+                        "the GAIA server log."
                     )
 
     def _pump(self, run: SetupRun, proc: subprocess.Popen) -> None:

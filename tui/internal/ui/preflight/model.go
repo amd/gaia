@@ -168,6 +168,8 @@ type Model struct {
 	// setup is "choose your models" and the download after it, open over the
 	// checklist; nil when the checklist is on screen.
 	setup *modelsetup.Model
+	// setupChoices are the model choices left with esc, for the next visit.
+	setupChoices *modelsetup.Choices
 	// motion is how much this screen animates (NO_MOTION and friends).
 	motion modelsetup.Motion
 }

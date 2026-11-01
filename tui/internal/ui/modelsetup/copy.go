@@ -60,7 +60,7 @@ const (
 	startingLine   = "starting the download…"
 	stoppingLine   = "stopping…"
 	everythingHere = "Everything is already on this PC."
-	lostContactFmt = "Lost contact with GAIA: %s. Press r to reconnect."
+	lostContact    = "Lost contact with GAIA's background service. Press r to reconnect, or d for what went wrong."
 	verifyingLine  = "checking the file…"
 	verifyWaiting  = "downloaded · checked when the rest finish"
 	setupCancelled = "Download stopped. Finished models stay; press r to resume."

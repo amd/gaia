@@ -88,7 +88,8 @@ func (m Model) key(msg tea.KeyMsg) (Model, tea.Cmd) {
 // leave is esc on a screen with nothing behind it in this component.
 func (m Model) leave() (Model, tea.Cmd) {
 	if m.opts.Mode == ModeFirstRun {
-		return m, func() tea.Msg { return BackMsg{} }
+		c := m.choices()
+		return m, func() tea.Msg { return BackMsg{Choices: c} }
 	}
 	busy, _ := m.Downloading()
 	return m, func() tea.Msg { return ClosedMsg{Downloading: busy} }

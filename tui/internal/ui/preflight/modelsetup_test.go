@@ -121,6 +121,52 @@ func TestModelStepOpensTheChoiceInsteadOfDownloading(t *testing.T) {
 	if m.SetupScreen() != "" {
 		t.Fatal("esc did not return to the checklist")
 	}
+
+	// Coming back finds the choice as it was left, and the header keeps the
+	// checklist's count.
+	if strings.Contains(plain(m), "step 2 of 4") {
+		t.Fatal("the checklist counted setup's parts as steps")
+	}
+}
+
+func TestComingBackToTheModelStepKeepsTheChoice(t *testing.T) {
+	api := plannedFake()
+	m := newWith(modelChoosingRunner{scriptedRunner{rep: modelStepReport(), fixes: &[]FixKind{}}, api},
+		Config{AgentID: "gaia", AgentName: "GAIA"}, Options{})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+	updated, _ = m.Update(reportMsg{rep: modelStepReport()})
+	m = updated.(Model)
+	open := func() {
+		t.Helper()
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = run(t, updated.(Model), cmd)
+		if m.SetupScreen() != "models" {
+			t.Fatalf("setup screen = %q, want models", m.SetupScreen())
+		}
+	}
+	open()
+	if !strings.Contains(plain(m), "[x] embeddinggemma-300m") {
+		t.Fatalf("embedder not ticked to start:\n%s", plain(m))
+	}
+	// Untick the embedder (second row), then leave.
+	for _, k := range []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeySpace, Runes: []rune{' '}}} {
+		updated, _ = m.Update(k)
+		m = updated.(Model)
+	}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if msg := cmd(); msg != nil {
+		updated, _ = m.Update(msg)
+		m = updated.(Model)
+	}
+	if m.SetupScreen() != "" {
+		t.Fatal("esc did not return to the checklist")
+	}
+	open()
+	if s := plain(m); !strings.Contains(s, "[ ] embeddinggemma-300m") {
+		t.Fatalf("the untick was lost on coming back:\n%s", s)
+	}
 }
 
 // Finishing re-checks and hands off without another enter.
