@@ -591,6 +591,22 @@ def test_thinking_blocks_never_reach_answer_text(fake_anthropic):
     assert result == "The answer is 4."
 
 
+def test_thinking_only_reply_fails_loudly_with_stop_reason(fake_anthropic, caplog):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response(
+        [SimpleNamespace(type="thinking", thinking="Need more budget.")],
+        stop_reason="max_tokens",
+    )
+
+    with caplog.at_level("WARNING", logger="gaia.llm.providers.claude"):
+        with pytest.raises(RuntimeError, match="whole output token budget on thinking"):
+            provider.chat([{"role": "user", "content": "Answer this."}])
+
+    assert provider.get_last_finish_reason() == "length"
+    assert "stop_reason=max_tokens" in caplog.text
+    assert "block_types=thinking" in caplog.text
+
+
 def test_usage_captured_from_response(fake_anthropic):
     provider = _provider(fake_anthropic)
     provider._client.messages.create.return_value = _response(
