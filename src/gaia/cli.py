@@ -3145,7 +3145,7 @@ Examples:
 
     mcp_tui_parser = mcp_subparsers.add_parser(
         "tui",
-        help="Start TUI control MCP server (drives a running `gaia tui --control`)",
+        help="Start TUI control MCP server (drives a running `gaia-tui --control`)",
     )
     mcp_tui_parser.add_argument(
         "--host", default="localhost", help="Host to bind to (default: localhost)"
@@ -4864,6 +4864,7 @@ def main():
                     TelegramAllowlistError,
                     run_telegram,
                 )
+                from gaia.messaging.telegram_api import TelegramTokenError
             except Exception as e:  # pragma: no cover - runtime import error
                 print(f"❌ Telegram support is not available: {e}", file=sys.stderr)
                 sys.exit(1)
@@ -4898,7 +4899,7 @@ def main():
                     background=getattr(args, "background", False),
                     health_port=getattr(args, "health_port", TELEGRAM_HEALTH_PORT),
                 )
-            except TelegramAllowlistError as e:
+            except (TelegramAllowlistError, TelegramTokenError) as e:
                 # Show the remedy rather than a traceback.
                 print(f"❌ {e}", file=sys.stderr)
                 sys.exit(2)
@@ -10892,7 +10893,7 @@ def handle_mcp_serve(args):
 
 
 def handle_mcp_tui(args):
-    """Start the TUI control MCP server (drives a running `gaia tui --control`)."""
+    """Start the TUI control MCP server (drives a running `gaia-tui --control`)."""
     log = get_logger(__name__)
 
     try:
@@ -10912,7 +10913,7 @@ def handle_mcp_tui(args):
             print("=" * 60)
             print("🖥️  GAIA TUI Control MCP Server")
             print("=" * 60)
-            print("   Target  : the running `gaia tui --control` session")
+            print("   Target  : the running `gaia-tui --control` session")
             print(f"   MCP     : http://{args.host}:{args.port}/mcp")
             try:
                 tool_count = len(

@@ -499,7 +499,7 @@ func TestExitOneMeansSetupIsNeeded(t *testing.T) {
 	if !strings.Contains(row.Remedy.Command, "gaia init") {
 		t.Errorf("remedy command = %q, want a gaia init", row.Remedy.Command)
 	}
-	if row.Step != "download the models (3.5 GB)" {
+	if row.Step != "choose and download the models (3.5 GB)" {
 		t.Errorf("step = %q, want the reported sizes summed", row.Step)
 	}
 }

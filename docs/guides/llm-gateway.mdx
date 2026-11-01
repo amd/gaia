@@ -203,10 +203,11 @@ every start. Delete the model from those lists to re-probe it.
 A model that can take tools natively still starts on GAIA's in-text tool format,
 which costs far less context per call: the full tool schemas add about 12K
 tokens to every request. If the model writes tool calls in its own markup
-instead (Claude's `<invoke>` XML, for example), GAIA runs that call, switches
-the model to native tool calls from its next request, and remembers it under
-`own_tool_markup_models`. Models that follow the in-text format, such as
-`DeepSeek-V4.1-Flash`, stay on it.
+instead (Claude's `<invoke>` XML, for example), GAIA runs that call and
+switches the model to native tool calls from its next request, for the rest of
+that session only. Every new session starts on the in-text format again, so a
+model that follows it, such as `DeepSeek-V4.1-Flash`, is not moved to the
+costlier native format for good by one stray reply.
 
 ## Troubleshooting
 
