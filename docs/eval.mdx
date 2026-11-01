@@ -52,7 +52,7 @@ flowchart TD
     MCPS --> API(["FastAPI Backend · port 4200"])
     API --> DB(["SQLite DB\ngaia_chat.db"])
     API --> RAG(["FAISS Index\n~/.gaia/*.pkl"])
-    API -->|"chat · embeddings"| LEM(["Lemonade Server · port 8000"])
+    API -->|"chat · embeddings"| LEM(["Lemonade Server · port 13305"])
 
     EVAL -->|"structured JSON\nto stdout"| SCORE(["Score Recompute\n& Status Derive\n(runner.py)"])
     SCORE --> SC(["scorecard.json"])

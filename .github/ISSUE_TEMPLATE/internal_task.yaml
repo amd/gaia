@@ -34,7 +34,7 @@ body:
       description: Concrete list of changes. Files, components, endpoints, tests. Distinguish what's IN scope vs. OUT of scope.
       placeholder: |
         ### A. Implementation
-        - [ ] Create `src/gaia/messaging/telegram.py` wrapping `python-telegram-bot`
+        - [ ] Create `src/gaia/messaging/telegram.py` calling the Telegram Bot API over httpx
         - [ ] CLI: `gaia telegram start --token $TOKEN`
         - [ ] Tests in `tests/unit/test_telegram.py`
 
@@ -64,7 +64,7 @@ body:
       description: Cite the libraries, papers, open standards, or comparator products this work builds on. (See `CLAUDE.md` for why this matters.)
       placeholder: |
         - Hermes Agent (Nous Research) — messaging-native paradigm
-        - python-telegram-bot — upstream library, MIT
+        - Telegram Bot API (core.telegram.org/bots/api) — called directly over httpx, no copyleft client library
         - Issue #635 — full multi-platform messaging adapter (this carves Telegram out as Phase 0)
 
   - type: dropdown
