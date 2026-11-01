@@ -4,6 +4,7 @@
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 import responses
@@ -28,6 +29,24 @@ def embedded_state(tmp_path, monkeypatch):
 
     monkeypatch.setattr(lc, "EMBEDDED_LEMONADE_STATE", tmp_path / "state.json")
     return _write
+
+
+def test_root_conftest_ignores_a_real_home_embedded_state(tmp_path, monkeypatch):
+    """The unit suite must not adopt the caller's installed Lemonade server."""
+    caller_home = tmp_path / "caller-home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: caller_home))
+    real_state = caller_home / ".gaia" / "lemonade" / "state.json"
+    real_state.parent.mkdir(parents=True, exist_ok=True)
+    real_state.write_text(
+        json.dumps({"pid": os.getpid(), "port": 63209, "api_key": "caller-key"}),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("GAIA_HOME", raising=False)
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+
+    assert lc.resolve_lemonade_base_url() == lc.DEFAULT_LEMONADE_URL
+    assert lc.resolve_lemonade_api_key() is None
 
 
 class TestResolveLemonadeApiKey:

@@ -307,6 +307,26 @@ def _allow_embedded_start(request, monkeypatch):
     )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_embedded_lemonade_paths():
+    """Keep tests off the caller's embedded Lemonade state and install.
+
+    ``EMBEDDED_LEMONADE_STATE`` is fixed when ``lemonade_client`` imports, and
+    ``lemonade_embedded.gaia_home()`` otherwise falls back to ``Path.home()``.
+    Neither follows the environment-backed state isolation above. Point both at
+    this session's throwaway state root instead; tests that exercise either
+    path can still patch them after this fixture has run.
+    """
+    from gaia.llm import lemonade_client, lemonade_embedded
+
+    state_path = _STATE_ROOT / "lemonade" / "state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(lemonade_client, "EMBEDDED_LEMONADE_STATE", state_path)
+        mp.setattr(lemonade_embedded, "gaia_home", lambda: _STATE_ROOT)
+        yield
+
+
 #: EmbeddedLemonade methods that act on a server; none may reach the real home.
 _EMBEDDED_ACTIONS = (
     "install",
