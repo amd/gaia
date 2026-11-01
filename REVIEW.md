@@ -100,6 +100,56 @@ eventual screenshot, don't block on it. The gap worth flagging is a UI-backed ch
 **Spot regression** subsection (a few *adjacent* operations exercised alongside the changed
 one) is expected content, not scope creep.
 
+## Sibling paths
+
+The most common bug that gets past review is a change that lands on one path while a sibling
+stays broken. On a PR of 200+ changed lines (`grep -c '^[+-]' pr-diff.txt`), before you write
+the verdict, take each behaviour the diff changes and search the code outside the diff for:
+
+- other callers of what changed, and other implementations of the same rule
+- hard-coded lists that must gain or lose an entry (tools, models, event types, routes)
+- the same flow reached another way: the Agent UI, the TUI, the CLI, a relayed or background
+  run, and the streaming and non-streaming branches
+
+A sibling still on the old behaviour is a 🟡, or a 🔴 when users reach it in normal use. Name
+the sibling and how you found it. If the PR has no behaviour change, skip this.
+
+## Known bug classes
+
+`/tmp/missed-bug-classes.md` lists the bugs that keep shipping. Apply every **Code:** line to
+the changed code, whatever the PR's size, and trace startup, restart and lock changes from an
+empty `~/.gaia` and from a server that just restarted. Skip the **Docs**, **Walkthrough** and
+"Don't report" parts: those are for the audits.
+
+## Documentation drift
+
+Run this on every PR. Most doc bugs are made here: a PR corrects the docs it remembers and
+misses the others that repeat the claim.
+
+When the diff changes behaviour a reader relies on (a default, limit, flag, command, status
+code, error message, field, name or UI label), take the **old** value or wording from the
+removed lines and grep for it across `docs/`, `hub/agents/**/*.md`, `hub/skills/**/SKILL.md`,
+any shipped contract (`spec_html.py`, `specification.html`, `openapi.*.json`), the root
+`README.md`, and `cpp/`. Search the old claim, not the file the PR already touched, and check
+hand-maintained tables for a row the change added or removed.
+
+- A doc that still states the old behaviour is a 🟡, or a 🔴 when a command it gives now fails.
+- Report each stale claim **once**, listing every place, and name a doc the PR should have
+  changed. These do not count toward the nit cap.
+- A PR that edits docs: check its new claims against the code, too.
+- Skip this for changes nothing documents: internal refactors, tests, CI. Skip a claim that
+  only appears in a past CHANGELOG entry or release note, which record what was true then.
+
+On a re-review, check only behaviour the new commits changed.
+
+## The verdict is enforced
+
+Part 1 opens with exactly one of `**Verdict: Approve**`, `**Verdict: Approve with suggestions**`
+or `**Verdict: Request changes**`, on its own line. The `PR review verdict` status reads that
+line, and a Request changes stays failing until a push passes re-review or a maintainer adds
+the `review-override` label. A reply does not clear it. So use Request changes only for a 🔴 or
+🟡 that must be fixed before merge.
+
 ## Length caps
 
 Keep reviews skimmable:
@@ -111,6 +161,6 @@ Keep reviews skimmable:
 ## Lightweight re-review (per push)
 
 The re-review that runs on each push is **stricter than this rubric, by design**: it reports
-only NEW 🔴/🟡 regressions introduced since the first review and stays **completely silent on
-nits**. The nit cap above is the ceiling for the first full review, not a license for the
+only NEW 🔴/🟡 regressions introduced since the first review, plus any blocking finding from
+an earlier Request changes that is still not fixed, and stays **completely silent on nits**. The nit cap above is the ceiling for the first full review, not a license for the
 re-review to post nits. Default to silence on a re-review.

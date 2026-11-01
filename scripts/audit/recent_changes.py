@@ -44,6 +44,11 @@ MAX_PRS = 150
 
 #: PRs per GraphQL query (aliased `pullRequest(number:)` lookups).
 PR_BATCH = 50
+BOT_AUTHORS = {"github-actions", "app/github-actions", "github-actions[bot]"}
+VERDICT = re.compile(r"^\*\*Verdict: ([A-Za-z ]+?)\*\*", re.MULTILINE)
+BLOCKING = "Request changes"
+REVIEW_CHARS = 500
+COMMENTS_READ = 30
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
@@ -69,10 +74,14 @@ def _must(args: list[str]) -> str:
 def resolve_range(base_sha: str, fallback_days: int) -> tuple[list[str], str, bool]:
     """Return ``(git log selector args, plain-words description, exact?)``."""
     if base_sha:
-        known = _run(["git", "cat-file", "-e", f"{base_sha}^{{commit}}"]).returncode == 0
+        known = (
+            _run(["git", "cat-file", "-e", f"{base_sha}^{{commit}}"]).returncode == 0
+        )
         ancestor = (
             known
-            and _run(["git", "merge-base", "--is-ancestor", base_sha, "HEAD"]).returncode
+            and _run(
+                ["git", "merge-base", "--is-ancestor", base_sha, "HEAD"]
+            ).returncode
             == 0
         )
         if ancestor:
@@ -145,7 +154,9 @@ def fetch_prs(
     for start in range(0, len(wanted), PR_BATCH):
         batch = wanted[start : start + PR_BATCH]
         fields = " ".join(
-            f"p{n}: pullRequest(number: {n}) {{ number title body }}" for n in batch
+            f"p{n}: pullRequest(number: {n}) {{ number title body comments(last: "
+            f"{COMMENTS_READ}) {{ nodes {{ author {{ login }} body }} }} }}"
+            for n in batch
         )
         query = (
             "query($owner: String!, $name: String!) { repository(owner: $owner, "
@@ -182,6 +193,21 @@ def fetch_prs(
     return prs, len(numbers) - len(wanted)
 
 
+def unanswered_review(pr: dict) -> str:
+    """The visible part of a merged PR's last review if it still said Request changes."""
+    for comment in reversed((pr.get("comments") or {}).get("nodes") or []):
+        if ((comment.get("author") or {}).get("login")) not in BOT_AUTHORS:
+            continue
+        body = comment.get("body") or ""
+        verdict = VERDICT.search(body)
+        if verdict:
+            if verdict.group(1) != BLOCKING:
+                return ""
+            visible = re.split(r"<details>", body, maxsplit=1, flags=re.I)[0]
+            return " ".join(visible.split())[:REVIEW_CHARS]
+    return ""
+
+
 def excerpt(body: str) -> str:
     """The PR's opening prose: no comments, collapsed blocks, headings or test plan."""
     text = re.sub(r"<!--.*?-->", " ", body or "", flags=re.S)
@@ -189,7 +215,9 @@ def excerpt(body: str) -> str:
     text = re.split(r"^#+\s*test plan", text, flags=re.I | re.M)[0]
     text = re.sub(r"^#+.*$", " ", text, flags=re.M)
     text = " ".join(text.split())
-    return text if len(text) <= BODY_CHARS else text[:BODY_CHARS].rsplit(" ", 1)[0] + " …"
+    return (
+        text if len(text) <= BODY_CHARS else text[:BODY_CHARS].rsplit(" ", 1)[0] + " …"
+    )
 
 
 def area(path: str) -> str:
@@ -233,6 +261,12 @@ def render(
         body = excerpt(pr["body"]) if pr else ""
         if body:
             block.append(body)
+        review = unanswered_review(pr) if pr else ""
+        if review:
+            block.append(
+                "Merged while its last review said Request changes, so check whether "
+                f"these were fixed: {review}"
+            )
         paths = commit["paths"][:MAX_PATHS_PER_COMMIT]
         more = len(commit["paths"]) - len(paths)
         block.append(
@@ -280,7 +314,9 @@ def main(argv: list[str] | None = None) -> int:
     paths = sorted({p for c in commits for p in c["paths"]})
     args.paths_out.write_text("".join(f"{p}\n" for p in paths), encoding="utf-8")
     with args.summary.open("a", encoding="utf-8") as fh:
-        fh.write(f"**Recent changes read first:** {len(commits)} commit(s), {description}.\n\n")
+        fh.write(
+            f"**Recent changes read first:** {len(commits)} commit(s), {description}.\n\n"
+        )
     if not exact:
         print(f"::warning title=Audit window is approximate::Covering {description}.")
     print(f"{len(commits)} commits, {len(paths)} paths -> {args.out}")

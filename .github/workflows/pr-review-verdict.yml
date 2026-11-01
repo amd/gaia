@@ -1,0 +1,54 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Posts the "PR review verdict" commit status: failing while the latest review says
+# Request changes. It blocks a merge only once branch protection requires that context.
+#
+# workflow_run is what catches a new review: the review comment is posted with
+# GITHUB_TOKEN, so an issue_comment trigger would never fire. pull_request_target covers
+# pushes and the override label. Both run this file and the script from the default
+# branch, and the PR's code is never checked out.
+
+name: PR Review Verdict
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+  workflow_run:
+    workflows: ["Claude AI Assistant"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  verdict:
+    if: |
+      github.repository == 'amd/gaia' &&
+      (github.event_name == 'pull_request_target' ||
+       github.event.workflow_run.event == 'pull_request_target')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      statuses: write
+    concurrency:
+      group: pr-review-verdict-${{ github.event.pull_request.number || github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Post the verdict status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ -n "$PR_NUMBER" ]; then
+            python3 util/check_review_verdict.py --repo "$REPO" --pr "$PR_NUMBER"
+          else
+            python3 util/check_review_verdict.py --repo "$REPO" --sha "$HEAD_SHA"
+          fi
