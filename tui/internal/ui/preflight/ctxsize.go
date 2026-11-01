@@ -42,13 +42,15 @@ import (
 // depending on the `gaia` CLI being on PATH.
 
 // Context windows per device profile. These MUST equal
-// gaia.llm.lemonade_client.GPU_CTX_SIZE / NPU_CTX_SIZE: the NPU's FastFlowLM
-// build is registered at 32768 and cannot reach 65536, so handing it the GPU
-// window fails the load outright — and collapsing them to one number would cap
-// GPU doc-Q&A at 32K and re-open the #1030 context overflow.
+// gaia.llm.lemonade_client.GPU_CTX_SIZE / NPU_CTX_SIZE: FastFlowLM builds such
+// as E2B load at 32768 and cannot reach 65536, so handing them the GPU window
+// fails the load outright — and collapsing them to one number would cap GPU
+// doc-Q&A at 32K and re-open the #1030 context overflow. An NPU model GAIA
+// recommends with a larger min_ctx_size raises its own ceiling, as
+// lemonade_client.npu_ctx_ceiling does.
 const (
 	gpuCtxSize = 65536 // GPU/CPU — Gemma-4-E4B-it-GGUF (llama.cpp)
-	npuCtxSize = 32768 // NPU — gemma4-it-e2b-FLM (FastFlowLM ceiling)
+	npuCtxSize = 32768 // NPU — the FastFlowLM ceiling for unmeasured FLM builds
 )
 
 // ctxSizeEnv is the variable modern Lemonade reads its context window from.
@@ -76,32 +78,41 @@ func profileCtxSize(p hostProbe) int {
 			return n
 		}
 	}
-	if strings.EqualFold(strings.TrimSpace(readDefaultDevice(p)), "npu") {
+	cfg := readDeviceConfig(p)
+	for _, r := range lemonade.RecommendedFor("local") {
+		if r.Device == "npu" && r.Matches(cfg.DefaultModel) && r.MinCtxSize > npuCtxSize {
+			return int(r.MinCtxSize)
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.DefaultDevice), "npu") {
 		return npuCtxSize
 	}
 	return gpuCtxSize
 }
 
-// readDefaultDevice returns `default_device` from ~/.gaia/config.json, or "" when
-// there is no readable answer. A missing file is the normal state on a machine
-// that has never run `gaia init`, so it is not an error — it just means the
-// caller falls back the same way GaiaConfig does.
-func readDefaultDevice(p hostProbe) string {
+type deviceConfig struct {
+	DefaultDevice string `json:"default_device"`
+	DefaultModel  string `json:"default_model"`
+}
+
+// readDeviceConfig returns `default_device` and `default_model` from
+// ~/.gaia/config.json, empty when there is no readable answer. A missing file is
+// the normal state on a machine that has never run `gaia init`, so it is not an
+// error — the caller falls back the same way GaiaConfig does.
+func readDeviceConfig(p hostProbe) deviceConfig {
+	var cfg deviceConfig
 	path := configPath(p)
 	if path == "" {
-		return ""
+		return cfg
 	}
 	raw, err := p.readFile(path)
 	if err != nil {
-		return ""
-	}
-	var cfg struct {
-		DefaultDevice string `json:"default_device"`
+		return cfg
 	}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return ""
+		return deviceConfig{}
 	}
-	return cfg.DefaultDevice
+	return cfg
 }
 
 func configPath(p hostProbe) string {
