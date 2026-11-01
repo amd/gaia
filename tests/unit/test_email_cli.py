@@ -61,6 +61,36 @@ class TestDispatch:
             assert getattr(args, "use_claude", False) is False
             assert getattr(args, "use_chatgpt", False) is False
 
+    def test_handle_email_command_checks_daemon_deps_before_lemonade(
+        self, capsys, monkeypatch
+    ):
+        """A base install gets the [api] remedy before any server probe (#3423)."""
+        import argparse
+
+        from gaia import cli
+
+        ns = argparse.Namespace(
+            action="email",
+            query="triage my inbox",
+            interactive=False,
+            verbose=False,
+            debug=False,
+            no_lemonade_check=True,
+            base_url=None,
+            model=None,
+            spec=False,
+        )
+        monkeypatch.setattr(
+            "gaia.daemon.client.missing_daemon_deps", lambda: ["fastapi", "uvicorn"]
+        )
+        with pytest.raises(SystemExit) as exc:
+            cli.handle_email_command(ns)
+
+        assert exc.value.code == 1
+        output = capsys.readouterr().out
+        assert "fastapi, uvicorn" in output
+        assert 'pip install "amd-gaia[api]"' in output
+
     def test_handle_email_command_relays_query_through_daemon(self):
         """``handle_email_command`` is a thin client (#2191): the query path
         ensures the daemon + ``email`` sidecar and relays through

@@ -6480,6 +6480,11 @@ def handle_email_command(args):
         handle_email_autonomy_command(args)
         return
 
+    # The email query is a thin client over the daemon. Check its runtime
+    # dependencies before probing Lemonade or spawning anything, so a base
+    # install gets the actionable [api] remedy instead of "daemon exited early".
+    _check_daemon_deps()
+
     # Initialize Lemonade — local LLM only. The daemon spawns the sidecar, but the
     # sidecar's inference runs on Lemonade; this upfront check gives a friendlier
     # "start Lemonade first" message than a mid-stream error event (AC: Lemonade
