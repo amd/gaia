@@ -9,9 +9,10 @@
 // payload that fails its schema says so. A card is never dropped and never
 // blanks the message.
 //
-// Of the five primitives this package draws three. `image` is base64 raster and
-// cannot be shown in a terminal, so it degrades to a caption line; `diff` has no
-// producer today and rides the unsupported-card fallback until one exists.
+// Of the six primitives this package draws three. `image` and `audio` cannot be
+// shown or played in a terminal, so they degrade to a caption, the saved path
+// and (for audio) the length; `diff` has no producer today and rides the
+// unsupported-card fallback until one exists.
 package cards
 
 import (
@@ -54,6 +55,8 @@ func RenderDeduped(renderKey string, data json.RawMessage, width int, seen map[s
 		return renderList(data, width), nil
 	case "image":
 		return renderImage(data, width), nil
+	case "audio":
+		return renderAudio(data, width), nil
 	default:
 		return renderUnsupported(key, data, width), nil
 	}

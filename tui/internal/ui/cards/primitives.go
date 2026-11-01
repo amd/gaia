@@ -377,6 +377,7 @@ type imagePayload struct {
 	Src     string `json:"src"`
 	Alt     string `json:"alt"`
 	Caption string `json:"caption"`
+	Path    string `json:"path"`
 }
 
 // renderImage degrades rather than draws: `image.src` is inline base64 raster
@@ -388,8 +389,8 @@ func renderImage(data json.RawMessage, width int) string {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return renderInvalid("image", err.Error(), data, width)
 	}
-	if !isInlineRaster(p.Src) {
-		return renderInvalid("image", "src must be an inline base64 raster data: URI", data, width)
+	if !isInlineRaster(p.Src) && !isGeneratedMediaRef("image", p.Src) {
+		return renderInvalid("image", "src must be an inline base64 raster data: URI or a generated image", data, width)
 	}
 
 	// Both caption and alt when both exist: the picture is never drawn, so every
@@ -400,6 +401,9 @@ func renderImage(data json.RawMessage, width int) string {
 	}
 	b := newBox("Image", width)
 	b.addWrapped("  ", "[image: "+label+"]")
+	if path := strings.TrimSpace(p.Path); path != "" {
+		b.addWrapped("  ", "Saved: "+path)
+	}
 	b.addWrapped("  ", "Not shown — a terminal cannot display it.")
 	return b.render()
 }

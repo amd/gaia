@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse
 
 from gaia.utils.user_folders import documents_dir
 
+from .. import generated_media
 from ..models import (
     BrowseResponse,
     FileEntry,
@@ -44,6 +45,7 @@ from ..utils import (
     build_quick_links,
     ensure_within_home,
     format_size,
+    harden_served_file,
     is_within_document_roots,
     list_windows_drives,
     uploads_dir,
@@ -812,3 +814,23 @@ async def serve_local_image(path: str):
     }
     media_type = media_types.get(ext, "application/octet-stream")
     return FileResponse(path=str(resolved), media_type=media_type)
+
+
+# ── Serve Generated Media ────────────────────────────────────────────────────
+
+
+@router.get("/api/media/{kind}/{name}")
+async def serve_generated_media(kind: str, name: str):
+    """Serve an image or audio file GAIA generated, for the chat's inline cards.
+
+    Only a plain file name directly inside the generation tools' own output
+    folder is served; anything else is a 404 that says why.
+    """
+    try:
+        path = generated_media.resolve_generated_media(kind, name)
+    except generated_media.MediaNotServable as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return harden_served_file(
+        FileResponse(path=str(path), media_type=generated_media.media_type(kind, path)),
+        path.name,
+    )

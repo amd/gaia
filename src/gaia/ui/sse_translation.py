@@ -117,6 +117,7 @@ SUMMARY_VIEW_KEYS = (
     # What the tool wrote (``RESULT_PATH_KEYS`` in ``gaia.ui.sse_handler``).
     "file_path",
     "image_path",
+    "audio_path",
     # A ``search_web`` result's hits, so a relayed turn can cite them.
     "sources",
 )
