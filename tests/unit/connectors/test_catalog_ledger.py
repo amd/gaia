@@ -7,15 +7,15 @@ Replaces the previous "legacy ⊆ new" parity check. The MCP catalog has been
 intentionally reduced from 22 deployed entries down to 3 carried-over entries
 (#1021 removed mcp-filesystem and mcp-fetch because no built-in agent consumes
 them through the connectors framework; custom agents supply their own
-mcp_servers.json instead), plus mcp-tavily added net-new afterwards. This test
-asserts both ends of that ledger:
+mcp_servers.json instead), plus mcp-tavily and mcp-slack (#1002) added
+net-new afterwards. This test asserts both ends of that ledger:
 
   * KEPT_IDS — exactly these ids must remain in
     ``connectors.catalog.mcp_servers`` (the 3 carried over from the legacy
-    catalog, plus mcp-tavily). For each carried-over id, field-by-field
+    catalog, plus the net-new ids). For each carried-over id, field-by-field
     equivalence against the legacy ``mcp.py:_CATALOG`` row of the same name is
     asserted as a guard against silent drift during the migration.
-  * DELETED_IDS — these 19 ids must NOT be present. Regression guard against
+  * DELETED_IDS — these 17 ids must NOT be present. Regression guard against
     accidentally re-introducing untested catalog tiles.
 
 When ``src/gaia/ui/routers/mcp.py:_CATALOG`` is finally deleted (also part of
@@ -39,6 +39,9 @@ KEPT_IDS = frozenset(
         # server. The same keyring TAVILY_API_KEY is also read by the
         # gaia.web.tavily Python wrapper.
         "mcp-tavily",
+        # Re-added in #1002 on the maintained slack-mcp-server, pinned and
+        # covered by test_slack_mcp_connector.py.
+        "mcp-slack",
     }
 )
 
@@ -59,7 +62,6 @@ DELETED_IDS = frozenset(
         "mcp-google-calendar",
         "mcp-outlook",
         "mcp-spotify",
-        "mcp-slack",
         "mcp-notion",
         "mcp-linear",
         "mcp-jira",

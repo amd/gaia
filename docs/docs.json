@@ -139,6 +139,7 @@
                   "connectors/microsoft",
                   "connectors/github",
                   "connectors/tavily",
+                  "connectors/slack",
                   "security/connections",
                   "security/connectors"
                 ]
