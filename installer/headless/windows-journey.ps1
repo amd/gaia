@@ -446,6 +446,13 @@ switch ($Step) {
                 Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$gaiaHome\*" } | ForEach-Object { "  $($_.ProcessId) $($_.CommandLine)" }
                 Fail "gaia uninstall --purge exited $rc"
             }
+            # The running venv is removed by a helper after gaia.exe exits.
+            $deadline = (Get-Date).AddSeconds(120)
+            while ((Test-Path "$gaiaHome\venv") -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+            if (Test-Path "$gaiaHome\venv") {
+                Get-ChildItem $env:TEMP -Filter 'gaia-uninstall-venv-*.log' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "--- $($_.FullName) ---"; Get-Content $_.FullName }
+                Fail "$gaiaHome\venv was still there 120 s after the uninstaller ran"
+            }
         } else {
             Uninstall-Tui
             Uninstall-Ui
