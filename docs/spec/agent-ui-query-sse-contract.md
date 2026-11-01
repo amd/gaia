@@ -361,7 +361,7 @@ unknown `render` degrades to the generic result card (see §7).
 
 ### 4.3 Generic render primitives (#2108)
 
-Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers five
+Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers six
 **generic primitives** any agent can emit on `tool_result.render` without
 shipping its own frontend component. `data` must match the schema for the key:
 
@@ -370,7 +370,8 @@ shipping its own frontend component. `data` must match the schema for the key:
 | `table` | `{ title?: string, columns: string[], rows: Array<Array<string\|number\|boolean\|null>> }` |
 | `key_value` | `{ title?: string, items: Array<{key: string, value: string\|number\|boolean\|null}> }` |
 | `list` | `{ title?: string, ordered?: boolean, items: Array<string\|number> }` |
-| `image` | `{ src: string, alt?: string, caption?: string }` |
+| `image` | `{ src: string, alt?: string, caption?: string, path?: string }` |
+| `audio` | `{ src: string, caption?: string, path?: string, duration_seconds?: number }` — added (additive, MINOR) for generated music and sound effects (#540) |
 | `diff` | `{ title?: string, unified: string }` — a unified-diff text; lines are styled by their `+` / `-` / `@@` prefix |
 
 Rules every receiver implements and every producer can rely on:
@@ -381,9 +382,22 @@ Rules every receiver implements and every producer can rely on:
   raw `data` so the turn stays debuggable. A card is never silently dropped
   and a bad card never blanks the message.
 - **`image.src` accepts only inline base64 raster data** matching
-  `^data:image/(png|jpe?g|gif|webp);base64,` — SVG is deliberately excluded
-  (it can carry script), and remote URLs (`http(s)://`) are rejected. Anything
-  else is an invalid payload.
+  `^data:image/(png|jpe?g|gif|webp);base64,`, **or a generated-media
+  reference** `/api/media/image/<name>` — SVG is deliberately excluded (it can
+  carry script), and remote URLs (`http(s)://`) are rejected. Anything else is
+  an invalid payload.
+- **`audio.src` accepts only a generated-media reference**
+  `/api/media/audio/<name>`. A generated-media reference names one
+  URL-encoded file name (no separators, no `..`) that the Agent UI backend
+  serves from GAIA's own generation folder (`GET /api/media/{kind}/{name}`);
+  `path` is that file on disk. A terminal can show neither, so the TUI draws
+  the caption, `path` and (for audio) the length instead.
+- **No sidecar emits `image`-by-reference or `audio` today.** The Agent UI
+  host builds them from a successful `generate_image` / `generate_music` /
+  `generate_sound_effect` result's `image_path` / `audio_path` (carried in
+  `tool_result.data`), whether the agent ran in-process or behind `/query`,
+  so no sidecar `apiVersion` changes. An older sidecar that omits
+  `audio_path` simply gets no audio card.
 - **500-item render cap.** `table` rows, `list` items, and `key_value` items
   render at most 500 entries; the card shows a visible `+N more (truncated)`
   row when capped. Producers should pre-trim to what the user actually needs.

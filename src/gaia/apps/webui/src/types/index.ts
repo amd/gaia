@@ -825,6 +825,10 @@ export interface AgentStep {
     mcpOutput?: McpOutput;
     /** Tool call latency in milliseconds. */
     latencyMs?: number;
+    /** Card key the tool's result drew, persisted for reload (for type='tool'). */
+    render?: string;
+    /** That card's payload. */
+    data?: unknown;
 }
 
 /** The text an MCP tool returned, capped by the server. */
