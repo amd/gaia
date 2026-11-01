@@ -150,6 +150,27 @@ def test_stop_signals_the_adapter(mock_home, monkeypatch, capsys):
         adapter.wait(timeout=10)
 
 
+def test_force_stop_kills_the_adapter(mock_home, monkeypatch, capsys):
+    """--force must take the hard-stop path rather than repeating SIGTERM."""
+    adapter = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)", "telegram", "start"]
+    )
+    try:
+        pid_path = mock_home / ".gaia" / "telegram.pid"
+        pid_path.parent.mkdir(parents=True)
+        pid_path.write_text(str(adapter.pid), encoding="utf-8")
+
+        _run_cli(monkeypatch, "stop", "--force")
+
+        assert adapter.wait(timeout=10) is not None
+        assert not pid_path.exists()
+        assert "Force-stopped" in capsys.readouterr().out
+    finally:
+        if adapter.poll() is None:
+            adapter.kill()
+        adapter.wait(timeout=10)
+
+
 def test_status_reports_a_reused_pid_as_not_running(
     mock_home, monkeypatch, capsys, unrelated_process
 ):

@@ -72,6 +72,11 @@ extraResources:
     to: vendor/uv
     filter:
       - "**/*"
+  # Third-party licence notices for the libraries the app bundles.
+  - from: ../../../../THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
+  - from: ../../../../licenses
+    to: licenses
 
 asar: true
 # Nothing currently needs to be unpacked from the asar.

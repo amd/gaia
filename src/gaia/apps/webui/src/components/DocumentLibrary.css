@@ -75,13 +75,15 @@
 /* Path input */
 .path-input-form {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     margin-bottom: 16px;
 }
 .path-icon { color: var(--text-muted); flex-shrink: 0; }
 .path-input {
-    flex: 1;
+    flex: 1 1 200px;
+    min-inline-size: 0;
     padding: 9px 14px;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);

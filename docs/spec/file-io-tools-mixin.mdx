@@ -411,7 +411,7 @@ module level, and the tool never renames or moves a definition.
 ### 9. write_markdown_file
 
 Write (or overwrite) a Markdown file, optionally creating parent directories.
-Used by the code agent when generating READMEs, spec documents, or reports.
+Used by agents that generate READMEs, spec documents, or reports.
 
 **Parameters:**
 - `file_path` (str, required): Destination path
@@ -430,8 +430,8 @@ Used by the code agent when generating READMEs, spec documents, or reports.
 ### 10. update_gaia_md
 
 Refresh the project's `GAIA.md` (or another project-level index file) with
-generated metadata — used by the code agent to keep project docs in sync with
-what it's building.
+generated metadata — used by agents to keep project docs in sync with
+what they are building.
 
 **Parameters:**
 - `project_root` (str, optional): Project root directory (default: `"."`)

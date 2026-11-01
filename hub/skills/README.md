@@ -34,7 +34,17 @@ only create two places for the same facts to disagree.
 
 `name` must equal the directory name; a mismatch is a load error, not a warning.
 
-## Use one locally
+## Use one
+
+Every skill here is published to the hub with each GAIA release, signed by the AMD
+key GAIA trusts out of the box. Browse them at https://amd-gaia.ai/hub.
+
+```bash
+gaia skill search report
+gaia skill install research-report
+```
+
+Or copy one from a clone:
 
 ```bash
 gaia skill import hub/skills/research-report   # copy into ~/.gaia/skills/
@@ -47,9 +57,11 @@ file claims — the tier records what *you* verified, not what the author assert
 
 ## Publishing
 
-**By pull request only.** The hub's publish endpoint is gated on a
-maintainer-held token, so a contributor never handles one; `gaia skill publish`
-is what maintainers run *after* a PR merges. Before opening one:
+**By pull request only.** Every final release tag runs
+[`release_skills.yml`](../../.github/workflows/release_skills.yml), which signs and
+publishes each skill whose `version` is not on the hub yet. Hub versions are
+immutable, so **bump `version:` whenever you change a skill** — the release fails
+on a published version whose files changed. Before opening a PR:
 
 ```bash
 gaia skill audit ./hub/skills/<name>/    # exit 0 (ALLOW) is what merges cleanly

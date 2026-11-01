@@ -20,7 +20,7 @@ from gaia.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentR
 **See also:** [User Guide](/guides/agent-ui) | [Agent SDK](/sdk/sdks/chat) | [API Specification](/spec/agent-ui-server)
 
 <Warning>
-  **Tested Configuration:** The Agent UI has been tested on **AMD Ryzen AI MAX+ 395** with **Qwen3.5-35B-A3B-GGUF**. Other configurations are not officially verified. See the [User Guide](/guides/agent-ui) for full details and how to report issues on other hardware.
+  **Tested Configuration:** The Agent UI has been tested on **AMD Ryzen AI MAX+ 395** with **Gemma-4-E4B-it-GGUF**. Other configurations are not officially verified. See the [User Guide](/guides/agent-ui) for full details and how to report issues on other hardware.
 </Warning>
 
 ---
@@ -510,13 +510,17 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "version": "2026.41.1",
       "chat_model": {
         "name": "Qwen3.6-35B-A3B-GGUF",
+        "model_type": "llm",
         "recipe": "llamacpp",
         "device": "gpu",
         "backend": "vulkan",
         "backend_source": "lemonade_default",
         "ctx_size": 65536
       },
-      "embedding_model": { "name": "embeddinggemma-300m-GGUF", "backend": "vulkan", "...": "..." },
+      "embedding_model": { "name": "embeddinggemma-300m-GGUF", "model_type": "embedding", "backend": "vulkan", "...": "..." },
+      "loaded_models": [
+        { "name": "kokoro-v1", "model_type": "tts", "backend": "cpu", "ctx_size": null }
+      ],
       "default_backend": "vulkan",
       "available_backends": [
         { "name": "vulkan", "state": "installed" },
@@ -531,6 +535,9 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Description |
     |-------|-------------|
     | `owner` | `gaia` (GAIA's own Lemonade), `user` (another Lemonade on this PC), or `remote` |
+    | `chat_model` / `embedding_model` | The selected loaded chat and embedding model, respectively; each has the loaded-model shape below or is `null` |
+    | `loaded_models` | Other loaded models, excluding only the selected chat and embedding entries. This can include additional embedding models, vision, speech, transcription, reranking, image, or 3D models. |
+    | `model_type` | Lemonade's type for a loaded model, such as `llm`, `embedding`, `vision`, `tts`, `transcription`, `reranking`, or `3d`; `null` when Lemonade did not report it |
     | `backend` | `vulkan`, `rocm`, `metal`, `cpu`, `npu`, `remote` (a cloud model), or `null` when Lemonade did not say |
     | `backend_source` | `requested` (named by the load), `launch` (read from the llama-server path), or `lemonade_default` |
     | `available_backends` | llama.cpp backends Lemonade can run here; `unsupported` ones are never listed |
@@ -2929,7 +2936,7 @@ CREATE TABLE sessions (
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TEXT,
     updated_at TEXT,
-    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-GGUF',
+    model TEXT NOT NULL DEFAULT 'Gemma-4-E4B-it-GGUF',
     system_prompt TEXT
 );
 
@@ -3086,7 +3093,7 @@ from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 # system prompt from `prompt_profile` ("chat" | "doc" | "file" | "data" |
 # "web" | "full") — there is no `system_prompt` config field.
 config = ChatAgentConfig(
-    model_id=session.get("model", "Qwen3.5-35B-A3B-GGUF"),
+    model_id=session.get("model", "Gemma-4-E4B-it-GGUF"),
     prompt_profile="doc",
     allowed_paths=["/path/to/files"],
 )

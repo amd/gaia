@@ -549,6 +549,9 @@ with `LEMONADE_BASE_URL`: GAIA never unloads its models or stops it.
   load did not name a backend and Lemonade picked it. *unknown* means this
   Lemonade does not report it.
 - **Context window** and the **Embedding model** with its backend.
+- One row for each other model this Lemonade has loaded (speech,
+  transcription, vision, reranking, image or 3D), labelled by its type, with
+  its name, backend and context window.
 
 To choose the backend, pick **Auto**, **Vulkan**, **ROCm** or **CPU** under
 *llama.cpp backend for chat models*. Only backends Lemonade can run on this PC
@@ -787,8 +790,8 @@ colors the text shades adjust on their own so everything stays readable.
 **Language** switches the app's labels between **English** and **العربية
 (Arabic)**. In Arabic the whole layout reads right to left, with the sidebar on
 the right, and each label keeps its English in brackets, such as "محادثة جديدة
-(New chat)". It changes the app, not the language GAIA answers in, and this
-device remembers it. In either language, each paragraph of an answer runs in
+(New chat)", set smaller and lighter so the Arabic leads. It changes the app,
+not the language GAIA answers in, and this device remembers it. In either language, each paragraph of an answer runs in
 its own direction, so an answer mixing Arabic and English shows each part the
 right way round, and code always reads left to right.
 
@@ -1179,7 +1182,7 @@ For the REST API reference and backend classes, see the [Agent UI SDK Reference]
 ---
 
 <Note>
-  **Hardware:** Tested on AMD Ryzen AI MAX+ 395 with Qwen3.5-35B-A3B-GGUF via Lemonade Server. Other configurations may work — [report issues here](https://github.com/amd/gaia/issues/new).
+  **Hardware:** Tested on AMD Ryzen AI MAX+ 395 with Gemma-4-E4B-it-GGUF via Lemonade Server. Other configurations may work — [report issues here](https://github.com/amd/gaia/issues/new).
 </Note>
 
 <small style="color: #666;">

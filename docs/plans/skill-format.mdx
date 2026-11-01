@@ -443,10 +443,10 @@ version bump.
 `min(claimed tier, tier the signature earned)` and enforces the ceiling against
 that, so an unsigned skill can never install as `verified` no matter what its front
 matter says. A key's trust-store role decides what it attests: `publisher` →
-`community`, `amd` → `verified`. The trust store ships empty and **no AMD key is
-bundled**, so out of the box every skill installs `experimental` — the honest floor
-rather than a placeholder that makes the top tier look anchored. See
-[`gaia skill install`](/reference/cli#skills).
+`community`, `amd` → `verified`. GAIA trusts one key out of the box: the AMD key
+the release signs `hub/skills/*` with, so first-party skills install from the hub
+with no setup. Every other key installs `experimental` until an operator trusts it.
+See [`gaia skill install`](/reference/cli#skills).
 
 The dangerous set the spec names — `shell:execute`, `desktop:control`,
 `database:write` — is retained as authoritative. `shell:execute:<binary>` is
