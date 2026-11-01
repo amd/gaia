@@ -21,7 +21,11 @@ What it does, per run:
    no longer verifies — the tampered-bundle refusal target.
 3. Zips each bundle and writes the hub layout ``gaia.skills.hub`` fetches
    (index.json + per-skill manifest.json + versioned SKILL.md + artifact)
-   into ``--out`` (default ``fixture_hub/_prepared``, gitignored).
+   into ``--out`` (default ``fixture_hub/_prepared``, gitignored). The hub is
+   built in a sibling temp folder and renamed into place only once complete,
+   so a failed run never leaves a partial hub, and concurrent runs (pytest-xdist
+   workers) each publish a whole one instead of colliding; the last to finish
+   is the one served.
 4. Trust-adds the throwaway public key (role ``publisher``) to
    ``<skills-root>/trusted-keys.json`` so signed bundles attest ``community``.
 
@@ -33,11 +37,14 @@ silently pollute their trust store with a test key.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
+import os
 import shutil
 import sys
 import tempfile
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -45,6 +52,9 @@ HERE = Path(__file__).resolve().parent
 SOURCES = HERE / "fixture_hub" / "sources"
 DEFAULT_OUT = HERE / "fixture_hub" / "_prepared"
 KEY_NAME = "eval-test-publisher"
+#: How long a run waits for another to finish swapping its hub into place. A
+#: swap is two renames, so only a stuck process holds the lock this long.
+PUBLISH_LOCK_SECONDS = 60.0
 
 #: Appended to a tampered bundle's SKILL.md AFTER signing: a realistic
 #: post-publish edit (an exfiltration line) that breaks the signed digest.
@@ -71,6 +81,23 @@ def _zip_dir(source_dir: Path, destination: Path) -> bytes:
     return destination.read_bytes()
 
 
+def _publish(build: Path, out_dir: Path) -> None:
+    """Swap the finished hub at *build* in as *out_dir*, replacing any earlier one.
+
+    Held under a cross-process lock so two runs never interleave their renames.
+    """
+    from gaia.utils.file_lock import file_lock
+
+    retired = None
+    with file_lock(out_dir, timeout=PUBLISH_LOCK_SECONDS):
+        if out_dir.exists():
+            retired = out_dir.with_name(f"{out_dir.name}.old-{uuid.uuid4().hex}")
+            os.rename(out_dir, retired)
+        os.rename(build, out_dir)
+    if retired is not None:
+        shutil.rmtree(retired)
+
+
 def prepare(
     skills_root: Path,
     out_dir: Path,
@@ -85,10 +112,9 @@ def prepare(
 
     Raises on every failure (missing sources, unknown --unsigned/--tampered
     name, a skill in both, signing errors) — a half-prepared hub must never
-    look ready.
+    look ready: the hub is built aside and published only once complete.
     """
-    from gaia.skills.format import parse_skill
-    from gaia.skills.signing import TrustStore, generate_key, sign_bundle
+    from gaia.skills.signing import TrustStore, generate_key
 
     source_dirs = sorted(d for d in SOURCES.iterdir() if d.is_dir())
     if not source_dirs:
@@ -114,9 +140,39 @@ def prepare(
     skills_root.mkdir(parents=True, exist_ok=True)
     key = generate_key(skills_root, name=KEY_NAME, force=True)
 
-    if out_dir.exists():
-        shutil.rmtree(out_dir)
-    out_dir.mkdir(parents=True)
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    build = Path(tempfile.mkdtemp(prefix=f"{out_dir.name}.build-", dir=out_dir.parent))
+    try:
+        summaries = _build_hub(build, key, source_dirs, unsigned, tampered)
+
+        store = TrustStore.load(skills_root)
+        trusted_id = store.add(
+            public_key_b64=base64.b64encode(key.public_bytes).decode("ascii"),
+            publisher=KEY_NAME,
+            role="publisher",
+        )
+        store.save()
+
+        _publish(build, out_dir)
+    finally:
+        if build.exists():
+            shutil.rmtree(build)
+
+    for name, summary in summaries.items():
+        summary["key_id"] = trusted_id if summary["signed"] else ""
+    return summaries
+
+
+def _build_hub(
+    out_dir: Path,
+    key,
+    source_dirs: list[Path],
+    unsigned: frozenset[str],
+    tampered: frozenset[str],
+) -> dict[str, dict]:
+    """Write the signed hub layout into the empty *out_dir*."""
+    from gaia.skills.format import parse_skill
+    from gaia.skills.signing import sign_bundle
 
     summaries: dict[str, dict] = {}
     index_entries = []
@@ -204,19 +260,6 @@ def prepare(
         + "\n",
         encoding="utf-8",
     )
-
-    store = TrustStore.load(skills_root)
-    import base64
-
-    trusted_id = store.add(
-        public_key_b64=base64.b64encode(key.public_bytes).decode("ascii"),
-        publisher=KEY_NAME,
-        role="publisher",
-    )
-    store.save()
-
-    for name, summary in summaries.items():
-        summary["key_id"] = trusted_id if summary["signed"] else ""
     return summaries
 
 
