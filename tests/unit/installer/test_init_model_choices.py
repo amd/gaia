@@ -75,7 +75,11 @@ class FakeLemonade(LemonadeClient):
 
     def get_system_info(self, timeout=None):
         return {
-            "devices": {"amd_igpu": {"available": True, "vram_gb": self.vram_gb}},
+            "Physical Memory": "64.00 GB",
+            "devices": {
+                "amd_igpu": {"available": True, "vram_gb": self.vram_gb},
+                "amd_npu": {"available": True},
+            },
             "model_storage": {"free_bytes": self.free_gb * GB, "path": self.store},
         }
 

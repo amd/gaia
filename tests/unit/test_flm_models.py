@@ -150,6 +150,12 @@ def test_the_reported_link_points_at_the_offered_model(web, config_file):
     assert "GGUF" not in report["error"]
 
 
+def test_e2b_is_not_offered_so_its_link_adds_it(web, config_file):
+    report = _inspect("FastFlowLM/Gemma4-E2B-IT-NPU2")
+    assert report["ok"], report["error"]
+    assert report["model_id"] == "gemma4-it-e2b-FLM"
+
+
 def test_a_repo_two_tags_share_resolves_to_the_chat_build(web, config_file):
     assert _inspect(REPO)["checkpoint"] != "gemma4e-flash:e4b"
 
@@ -533,11 +539,7 @@ def test_gemma_on_the_npu_is_offered_where_it_fits():
     assert lc.npu_chat_models_that_fit(_capacity(64.0)) == list(lc.NPU_CHAT_MODELS)
 
 
-def test_a_small_pc_gets_only_the_build_it_holds():
-    assert lc.npu_chat_models_that_fit(_capacity(9.0)) == ["gemma4-it-e2b-FLM"]
-
-
-@pytest.mark.parametrize("npu_gb", [None, 0.0, 1.0])
+@pytest.mark.parametrize("npu_gb", [None, 0.0, 1.0, 9.0])
 def test_no_npu_or_no_room_offers_none(npu_gb):
     assert lc.npu_chat_models_that_fit(_capacity(npu_gb)) == []
 
@@ -587,8 +589,7 @@ def test_a_load_reads_free_system_ram_not_free_gpu_memory():
 
 def test_every_offered_model_is_a_registered_requirement():
     for model_id in lc.NPU_CHAT_MODELS:
-        req = lc.find_model_requirement(model_id)
-        assert req.recipe == "flm" and req.size_gb and req.pull_kwargs() == {}
+        assert lc.find_model_requirement(model_id).pull_kwargs() == {}
 
 
 def test_recommended_models_agree_with_the_requirements():
@@ -605,7 +606,6 @@ def test_recommended_models_agree_with_the_requirements():
     )
     rows = {m["id"]: m for m in doc["models"]}
     for model_id in lc.NPU_CHAT_MODELS:
-        req = lc.find_model_requirement(model_id)
         assert rows[model_id]["device"] == "npu"
-        assert rows[model_id]["size_gb"] == req.size_gb
-        assert rows[model_id]["min_ctx_size"] == req.min_ctx_size
+        assert rows[model_id]["size_gb"] == lc.NPU_CHAT_MODELS[model_id]
+        assert rows[model_id]["min_ctx_size"] == lc.NPU_CTX_SIZE

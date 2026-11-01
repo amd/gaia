@@ -725,12 +725,18 @@ def inspect_link(
 
 
 def _already_listed(
-    report: Dict[str, Any], catalog: Optional[List[Dict[str, Any]]]
+    report: Dict[str, Any],
+    catalog: Optional[List[Dict[str, Any]]],
+    *,
+    shipped: bool = True,
 ) -> Optional[str]:
-    """Why the model in *report* can't be added beside what is listed, if so."""
+    """Why the model in *report* can't be added beside what is listed, if so.
+
+    *shipped* False skips ``MODELS``, which holds models the lists don't offer too.
+    """
     from gaia.llm.lemonade_client import MODELS, _model_ids_match
 
-    for req in MODELS.values():
+    for req in MODELS.values() if shipped else ():
         if _model_ids_match(req.model_id, report["model_id"]) or (
             req.checkpoint and req.checkpoint.lower() == report["checkpoint"].lower()
         ):
@@ -896,7 +902,7 @@ def _inspect_npu_repo(
             "Not already listed",
             f"{name} is already in your model list. Download it from there.",
         )
-    listed = _already_listed(report, catalog)
+    listed = _already_listed(report, catalog, shipped=False)
     if listed:
         return fail("new", "Not already listed", listed)
     report["ok"] = True

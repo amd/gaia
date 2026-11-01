@@ -1741,11 +1741,9 @@ MODELS = {
     "gemma-4-e2b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="gemma4-it-e2b-FLM",
-        display_name="Gemma 4 E2B NPU",
+        display_name="Gemma 4 E2B (NPU/FLM)",
         min_ctx_size=NPU_CTX_SIZE,
         tool_calling=False,
-        recipe="flm",
-        size_gb=6.0,
     ),
     # The NPU build of GAIA's default model. Native tool calls verified on
     # hardware with FastFlowLM 1.0.7.
@@ -2255,9 +2253,10 @@ DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
 OPTIONAL_CHAT_MODELS = (GPT_OSS_20B_MODEL_NAME, "gpt-oss-120b-mxfp-GGUF")
 
 
-#: Gemma's NPU builds, offered for download on a PC with an NPU they fit. Lemonade
-#: lists no FLM model until its NPU backend is installed, so these are named here.
-NPU_CHAT_MODELS = ("gemma4-it-e4b-FLM", "gemma4-it-e2b-FLM")
+#: Gemma's NPU build with its size in GB, offered for download on a PC with an NPU
+#: it fits. Lemonade lists no FLM model until its NPU backend is installed, so it is
+#: named here. E2B stays out: its embedded-JSON tool path shows replies as raw JSON.
+NPU_CHAT_MODELS = {"gemma4-it-e4b-FLM": 9.1}
 NPU_BACKEND_SPEC = "flm:npu"
 
 
@@ -2268,11 +2267,7 @@ def npu_chat_models_that_fit(capacity: Any) -> List[str]:
     npu = npu_capacity(capacity)
     if npu is None:
         return []
-    return [
-        model_id
-        for model_id in NPU_CHAT_MODELS
-        if check_fit(find_model_requirement(model_id).size_gb, npu).fits
-    ]
+    return [m for m, size in NPU_CHAT_MODELS.items() if check_fit(size, npu).fits]
 
 
 def optional_chat_models_that_fit(capacity: Any) -> List[str]:

@@ -1059,7 +1059,6 @@ def test_a_cold_npu_pc_is_offered_gemma_before_lemonade_lists_any_flm_model(
     assert rows["gemma4-it-e4b-FLM"]["size_gb"] == 9.1
     assert rows["gemma4-it-e4b-FLM"]["display_name"] == "Gemma 4 E4B NPU"
     assert rows["gemma4-it-e4b-FLM"]["state"] == "not_downloaded"
-    assert "gemma4-it-e2b-FLM" in rows
 
 
 def test_a_pc_without_an_npu_is_not_offered_flm_models(client, lemonade):

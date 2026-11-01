@@ -393,6 +393,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
     """Chat models for *provider*; *offer_optional* adds the optional ones that fit."""
     from gaia.llm.lemonade_client import (
         _model_ids_match,
+        NPU_CHAT_MODELS,
         catalog_context_window,
         find_model_requirement,
         runs_on_npu,
@@ -454,8 +455,10 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
                     "context_length": None,
                     "downloaded": False,
                     "labels": [],
-                    "recipe": req.recipe if req else None,
-                    "size_gb": req.size_gb if req else None,
+                    "recipe": (req.recipe if req else None)
+                    or ("flm" if runs_on_npu(model_id) else None),
+                    "size_gb": (req.size_gb if req else None)
+                    or NPU_CHAT_MODELS.get(model_id),
                     "rank": None,
                     "note": None,
                     "evidence": None,

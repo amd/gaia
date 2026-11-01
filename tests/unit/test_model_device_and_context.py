@@ -96,8 +96,13 @@ def loaded(name, device="gpu", recipe="llamacpp", backend_dir="vulkan", ctx=6553
     }
 
 
-def _cap(memory_gb, source="AMD iGPU", disk=None):
-    return MachineCapacity(memory_gb=memory_gb, memory_source=source, disk_free_gb=disk)
+def _cap(memory_gb, source="AMD iGPU", disk=None, npu=None):
+    return MachineCapacity(
+        memory_gb=memory_gb,
+        memory_source=source,
+        disk_free_gb=disk,
+        npu_memory_gb=npu,
+    )
 
 
 # ── #5214: the device each model runs on ──────────────────────────────────
@@ -199,7 +204,7 @@ _MODELS = [
         # Strix Halo with an NPU: every model loads.
         (
             "halo",
-            _cap(64),
+            _cap(64, npu=64),
             {"Gemma-4-E4B-it-GGUF", LARGE_DEFAULT_MODEL_NAME, "gemma4-it-e2b-FLM"},
         ),
         # 16 GB GPU, no NPU: the 35B does not fit and FLM has no NPU.
