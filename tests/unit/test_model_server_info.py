@@ -299,9 +299,7 @@ def test_second_embedding_model_is_reported_after_the_selected_embedder():
         preferred_backend=None,
     )
     assert info["embedding_model"]["name"] == "embedding-primary"
-    assert [model["name"] for model in info["loaded_models"]] == [
-        "embedding-secondary"
-    ]
+    assert [model["name"] for model in info["loaded_models"]] == ["embedding-secondary"]
 
 
 def test_chat_capable_vision_models_remain_chat_models():
