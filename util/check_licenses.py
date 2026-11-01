@@ -65,7 +65,8 @@ TEXT_ALIASES = {
 
 # Components whose metadata cannot be classified automatically, reviewed by hand.
 # Key: (ecosystem, name). Value: (versions reviewed as [min, max), SPDX licence, why).
-# A release outside the reviewed range is unclassified again: licences change.
+# A release outside the reviewed range is unclassified again (licences change),
+# unless it declares a License-Expression, which is then classified on its own.
 REVIEWED: dict[tuple[str, str], tuple[tuple[str, str], str, str]] = {
     ("python", "matplotlib"): (("3.0", "4.0"), "PSF-2.0", "Matplotlib licence is PSF-based (LICENSE/LICENSE in the wheel)"),
     ("python", "python-dateutil"): (
@@ -88,6 +89,10 @@ REVIEWED: dict[tuple[str, str], tuple[tuple[str, str], str, str]] = {
         "(FreeType under FTL; ICU's GPL text covers only an Autoconf build script)",
     ),
 }
+
+# Wheels that bundle third-party code their License-Expression doesn't cover:
+# past the reviewed range they always need a human re-review.
+REREVIEW_PAST_RANGE: frozenset[tuple[str, str]] = frozenset({("python", "pypdfium2")})
 
 # Installer tooling present in every venv that never ships inside GAIA. PyInstaller is
 # deliberately NOT here: the frozen agent binaries bundle parts of it.
@@ -292,19 +297,29 @@ def _version_tuple(version: str) -> tuple[int, ...]:
     return tuple(int(x) for x in re.findall(r"\d+", version)[:3]) or (0,)
 
 
-def _classify_component(ecosystem: str, name: str, version: str, licence: str, extra: list[str] | None = None) -> Finding:
+def _classify_component(
+    ecosystem: str,
+    name: str,
+    version: str,
+    licence: str,
+    extra: list[str] | None = None,
+    declared: bool = False,
+) -> Finding:
     key = (ecosystem, name.lower())
     classifiers = [c.split(" :: ")[-1] for c in (extra or [])]
     copyleft_classifiers = [c for c in classifiers if _denied_family(c)]
     if key in REVIEWED:
         (low, high), spdx, why = REVIEWED[key]
-        if not _version_tuple(low) <= _version_tuple(version) < _version_tuple(high):
+        in_range = _version_tuple(low) <= _version_tuple(version) < _version_tuple(high)
+        # Outside the range, a declared SPDX License-Expression is classified on its own merits.
+        if not in_range and (not declared or key in REREVIEW_PAST_RANGE):
             return Finding(
                 ecosystem, name, version, licence, "unknown",
                 f"REVIEWED covers {low} <= version < {high}; re-check the licence of {version} and update the entry",
             )
-        verdict, detail = classify(spdx)
-        return Finding(ecosystem, name, version, spdx, verdict, f"reviewed: {why}" if verdict == "ok" else detail)
+        if in_range:
+            verdict, detail = classify(spdx)
+            return Finding(ecosystem, name, version, spdx, verdict, f"reviewed: {why}" if verdict == "ok" else detail)
     verdict, detail = classify(licence)
     # A copyleft classifier counts unless the declared expression offers that family as an OR alternative.
     offered_as_alternative = verdict == "ok" and " OR " in licence and _denied_family(licence)
@@ -347,7 +362,7 @@ def scan_python() -> list[Finding]:
             if not licence:
                 findings.append(Finding("python", key, dist.version, raw.strip().splitlines()[0], "unknown", "unrecognised licence text"))
                 continue
-        findings.append(_classify_component("python", key, dist.version, licence, classifiers))
+        findings.append(_classify_component("python", key, dist.version, licence, classifiers, declared=bool(expression)))
     return findings
 
 
