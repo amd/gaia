@@ -573,27 +573,35 @@ def gateway_anthropic_base_url(state: Optional[GatewayState] = None) -> str:
     )
 
 
-def resolve_gateway_token() -> str:
-    """The gateway token GAIA itself sends, for routes Lemonade doesn't carry.
+def resolve_gateway_token_with_source() -> tuple[str, str]:
+    """Return GAIA's gateway token and the non-secret source name.
 
-    Same sources as the rest of GAIA, in order: ``LEMONADE_AMD_API_KEY``,
-    ``GAIA_GATEWAY_TOKEN``, then the OS credential store.
+    The source is used only for diagnostics; the token value is never included
+    in an error message. Keeping it beside resolution lets Claude explain when
+    its source differs from the key Lemonade currently uses.
     """
-    # No prompt to fall back on here, so a broken store must say so.
-    token = (
-        os.getenv(GATEWAY_ENV_VAR)
-        or os.getenv("GAIA_GATEWAY_TOKEN")
-        or read_stored_token()
+    token = os.getenv(GATEWAY_ENV_VAR)
+    if token and token.strip():
+        return token.strip(), GATEWAY_ENV_VAR
+    token = os.getenv("GAIA_GATEWAY_TOKEN")
+    if token and token.strip():
+        return token.strip(), "GAIA_GATEWAY_TOKEN"
+    token = read_stored_token()
+    if token and token.strip():
+        return token.strip(), "OS credential store"
+    raise GatewayError(
+        f"No AMD LLM gateway token found, and Claude gateway models need one "
+        f"in GAIA's own process. Run `gaia gateway auth` (without "
+        f"--no-remember) to store it in the OS credential store, or set "
+        f"{GATEWAY_ENV_VAR} or GAIA_GATEWAY_TOKEN in GAIA's environment. "
+        f"See https://amd-gaia.ai/docs/guides/llm-gateway."
     )
-    if not token or not token.strip():
-        raise GatewayError(
-            f"No AMD LLM gateway token found, and Claude gateway models need one "
-            f"in GAIA's own process. Run `gaia gateway auth` (without "
-            f"--no-remember) to store it in the OS credential store, or set "
-            f"{GATEWAY_ENV_VAR} or GAIA_GATEWAY_TOKEN in GAIA's environment. "
-            f"See https://amd-gaia.ai/docs/guides/llm-gateway."
-        )
-    return token.strip()
+
+
+def resolve_gateway_token() -> str:
+    """The gateway token GAIA itself sends, for routes Lemonade doesn't carry."""
+    token, _source = resolve_gateway_token_with_source()
+    return token
 
 
 class GatewayManager:
@@ -975,9 +983,9 @@ class GatewayManager:
             return False
         return True
 
-    def status(self) -> GatewayStatus:
+    def status(self, *, timeout: int = _REQUEST_TIMEOUT) -> GatewayStatus:
         """Registration and auth state for the gateway provider."""
-        info = self._request("GET", "system-info")
+        info = self._request("GET", "system-info", timeout=timeout)
         providers = (info.get("cloud") or {}).get("providers") or []
         for entry in providers:
             if entry.get("name") != GATEWAY_PROVIDER:

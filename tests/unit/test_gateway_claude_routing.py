@@ -473,7 +473,12 @@ def test_local_only_refuses_the_gateway(fake_sdk, monkeypatch):
         (502, "bad gateway", "HTTP 502"),
     ],
 )
-def test_gateway_errors_are_actionable(fake_sdk, status, message, expected):
+def test_gateway_errors_are_actionable(
+    fake_sdk, status, message, expected, monkeypatch
+):
+    manager = MagicMock()
+    manager.status.side_effect = RuntimeError("status unavailable")
+    monkeypatch.setattr("gaia.llm.gateway.GatewayManager", lambda: manager)
     client = _gateway_client()
     error = (
         fake_sdk.AuthenticationError(message, status)
@@ -488,6 +493,39 @@ def test_gateway_errors_are_actionable(fake_sdk, status, message, expected):
     assert GATEWAY_TOKEN not in str(raised.value)
     assert raised.value.__cause__ is error
     lemonade.assert_not_called()
+
+
+def test_gateway_claude_401_explains_likely_token_drift(
+    fake_sdk, monkeypatch, gateway_env
+):
+    client = _gateway_client()
+    error = fake_sdk.AuthenticationError("invalid subscription key", 401)
+    client._client.messages.create.side_effect = error
+    manager = MagicMock()
+    manager.status.return_value = SimpleNamespace(
+        env_var_set=True, runtime_key_set=False
+    )
+    monkeypatch.setattr("gaia.llm.gateway.GatewayManager", lambda: manager)
+
+    with pytest.raises(RuntimeError) as first_raised:
+        client.chat([{"role": "user", "content": "hi"}])
+    assert "those keys differ" not in str(first_raised.value)
+
+    client._gateway_token_source = "OS credential store"
+    manager.status.return_value = SimpleNamespace(
+        env_var_set=False, runtime_key_set=True
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    message = str(raised.value)
+    assert "GAIA's Claude route used OS credential store" in message
+    assert "Lemonade reports Lemonade runtime auth" in message
+    assert "if other gateway models still work, those keys differ" in message
+    assert GATEWAY_TOKEN not in message
+    assert manager.status.call_count == 2
+    assert all(call.kwargs == {"timeout": 5} for call in manager.status.call_args_list)
 
 
 def test_unreachable_gateway_names_the_vpn(fake_sdk):
