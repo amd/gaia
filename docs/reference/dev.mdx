@@ -122,7 +122,7 @@ uv pip install -e ".[dev,talk,rag,ui]"
 | `dev` | Test + lint tooling (pytest, black, isort, mypy, pylint, …) |
 | `ui` | Agent UI backend (FastAPI + uvicorn + SSE); **required for `gaia --ui`** |
 | `api` | OpenAI-compatible API server (`gaia api start`) |
-| `rag` | RAG document Q&A (FAISS, PyMuPDF, pypdf, Office formats; embeddings come from Lemonade) |
+| `rag` | RAG document Q&A (FAISS, pypdf, pypdfium2, Office formats; embeddings come from Lemonade) |
 | `talk` | Microphone and speaker I/O for `gaia talk` (sounddevice); Whisper and Kokoro run in Lemonade |
 | `mcp` | MCP client/server bridge (`gaia mcp start`) |
 | `image` | Terminal image rendering (`term-image`) |

@@ -151,10 +151,13 @@ def run_args(
     gaia_lemonade: bool = False,
     allow_low_disk: bool = False,
     keep_trying: bool = False,
+    extra_models: Optional[List[str]] = None,
+    server_only: bool = False,
 ) -> List[str]:
     # --yes: nobody can answer a prompt on a pipe. --skip-webui-build: a source
     # checkout would otherwise rebuild the very UI that is running this.
     # --progress-json: per-model bytes and states for the progress rows.
+    # server_only: start the model server so the user can choose models next.
     args = [
         "init",
         "--profile",
@@ -171,6 +174,10 @@ def run_args(
         args.append("--skip-chat-model")
     if gaia_lemonade:
         args.append("--gaia-lemonade")
+    if server_only:
+        args.append("--skip-models")
+    for model_id in extra_models or []:
+        args += ["--download-model", model_id]
     return args
 
 
@@ -387,8 +394,24 @@ def step_labels(
     skip_chat_model: bool,
     users_server: Optional[str] = None,
     chat_model: Optional[str] = None,
+    server_only: bool = False,
 ) -> List[Dict[str, str]]:
     """The steps as the user reads them: their server, and the model setup chose."""
+    server = (
+        {
+            "key": PHASE_SERVER,
+            "label": "Use your Lemonade Server",
+            "detail": users_server,
+        }
+        if users_server
+        else {
+            "key": PHASE_SERVER,
+            "label": "Install the local model server",
+            "detail": "about 1 minute",
+        }
+    )
+    if server_only:
+        return [server]
     if skip_chat_model:
         models = "the embedding model, under 1 GB"
     elif chat_model:
@@ -396,19 +419,7 @@ def step_labels(
     else:
         models = "the chat model that fits this PC, plus the embedding model"
     return [
-        (
-            {
-                "key": PHASE_SERVER,
-                "label": "Use your Lemonade Server",
-                "detail": users_server,
-            }
-            if users_server
-            else {
-                "key": PHASE_SERVER,
-                "label": "Install the local model server",
-                "detail": "about 1 minute",
-            }
-        ),
+        server,
         {"key": PHASE_MODELS, "label": "Download the models", "detail": models},
         {"key": PHASE_FINISH, "label": "Check that the models load", "detail": ""},
     ]
@@ -423,6 +434,8 @@ MODEL_STATES = (
     "failed",
     "skipped",
     "cancelled",
+    # Downloaded, but the run stopped before its load check: kept, never retried.
+    "unchecked",
 )
 
 
@@ -538,11 +551,19 @@ class SetupRun:
     status: Optional[Dict[str, Any]] = None
     allow_low_disk: bool = False
     keep_trying: bool = False
+    #: Only start the model server; the models are chosen and pulled after.
+    server_only: bool = False
+    #: Models pulled beside the profile's; setup has no load check for them.
+    extra_models: List[str] = field(default_factory=list)
+    #: A model's download failed in this run: its row already says why.
+    model_failed: bool = False
 
     def view(self) -> Dict[str, Any]:
         reached = PHASES.index(self.phase) if self.phase in PHASES else -1
         steps = []
-        labels = step_labels(self.skip_chat_model, self.users_server, self.chat_model)
+        labels = step_labels(
+            self.skip_chat_model, self.users_server, self.chat_model, self.server_only
+        )
         for i, step in enumerate(labels):
             if self.state == "ready" or i < reached:
                 status = "done"
@@ -567,6 +588,8 @@ class SetupRun:
             "log_tail": self.log[-40:],
             "skip_chat_model": self.skip_chat_model,
             "gaia_lemonade": self.gaia_lemonade,
+            "server_only": self.server_only,
+            "model_failed": self.model_failed,
             "chat_model": None if self.skip_chat_model else self.chat_model,
         }
 
@@ -634,8 +657,14 @@ class SetupRunner:
         gaia_lemonade: bool = False,
         allow_low_disk: bool = False,
         keep_trying: bool = False,
+        extra_models: Optional[List[str]] = None,
+        server_only: bool = False,
     ) -> Dict[str, Any]:
-        """Start setup; *gaia_lemonade* sets up and saves GAIA's own server."""
+        """Start setup; *gaia_lemonade* sets up and saves GAIA's own server.
+
+        *extra_models* are pulled beside the plan's. *server_only* starts the
+        model server and stops there, so the models can be chosen against it.
+        """
         if gaia_lemonade:
             from gaia.llm.lemonade_choice import env_override_note
 
@@ -658,13 +687,20 @@ class SetupRunner:
                 gaia_lemonade=gaia_lemonade,
                 allow_low_disk=allow_low_disk,
                 keep_trying=keep_trying,
+                server_only=server_only,
+                extra_models=list(extra_models or []),
             )
             command = run_command(skip_chat_model, gaia_lemonade)
             try:
                 self._proc = subprocess.Popen(
                     _gaia_argv(
                         *run_args(
-                            skip_chat_model, gaia_lemonade, allow_low_disk, keep_trying
+                            skip_chat_model,
+                            gaia_lemonade,
+                            allow_low_disk,
+                            keep_trying,
+                            extra_models,
+                            server_only,
                         )
                     ),
                     stdout=subprocess.PIPE,
@@ -696,7 +732,7 @@ class SetupRunner:
     ) -> Dict[str, Any]:
         """Pull one model now, in this process: Retry, Resume, or a model the
         user skipped at setup and now wants. Lemonade resumes a partial file."""
-        before = _bytes_on_disk(client, model_id)
+        on_disk = _bytes_on_disk(client, model_id)
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
                 raise SetupBusy(
@@ -707,8 +743,15 @@ class SetupRunner:
                 raise SetupBusy(f"{model_id} is already downloading.")
             stop = threading.Event()
             self._pulls[model_id] = stop
+            # Start from the bytes already down, so the first poll doesn't read 0
+            # and the next one jump to the partial size.
+            before = self._models.get(model_id)
             self._models[model_id] = ModelProgress(
-                id=model_id, state="downloading", bytes_before=before or None
+                id=model_id,
+                state="downloading",
+                bytes_done=before.bytes_done if before else 0,
+                bytes_total=before.bytes_total if before else 0,
+                bytes_before=on_disk or None,
             )
         threading.Thread(
             target=self._pull_one,
@@ -840,6 +883,8 @@ class SetupRunner:
                 entry.error_kind = error_kind(message)
                 entry.state, entry.speed_bps = "failed", 0
                 entry.error = _failure_text(model_id, entry.error_kind)
+                if self._run is not None:
+                    self._run.model_failed = True
 
     def _mirror_totals(self, run: SetupRun) -> None:
         """Fill the run's single bar from the per-model totals. Caller holds the lock."""
@@ -849,13 +894,13 @@ class SetupRunner:
         run.percent = totals["percent"]
         run.size = f"{totals['bytes_done'] / 1e9:.2f} GB of {totals['bytes_total'] / 1e9:.2f} GB"
 
-    def _settle_models(self, failed: Dict[str, str], run_failed: bool = False) -> None:
+    def _settle_models(
+        self, ready: Optional[set], failed: Dict[str, str], run_failed: bool = False
+    ) -> None:
         """After a run: downloaded models become ready, or failed when their
-        load check failed or the run stopped before checking.
-
-        "ready" means downloaded: a model the check did not load (Gemma, once a
-        chat model is saved) is ready without a load check of its own. Caller
-        holds the lock."""
+        load check failed. When the run stopped before checking, they stay
+        downloaded as "unchecked": nothing is wrong with them, so nothing may
+        delete or re-download them. Caller holds the lock."""
         for entry in self._models.values():
             if entry.id in failed:
                 entry.state, entry.error_kind = "failed", "verify"
@@ -863,14 +908,8 @@ class SetupRunner:
             elif entry.state != "verifying":
                 continue
             elif run_failed:
-                entry.state, entry.error_kind = "failed", "verify"
-                entry.error = (
-                    f"Setup stopped before GAIA could check that {entry.id} loads. "
-                    "Fix the error above, then run setup again."
-                )
-            else:
-                # Downloaded; a model the check did not load (Gemma once a
-                # chat model is saved) is not left "verifying" forever.
+                entry.state, entry.error_kind, entry.error = "unchecked", None, None
+            elif ready is None or entry.id in ready:
                 entry.state = "ready"
 
     def _watch(self, run: SetupRun, proc: subprocess.Popen) -> None:
@@ -925,7 +964,7 @@ class SetupRunner:
             if code != 0:
                 run.state = "failed"
                 # Downloaded but never checked: not shown as ready.
-                self._settle_models({}, run_failed=True)
+                self._settle_models(None, {}, run_failed=True)
                 if problem is not None:
                     # The raw exception stays in the log, behind "Details".
                     run.problem, run.error = problem, problem["message"]
@@ -935,6 +974,10 @@ class SetupRunner:
                     f"failed (exit {code}): "
                     f"{run.error or _last_line(chr(10).join(run.log))}"
                 )
+                return
+            if run.server_only:
+                # Nothing downloaded yet, so there is nothing to load.
+                run.state, run.text = "ready", "The local model server is running"
                 return
             run.state = "verifying"
             run.phase = PHASE_FINISH
@@ -948,7 +991,7 @@ class SetupRunner:
         except SetupError as e:
             with self._lock:
                 run.state, run.error = "failed", str(e)
-                self._settle_models({}, run_failed=True)
+                self._settle_models(None, {}, run_failed=True)
             return
         loads = status.get("models") or []
         failed = {
@@ -958,8 +1001,15 @@ class SetupRunner:
         }
         with self._lock:
             run.status = status
+            loaded = {m["id"] for m in loads if m.get("loaded")}
+            # An extra the user ticked has no load check: downloaded is as far
+            # as setup takes it. Any other model the check skipped stays unverified.
+            checked = {m["id"] for m in loads}
+            loaded |= {i for i in run.extra_models if i not in checked}
             self._settle_models(
-                failed, run_failed=not status.get("ready") and not loads
+                loaded if loads else None,
+                failed,
+                run_failed=not status.get("ready") and not loads,
             )
             if status.get("ready"):
                 run.state, run.text = "ready", "GAIA is ready"

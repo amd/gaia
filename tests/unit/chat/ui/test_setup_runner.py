@@ -70,6 +70,22 @@ def test_run_args_switch_to_gaias_own_server():
     assert "--gaia-lemonade" not in sr.run_args(False)
 
 
+def test_run_args_server_only_downloads_nothing():
+    args = sr.run_args(False, server_only=True)
+    assert "--skip-models" in args and "--download-model" not in args
+    assert "--skip-models" not in sr.run_args(False)
+
+
+def test_run_args_pull_each_ticked_extra_model():
+    args = sr.run_args(False, extra_models=["Qwen3-VL-4B-Instruct-GGUF", "gpt-oss-20b"])
+    assert args[-4:] == [
+        "--download-model",
+        "Qwen3-VL-4B-Instruct-GGUF",
+        "--download-model",
+        "gpt-oss-20b",
+    ]
+
+
 # ── parse_status ───────────────────────────────────────────────────────────
 
 
@@ -376,6 +392,18 @@ def test_view_names_the_chat_model_once_setup_picks_it():
     assert "Qwen3.6-35B-A3B-GGUF" in view["steps"][1]["detail"]
 
 
+def test_server_only_lists_just_the_server_step():
+    assert [s["key"] for s in sr.step_labels(False, server_only=True)] == ["server"]
+    mine = sr.step_labels(False, users_server="http://h:1/api/v1", server_only=True)
+    assert mine == [
+        {
+            "key": "server",
+            "label": "Use your Lemonade Server",
+            "detail": "http://h:1/api/v1",
+        }
+    ]
+
+
 def test_use_mine_replaces_the_install_step():
     steps = sr.step_labels(False, users_server="http://localhost:13305/api/v1")
     assert steps[0]["label"] == "Use your Lemonade Server"
@@ -463,6 +491,97 @@ def test_a_clean_run_is_verified_then_ready(monkeypatch):
     assert argv[3:] == sr.run_args(True)
     assert kwargs["stdin"] is subprocess.DEVNULL
     assert "[====] 100% (5 MB/5 MB)" in view["log_tail"]
+
+
+def test_a_server_only_run_is_ready_without_loading_models(monkeypatch):
+    calls = []
+    _popen(
+        monkeypatch,
+        _FakeProc(io.BytesIO(b"Step 1/2: Starting Lemonade Server...\n")),
+        calls,
+    )
+
+    def check(*_a, **_k):
+        raise AssertionError("a server-only run has no models to load")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, server_only=True)
+    view = _wait_done(runner)
+    assert view["state"] == "ready" and view["server_only"] is True
+    assert [s["key"] for s in view["steps"]] == ["server"]
+    assert view["steps"][0]["status"] == "done"
+    assert "--skip-models" in calls[0][0]
+
+
+def test_an_extra_model_with_no_load_check_ends_ready(monkeypatch):
+    plan = json.dumps(
+        {
+            "event": "plan",
+            "models": [
+                {"id": "Gemma-4-E4B-it-GGUF", "bytes_total": 10, "downloaded": True},
+                {"id": "gpt-oss-20b-GGUF", "bytes_total": 10, "downloaded": True},
+            ],
+        }
+    )
+    _popen(monkeypatch, _FakeProc(io.BytesIO((plan + chr(10)).encode())))
+    monkeypatch.setattr(
+        sr,
+        "check",
+        lambda *_a, **_k: {
+            "ready": True,
+            "models": [{"id": "Gemma-4-E4B-it-GGUF", "loaded": True}],
+        },
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, extra_models=["gpt-oss-20b-GGUF"])
+    view = _wait_done(runner)
+    assert view["state"] == "ready"
+    assert {m["id"]: m["state"] for m in view["models"]} == {
+        "Gemma-4-E4B-it-GGUF": "ready",
+        "gpt-oss-20b-GGUF": "ready",
+    }
+
+
+def test_only_extras_skip_the_load_check(monkeypatch):
+    plan = json.dumps(
+        {
+            "event": "plan",
+            "models": [
+                {"id": "Gemma-4-E4B-it-GGUF", "bytes_total": 10, "downloaded": True},
+                {
+                    "id": "user.embeddinggemma-300m-GGUF",
+                    "bytes_total": 1,
+                    "downloaded": True,
+                },
+            ],
+        }
+    )
+    _popen(monkeypatch, _FakeProc(io.BytesIO((plan + chr(10)).encode())))
+    # The check reports Gemma only: the embedder was never verified.
+    monkeypatch.setattr(
+        sr,
+        "check",
+        lambda *_a, **_k: {
+            "ready": True,
+            "models": [{"id": "Gemma-4-E4B-it-GGUF", "loaded": True}],
+        },
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    states = {m["id"]: m["state"] for m in view["models"]}
+    assert states["Gemma-4-E4B-it-GGUF"] == "ready"
+    assert states["user.embeddinggemma-300m-GGUF"] != "ready"
+
+
+def test_a_failed_server_only_run_fails_like_any_run(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO("\u274c Port in use\n".encode()), 1))
+    monkeypatch.setattr(sr, "server_problem", lambda: None)
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, server_only=True)
+    view = _wait_done(runner)
+    assert view["state"] == "failed" and "Port in use" in view["error"]
 
 
 def test_a_run_follows_the_chat_model_and_the_users_server(monkeypatch):
@@ -1077,7 +1196,7 @@ def test_a_finished_run_marks_what_loaded_ready_and_what_did_not_failed():
     runner._on_event(json.loads(_plan_event()))
     runner._on_event({"event": "model_done", "model": QWEN, "downloaded": True})
     with runner._lock:
-        runner._settle_models({QWEN: "would not load"})
+        runner._settle_models({EMBED}, {QWEN: "would not load"})
     rows = _models(runner)
     assert rows[EMBED]["state"] == "ready"
     assert rows[QWEN]["state"] == "failed" and rows[QWEN]["error_kind"] == "verify"
@@ -1100,7 +1219,7 @@ def test_a_downloaded_model_the_check_did_not_load_is_not_left_verifying():
     for model in (QWEN, GEMMA):
         runner._on_event({"event": "model_done", "model": model, "downloaded": True})
     with runner._lock:
-        runner._settle_models({})
+        runner._settle_models(None, {})
     rows = _models(runner)
     assert rows[QWEN]["state"] == rows[GEMMA]["state"] == "ready"
 
@@ -1327,10 +1446,110 @@ def test_a_failed_run_never_shows_unchecked_models_as_ready():
     runner = sr.SetupRunner()
     runner._on_event(json.loads(_plan_event()))
     with runner._lock:
-        runner._settle_models({}, run_failed=True)
+        runner._settle_models(None, {}, run_failed=True)
     embed = _models(runner)[EMBED]
-    assert embed["state"] == "failed" and embed["error_kind"] == "verify"
-    assert "before GAIA could check" in embed["error"]
+    # Not ready, and not failed either: nothing is wrong with the file.
+    assert embed["state"] == "unchecked"
+    assert embed["error_kind"] is None and embed["error"] is None
+    assert not embed["can_retry"]
+    assert runner.status()["overall"]["failed"] == 0
+
+
+def test_a_later_download_failing_keeps_the_earlier_models(monkeypatch):
+    """gaia init exits 1 when any one pull fails; what already downloaded stays."""
+    lines = [
+        _plan_event(),
+        json.dumps({"event": "model_done", "model": QWEN, "downloaded": True}),
+        json.dumps(
+            {"event": "error", "model": GEMMA, "message": "Connection reset by peer"}
+        ),
+    ]
+    _popen(
+        monkeypatch,
+        _FakeProc(io.BytesIO((chr(10).join(lines) + chr(10)).encode()), returncode=1),
+    )
+    monkeypatch.setattr(
+        sr, "check", lambda *_a, **_k: pytest.fail("a failed run is not load-checked")
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    assert view["state"] == "failed"
+    rows = {m["id"]: m for m in view["models"]}
+    for kept in (QWEN, EMBED):
+        assert rows[kept]["state"] == "unchecked", rows[kept]
+        assert rows[kept]["error_kind"] is None and not rows[kept]["can_retry"]
+        assert rows[kept]["bytes_done"] == rows[kept]["bytes_total"]
+    assert rows[GEMMA]["state"] == "failed" and rows[GEMMA]["can_retry"]
+    # Only the real failure counts.
+    assert view["overall"]["failed"] == 1
+    # The run says a model is why it stopped, so the UI shows no second error.
+    assert view["model_failed"] is True
+
+
+def test_a_run_that_stopped_for_another_reason_names_no_model(monkeypatch):
+    lines = [_plan_event(), json.dumps({"event": "model_done", "model": QWEN})]
+    _popen(
+        monkeypatch,
+        _FakeProc(io.BytesIO((chr(10).join(lines) + chr(10)).encode()), returncode=1),
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    assert view["state"] == "failed" and view["model_failed"] is False
+
+
+def test_a_load_check_that_never_ran_leaves_models_unchecked(monkeypatch):
+    lines = [_plan_event(), json.dumps({"event": "model_done", "model": QWEN})]
+    _popen(monkeypatch, _FakeProc(io.BytesIO((chr(10).join(lines) + chr(10)).encode())))
+
+    def broken(*_a, **_k):
+        raise sr.SetupError("The model server stopped answering.")
+
+    monkeypatch.setattr(sr, "check", broken)
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    assert view["state"] == "failed"
+    assert {m["id"]: m["state"] for m in view["models"]}[QWEN] == "unchecked"
+    assert view["overall"]["failed"] == 0
+
+
+def test_only_a_real_load_failure_is_a_verify_failure():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event({"event": "model_done", "model": QWEN})
+    with runner._lock:
+        runner._settle_models({EMBED}, {QWEN: "would not load"})
+    rows = _models(runner)
+    assert rows[QWEN]["state"] == "failed" and rows[QWEN]["error_kind"] == "verify"
+    assert rows[EMBED]["state"] == "ready"
+
+
+def test_a_resume_starts_from_the_bytes_already_down():
+    """The first poll after Resume must not read 0 and then jump to the partial."""
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event(
+        {
+            "event": "progress",
+            "model": QWEN,
+            "bytes_done": 9_000_000_000,
+            "bytes_total": 23_300_000_000,
+        }
+    )
+    runner.cancel(QWEN)
+    with runner._lock:
+        runner._models[QWEN].state = "cancelled"
+    gate = threading.Event()
+    runner.download_model(_PullClient([], gate=gate), QWEN)
+    try:
+        row = _models(runner)[QWEN]
+        assert row["state"] == "downloading"
+        assert row["bytes_done"] == 9_000_000_000
+        assert row["bytes_total"] == 23_300_000_000
+    finally:
+        gate.set()
 
 
 def test_remove_is_refused_while_setup_runs_or_under_another_spelling(client):

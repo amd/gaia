@@ -11,6 +11,7 @@ from gaia.utils.file_watcher import (
     compute_file_hash,
 )
 from gaia.utils.parsing import (
+    PdfRenderError,
     detect_field_changes,
     extract_json_from_text,
     pdf_page_to_image,
@@ -28,6 +29,7 @@ __all__ = [
     # Parsing utilities
     "extract_json_from_text",
     "pdf_page_to_image",
+    "PdfRenderError",
     "detect_field_changes",
     "validate_required_fields",
 ]

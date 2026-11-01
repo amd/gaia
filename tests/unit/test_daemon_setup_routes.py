@@ -192,7 +192,8 @@ def test_run_passes_keep_trying_through(daemon, monkeypatch):
     )
     r = daemon.post("/daemon/v1/setup/run", json={"keep_trying": True}, headers=AUTH)
     assert r.status_code == 200 and r.json() == {"state": "running"}
-    assert seen == [((False, False), {"allow_low_disk": False, "keep_trying": True})]
+    assert len(seen) == 1 and seen[0][0] == (False, False)
+    assert seen[0][1]["keep_trying"] is True and seen[0][1]["allow_low_disk"] is False
 
 
 def test_status_is_idle_with_nothing_running(daemon, monkeypatch):
