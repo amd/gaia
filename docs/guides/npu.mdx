@@ -41,8 +41,9 @@ This will:
 
 The Agent UI and terminal UI then have an agent to talk to. If GAIA's download server can't be
 reached, setup still downloads the models, then reports itself incomplete and exits
-`1` — run `gaia init --profile npu` again once the network is back. To return to the GPU, pick
-a GPU model in the model list (or `gaia config set default_model <id>`).
+`1` — run `gaia init --profile npu` again once the network is back. To return to the GPU, run
+`gaia config set default_model <id>` with a GPU model; picking one in the Agent UI or terminal
+UI model list changes only the model those open on.
 
 ## Which NPU model
 
