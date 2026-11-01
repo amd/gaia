@@ -7,7 +7,7 @@
  * plan, so the numbers shown are the backend's numbers added up, never guesses.
  */
 
-import type { GpuMemoryStatus, SetupCatalogEntry, SetupPlan } from '../../types';
+import type { GpuMemoryStatus, SetupCatalogEntry, SetupOverall, SetupPlan, SetupRunStatus } from '../../types';
 
 export interface Selection {
     /** Models the user wants on this PC. */
@@ -165,12 +165,42 @@ export function gpuUnlocks(gpu: GpuMemoryStatus | null): string[] {
 }
 
 /**
- * The GPU step shows on an integrated GPU where a bigger share makes a default
- * model fit, unless the user unticked every model it would help.
+ * The GPU step shows on an integrated GPU only when a bigger share makes a
+ * model the user ticked (or chose to chat with) fit; it never promotes one
+ * they didn't pick.
  */
 export function showGpuStep(gpu: GpuMemoryStatus | null, sel: Selection): boolean {
     if (!gpu?.applies || !gpu.show_in_setup) return false;
-    return gpuUnlocks(gpu).some((id) => !sel.unticked.has(id));
+    return gpuUnlocks(gpu).some((id) => sel.ticked.has(id) || id === sel.defaultChat);
+}
+
+/**
+ * The download's overall progress from the same plan the models step totalled:
+ * only what was left to download when it started, so the two screens never
+ * disagree (a model already on disk adds nothing; a partial one only its rest).
+ */
+export function overallFromPlan(status: SetupRunStatus, plan: SetupPlan | null): SetupOverall | undefined {
+    const rows = (status.models ?? []).filter((m) => m.state !== 'skipped');
+    if (!plan?.catalog || rows.length === 0) return status.overall;
+    let done = 0;
+    let total = 0;
+    for (const m of rows) {
+        const entry = plan.catalog.find((e) => e.id === m.id);
+        const left = entry?.downloaded ? 0
+            : entry?.size_gb != null ? Math.min(m.bytes_total || Infinity, entry.size_gb * 1e9)
+                : m.bytes_total;
+        const before = Math.max(0, m.bytes_total - left);
+        total += left;
+        done += m.state === 'ready' || m.state === 'verifying' ? left : Math.min(left, Math.max(0, m.bytes_done - before));
+    }
+    return {
+        bytes_done: done,
+        bytes_total: total,
+        speed_bps: status.overall?.speed_bps ?? 0,
+        eta_s: null,
+        percent: total > 0 ? Math.floor((done * 100) / total) : 100,
+        failed: rows.filter((m) => m.state === 'failed').length,
+    };
 }
 
 function round1(n: number): number {

@@ -3,10 +3,10 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-    chatCandidates, extraModels, initialSelection, installedOnlyRows, mainRows, moreRows, recommendedSelection,
+    chatCandidates, extraModels, initialSelection, installedOnlyRows, mainRows, moreRows, overallFromPlan, recommendedSelection,
     shortfall, showGpuStep, skipChanges, toggle, tooBig, totals, visionSkipped,
 } from '../selection';
-import { COLD_BIG, EMBED, FLM, GEMMA, GPT_OSS, QWEN, entry, gpuStatus, plan } from './fixtures';
+import { COLD_BIG, EMBED, FLM, GEMMA, GPT_OSS, QWEN, entry, gpuStatus, plan, progress, runStatus } from './fixtures';
 
 describe('the selection a plan starts from', () => {
     it('ticks what setup plans, so the recommended set is preselected', () => {
@@ -145,5 +145,52 @@ describe('the GPU memory step', () => {
         const p = COLD_BIG();
         const only = gpuStatus({ presets: [{ setting_gb: 64, gpu_gb: 64, unlocks: [QWEN.id] }] });
         expect(showGpuStep(only, toggle(initialSelection(p), p.catalog!, QWEN.id, false))).toBe(false);
+    });
+});
+
+describe('the GPU step only for a model the user picked', () => {
+    it('stays hidden when the model a bigger share would help was never ticked', () => {
+        // An NPU-only user: the 23 GB model is not theirs, so no step promotes it.
+        const p = plan([{ ...QWEN, recommended: false, planned: false, selected: false }, GEMMA, EMBED, FLM], {
+            chat_model: { id: FLM.id, user_set: true, size_gb: 0, downloaded: true },
+        });
+        const sel = initialSelection(p);
+        expect(sel.defaultChat).toBe(FLM.id);
+        expect(sel.ticked.has(QWEN.id)).toBe(false);
+        expect(showGpuStep(gpuStatus({ presets: [{ setting_gb: 64, gpu_gb: 64, unlocks: [QWEN.id] }] }), sel)).toBe(false);
+    });
+
+    it('shows once the user ticks that model', () => {
+        const p = plan([{ ...QWEN, recommended: false, planned: false, selected: false }, GEMMA, EMBED]);
+        const sel = toggle(initialSelection(p), p.catalog!, QWEN.id, true);
+        expect(showGpuStep(gpuStatus({ presets: [{ setting_gb: 64, gpu_gb: 64, unlocks: [QWEN.id] }] }), sel)).toBe(true);
+    });
+});
+
+describe('download totals from one source', () => {
+    it('counts only what was left to download, as the models step did', () => {
+        // The embedder is on disk; Qwen was 7.6 GB in; Gemma is new.
+        const p = plan([
+            { ...QWEN, partial: true, partial_gb: 7.6, size_gb: 15.7 },
+            GEMMA,
+            { ...EMBED, downloaded: true, size_gb: 0 },
+        ]);
+        const sel = initialSelection(p);
+        const status = runStatus([
+            progress({ id: EMBED.id, roles: ['embedding'], state: 'verifying', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
+            progress({ id: QWEN.id, state: 'downloading', bytes_done: 9.6e9, bytes_total: 23.3e9 }),
+            progress({ id: GEMMA.id, roles: ['vision'], state: 'queued', bytes_total: 5.97e9 }),
+        ]);
+        const overall = overallFromPlan(status, p)!;
+        expect(overall.bytes_total / 1e9).toBeCloseTo(totals(p, sel).downloadGb!, 1);
+        // 2 GB of Qwen's remaining 15.7 GB have come since the start.
+        expect(overall.bytes_done / 1e9).toBeCloseTo(2.0, 1);
+        expect(overall.percent).toBe(Math.floor((2.0 / 21.67) * 100));
+    });
+
+    it('reads 100% when everything was already on this PC', () => {
+        const p = plan([{ ...GEMMA, downloaded: true, size_gb: 0 }, { ...EMBED, downloaded: true, size_gb: 0 }]);
+        const status = runStatus([progress({ id: GEMMA.id, state: 'verifying', bytes_done: 6e9, bytes_total: 6e9 })], { state: 'verifying' });
+        expect(overallFromPlan(status, p)!.percent).toBe(100);
     });
 });

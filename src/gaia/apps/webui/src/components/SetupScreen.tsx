@@ -18,7 +18,7 @@ import { DownloadProgress, downloadsActive } from './setup/DownloadProgress';
 import { GpuMemoryPanel } from './setup/GpuMemoryPanel';
 import { tooBigText } from './setup/ModelChecklist';
 import {
-    catalogOf, extraModels, initialSelection, showGpuStep, skipChanges, tooBig, type Selection,
+    catalogOf, extraModels, initialSelection, overallFromPlan, showGpuStep, skipChanges, tooBig, type Selection,
 } from './setup/selection';
 import type {
     GpuMemoryStatus, LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCatalogEntry,
@@ -275,6 +275,9 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
     const [plan, setPlan] = useState<SetupPlan | null>(null);
     const [planError, setPlanError] = useState<string | null>(null);
     const [selection, setSelection] = useState<Selection | null>(null);
+    // The plan the download started from: the download step's totals come from it,
+    // as the models step's did, so the two screens show the same numbers.
+    const [startPlan, setStartPlan] = useState<SetupPlan | null>(null);
     // The plan read after setup finished: what is really on disk, for the summary.
     const [finalPlan, setFinalPlan] = useState<SetupPlan | null>(null);
     const [gpu, setGpu] = useState<GpuMemoryStatus | null>(null);
@@ -449,6 +452,7 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
 
     /** Download with the selection: the plan's models, minus skips, plus ticked extras. */
     const download = useCallback((acknowledgeLowDisk: boolean, latest: SetupPlan | null = plan) => {
+        setStartPlan(latest);
         const extras = latest && selection && !cloud ? extraModels(latest, selection) : [];
         void start(false, { acknowledgeLowDisk, keepTrying, extraModels: extras });
     }, [plan, selection, cloud, keepTrying, start]);
@@ -802,7 +806,7 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
                                 {(fullRun.models?.length ?? 0) > 0 ? (
                                     <div className={lostContact ? 'is-stale' : undefined}>
                                         <DownloadProgress
-                                            status={fullRun}
+                                            status={{ ...fullRun, overall: overallFromPlan(fullRun, startPlan ?? plan) }}
                                             names={names}
                                             freeGb={plan?.disk?.free_gb ?? null}
                                             onCancel={() => void cancel()}

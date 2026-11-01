@@ -214,6 +214,7 @@ export function DownloadProgress({ status, names, freeGb = null, onCancel, onRet
     const models = useMemo(() => sortedModels(status.models ?? []), [status.models]);
     const meters = useRef(new Map<string, DownloadMeter>());
     const overallMeter = useRef(new DownloadMeter());
+    const wasMoving = useRef(false);
     const [now, setNow] = useState(() => Date.now());
     const [confirmCancel, setConfirmCancel] = useState(false);
     const [announce, setAnnounce] = useState('');
@@ -247,6 +248,9 @@ export function DownloadProgress({ status, names, freeGb = null, onCancel, onRet
             out[m.id] = meter.update(m.bytes_done, m.bytes_total, at);
         }
         const moving = models.some((m) => m.state === 'downloading');
+        // A resume or retry after a pause starts its speed and time left fresh.
+        if (moving && !wasMoving.current) overallMeter.current = new DownloadMeter();
+        wasMoving.current = moving;
         // Time left counts only rows still coming: a failed or cancelled one isn't.
         const coming = models
             .filter((m) => m.state === 'downloading' || m.state === 'queued')

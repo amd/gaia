@@ -128,6 +128,26 @@ describe('DownloadProgress', () => {
         expect(within(rowOf('Qwen3.6-35B-A3B')).getByText(/18 MB\/s · about \d+ min/)).toBeInTheDocument();
     });
 
+    it('starts speed and time left fresh after a cancel and resume', () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(0);
+        const at = (state: 'downloading' | 'cancelled', done: number): SetupRunStatus =>
+            runStatus([progress({ id: QWEN.id, state, bytes_done: done, bytes_total: 23.3e9 })]);
+        const { rerender } = render(<DownloadProgress status={at('downloading', 1e9)} names={NAMES} />);
+        for (let s = 1; s <= 11; s++) {
+            vi.setSystemTime(s * 1000);
+            rerender(<DownloadProgress status={at('downloading', 1e9 + s * 18e6)} names={NAMES} />);
+        }
+        expect(screen.getByText(/18 MB\/s · about/, { selector: '.dl-detail bdi' })).toBeInTheDocument();
+        vi.setSystemTime(60_000);
+        rerender(<DownloadProgress status={at('cancelled', 1.2e9)} names={NAMES} />);
+        vi.setSystemTime(300_000);
+        rerender(<DownloadProgress status={at('downloading', 1.3e9)} names={NAMES} />);
+        // No speed carried over from before the pause: it estimates again.
+        expect(within(rowOf('Qwen3.6-35B-A3B')).getByText(/Estimating…/)).toBeInTheDocument();
+        expect(screen.getByText(/Overall .* Estimating…/)).toBeInTheDocument();
+    });
+
     it('says when no data has come for 15 s, and offers Retry after a minute', () => {
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(0);
