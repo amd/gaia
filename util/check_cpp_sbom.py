@@ -6,8 +6,9 @@
 Every source of third-party code in the C++ framework must have a matching
 SPDX package, and the SBOM must not list anything the build no longer uses:
 
-- each ``FetchContent_Declare`` in cpp/CMakeLists.txt, matched by its URL, with
-  the same SHA256 and the version taken from the tag in that URL;
+- each ``FetchContent_Declare`` in a cpp/ CMakeLists.txt or *.cmake module
+  (examples and build trees excluded), matched by its URL, with the same SHA256
+  and the version taken from the tag in that URL;
 - each vendored tree under cpp/third_party/<dir>/, described by its
   ``*_VERSION.txt`` (``UPSTREAM_URL``, ``UPSTREAM_SHA256``, ``<X>_VERSION``);
 - each dependency named in cpp/vcpkg.json, matched by package name;
@@ -43,8 +44,8 @@ _TAG_RE = re.compile(r"/refs/tags/v?([^/]+?)\.(?:tar\.gz|zip)$")
 class Dependency:
     origin: str  # where the pin lives, for error messages
     url: str
-    sha256: Optional[str]
-    version: Optional[str]
+    sha256: str
+    version: str
 
 
 def _strip_comments(cmake: str) -> str:
@@ -70,14 +71,36 @@ def fetchcontent_dependencies(cmake_text: str, origin: str) -> List[Dependency]:
             errors.append(f"{where} needs both URL and URL_HASH SHA256=<hex>")
             continue
         tag = _TAG_RE.search(url.group(1))
+        if not tag:
+            errors.append(
+                f"{where} URL {url.group(1)} is not a .../refs/tags/<version> "
+                "archive, so its version cannot be checked against the SBOM"
+            )
+            continue
         deps.append(
             Dependency(
-                where, url.group(1), sha.group(1).lower(), tag.group(1) if tag else None
+                where, url.group(1), sha.group(1).lower(), tag.group(1)
             )
         )
     if errors:
         raise ValueError("\n".join(errors))
     return deps
+
+
+# Consumer examples pin gaia itself, and build trees hold fetched sources.
+_SKIP_DIRS = {"examples", "third_party", "_deps"}
+
+
+def cmake_sources(cpp_dir: Path) -> List[Path]:
+    """Every CMakeLists.txt and *.cmake module the C++ build can include."""
+    found = []
+    for path in sorted(cpp_dir.rglob("*")):
+        rel = path.relative_to(cpp_dir).parts
+        if any(p in _SKIP_DIRS or p.startswith("build") for p in rel[:-1]):
+            continue
+        if path.name == "CMakeLists.txt" or path.suffix == ".cmake":
+            found.append(path)
+    return found
 
 
 def vendored_dependencies(third_party: Path) -> List[Dependency]:
@@ -187,7 +210,12 @@ def check(cpp_dir: Path, sbom_path: Path) -> List[str]:
             )
 
     try:
-        pinned = fetchcontent_dependencies(cmake_text, "cpp/CMakeLists.txt")
+        pinned = []
+        for source in cmake_sources(cpp_dir):
+            pinned += fetchcontent_dependencies(
+                source.read_text(encoding="utf-8"),
+                f"cpp/{source.relative_to(cpp_dir).as_posix()}",
+            )
         pinned += vendored_dependencies(cpp_dir / "third_party")
     except ValueError as exc:
         errors.append(str(exc))
@@ -206,7 +234,7 @@ def check(cpp_dir: Path, sbom_path: Path) -> List[str]:
             errors.append(
                 f"{pkg.get('name')}: SBOM SHA256 {_sha256_of(pkg)} != pinned {dep.sha256}"
             )
-        if dep.version and pkg.get("versionInfo") != dep.version:
+        if pkg.get("versionInfo") != dep.version:
             errors.append(
                 f"{pkg.get('name')}: SBOM versionInfo {pkg.get('versionInfo')!r} "
                 f"!= pinned {dep.version!r}"

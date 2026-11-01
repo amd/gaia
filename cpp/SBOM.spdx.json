@@ -171,7 +171,7 @@
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "Apache-2.0",
+      "licenseDeclared": "NOASSERTION",
       "copyrightText": "NOASSERTION",
       "externalRefs": [
         {
@@ -180,7 +180,7 @@
           "referenceLocator": "pkg:generic/openssl"
         }
       ],
-      "comment": "Optional HTTPS support. Not pinned: vcpkg (cpp/vcpkg.json) on Windows, the system package on Linux/macOS. Apache-2.0 applies to OpenSSL 3.x."
+      "comment": "Optional HTTPS support. Not pinned: vcpkg (cpp/vcpkg.json) on Windows, the system package on Linux/macOS. The license depends on the version found: Apache-2.0 for OpenSSL 3.x, OpenSSL AND SSLeay for 1.1.x."
     }
   ],
   "relationships": [

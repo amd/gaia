@@ -255,3 +255,37 @@ def test_missing_and_invalid_sbom_fail(cpp_tree, capsys):
     (cpp_tree / "SBOM.spdx.json").write_text("{not json", encoding="utf-8")
     assert check_cpp_sbom.run_check(cpp_tree) == 1
     assert "not valid JSON" in capsys.readouterr().err
+
+
+def test_tagless_pin_is_rejected(cpp_tree):
+    cmake = cpp_tree / "CMakeLists.txt"
+    cmake.write_text(
+        cmake.read_text(encoding="utf-8")
+        + "FetchContent_Declare(\n  sha\n  URL https://github.com/a/b/archive/"
+        "0123abcd.tar.gz\n  URL_HASH SHA256=" + "d" * 64 + "\n)\n",
+        encoding="utf-8",
+    )
+    errors = _errors(cpp_tree, _sbom(_good_packages()))
+    assert any("FetchContent_Declare(sha)" in e and "refs/tags" in e for e in errors)
+
+
+def test_pin_in_cmake_module_is_checked(cpp_tree):
+    (cpp_tree / "cmake").mkdir()
+    (cpp_tree / "cmake" / "deps.cmake").write_text(
+        "FetchContent_Declare(\n  fmt\n  URL https://github.com/fmtlib/fmt/archive/"
+        "refs/tags/10.2.1.tar.gz\n  URL_HASH SHA256=" + "e" * 64 + "\n)\n",
+        encoding="utf-8",
+    )
+    errors = _errors(cpp_tree, _sbom(_good_packages()))
+    assert any(
+        e.startswith("cpp/cmake/deps.cmake FetchContent_Declare(fmt)") for e in errors
+    ), errors
+
+
+def test_examples_and_build_trees_are_ignored(cpp_tree):
+    bad = "FetchContent_Declare(\n  gaia_core\n  GIT_REPOSITORY https://x/g.git\n)\n"
+    for sub in ("examples/consumer", "build/_deps/x-src", "build-shared/y"):
+        d = cpp_tree / sub
+        d.mkdir(parents=True)
+        (d / "CMakeLists.txt").write_text(bad, encoding="utf-8")
+    assert _errors(cpp_tree, _sbom(_good_packages())) == []
