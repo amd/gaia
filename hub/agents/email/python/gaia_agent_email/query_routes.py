@@ -516,6 +516,20 @@ _QUERY_SSE_RESPONSES = {
 }
 
 
+def _carry_runtime_settings(previous: Any, rebuilt: Any) -> None:
+    """Re-apply the runtime toggles a caller set on a session's previous agent
+    (memory off, autonomy level) to the agent rebuilt for a new model."""
+    memory_status = getattr(previous, "memory_status", None)
+    if callable(memory_status):
+        status = memory_status()
+        if status.get("available") and not status.get("enabled"):
+            rebuilt.set_memory_enabled(False)
+    previous_level = getattr(getattr(previous, "config", None), "autonomy_level", None)
+    rebuilt_level = getattr(getattr(rebuilt, "config", None), "autonomy_level", None)
+    if previous_level is not None and previous_level != rebuilt_level:
+        rebuilt.set_autonomy_level(previous_level)
+
+
 @router.post("/query", responses=_QUERY_SSE_RESPONSES)
 async def query(request: QueryRequest) -> StreamingResponse:
     """Run the email agent loop for one request and stream canonical SSE events.
@@ -587,14 +601,19 @@ async def query(request: QueryRequest) -> StreamingResponse:
                 status_code=409,
                 detail="A turn is already in progress for this session.",
             )
-        if request.model and request.model != session.model_id:
+        running_on = (session.model_id, getattr(session.agent, "model_id", None))
+        if request.model and request.model not in running_on:
             # The session's agent was built on another model; never run this
             # turn on a model the caller did not ask for.
+            rebuilt = None
             try:
                 rebuilt = await asyncio.to_thread(
                     agent_routes.build_session_agent, **config_kwargs
                 )
+                _carry_runtime_settings(session.agent, rebuilt)
             except Exception as exc:  # construction failure → fail loud
+                if rebuilt is not None:
+                    agent_routes._close_agent(rebuilt)
                 session.run_lock.release()
                 raise HTTPException(
                     status_code=502,
@@ -604,8 +623,9 @@ async def query(request: QueryRequest) -> StreamingResponse:
                     ),
                 ) from exc
             previous, session.agent = session.agent, rebuilt
-            session.model_id = request.model
             agent_routes._close_agent(previous)
+        if request.model:
+            session.model_id = request.model
         agent = session.agent
     else:
         try:

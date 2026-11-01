@@ -13,8 +13,9 @@ contract version is tracked separately as
   for.** `POST /v1/email/query` with a `session_id` used to keep running the
   session's agent on whatever model it was first built with, even when a later
   turn named another `model`. That turn now rebuilds the session's agent on
-  the requested model, and a failed rebuild is a 502 that leaves the session
-  usable. This matters now that the Agent UI sends `session_id`, so a
+  the requested model, keeping the session's memory-off toggle and autonomy
+  level, and a failed rebuild is a 502 that leaves the session usable. Naming
+  the model the session already runs does not rebuild. This matters now that the Agent UI sends `session_id`, so a
   follow-up can name a thread the previous turn showed. (#2834)
 
 - **Concurrent startup no longer fails to open the email state database
