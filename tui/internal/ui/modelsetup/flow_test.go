@@ -1487,3 +1487,53 @@ func TestTheSummaryCountsAModelTheRunDidNotCheck(t *testing.T) {
 	h.expect("Vision     Gemma-4-E4B-it")
 	h.expectNot("Vision: off")
 }
+
+// The load check's run lists no models until `gaia init` starts; meanwhile
+// every row is being checked, not queued.
+func TestTheLoadCheckNeverReadsQueued(t *testing.T) {
+	h := startedDownload(t)
+	h.api.Progress(setupapi.ModelProgress{ID: emb, State: setupapi.StateUnchecked, BytesDone: total(emb), BytesTotal: total(emb)})
+	h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateUnchecked, BytesDone: total(qwen), BytesTotal: total(qwen)})
+	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateFailed, BytesDone: 5e8, BytesTotal: total(gemma), ErrorKind: strp("network")})
+	h.api.SetRunState(setupapi.RunFailed)
+	h.poll()
+	h.poll()
+	h.focusOnProgress(gemma)
+	h.key("r")
+	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateReady, BytesDone: total(gemma), BytesTotal: total(gemma)})
+	h.poll()
+	h.expect(checkingModels)
+	h.api.S.Models = nil
+	h.poll()
+	h.expectNot("queued")
+	h.expectNot("already here")
+	h.expect(verifyingLine)
+}
+
+// After a /models download the plan has nothing left to download: the overall
+// line goes rather than reading 0% of 0 MB.
+func TestFinishedModelsDownloadDropsTheEmptyOverallLine(t *testing.T) {
+	api := &f.Fake{P: warmPlan(), G: discreteGPU()}
+	h := newHarness(t, ModeModels, api)
+	h.focusID(oss)
+	h.key("space", "a")
+	for i := range api.P.Catalog {
+		if api.P.Catalog[i].ID == oss {
+			api.P.Catalog[i] = f.Entry(oss, chat, 12.1, true, false, false, f.Bool(true), 14.0, 96)
+		}
+	}
+	api.Progress(setupapi.ModelProgress{ID: oss, State: setupapi.StateReady, BytesDone: 12_100_000_000, BytesTotal: 12_100_000_000})
+	h.poll()
+	h.expect("Downloads finished.")
+	h.expectNot("Overall")
+	h.expectNot("0/0 MB")
+}
+
+// Gemma reads Chat only while it is the chat model.
+func TestTheVisionModelReadsChatOnlyAsTheChatModel(t *testing.T) {
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: discreteGPU()})
+	h.expectNot("Chat+Vision")
+	h.expect("Vision")
+	h = newHarness(t, ModeFirstRun, &f.Fake{P: small16(), G: discreteGPU()})
+	h.expect("Chat+Vision")
+}
