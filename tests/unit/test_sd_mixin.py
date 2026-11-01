@@ -321,6 +321,20 @@ class TestSDToolsMixinSaveImage:
         assert ":" not in path.stem
         assert "<" not in path.stem
 
+    def test_save_image_sanitizes_model_before_building_filename(
+        self, tmp_path, mock_lemonade_client
+    ):
+        mixin = SDToolsMixin()
+        mixin.init_sd(output_dir=str(tmp_path))
+
+        path = mixin._save_image("edited image", b"png", "../../x")
+
+        assert path.exists()
+        assert path.parent == tmp_path.resolve()
+        assert ".." not in path.name
+        assert "/" not in path.name
+        assert "\\" not in path.name
+
 
 class TestSDHealthCheckRemedy:
     """The 'no SD models' remedy must name the model this instance will ask for.

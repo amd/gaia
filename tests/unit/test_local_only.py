@@ -353,6 +353,16 @@ def test_generate_image_checks_its_default_model(
         client.generate_image("a cat")
 
 
+def test_edit_image_checks_the_requested_model(
+    local_only_on, client, no_network, tmp_path
+):
+    source = tmp_path / "source.png"
+    source.write_bytes(b"png")
+
+    with pytest.raises(CloudDisabledError, match="fireworks.glm-5p3-flash"):
+        client.edit_image(source, "change it", model="fireworks.glm-5p3-flash")
+
+
 @pytest.fixture
 def lease_entered(monkeypatch):
     def lease(self, model, request_timeout=None):
