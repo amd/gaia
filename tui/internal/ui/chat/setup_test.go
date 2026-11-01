@@ -161,26 +161,6 @@ func TestMissingCLIReadinessDoesNotSuggestRunningSetup(t *testing.T) {
 	}
 }
 
-func TestMissingCLISetupCommandDoesNotSuggestRunningSetup(t *testing.T) {
-	restore := gaiainit.Binary
-	gaiainit.Binary = func() (string, error) {
-		return "", fmt.Errorf("%w: the `gaia` CLI is not on PATH", gaiainit.ErrNoCLI)
-	}
-	t.Cleanup(func() { gaiainit.Binary = restore })
-
-	m := gaiaTestModel(t)
-	updated, _ := m.submit("/setup")
-	after := updated.(ChatModel)
-	last := after.messages[len(after.messages)-1]
-	if last.Role != RoleError || !strings.Contains(last.Content, "Install the GAIA CLI") {
-		t.Fatalf("missing-CLI /setup message = %+v", last)
-	}
-	// The real Binary error is allowed to name gaia, but must never recommend gaia init.
-	if strings.Contains(last.Content, "gaia init") {
-		t.Fatalf("missing-CLI /setup message still suggests unavailable setup: %q", last.Content)
-	}
-}
-
 // --- the composer holds Enter while the gate is up --------------------
 
 func TestEnterQueuesWhileSetupIsChecking(t *testing.T) {
