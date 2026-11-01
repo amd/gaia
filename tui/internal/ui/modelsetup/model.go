@@ -548,7 +548,9 @@ func anyDownloading(st setupapi.Status) bool {
 // Choices is the user's staged choice on "Choose your models".
 type Choices struct {
 	Ticked     map[string]bool
+	Unticked   map[string]bool
 	Chat       string
+	ChatChosen bool
 	KeepTrying bool
 }
 
@@ -556,9 +558,13 @@ func (m Model) choices() *Choices {
 	if m.plan == nil {
 		return nil
 	}
-	c := &Choices{Ticked: map[string]bool{}, Chat: m.sel.chat, KeepTrying: m.keepTry}
+	c := &Choices{Ticked: map[string]bool{}, Unticked: map[string]bool{}, Chat: m.sel.chat,
+		ChatChosen: m.sel.chatChosen, KeepTrying: m.keepTry}
 	for id, v := range m.sel.ticked {
 		c.Ticked[id] = v
+	}
+	for id, v := range m.sel.unticked {
+		c.Unticked[id] = v
 	}
 	return c
 }
@@ -571,8 +577,14 @@ func (m Model) applyChoices(c Choices) Model {
 			m.sel.ticked[r.id] = v
 		}
 	}
+	for id, v := range c.Unticked {
+		if v {
+			m.sel.unticked[id] = true
+		}
+	}
 	if c.Chat != "" && m.sel.canChat(c.Chat) {
 		m.sel.chat = c.Chat
+		m.sel.chatChosen = m.sel.chatChosen || c.ChatChosen
 	} else if !m.sel.canChat(m.sel.chat) {
 		m.sel.chat = m.sel.fallbackChat()
 	}
@@ -724,14 +736,27 @@ func (m Model) gpuStepShown() bool {
 		// Nothing this PC can give.
 		return false
 	}
-	// Only when a model the user wants gains from it: offering more GPU
-	// memory for a model they didn't tick is noise.
 	for _, g := range m.gpu.Models {
-		if !g.FitsNow && g.FitsAtSettingGB != nil && m.sel.wants(g.ID) {
+		if m.gpuHelps(g) {
 			return true
 		}
 	}
 	return false
+}
+
+// gpuHelps reports whether a bigger GPU share is worth offering for g: it
+// would then fit, and either the user wants it (ticked, or their chat model)
+// or it is GAIA's default chat model for this PC, which starts unticked on a
+// cold Strix Halo only because it doesn't fit yet. The default stops counting
+// once the user unticks it or picks their own chat model.
+func (m Model) gpuHelps(g setupapi.GPUModel) bool {
+	if g.FitsNow || g.FitsAtSettingGB == nil {
+		return false
+	}
+	if m.sel.wants(g.ID) {
+		return true
+	}
+	return g.Default && !m.sel.untickedByHand(g.ID) && !m.sel.chatChosen
 }
 
 // These screens are one step of the host's setup ("choose and download the

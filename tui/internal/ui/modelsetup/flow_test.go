@@ -400,29 +400,65 @@ func TestStepHiddenWhenTheUserGaveUpEveryModelThatGains(t *testing.T) {
 	h.expect("part 1 of 2")
 }
 
-// A model that would gain from more GPU memory but that the user never ticked
-// is no reason for the step: on an NPU pick, offering GPU memory for Qwen the
-// user didn't choose is noise.
-func TestStepHiddenWhenNoTickedModelGains(t *testing.T) {
+// coldStrixHalo is a first run on a Strix Halo before the GPU share grows:
+// GAIA's default chat model for the PC (Qwen) doesn't fit yet, so it starts
+// unticked and Gemma chats until the share is bigger.
+func coldStrixHalo() setupapi.Plan {
 	p := coldPlan()
 	p.ChatModel = setupapi.ChatModel{ID: gemma}
 	for i := range p.Catalog {
 		if p.Catalog[i].ID == qwen {
 			p.Catalog[i].Selected = false
+			p.Catalog[i].Fits = f.Bool(false)
 		}
 	}
-	h := newHarness(t, ModeFirstRun, &f.Fake{P: p, G: gpuShared()})
-	h.expect("[ ] Qwen3.6-35B-A3B")
-	h.expect("part 1 of 2")
-	h.key("enter")
-	if h.m.Screen() == "gpu" {
-		t.Fatal("the GPU step was offered for a model nobody ticked")
+	return p
+}
+
+// The GPU step is for a model the user ticked or chats with, or for GAIA's
+// default chat model for the PC, which a cold Strix Halo can't tick yet. The
+// default stops counting once the user unticks it or picks their own chat
+// model (an NPU pick, say).
+func TestGPUStepRuleOnAColdStrixHalo(t *testing.T) {
+	cases := []struct {
+		name string
+		plan func() setupapi.Plan
+		keys func(h *harness)
+		want bool
+	}{
+		{"default model that doesn't fit yet", coldStrixHalo, nil, true},
+		{"user ticked it", coldStrixHalo, func(h *harness) { h.focusID(qwen); h.key("space") }, true},
+		{"user ticked then unticked it", coldStrixHalo, func(h *harness) { h.focusID(qwen); h.key("space", "space") }, false},
+		{"user picked their own chat model", coldStrixHalo, func(h *harness) { h.key("c", "enter") }, false},
+		{"chat model saved earlier", func() setupapi.Plan {
+			p := coldStrixHalo()
+			p.ChatModel.UserSet = true
+			return p
+		}, nil, false},
 	}
-	// Ticking it back brings the step back.
-	h2 := newHarness(t, ModeFirstRun, &f.Fake{P: p, G: gpuShared()})
-	h2.focusID(qwen)
-	h2.key("space")
-	h2.expect("part 1 of 3")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, ModeFirstRun, &f.Fake{P: tc.plan(), G: gpuShared()})
+			h.expect("[ ] Qwen3.6-35B-A3B")
+			if tc.keys != nil {
+				tc.keys(h)
+			}
+			if got := h.m.gpuStepShown(); got != tc.want {
+				t.Fatalf("GPU step shown = %v, want %v", got, tc.want)
+			}
+			if tc.want {
+				h.expect("part 1 of 3")
+				h.key("enter")
+				if h.m.ask == askNoFit {
+					h.key("y") // a ticked model that doesn't fit yet asks first
+				}
+				if h.m.Screen() != "gpu" {
+					t.Fatalf("screen = %s, want the GPU step", h.m.Screen())
+				}
+				h.expect("Qwen3.6-35B-A3B fits.")
+			}
+		})
+	}
 }
 
 // "I've done this" re-reads the split; it never trusts the claim.

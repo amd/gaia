@@ -111,6 +111,11 @@ type selection struct {
 	ticked  map[string]bool
 	chat    string
 	initial map[string]bool
+	// unticked are models the user unticked by hand, not ones never ticked.
+	unticked map[string]bool
+	// chatChosen is set once the user picked their own chat model (or saved
+	// one earlier), rather than taking GAIA's default for this PC.
+	chatChosen bool
 	// cloud is a chat that runs on a cloud provider: only the embedder matters.
 	cloud bool
 }
@@ -118,7 +123,8 @@ type selection struct {
 // newSelection lays the plan out as rows and starts from the backend's own
 // selection: recommended models ticked, skipped ones not.
 func newSelection(p setupapi.Plan, cloud bool) selection {
-	s := selection{ticked: map[string]bool{}, initial: map[string]bool{}, cloud: cloud}
+	s := selection{ticked: map[string]bool{}, initial: map[string]bool{}, unticked: map[string]bool{},
+		chatChosen: p.ChatModel.UserSet, cloud: cloud}
 	for _, e := range p.Catalog {
 		r := entryFrom(e)
 		if cloud && !(r.embedding && r.planned) {
@@ -224,6 +230,7 @@ func (s *selection) toggle(id string) bool {
 	if r.installed {
 		if r.chatable {
 			s.chat = r.id
+			s.chatChosen = true
 		}
 		return true
 	}
@@ -231,6 +238,11 @@ func (s *selection) toggle(id string) bool {
 		return false
 	}
 	s.ticked[r.id] = !s.ticked[r.id]
+	if s.ticked[r.id] {
+		delete(s.unticked, r.id)
+	} else {
+		s.unticked[r.id] = true
+	}
 	if s.cloud {
 		return true
 	}
@@ -246,6 +258,8 @@ func (s *selection) toggle(id string) bool {
 // resetToRecommended ticks the recommended models only.
 func (s *selection) resetToRecommended(chat string) {
 	s.ticked = map[string]bool{}
+	s.unticked = map[string]bool{}
+	s.chatChosen = false
 	for _, r := range s.rows {
 		if !r.installed && r.recommended {
 			s.ticked[r.id] = true
@@ -343,6 +357,16 @@ func (s selection) wants(id string) bool {
 		}
 	}
 	return sameID(id, s.chat) && s.chat != ""
+}
+
+// untickedByHand reports whether the user unticked id themselves.
+func (s selection) untickedByHand(id string) bool {
+	for k, v := range s.unticked {
+		if v && sameID(k, id) {
+			return true
+		}
+	}
+	return false
 }
 
 // dirty reports whether anything differs from what the backend has saved.

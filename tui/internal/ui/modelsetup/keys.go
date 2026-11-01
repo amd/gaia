@@ -244,6 +244,7 @@ func (m Model) pickKey(k string) (Model, tea.Cmd) {
 	case "enter", " ", "space":
 		if m.pick < len(cands) {
 			m.sel.chat = cands[m.pick].id
+			m.sel.chatChosen = true
 		}
 		m.scr = m.back
 	case "esc":

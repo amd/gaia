@@ -706,8 +706,8 @@ func (m Model) gpuView(w int) (body, foot []string) {
 func (m Model) unlocks() []string {
 	var out []string
 	for _, id := range m.targetPreset().Unlocks {
-		if m.opts.Mode != ModeGPU && !m.sel.wants(id) {
-			// Setup names only what the user chose; /gpu names everything.
+		if m.opts.Mode != ModeGPU && !m.unlockCounts(id) {
+			// Setup names only what the step is for; /gpu names everything.
 			continue
 		}
 		out = append(out, shortName(id))
@@ -716,6 +716,16 @@ func (m Model) unlocks() []string {
 		}
 	}
 	return out
+}
+
+// unlockCounts reports whether id is a model the GPU step is offered for.
+func (m Model) unlockCounts(id string) bool {
+	for _, g := range m.gpu.Models {
+		if sameID(g.ID, id) {
+			return m.gpuHelps(g)
+		}
+	}
+	return m.sel.wants(id)
 }
 
 // splitBar is CPU and GPU shares of the memory, with the target marked.
