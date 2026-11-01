@@ -9,6 +9,13 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **`gaia email autonomy status` now says what the last cycle did.** Every
+  autonomy cycle, whether run over REST, from the CLI or on the scheduler,
+  records a counts-only summary (or a redacted error if it failed).
+  `GET /v1/email/agent/autonomy/{id}` returns it as `last_cycle`, so "ran,
+  nothing to do" is no longer indistinguishable from "never ran", and a run
+  whose caller timed out still has a readable result. (#2618)
+
 - **Concurrent startup no longer fails to open the email state database
   during SQLite WAL-mode setup.** The agent now uses GAIA core's bounded WAL
   retry helper when another email agent is opening the same `state.db`.

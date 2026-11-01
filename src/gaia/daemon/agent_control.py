@@ -22,12 +22,30 @@ from typing import Any, Dict, Optional
 from gaia.daemon import client, paths
 from gaia.daemon.constants import AUTH_SCHEME
 from gaia.daemon.errors import DaemonError
+from gaia.daemon.timeouts import agent_read_timeout
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
 _CONNECT_TIMEOUT = 10.0
-_READ_TIMEOUT = 120.0
+
+
+# The CLI waits a little past the daemon's own budget so the daemon's verdict
+# on a slow sidecar arrives first.
+_READ_GRACE = 30.0
+
+
+class AgentResponseTimeoutError(DaemonError):
+    """The agent accepted the request but did not answer within the read
+    budget. The work may still be running on the agent."""
+
+
+class AgentHTTPError(DaemonError):
+    """The relay answered with an HTTP error status."""
+
+    def __init__(self, message: str, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def relay_json(
@@ -50,14 +68,27 @@ def relay_json(
     inst = client.ensure_agent(agent_id)
     url = f"{inst.base_url}/v1/{agent_id}/{path.lstrip('/')}"
     headers = {"Authorization": f"{AUTH_SCHEME} {inst.token}"}
+    # The daemon relays to the sidecar on this same budget;
+    # GAIA_AGENT_TOOL_TIMEOUT raises both.
+    try:
+        read_timeout = agent_read_timeout() + _READ_GRACE
+    except ValueError as e:
+        raise DaemonError(str(e)) from e
     try:
         r = requests.request(
             method,
             url,
             headers=headers,
             json=json_body,
-            timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
+            timeout=(_CONNECT_TIMEOUT, read_timeout),
         )
+    except requests.exceptions.ReadTimeout as e:
+        raise AgentResponseTimeoutError(
+            f"the '{agent_id}' agent did not answer {method} {path} within "
+            f"{read_timeout:g}s; it may still be working. Set "
+            "GAIA_AGENT_TOOL_TIMEOUT (seconds) for both the daemon and this "
+            "shell to wait longer."
+        ) from e
     except requests.exceptions.RequestException as e:
         raise DaemonError(
             f"could not reach the '{agent_id}' agent through the daemon at "
@@ -65,9 +96,10 @@ def relay_json(
             f"log at {paths.log_path()}."
         ) from e
     if r.status_code >= 400:
-        raise DaemonError(
+        raise AgentHTTPError(
             f"the '{agent_id}' agent refused {method} {path} "
-            f"(HTTP {r.status_code}): {client._error_detail(r)}"
+            f"(HTTP {r.status_code}): {client._error_detail(r)}",
+            r.status_code,
         )
     try:
         return r.json()
@@ -78,4 +110,4 @@ def relay_json(
         ) from e
 
 
-__all__ = ["relay_json"]
+__all__ = ["AgentHTTPError", "AgentResponseTimeoutError", "relay_json"]

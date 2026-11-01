@@ -1302,7 +1302,7 @@ gaia slack stop
 ```bash
 gaia email -q "Which messages need a reply today?"   # one-shot query
 gaia email -i                                        # interactive loop
-gaia email autonomy status                           # autonomy level and trust summary
+gaia email autonomy status                           # autonomy level, trust summary, last cycle
 ```
 
 | Option | Description |
@@ -1313,7 +1313,7 @@ gaia email autonomy status                           # autonomy level and trust 
 | `-v, --verbose` / `--debug` | Log every triage decision and tool call / add full prompt and response logging (sensitive payloads) |
 | `--spec` | Write the HTML endpoint spec to disk (`--output PATH`, default `~/.gaia/email/endpoint-spec.html`) and open it; needs no LLM |
 
-`gaia email autonomy` takes `status`, `trust`, `set-level`, `pause`, `resume`, `kill` and `run`.
+`gaia email autonomy` takes `status`, `trust`, `set-level`, `pause`, `resume`, `kill` and `run`. `status` also shows when the last cycle finished, how long it took and what it did (or that none has run, or that it failed and why), including cycles the agent ran on its own schedule. `run` waits as long as the daemon relay does (300 s, or longer with `GAIA_AGENT_TOOL_TIMEOUT`); if it gives up first, the cycle keeps going and `status` shows its result.
 
 [→ Email Guide](/guides/email)
 

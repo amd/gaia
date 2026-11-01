@@ -931,7 +931,13 @@ def render_endpoint_spec_html() -> str:
     thresholds, and the earned-trust ledger:
     <code>{ level, enabled, trust_min_samples, trust_threshold,
     trusted_scope_count, scopes:[{ action_type, scope, positive, negative,
-    total, score, trusted }] }</code>. This is the read-model
+    total, score, trusted }], last_cycle }</code>. <code>last_cycle</code> is
+    <code>null</code> until a cycle has run, then the most recent one (REST,
+    CLI or scheduler) as counts only — <code>{ outcome: "completed",
+    started_at, finished_at, level, executed, proposals, decisions, skipped,
+    already_proposed, errors, stopped }</code>, or <code>{ outcome: "failed",
+    started_at, finished_at, level, error }</code> with the error redacted.
+    This is the read-model
     <code>gaia email autonomy status</code> / <code>trust</code> render, so
     autonomy behavior is always explainable. 404 if the session is unknown.</p>
 </div>
