@@ -525,9 +525,9 @@ part of the temp dir the agent may use.
 sidecar starts in — absolute folders joined with `;` on Windows and `:` elsewhere.
 The scope becomes the overlap with the default; an entry outside it is ignored
 with a warning and never widens it. Out-of-scope paths are refused without a
-prompt when the sidecar is in normal permission mode; full access can grant a
-path outside the conversation's scope without that extra prompt, but still cannot
-widen this environment-level restriction. The scratch directory stays writable. An empty,
+prompt in every mode, including full access; full access can grant a path outside
+the conversation's scope without that extra prompt, but still cannot widen this
+environment-level restriction. The scratch directory stays writable. An empty,
 relative or missing entry stops the sidecar at startup. It confines the agent's
 tools, not code they run: a `run_python` script or shell command can still read
 anything the OS user can, so isolating a run from files it must not see needs a
