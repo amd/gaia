@@ -16,30 +16,7 @@
             },
             "problemMatcher": []
         },
-        {
-            "label": "Run JAX (Jira Agent Experience)",
-            "type": "shell",
-            "windows": {
-                "command": "powershell",
-                "args": [
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    "${workspaceFolder}/src/gaia/apps/jira/webui/run.ps1"
-                ]
-            },
-            "linux": {
-                "command": "${workspaceFolder}/src/gaia/apps/jira/webui/run.sh"
-            },
-            "group": "test",
-            "presentation": {
-                "reveal": "always",
-                "panel": "new",
-                "focus": true
-            },
-            "problemMatcher": [],
-            "detail": "Build and run the JAX Electron application"
-        },
+
         {
             "label": "Compile GAIA Code Extension",
             "type": "npm",
