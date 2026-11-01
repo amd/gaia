@@ -421,3 +421,187 @@ describe("installSafetyNet", () => {
     expect(typeof result.fatal).toBe("function");
   });
 });
+
+// ── Safe mode (issue #938) ───────────────────────────────────────────────────
+
+describe("crash-loop safe mode", () => {
+  let tmpDir;
+  let homedirFn;
+  let counter;
+
+  function seed(content) {
+    fs.mkdirSync(path.dirname(counter), { recursive: true });
+    fs.writeFileSync(counter, content);
+  }
+
+  function safeModeApp() {
+    return { relaunch: jest.fn(), exit: jest.fn() };
+  }
+
+  function dialogAnswering(...choices) {
+    const queue = [...choices];
+    return {
+      showErrorBox: jest.fn(),
+      showMessageBoxSync: jest.fn(() => {
+        if (queue.length === 0) throw new Error("dialog asked more times than the test expected");
+        return queue.shift();
+      }),
+    };
+  }
+
+  function run(overrides) {
+    const { runSafeModePrompt } = require(SAFETY_NET_PATH);
+    return runSafeModePrompt({
+      count: 3,
+      appModule: safeModeApp(),
+      shellModule: { openPath: jest.fn() },
+      homedirFn,
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    jest.resetModules();
+    tmpDir = makeTmpDir();
+    homedirFn = () => tmpDir;
+    counter = path.join(tmpDir, ".gaia", "electron-startup-failures.json");
+    jest.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  test("the threshold is 3", () => {
+    expect(require(SAFETY_NET_PATH).SAFE_MODE_THRESHOLD).toBe(3);
+  });
+
+  test("readCount is 0 on a cold start with no counter file, silently", () => {
+    const { readCount } = require(SAFETY_NET_PATH);
+    expect(readCount(homedirFn)).toBe(0);
+    expect(process.stderr.write).not.toHaveBeenCalled();
+  });
+
+  test("readCount returns the written count", () => {
+    const { readCount } = require(SAFETY_NET_PATH);
+    seed(JSON.stringify({ count: 3 }));
+    expect(readCount(homedirFn)).toBe(3);
+  });
+
+  test.each([
+    ["truncated JSON", '{"count": 4'],
+    ["empty file", ""],
+    ["string count", JSON.stringify({ count: "5" })],
+    ["negative count", JSON.stringify({ count: -2 })],
+    ["fractional count", JSON.stringify({ count: 3.5 })],
+    ["null count", JSON.stringify({ count: null })],
+  ])("readCount treats a %s as 0 and says why on stderr", (_label, content) => {
+    const { readCount } = require(SAFETY_NET_PATH);
+    seed(content);
+    expect(readCount(homedirFn)).toBe(0);
+    expect(process.stderr.write).toHaveBeenCalledWith(expect.stringContaining(counter));
+  });
+
+  test("Reset state deletes the counter, then relaunches and exits 0", async () => {
+    const { readCount } = require(SAFETY_NET_PATH);
+    seed(JSON.stringify({ count: 3 }));
+    const app = safeModeApp();
+    const shell = { openPath: jest.fn() };
+
+    const result = await run({ dialogModule: dialogAnswering(0), appModule: app, shellModule: shell });
+
+    expect(result).toBe("reset");
+    expect(fs.existsSync(counter)).toBe(false);
+    expect(readCount(homedirFn)).toBe(0);
+    expect(app.relaunch).toHaveBeenCalledTimes(1);
+    expect(app.exit).toHaveBeenCalledWith(0);
+    expect(app.relaunch.mock.invocationCallOrder[0]).toBeLessThan(app.exit.mock.invocationCallOrder[0]);
+    expect(shell.openPath).not.toHaveBeenCalled();
+  });
+
+  test("the dialog names the crash count and offers three choices, Quit on Esc", async () => {
+    const dialog = dialogAnswering(2);
+    await run({ count: 7, dialogModule: dialog });
+    const opts = dialog.showMessageBoxSync.mock.calls[0][0];
+    expect(opts.message).toContain("7 times");
+    expect(opts.buttons).toEqual(["Reset state", "Open log folder", "Quit"]);
+    expect(opts.buttons[opts.cancelId]).toBe("Quit");
+    expect(opts.buttons[opts.defaultId]).toBe("Reset state");
+  });
+
+  test("Quit exits 0 without touching the counter or relaunching", async () => {
+    const { readCount } = require(SAFETY_NET_PATH);
+    seed(JSON.stringify({ count: 4 }));
+    const app = safeModeApp();
+    const result = await run({ count: 4, dialogModule: dialogAnswering(2), appModule: app });
+    expect(result).toBe("quit");
+    expect(app.exit).toHaveBeenCalledWith(0);
+    expect(app.relaunch).not.toHaveBeenCalled();
+    expect(readCount(homedirFn)).toBe(4);
+  });
+
+  test("Open log folder opens ~/.gaia, waits for it, then asks again", async () => {
+    const app = safeModeApp();
+    const dialog = dialogAnswering(1, 2);
+    let opened = false;
+    const shell = {
+      openPath: jest.fn(async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        opened = true;
+        return "";
+      }),
+    };
+    let openedAtExit;
+    app.exit.mockImplementation(() => { openedAtExit = opened; });
+
+    const result = await run({ dialogModule: dialog, appModule: app, shellModule: shell });
+
+    expect(result).toBe("quit");
+    expect(shell.openPath).toHaveBeenCalledWith(path.join(tmpDir, ".gaia"));
+    expect(dialog.showMessageBoxSync).toHaveBeenCalledTimes(2);
+    expect(openedAtExit).toBe(true);
+    expect(app.exit).toHaveBeenCalledWith(0);
+  });
+
+  test("a folder that will not open is reported in the next dialog", async () => {
+    const dialog = dialogAnswering(1, 2);
+    const shell = { openPath: jest.fn(async () => "Failed to open path") };
+    await run({ dialogModule: dialog, shellModule: shell });
+    expect(dialog.showMessageBoxSync.mock.calls[0][0].detail).not.toContain("Could not open");
+    expect(dialog.showMessageBoxSync.mock.calls[1][0].detail).toContain("Could not open");
+    expect(dialog.showMessageBoxSync.mock.calls[1][0].detail).toContain("Failed to open path");
+  });
+
+  test("a dialog that throws exits 1 instead of continuing start-up", async () => {
+    const app = safeModeApp();
+    const dialog = {
+      showErrorBox: jest.fn(),
+      showMessageBoxSync: jest.fn(() => { throw new Error("no display"); }),
+    };
+    const result = await run({ dialogModule: dialog, appModule: app });
+    expect(result).toBe("error");
+    expect(app.exit).toHaveBeenCalledWith(1);
+    expect(app.relaunch).not.toHaveBeenCalled();
+    expect(process.stderr.write).toHaveBeenCalledWith(expect.stringContaining("no display"));
+  });
+
+  test("an error box that also throws still exits 1", async () => {
+    const app = safeModeApp();
+    const dialog = {
+      showErrorBox: jest.fn(() => { throw new Error("still no display"); }),
+      showMessageBoxSync: jest.fn(() => { throw new Error("no display"); }),
+    };
+    await expect(run({ dialogModule: dialog, appModule: app })).resolves.toBe("error");
+    expect(app.exit).toHaveBeenCalledWith(1);
+  });
+
+  test("a counter that cannot be deleted exits 1 rather than relaunching into the loop", async () => {
+    const app = safeModeApp();
+    jest.spyOn(fs, "rmSync").mockImplementation(() => { throw new Error("EPERM"); });
+    const result = await run({ dialogModule: dialogAnswering(0), appModule: app });
+    expect(result).toBe("error");
+    expect(app.relaunch).not.toHaveBeenCalled();
+    expect(app.exit).toHaveBeenCalledWith(1);
+  });
+});

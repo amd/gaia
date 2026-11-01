@@ -27,21 +27,43 @@ const path = require("path");
 const os = require("os");
 
 // ── Counter helpers ───────────────────────────────────────────────────────────
-// The counter is currently forensic only — post-mortem grep of
-// ~/.gaia/electron-startup-failures.json.
-// TODO(#938): on next launch, if count >= 3, skip log-tee init and show
-// a "reset state?" dialog (safe-mode entry point).
+// ~/.gaia/electron-startup-failures.json counts crashes since the last time a
+// window was focused. At SAFE_MODE_THRESHOLD the next launch enters safe mode.
+
+/** Crashes in a row, with no focused window between them, that make the next launch start in safe mode. */
+const SAFE_MODE_THRESHOLD = 3;
+
+function warn(msg) {
+  try { process.stderr.write(`[safety-net] ${msg}\n`); } catch { }
+}
 
 function counterPath(homedir) {
   return path.join(homedir(), ".gaia", "electron-startup-failures.json");
 }
 
 function readCount(homedir) {
+  const p = counterPath(homedir);
+  let raw;
   try {
-    return JSON.parse(fs.readFileSync(counterPath(homedir), "utf8")).count || 0;
-  } catch {
+    raw = fs.readFileSync(p, "utf8");
+  } catch (err) {
+    if (err && err.code === "ENOENT") return 0;
+    warn(`cannot read ${p}, treating the crash count as 0: ${err.message}`);
     return 0;
   }
+  let count;
+  try {
+    count = JSON.parse(raw).count;
+  } catch (err) {
+    warn(`${p} is not valid JSON, treating the crash count as 0: ${err.message}`);
+    return 0;
+  }
+  if (count === undefined) return 0;
+  if (!Number.isInteger(count) || count < 0) {
+    warn(`${p} has an invalid count ${JSON.stringify(count)}, treating it as 0`);
+    return 0;
+  }
+  return count;
 }
 
 function writeCount(n, homedir) {
@@ -202,6 +224,72 @@ function installSafetyNet({
   return { fatal };
 }
 
+// ── Safe mode ─────────────────────────────────────────────────────────────────
+
+const SAFE_MODE_BUTTONS = ["Reset state", "Open log folder", "Quit"];
+const SAFE_MODE_RESET = 0;
+const SAFE_MODE_OPEN_LOGS = 1;
+const SAFE_MODE_QUIT = 2;
+
+/**
+ * Ask a user whose last launches crashed what to do, before any other start-up
+ * work runs. Must be called after app ready: before it, showMessageBoxSync
+ * does nothing on Windows.
+ *
+ * Reset state deletes the crash counter and relaunches; Open log folder opens
+ * ~/.gaia and asks again; Quit exits. If the dialog itself fails, GAIA exits
+ * with code 1 rather than retry the start-up that kept crashing.
+ *
+ * @param {object} opts
+ * @param {number}   opts.count         - The crash count read at launch.
+ * @param {object}   opts.dialogModule  - Electron dialog (injected for tests).
+ * @param {object}   opts.appModule     - Electron app (injected for tests).
+ * @param {object}   opts.shellModule   - Electron shell (injected for tests).
+ * @param {Function} [opts.homedirFn]   - Override for os.homedir (tests).
+ * @returns {Promise<"reset"|"quit"|"error">}
+ */
+async function runSafeModePrompt({ count, dialogModule, appModule, shellModule, homedirFn }) {
+  const homedir = homedirFn || (() => os.homedir());
+  const gaiaDir = path.join(homedir(), ".gaia");
+  let openFailure = "";
+  try {
+    for (;;) {
+      const choice = dialogModule.showMessageBoxSync({
+        type: "warning",
+        title: "GAIA keeps crashing",
+        message: `GAIA has crashed ${count} times in a row.`,
+        detail:
+          "Reset state clears the crash count and starts GAIA normally. " +
+          `Open log folder shows the logs in ${gaiaDir} to attach to a bug report.` +
+          openFailure,
+        buttons: SAFE_MODE_BUTTONS,
+        defaultId: SAFE_MODE_RESET,
+        cancelId: SAFE_MODE_QUIT,
+        noLink: true,
+      });
+      if (choice === SAFE_MODE_RESET) {
+        fs.rmSync(counterPath(homedir), { force: true });
+        appModule.relaunch();
+        appModule.exit(0);
+        return "reset";
+      }
+      if (choice === SAFE_MODE_OPEN_LOGS) {
+        const err = await shellModule.openPath(gaiaDir);
+        openFailure = err ? `\n\nCould not open ${gaiaDir}: ${err}` : "";
+        continue;
+      }
+      appModule.exit(0);
+      return "quit";
+    }
+  } catch (err) {
+    const detail = (err && err.stack) || String(err);
+    warn(`safe mode failed: ${detail}`);
+    try { dialogModule.showErrorBox("GAIA could not recover", detail); } catch { } // intentional: exiting next
+    appModule.exit(1);
+    return "error";
+  }
+}
+
 // ── Log-tee helper ────────────────────────────────────────────────────────────
 
 /**
@@ -226,4 +314,11 @@ function installLogTee({ stream, logPath }) {
   });
 }
 
-module.exports = { installSafetyNet, installLogTee, FATAL_EXIT_GRACE_MS };
+module.exports = {
+  installSafetyNet,
+  installLogTee,
+  FATAL_EXIT_GRACE_MS,
+  readCount,
+  runSafeModePrompt,
+  SAFE_MODE_THRESHOLD,
+};
