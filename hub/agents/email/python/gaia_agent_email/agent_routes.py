@@ -105,9 +105,14 @@ class _AgentSession:
     second turn can't corrupt the cached agent's conversation state.
     """
 
-    def __init__(self, session_id: str, agent: Any) -> None:
+    def __init__(
+        self, session_id: str, agent: Any, model_id: Optional[str] = None
+    ) -> None:
         self.session_id = session_id
         self.agent = agent
+        # The model a caller asked for when this agent was built, so a later
+        # turn that asks for a different one rebuilds instead of ignoring it.
+        self.model_id = model_id
         self.run_lock = threading.Lock()
         # (user_message, assistant_answer) pairs, oldest first.
         self.history: List[Tuple[str, str]] = []
@@ -183,7 +188,9 @@ class _SessionRegistry:
                 _close_agent(agent)
                 self._last_used[session_id] = time.monotonic()
                 return existing
-            session = _AgentSession(session_id, agent)
+            session = _AgentSession(
+                session_id, agent, model_id=config_kwargs.get("model_id")
+            )
             self._sessions[session_id] = session
             self._last_used[session_id] = time.monotonic()
             return session

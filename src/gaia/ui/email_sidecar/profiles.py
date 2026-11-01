@@ -129,10 +129,12 @@ class RelayProfile:
     #: Contract version from which ``/sessions/{id}/bypass`` exists, so the
     #: chat's Full access mode can reach the agent. ``None`` means it never does.
     min_full_access_api_version: Optional[Tuple[int, int]] = None
-    #: Whether to send ``session_id`` on the ``/query`` body. Gated per agent
-    #: because the request model is ``extra="forbid"`` on both sidecars: an
-    #: unexpected field is a 422, not a shrug.
-    sends_session_id: bool = False
+    #: Contract version from which ``/query`` takes ``session_id``, so every
+    #: turn of a chat reaches the same sidecar agent and what one turn surfaced
+    #: (a thread id, an indexed document) is there on the next. ``None`` means
+    #: never. Gated because the request model is ``extra="forbid"`` on both
+    #: sidecars: an unexpected field is a 422, not a shrug.
+    min_session_id_api_version: Optional[Tuple[int, int]] = None
     #: Contract version from which this agent waits on a ``needs_confirmation``
     #: and takes the answer over ``/query/{run_id}/tool_decision``. ``None``
     #: means it never does: the confirmation ends the run, and the relay shows
@@ -359,11 +361,9 @@ EMAIL_PROFILE = RelayProfile(
         "not running or unreachable from the email agent."
     ),
     always_relay=True,
-    # Left off deliberately: the email relay has never sent one, and turning it
-    # on would change which agent instance a live email session resolves to
-    # (gaia_agent_email.query_routes threads it into a session-scoped registry).
-    # That is its own change, with its own test, not a rider on this one.
-    sends_session_id=False,
+    # 2.12 added /query's session_id (#2829): a follow-up can then name a
+    # thread the previous turn showed (#2834).
+    min_session_id_api_version=(2, 12),
 )
 
 
@@ -551,7 +551,7 @@ GAIA_PROFILE = RelayProfile(
     # 2.14 added /sessions/{id}/bypass.
     min_full_access_api_version=(2, 14),
     readiness_is_blocking=False,
-    sends_session_id=True,
+    min_session_id_api_version=(2, 12),
     # 2.14 added /tool_decision. Older binaries refuse a gated tool outright.
     min_confirm_api_version=(2, 14),
     # 2.16 added /query's documents field.
@@ -781,6 +781,15 @@ def turns_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     return floor is not None and _meets(api_version, floor)
 
 
+def session_id_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``session_id`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_session_id_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def reasoning_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when *api_version* takes ``/query``'s ``reasoning`` field.
 
@@ -821,4 +830,5 @@ __all__ = [
     "grants_supported",
     "internet_supported",
     "changes_supported",
+    "session_id_supported",
 ]
