@@ -38,11 +38,20 @@ NIGHTLY_AUDIT = WORKFLOW_DIR / "claude-nightly-audit.yml"
 DOC_WALKTHROUGH = WORKFLOW_DIR / "claude-weekly-doc-walkthrough.yml"
 SECURITY_AUDIT = WORKFLOW_DIR / "claude-security-audit.yml"
 
+ROTATION = WORKFLOW_DIR / "claude-audit-rotation.yml"
+INSTALLER_SCRIPTS = REPO_ROOT / "installer" / "scripts"
+
 #: Every scheduled Claude workflow that files or publishes findings.
 PROACTIVE_WORKFLOWS = (NIGHTLY_AUDIT, DOC_WALKTHROUGH, SECURITY_AUDIT)
 
+#: The read-only tool set; a step may grant less, never more.
+READ_ONLY_TOOLS = {"Read", "Grep", "Glob", "Bash"}
+
 #: The action whose actor gate rejects a bot-actored scheduled run.
 CLAUDE_ACTION = "anthropics/claude-code-action"
+
+#: The step that picks the run's Claude account, and stops the run if none answers.
+CREDENTIAL_ACTION = "./.github/actions/claude-credential"
 
 #: On a `schedule` event the actor is whoever last touched the default branch,
 #: which in this repo is one of these two bots. Both must be allowed or the run
@@ -69,6 +78,18 @@ def _steps(workflow: dict):
 
 def _claude_steps(workflow: dict):
     return [s for s in _steps(workflow) if CLAUDE_ACTION in str(s.get("uses", ""))]
+
+
+def _gate(workflow: dict) -> tuple[str, dict]:
+    """The one job that picks the run's Claude account, and its pick step."""
+    found = [
+        (name, step)
+        for name, job in workflow["jobs"].items()
+        for step in job.get("steps") or []
+        if step.get("uses") == CREDENTIAL_ACTION
+    ]
+    assert len(found) == 1, f"expected one account-picking gate job, found {found}"
+    return found[0]
 
 
 @pytest.fixture(scope="module")
@@ -100,7 +121,12 @@ def test_every_scheduled_claude_step_allows_the_bots_that_actor_it(path: Path):
     pushes release notes to main as `github-actions[bot]` — was rejected.
     """
     workflow = _load(path)
-    assert "schedule" in _triggers(workflow), f"{path.name} is not scheduled"
+    rotation = ROTATION.read_text(encoding="utf-8")
+    assert "audit_rotation.py" in rotation and path.name in (
+        REPO_ROOT / "scripts" / "audit" / "audit_rotation.py"
+    ).read_text(
+        encoding="utf-8"
+    ), f"{path.name} is not dispatched by the audit rotation"
     steps = _claude_steps(workflow)
     assert steps, f"{path.name} declares no {CLAUDE_ACTION} step"
     for step in steps:
@@ -111,6 +137,22 @@ def test_every_scheduled_claude_step_allows_the_bots_that_actor_it(path: Path):
             f"{missing} from allowed_bots ({allowed!r}). A scheduled run actored "
             f"by that bot is rejected before Claude starts, and reports green."
         )
+
+
+def test_every_audit_runs_one_claude_code_action_pin():
+    """The pinned action bundles the CLI that resolves `--model`; lenses on two pins
+    can disagree about which models exist, and only some of them fail."""
+    pins = {}
+    for path in PROACTIVE_WORKFLOWS:
+        for step in _claude_steps(_load(path)):
+            ref = str(step["uses"]).split("@", 1)[1]
+            pins.setdefault(ref, []).append(
+                f"{path.name}:{step.get('id') or step.get('name')}"
+            )
+    assert len(pins) == 1, (
+        f"{CLAUDE_ACTION} is pinned to {len(pins)} versions across the audits: "
+        f"{pins}. Bump every step together."
+    )
 
 
 # ----------------------------------------------------------------------
@@ -147,11 +189,76 @@ def test_the_walkthrough_refuses_to_synthesize_a_partial_sweep(walkthrough: dict
     steps = walkthrough["jobs"]["synthesize"]["steps"]
     gate = [s for s in steps if "reported in" in str(s.get("name", ""))]
     assert gate, (
-        "the walkthrough's synthesize job needs a step requiring every discovered "
-        "doc to have produced findings, matching the nightly audit's dimension gate"
+        "the walkthrough's synthesize job needs a step checking the discovered "
+        "docs produced findings"
     )
     run = gate[0]["run"]
-    assert "exit 1" in run, "a short sweep must fail, not warn"
+    assert re.search(
+        r'if \[ "\$got" -eq 0 \]; then\n[^\n]*\n\s*exit 1', run
+    ), "a night where no guide reported must fail, not synthesize an empty sweep"
+
+
+def test_the_walkthrough_files_a_partial_night_and_names_the_missing_guides(
+    walkthrough: dict,
+):
+    """Refusing the whole night because one guide failed let one always-failing guide
+    stop every other guide from being recorded, so the rotation never moved on."""
+    steps = walkthrough["jobs"]["synthesize"]["steps"]
+    run = next(s for s in steps if "reported in" in str(s.get("name", "")))["run"]
+    assert '-lt "$expected"' not in run, "a partial night must not be refused outright"
+    assert "::error title=Doc walkthrough guide unverified::" in run
+    assert "GITHUB_STEP_SUMMARY" in run
+
+
+def test_the_rotation_reads_per_guide_history(walkthrough: dict):
+    """Changed-first is judged per guide inside audit_history.py rotate; the run-wide
+    changed-paths list kept the same guides 'changed' while the base never moved."""
+    discover = walkthrough["jobs"]["discover"]
+    body = "\n".join(str(s.get("run", "")) for s in discover["steps"])
+    assert "audit_history.py rotate" in body
+    assert "--changed-paths" not in body
+    assert "--success-job synthesize" in body
+    assert (
+        discover["steps"][0]["with"]["fetch-depth"] == 0
+    ), "the per-guide git diff needs full history"
+
+
+@pytest.mark.parametrize("path", PROACTIVE_WORKFLOWS, ids=lambda p: p.name)
+def test_synthesis_runs_only_after_the_quota_gate_passed(path: Path):
+    """A refused probe fails the gate job; without this check synthesis still ran on
+    `!cancelled()` and reported "the audit did not run" instead of the probe's reason.
+    """
+    workflow = _load(path)
+    gate, _step = _gate(workflow)
+    condition = str(workflow["jobs"]["synthesize"]["if"])
+    assert (
+        f"needs.{gate}.result == 'success'" in condition
+    ), f"{path.name}: synthesize must require {gate} to have succeeded"
+
+
+@pytest.mark.parametrize("path", PROACTIVE_WORKFLOWS, ids=lambda p: p.name)
+def test_the_gate_hands_its_account_to_every_claude_job(path: Path):
+    """One probe picks the account for the whole run, at run time. The repo
+    variable it replaced needed a PAT nobody set to switch back, so the audits sat
+    on an exhausted account while the other had quota."""
+    workflow = _load(path)
+    gate, step = _gate(workflow)
+    assert step["id"] == "claude_account"
+    assert step["with"]["primary-token"] == "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"
+    assert step["with"]["secondary-token"] == (
+        "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}"
+    )
+    assert workflow["jobs"][gate]["outputs"]["claude_account"] == (
+        "${{ steps.claude_account.outputs.account }}"
+    )
+    label = f"needs.{gate}.outputs.claude_account"
+    for name, job in workflow["jobs"].items():
+        for claude in _claude_steps({"jobs": {name: job}}):
+            token = claude["with"]["claude_code_oauth_token"]
+            assert token.startswith(
+                "${{ " + label + " == 'secondary'"
+            ), f"{path.name}:{name} does not use the account the gate picked"
+    assert "request-account-switch" not in workflow["jobs"]
 
 
 def test_the_nightly_audit_refuses_to_synthesize_a_partial_sweep(nightly: dict):
@@ -300,22 +407,76 @@ def test_a_dry_run_mode_exists_so_dedup_can_be_validated_without_filing(path: Pa
 # ----------------------------------------------------------------------
 
 
-def test_the_nightly_audit_says_nightly_everywhere_it_says_anything(nightly: dict):
-    """Filename, display name, and cron told three different stories."""
+def test_the_rotation_is_the_only_scheduler_and_runs_at_2_to_4am_pacific():
+    """One audit a night. A second cron anywhere runs an audit on another's night,
+    which is how three nightly audits spent the weekly Claude cap mid-week.
+
+    10:00-11:00 UTC is the only hour inside 2-4am Pacific in both PDT and PST.
+    """
+    for path in PROACTIVE_WORKFLOWS:
+        assert "schedule" not in _triggers(_load(path)), f"{path.name} has its own cron"
+    crons = [entry["cron"] for entry in _triggers(_load(ROTATION))["schedule"]]
+    assert len(crons) == 1, crons
+    minute, hour, *rest = crons[0].split()
+    assert rest == ["*", "*", "*"], f"the rotation must fire every night: {crons[0]}"
+    assert hour == "10", f"{crons[0]} is outside 2-4am Pacific in one of the seasons"
+    assert int(minute) not in (0, 30), "the :00/:30 slots queue on the shared fleet"
+
+
+def test_the_code_audit_keeps_its_filename_and_concurrency_group(nightly: dict):
+    """The filename is referenced from docs, skills and tests; renaming breaks them."""
     assert NIGHTLY_AUDIT.name == "claude-nightly-audit.yml"
-    assert "Nightly" in nightly["name"]
-    crons = [entry["cron"] for entry in _triggers(nightly)["schedule"]]
-    assert crons and all(
-        cron.split()[2:] == ["*", "*", "*"] for cron in crons
-    ), f"a workflow named nightly must run every day, got {crons}"
     assert nightly["concurrency"]["group"] == "claude-nightly-audit"
 
 
-def test_the_doc_walkthrough_really_is_weekly(walkthrough: dict):
-    crons = [entry["cron"] for entry in _triggers(walkthrough)["schedule"]]
-    assert crons and all(
-        cron.split()[4] != "*" for cron in crons
-    ), f"a workflow named weekly must pin a day-of-week, got {crons}"
+@pytest.mark.parametrize("path", PROACTIVE_WORKFLOWS, ids=lambda p: p.name)
+def test_claude_is_probed_before_any_lens_starts(path: Path):
+    """On the usage limit the run stops once, before spending runner time.
+
+    October 2026: every lens of both daily audits was refused in under a second
+    and the runs blamed a missing artifact; the walkthrough spent ~3 minutes of a
+    Strix Point runner per guide being refused.
+    """
+    workflow = _load(path)
+    gate, _step = _gate(workflow)
+    for name, job in workflow["jobs"].items():
+        if name == gate or not _claude_steps({"jobs": {name: job}}):
+            continue
+        needs = job.get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        assert gate in needs, f"{path.name}: job {name!r} runs Claude without the gate"
+
+
+def test_both_filing_jobs_share_one_concurrency_group():
+    """Two syntheses reading the backlog at once each miss what the other files."""
+    groups = {
+        _load(path)["jobs"]["synthesize"]["concurrency"]["group"]
+        for path in (NIGHTLY_AUDIT, DOC_WALKTHROUGH)
+    }
+    assert groups == {"claude-audit-issue-filing"}
+
+
+@pytest.mark.parametrize("path", PROACTIVE_WORKFLOWS, ids=lambda p: p.name)
+def test_no_run_script_carries_a_literal_backslash_n(path: Path):
+    """`\\n` inside a `run:` block is not a line break: bash passes `n` as an
+    argument. The walkthrough's dry-run watermark died on exactly that."""
+    for step in _steps(_load(path)):
+        assert not re.search(
+            r"\\n\s{2,}--", str(step.get("run", ""))
+        ), f"{path.name} step {step.get('name')!r} has a literal \\n continuation"
+
+
+@pytest.mark.parametrize(
+    "script", sorted(INSTALLER_SCRIPTS.glob("*.ps1")), ids=lambda p: p.name
+)
+def test_powershell_never_appends_to_a_github_command_file_with_redirection(
+    script: Path,
+):
+    """Windows PowerShell 5.1 `>>` writes UTF-16. Run inside another action's step
+    (the walkthrough's executor), it corrupts that step's output file and a
+    finished walk is reported as a crash."""
+    text = script.read_text(encoding="utf-8-sig")
+    assert not re.search(r">>\s*\$env:GITHUB_(OUTPUT|ENV|PATH)", text), script.name
 
 
 @pytest.mark.parametrize("path", (NIGHTLY_AUDIT, DOC_WALKTHROUGH), ids=lambda p: p.name)
@@ -341,7 +502,7 @@ def test_the_claude_jobs_stay_read_only(path: Path):
         assert granted, f"{path.name}: a Claude step declares no --allowedTools"
         # Compared as a SET, not a substring: `Read,Grep,Glob,Bash,Edit` contains
         # `Read,Grep,Glob,Bash`, so a substring check waves Edit straight through.
-        assert set(granted.group(1).split(",")) == {"Read", "Grep", "Glob", "Bash"}, (
+        assert set(granted.group(1).split(",")) <= READ_ONLY_TOOLS, (
             f"{path.name} step {step.get('name', step.get('id'))!r} grants "
             f"{granted.group(1)} — an audit reports, it never edits or runs repo code"
         )

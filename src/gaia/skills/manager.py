@@ -372,7 +372,7 @@ class SkillManager:
         if not WATCHDOG_AVAILABLE:
             raise SkillError(
                 "Skill hot-reload needs the 'watchdog' package, which is not "
-                "installed. Install it with: pip install 'watchdog>=2.1.0' (or "
+                "installed. Install it with: pip install 'watchdog>=2.1.0,<7' (or "
                 "uv pip install -e '.[dev]'), or call SkillManager.reload() manually."
             )
 

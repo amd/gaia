@@ -9,11 +9,11 @@ from __future__ import annotations
 # Standard library imports
 import abc
 import ast
+import contextlib
 import contextvars
 import datetime
 import inspect
 import json
-import logging
 import math
 import os
 import queue
@@ -129,7 +129,11 @@ from gaia.agents.base.tool_outcome import (
     tool_result_error_fields,
     tool_result_failed,
 )
-from gaia.agents.base.tools import _TOOL_REGISTRY, tool_call_progress_message
+from gaia.agents.base.tools import (
+    _TOOL_REGISTRY,
+    bare_tool_name,
+    tool_call_progress_message,
+)
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
     POST_ANSWER_CLOSING_PROMPT,
@@ -174,6 +178,7 @@ from gaia.llm.retry import (
     model_retry_notices,
     retry_state_of,
 )
+from gaia.logger import get_logger
 from gaia.utils import awake_clock
 from gaia.utils.json_string import extract_json_string_field
 from gaia.utils.power import stay_awake
@@ -185,9 +190,9 @@ if TYPE_CHECKING:
     from gaia.skills import Skill, SkillManager, SkillSetResolution, SkillSets
     from gaia.skills.binaries import BinaryGrants
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Set up logging via the project logger; importing this module must not
+# reconfigure the root logger.
+logger = get_logger(__name__)
 
 
 def _skill_validation_error(message: str) -> Exception:
@@ -202,8 +207,8 @@ def _skill_validation_error(message: str) -> Exception:
     return SkillValidationError(message)
 
 
-#: How much of a skill's description the always-on menu line carries (#2848
-#: follow-up). A loaded-but-inactive skill still needs to be discoverable
+#: How much of a skill's description the always-on menu line carries.
+#: A loaded-but-inactive skill still needs to be discoverable
 #: without paying for its full body, and some skills (ported from other
 #: ecosystems) ship trigger descriptions over 1,000 characters — capped so the
 #: menu itself never becomes what it exists to avoid.
@@ -643,7 +648,7 @@ class ToolExecutionTimeout(Exception):
 # execution, regardless of which agent runs them (shell / file mutation).
 # Agent-specific gated tools (e.g. email send/RSVP) are declared on the owning
 # agent class via ``Agent.CONFIRMATION_REQUIRED_TOOLS`` and merged with this
-# base set at runtime — see ``Agent.confirmation_required_tools`` (#1440).
+# base set at runtime — see ``Agent.confirmation_required_tools``.
 #
 # Adding a tool name here (or to a subclass's ``CONFIRMATION_REQUIRED_TOOLS``)
 # causes _execute_tool() to call console.confirm_tool_execution() and block
@@ -724,8 +729,28 @@ def _is_image_tool(tool_name: str) -> bool:
     return tool_name.lower().startswith(_SD_CAPABILITY_TOOLS)
 
 
+def _loaded_context_is_too_small(loaded_ctx: Any, requested_ctx: Any) -> bool:
+    """Return whether the backend's loaded window is below the requested one.
+
+    The requested value is the agent's effective window, including an explicit
+    client pin such as ``GAIA_CTX_SIZE=16384``.  Comparing those two values is
+    deliberately independent of the error wording: llama.cpp reports the
+    same context size in both a genuine bad-load error and an intentional
+    small-window overflow.
+    """
+    return (
+        isinstance(loaded_ctx, int)
+        and not isinstance(loaded_ctx, bool)
+        and loaded_ctx > 0
+        and isinstance(requested_ctx, int)
+        and not isinstance(requested_ctx, bool)
+        and requested_ctx > 0
+        and loaded_ctx < requested_ctx
+    )
+
+
 # Final answer when a turn still overflows the model's context window after
-# the one-shot shrink-and-retry (#2763) -- shared across every agent, so it
+# the one-shot shrink-and-retry -- shared across every agent, so it
 # names the constraint generically (no tool- or domain-specific vocabulary)
 # rather than assuming a search/date-range shape. The prior copy ("re-ask in
 # a fresh chat with just the essentials") never said WHAT was too big or HOW
@@ -896,7 +921,7 @@ def _repeat_count(history: List[Any], max_period: int = _MAX_LOOP_PERIOD) -> int
 # model that loses track of sequential state may re-issue an identical
 # mutation (same tool + same id). Unlike query dedup we key on the *args*,
 # not the result — re-issuing mark_read on the same id returns a *different*
-# result ("already read"), so a result hash would miss the repeat (#1317).
+# result ("already read"), so a result hash would miss the repeat.
 _MUTATION_TOOLS: Tuple[str, ...] = (
     "mark_read",
     "mark_read_batch",
@@ -1153,7 +1178,7 @@ def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
 # Only these field names are ever accepted from a tool's self-reported
 # ``usage`` dict — deliberately narrower than "any dict under a `usage` key",
 # so a tool with an unrelated `usage` value (rate-limit/quota/disk usage, not
-# LLM tokens) is never misread as token accounting (#2899).
+# LLM tokens) is never misread as token accounting.
 _TOOL_USAGE_TOKEN_FIELDS = (
     "prompt_tokens",
     "completion_tokens",
@@ -1265,7 +1290,7 @@ _CUT_OFF_FAILURE_ANSWER = (
     "reasons more briefly."
 )
 
-# Unfinished-answer guard (#3887): a "final answer" that is really a plan,
+# Unfinished-answer guard: a "final answer" that is really a plan,
 # a narrated next step, or a tool call typed out as text.
 _MAX_UNFINISHED_ANSWER_REPROMPTS = 2
 _UNFINISHED_PARAGRAPH_MAX_CHARS = 500
@@ -1487,7 +1512,7 @@ def _with_replaced_answer(reply: str, replaced: str) -> Optional[str]:
 #: Any one of these lets the agent look at a file the request names.
 _LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
 
-# Fabricated-save guard (#4010): a final answer that asserts a file was
+# Fabricated-save guard: a final answer that asserts a file was
 # written when no write tool ran this turn.
 _MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
 #: Written files whose figures are checked, and input files read as evidence.
@@ -1541,7 +1566,7 @@ _FILE_WRITE_CLAIM_PATTERNS = (
 # Plan prose names a save the model still intends to make ("**Completion:**
 # Conclude by stating the path where the summary was saved"). Reading that as
 # a claim spends the turn's single re-prompt, so a real fabrication later in
-# the same turn goes through unblocked (#4057). Plan text belongs to the
+# the same turn goes through unblocked. Plan text belongs to the
 # narration guard above, not to this one.
 _PLAN_FRAME_PATTERN = re.compile(
     r"^\s*(?:[-*+]\s+|\d+[.)]\s+)?[*_#>\s]*"
@@ -2059,7 +2084,7 @@ class Agent(abc.ABC):
     # Class-level so a subclass that never runs ``__init__`` still increments.
     _turn_seq: int = 0
 
-    # Dynamic tool loader (#1449): the subset of tool names to surface this
+    # Dynamic tool loader: the subset of tool names to surface this
     # turn, in admission order, or ``None`` to render the full registry (legacy,
     # byte-identical). Set by ``_select_tools_for_turn`` at the top of each
     # query; consulted by both render paths and the ``_openai_tools`` property.
@@ -2067,7 +2092,7 @@ class Agent(abc.ABC):
 
     # Last value handed to the backend as ``tools=``, and the filter in force
     # when it was built. Stamped by the ``_openai_tools`` property so a trace
-    # reports what went out rather than re-deriving it (#3774).
+    # reports what went out rather than re-deriving it.
     _last_tool_schemas: Optional[List[Dict[str, Any]]] = None
     _last_tool_filter: Optional[List[str]] = None
 
@@ -2101,14 +2126,14 @@ class Agent(abc.ABC):
     _open_step_stats: Optional[Dict[str, Any]] = None
     _step_stats_recorded: bool = False
 
-    # Skills (#888): lazily built manager + the skills loaded into this agent.
+    # Skills: lazily built manager + the skills loaded into this agent.
     # Instance-level once set, so one agent's skills never leak into a sibling.
     _skill_manager: Optional[Any] = None
     _loaded_skills: Optional[Dict[str, Any]] = None
     # ``shell:execute:<binary>`` grants held by the currently loaded skills.
     _granted_binaries: Optional[Any] = None
 
-    # Lazy skill-body activation (#2848 follow-up): the sorted subset of
+    # Lazy skill-body activation: the sorted subset of
     # LOADED skill names whose full body renders this turn, or ``None`` to
     # render every loaded skill's body unconditionally (legacy, byte-identical
     # — the default for every agent that hasn't opted in). Set by
@@ -2130,7 +2155,7 @@ class Agent(abc.ABC):
     #: name -> turns of pinning remaining; decremented each refresh.
     _sticky_skill_turns: Optional[Dict[str, int]] = None
 
-    # Adaptive skills (#2674): the learned overlay composed over an authored
+    # Adaptive skills: the learned overlay composed over an authored
     # skill at render time. ``False`` is the ``--no-learned-skills`` floor and
     # must produce a byte-identical prompt, so nothing here may be consulted
     # before ``learned_skills_enabled()`` says so.
@@ -2149,7 +2174,7 @@ class Agent(abc.ABC):
     #: See :mod:`gaia.agents.base.skill_catalog`.
     _skill_catalog_enabled: bool = False
 
-    # Skill sets (#2466): the parsed manifest declarations, the explicit
+    # Skill sets: the parsed manifest declarations, the explicit
     # ``--skill-set`` request, and the set that actually resolved.
     _skill_sets: Optional[Any] = None
     _requested_skill_set: Optional[str] = None
@@ -2167,7 +2192,7 @@ class Agent(abc.ABC):
 
     #: What to show while a non-streaming LLM call blocks. A local model can sit
     #: here for a minute with nothing else on the wire, and the old label —
-    #: "Thinking" — described the harness rather than the work (#2804).
+    #: "Thinking" — described the harness rather than the work.
     _STATE_PROGRESS_LABELS = {
         STATE_PLANNING: "Working out how to answer",
         STATE_EXECUTING_PLAN: "Working through the plan",
@@ -2184,7 +2209,7 @@ class Agent(abc.ABC):
     # Set by a host (the Agent UI's session panel); checked on every tool call.
     internet_off: bool = False
 
-    # T-X2 (issue #915): declarative external-OAuth scope requirement.
+    # Declarative external-OAuth scope requirement.
     # Subclasses override this to declare which provider+scopes their tool
     # bodies need. The registry surfaces these to AgentUI's consent dialog and
     # the CLI ``gaia connectors grants`` command, and the runtime gates each
@@ -2195,14 +2220,14 @@ class Agent(abc.ABC):
     # Registry reads this to include dynamic MCP consumers in the Settings "Active for" panel.
     CONSUMES_MCP_SERVERS: ClassVar[bool] = False
 
-    # Agent-bundled skill directories (issue #888) — the highest-precedence
+    # Agent-bundled skill directories — the highest-precedence
     # discovery root. A packaged agent points this at its own ``skills/`` folder
     # so the skills it ships always win over a same-named user or Claude Code
     # copy. Empty = the agent bundles no skills.
     SKILL_DIRS: ClassVar[List[str]] = []
 
     # Path to the ``gaia-agent.yaml`` whose ``skills:`` / ``skill_sets:`` blocks
-    # this agent composes (#2466, #2467 scope D). The base ``__init__`` reads it
+    # this agent composes. The base ``__init__`` reads it
     # and loads the resolved set at startup. ``None`` auto-detects the manifest
     # beside the agent's own module — which is why a custom harness needs no code
     # change to consume an installed hub skill. Relative paths resolve against
@@ -2214,8 +2239,8 @@ class Agent(abc.ABC):
     # input) and calls ``load_skill`` itself.
     AUTOLOAD_DECLARED_SKILLS: ClassVar[bool] = True
 
-    # Agent-specific tools that must be gated behind explicit user confirmation
-    # (#1440). Subclasses override this to declare their own destructive/external
+    # Agent-specific tools that must be gated behind explicit user confirmation.
+    # Subclasses override this to declare their own destructive/external
     # tools (e.g. email send, calendar RSVP). It is UNIONED with the generic
     # ``TOOLS_REQUIRING_CONFIRMATION`` base set at runtime — see
     # ``confirmation_required_tools`` — so an agent never has to re-list the
@@ -2244,9 +2269,9 @@ class Agent(abc.ABC):
     VOLATILE_PROMPT_FRAGMENTS: ClassVar[frozenset] = frozenset(
         {
             "get_memory_system_prompt",  # re-rendered on forget/update of a shown item
-            "get_skills_system_prompt",  # per-turn body selection (#2848)
+            "get_skills_system_prompt",  # per-turn body selection
             # Mostly static, but the index line flips as a background index
-            # lands and the shape line changes if the project does (#3379).
+            # lands and the shape line changes if the project does.
             "get_project_map_system_prompt",
         }
     )
@@ -2426,13 +2451,13 @@ Do NOT wrap conversational replies in JSON.
         self.error_history = []  # Store error history for learning
         # Safe default so _execute_tool -> _fold_tool_usage never AttributeErrors
         # if called outside the normal process_query loop (e.g. directly in a
-        # test); _process_query_impl resets this per-turn (#2899).
+        # test); _process_query_impl resets this per-turn.
         self._tool_reported_usage: List[Dict[str, Any]] = []
-        # Same rationale for the verification-scope log (#3376).
+        # Same rationale for the verification-scope log.
         self._turn_tool_executions: List[Dict[str, Any]] = []
         # Whether a project root has tests, walked once per root per turn.
         self._has_tests_cache: Dict[Optional[str], bool] = {}
-        # Same rationale for the per-turn record of edited files (#3733).
+        # Same rationale for the per-turn record of edited files.
         self._turn_file_edits: List[Dict[str, Any]] = []
         # Per-turn model-call retry tally; reset at the start of every turn.
         self._turn_model_retries: Dict[str, Any] = {
@@ -2449,6 +2474,8 @@ Do NOT wrap conversational replies in JSON.
         self._deliverable_cache: Dict[tuple, list] = {}
         # Step-budget notices already sent this turn, by threshold.
         self._budget_notices_sent: set = set()
+        # The model that wrote its own tool-call markup in this session, if any.
+        self._own_markup_model: Optional[str] = None
         self._budget_notices_on = budget_notices_enabled()
         self.conversation_history = (
             []
@@ -2492,7 +2519,7 @@ Do NOT wrap conversational replies in JSON.
         # running. Drained at the step boundary beside the cancel check, so a
         # second thought reaches the model without waiting out the turn.
         self._followup_queue: Optional["queue.Queue[str]"] = None
-        # Effects the user declined this turn; reset per turn (#4447).
+        # Effects the user declined this turn; reset per turn.
         self._denied_effects = DeniedEffects()
         # (turn, path) for each access prompt declined or left unanswered.
         self._refused_paths: List[Tuple[int, Path]] = []
@@ -2611,7 +2638,7 @@ Do NOT wrap conversational replies in JSON.
         self._extraction_ledger: Optional[ExtractionLedger] = None
         self._completion_evidence: Optional[CompletionEvidence] = None
 
-        # Declarative skills (#2466, #2467 scope D): compose whatever this
+        # Declarative skills: compose whatever this
         # agent's gaia-agent.yaml declares. After _register_tools so a skill's
         # tools land on top of the agent's own registry (and survive a subclass's
         # ``_snapshot_tools()``), and before the system prompt is first composed
@@ -2695,10 +2722,14 @@ Do NOT wrap conversational replies in JSON.
         if self.max_output_tokens is not None:
             return self.max_output_tokens
         from gaia.agents.base.history import context_window
-        from gaia.llm.lemonade_client import LemonadeClient
+        from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
 
         backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
         if not isinstance(backend, LemonadeClient):
+            # A gateway Claude client calls the gateway itself, not via Lemonade.
+            model = getattr(self.chat, "effective_model", None)
+            if isinstance(model, str) and cloud_model_provider(model):
+                return CLOUD_MAX_OUTPUT_TOKENS
             return LOCAL_MAX_OUTPUT_TOKENS
         if backend.cloud_model_provider(self.chat.effective_model):
             return CLOUD_MAX_OUTPUT_TOKENS
@@ -3014,10 +3045,16 @@ Do NOT wrap conversational replies in JSON.
         read by both the tool-block gate and the response-format gate in
         :meth:`_compose_system_prompt`.
         """
-        from gaia.llm.lemonade_client import is_tool_calling_model
+        from gaia.llm.lemonade_client import uses_native_tool_calls
 
-        return bool(getattr(self, "_use_claude", False)) or is_tool_calling_model(
-            getattr(self, "model_id", None)
+        model_id = getattr(self, "model_id", None)
+        return (
+            bool(getattr(self, "_use_claude", False))
+            or (
+                model_id is not None
+                and getattr(self, "_own_markup_model", None) == model_id
+            )
+            or uses_native_tool_calls(model_id)
         )
 
     def _hosted_native_tool_caller(self) -> bool:
@@ -3736,7 +3773,7 @@ Do NOT wrap conversational replies in JSON.
         (legacy behavior, unchanged for every agent that doesn't opt in).
         GaiaAgent overrides this with a per-turn semantic selector so an
         unrelated skill's body doesn't ride along on every subsequent turn
-        for the life of the session (#2848).
+        for the life of the session.
         """
         return None
 
@@ -3774,7 +3811,7 @@ Do NOT wrap conversational replies in JSON.
 
         Mirrors :meth:`_refresh_active_tool_filter`. Recomputed fresh every
         turn rather than accumulated: a skill body is large enough (measured
-        15-19KB, #2848) that letting a stale match stick around reproduces the
+        15-19KB) that letting a stale match stick around reproduces the
         exact permanent-inlining bug this exists to fix.
         """
         # pylint: disable-next=assignment-from-none
@@ -3909,7 +3946,7 @@ Do NOT wrap conversational replies in JSON.
         self._system_prompt_cache = self._compose_system_prompt()
 
     # ------------------------------------------------------------------
-    # Skills (issue #888) — SKILL.md capabilities loaded at runtime
+    # Skills — SKILL.md capabilities loaded at runtime
     # ------------------------------------------------------------------
 
     @property
@@ -4321,7 +4358,7 @@ Do NOT wrap conversational replies in JSON.
         return True
 
     # ------------------------------------------------------------------
-    # Skill sets (issue #2466) — declarative, per-launch skill bundles
+    # Skill sets — declarative, per-launch skill bundles
     # ------------------------------------------------------------------
 
     @property
@@ -4610,7 +4647,7 @@ Do NOT wrap conversational replies in JSON.
         ``_active_skill_filter is None`` (the default, every agent that hasn't
         opted into per-turn selection) renders every loaded skill's full body
         every turn — the original, byte-identical behavior. When a subclass
-        has set the filter (GaiaAgent, #2848 follow-up), a loaded skill whose
+        has set the filter (GaiaAgent), a loaded skill whose
         name is not in the filter — and is not in the manifest's always-on
         ``skills:`` list — collapses to a one-line menu entry instead of its
         full body, so a loaded-but-irrelevant skill costs a menu line, not a
@@ -4863,6 +4900,42 @@ Do NOT wrap conversational replies in JSON.
             "content": thought or None,
         }
 
+    def _switch_to_native_tool_calls(self) -> None:
+        """Move a hosted model writing its own tool markup onto native tool calls.
+
+        For this agent's session only: a model that slips into its own markup
+        once (DeepSeek's DSML) must not pay ~12K tokens per call in every
+        later session, while one that always writes it (Claude's ``<invoke>``)
+        switches on its first reply anyway.
+        """
+        from gaia.llm.lemonade_client import (
+            cloud_model_info,
+            cloud_model_provider,
+            is_tool_calling_model,
+            learned_tool_calling,
+        )
+
+        model_id = getattr(self, "model_id", None)
+        hosted = cloud_model_info(model_id) is not None or bool(
+            cloud_model_provider(model_id)
+        )
+        if (
+            self._uses_native_tool_calls()
+            or not hosted
+            or not is_tool_calling_model(model_id)
+            or learned_tool_calling(model_id) is not True
+        ):
+            return
+        self._own_markup_model = model_id
+        logger.info(
+            "%s wrote its own tool-call markup; it gets native tool calls for "
+            "the rest of this session",
+            model_id,
+        )
+        # The text tool list and JSON format template leave the prompt.
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
+
     @staticmethod
     def _regex_tool_args(response: str, tool: str) -> Dict[str, Any]:
         """The ``tool_args`` object of a reply whose JSON did not parse as a whole.
@@ -4944,7 +5017,7 @@ Do NOT wrap conversational replies in JSON.
                 calls.
         """
         # Quick check: must contain "tool" to be worth scanning for the JSON
-        # shape. Responses without it may still carry the #2521 Python-call
+        # shape. Responses without it may still carry the Python-call
         # shape below (e.g. no literal "tool" substring at all).
         if '"tool"' not in response:
             return self._extract_function_call_tool_syntax(response)
@@ -5057,7 +5130,7 @@ Do NOT wrap conversational replies in JSON.
             return unfenced[0]
 
         if len(fenced) == 1:
-            # Rule 2: exactly one fenced call — trust it (fix for #1428)
+            # Rule 2: exactly one fenced call — trust it
             logger.debug(
                 "[PARSE] Extracted fenced tool call: %s", fenced[0].get("tool")
             )
@@ -5097,7 +5170,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Rule 4: the "tool" marker was present but matched no JSON-shaped
         # candidate (e.g. it appeared in unrelated text) — fall back to the
-        # Python-call syntax detector (#2521) before giving up.
+        # Python-call syntax detector before giving up.
         return self._extract_function_call_tool_syntax(response)
 
     # No space before "(": a call is ``remember(fact=...)``; "tree (v2)" is prose.
@@ -5557,7 +5630,7 @@ Do NOT wrap conversational replies in JSON.
             try:
                 envelope = json.loads(response)
             except json.JSONDecodeError as exc:
-                # Issue #1023: smaller LLMs occasionally emit envelopes with
+                # Smaller LLMs occasionally emit envelopes with
                 # (a) single-backslash Windows paths -> ``Invalid \escape``,
                 # or (b) trailing commentary after the closing brace ->
                 # ``Extra data``.  Mirror the inner-arguments recovery
@@ -5598,7 +5671,7 @@ Do NOT wrap conversational replies in JSON.
                     raise ValueError(
                         f"Malformed native tool_calls envelope: {exc}"
                     ) from exc
-            # Issue #1023: after the recovery path (repair or ``raw_decode``)
+            # After the recovery path (repair or ``raw_decode``)
             # an envelope can be syntactically valid JSON without the
             # ``__tool_calls__`` key -- e.g. ``raw_decode`` of
             # ``{"foo":1}<trailing>`` returns ``{"foo":1}``.  Convert the
@@ -5638,7 +5711,7 @@ Do NOT wrap conversational replies in JSON.
                 )
             # Normalise every entry. Tool-calling-trained models routinely
             # emit multiple tool_calls per response when a user utterance
-            # contains multiple distinct intents (issue #944). Each call gets
+            # contains multiple distinct intents. Each call gets
             # parsed independently so a single bad-arguments entry only
             # poisons that one call's parse, not the others.
             normalised: list[Dict[str, Any]] = []
@@ -5662,7 +5735,7 @@ Do NOT wrap conversational replies in JSON.
                     try:
                         tool_args = json.loads(args_str)
                     except json.JSONDecodeError as exc:
-                        # Issue #1023: Windows paths emitted with single
+                        # Windows paths emitted with single
                         # backslashes (``C:\Users\Klaus``) -> ``\U`` is
                         # invalid JSON.  Repair invalid escapes and retry
                         # once before surfacing the error to the recovery
@@ -5776,6 +5849,10 @@ Do NOT wrap conversational replies in JSON.
         if not _is_json(response):
             markup_call = self._parse_markup_tool_calls(response)
             if markup_call is not None:
+                names = [c["name"] for c in markup_call.get("tool_calls", [])]
+                names.append(markup_call.get("tool"))
+                if any(name in self._tools_registry for name in names):
+                    self._switch_to_native_tool_calls()
                 return markup_call
 
         # Log what we received for debugging (show more to see full JSON)
@@ -6204,8 +6281,8 @@ Do NOT wrap conversational replies in JSON.
 
         # A new thread starts with an EMPTY context, so the agent-identity
         # contextvar bound by process_query would be None inside every tool
-        # body — silently disabling the per-agent connector grant check
-        # (#915). Snapshot here, in the caller; copying inside _target would
+        # body — silently disabling the per-agent connector grant check.
+        # Snapshot here, in the caller; copying inside _target would
         # copy the worker's own empty context and change nothing.
         ctx = contextvars.copy_context()
         worker = threading.Thread(
@@ -6318,7 +6395,7 @@ Do NOT wrap conversational replies in JSON.
             return None
         return refuses(tool_name, tool_args)  # pylint: disable=not-callable
 
-    #: The answers the denied-effect question offers (#4447).
+    #: The answers the denied-effect question offers.
     ALLOW_DENIED_EFFECT = "Allow once"
     KEEP_DENIED_EFFECT = "Don't run it"
 
@@ -6522,8 +6599,14 @@ Do NOT wrap conversational replies in JSON.
                 )
                 return True
 
-        if tool_name in self.confirmation_required_tools():
+        gated = self.confirmation_required_tools()
+        if tool_name in gated:
             return not self._call_is_pre_authorized(tool_name, tool_args)
+        if bare_tool_name(tool_name) in gated:
+            # A skill tool named like a gated core tool (``x/run_python``) is
+            # gated like it. No grant pre-authorizes it: grants describe what
+            # the core tool does with its arguments, not what skill code does.
+            return True
         entry = self._tools_registry.get(tool_name) or {}
         flag = entry.get("requires_confirmation")
         if flag is not None:
@@ -6812,8 +6895,8 @@ Do NOT wrap conversational replies in JSON.
                 return rerouted
 
         # Guardrail: require explicit user confirmation for high-risk tools.
-        # Consoles that cannot reach a human deny rather than answer for them
-        # (#2210): AgentConsole prompts on a TTY, SSEOutputHandler blocks on the
+        # Consoles that cannot reach a human deny rather than answer for them:
+        # AgentConsole prompts on a TTY, SSEOutputHandler blocks on the
         # frontend modal, everything else denies with an actionable message.
         # A host may add what the arguments leave out, such as where a shell
         # call runs. Display only: the tool runs with tool_args.
@@ -6904,7 +6987,7 @@ Do NOT wrap conversational replies in JSON.
                 self._read_validator().add_allowed_path(str(outside))
                 logger.info("User allowed writing %s for this session", outside)
 
-        # Dynamic tool loader (#1449): record use for LRU recency. The name is
+        # Dynamic tool loader: record use for LRU recency. The name is
         # fully resolved and confirmed in the registry here. Execution stays on
         # the full registry — recording never gates it — so a model that names
         # an unlisted tool still runs it (free non-tool-calling recovery), and
@@ -6933,7 +7016,7 @@ Do NOT wrap conversational replies in JSON.
             )
             logger.error(error_msg)
             # Tagged so callers can tell a malformed call (retryable — the model
-            # can re-emit it) from a tool that ran and failed (#3581).
+            # can re-emit it) from a tool that ran and failed.
             return {
                 **NOT_EXECUTED,
                 "status": "error",
@@ -6994,8 +7077,29 @@ Do NOT wrap conversational replies in JSON.
         if tool_name not in TOOLS_WITHOUT_EXTERNAL_CONTENT:
             self._turn_saw_external_content = True
 
+        # A skill's own tool runs bound to this agent, so gaia.skills.context
+        # can check its paths and declared capabilities against this agent's
+        # scope; a path-named argument outside that scope never reaches it.
+        skill_name = (self._tools_registry.get(tool_name) or {}).get("skill")
+        skill = self.loaded_skills.get(skill_name) if skill_name else None
+        skill_scope: Any = contextlib.nullcontext()
+        skill_refusals: tuple = ()
+        if skill is not None:
+            from gaia.skills.context import bind, path_argument_refusal
+            from gaia.skills.errors import SkillPermissionError
+
+            skill_refusals = (SkillPermissionError,)
+
+            refusal = path_argument_refusal(self, tool_args)
+            if refusal is not None:
+                logger.info("Skill tool %s refused: %s", tool_name, refusal["error"])
+                return refusal
+            skill_scope = bind(self, skill)
+
         try:
-            result = self._call_tool_bounded(tool, tool_args, tool_name)
+            with skill_scope as skill_call:
+                body = skill_call.wrap(tool) if skill_call is not None else tool
+                result = self._call_tool_bounded(body, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
             self._fold_tool_usage(tool_name, result)
             return result
@@ -7023,7 +7127,7 @@ Do NOT wrap conversational replies in JSON.
             logger.error(error_msg)
             self.error_history.append(error_msg)
             # The main loop's is_error/STATE_ERROR_RECOVERY handling retries
-            # this — not a fatal top-level failure (#2515).
+            # this — not a fatal top-level failure.
             self.console.print_error(error_msg, recoverable=True)
             return {
                 "status": "error",
@@ -7031,6 +7135,11 @@ Do NOT wrap conversational replies in JSON.
                 "timeout": True,
                 "tool_name": tool_name,
             }
+        except skill_refusals as e:
+            # A skill tool asked gaia.skills.context for something outside its
+            # declaration or this agent's scope. The message says what to do.
+            logger.warning("Skill tool %s refused: %s", tool_name, e)
+            return {"status": "error", "error": str(e), "tool_name": tool_name}
         except subprocess.TimeoutExpired as e:
             # Handle subprocess timeout specifically
             error_msg = f"Tool {tool_name} timed out: {str(e)}"
@@ -7052,7 +7161,7 @@ Do NOT wrap conversational replies in JSON.
 
             # Print to console immediately so user sees it. The caller's
             # is_error/STATE_ERROR_RECOVERY handling retries this — not a
-            # fatal top-level failure (#2515).
+            # fatal top-level failure.
             self.console.print_error(formatted_error, recoverable=True)
 
             return {
@@ -7789,16 +7898,23 @@ Do NOT wrap conversational replies in JSON.
                     continue
 
                 ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                # Clamp like the load path: a model at its max can't reload larger.
-                expected_ctx = resolve_effective_ctx_size(
-                    resolve_ctx_size(
-                        model=m.get("model_name") or own_model,
-                        device=self.device,
-                        base_url=base_url,
-                    ),
-                    m.get("max_context_window"),
-                )
-                if 0 < ctx < expected_ctx:
+                # An exact client pin is the requested window; otherwise clamp
+                # like the load path (a model at its max can't reload larger).
+                backend = getattr(getattr(self, "chat", None), "llm_client", None)
+                backend = getattr(backend, "_backend", backend)
+                pin = getattr(backend, "ctx_size_override", None)
+                if isinstance(pin, int) and not isinstance(pin, bool) and pin > 0:
+                    expected_ctx = pin
+                else:
+                    expected_ctx = resolve_effective_ctx_size(
+                        resolve_ctx_size(
+                            model=m.get("model_name") or own_model,
+                            device=self.device,
+                            base_url=base_url,
+                        ),
+                        m.get("max_context_window"),
+                    )
+                if _loaded_context_is_too_small(ctx, expected_ctx):
                     return True
             return False
         except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
@@ -7848,7 +7964,7 @@ Do NOT wrap conversational replies in JSON.
         # 2. String-based reclassification — covers the case where the typed
         # exception was stringified into a generic ``Exception`` by AgentSDK.
         # ``classify_lemonade_exception`` already does the timeout-vs-network
-        # split we need for #1030.
+        # split we need here.
         classified = classify_lemonade_exception(exc)
         if classified is not None:
             msg = getattr(classified, "user_message", None)
@@ -7962,6 +8078,7 @@ Do NOT wrap conversational replies in JSON.
         getter = getattr(client, "get_last_retry_count", None)
         if not callable(getter):
             return 0
+        # pylint: disable-next=assignment-from-none
         count = getter()
         if isinstance(count, int) and not isinstance(count, bool):
             return count
@@ -8337,7 +8454,7 @@ Do NOT wrap conversational replies in JSON.
             threshold, _ = self._truncation_budget()
             # Prose call site: text_content is spliced into a message's text
             # field, never json.loads'd -- stays on the default prose path,
-            # not the JSON-safe envelope (#2620, reflection C2).
+            # not the JSON-safe envelope.
             text_content = self._truncate_large_content(
                 tool_output, max_chars=threshold
             )
@@ -8359,6 +8476,36 @@ Do NOT wrap conversational replies in JSON.
                     block["text"] += _SINGLE_TOOL_DONE_SUFFIX
                     break
         return msg
+
+    def _recast_unpaired_tool_results(self, messages: List[Dict[str, Any]]) -> None:
+        """On a hosted ``tools=`` route, make results no call asked for user text.
+
+        Strict OpenAI-style routes reject a ``role: tool`` message without a
+        matching call, which a single text-format call leaves behind.
+        """
+        if getattr(self, "_use_claude", False) or not self._hosted_native_tool_caller():
+            return
+        from gaia.agents.base.history import _RECORDED_RESULT_PREFIX
+
+        asked = set()
+        for index, message in enumerate(messages):
+            asked.update(call["id"] for call in message.get("tool_calls") or [])
+            if message.get("role") != "tool" or message.get("tool_call_id") in asked:
+                continue
+            content = message.get("content")
+            if isinstance(content, list):
+                content = "".join(
+                    block.get("text", "")
+                    for block in content
+                    if isinstance(block, dict)
+                )
+            elif not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            messages[index] = {
+                "role": "user",
+                "content": f"{_RECORDED_RESULT_PREFIX}"
+                f"{message.get('name', 'unknown')}] {content}",
+            }
 
     def _reasoning_request_kwargs(self) -> Dict[str, Any]:
         """The reasoning effort the agent chose (ReasoningEffortToolsMixin), if any."""
@@ -8479,8 +8626,7 @@ Do NOT wrap conversational replies in JSON.
         always parses. Prose callers (spliced directly into an LLM prompt
         string, e.g. ``_create_tool_message``) get the plain slice they
         always got: wrapping prose in an escaped JSON blob would waste an
-        already-tight budget on punctuation the reader never needed
-        (reflection C2).
+        already-tight budget on punctuation the reader never needed.
         """
 
         # If we have test_results in the output we don't want to
@@ -8549,7 +8695,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Dict/list content (Jira "issues", email "messages"/"awaiting_reply",
         # a bare list, ...): drop whole trailing items -- never slice inside
-        # one -- so the result always re-serializes cleanly (#2620).
+        # one -- so the result always re-serializes cleanly.
         dropped = self._drop_items_to_fit(content, max_chars)
         if dropped is not None:
             return dropped
@@ -8563,7 +8709,7 @@ Do NOT wrap conversational replies in JSON.
 
         ``as_json`` callers get a JSON envelope (``json.dumps`` escapes the
         slice, so the result always parses); prose callers get the plain
-        mid-slice they always got (#2620, reflection C2).
+        mid-slice they always got.
         """
         if as_json:
             envelope_overhead = len(
@@ -8675,7 +8821,7 @@ Do NOT wrap conversational replies in JSON.
         )
 
     # ------------------------------------------------------------------
-    # Proactive lifecycle hooks (#1484)
+    # Proactive lifecycle hooks
     # ------------------------------------------------------------------
 
     def on_first_run(  # pylint: disable=unused-argument
@@ -8725,7 +8871,7 @@ Do NOT wrap conversational replies in JSON.
         request from inside it fails closed rather than taking the ungated
         CLI path.
         """
-        # `_agent_context` is intentionally PRIVATE (issue #915): imported via
+        # `_agent_context` is intentionally PRIVATE: imported via
         # the private path so a malicious tool body can't forge an agent
         # identity through the public gaia.connectors API.
         from gaia.connectors.context import _agent_context
@@ -9403,12 +9549,12 @@ Do NOT wrap conversational replies in JSON.
         # establishes is in the prompt on the turn that established it.
         self._on_task_start(user_input)
 
-        # Lazy skill-body activation (#2848 follow-up): re-selected every turn,
+        # Lazy skill-body activation: re-selected every turn,
         # so a stale skill match never survives into a turn that no longer
         # needs it. Before the tool filter, which admits active skills' tools.
         self._refresh_active_skill_filter(user_input)
 
-        # Dynamic tool selection (#1449): pick this turn's tool subset and
+        # Dynamic tool selection: pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.
         self._refresh_active_tool_filter(user_input)
 
@@ -9460,7 +9606,7 @@ Do NOT wrap conversational replies in JSON.
         steps_taken = 0
         final_answer = None
         # Set when the Agent-UI Stop is observed mid-generation (per-token) so
-        # the turn ends with empty text instead of a completed answer (#2157).
+        # the turn ends with empty text instead of a completed answer.
         cancelled_by_console = False
         # Set when the person at the prompt declines more steps. Distinct from
         # cancelled_by_console, which only the Agent UI Stop button sets.
@@ -9513,12 +9659,12 @@ Do NOT wrap conversational replies in JSON.
         self.plan_iterations = 0  # Reset plan iteration counter
         # The reply to a plan-budget stop is forced, not the user's answer.
         budget_stop_pending = False
-        # Tool-reported LLM usage this turn (see _fold_tool_usage / #2899) —
+        # Tool-reported LLM usage this turn (see _fold_tool_usage) —
         # reset per-turn since an Agent instance persists across queries in
         # an interactive session.
         self._tool_reported_usage: List[Dict[str, Any]] = []
         # Executed tool calls this turn, classified for the verification-scope
-        # statement (#3376). Per-turn: an instance persists across queries.
+        # statement. Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
         self._has_tests_cache = {}
         self._turn_ungrounded = []
@@ -9530,7 +9676,7 @@ Do NOT wrap conversational replies in JSON.
             validator=self._read_validator(),
         )
         # Files edited this turn, so an empty response can name what it left
-        # behind (#3733). Per-turn: an instance persists across queries.
+        # behind. Per-turn: an instance persists across queries.
         self._turn_file_edits: List[Dict[str, Any]] = []
         # Per-turn too: the budget is spent per turn, so the notices reset
         # with it. Read the env knob here rather than at import, so setting it
@@ -9772,6 +9918,7 @@ Do NOT wrap conversational replies in JSON.
                     messages.append(
                         self._create_tool_message(tool_name, truncated_result)
                     )
+                    self._recast_unpaired_tool_results(messages)
 
                     if self._turn_scope.turn_should_end:
                         final_answer, steps_taken = self._end_turn_on_scope(
@@ -9807,7 +9954,7 @@ Do NOT wrap conversational replies in JSON.
                         # Only print if error wasn't already displayed by _execute_tool
                         if not failed.get("error_displayed"):
                             # STATE_ERROR_RECOVERY below retries this — not a
-                            # fatal top-level failure (#2515).
+                            # fatal top-level failure.
                             self.console.print_error(last_error, recoverable=True)
 
                         # Switch to error recovery state
@@ -9853,8 +10000,7 @@ Do NOT wrap conversational replies in JSON.
                             )
                             if len(plan_context_raw) > 20000:
                                 # Prose call site: spliced into an f-string
-                                # prompt below, never json.loads'd (#2620,
-                                # reflection C2).
+                                # prompt below, never json.loads'd.
                                 plan_context_str = self._truncate_large_content(
                                     plan_context, max_chars=20000
                                 )
@@ -9937,7 +10083,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Truncate previous outputs if too large to avoid overwhelming the LLM.
                     # Prose call site: spliced into the recovery prompt below,
-                    # never json.loads'd (#2620, reflection C2).
+                    # never json.loads'd.
                     truncated_outputs = (
                         self._truncate_large_content(previous_outputs, max_chars=500)
                         if previous_outputs
@@ -9961,7 +10107,7 @@ Do NOT wrap conversational replies in JSON.
                     )
                     if self._is_denial_error(last_error):
                         # "Fix the error" read as "find another way" is how a
-                        # user's no got routed around (#4447).
+                        # user's no got routed around.
                         prompt = header + (
                             "This was a denial or refusal, not a mistake to fix. "
                             "It is a decision about what the action DOES, so the "
@@ -10069,7 +10215,7 @@ Do NOT wrap conversational replies in JSON.
                             # single-shot RAG/chat answer (no step boundaries)
                             # halts promptly and the upstream Lemonade stream is
                             # closed (GeneratorExit cascades to the llm_client
-                            # generator, which shuts the HTTP socket). #2157
+                            # generator, which shuts the HTTP socket).
                             if self._console_cancelled():
                                 cancelled_by_console = True
                                 try:
@@ -10181,19 +10327,11 @@ Do NOT wrap conversational replies in JSON.
                         logger.error(f"Unexpected error during streaming: {e}")
                         err_text = str(e).lower()
                         is_ctx_overflow = is_context_overflow_error(err_text)
-                        # See non-streaming branch for explanation: re-raise
-                        # if model was loaded with the wrong (small) ctx so
-                        # the chat helper can reload it at 32K.
-                        is_wrong_ctx_loaded = is_ctx_overflow and (
-                            "context size (4096" in err_text
-                            or "context size (8192" in err_text
-                            or "context size (16384" in err_text
-                            or "n_ctx': 4096" in err_text
-                            or "n_ctx': 8192" in err_text
-                            or "n_ctx': 16384" in err_text
+                        # Same rule as the non-streaming branch: only the probe
+                        # decides a bad load, never the window in the error.
+                        is_wrong_ctx_loaded = (
+                            is_ctx_overflow and self._is_loaded_ctx_too_small()
                         )
-                        if is_ctx_overflow and not is_wrong_ctx_loaded:
-                            is_wrong_ctx_loaded = self._is_loaded_ctx_too_small()
                         if is_wrong_ctx_loaded:
                             self.error_history.append(
                                 {
@@ -10247,7 +10385,7 @@ Do NOT wrap conversational replies in JSON.
                         self._turn_model_retries["failed"] = True
                         if is_ctx_overflow:
                             # Name the actual constraint and a next step
-                            # (#2763) -- "re-ask with just the essentials" told
+                            # -- "re-ask with just the essentials" told
                             # the user nothing about WHAT was too big or HOW to
                             # shrink it, so every retry looked identical.
                             final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
@@ -10377,24 +10515,15 @@ Do NOT wrap conversational replies in JSON.
                         # Did we hit a context-overflow mid-loop? Classify by
                         # structure-then-text since typed exceptions get
                         # wrapped by AgentSDK and the backend's error shape
-                        # varies (llama.cpp vs. FastFlowLM, #2513).
+                        # varies (llama.cpp vs. FastFlowLM).
                         err_text = str(e).lower()
                         is_ctx_overflow = is_context_overflow_error(err_text)
-                        # Detect "wrong ctx size loaded" — substring match on
-                        # error text first (when raw payload is preserved),
-                        # then probe Lemonade health if substring missed
-                        # (typical: AgentSDK stringifies typed exception to
-                        # user_message, dropping n_ctx detail).
-                        is_wrong_ctx_loaded = is_ctx_overflow and (
-                            "context size (4096" in err_text
-                            or "context size (8192" in err_text
-                            or "context size (16384" in err_text
-                            or "n_ctx': 4096" in err_text
-                            or "n_ctx': 8192" in err_text
-                            or "n_ctx': 16384" in err_text
+                        # Only the loaded-vs-requested probe decides a bad
+                        # load: the window named in the error is equally valid
+                        # for a deliberately small pin.
+                        is_wrong_ctx_loaded = (
+                            is_ctx_overflow and self._is_loaded_ctx_too_small()
                         )
-                        if is_ctx_overflow and not is_wrong_ctx_loaded:
-                            is_wrong_ctx_loaded = self._is_loaded_ctx_too_small()
                         if is_wrong_ctx_loaded:
                             self.error_history.append(
                                 {
@@ -10446,15 +10575,15 @@ Do NOT wrap conversational replies in JSON.
                         self._turn_model_retries["failed"] = True
                         if is_ctx_overflow:
                             # Name the actual constraint and a next step
-                            # (#2763) -- "re-ask with just the essentials" told
+                            # -- "re-ask with just the essentials" told
                             # the user nothing about WHAT was too big or HOW to
                             # shrink it, so every retry looked identical.
                             final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
                             loop_break_answer_unprinted = True
                         else:
                             # If we have a typed Lemonade error in the
-                            # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``
-                            # from #1030), surface its actionable
+                            # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``),
+                            # surface its actionable
                             # ``user_message`` verbatim instead of wrapping it
                             # with the generic "try again in a moment" copy —
                             # that wrapper actively misleads users on
@@ -10556,7 +10685,7 @@ Do NOT wrap conversational replies in JSON.
                 )
                 error_count += 1
                 parse_failures += 1
-                # Issue #1023: pull the most recent successful image path
+                # Pull the most recent successful image path
                 # out of step_results so both the recovery prompt and the
                 # give-up fallback can surface it.  When the SD two-step
                 # flow's step-1 succeeded and step-2 parse-failed, the
@@ -10801,8 +10930,8 @@ Do NOT wrap conversational replies in JSON.
                 )
 
                 # Add plan response to messages for chat history. Same
-                # OpenAI-shape rule as the main-response append (issue
-                # #944): a tool-calling-trained planner can emit native
+                # OpenAI-shape rule as the main-response append:
+                # a tool-calling-trained planner can emit native
                 # ``tool_calls`` instead of (or alongside) the expected
                 # plan JSON — those must be preserved as a structured
                 # assistant turn so the fan-out below can correlate
@@ -10840,7 +10969,7 @@ Do NOT wrap conversational replies in JSON.
                         f"Plan content: {parsed['plan']}"
                     )
                     # The "continue" below asks the LLM to correct itself —
-                    # not a fatal top-level failure (#2515).
+                    # not a fatal top-level failure.
                     self.console.print_error(
                         f"LLM returned invalid plan format (expected array, got {type(parsed['plan']).__name__}). "
                         "Asking for correction...",
@@ -10879,7 +11008,7 @@ Do NOT wrap conversational replies in JSON.
                 if invalid_steps:
                     logger.error(f"Invalid plan steps found: {invalid_steps}")
                     # The "continue" below asks the LLM to correct itself —
-                    # not a fatal top-level failure (#2515).
+                    # not a fatal top-level failure.
                     self.console.print_error(
                         f"Plan contains {len(invalid_steps)} invalid step(s). Asking for correction...",
                         recoverable=True,
@@ -10926,10 +11055,10 @@ Do NOT wrap conversational replies in JSON.
                     f"New plan created with {self.total_plan_steps} steps: {self.current_plan}"
                 )
 
-            # === Native parallel tool_calls fan-out (issue #944) ===
+            # === Native parallel tool_calls fan-out ===
             #
             # Tool-calling-trained models (Gemma-4-E4B-it-GGUF — GAIA's
-            # default per #865 — and the Qwen3-Instruct line) routinely emit
+            # default — and the Qwen3-Instruct line) routinely emit
             # multiple ``tool_calls`` in a single response when the user
             # utterance contains multiple distinct intents. We drain them
             # sequentially within the same loop iteration, appending one
@@ -11056,10 +11185,10 @@ Do NOT wrap conversational replies in JSON.
                                 {"role": "user", "content": dedup_msg}
                             )
 
-                    # Input-based dedup for mutation tools (#1317): catch an
+                    # Input-based dedup for mutation tools: catch an
                     # identical mutation re-issue at the first repeat. Errored
                     # calls are skipped so a rejected retry isn't mistaken for
-                    # an applied change (#2464).
+                    # an applied change.
                     self._dedup_mutation_call(
                         tool_name,
                         tool_args,
@@ -11098,7 +11227,7 @@ Do NOT wrap conversational replies in JSON.
                     # Append the tool result message with the *real*
                     # tool_call_id from the originating call so the next
                     # LLM round can correlate this result with the right
-                    # call in the prior assistant turn (issue #944).
+                    # call in the prior assistant turn.
                     messages.append(
                         self._create_tool_message(
                             tool_name,
@@ -11120,7 +11249,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Track errors but DON'T break early — drain all N
                     # tool calls first so conversation history reflects
-                    # the full set, per #944 acceptance criterion (b).
+                    # the full set.
                     is_error = Agent._is_error_result(tool_result)
                     if is_error:
                         failed = tool_result_error_fields(tool_result)
@@ -11147,7 +11276,7 @@ Do NOT wrap conversational replies in JSON.
                         if not failed.get("error_displayed"):
                             # any_error below switches to STATE_ERROR_RECOVERY
                             # and retries — not a fatal top-level failure
-                            # (#2515, the archive_message_batch repro).
+                            # (the archive_message_batch repro).
                             self.console.print_error(last_error, recoverable=True)
                         any_error = True
                 self._turn_scope.end_batch()
@@ -11285,7 +11414,7 @@ Do NOT wrap conversational replies in JSON.
                         tool_result, FAILED_STATUSES
                     )
 
-                # Issue #1023: mirror the plan-execution branch (L2330) so
+                # Mirror the plan-execution branch so
                 # ``step_results`` is consistent regardless of whether the
                 # LLM emitted a multi-step plan or a series of single-tool
                 # responses.  Downstream consumers (parse-error recovery
@@ -11333,10 +11462,10 @@ Do NOT wrap conversational replies in JSON.
                         )
                         messages.append({"role": "user", "content": dedup_msg})
 
-                # Input-based dedup for mutation tools (#1317): catch an
+                # Input-based dedup for mutation tools: catch an
                 # identical mutation re-issue at the first repeat. Errored calls
                 # are skipped so a rejected retry isn't mistaken for an applied
-                # change (#2464).
+                # change.
                 self._dedup_mutation_call(
                     tool_name, tool_args, mutation_call_cache, messages, tool_result
                 )
@@ -11369,6 +11498,7 @@ Do NOT wrap conversational replies in JSON.
 
                 # Share tool output with subsequent LLM calls
                 messages.append(self._create_tool_message(tool_name, truncated_result))
+                self._recast_unpaired_tool_results(messages)
 
                 if self._turn_scope.turn_should_end:
                     final_answer, steps_taken = self._end_turn_on_scope(
@@ -11414,7 +11544,7 @@ Do NOT wrap conversational replies in JSON.
                     # Only print if error wasn't already displayed by _execute_tool
                     if not failed.get("error_displayed"):
                         # STATE_ERROR_RECOVERY below retries this — not a
-                        # fatal top-level failure (#2515).
+                        # fatal top-level failure.
                         self.console.print_error(last_error, recoverable=True)
 
                     # Switch to error recovery state
@@ -12092,8 +12222,8 @@ Do NOT wrap conversational replies in JSON.
                 self.execution_state = self.STATE_COMPLETION
                 # Compute the real token total BEFORE printing the answer so it
                 # can ride the same event, instead of the post-loop aggregation
-                # below which runs after print_final_answer already fired
-                # (#2899). Output tokens only — "tokens actually generated",
+                # below which runs after print_final_answer already fired.
+                # Output tokens only — "tokens actually generated",
                 # matching the tok/s calc downstream which is also output-only.
                 _pre_input_tokens, pre_output_tokens = _sum_conversation_tokens(
                     conversation, self._tool_reported_usage
@@ -12217,9 +12347,9 @@ Do NOT wrap conversational replies in JSON.
         # it. After the step-cap call above, so that call's time is counted.
         timing_summary = step_timer.finish()
 
-        # Cancelled mid-generation via the Agent UI Stop (#2157): end the turn
+        # Cancelled mid-generation via the Agent UI Stop: end the turn
         # with empty text so it doesn't rehydrate as a completed answer and the
-        # empty-answer classification (#2137/#2141) skips persistence. Returned
+        # empty-answer classification skips persistence. Returned
         # before the max-steps fallback, which would otherwise substitute a
         # non-empty "here's what I accomplished" message.
         if cancelled_by_console:
@@ -12283,7 +12413,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Aggregate token counts from conversation stats, plus any usage a
         # tool self-reported (e.g. a triage tool's internal per-message LLM
-        # calls, #2899) — same helper the pre-answer computation above uses,
+        # calls) — same helper the pre-answer computation above uses,
         # reading identical inputs since nothing mutates conversation or
         # self._tool_reported_usage between the two calls.
         total_input_tokens, total_output_tokens = _sum_conversation_tokens(
@@ -12300,8 +12430,8 @@ Do NOT wrap conversational replies in JSON.
         # overflow, typed Lemonade error, parse give-up, loop-break summary,
         # step-limit note when the closing call failed. Those are
         # disproportionately the runs that went wrong, so they need the scope
-        # line most (#3376). The console-cancellation path returns above with a
-        # deliberately empty result and is excluded (#3386).
+        # line most. The console-cancellation path returns above with a
+        # deliberately empty result and is excluded.
         if not verification_scope_applied and not account_refused:
             final_answer = self._with_verification_scope(final_answer)
 
@@ -12508,7 +12638,7 @@ Do NOT wrap conversational replies in JSON.
             # A loop break is evidence of neither outcome: the work may be done
             # (the model kept re-verifying it) or never started (it had no tool
             # for the job). Say which is unknown instead of claiming either,
-            # which is what "Task completed with ..." used to do here (#3750).
+            # which is what "Task completed with..." used to do here.
             return (
                 f"I stopped after calling `{tool_name}` {executed_count} "
                 "times in a row without making progress, so I can't confirm "
@@ -12665,7 +12795,7 @@ Do NOT wrap conversational replies in JSON.
         # A mutation that ERRORED never took effect, so re-issuing it is a
         # legitimate retry — not a redundant repeat. Deduping it would inject
         # "the change is already applied — move on", falsely reporting success
-        # and abandoning the operation (#2464: batch archive/star dead-ended
+        # and abandoning the operation (batch archive/star dead-ended
         # ~50% of the time when the model re-sent a spurious ``mailbox`` kwarg
         # the dispatcher rejects, and the 2nd rejection was mistaken for a
         # completed mutation). Only dedup calls that actually applied.

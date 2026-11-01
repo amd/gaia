@@ -1,9 +1,9 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# This workflow tests the GAIA Chat Agent, which ships as the standalone
-# gaia-agent-chat wheel (#1102). Tests include the wheel's own smoke tests
-# plus the framework-side session, RAG, and path-validation suites.
+# This workflow tests ChatAgent, which ships in the flagship gaia-agent-gaia
+# wheel (#6099), plus the deprecated gaia-agent-chat re-export shim's own
+# tests and the framework-side session, RAG, and path-validation suites.
 
 name: Chat Agent Tests
 
@@ -12,6 +12,7 @@ on:
     branches: [ main ]
     paths:
       - 'hub/agents/chat/python/**'
+      - 'hub/agents/gaia/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       # Only lane that installs the chat wheel, so the only lane where
@@ -95,6 +96,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'hub/agents/chat/python/**'
+      - 'hub/agents/gaia/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       # Only lane that installs the chat wheel, so the only lane where
@@ -206,8 +208,9 @@ jobs:
           uv pip install --system -e .[dev,rag,ui,api]
           # Install pytest-mock for mocking tests
           uv pip install --system pytest-mock
-          # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102)
-          uv pip install --system -e hub/agents/chat/python
+          # ChatAgent ships in the flagship wheel (#6099), which the retrieval
+          # harness also binds; the chat package is its deprecated re-export shim.
+          uv pip install --system -e hub/agents/gaia/python -e hub/agents/chat/python
 
       - name: Check no test file skips wholesale
         run: python util/check_module_skips.py --workflow test_chat_agent.yml --job test-chat-agent
@@ -236,7 +239,7 @@ jobs:
           echo "================================================================"
           echo "                  CHAT AGENT PACKAGE TESTS"
           echo "================================================================"
-          echo "Testing registration shapes, lazy re-exports, and discovery..."
+          echo "Testing the deprecated re-export shim..."
           echo ""
           python -m pytest hub/agents/chat/python/tests/ -v --tb=short
 
@@ -244,7 +247,7 @@ jobs:
         env:
           GAIA_MEMORY_DISABLED: "1"
         run: |
-          # Each of these importorskips gaia_agent_chat, at module level or per
+          # Each of these importorskips gaia_agent, at module level or per
           # test, so test_unit.yml collects them and runs none of it (#4206).
           python -m pytest \
             tests/unit/test_chat_agent_integration.py \
@@ -289,10 +292,10 @@ jobs:
           echo "           FRAMEWORK REGISTRY DISCOVERY TESTS"
           echo "================================================================"
           # tests/unit/agents/test_registry.py::TestBuiltinRegistration has
-          # chat-specific cases that importorskip("gaia_agent_chat") -- this
-          # is the only CI job that installs that wheel, so it's the only
-          # place these actually run instead of silently skipping (#2240).
-          echo "Verifying AgentRegistry actually resolves the installed gaia-agent-chat wheel..."
+          # flagship cases that importorskip("gaia_agent") -- this lane
+          # installs that wheel, so they actually run here instead of silently
+          # skipping (#2240).
+          echo "Verifying AgentRegistry resolves the flagship and its legacy chat ids..."
           echo ""
           python -m pytest tests/unit/agents/test_registry.py -v --tb=short
 

@@ -552,6 +552,9 @@ Generate only the additional content (without repeating the existing content).""
 
 def main():
     """Command line interface for PDF document generation."""
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(
         description="Generate example PDF documents using Claude AI for testing PDF processing and summarization",
         formatter_class=argparse.RawDescriptionHelpFormatter,

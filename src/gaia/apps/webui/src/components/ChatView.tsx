@@ -50,6 +50,7 @@ import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { useChatDraft } from '../hooks/useSavedDraft';
+import { getT, useT } from '../i18n/useT';
 
 /** Events that only come after the agent got past a permission prompt. */
 const RESOLVES_PROMPTS = new Set(['tool_start', 'tool_end', 'tool_result']);
@@ -88,6 +89,7 @@ interface SendOptions {
 }
 
 export function ChatView({ sessionId }: ChatViewProps) {
+    const t = useT();
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
@@ -188,6 +190,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         [sessionId],
     );
     const userStoppedRef = useRef(false);
+    /** The running reply said up front that it can't take a message mid-turn. */
+    const [followupsUnavailable, setFollowupsUnavailable] = useState(false);
     /** This view saw its chat's last turn end, so the queue need not wait for a poll to say so. */
     const observedEndRef = useRef(false);
     /** A queued message's send that the server has not yet taken; leaving the chat must not abort it. */
@@ -564,6 +568,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setLiveHistoryNotice(null);
         let doneHandled = false;
         observedEndRef.current = false;
+        if (!reattach) setFollowupsUnavailable(false);
         let streamController: AbortController | null = null;
         let queuedSettled = !fromQueue;
         queuedSendPendingRef.current = fromQueue;
@@ -719,6 +724,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         created_at: new Date().toISOString(),
                         rag_sources: null,
                     });
+                    return;
+                }
+                if (event.type === 'followup_unavailable') {
+                    if (!isStale()) setFollowupsUnavailable(true);
                     return;
                 }
                 if (event.type === 'followup_returned') {
@@ -938,7 +947,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     const store = useChatStore.getState();
                     const tool = [...store.agentSteps].reverse().find((s) => s.type === 'tool');
                     if (event.narration && tool?.active && store.livePhase === 'tool') {
-                        store.setLiveStatus(toolRowText(tool), 'tool');
+                        store.setLiveStatus(toolRowText(tool, getT()), 'tool');
                     }
                     return;
                 }
@@ -1024,7 +1033,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
                         // The model's phase ended with the call; say a tool runs, not the model.
-                        useChatStore.getState().setLiveStatus(toolRowText(step), 'tool');
+                        useChatStore.getState().setLiveStatus(toolRowText(step, getT()), 'tool');
                     }
                 }
             },
@@ -1422,7 +1431,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             .then(() => setQueue((q) => messageQueue.promote(q, id, 'sending', 'delivered')))
             .catch((err) => {
                 log.chat.info(`Follow-up not taken by the running reply; it stays queued: ${err instanceof Error ? err.message : err}`);
-                setQueue((q) => messageQueue.promote(q, id, 'sending', 'queued'));
+                setQueue((q) => messageQueue.steerRefused(q, id));
             });
     }, [queue, isStreaming, sessionId, setQueue]);
 
@@ -1589,10 +1598,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             {...CLAIMS_ESCAPE}
                             autoFocus
                             aria-label="Chat title"
+                            dir="auto"
                         />
                     ) : (
-                        <button type="button" className="task-title" onClick={startEditTitle} title="Rename">
-                            <span>{session?.title || 'New chat'}</span>
+                        <button type="button" className="task-title" onClick={startEditTitle} title={t('row.rename')}>
+                            <span>{session?.title || t('sidebar.newChat')}</span>
                             <Edit3 size={12} aria-hidden="true" className="task-title-edit" />
                         </button>
                     )}
@@ -1802,7 +1812,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         items={queue}
                         onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}
                         onRetry={(id) => setQueue((q) => messageQueue.promote(q, id, 'failed', 'queued'))}
-                        onSteer={isStreaming && !stopping ? handleSteer : undefined}
+                        onSteer={isStreaming && !stopping && !followupsUnavailable ? handleSteer : undefined}
                         replying={isStreaming}
                         busyRetry={!!queueHold}
                     />
@@ -1818,8 +1828,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         attachments={attach}
                         inputRef={inputRef}
                         placeholder={isStreaming
-                            ? 'Queue your next message'
-                            : messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}
+                            ? t('composer.queueNext')
+                            : messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}
                         leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
                         rightControls={(
                             <>

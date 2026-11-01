@@ -9,7 +9,7 @@
 
 .update-chip {
     position: fixed;
-    right: 16px;
+    inset-inline-end: 16px;
     bottom: 16px;
     z-index: 1200;
 
@@ -76,7 +76,7 @@
     opacity: 0.55;
     cursor: pointer;
     padding: 2px;
-    margin-left: 2px;
+    margin-inline-start: 2px;
     border-radius: 50%;
 }
 

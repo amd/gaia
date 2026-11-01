@@ -33,6 +33,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import closed_duplicates  # noqa: E402  (sibling module; scripts/audit is no package)
+
 #: Severity ranking, most severe first. Used to pick a cluster's severity and
 #: to order the dossier.
 SEVERITY_ORDER = ["🔴", "🟠", "🟡"]
@@ -252,7 +255,26 @@ def _gh_json(args: list[str]) -> Any:
     return json.loads(completed.stdout)
 
 
-def fetch_backlog(repo: str, label: str, limit: int) -> dict[str, Any]:
+#: What fetch_backlog() returns, and so what a --backlog-file snapshot must hold.
+BACKLOG_KEYS = frozenset({"open_issues", "filed", "suppressed", "closed_duplicates"})
+
+
+def _capped(issues: list[Any], what: str, limit: int) -> list[Any]:
+    """`gh issue list` stops at --limit without saying so: treat a full page as cut."""
+    if len(issues) >= limit:
+        raise SystemExit(
+            f"The {what} query returned {len(issues)} issues, hitting the --limit of "
+            f"{limit}, so it may be cut short and dedup would miss keys. Raise --limit."
+        )
+    return issues
+
+
+def fetch_backlog(
+    repo: str,
+    label: str,
+    limit: int,
+    closed_cap: int = closed_duplicates.DEFAULT_CAP,
+) -> dict[str, Any]:
     """Read the whole open backlog plus the audit's own filed/suppressed keys."""
     open_issues = _gh_json(
         [
@@ -307,8 +329,13 @@ def fetch_backlog(repo: str, label: str, limit: int) -> dict[str, Any]:
     )
     return {
         "open_issues": open_issues,
-        "filed": labelled,
-        "suppressed": suppressed,
+        "filed": _capped(labelled, f"open {label!r}", limit),
+        "suppressed": _capped(suppressed, "audit-wontfix", limit),
+        # Closed as a duplicate: its keys must keep pointing at the open canonical, or
+        # the next run re-files the defect the moment a human consolidates it.
+        "closed_duplicates": closed_duplicates.fetch_closed_duplicates(
+            repo, label, closed_cap
+        ),
     }
 
 
@@ -334,6 +361,45 @@ def extract_keys(issues: list[dict[str, Any]]) -> dict[str, list[int]]:
             if number not in bucket:
                 bucket.append(number)
     return dict(keys)
+
+
+def redirect_duplicates(
+    duplicates: list[dict[str, Any]], open_numbers: set[int]
+) -> list[dict[str, Any]]:
+    """Re-home each closed duplicate's audit markers onto its open canonical.
+
+    Returns pseudo-issues ``{"number": canonical, "body": duplicate's body}`` to
+    feed through :func:`extract_keys` alongside the open filed issues. Without this
+    a duplicate's keys vanish from dedup the moment it is closed, so the next run
+    re-files exactly what the triager just consolidated.
+
+    The canonical comes from :func:`closed_duplicates.canonical_of`: GitHub's own
+    duplicate event first (the UI's "Close as duplicate" leaves no comment), then
+    the latest "Duplicate of #N". A duplicate whose canonical cannot be named, or
+    is no longer open, is not redirected: the defect then goes through the normal
+    backlog search instead of being silenced against an issue nobody will see.
+    """
+    redirected = []
+    for issue in duplicates:
+        canonical = closed_duplicates.canonical_of(issue)
+        if canonical is None or canonical not in open_numbers:
+            continue
+        redirected.append({"number": canonical, "body": issue.get("body") or ""})
+    return redirected
+
+
+def marker_text_by_issue(issues: list[dict[str, Any]]) -> dict[int, str]:
+    """Every audit key an issue carries, as matchable text, keyed by issue number.
+
+    Titles alone miss same-location duplicates: two judges describe one broken
+    section in different words ("drops 5 of its pages" vs "hides eight shipped
+    guides"), but both keys name `docs/guides/index.mdx`.
+    """
+    text: dict[int, list[str]] = defaultdict(list)
+    for issue in issues:
+        for match in KEY_MARKER_RE.finditer(issue.get("body") or ""):
+            text[issue["number"]].append(match.group(1))
+    return {number: " ".join(keys) for number, keys in text.items()}
 
 
 # ----------------------------------------------------------------------
@@ -395,6 +461,7 @@ def find_backlog_candidates(
     *,
     threshold: float = MATCH_THRESHOLD,
     max_candidates: int = MAX_CANDIDATES,
+    marker_text: dict[int, str] | None = None,
 ) -> tuple[dict[str, float], float]:
     """Attach the most similar open issues to each cluster, in place.
 
@@ -403,15 +470,24 @@ def find_backlog_candidates(
     is visible to the synthesis step and gets a comment instead of a 15th
     duplicate.
 
+    *marker_text* adds each issue's own audit keys to its title. Title-only
+    matching let same-location duplicates through: on the real backlog #3832
+    scored 0.15 against #3471 (same guide, same section) and #3457 scored 0.05
+    against #3195; with the keys both rank first above the threshold.
+
     Returns the term weights built from the backlog so sibling detection can
     score against the same large, stable corpus.
     """
+    marker_text = marker_text or {}
     searchable = [
         issue
         for issue in open_issues
         if not RECEIPT_TITLE_RE.match(issue.get("title") or "")
     ]
-    issue_tokens = [tokenize(issue.get("title") or "") for issue in searchable]
+    issue_tokens = [
+        tokenize(f"{issue.get('title') or ''} {marker_text.get(issue['number'], '')}")
+        for issue in searchable
+    ]
     idf, unseen = _idf(issue_tokens)
 
     for cluster in clusters:
@@ -802,6 +878,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--label", default="weekly-audit")
     # Keep well above the open-issue count; the guard below fails loudly if it isn't.
     parser.add_argument("--limit", type=int, default=5000)
+    parser.add_argument(
+        "--closed-cap",
+        type=int,
+        default=closed_duplicates.DEFAULT_CAP,
+        help="Fail rather than read past this many closed labelled issues.",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dossier", type=Path, required=True)
     parser.add_argument(
@@ -823,8 +905,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.backlog_file:
         backlog = json.loads(args.backlog_file.read_text(encoding="utf-8"))
+        missing = BACKLOG_KEYS - set(backlog)
+        if missing:
+            raise SystemExit(
+                f"{args.backlog_file} has no {sorted(missing)}: it predates this "
+                "script's backlog format. Re-save the snapshot from fetch_backlog() "
+                "rather than guessing the missing lists are empty."
+            )
     else:
-        backlog = fetch_backlog(args.repo, args.label, args.limit)
+        backlog = fetch_backlog(args.repo, args.label, args.limit, args.closed_cap)
 
     if len(backlog["open_issues"]) >= args.limit:
         raise SystemExit(
@@ -834,12 +923,18 @@ def main(argv: list[str] | None = None) -> int:
             f"Raise --limit above the open-issue count."
         )
 
+    open_numbers = {issue["number"] for issue in backlog["open_issues"]}
+    tracked = backlog["filed"] + redirect_duplicates(
+        backlog["closed_duplicates"], open_numbers
+    )
     classify(
         clusters,
-        extract_keys(backlog["filed"]),
+        extract_keys(tracked),
         extract_keys(backlog["suppressed"]),
     )
-    idf, unseen = find_backlog_candidates(clusters, backlog["open_issues"])
+    idf, unseen = find_backlog_candidates(
+        clusters, backlog["open_issues"], marker_text=marker_text_by_issue(tracked)
+    )
     find_sibling_clusters(clusters, idf, unseen)
 
     counts = {

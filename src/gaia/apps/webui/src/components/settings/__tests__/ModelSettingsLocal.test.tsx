@@ -13,6 +13,7 @@ import { ModelSettings } from '../ModelSettings';
 import { useModelStore } from '../../../stores/modelStore';
 import { useChatStore } from '../../../stores/chatStore';
 import * as api from '../../../services/api';
+import { mockSetupApis } from '../../../test/setupApiMocks';
 import type { ActiveModel, ContextChoice, ProviderInfo, ProviderModel } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -56,6 +57,7 @@ const CTX: ContextChoice = {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    mockSetupApis(mockedApi);
     useModelStore.setState({ active: ACTIVE, error: null, restoreNotice: null, names: {} });
     useChatStore.setState({ systemStatus: null });
     mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL], active: ACTIVE, lemonade_error: null });

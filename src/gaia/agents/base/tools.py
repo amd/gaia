@@ -5,11 +5,14 @@ Tool registry and decorator for agent tools.
 """
 
 import inspect
-import logging
 import re
 import types
 import typing
 from typing import Any, Callable, Dict, Optional
+
+# Set up logging via the project logger; importing this module must not
+# reconfigure the root logger.
+from gaia.logger import get_logger
 
 # Re-exported for existing callers of this module.
 # pylint: disable=unused-import
@@ -21,9 +24,7 @@ from gaia.tool_cancellation import (  # noqa: F401
     tool_cancelled,
 )
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Tool registry to store registered tools
 _TOOL_REGISTRY: dict[str, dict] = {}
@@ -339,6 +340,18 @@ def tool(
         return decorator
 
 
+def bare_tool_name(tool_name: str) -> str:
+    """Return *tool_name* without its ``<skill-name>/`` namespace.
+
+    A skill's tools register as ``<skill>/<tool>`` (``rss-digest/fetch_rss``).
+    Checks that classify a tool by name — the confirmation set, "does this
+    write a file" — read the bare name, so a skill tool called ``write_file``
+    is held to the same rule as the core ``write_file``. Core and MCP names
+    carry no ``/`` and come back unchanged.
+    """
+    return tool_name.rpartition("/")[2]
+
+
 def get_tool_display_name(tool_name: str) -> str:
     """Return the display name for a tool, resolving MCP namespacing.
 
@@ -361,16 +374,16 @@ def get_tool_display_name(tool_name: str) -> str:
     return tool.get("display_name", tool_name)  # type: ignore[no-any-return]
 
 
-def get_tool_display_label(tool_name: str) -> str:
-    """Return a user-facing label for the tool suitable for UI progress strips.
+def get_tool_display_label(tool_name: str) -> Optional[str]:
+    """Return the tool's ``display_label`` for UI progress strips, or None.
 
-    Prefers the explicit `display_label` provided on the decorator, falls
-    back to the registry `description`, then finally to the raw tool name.
+    None when the tool isn't registered or declares no ``display_label``;
+    callers pick their own fallback.
     """
     tool = _TOOL_REGISTRY.get(tool_name)
     if not tool:
-        return None  # type: ignore[return-value]
-    return tool.get("display_label")  # type: ignore[return-value]
+        return None
+    return tool.get("display_label")
 
 
 #: What a long tool call is doing, in the user's words, while it streams.

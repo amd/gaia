@@ -670,7 +670,7 @@ def fetch_error_text(exc: Exception) -> str:
         return str(exc)
     minutes = f" (about {round(wait / 60)} min)" if wait >= 120 else ""
     return (
-        f"{exc}. The server asked to wait {round(wait)} s{minutes} before trying "
+        f"{exc} — the server asked to wait {round(wait)} s{minutes} before trying "
         "again (Retry-After); don't fetch this URL again before then."
     )
 

@@ -35,6 +35,12 @@ from urllib.parse import urlparse
 
 import requests
 
+from gaia.llm.local_only import (
+    CloudDisabledError,
+    assert_model_permitted,
+    cloud_blocked,
+    recipes_in_catalog,
+)
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -190,6 +196,10 @@ class Usage:
         self.records.append(record)
 
 
+#: Routes that run a model; everything before the first one is the API prefix.
+_MODEL_ROUTES = ("/chat/", "/messages", "/completions", "/responses", "/embeddings")
+
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server: "_Server"
@@ -197,11 +207,48 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args: Any) -> None:  # the stdlib default prints headers
         pass
 
+    def _local_only_refusal(self, path: str, body: bytes) -> Optional[str]:
+        """Why Local only refuses this request's model, or None to forward it."""
+        if not cloud_blocked():
+            return None
+        try:
+            model = json.loads(body or b"{}").get("model")
+        except (ValueError, AttributeError):
+            model = None
+        route = urlparse(path).path
+        # The API prefix the caller uses (/api/v1, /v1), so /models sits beside it.
+        marks = [route.find(m) for m in _MODEL_ROUTES if m in route]
+        prefix = route[: min(marks)] if marks else ""
+        url = f"{self.server.gateway.upstream}{prefix}/models?show_all=true"
+
+        def catalog() -> Dict[str, Any]:
+            reply = requests.get(url, timeout=30)
+            reply.raise_for_status()
+            return reply.json()
+
+        try:
+            assert_model_permitted(model, lambda m: recipes_in_catalog(m, {}, catalog))
+        except CloudDisabledError as e:
+            return str(e)
+        return None
+
+    def _send_json(self, status: int, payload: Dict[str, Any]) -> None:
+        data = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def _forward(self, method: str) -> None:
         gateway = self.server.gateway
         path = self.path
         length = int(self.headers.get("content-length") or 0)
         body = self.rfile.read(length) if length else b""
+        refusal = self._local_only_refusal(path, body) if method == "POST" else None
+        if refusal is not None:
+            self._send_json(403, {"error": {"type": "local_only", "message": refusal}})
+            return
         if "/messages" in urlparse(path).path:
             body = keep_system_messages(body)
         headers = {

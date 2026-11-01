@@ -31,6 +31,8 @@ from gaia.config import (
     unsafe_gaia_home_reason,
 )
 from gaia.llm.lemonade_embedded import gaia_home
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
+from gaia.utils.user_folders import documents_dir
 
 from .models import (
     DocumentResponse,
@@ -61,8 +63,10 @@ logger = logging.getLogger(__name__)
 #   .xls (legacy BIFF) — openpyxl only handles .xlsx; would raise on open
 # NOTE: .pptx and .docx ARE supported — python-pptx and python-docx ship with
 # GAIA. See ``_UNSUPPORTED_CATEGORIES`` below for the user-facing rejection hint.
-# Image formats are tracked by issue #730 (VLM-based indexing).
-ALLOWED_EXTENSIONS = frozenset(
+#
+# FOLDER_INDEX_EXTENSIONS is what a folder walk indexes. Images are indexable
+# only when the user picks the file (see ``gaia.utils.image_formats``).
+FOLDER_INDEX_EXTENSIONS = frozenset(
     {
         ".pdf",
         ".pptx",
@@ -101,6 +105,8 @@ ALLOWED_EXTENSIONS = frozenset(
         ".toml",
     }
 )
+
+ALLOWED_EXTENSIONS = FOLDER_INDEX_EXTENSIONS | IMAGE_EXTENSIONS
 
 # Text file extensions for preview endpoint
 TEXT_EXTENSIONS = frozenset(
@@ -332,20 +338,9 @@ def sanitize_document_path(user_path: str) -> Path:
         # Provide categorized feedback for common unsupported types
         _UNSUPPORTED_CATEGORIES = {
             "image": (
-                {
-                    ".jpg",
-                    ".jpeg",
-                    ".png",
-                    ".gif",
-                    ".bmp",
-                    ".tiff",
-                    ".webp",
-                    ".ico",
-                    ".heic",
-                    ".heif",
-                },
-                "Image files cannot be indexed for text search. "
-                "Tip: If your images contain text, convert them to PDF first — GAIA can extract text from PDFs.",
+                {".ico", ".heic", ".heif"},
+                "This image format cannot be indexed. "
+                "Tip: Convert it to PNG or JPEG — GAIA reads the text in those images.",
             ),
             "video": (
                 {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
@@ -394,7 +389,7 @@ def sanitize_document_path(user_path: str) -> Path:
         detail = (
             f"{hint} "
             f"Supported formats: PDF, DOCX, PPTX, XLSX, EPUB, TXT, MD, CSV, JSON, "
-            f"HTML, XML, YAML, and 30+ code file formats. "
+            f"HTML, XML, YAML, images (PNG, JPG, WEBP, ...), and 30+ code file formats. "
             f"Want support for {category + ' files' if category else 'this file type'}? "
             f"Request it at https://github.com/amd/gaia/issues/new?title=[Feature]%20Support%20{ext}%20file%20indexing"
         )
@@ -519,24 +514,31 @@ def uploads_dir() -> Path:
 UPLOAD_URL_PREFIX = "/api/files/uploads/"
 
 
+def harden_served_file(response: Response, path: str) -> Response:
+    """Stop a user file served on the app's origin from ever running as the app.
+
+    ``sandbox`` gives the document an opaque origin with scripts off; PDFs are
+    exempt because Chromium refuses to show a sandboxed PDF, and its viewer
+    never runs on the page's origin anyway.
+    """
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if not path.lower().endswith(".pdf"):
+        response.headers["Content-Security-Policy"] = "sandbox"
+    return response
+
+
 class UploadStaticFiles(StaticFiles):
     """Serve chat uploads so an uploaded page can never run as the app.
 
     Uploads include ``.html`` and ``.svg``, and the chat links them on the
-    backend's own origin. ``sandbox`` gives the document an opaque origin with
-    scripts off; PDFs are exempt because Chromium refuses to show a sandboxed
-    PDF, and its viewer never runs on the page's origin anyway.
+    backend's own origin.
     """
 
     async def get_response(self, path: str, scope) -> Response:
-        response = await super().get_response(path, scope)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        if not path.lower().endswith(".pdf"):
-            response.headers["Content-Security-Policy"] = "sandbox"
-        return response
+        return harden_served_file(await super().get_response(path, scope), path)
 
 
-_UPLOAD_LINK_RE = re.compile(
+UPLOAD_LINK_RE = re.compile(
     r"(?P<bang>!?)\[(?P<label>[^\]\n]*)\]\("
     + re.escape(UPLOAD_URL_PREFIX)
     + r"(?P<name>[^)\s]+)\)"
@@ -566,7 +568,7 @@ def resolve_upload_links(message: str) -> str:
             return match.group(0)
         return f"{match.group('bang')}[{match.group('label')}]({path})"
 
-    return _UPLOAD_LINK_RE.sub(_sub, message)
+    return UPLOAD_LINK_RE.sub(_sub, message)
 
 
 def attached_upload_paths(message: str) -> List[str]:
@@ -660,6 +662,23 @@ def _describe_roots(roots: Sequence[Path]) -> str:
     for root in roots:
         by_real.setdefault(os.path.realpath(str(root)), str(root))
     return ", ".join(by_real.values())
+
+
+def is_within_document_roots(path: Path) -> bool:
+    """Return whether *path* is browseable under the configured document roots.
+
+    The lexical check runs first, so a path outside every root (a UNC share,
+    say) is rejected without touching the filesystem.
+    """
+    roots = document_roots()
+    try:
+        lexical = Path(os.path.abspath(str(path)))
+        if not any(lexical.is_relative_to(root) for root in roots):
+            return False
+        resolved = path.resolve()
+    except (OSError, ValueError):
+        return False
+    return any(resolved.is_relative_to(root) for root in roots)
 
 
 def ensure_within_home(resolved: Path) -> None:
@@ -860,12 +879,13 @@ def build_quick_links() -> list:
 
     candidates = [
         ("Desktop", home / "Desktop", "desktop"),
-        ("Documents", home / "Documents", "documents"),
+        ("Documents", documents_dir(home), "documents"),
         ("Downloads", home / "Downloads", "download"),
     ]
 
     for name, candidate_path, icon in candidates:
-        if candidate_path.is_dir():
+        # Roots first: is_dir() on a UNC path outside them can hang on SMB.
+        if is_within_document_roots(candidate_path) and candidate_path.is_dir():
             links.append(QuickLink(name=name, path=str(candidate_path), icon=icon))
 
     return links

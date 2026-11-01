@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/setupapi"
+	"github.com/amd/gaia/tui/internal/setupapi/setupapitest"
+	"github.com/amd/gaia/tui/internal/ui/modelsetup"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
@@ -302,6 +305,8 @@ func TestMain(m *testing.M) {
 	if runtime.GOOS == "" { // keeps the import used on every platform
 		return
 	}
+	// A developer's own Local only must not change what these tests write.
+	os.Setenv("GAIA_POLICY_FILE", filepath.Join(os.TempDir(), "gaia-preflight-test-no-policy.json"))
 	// A down Lemonade must never start the developer's real one: by default
 	// the starter finds nothing to start. Tests of the starter opt back in via
 	// autoStartForTest.
@@ -310,6 +315,13 @@ func TestMain(m *testing.M) {
 	replayKeptKey = func(context.Context, string) (bool, error) { return false, nil }
 	// Nor reach the network to check the AMD gateway.
 	probeChatGateway = func(context.Context, string, string) error { return nil }
+	// Full motion by default: go test's stdout is not a terminal, which would
+	// otherwise switch every spinner off.
+	setupMotion = func() modelsetup.Motion { return modelsetup.Motion{} }
+	// Nor start the developer's real daemon to read the model plan.
+	newSetupAPI = func() setupapi.API {
+		return &setupapitest.Fake{PlanErr: errors.New("no daemon in tests")}
+	}
 	// Nor read the developer's own Lemonade choice, or find their server.
 	cfgDir, err := os.MkdirTemp("", "gaia-preflight-config-")
 	if err != nil {

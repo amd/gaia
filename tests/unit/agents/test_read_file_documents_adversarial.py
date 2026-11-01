@@ -306,8 +306,17 @@ def test_find_treats_regex_metacharacters_as_plain_text(term):
 def test_find_with_no_match_says_so_and_does_not_infer():
     shown = text_window("A page about boards. " * 100, URL, 5000, find="$1,299")
 
-    assert "No occurrence of '$1,299'" in shown
-    assert "Do not infer it" in shown
+    assert "No exact occurrence of '$1,299'" in shown
+    assert "Do not infer an answer" in shown
+
+
+def test_a_single_token_price_never_falls_back_to_its_digits():
+    shown = text_window(
+        "Step 1 of 299 in the setup guide. " * 50, URL, 5000, find="$1,299"
+    )
+
+    assert "No exact occurrence of '$1,299'" in shown
+    assert "Exact phrase" not in shown
 
 
 @pytest.mark.parametrize("term", ["", "   ", "\n"])

@@ -1256,8 +1256,21 @@ class TestSessionEndpoints:
         assert resp.status_code == 422
         detail = resp.json()["detail"]
         assert "'data'" in detail
-        assert "chat, email, gaia" in detail
+        assert "email, gaia" in detail
         assert client.get("/api/sessions").json()["total"] == 0
+
+    def test_a_legacy_chat_id_is_accepted_but_not_listed(
+        self, client, gaia_only_registry
+    ):
+        """``chat`` resolves to the flagship (#6099): a client still sending it
+        gets a session, but it is not offered as an id of its own."""
+        assert (
+            client.post("/api/sessions", json={"agent_type": "chat"}).status_code == 200
+        )
+        detail = client.post("/api/sessions", json={"agent_type": "data"}).json()[
+            "detail"
+        ]
+        assert "chat" not in detail.split("Registered agent ids:")[1]
 
     def test_create_session_registered_agent_type_accepted(
         self, client, gaia_only_registry
@@ -1299,7 +1312,7 @@ class TestSessionEndpoints:
         detail = client.post("/api/sessions", json={"agent_type": "data"}).json()[
             "detail"
         ]
-        assert "Registered agent ids: chat, email, gaia." in detail
+        assert "Registered agent ids: email, gaia." in detail
 
     def test_update_session_mail_provider(self, client):
         sid = client.post("/api/sessions", json={}).json()["id"]
@@ -1632,6 +1645,42 @@ class TestChatSendEndpoint:
         assert "content" in data
         assert data["content"] == "This is a response."
         assert "message_id" in data
+
+    @patch("gaia.ui.agent_loop.agent_loop.yield_to_user")
+    @patch("gaia.ui.routers.chat.turn_takes_the_line", return_value=True)
+    @patch("gaia.ui.server._get_chat_response")
+    def test_local_chat_request_preempts_a_goal_tick(
+        self, mock_chat, mock_takes_line, mock_yield, client
+    ):
+        mock_chat.return_value = "This is a response."
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+
+        response = client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+
+        assert response.status_code == 200
+        mock_takes_line.assert_called_once()
+        mock_yield.assert_called_once_with()
+
+    @patch("gaia.ui.agent_loop.agent_loop.yield_to_user")
+    @patch("gaia.ui.routers.chat.turn_takes_the_line", return_value=False)
+    @patch("gaia.ui.server._get_chat_response")
+    def test_cloud_chat_request_does_not_preempt_a_goal_tick(
+        self, mock_chat, mock_takes_line, mock_yield, client
+    ):
+        mock_chat.return_value = "This is a response."
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+
+        response = client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+
+        assert response.status_code == 200
+        mock_takes_line.assert_called_once()
+        mock_yield.assert_not_called()
 
     @patch("gaia.ui.server._get_chat_response")
     def test_non_streaming_saves_both_messages(self, mock_chat, client, db):
