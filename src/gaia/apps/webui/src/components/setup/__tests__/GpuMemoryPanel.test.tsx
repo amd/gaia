@@ -250,16 +250,29 @@ describe('GPU memory: the value to enter', () => {
 });
 
 describe('GPU memory: the real backend payload', () => {
-    // /api/gpu-memory as the backend returns it today, read from a real run.
+    // /api/gpu-memory read from a real run: a Strix Halo with a 16 GB share, guided.
     const real = () => ({ ...(coldStrixHalo.gpu as unknown as GpuMemoryStatus), method: 'guided' as const });
+    const at64 = () => ({ ...(coldStrixHalo.gpuAt64 as unknown as GpuMemoryStatus), method: 'guided' as const });
 
-    it('offers the steps when the backend does not send guided_value', async () => {
+    it("names the target by gpu_gb and the value to enter by guided_value, never the preset's setting_gb", async () => {
         const status = real();
-        expect('guided_value' in status ? status.guided_value : undefined).not.toBeNull();
-        mocked.getGpuMemory.mockResolvedValue(status);
+        mocked.getGpuMemory.mockResolvedValue(at64());
         render(<Harness initial={status} />);
+        fireEvent.click(screen.getByRole('radio', { name: 'GPU 64.5 GB' }));
         fireEvent.click(screen.getByRole('button', { name: 'Show me how' }));
-        expect(await screen.findByText(status.guided_steps![0])).toBeInTheDocument();
+        expect(mocked.getGpuMemory).toHaveBeenCalledWith(64);
+        expect(await screen.findByText('To give the GPU 64.5 GB:')).toBeInTheDocument();
+        const value = at64().guided_value!;
+        expect(screen.getAllByText(new RegExp(value)).length).toBeGreaterThan(0);
         expect(screen.getByRole('button', { name: 'I’ve done this' })).toBeInTheDocument();
+        expect(document.body).not.toHaveTextContent(/\b64(\.0)? GB/);
+    });
+
+    it('offers the steps when an older backend sends no guided_value', async () => {
+        const { guided_value: _omit, ...old } = real();
+        mocked.getGpuMemory.mockResolvedValue(old);
+        render(<Harness initial={old} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Show me how' }));
+        expect(await screen.findByText(old.guided_steps![0])).toBeInTheDocument();
     });
 });

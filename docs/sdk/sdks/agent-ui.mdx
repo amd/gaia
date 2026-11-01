@@ -2516,10 +2516,13 @@ for a target and `guided_value` as the value to enter, not a preset's
     `fits_now`, `fits_at_setting_gb`), `pending` (`setting_gb`,
     `previous_setting_gb`, `source`, `state`: `restart_required`,
     `took_effect` or `not_applied`), `revert` (`available`,
-    `previous_setting_gb`), `guided_steps` and `guided_value`. To hide the
-    step when none of the user's ticked models gains from it, show it only if
-    a ticked model has `fits_now: false` and a `fits_at_setting_gb`; that is
-    exactly the set of models named in some preset's `unlocks`. **Query:** `setting_gb` renders
+    `previous_setting_gb`), `guided_steps` and `guided_value`. A model gains
+    from a bigger share when it has `fits_now: false` and a
+    `fits_at_setting_gb` (exactly the models some preset `unlocks`). Show the
+    step only when such a model is ticked, is the chosen chat model, or is a
+    `default` model the user hasn't unticked or passed over for a chat model
+    of their own. Setup can't tick that default model on a cold start because
+    it doesn't fit yet. **Query:** `setting_gb` renders
     `guided_steps` for that value (**422** outside `min_gb`–`max_gb`).
   </Accordion>
 

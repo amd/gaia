@@ -376,8 +376,132 @@
       "Run: echo 'options ttm pages_limit=7812500' | sudo tee /etc/modprobe.d/ttm.conf",
       "Rebuild the boot image. Ubuntu: sudo update-initramfs -u · Fedora: sudo dracut --regenerate-all -f",
       "Restart your PC, then come back here. GAIA reads the new split.",
-      "Or use AMD's tool, which counts in GiB: amd-ttm --set 29.8",
       "Or raise UMA Frame Buffer Size in the BIOS. AMD recommends keeping that small on Linux and raising this limit instead."
-    ]
+    ],
+    "guided_value": "7812500"
+  },
+  "gpuAt64": {
+    "applies": true,
+    "show_in_setup": true,
+    "hidden_reason": null,
+    "os": "linux",
+    "total_gb": 137.4,
+    "gpu_gb": 17.2,
+    "cpu_gb": 120.3,
+    "setting": {
+      "name": "GPU memory limit (GTT)",
+      "current_gb": 16.6,
+      "min_gb": 4.0,
+      "max_gb": 111.0
+    },
+    "reserve_gb": 16.0,
+    "method": "apply",
+    "method_reason": "",
+    "needs_admin": true,
+    "needs_restart": true,
+    "presets": [
+      {
+        "setting_gb": 32.0,
+        "gpu_gb": 32.5,
+        "unlocks": [
+          "Qwen3.6-35B-A3B-GGUF"
+        ]
+      },
+      {
+        "setting_gb": 48.0,
+        "gpu_gb": 48.5,
+        "unlocks": [
+          "Qwen3.6-35B-A3B-GGUF"
+        ]
+      },
+      {
+        "setting_gb": 64.0,
+        "gpu_gb": 64.5,
+        "unlocks": [
+          "Qwen3.6-35B-A3B-GGUF"
+        ]
+      },
+      {
+        "setting_gb": 80.0,
+        "gpu_gb": 80.5,
+        "unlocks": [
+          "Qwen3.6-35B-A3B-GGUF",
+          "gpt-oss-120b-mxfp-GGUF"
+        ]
+      },
+      {
+        "setting_gb": 96.0,
+        "gpu_gb": 96.5,
+        "unlocks": [
+          "Qwen3.6-35B-A3B-GGUF",
+          "gpt-oss-120b-mxfp-GGUF",
+          "user.Qwen3.8-Flash-Next-GGUF"
+        ]
+      },
+      {
+        "setting_gb": 111.0,
+        "gpu_gb": 111.5,
+        "unlocks": [
+          "Qwen3.6-35B-A3B-GGUF",
+          "gpt-oss-120b-mxfp-GGUF",
+          "user.Qwen3.8-Flash-Next-GGUF"
+        ]
+      }
+    ],
+    "recommended_setting_gb": 32.0,
+    "models": [
+      {
+        "id": "Qwen3.6-35B-A3B-GGUF",
+        "size_gb": 23.3,
+        "need_gb": 28.8,
+        "default": true,
+        "fits_now": false,
+        "fits_at_setting_gb": 29.0
+      },
+      {
+        "id": "Gemma-4-E4B-it-GGUF",
+        "size_gb": 5.97,
+        "need_gb": 9.0,
+        "default": true,
+        "fits_now": true,
+        "fits_at_setting_gb": null
+      },
+      {
+        "id": "user.ggml-gpt-oss-20b-MXFP4-GGUF",
+        "size_gb": 12.1,
+        "need_gb": 16.4,
+        "default": false,
+        "fits_now": true,
+        "fits_at_setting_gb": null
+      },
+      {
+        "id": "gpt-oss-120b-mxfp-GGUF",
+        "size_gb": 63.4,
+        "need_gb": 75.1,
+        "default": false,
+        "fits_now": false,
+        "fits_at_setting_gb": 75.0
+      },
+      {
+        "id": "user.Qwen3.8-Flash-Next-GGUF",
+        "size_gb": 82.86,
+        "need_gb": 96.2,
+        "default": false,
+        "fits_now": false,
+        "fits_at_setting_gb": 96.0
+      }
+    ],
+    "pending": null,
+    "revert": {
+      "available": false,
+      "previous_setting_gb": null
+    },
+    "guided_steps": [
+      "Run: echo 'options ttm pages_limit=15625000' | sudo tee /etc/modprobe.d/ttm.conf",
+      "Rebuild the boot image. Ubuntu: sudo update-initramfs -u · Fedora: sudo dracut --regenerate-all -f",
+      "Restart your PC, then come back here. GAIA reads the new split.",
+      "Or raise UMA Frame Buffer Size in the BIOS. AMD recommends keeping that small on Linux and raising this limit instead."
+    ],
+    "guided_value": "15625000"
   }
 }
