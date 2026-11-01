@@ -17,12 +17,15 @@ the key's copy of every answer.
 
 import argparse
 import csv
+import io
 import json
 import random
 import shutil
 from pathlib import Path
 
-import pymupdf
+from pypdf import PdfReader, PdfWriter
+from reportlab.lib.utils import simpleSplit
+from reportlab.pdfgen import canvas
 
 REPO = Path(__file__).resolve().parents[1]
 _parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -38,17 +41,24 @@ rng = random.Random(4471)
 answers = {}
 
 # 1. 1,667-page PDF with one needle page buried at page 1204.
-src = pymupdf.open(REPO / "eval/corpus/documents/safety_handbook_large.pdf")
-page = src.new_page(pno=1203)
-page.insert_textbox(
-    pymupdf.Rect(72, 72, 540, 400),
-    "Section 602-B: Cold storage incident protocol.\n"
+src = PdfWriter(clone_from=PdfReader(REPO / "eval/corpus/documents/safety_handbook_large.pdf"))
+width, height = (float(v) for v in src.pages[0].mediabox[2:])
+needle = io.BytesIO()
+c = canvas.Canvas(needle, pagesize=(width, height))
+c.setFont("Helvetica", 11)
+y = height - 72 - 11
+for paragraph in (
+    "Section 602-B: Cold storage incident protocol.",
     "The emergency shutoff code for the Building 7 ammonia chiller is KESTREL-4471. "
     "Only the duty engineer, Marisol Okafor, may enter it, and the chiller must stay "
     "offline for 36 hours after any leak alarm.",
-    fontsize=11,
-)
-src.save(OUT / "safety_handbook_1667p.pdf")
+):
+    for line in simpleSplit(paragraph, "Helvetica", 11, 468):
+        c.drawString(72, y, line)
+        y -= 14
+c.save()
+src.insert_page(PdfReader(needle).pages[0], index=1203)
+src.write(OUT / "safety_handbook_1667p.pdf")
 answers["safety_handbook_1667p.pdf"] = {
     "q": "shutoff code for Building 7 ammonia chiller; who may enter it; offline hours",
     "a": ["KESTREL-4471", "Marisol Okafor", "36"],
@@ -116,8 +126,9 @@ answers["résumé (final) 東京 v2.txt"] = {"a": "11"}
     "Cy;Rome;300;=HYPERLINK(\"http://evil.example\",\"click\")\n"
     "Dee;Oslo;450,25;multi\nline\n".encode("utf-8")
 )
-good = pymupdf.open(OUT / "agent-memory-architecture.pdf")
-good.save(adv / "encrypted.pdf", encryption=pymupdf.PDF_ENCRYPT_AES_256, owner_pw="o", user_pw="secret")
+good = PdfWriter(clone_from=PdfReader(OUT / "agent-memory-architecture.pdf"))
+good.encrypt(user_password="secret", owner_password="o", algorithm="AES-256")
+good.write(adv / "encrypted.pdf")
 raw = (OUT / "agent-memory-architecture.pdf").read_bytes()
 (adv / "truncated.pdf").write_bytes(raw[: len(raw) // 3])
 (adv / "not_really.pdf").write_text("This is plain text pretending to be a PDF.", encoding="utf-8")

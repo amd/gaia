@@ -4864,6 +4864,7 @@ def main():
                     TelegramAllowlistError,
                     run_telegram,
                 )
+                from gaia.messaging.telegram_api import TelegramTokenError
             except Exception as e:  # pragma: no cover - runtime import error
                 print(f"❌ Telegram support is not available: {e}", file=sys.stderr)
                 sys.exit(1)
@@ -4898,7 +4899,7 @@ def main():
                     background=getattr(args, "background", False),
                     health_port=getattr(args, "health_port", TELEGRAM_HEALTH_PORT),
                 )
-            except TelegramAllowlistError as e:
+            except (TelegramAllowlistError, TelegramTokenError) as e:
                 # Show the remedy rather than a traceback.
                 print(f"❌ {e}", file=sys.stderr)
                 sys.exit(2)
