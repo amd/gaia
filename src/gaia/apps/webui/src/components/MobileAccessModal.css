@@ -44,7 +44,7 @@
 }
 
 .tunnel-status .status-dot.setup {
-    background: var(--accent-yellow);
+    background: var(--text-muted);
 }
 
 .tunnel-status .status-dot.inactive {

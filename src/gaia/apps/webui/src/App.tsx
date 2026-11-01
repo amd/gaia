@@ -582,14 +582,20 @@ function App() {
     const openMobileAccess = useCallback(async () => {
         setShowMobileAccess(true);
         setTunnelError(null);
-        setTunnelSetup(null);
-        if (tunnelActive) return;
+        if (tunnelActive) {
+            setTunnelSetup(null);
+            return;
+        }
         try {
             const status = await api.startTunnel();
-            if (status.reason === 'ngrok_not_installed') setTunnelSetup(status.installCommands ?? []);
-            else if (status.error) setTunnelError(status.error);
+            // Kept until the retry answers, so the setup panel doesn't flash to "Starting".
+            const notInstalled = status.reason === 'ngrok_not_installed';
+            setTunnelSetup(notInstalled ? status.installCommands ?? [] : null);
+            if (notInstalled) return;
+            if (status.error) setTunnelError(status.error);
             else setTunnelActive(true);
         } catch (err) {
+            setTunnelSetup(null);
             setTunnelError(err instanceof Error ? err.message : 'Could not start mobile access');
         }
     }, [tunnelActive]);

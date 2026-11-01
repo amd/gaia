@@ -11,6 +11,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MobileAccessModal } from '../MobileAccessModal';
 import * as api from '../../services/api';
+import { useChatStore } from '../../stores/chatStore';
 
 vi.mock('../../services/api');
 
@@ -90,6 +91,22 @@ describe('MobileAccessModal when ngrok is not installed', () => {
         expect(screen.getByText('ngrok authtoken not configured.')).toBeInTheDocument();
         expect(screen.queryByText('Set up ngrok (one-time)')).toBeNull();
         expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
+    });
+
+    it('is translated, and keeps the shell command left-to-right in Arabic', () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        try {
+            const { container } = render(
+                <MobileAccessModal isOpen onClose={vi.fn()} setupCommands={['choco install ngrok']} onRetry={vi.fn()} />,
+            );
+            expect(container.querySelector('.tunnel-setup-title')?.textContent).toContain('إعداد ngrok');
+            const input = container.querySelector('.tunnel-setup-command input') as HTMLInputElement;
+            expect(input.value).toBe('choco install ngrok');
+            expect(input).toHaveAttribute('dir', 'ltr');
+        } finally {
+            act(() => useChatStore.getState().setLocale('en'));
+            localStorage.removeItem('gaia-chat-locale');
+        }
     });
 
     it('setup wins over the raw hint text if both arrive', () => {

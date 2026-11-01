@@ -8,6 +8,7 @@ import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { log } from '../utils/logger';
+import { useT } from '../i18n/useT';
 import './MobileAccessModal.css';
 
 // QRCode loaded lazily via dynamic import
@@ -31,6 +32,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
     const [status, setStatus] = useState<TunnelStatus | null>(null);
     const [copied, setCopied] = useState(false);
     const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+    const t = useT();
     const needsSetup = Array.isArray(setupCommands);
     // Nothing to poll for or scan while the tunnel cannot start.
     const halted = !!error || needsSetup;
@@ -181,7 +183,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                             {status?.active
                                 ? 'Tunnel active'
                                 : needsSetup
-                                    ? 'ngrok required'
+                                    ? t('mobile.ngrokRequired')
                                     : error
                                         ? "Couldn't start mobile access"
                                         : 'Starting tunnel...'}
@@ -192,28 +194,26 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                     {/* Missing prerequisite: a setup step, not a failure. */}
                     {needsSetup && (
                         <div className="tunnel-setup">
-                            <div className="tunnel-setup-title">Set up ngrok (one-time)</div>
+                            <div className="tunnel-setup-title">{t('mobile.setupTitle')}</div>
                             <p>
-                                Mobile access uses ngrok to reach this PC from your phone.
-                                {setupCommands.length > 0
-                                    ? ' Install it with the command below, then press Retry.'
-                                    : ' Download it for your system, then press Retry.'}
+                                {t('mobile.setupIntro')}{' '}
+                                {setupCommands.length > 0 ? t('mobile.setupInstall') : t('mobile.setupDownload')}
                             </p>
                             {setupCommands.map((command) => (
                                 <div className="tunnel-url-row tunnel-setup-command" key={command}>
-                                    <input type="text" readOnly value={command} aria-label="ngrok install command" />
+                                    <input type="text" readOnly dir="ltr" value={command} aria-label={t('mobile.installCommand')} />
                                     <button
                                         className={`copy-url-btn ${copiedCommand === command ? 'copied' : ''}`}
                                         onClick={() => copyCommand(command)}
-                                        title="Copy command"
+                                        title={t('mobile.copyCommand')}
                                     >
                                         {copiedCommand === command ? <Check size={13} /> : <Copy size={13} />}
-                                        {copiedCommand === command ? 'Copied' : 'Copy'}
+                                        {copiedCommand === command ? t('mobile.copied') : t('mobile.copy')}
                                     </button>
                                 </div>
                             ))}
                             <a href={NGROK_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" className="tunnel-setup-link">
-                                ngrok download page <ExternalLink size={11} />
+                                {t('mobile.downloadPage')} <ExternalLink size={11} />
                             </a>
                         </div>
                     )}
@@ -304,7 +304,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                         )}
                         {needsSetup && onRetry && (
                             <button className="btn-primary" onClick={onRetry}>
-                                <RotateCw size={13} /> Retry
+                                <RotateCw size={13} /> {t('mobile.retry')}
                             </button>
                         )}
                         <button className="btn-secondary" onClick={onClose}>Close</button>
