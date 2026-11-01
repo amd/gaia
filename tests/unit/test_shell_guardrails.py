@@ -1745,3 +1745,203 @@ class TestBlanketApproval:
         assert result["status"] == "success", result
         assert (tmp_path / "made.txt").exists()
         assert notes == [("shell", command)]
+
+
+def _validate_argv(command: str):
+    """Like ``validate`` but tokenized as the tool does, so quoted values hold."""
+    import shlex
+
+    parts = shlex.split(command)
+    return ShellToolsMixin._validate_command(parts[0].lower(), parts, command)
+
+
+class TestStateChangingFlags:
+    """Read-only-by-name commands whose flags set system state or write (#2768).
+
+    Each must reach the confirmation prompt (TIER_CONFIRM), never run unasked.
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "date -s 2020-01-01",
+            "date -us now",
+            "date --set=2020-01-01",
+            "date --se 2020-01-01",
+            "date --s now",
+            "date 010112002020",
+            "date 0101",
+            "date -u 010112002020",
+            "date --d x",  # ambiguous --date/--debug: over-read, asked
+            "date -x",
+            "DATE -s now",
+            "sysctl -w kern.maxfiles=1",
+            "sysctl kern.maxfiles=1",
+            "sysctl -n kern.x=1",
+            "sysctl -p",
+            "sysctl -p /tmp/evil.conf",
+            "sysctl -f /tmp/evil.conf",
+            "sysctl --system",
+            "sysctl --load=/tmp/x",
+            "sysctl -aw x=1",
+            "hostname evil",
+            "hostname -F /tmp/name",
+            "hostname --file /tmp/name",
+            "hostname -b evil",
+            "hostname --boot evil",
+            "ipconfig /release",
+            "ipconfig /renew",
+            "ipconfig -renew",
+            "ipconfig /RELEASE6",
+            "ipconfig /flushdns",
+            "ipconfig /registerdns",
+            "ipconfig /setclassid Ethernet x",
+            "ipconfig /all /release",
+            "file -C -m magic",
+            "file -bC",
+            "file --compile",
+            "file --comp",
+            "less -o /tmp/log file.txt",
+            "less -O/tmp/log file.txt",
+            "less -So/tmp/log file.txt",
+            "less --log-file=/tmp/log file.txt",
+            "less --LOG-FILE /tmp/log file.txt",
+            "less +!touch file.txt",
+            "less '+|touch' file.txt",
+        ],
+    )
+    def test_state_change_goes_to_prompt(self, command):
+        result = _validate_argv(command)
+        assert result is not None, command
+        assert result["status"] == "error"
+        assert result["tier"] == TIER_CONFIRM, result
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "date",
+            "date +%z",
+            "date -u +%Y-%m-%dT%H:%M",
+            "date -d 'next friday'",
+            "date --date 'next friday' +%F",
+            "date --date=@0",
+            "date -dtomorrow",
+            "date -r file.txt",
+            "date --reference file.txt",
+            "date -Iseconds",
+            "date --iso-8601=ns",
+            "date --rfc-3339=seconds",
+            "date -R",
+            "date --utc",
+            "sysctl -a",
+            "sysctl -n machdep.cpu.brand_string",
+            "sysctl -an",
+            "sysctl hw.memsize hw.ncpu",
+            "sysctl --all",
+            "hostname",
+            "hostname -s",
+            "hostname -fI",
+            "hostname --fqdn",
+            "ipconfig",
+            "ipconfig /all",
+            "ipconfig -all",
+            "ipconfig /displaydns",
+            "ipconfig /showclassid Ethernet",
+            "file x.bin",
+            "file -b --mime-type x.bin",
+            "less file.txt",
+            "less -N -S file.txt",
+        ],
+    )
+    def test_read_forms_stay_unprompted(self, command):
+        assert _validate_argv(command) is None, command
+
+    @pytest.mark.parametrize(
+        "command",
+        ["wmic /record:/tmp/log os get caption", "wmic /RECORD:x cpu get name"],
+    )
+    def test_wmic_record_writes_a_file(self, command):
+        result = _validate_argv(command)
+        assert result is not None
+        assert result["tier"] == TIER_CONFIRM_ONCE
+
+    def test_wmic_role_is_not_mistaken_for_record(self):
+        assert _validate_argv("wmic /role:root/cimv2 os get caption") is None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "ls | date -s now",
+            "date && sysctl -w x=1",
+            "/usr/bin/date -s now",
+            "date.exe -s now",
+        ],
+    )
+    def test_guard_holds_in_pipelines_and_other_spellings(self, command):
+        error = ShellToolsMixin()._validate_shell_command(command)[0]
+        assert error is not None, command
+
+    def test_every_guarded_command_is_on_the_no_prompt_list(self):
+        # A guard for a command that is not on the list could never fire.
+        assert set(shell_tools.STATE_CHANGING_FLAG_GUARDS) <= ALLOWED_COMMANDS
+
+
+#: Entries reviewed for #2768 with no flag or operand that writes, deletes,
+#: sets system state, or executes when run non-interactively. A new entry must
+#: be reviewed and added here, or get a sub-guard.
+_REVIEWED_PLAIN_READS = {
+    "ls",
+    "dir",
+    "pwd",
+    "cd",
+    "cat",
+    "head",
+    "tail",
+    "more",
+    "grep",
+    "wc",
+    "diff",
+    "findstr",
+    "stat",
+    "du",
+    "df",
+    "whoami",
+    "uname",
+    "uptime",
+    "lscpu",
+    "lspci",
+    "lsblk",
+    "lsusb",
+    "free",
+    "nproc",
+    "arch",
+    "sw_vers",
+    "system_profiler",
+    "systeminfo",
+    "tasklist",
+    "driverquery",
+    "ver",
+    "which",
+    "whereis",
+    "basename",
+    "dirname",
+    "echo",
+    "printf",
+    "ps",
+    "top",
+    "jobs",
+}
+#: Entries guarded by a dedicated branch in ``_validate_command``.
+_SUB_GUARDED = {"find", "sort", "uniq", "wmic", "powershell", "powershell.exe"}
+
+
+def test_every_allowed_command_was_reviewed_for_write_flags():
+    unreviewed = ALLOWED_COMMANDS - (
+        _REVIEWED_PLAIN_READS
+        | _SUB_GUARDED
+        | set(shell_tools.STATE_CHANGING_FLAG_GUARDS)
+    )
+    assert not unreviewed, (
+        f"{sorted(unreviewed)} added to ALLOWED_COMMANDS without a review of "
+        "its flags: add a sub-guard or list it in _REVIEWED_PLAIN_READS"
+    )

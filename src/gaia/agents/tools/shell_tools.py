@@ -201,6 +201,173 @@ DANGEROUS_FIND_ACTIONS = {
     "-fls",
 }
 
+
+def _long_flag_matches(token: str, full: str) -> bool:
+    """True when *token* is ``--name`` or ``--name=…`` spelling *full* or a prefix of it."""
+    name = token.split("=", 1)[0]
+    return len(name) > 2 and full.startswith(name)
+
+
+#: ``date`` flags that only choose what is printed; ``-d``/``-f``/``-r`` read
+#: their value, and ``-I`` takes an optional attached one.
+_DATE_VALUE_SHORT = frozenset("dfr")
+_DATE_LONG_VALUE = ("--date", "--file", "--reference")
+_DATE_LONG_FLAGS = (
+    "--date",
+    "--debug",
+    "--file",
+    "--iso-8601",
+    "--reference",
+    "--resolution",
+    "--rfc-3339",
+    "--rfc-email",
+    "--universal",
+    "--utc",
+    "--help",
+    "--version",
+)
+
+
+def _date_sets_clock(parts: list) -> Optional[str]:
+    """Why ``date`` *parts* sets the clock, or None for a read."""
+    skip_next = False
+    for part in parts[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if part.startswith("--"):
+            name = part.split("=", 1)[0]
+            matches = [f for f in _DATE_LONG_FLAGS if _long_flag_matches(part, f)]
+            if name in matches:
+                matches = [name]
+            if len(matches) != 1:
+                # Unknown, ambiguous, or an abbreviation of --set.
+                return f"date '{part}' can set the system clock"
+            if matches[0] in _DATE_LONG_VALUE and "=" not in part:
+                skip_next = True
+            continue
+        if part.startswith("-") and part != "-":
+            for i, letter in enumerate(part[1:]):
+                if letter == "s":
+                    return "date -s sets the system clock"
+                if letter in _DATE_VALUE_SHORT:
+                    skip_next = i == len(part) - 2
+                    break
+                if letter == "I":
+                    break
+                if letter not in "uR":
+                    return f"date '{part}' can set the system clock"
+            continue
+        if not part.startswith("+"):
+            # An operand that is not a +FORMAT is a new date to set.
+            return f"date '{part}' sets the system clock"
+    return None
+
+
+#: ``sysctl`` letters that only read (Linux procps and BSD/macOS).
+_SYSCTL_READ_LETTERS = frozenset("aAbdehiNnoqxX")
+_SYSCTL_READ_LONG = ("--all", "--binary", "--ignore", "--names", "--values", "--quiet")
+
+
+def _sysctl_writes(parts: list) -> Optional[str]:
+    """Why ``sysctl`` *parts* changes kernel state, or None for a read."""
+    for part in parts[1:]:
+        if part.startswith("--"):
+            if not any(_long_flag_matches(part, f) for f in _SYSCTL_READ_LONG):
+                return f"sysctl '{part}' can write or load kernel settings"
+        elif part.startswith("-") and part != "-":
+            if not set(part[1:]) <= _SYSCTL_READ_LETTERS:
+                return f"sysctl '{part}' can write or load kernel settings"
+        elif "=" in part:
+            return f"sysctl '{part}' sets a kernel setting"
+    return None
+
+
+_HOSTNAME_READ_LETTERS = frozenset("aAdfhiIsVy")
+_HOSTNAME_READ_LONG = (
+    "--alias",
+    "--all-fqdns",
+    "--all-ip-addresses",
+    "--domain",
+    "--fqdn",
+    "--help",
+    "--ip-address",
+    "--long",
+    "--short",
+    "--version",
+    "--yp",
+    "--nis",
+)
+
+
+def _hostname_sets(parts: list) -> Optional[str]:
+    """Why ``hostname`` *parts* renames this machine, or None for a read."""
+    for part in parts[1:]:
+        if part.startswith("--"):
+            if not any(_long_flag_matches(part, f) for f in _HOSTNAME_READ_LONG):
+                return f"hostname '{part}' can rename this machine"
+        elif part.startswith("-") and part != "-":
+            if not set(part[1:]) <= _HOSTNAME_READ_LETTERS:
+                return f"hostname '{part}' can rename this machine"
+        else:
+            return f"hostname '{part}' renames this machine"
+    return None
+
+
+#: ``ipconfig`` switches that only display; /release, /renew, /flushdns,
+#: /registerdns and /setclassid change network state.
+_IPCONFIG_READ_SWITCHES = frozenset(
+    {"all", "displaydns", "allcompartments", "showclassid", "showclassid6", "?"}
+)
+
+
+def _ipconfig_changes_network(parts: list) -> Optional[str]:
+    """Why ``ipconfig`` *parts* changes network state, or None for a read."""
+    for part in parts[1:]:
+        if part.startswith(("/", "-")) and part.lstrip("/-").lower() not in (
+            _IPCONFIG_READ_SWITCHES
+        ):
+            return f"ipconfig '{part}' changes network configuration"
+    return None
+
+
+def _file_compiles_magic(parts: list) -> Optional[str]:
+    """Why ``file`` *parts* writes a compiled magic file, or None for a read."""
+    for part in parts[1:]:
+        if part.startswith("--"):
+            if len(part.split("=", 1)[0]) > 3 and _long_flag_matches(part, "--compile"):
+                return "file --compile writes a compiled magic file"
+        elif part.startswith("-") and "C" in re.match(r"-[a-zA-Z]*", part).group(0):
+            return "file -C writes a compiled magic file"
+    return None
+
+
+def _less_writes_or_runs(parts: list) -> Optional[str]:
+    """Why ``less`` *parts* writes a log file or runs a command, or None."""
+    for part in parts[1:]:
+        if part.startswith("--"):
+            if _long_flag_matches(part.lower(), "--log-file"):
+                return f"less '{part}' writes a log file"
+        elif part.startswith("-") and part != "-":
+            if set(re.match(r"-[a-zA-Z]*", part).group(0)) & {"o", "O"}:
+                return f"less '{part}' writes a log file"
+        elif part.startswith("+"):
+            # A +command can be '!' or '|', which runs a shell command.
+            return f"less '{part}' runs a less command at startup"
+    return None
+
+
+#: Read-only-by-name commands with flags or operands that write, set system
+#: state, or run something. Each returns why, or None for a plain read.
+STATE_CHANGING_FLAG_GUARDS = {
+    "date": _date_sets_clock,
+    "sysctl": _sysctl_writes,
+    "hostname": _hostname_sets,
+    "ipconfig": _ipconfig_changes_network,
+    "file": _file_compiles_magic,
+    "less": _less_writes_or_runs,
+}
+
 # How a blocked command is blocked. Mirrors the three tiers in
 # ``gaia.skills.binaries`` (ALLOW / CONFIRM / REFUSE), spelled locally so this
 # module keeps its light import.
@@ -4173,7 +4340,14 @@ class ShellToolsMixin:
         # Special handling for wmic - only allow read-only queries
         if cmd_base == "wmic":
             for part in cmd_parts[1:]:
-                if _is_file_write_flag(part):
+                # /RECORD:<file> logs the session to a file.
+                switch = part.lower().lstrip("/-").split(":", 1)[0]
+                is_record = (
+                    part.startswith(("/", "-"))
+                    and len(switch) >= 3
+                    and "record".startswith(switch)
+                )
+                if _is_file_write_flag(part) or is_record:
                     return _confirm_once(
                         {
                             "status": "error",
@@ -4378,6 +4552,19 @@ class ShellToolsMixin:
                     "error": "uniq with an output file is not allowed: it writes to disk, violating the read-only command policy.",
                     "has_errors": True,
                     "hint": "Use a single input (or stdin) and read stdout, e.g. 'uniq file' or 'sort file | uniq'.",
+                }
+        elif cmd_base in STATE_CHANGING_FLAG_GUARDS:
+            reason = STATE_CHANGING_FLAG_GUARDS[cmd_base](cmd_parts)
+            if reason is not None:
+                return {
+                    "status": "error",
+                    "tier": TIER_CONFIRM,
+                    "error": (
+                        f"{reason}, which is not allowed under the read-only "
+                        "command policy."
+                    ),
+                    "has_errors": True,
+                    "hint": f"Run '{cmd_base}' with read-only options only.",
                 }
         elif cmd_base in SHELL_KEYWORDS:
             return {

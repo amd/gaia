@@ -424,6 +424,16 @@ if cmd_base not in ALLOWED_COMMANDS:
     }
 ```
 
+Membership is by name, and a read-only name says nothing about its flags, so the
+flags that write, change system state, or run something are inspected per
+pipeline segment and sent to the prompt (`TIER_CONFIRM`) instead of running
+unasked: `find -exec`/`-delete`/`-fprint*`, `sort -o`, a second `uniq` operand,
+`wmic /output`/`/append`/`/record`, `date -s` or a date operand, `sysctl -w`/`-p`/
+`-f`/`--system`/`name=value`, `hostname NAME`/`-F`/`-b`, `ipconfig /release`/
+`/renew`/`/flushdns`/`/registerdns`/`/setclassid`, `file -C`, and `less -o`/`-O`/
+`--log-file`/`+command`. `date`, `sysctl`, `hostname` and `ipconfig` accept only
+their known read-only options, so an unknown flag also asks.
+
 ### Bypass Permissions
 
 Off by default. Turned on only by the flagship sidecar's `--full-access`
