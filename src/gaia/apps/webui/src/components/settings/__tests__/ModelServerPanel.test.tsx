@@ -67,7 +67,7 @@ describe('ModelServerPanel', () => {
 
         expect(await screen.findByText('Vision model')).toBeInTheDocument();
         expect(screen.getByText(/Gemma-3n-Vision-GGUF · Vulkan.*4K tokens/)).toBeInTheDocument();
-        expect(screen.getByText('Reranking model')).toBeInTheDocument();
+        expect(screen.getByText('Reranker model')).toBeInTheDocument();
         expect(screen.getByText(/bge-reranker-v2-m3-GGUF · ROCm/)).toBeInTheDocument();
     });
 

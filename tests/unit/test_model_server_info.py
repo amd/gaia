@@ -275,6 +275,35 @@ def test_other_loaded_models_are_reported_without_hiding_the_chat_model():
     assert info["loaded_models"][0]["ctx_size"] == 8192
 
 
+def test_second_embedding_model_is_reported_after_the_selected_embedder():
+    info = describe_model_server(
+        base_url="http://localhost:13305/api/v1",
+        owner="gaia",
+        health={
+            "model_loaded": "chat-model",
+            "all_models_loaded": [
+                _llm(name="chat-model"),
+                {
+                    "model_name": "embedding-primary",
+                    "type": "embedding",
+                    "recipe": "llamacpp",
+                },
+                {
+                    "model_name": "embedding-secondary",
+                    "type": "embedding",
+                    "recipe": "llamacpp",
+                },
+            ],
+        },
+        system_info=SYSINFO,
+        preferred_backend=None,
+    )
+    assert info["embedding_model"]["name"] == "embedding-primary"
+    assert [model["name"] for model in info["loaded_models"]] == [
+        "embedding-secondary"
+    ]
+
+
 def test_chat_capable_vision_models_remain_chat_models():
     info = describe_model_server(
         base_url="http://localhost:13305/api/v1",

@@ -39,9 +39,25 @@ function ctxLabel(ctx: number | null | undefined): string {
     return ctx ? `${Math.round(ctx / 1024)}K tokens` : 'unknown';
 }
 
+const MODEL_KIND_LABELS: Record<string, string> = {
+    asr: 'Speech recognition',
+    embedding: 'Embedding',
+    image: 'Image',
+    llm: 'Language',
+    rerank: 'Reranker',
+    reranking: 'Reranker',
+    stt: 'Speech recognition',
+    transcription: 'Speech recognition',
+    tts: 'Speech',
+    vision: 'Vision',
+    '3d': '3D',
+};
+
 function modelKindLabel(model: LoadedModelInfo): string {
     if (!model.model_type) return 'Loaded model';
-    return `${model.model_type.charAt(0).toUpperCase()}${model.model_type.slice(1)} model`;
+    const type = model.model_type.toLowerCase();
+    const label = MODEL_KIND_LABELS[type] ?? `${type.charAt(0).toUpperCase()}${type.slice(1)}`;
+    return `${label} model`;
 }
 
 function loadedModelDetail(model: LoadedModelInfo): string {

@@ -186,12 +186,12 @@ def _embedder_entry(health: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _other_loaded_entries(health: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Loaded models not already shown as chat or embedding models."""
-    chat = _chat_entry(health)
+    """Loaded models not already shown as the selected chat or embedding model."""
+    shown = (_chat_entry(health), _embedder_entry(health))
     return [
         m
         for m in health.get("all_models_loaded") or []
-        if isinstance(m, dict) and m is not chat and m.get("type") != "embedding"
+        if isinstance(m, dict) and not any(m is entry for entry in shown)
     ]
 
 
