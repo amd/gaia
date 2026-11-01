@@ -69,14 +69,34 @@ READ_TIMEOUT_RE = re.compile(r"read timed out|readtimeouterror", re.IGNORECASE)
 
 
 def _reasoning_tokens(usage: dict) -> Optional[int]:
-    """Reasoning tokens from an OpenAI-shape ``usage``, when reported."""
-    for key in ("completion_tokens_details", "output_tokens_details"):
-        details = usage.get(key)
+    """Reasoning tokens from an OpenAI-shape ``usage``, when reported.
+
+    Nested under ``*_details`` (OpenAI, Fireworks), or top-level as the AMD
+    gateway streams it for DeepSeek.
+    """
+    for details in (
+        usage.get("completion_tokens_details"),
+        usage.get("output_tokens_details"),
+        usage,
+    ):
         if isinstance(details, dict):
             value = details.get("reasoning_tokens")
             if isinstance(value, int) and not isinstance(value, bool):
                 return value
     return None
+
+
+_THINK_TAG_RE = re.compile(r"<(/?)think>", re.IGNORECASE)
+
+
+def _defang_think_tags(text: str) -> str:
+    """*text* with ``<think>`` / ``</think>`` broken up.
+
+    Streamed reasoning is wrapped in those tags for the agent to split off. A
+    tag inside the reasoning itself would end the block early and leak the rest
+    (a tool-call-shaped line included) into the parsed answer.
+    """
+    return _THINK_TAG_RE.sub(r"< \1think>", text)
 
 
 #: Seconds between progress reports while a tool call's arguments stream in.
@@ -860,11 +880,17 @@ class LemonadeProvider(LLMClient):
             )
 
         content = message.get("content") or ""
-        if not content and finish_reason == "stop" and reasoning:
+        if (
+            not content
+            and finish_reason == "stop"
+            and reasoning
+            and not self._backend.cloud_model_provider(effective_model)
+        ):
             # Some llama.cpp builds route a completed answer into
             # ``reasoning_content``. A reply cut off by the token limit
             # (``finish_reason="length"``) is left empty on purpose — that text
-            # is an unfinished thought, not an answer.
+            # is an unfinished thought, not an answer. A cloud provider's
+            # reasoning is never the answer: parsed, it could run a tool.
             logger.warning(
                 "Lemonade returned empty 'content' with finish_reason=stop; "
                 "treating 'reasoning_content' as the answer (model=%s)",
@@ -988,7 +1014,7 @@ class LemonadeProvider(LLMClient):
 
         def close_thinking():
             nonlocal in_thinking, thought
-            out = (thought + "</think>") if thought else "</think>"
+            out = _defang_think_tags(thought) + "</think>"
             in_thinking, thought = False, ""
             return out
 
@@ -1025,6 +1051,37 @@ class LemonadeProvider(LLMClient):
                         next_progress = (
                             time.perf_counter() + TOOL_CALL_PROGRESS_INTERVAL_S
                         )
+                # Thinking models (e.g. Qwen3.5) stream reasoning in a
+                # separate field. Wrap in <think> tags so the UI can display it
+                # in a collapsible section. Read before content: a
+                # non-streaming reply arrives as one delta carrying both.
+                reasoning = delta.get("reasoning_content")
+                if reasoning:
+                    reasoning_seen.append(reasoning)
+                    now = time.perf_counter()
+                    if next_reasoning_progress is None:
+                        next_reasoning_progress = now + REASONING_PROGRESS_INTERVAL_S
+                    elif (
+                        self.reasoning_progress is not None
+                        and now >= next_reasoning_progress
+                    ):
+                        self.reasoning_progress(len("".join(reasoning_seen).split()))
+                        next_reasoning_progress = now + REASONING_PROGRESS_INTERVAL_S
+                    if not in_thinking:
+                        yield "<think>"
+                        in_thinking = True
+                    # Released a line at a time, never a token at a time:
+                    # every surface renders a thought as ONE replaced line,
+                    # so per-token reasoning blanks the sentence before it
+                    # and the status line reads as ". / just / `." churn.
+                    # A tag has no newline, so no cut can split one. Only the
+                    # new piece is searched: a long line stays linear.
+                    cut = reasoning.rfind("\n")
+                    if cut >= 0:
+                        yield _defang_think_tags(thought + reasoning[: cut + 1])
+                        thought = reasoning[cut + 1 :]
+                    else:
+                        thought += reasoning
                 content = delta.get("content")
                 if content:
                     # Close thinking block before yielding actual content
@@ -1032,47 +1089,13 @@ class LemonadeProvider(LLMClient):
                         yield close_thinking()
                     text_seen.append(content)
                     yield content
-                else:
-                    # Thinking models (e.g. Qwen3.5) stream reasoning in a
-                    # separate field. Wrap in <think> tags so the UI can
-                    # display it in a collapsible section.
-                    reasoning = delta.get("reasoning_content")
-                    if reasoning:
-                        reasoning_seen.append(reasoning)
-                        now = time.perf_counter()
-                        if next_reasoning_progress is None:
-                            next_reasoning_progress = (
-                                now + REASONING_PROGRESS_INTERVAL_S
-                            )
-                        elif (
-                            self.reasoning_progress is not None
-                            and now >= next_reasoning_progress
-                        ):
-                            self.reasoning_progress(
-                                len("".join(reasoning_seen).split())
-                            )
-                            next_reasoning_progress = (
-                                now + REASONING_PROGRESS_INTERVAL_S
-                            )
-                        if not in_thinking:
-                            yield "<think>"
-                            in_thinking = True
-                        # Released a line at a time, never a token at a time:
-                        # every surface renders a thought as ONE replaced line,
-                        # so per-token reasoning blanks the sentence before it
-                        # and the status line reads as ". / just / `." churn.
-                        thought += reasoning
-                        cut = thought.rfind("\n")
-                        if cut >= 0:
-                            yield thought[: cut + 1]
-                            thought = thought[cut + 1 :]
-                    elif "text" in choice:
-                        text = choice["text"]
-                        if text:
-                            if in_thinking:
-                                yield close_thinking()
-                            text_seen.append(text)
-                            yield text
+                elif not reasoning and "text" in choice:
+                    text = choice["text"]
+                    if text:
+                        if in_thinking:
+                            yield close_thinking()
+                        text_seen.append(text)
+                        yield text
         self._last_reasoning = "".join(reasoning_seen) or None
         self._last_finish_reason = finish_reason or None
         if not finish_reason and not usage_seen:

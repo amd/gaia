@@ -243,6 +243,11 @@ class GatewayState:
     # Native-capable models seen writing their own tool-call markup on the
     # in-text format; only these get ``tools=``, the rest stay in-text.
     own_tool_markup_models: List[str] = field(default_factory=list)
+    # Whether a model reasons when sent ``reasoning_effort``, learned the same
+    # way: the gateway's catalog says nothing, and DeepSeek reasons only if asked.
+    reasoning_models: List[str] = field(default_factory=list)
+    no_reasoning_models: List[str] = field(default_factory=list)
+    reasoning_probe_failures: Dict[str, str] = field(default_factory=dict)
     # Models whose last call came back "not found" (HTTP 404) from the cloud
     # provider, keyed by id: ``{"status": 404, "at": "<UTC ISO time>"}``. A
     # later successful call clears the entry. Nothing switches models on it —
@@ -286,6 +291,12 @@ class GatewayState:
                 for k, v in (raw.get("tool_calling_probe_failures") or {}).items()
             },
             own_tool_markup_models=list(raw.get("own_tool_markup_models") or []),
+            reasoning_models=list(raw.get("reasoning_models") or []),
+            no_reasoning_models=list(raw.get("no_reasoning_models") or []),
+            reasoning_probe_failures={
+                str(k): str(v)
+                for k, v in (raw.get("reasoning_probe_failures") or {}).items()
+            },
             unavailable_models={
                 str(k): dict(v)
                 for k, v in (raw.get("unavailable_models") or {}).items()
@@ -307,6 +318,11 @@ class GatewayState:
                 sorted(self.tool_calling_probe_failures.items())
             ),
             "own_tool_markup_models": sorted(self.own_tool_markup_models),
+            "reasoning_models": sorted(self.reasoning_models),
+            "no_reasoning_models": sorted(self.no_reasoning_models),
+            "reasoning_probe_failures": dict(
+                sorted(self.reasoning_probe_failures.items())
+            ),
             "unavailable_models": dict(sorted(self.unavailable_models.items())),
         }
         # Another GAIA process reading mid-write must never see half a file.

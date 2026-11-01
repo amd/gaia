@@ -804,8 +804,8 @@ def test_side_request_reaches_lemonade_with_thinking_off(monkeypatch, stream):
         # No thinking switch registered: the template's own mode, nothing sent.
         ("Gemma-4-E4B-it-GGUF", {}),
         (_QWEN3_30B, {}),
-        # Cloud providers do not take llama.cpp template kwargs.
-        ("fireworks.deepseek-v4p1-flash", {}),
+        # No template kwargs for a cloud model; no default reasoning effort either.
+        ("fireworks.deepseek-v4p1-flash", {"reasoning_effort": None}),
         (None, {}),
     ],
 )

@@ -208,6 +208,40 @@ the model to native tool calls from its next request, and remembers it under
 `own_tool_markup_models`. Models that follow the in-text format, such as
 `DeepSeek-V4.1-Flash`, stay on it.
 
+### Reasoning
+
+Some gateway models reason only when the request asks them to:
+`DeepSeek-V4.1-Flash` answers with its thinking off unless it is sent
+`reasoning_effort`. GAIA sends none by default, so every model runs in its
+provider's default mode. Reasoning is opt-in because it costs more input tokens
+and makes each reply slower, without a reliable gain in answer quality.
+
+Turn it on with a level:
+
+```bash
+gaia config set cloud_reasoning_effort medium   # off (default) | low | medium | high
+```
+
+With a level set, GAIA probes each gateway model once, the next time an agent
+starts on it, and records the result in `~/.gaia/gateway.json`
+(`reasoning_models` / `no_reasoning_models`). While the setting is `off`, no
+probe runs.
+
+- A model that comes back with reasoning gets `reasoning_effort` at your level on
+  every agent request. Its reasoning shows as thinking and is never parsed as the
+  answer or as a tool call.
+- A model that ignores the field, or rejects it (`Qwen3.8-Flash-Next` and
+  `gpt-5.3-chat` return HTTP 400 for `high`), is never sent it and runs in its
+  provider's default mode.
+- Short side calls, such as session titles and memory summaries, never get it, so
+  they don't spend their small token budget reasoning.
+
+Reasoning tokens count against the reply's output limit (32K for cloud models
+in the agent). A reply cut off at that limit is reported as cut off, never
+treated as the answer. A failed or inconclusive probe is retried an hour later,
+like the tool-calling probe (`reasoning_probe_failures`). Delete the model from
+those lists to re-probe it. Set the level back to `off` to stop sending it.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |

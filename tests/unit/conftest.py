@@ -84,6 +84,26 @@ def _forget_crashed_loads(monkeypatch):
     monkeypatch.setattr(lemonade_client, "_CRASHED_LOADS", {})
 
 
+@pytest.fixture(autouse=True)
+def _isolate_learned_reasoning(tmp_path, monkeypatch):
+    """Start each test with nothing learned about cloud reasoning, and keep
+    probes off the developer's real ``~/.gaia/gateway.json``."""
+    from gaia.llm import gateway
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(gateway, "GATEWAY_STATE_FILE", tmp_path / "gateway.json")
+    monkeypatch.setattr(
+        lc,
+        "_CLOUD_REASONING",
+        lc._LearnedCapability(
+            "reasoning",
+            "reasoning_models",
+            "no_reasoning_models",
+            "reasoning_probe_failures",
+        ),
+    )
+
+
 #: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
 _RUN_HOME = Path.home()
 

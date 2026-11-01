@@ -224,6 +224,9 @@ class TestAuth:
             "no_tool_calling_models",
             "tool_calling_probe_failures",
             "own_tool_markup_models",
+            "reasoning_models",
+            "no_reasoning_models",
+            "reasoning_probe_failures",
             "unavailable_models",
         }
 
