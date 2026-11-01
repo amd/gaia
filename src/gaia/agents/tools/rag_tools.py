@@ -349,7 +349,8 @@ def _chunks_have_pages(chunks: List[Dict[str, Any]]) -> bool:
 
 _MARKER_NOTE = (
     "A chunk's 'page' is where it starts; text after a '[Page N]' marker inside "
-    "it is on page N, so cite N for facts that follow the marker."
+    "it is on page N, so cite N for facts that follow the marker and the page "
+    "before N for facts ahead of it."
 )
 
 

@@ -27,7 +27,7 @@ def test_paged_file_instruction_is_unchanged():
         "'page': 2, say 'According to report.pdf, page 2:'\nIf info from multiple "
         "pages, say 'According to report.pdf, pages 2 and 5:'\n"
         "A chunk's 'page' is where it starts; text after a '[Page N]' marker inside "
-        "it is on page N, so cite N for facts that follow the marker."
+        "it is on page N, so cite N for facts that follow the marker and the page before N for facts ahead of it."
     )
 
 
@@ -43,7 +43,7 @@ def test_paged_documents_instruction_is_unchanged():
         "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf "
         "(pages 2, 5):'\n"
         "A chunk's 'page' is where it starts; text after a '[Page N]' marker inside "
-        "it is on page N, so cite N for facts that follow the marker.\n\n"
+        "it is on page N, so cite N for facts that follow the marker and the page before N for facts ahead of it.\n\n"
         "IMPORTANT: Always use the full path exactly as given in source_file. "
         "Do NOT shorten it to just the filename."
     )
