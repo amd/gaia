@@ -65,8 +65,9 @@ indexes empty text. Photos are turned upright using their EXIF orientation, and
 transparent backgrounds are read as white. A multi-page TIFF is read page by
 page, up to 50 pages; a larger one fails, naming its page count. An animated GIF
 is read from its first frame only.
-`gaia init` doesn't download the default vision model; run
-`lemonade pull Qwen3-VL-4B-Instruct-GGUF` to get it. The Agent UI's folder
+The default vision model is `Gemma-4-E4B-it-GGUF`, which `gaia init` downloads
+unless you set your own `default_model`; then run
+`lemonade pull Gemma-4-E4B-it-GGUF` to get it. The Agent UI's folder
 indexing skips images, so add them one at a time.
 </Note>
 

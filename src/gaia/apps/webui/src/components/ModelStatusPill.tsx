@@ -105,7 +105,7 @@ export function ModelStatusPill() {
                 <Icon size={13} aria-hidden="true" />
                 <span className="sb-location-text">
                     {place?.label && name && <span className="sb-location-place">{place.label}</span>}
-                    <span className="sb-location-name">{name ?? place?.label ?? 'Model'}</span>
+                    <span className="sb-location-name" dir="auto">{name ?? place?.label ?? 'Model'}</span>
                 </span>
                 {!place?.remote && (
                     <span className={`sb-location-dot is-${dot}`} aria-hidden="true" />

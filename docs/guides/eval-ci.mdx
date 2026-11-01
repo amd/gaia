@@ -502,7 +502,7 @@ gaia eval agent --corpus-dir ~/my-project/eval-corpus
 </CardGroup>
 
 <Warning>
-  The agent under test can run shell commands, so its backend must never inherit `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; only the `gaia eval agent` step needs them. On a public repository anyone can download workflow artifacts, and GitHub masks secrets only in job logs. Keep uploads to scorecards and reproduce a regression locally for its traces.
+  The agent under test can run shell commands, so its backend must never inherit `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or the backup `CLAUDE_CODE_OAUTH_TOKEN_BACKUP`; only the `gaia eval agent` step needs them. On a public repository anyone can download workflow artifacts, and GitHub masks secrets only in job logs. Keep uploads to scorecards and reproduce a regression locally for its traces.
 </Warning>
 
 <Warning>

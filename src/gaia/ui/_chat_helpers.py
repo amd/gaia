@@ -132,16 +132,18 @@ _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 _background_tasks: set = set()
 
 
-def relayed_turns_in_flight() -> Optional[str]:
-    """Why restarting the daemon now would cut off a chat's agent turn, or None.
+def active_turns_in_flight() -> Optional[str]:
+    """Why restarting the daemon now would cut off an Agent UI turn, or None.
 
-    These turns go straight to the agent, so the daemon cannot count them. A
-    chat still starting its turn has no relayed run yet and does not count.
+    The daemon cannot see turns this backend runs in-process or relays straight
+    to an agent. A chat still starting its turn, such as the one asking the
+    daemon whether it may restart, has neither and does not count.
     """
     running = sum(
         1
         for handler in list(_active_sse_handlers.values())
-        if getattr(handler, "active_relay_run_id", None) is not None
+        if getattr(handler, "in_process_turn_active", False)
+        or getattr(handler, "active_relay_run_id", None) is not None
     )
     if not running:
         return None
@@ -3780,15 +3782,9 @@ async def _get_chat_response(
                 # Agent factories that don't recognise a field filter it out
                 # via ``dataclasses.fields``/``AgentManifest`` validation.
                 #
-                # Non-streaming vs streaming asymmetry — read before refactoring:
-                # This path forwards ``rag_file_paths`` (the real list) because
-                # non-streaming has no SSE handler, so ChatAgent's silent
-                # ``_index_documents`` in __init__ is the only indexer and must
-                # see the paths. The STREAMING registered-agent path, by
-                # contrast, passes ``rag_file_paths=[]`` and does the indexing
-                # in ``_index_rag_with_progress`` so the user sees progress
-                # events; forwarding the real list there would double-index
-                # (see the regression test in test_chat_helpers.py).
+                # Documents are indexed after the build, as the streaming path
+                # does: indexing takes minutes and the build holds the lock
+                # every other chat needs to start.
                 with writing_tool_registry():
                     agent = registry.create_agent(
                         agent_type,
@@ -3799,7 +3795,7 @@ async def _get_chat_response(
                             min_context_size=device_ctx,
                         ),
                         **_session_agent_kwargs(
-                            rag_file_paths=rag_file_paths,
+                            rag_file_paths=[],
                             library_paths=library_paths,
                             allowed=allowed,
                             session_id=session_id,
@@ -3813,6 +3809,8 @@ async def _get_chat_response(
                         # connected mailbox (#1596).
                         mail_provider=_session_mail_provider(session),
                     )
+                if rag_file_paths and hasattr(agent, "_index_documents") and agent.rag:
+                    agent._index_documents(rag_file_paths)
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
                     agent_type,
@@ -4421,7 +4419,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # and the next turn's pre-flight reloads an evicted model.
                 t_query = _time.monotonic()
                 result_holder["agent"] = agent
-                result = agent.process_query(query)
+                sse_handler.in_process_turn_active = True
+                try:
+                    result = agent.process_query(query)
+                finally:
+                    sse_handler.in_process_turn_active = False
                 logger.info(
                     "PERF process_query session=%s took=%.3fs",
                     session_id[:8],

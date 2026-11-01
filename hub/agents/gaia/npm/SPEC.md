@@ -672,8 +672,10 @@ default, the read-only binary allowlist is replaced by a developer set
 (`node`, `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`,
 `timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`/`git`,
 which already had their own paths), and the shell rate limit is dropped. `git`
-being in that set means its policy's outright refusals — push, reset, rebase —
-also stop applying under bypass. That is
+being in that set means the policy that holds `git push`, `git reset` and
+`git rebase` also stops applying under bypass. Without bypass those commands ask
+the user once, and are refused only on a run nobody can answer; the destructive
+forms (`git push --force`, `git reset --hard`) are refused with no prompt. That is
 arbitrary code execution in the working directory, which is why it exists only
 on this transport: one local parent process on a private pipe. It is **not**
 reachable over HTTP, and the request body cannot ask for it —

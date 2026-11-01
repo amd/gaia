@@ -887,7 +887,7 @@ class MemoryStore:
         if current_version < 3:
             logger.info("[MemoryStore] migrating schema v%d -> v3", current_version)
 
-            # v2 -> v3: add the procedures table (procedural memory, #887).
+            # v2 -> v3: add the procedures table (procedural memory).
             # The table and its indexes are created by _SCHEMA_SQL's
             # CREATE TABLE IF NOT EXISTS, which already ran in _init_schema(),
             # so this step only advances the version marker.  Additive only —
@@ -902,7 +902,7 @@ class MemoryStore:
         if current_version < 4:
             logger.info("[MemoryStore] migrating schema v%d -> v4", current_version)
 
-            # v3 -> v4: add the skill_deltas table (adaptive skills, #2674).
+            # v3 -> v4: add the skill_deltas table (adaptive skills).
             # Same shape as the v2 -> v3 step: _SCHEMA_SQL's CREATE TABLE IF NOT
             # EXISTS already ran in _init_schema(), so this only advances the
             # marker. Additive — no existing row or read path is touched, and an
@@ -917,7 +917,7 @@ class MemoryStore:
         if current_version < 5:
             logger.info("[MemoryStore] migrating schema v%d -> v5", current_version)
 
-            # v4 -> v5: add the synthesis_marks table (procedural memory, #887).
+            # v4 -> v5: add the synthesis_marks table (procedural memory).
             # Same shape as the two steps above — _SCHEMA_SQL's CREATE TABLE IF
             # NOT EXISTS already ran in _init_schema(), so this only advances the
             # marker.  A store written before this build has no marks and no
@@ -931,7 +931,7 @@ class MemoryStore:
             current_version = 5
 
         if current_version < 6:
-            # v5 -> v6: add the forgotten table (#4730). Same shape as above:
+            # v5 -> v6: add the forgotten table. Same shape as above:
             # the table already exists, so this only advances the marker.
             self._conn.execute(
                 "UPDATE schema_version SET version = 6, migrated_at = ?",
@@ -1529,7 +1529,7 @@ class MemoryStore:
         except sqlite3.OperationalError as e:
             # A failed dedup search means store() falls through to inserting a
             # duplicate -- debug level hid exactly that for as long as this
-            # query could raise (#4142's own bug was one such cause).
+            # query could raise.
             logger.warning("[MemoryStore] FTS5 dedup search failed: %s", e)
 
         return None
@@ -2989,7 +2989,7 @@ class MemoryStore:
                 (now_iso,),
             ).fetchone()[0]
 
-            # Procedures (procedural memory / skills, #887). COUNT(*) instead of
+            # Procedures (procedural memory / skills). COUNT(*) instead of
             # fetching rows so a large procedure table never loads into memory.
             p_total = self._conn.execute("SELECT COUNT(*) FROM procedures").fetchone()[
                 0
@@ -3513,7 +3513,7 @@ class MemoryStore:
             ]
 
     # ==================================================================
-    # Procedures (v3 — procedural memory, #887)
+    # Procedures (v3 — procedural memory)
     # ==================================================================
 
     def _row_to_procedure_dict(self, row) -> Dict:
@@ -3818,7 +3818,7 @@ class MemoryStore:
                 raise
 
     # ------------------------------------------------------------------
-    # Skill deltas — the learned overlay on an authored skill (v4, #2674)
+    # Skill deltas — the learned overlay on an authored skill (v4)
     # ------------------------------------------------------------------
 
     def put_delta(
@@ -4189,7 +4189,7 @@ class MemoryStore:
         ]
 
     # ------------------------------------------------------------------
-    # Synthesis progress — what the distiller has already consumed (#887)
+    # Synthesis progress — what the distiller has already consumed
     # ------------------------------------------------------------------
 
     #: ``meta`` key holding the newest tool-history timestamp synthesis consumed.

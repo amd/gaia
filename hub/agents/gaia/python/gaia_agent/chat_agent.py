@@ -97,7 +97,6 @@ from gaia.llm.inference_location import InferenceLocation, resolve_inference_loc
 from gaia.llm.lemonade_client import (
     _endpoint_label,
     configured_lemonade_url,
-    is_tool_calling_model,
     resolve_default_chat_model,
     resolve_lemonade_base_url,
 )
@@ -1353,17 +1352,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 """
 
         # ── Tier 1: Discovery workflow (compact form) ──
-        discovery_rules = """
+        # find_files comes only from the file_fs group; profiles without it
+        # search with search_file, which doc_rag registers.
+        find_tool = "find_files" if "file_fs" in spec.tool_groups else "search_file"
+        discovery_rules = f"""
 **SMART DISCOVERY WORKFLOW:**
-1. Domain question + nothing relevant indexed: `find_files` with 1-2 document-type keywords (handbook / report / manual / policy / guide), NOT the question's content terms. If nothing after 2 tries, `browse_directory`.
+1. Domain question + nothing relevant indexed: `{find_tool}` with 1-2 document-type keywords (handbook / report / manual / policy / guide), NOT the question's content terms. If nothing after 2 tries, `browse_directory`.
 2. Files found → `index_document` immediately (no confirmation), then query and answer in the same turn.
 3. Already indexed → query directly.
 
 **NEVER ASK PERMISSION TO INDEX.** "Would you like me to index this?" is BANNED. If a document is referenced and you can locate it, index + query + answer in one flow.
 
-**SEARCH LOOP PREVENTION:** Same `find_files` / `browse_directory` query twice with same result → STOP and acknowledge.
+**SEARCH LOOP PREVENTION:** Same `{find_tool}` / `browse_directory` query twice with same result → STOP and acknowledge.
 
-**VAGUE FOLLOW-UP ("what about X?"):** find_files("X") → index_document → query_specific_file with whatever question is implicit, or "key topics overview" if none.
+**VAGUE FOLLOW-UP ("what about X?"):** {find_tool}("X") → index_document → query_specific_file with whatever question is implicit, or "key topics overview" if none.
 """
 
         # ── Tier 1b: Optional tool sections — each block is only injected when
@@ -1488,9 +1490,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         # built a loader for it (the "doc" and "full" profiles).
         load_tools_menu = ""
         loader = getattr(self, "tool_loader", None)
-        if loader is not None and is_tool_calling_model(
-            getattr(self, "model_id", None)
-        ):
+        if loader is not None and self._uses_native_tool_calls():
             load_tools_menu = (
                 "\n\n==== LOADABLE TOOL BUNDLES ====\n"
                 "Your visible tools are trimmed to what this turn needs. If a "
@@ -1956,7 +1956,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 project's packages. Any other script runs from its own folder.
                 Relative paths resolve against that working directory.
 
-                Has pypdf, pymupdf, docx, pptx, openpyxl, xlsxwriter,
+                Has pypdf, pypdfium2, docx, pptx, openpyxl, xlsxwriter,
                 reportlab, pandas, numpy, matplotlib; no pip.
 
                 Args:
@@ -2085,7 +2085,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 No access to your tools: `from gaia import <tool>` fails —
                 call it directly as a tool.
 
-                Has pypdf, pymupdf, docx, pptx, openpyxl, xlsxwriter,
+                Has pypdf, pypdfium2, docx, pptx, openpyxl, xlsxwriter,
                 reportlab, pandas, numpy, matplotlib; no pip.
 
                 Args:
@@ -2348,7 +2348,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             def open_url(url: str) -> dict:
                 """Open a public URL in the system's default web browser.
 
-                Refuses private, loopback, and link-local addresses.
+                Screens every address against GAIA's network policy. Private,
+                loopback, and link-local addresses are blocked by default, but an
+                operator can explicitly allow a loopback host for a local fixture
+                or service. Call this tool for a URL the user supplied and report
+                its policy result; do not refuse it based on this description alone.
 
                 Args:
                     url: Public http:// or https:// URL to open
@@ -2996,13 +3000,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools
-    # - FileToolsMixin (file_tools.py): Directory monitoring
+    # - FileToolsMixin (file_monitor_tools.py): Directory monitoring
     # - ShellToolsMixin (shell_tools.py): Shell command execution
     # - FileSystemToolsMixin (shared): File system browsing, search, tree, bookmarks
     # - ScratchpadToolsMixin (shared): SQLite working memory for data analysis
     # - BrowserToolsMixin (shared): Web browsing, content extraction, download
     # - FileSearchToolsMixin (shared): File and directory search across drives
-    # - FileIOToolsMixin (code/tools/file_io.py): read_file, write_file, edit_file (3 generic tools only)
+    # - FileIOToolsMixin (file_io_tools.py): read_file, write_file, edit_file (3 generic tools only)
     # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from <gaia_home>/mcp_servers.json)
 
@@ -3115,7 +3119,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 "Please install the required dependencies:\n"
                 '  uv pip install -e ".[dev]"\n\n'
                 "Or install watchdog directly:\n"
-                '  uv pip install "watchdog>=2.1.0"\n'
+                '  uv pip install "watchdog>=2.1.0,<7"\n'
             )
             logger.error(error_msg)
             raise ImportError(error_msg)

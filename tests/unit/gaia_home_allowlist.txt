@@ -18,7 +18,6 @@ src/gaia/cli.py:tilde_path 2
 src/gaia/code_index/sdk.py:tilde_path 1
 src/gaia/connectors/activations.py:home_join 2
 src/gaia/connectors/grants.py:home_join 2
-src/gaia/daemon/migrate.py:home_join 1
 src/gaia/daemon/paths.py:home_join 1
 src/gaia/engineering/service.py:home_join 1
 src/gaia/engineering/store.py:home_join 1
@@ -36,7 +35,7 @@ src/gaia/mcp/servers/tui_mcp.py:home_join 1
 src/gaia/messaging/slack/adapter.py:home_join 1
 src/gaia/messaging/slack/cli.py:home_join 1
 src/gaia/messaging/slack/onboarding.py:home_join 1
-src/gaia/messaging/telegram.py:tilde_path 2
+src/gaia/messaging/telegram.py:tilde_path 1
 src/gaia/schedule/store.py:tilde_path 1
 src/gaia/security.py:home_join 1
 src/gaia/skills/manager.py:home_join 1

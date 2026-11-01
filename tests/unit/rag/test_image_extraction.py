@@ -87,7 +87,7 @@ def test_the_vlm_is_built_and_called_the_way_the_pdf_path_calls_it(tmp_path):
     (images,), kwargs = vlm.extract_from_page_images.call_args
     assert kwargs == {"page_num": 1}
     assert len(images) == 1
-    # The keys extract_images_from_page_pymupdf hands the PDF path.
+    # The keys extract_images_from_page_pdfium hands the PDF path.
     assert set(images[0]) == {"image_bytes", "width", "height", "format", "size_kb"}
     assert images[0]["image_bytes"].startswith(PNG_SIGNATURE)
     assert (images[0]["width"], images[0]["height"]) == (320, 120)
@@ -145,8 +145,8 @@ def test_no_vlm_fails_with_the_model_and_where_to_get_it(tmp_path):
 
     vlm = _vlm(available=False)
     pull = StartHint(
-        instruction="Run: lemonade pull Qwen3-VL-4B-Instruct-GGUF",
-        command="lemonade pull Qwen3-VL-4B-Instruct-GGUF",
+        instruction="Run: lemonade pull Gemma-4-E4B-it-GGUF",
+        command="lemonade pull Gemma-4-E4B-it-GGUF",
     )
     with (
         patch("gaia.llm.VLMClient", return_value=vlm),
@@ -158,9 +158,9 @@ def test_no_vlm_fails_with_the_model_and_where_to_get_it(tmp_path):
             _sdk(tmp_path)._extract_text_from_image(str(_image(tmp_path)))
 
     message = str(excinfo.value)
-    hint.assert_called_once_with("pull", "Qwen3-VL-4B-Instruct-GGUF")
+    hint.assert_called_once_with("pull", "Gemma-4-E4B-it-GGUF")
     assert "scan.png" in message
-    assert "Run: lemonade pull Qwen3-VL-4B-Instruct-GGUF" in message
+    assert "Run: lemonade pull Gemma-4-E4B-it-GGUF" in message
     assert "Lemonade Model Manager (http://localhost:13305)" in message
     assert "isn't reachable" not in message
     assert "lemonade-server" not in message
@@ -225,7 +225,7 @@ def test_index_document_reports_the_no_vlm_error_and_indexes_nothing(tmp_path):
         stats = rag.index_document(str(_image(tmp_path)))
 
     assert stats["success"] is False
-    assert "Qwen3-VL-4B-Instruct-GGUF" in stats["error"]
+    assert "Gemma-4-E4B-it-GGUF" in stats["error"]
     assert rag.chunks == [] and not rag.indexed_files
 
 
@@ -402,3 +402,23 @@ def test_the_shared_helper_scales_16_bit_and_leaves_alpha_alone():
     Image.new("RGBA", (10, 10), (0, 0, 0, 0)).save(buf, format="PNG")
     prepared = prepare_image_for_vlm(buf.getvalue())
     assert Image.open(io.BytesIO(prepared["image_bytes"])).mode == "RGBA"
+
+
+def test_default_vision_model_is_one_gaia_init_downloads(tmp_path):
+    """A fresh install must not need an extra download before indexing an image."""
+    from gaia.installer.init_command import INIT_PROFILES
+
+    with patch("gaia.llm.VLMClient", return_value=_vlm()) as client:
+        _sdk(tmp_path)._extract_text_from_image(str(_image(tmp_path)))
+
+    model = client.call_args.kwargs["vlm_model"]
+    for profile in ("gaia", "chat", "rag", "minimal"):
+        assert model in INIT_PROFILES[profile]["models"], profile
+
+
+def test_an_explicit_vision_model_still_wins(tmp_path):
+    with patch("gaia.llm.VLMClient", return_value=_vlm()) as client:
+        _sdk(tmp_path, vlm_model="Qwen3-VL-4B-Instruct-GGUF")._extract_text_from_image(
+            str(_image(tmp_path))
+        )
+    assert client.call_args.kwargs["vlm_model"] == "Qwen3-VL-4B-Instruct-GGUF"

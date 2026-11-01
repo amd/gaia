@@ -1,3 +1,6 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """Execute a single scheduled job and deliver its output.
 
 Each fire runs in a fresh agent session (clean state, not a continuation) and
