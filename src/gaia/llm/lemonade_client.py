@@ -2833,7 +2833,13 @@ def uses_native_tool_calls(model_id: Optional[str]) -> bool:
     Any other cloud model starts each session on the in-text format (~12K
     fewer tokens per call, calls batched in a plan); an agent moves it to
     native calls for that session only if it writes its own tool-call markup.
+    Gateway Claude always gets ``tools=``: its Anthropic route takes native
+    calls and caches the schemas, and on the text format it invents results.
     """
+    from gaia.llm.gateway import gateway_claude_upstream_id
+
+    if gateway_claude_upstream_id(model_id):
+        return True
     if not is_tool_calling_model(model_id):
         return False
     cloud = _CLOUD_MODELS.get(model_id)
@@ -6377,16 +6383,16 @@ class LemonadeClient:
         timeout: int = 300,
     ) -> Dict[str, Any]:
         """
-        Generate an image from a text prompt using Stable Diffusion.
+        Generate an image with a downloaded Lemonade image model.
 
         Args:
             prompt: Text description of the image to generate
-            model: SD model - SD-1.5, SD-Turbo, SDXL-Base-1.0 (photorealistic), SDXL-Turbo
-            size: Image dimensions (auto-selected if None, or 512x512, 768x768, 1024x1024)
-            steps: Inference steps (auto-selected if None: Turbo=4, Base=20)
-            cfg_scale: CFG scale (auto-selected if None: Turbo=1.0, Base=7.5)
-            seed: Random seed for reproducibility (optional)
-            timeout: Request timeout in seconds (default: 300 for slower Base models)
+            model: Exact model ID (legacy Stable Diffusion or downloaded TheNoise)
+            size: Optional WIDTHxHEIGHT; legacy SD models have historical defaults
+            steps: Optional steps; legacy SD models have historical defaults
+            cfg_scale: Optional guidance; legacy SD models have historical defaults
+            seed: Optional reproducibility seed (randomized for legacy SD)
+            timeout: Request timeout in seconds
 
         Returns:
             Dict with 'data' containing list of generated images in b64_json format
@@ -6407,43 +6413,55 @@ class LemonadeClient:
                 model="SDXL-Turbo"
             )
         """
-        # Validate model
-        if model not in self.SD_MODELS:
+        # Lemonade routes image models by deployment label, not by the SD
+        # engine. TheNoise models belong here too. Discover non-legacy models
+        # instead of imposing the fixed SD-1.5 / SDXL model allowlist on them.
+        legacy_sd = model in self.SD_MODELS
+        if not legacy_sd and not any(
+            entry.get("id") == model for entry in self.list_sd_models()
+        ):
             raise LemonadeClientError(
-                f"Invalid model '{model}'. Choose from: {self.SD_MODELS}"
+                f"Invalid or not downloaded image model '{model}'. "
+                "Use list_sd_models() to choose a downloaded image model."
             )
 
-        # Apply model-specific defaults
-        defaults = self.SD_MODEL_DEFAULTS.get(model, {})
-        size = size or defaults.get("size", "512x512")
-        steps = steps if steps is not None else defaults.get("steps", 20)
-        cfg_scale = (
-            cfg_scale if cfg_scale is not None else defaults.get("cfg_scale", 7.5)
-        )
-
-        # Validate size
-        if size not in self.SD_SIZES:
-            raise LemonadeClientError(
-                f"Invalid size '{size}'. Choose from: {self.SD_SIZES}"
-            )
+        # Preserve historical defaults for the four legacy models. Newer
+        # recipes (including thenoise) declare their own image_defaults in
+        # Lemonade; sending 20 steps / CFG 7.5 would break distilled models.
+        if legacy_sd:
+            defaults = self.SD_MODEL_DEFAULTS[model]
+            size = size or defaults["size"]
+            steps = steps if steps is not None else defaults["steps"]
+            cfg_scale = cfg_scale if cfg_scale is not None else defaults["cfg_scale"]
+            if size not in self.SD_SIZES:
+                raise LemonadeClientError(
+                    f"Invalid size '{size}'. Choose from: {self.SD_SIZES}"
+                )
+        elif size is not None and not re.fullmatch(r"[1-9]\d{1,4}x[1-9]\d{1,4}", size):
+            raise LemonadeClientError(f"Invalid size '{size}'. Expected WIDTHxHEIGHT.")
 
         try:
-            # Generate random seed if not provided for varied results
+            # Keep the historical random-seed behaviour for legacy SD, but
+            # omit the field for new models so their backend may choose.
             import random
 
-            if seed is None:
+            if legacy_sd and seed is None:
                 seed = random.randint(0, 2**32 - 1)
 
             payload = {
                 "prompt": prompt,
                 "model": model,
-                "size": size,
                 "n": 1,
                 "response_format": "b64_json",
-                "cfg_scale": cfg_scale,
-                "steps": steps,
-                "seed": seed,
             }
+            for key, value in (
+                ("size", size),
+                ("cfg_scale", cfg_scale),
+                ("steps", steps),
+                ("seed", seed),
+            ):
+                if value is not None:
+                    payload[key] = value
 
             self.log.info(
                 f"Generating image: model={model}, size={size}, steps={steps}, cfg={cfg_scale}"
@@ -6536,24 +6554,20 @@ class LemonadeClient:
         except requests.RequestException as exc:
             raise LemonadeClientError(f"Lemonade 3D request failed: {exc}") from exc
 
-    def list_sd_models(self) -> List[Dict[str, Any]]:
-        """
-        List available Stable Diffusion models from the server.
+    def list_sd_models(self, show_all: bool = False) -> List[Dict[str, Any]]:
+        """Discover image-generation models served by Lemonade, including TheNoise.
 
-        Returns:
-            List of SD model info dicts with id, labels, and image_defaults
-
-        Example:
-            sd_models = client.list_sd_models()
-            for m in sd_models:
-                print(f"{m['id']}: {m.get('image_defaults', {})}")
+        By default list only downloaded models, so an agent does not silently
+        start a multi-GB download. Use ``show_all=True`` for discovery.
         """
         try:
-            models = self.list_models()
+            models = self.list_models(show_all=show_all)
             sd_models = [
                 m
                 for m in models.get("data", [])
-                if m.get("id") in self.SD_MODELS or "image" in m.get("labels", [])
+                if m.get("id") in self.SD_MODELS
+                or "image" in (m.get("labels") or [])
+                or m.get("recipe") in {"sd-cpp", "thenoise"}
             ]
             return sd_models
         except Exception as e:
