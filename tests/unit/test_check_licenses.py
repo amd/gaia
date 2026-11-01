@@ -291,6 +291,14 @@ def test_reviewed_entry_outside_range_uses_a_declared_expression():
     assert undeclared.verdict == "unknown"
 
 
+def test_bundling_wheel_past_its_range_needs_review_even_if_declared():
+    finding = check_licenses._classify_component(
+        "python", "pypdfium2", "6.0.0", "Apache-2.0", declared=True
+    )
+    assert finding.verdict == "unknown"
+    assert "re-check the licence" in finding.detail
+
+
 def test_copyleft_classifier_overrides_a_permissive_licence_field():
     finding = check_licenses._classify_component(
         "python",
