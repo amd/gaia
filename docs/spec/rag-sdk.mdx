@@ -69,6 +69,16 @@ class RAGConfig:
 
     # Security
     allowed_paths: Optional[List[str]] = None
+
+    # JSON records: index each object of a JSON array on its own
+    json_loader: Optional[JsonLoaderConfig] = None
+
+
+@dataclass
+class JsonLoaderConfig:
+    content_fields: List[str]               # searchable text, in order (required)
+    metadata_fields: List[str] = []         # "key: value" lines on every chunk
+    document_array_path: str = ""           # dotted path to the array; "" = file is the array
 ```
 
 ### RAGResponse
