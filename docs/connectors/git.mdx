@@ -1,0 +1,85 @@
+---
+title: "Git"
+icon: "code-branch"
+description: "Let GAIA agents inspect and commit to a local Git repository."
+---
+
+<Info>
+  **Connector ID:** `mcp-git` · **Type:** `mcp_server` · **Catalog entry:** [`src/gaia/connectors/catalog/mcp_servers.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/mcp_servers.py)
+</Info>
+
+## What you'll need
+
+The connector is the reference [`mcp-server-git`](https://pypi.org/project/mcp-server-git/)
+MCP server (pinned to `2026.8.18`). GAIA starts it on demand through `uvx` and routes
+tool calls (`git_status`, `git_diff`, `git_log`, `git_show`, `git_create_branch`,
+`git_checkout`, `git_add`, `git_commit`, and similar) through it. It works on repositories
+on your own machine, so it needs **no account and no API key**.
+
+The only requirement is [uv](https://docs.astral.sh/uv/) with `uvx` on your `PATH`:
+
+```bash
+uvx --version
+```
+
+## Step 1 — Enable it
+
+There is nothing to paste. Enabling the connector writes its launch entry to
+`~/.gaia/mcp_servers.json`.
+
+**From the CLI:**
+
+```bash
+gaia connectors configure mcp-git
+```
+
+**From the Agent UI:**
+
+1. Launch the Agent UI: `gaia chat --ui`.
+2. **Settings** (gear) → **Connectors** → click the **Git** tile.
+3. Enable it.
+
+## Step 2 — Grant and activate it for an agent
+
+An agent only sees the Git tools after you both **grant** it and **activate** the
+connector for it (activation defaults to OFF):
+
+```bash
+gaia connectors grants grant mcp-git builtin:chat --scopes "*"
+gaia connectors activations activate mcp-git builtin:chat
+```
+
+(In the UI: the tile's **Per-agent** toggle flips both at once.) See the
+[connections security model](/security/connections) for why visibility and
+credential access are gated separately.
+
+Then ask the agent, for example: *"What changed in `C:\work\myrepo` since the last tag?"*
+
+<Warning>
+  `git_commit` and `git_add` change your repository. Grant only the agents you trust
+  to do that, and review what an agent commits before you push.
+</Warning>
+
+## Common issues
+
+### `uvx: command not found`
+
+Install [uv](https://docs.astral.sh/uv/) and open a new terminal so `uvx` is on your
+`PATH`, then run `gaia connectors test mcp-git`.
+
+### The agent can't find my repository
+
+The server operates on the repository path the agent passes it. Give the agent the full
+path to the repository root (the folder that contains `.git`).
+
+## Revoking access
+
+- **Per agent:** `gaia connectors grants revoke mcp-git builtin:chat`.
+- **Entirely:** Settings → Connectors → Git → **Disconnect**, or
+  `gaia connectors disconnect mcp-git`. The entry is dropped from `mcp_servers.json`.
+
+## See also
+
+- [Connectors overview](/connectors)
+- [`mcp-server-git` on PyPI](https://pypi.org/project/mcp-server-git/)
+- [Connectors security model](/security/connections)
