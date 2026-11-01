@@ -90,7 +90,7 @@ func writeConfigKeys(keys map[string]any) (string, error) {
 	// merging into a stale copy and dropping the other's keys.
 	lock, err := filelock.Acquire(path, filelock.Timeout)
 	if err != nil {
-		return path, fmt.Errorf("cannot lock %s: %w", path, err)
+		return path, err
 	}
 	defer lock.Release()
 

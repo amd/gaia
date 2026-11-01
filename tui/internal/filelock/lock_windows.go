@@ -7,6 +7,7 @@ package filelock
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 
 	"golang.org/x/sys/windows"
@@ -35,4 +36,13 @@ func TryLock(f *os.File) (bool, error) {
 func Unlock(f *os.File) {
 	var ov windows.Overlapped
 	_ = windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &ov)
+}
+
+// renameHeld reports whether a failed rename may be another program (an
+// antivirus scanner, the search indexer) briefly holding the file, which
+// Python's replace_retrying waits out.
+func renameHeld(err error) bool {
+	return errors.Is(err, fs.ErrPermission) ||
+		errors.Is(err, windows.ERROR_SHARING_VIOLATION) ||
+		errors.Is(err, windows.ERROR_LOCK_VIOLATION)
 }

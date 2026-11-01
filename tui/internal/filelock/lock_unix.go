@@ -28,3 +28,7 @@ func TryLock(f *os.File) (bool, error) {
 func Unlock(f *os.File) {
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 }
+
+// renameHeld is always false here: no other program can hold a file open
+// against a rename on POSIX, so there is nothing to wait out.
+func renameHeld(error) bool { return false }

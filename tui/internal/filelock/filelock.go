@@ -18,10 +18,8 @@ package filelock
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 )
 
@@ -119,7 +117,7 @@ func renameRetrying(src, dst string) error {
 	deadline := time.Now().Add(renameRetry)
 	for {
 		err := os.Rename(src, dst)
-		if err == nil || runtime.GOOS != "windows" || !errors.Is(err, fs.ErrPermission) || !time.Now().Before(deadline) {
+		if err == nil || !renameHeld(err) || !time.Now().Before(deadline) {
 			return err
 		}
 		time.Sleep(pollEvery)
