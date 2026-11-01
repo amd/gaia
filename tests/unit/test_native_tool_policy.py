@@ -170,6 +170,17 @@ def test_an_unknown_model_keeps_the_optimistic_local_default():
     assert lc.uses_native_tool_calls("some-future-model-GGUF") is True
 
 
+@pytest.mark.parametrize("payload", ["[]", '"text"', "3", "null"])
+def test_a_gateway_file_that_is_not_an_object_names_the_fix(gateway, payload):
+    from gaia.llm.gateway import GatewayError, GatewayState
+
+    gateway.write_text(payload)
+    with pytest.raises(GatewayError, match="not an object") as raised:
+        GatewayState.load()
+    assert str(gateway) in str(raised.value)
+    assert "delete it" in str(raised.value)
+
+
 def test_a_gateway_file_without_the_new_field_loads(gateway):
     gateway.write_text(json.dumps({"tool_calling_models": ["amd.Flash"]}))
     _forget_in_memory()
@@ -210,6 +221,25 @@ def test_a_cold_gateway_model_switches_on_its_own_markup(cold_catalog, gateway):
     agent._parse_llm_response(INVOKE)
     assert agent._uses_native_tool_calls() is True
     assert json.loads(gateway.read_text())["own_tool_markup_models"] == ["amd.Opus"]
+
+
+def test_an_unprobed_model_does_not_flip_when_the_catalog_loads(cold_catalog, gateway):
+    unprobed = {"id": "amd.New", "recipe": lc.CLOUD_RECIPE, "labels": ["cloud"]}
+    agent = _agent("amd.New")
+    agent._parse_llm_response(INVOKE)
+    before = agent._uses_native_tool_calls()
+    lc.record_cloud_models({"data": CATALOG["data"] + [unprobed]})
+    assert before is False
+    assert agent._uses_native_tool_calls() is False
+    _stays_text(agent, gateway)
+
+
+def test_a_switched_model_stays_native_when_the_catalog_loads(cold_catalog):
+    agent = _agent("amd.Opus")
+    agent._parse_llm_response(INVOKE)
+    assert agent._uses_native_tool_calls() is True
+    lc.record_cloud_models(CATALOG)
+    assert agent._uses_native_tool_calls() is True
 
 
 def test_a_cold_local_model_is_still_native(cold_catalog):
@@ -285,12 +315,37 @@ def test_the_request_after_a_mid_turn_switch_goes_out_native(gateway):
     assert [t["function"]["name"] for t in tools] == ["read_file"]
     assert "==== AVAILABLE TOOLS ====" not in prompt
     assert agent._response_format_template not in prompt
-    # The text-format step stays text: its markup reply, then its result. The
-    # gateway takes this under tools=; no native call is left without a result.
+    # No call asked for the markup step's result, so it goes out as user text:
+    # strict tools= routes reject a tool result without a matching call.
     assistant, result = messages[-2:]
     assert assistant["role"] == "assistant" and assistant["content"] == INVOKE
-    assert result["role"] == "tool" and result["name"] == "read_file"
-    assert not any(m.get("tool_calls") for m in messages)
+    assert result["role"] == "user"
+    assert result["content"].startswith("[Recorded tool result: read_file] ")
+    asked = {c["id"] for m in messages for c in m.get("tool_calls") or []}
+    assert all(m["tool_call_id"] in asked for m in messages if m.get("role") == "tool")
+
+
+def _recast(agent, messages):
+    agent._recast_unpaired_tool_results(messages)
+    return messages
+
+
+def test_a_paired_native_result_stays_a_tool_message():
+    agent = _agent("amd.Labelled")
+    call = {"id": "c1", "type": "function", "function": {"name": "read_file"}}
+    paired = [
+        {"role": "assistant", "content": None, "tool_calls": [call]},
+        {"role": "tool", "name": "read_file", "tool_call_id": "c1", "content": "x"},
+    ]
+    assert _recast(agent, [dict(m) for m in paired]) == paired
+
+
+def test_a_local_or_text_format_route_keeps_its_tool_messages():
+    orphan = [
+        {"role": "tool", "name": "read_file", "tool_call_id": "z", "content": "x"}
+    ]
+    for model_id in ("Gemma-4-E4B-it-GGUF", "amd.Flash"):
+        assert _recast(_agent(model_id), [dict(m) for m in orphan]) == orphan
 
 
 def test_a_new_session_starts_native_after_the_switch():

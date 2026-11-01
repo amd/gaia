@@ -2659,9 +2659,8 @@ def uses_native_tool_calls(model_id: Optional[str]) -> bool:
     # A gateway id is cloud before this process has read the catalog, too.
     if cloud is None and cloud_model_provider(model_id) is None:
         return True
-    return learned_tool_calling(model_id) is not False and wrote_own_tool_markup(
-        model_id
-    )
+    # Only a probe-confirmed model: the catalog loading later must not flip it.
+    return learned_tool_calling(model_id) is True and wrote_own_tool_markup(model_id)
 
 
 def _usage_dict(usage: Any) -> Dict[str, Any]:

@@ -260,6 +260,12 @@ class GatewayState:
                 f"Gateway settings at {target} could not be read: {e}. "
                 f"Delete the file to start fresh, then re-run `gaia gateway install`."
             ) from e
+        if not isinstance(raw, dict):
+            raise GatewayError(
+                f"Gateway settings at {target} hold a JSON "
+                f"{type(raw).__name__}, not an object. Fix the file or delete it "
+                f"to start fresh, then re-run `gaia gateway install`."
+            )
         return cls(
             base_url=raw.get("base_url") or DEFAULT_GATEWAY_BASE_URL,
             enabled_models=list(raw.get("enabled_models") or []),

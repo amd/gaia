@@ -4906,7 +4906,7 @@ Do NOT wrap conversational replies in JSON.
             self._uses_native_tool_calls()
             or not hosted
             or not is_tool_calling_model(model_id)
-            or learned_tool_calling(model_id) is False
+            or learned_tool_calling(model_id) is not True
         ):
             return
         record_own_tool_markup(model_id)
@@ -8459,6 +8459,36 @@ Do NOT wrap conversational replies in JSON.
                     break
         return msg
 
+    def _recast_unpaired_tool_results(self, messages: List[Dict[str, Any]]) -> None:
+        """On a hosted ``tools=`` route, make results no call asked for user text.
+
+        Strict OpenAI-style routes reject a ``role: tool`` message without a
+        matching call, which a single text-format call leaves behind.
+        """
+        if getattr(self, "_use_claude", False) or not self._hosted_native_tool_caller():
+            return
+        from gaia.agents.base.history import _RECORDED_RESULT_PREFIX
+
+        asked = set()
+        for index, message in enumerate(messages):
+            asked.update(call["id"] for call in message.get("tool_calls") or [])
+            if message.get("role") != "tool" or message.get("tool_call_id") in asked:
+                continue
+            content = message.get("content")
+            if isinstance(content, list):
+                content = "".join(
+                    block.get("text", "")
+                    for block in content
+                    if isinstance(block, dict)
+                )
+            elif not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            messages[index] = {
+                "role": "user",
+                "content": f"{_RECORDED_RESULT_PREFIX}"
+                f"{message.get('name', 'unknown')}] {content}",
+            }
+
     def _reasoning_request_kwargs(self) -> Dict[str, Any]:
         """The reasoning effort the agent chose (ReasoningEffortToolsMixin), if any."""
         chosen = getattr(self, "reasoning_effort_kwargs", None)
@@ -9870,6 +9900,7 @@ Do NOT wrap conversational replies in JSON.
                     messages.append(
                         self._create_tool_message(tool_name, truncated_result)
                     )
+                    self._recast_unpaired_tool_results(messages)
 
                     if self._turn_scope.turn_should_end:
                         final_answer, steps_taken = self._end_turn_on_scope(
@@ -11449,6 +11480,7 @@ Do NOT wrap conversational replies in JSON.
 
                 # Share tool output with subsequent LLM calls
                 messages.append(self._create_tool_message(tool_name, truncated_result))
+                self._recast_unpaired_tool_results(messages)
 
                 if self._turn_scope.turn_should_end:
                     final_answer, steps_taken = self._end_turn_on_scope(
