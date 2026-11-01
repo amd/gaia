@@ -1306,7 +1306,7 @@ func (m Model) gpuArrived(msg gpuMsg) (Model, tea.Cmd) {
 	switch msg.action {
 	case "apply":
 		m.gpuPhase = gpuApplied
-		m.gpuNote = gpuDone(pool)
+		m.gpuNote = gpuDone(formatGBShort(pool))
 		m.gpuDone = true
 	case "reread":
 		if g.Setting.CurrentGB >= target-0.5 {
@@ -1327,7 +1327,7 @@ func (m Model) gpuArrived(msg gpuMsg) (Model, tea.Cmd) {
 		}
 	case "pending":
 		m.gpuPhase = gpuPendingSaved
-		m.gpuNote = gpuPendingLine(pool)
+		m.gpuNote = gpuPendingLine(formatGBShort(pool))
 		m.gpuDone = true
 	case "keep":
 		m.gpuNote = ""
@@ -1361,17 +1361,17 @@ func (m Model) targetGB() float64 { return m.targetPreset().SettingGB }
 // reads, since "the GPU has 24 GB now" counts the same way.
 func (m Model) targetPool() float64 { return m.targetPreset().GPUGB }
 
-// poolFor is the GPU memory a setting gives, or the setting itself when no
-// preset names it.
-func (m Model) poolFor(setting float64) float64 {
+// poolFor is the GPU memory a setting gives, in words. A setting no preset
+// names is never shown as if it were GPU memory.
+func (m Model) poolFor(setting float64) string {
 	if m.gpu != nil {
 		for _, p := range m.gpu.Presets {
 			if p.SettingGB == setting {
-				return p.GPUGB
+				return formatGBShort(p.GPUGB)
 			}
 		}
 	}
-	return setting
+	return "the new GPU memory"
 }
 
 func (m Model) gpuCmd(action string, setting float64) tea.Cmd {

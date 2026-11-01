@@ -1239,3 +1239,15 @@ func TestNothingToGiveHidesTheStepsAndTheValue(t *testing.T) {
 	h2.expectNot("Value:")
 	h2.expectNot("copy value")
 }
+
+// A setting is never shown as GPU memory: a preset says what it gives, and a
+// setting no preset names reads as "the new GPU memory".
+func TestGPUMessagesNameGPUMemoryNotTheSetting(t *testing.T) {
+	h := newHarness(t, ModeGPU, &f.Fake{P: coldPlan(), G: gpuShared()})
+	if got := h.m.poolFor(32); got != "40 GB" {
+		t.Fatalf("poolFor(32) = %q, want the preset's 40 GB", got)
+	}
+	if got := h.m.poolFor(17); got != "the new GPU memory" {
+		t.Fatalf("poolFor(17) = %q; an unnamed setting must not read as GPU memory", got)
+	}
+}

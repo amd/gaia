@@ -1158,7 +1158,7 @@ func (m Model) readyView(w int) (body, foot []string) {
 		body = append(body, indentAll(wrapStyled(okStyle, readyGPU(m.targetPool(), m.gpuWas), width), indentW)...)
 	}
 	if g := m.gpu; g != nil && (m.gpuPhase == gpuPendingSaved || m.gpuPhase == gpuApplied) {
-		body = append(body, indentAll(wrapStyled(warnStyle, "[!] "+gpuPendingLine(m.targetPool()), width), indentW)...)
+		body = append(body, indentAll(wrapStyled(warnStyle, "[!] "+gpuPendingLine(formatGBShort(m.targetPool())), width), indentW)...)
 	}
 	if m.runErr != "" {
 		body = append(body, "")

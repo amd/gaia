@@ -224,12 +224,14 @@ func gpuConsent(pool float64) string {
 		formatGBShort(pool))
 }
 
-func gpuDone(target float64) string {
-	return fmt.Sprintf("Done. Restart your PC to use %s. Downloads can start now; restart when they finish.", formatGBShort(target))
+// gpuDone and gpuPendingLine take the GPU memory as words: "40 GB", or "the
+// new GPU memory" when no preset says what a setting gives.
+func gpuDone(pool string) string {
+	return fmt.Sprintf("Done. Restart your PC to use %s. Downloads can start now; restart when they finish.", pool)
 }
 
-func gpuPendingLine(target float64) string {
-	return fmt.Sprintf("Restart your PC to use %s. GAIA checks the new split the next time it starts.", formatGBShort(target))
+func gpuPendingLine(pool string) string {
+	return fmt.Sprintf("Restart your PC to use %s. GAIA checks the new split the next time it starts.", pool)
 }
 
 func gpuTookEffect(now float64) string {
