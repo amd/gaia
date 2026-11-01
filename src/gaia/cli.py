@@ -4944,6 +4944,7 @@ def main():
                             capture_output=True,
                             text=True,
                             check=False,
+                            timeout=30,
                         )
                         if result.returncode:
                             detail = (result.stderr or result.stdout).strip()
