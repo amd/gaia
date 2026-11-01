@@ -137,7 +137,7 @@ func TestChoosingLocalKeepsTheFullDownload(t *testing.T) {
 	bin := newMachine(t)
 	r := localRunner{opts: LocalOptions{Binary: bin, AskWhereChatRuns: true}}.WithChatProvider("local")
 	rep := r.Check(context.Background(), localCfg())
-	want := "Step 1 of 2 — install the local model server (~1 min)\nStep 2 of 2 — download the models (~6 GB)"
+	want := "Step 1 of 2 — install the local model server (~1 min)\nStep 2 of 2 — choose and download the models (~6 GB)"
 	if got := strings.Join(stepLines(rep), "\n"); got != want {
 		t.Errorf("steps =\n%s\nwant\n%s", got, want)
 	}

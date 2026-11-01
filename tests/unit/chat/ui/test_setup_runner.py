@@ -1071,11 +1071,55 @@ def test_a_finished_run_marks_what_loaded_ready_and_what_did_not_failed():
     runner._on_event(json.loads(_plan_event()))
     runner._on_event({"event": "model_done", "model": QWEN, "downloaded": True})
     with runner._lock:
-        runner._settle_models({EMBED}, {QWEN: "would not load"})
+        runner._settle_models({QWEN: "would not load"})
     rows = _models(runner)
     assert rows[EMBED]["state"] == "ready"
     assert rows[QWEN]["state"] == "failed" and rows[QWEN]["error_kind"] == "verify"
     assert rows[GEMMA]["state"] == "skipped"
+
+
+def test_a_downloaded_model_the_check_did_not_load_is_not_left_verifying():
+    """Once init saves the chat model, ``--check --load`` drops Gemma; its row
+    must still finish, or a front end waits on it forever."""
+    runner = sr.SetupRunner()
+    runner._on_event(
+        {
+            "event": "plan",
+            "models": [
+                {"id": QWEN, "bytes_total": 10, "downloaded": False},
+                {"id": GEMMA, "bytes_total": 10, "downloaded": False},
+            ],
+        }
+    )
+    for model in (QWEN, GEMMA):
+        runner._on_event({"event": "model_done", "model": model, "downloaded": True})
+    with runner._lock:
+        runner._settle_models({})
+    rows = _models(runner)
+    assert rows[QWEN]["state"] == rows[GEMMA]["state"] == "ready"
+
+
+def test_the_init_child_never_inherits_the_daemons_broker_url(monkeypatch):
+    """Run from the daemon, the child got the broker URL with no credential and
+    every model load failed; it must find the daemon itself instead."""
+    from gaia.daemon.constants import BROKER_URL_ENV_VAR
+
+    monkeypatch.setenv(BROKER_URL_ENV_VAR, "http://127.0.0.1:5555")
+    monkeypatch.setenv("GAIA_HARNESS_MARK", "kept")
+    calls = []
+    _fake_run(monkeypatch, 0, '{"ready": true}\n', calls=calls)
+    sr.check()
+    env = calls[0][1]["env"]
+    assert BROKER_URL_ENV_VAR not in env
+    assert env["GAIA_HARNESS_MARK"] == "kept"
+
+    seen = []
+    proc = _FakeProc(io.BytesIO(b""))
+    _popen(monkeypatch, proc, calls=seen)
+    sr.SetupRunner().start(skip_chat_model=False)
+    env = seen[0][1]["env"]
+    assert BROKER_URL_ENV_VAR not in env
+    assert env["NO_COLOR"] == "1" and env["GAIA_HARNESS_MARK"] == "kept"
 
 
 class _PullClient:

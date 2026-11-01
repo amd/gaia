@@ -110,6 +110,20 @@ def desktop_setup_error() -> Optional[str]:
     )
 
 
+def _child_env(**extra: str) -> Dict[str, str]:
+    """This process's environment for a ``gaia init`` child.
+
+    Without the broker URL the daemon exports for its sidecars: run from the
+    daemon, the child inherited the URL with no credential, so every model
+    load in its check failed. Without it the CLI finds the daemon itself.
+    """
+    from gaia.daemon.constants import BROKER_URL_ENV_VAR
+
+    env = {k: v for k, v in os.environ.items() if k != BROKER_URL_ENV_VAR}
+    env.update(extra)
+    return env
+
+
 def _gaia_argv(*args: str) -> List[str]:
     # This interpreter, so setup acts on the same GAIA install that serves the UI.
     return [sys.executable, "-m", "gaia.cli", *args]
@@ -203,6 +217,7 @@ def check(skip_chat_model: bool = False, load: bool = False) -> Dict[str, Any]:
             errors="replace",
             timeout=VERIFY_TIMEOUT_S if load else CHECK_TIMEOUT_S,
             check=False,
+            env=_child_env(),
             **windows_hidden_popen_kwargs(),
         )
     except subprocess.TimeoutExpired as e:
@@ -620,13 +635,12 @@ class SetupRunner:
                     stdin=subprocess.DEVNULL,
                     # Rich wraps a pipe at 80 columns, which would cut the
                     # error line shown as the failure reason mid-sentence.
-                    env={
-                        **os.environ,
-                        "COLUMNS": str(_UNWRAPPED_COLUMNS),
+                    env=_child_env(
+                        COLUMNS=str(_UNWRAPPED_COLUMNS),
                         # Setup output is shown in the browser, not a terminal.
-                        "NO_COLOR": "1",
-                        "CLICOLOR": "0",
-                    },
+                        NO_COLOR="1",
+                        CLICOLOR="0",
+                    ),
                     **windows_hidden_popen_kwargs(),
                 )
             except OSError as e:
@@ -796,14 +810,16 @@ class SetupRunner:
         run.percent = totals["percent"]
         run.size = f"{totals['bytes_done'] / 1e9:.2f} GB of {totals['bytes_total'] / 1e9:.2f} GB"
 
-    def _settle_models(self, ready: Optional[set], failed: Dict[str, str]) -> None:
+    def _settle_models(self, failed: Dict[str, str]) -> None:
         """After a run: downloaded models become ready, or failed when their
         load check failed. Caller holds the lock."""
         for entry in self._models.values():
             if entry.id in failed:
                 entry.state, entry.error_kind = "failed", "verify"
                 entry.error = failed[entry.id]
-            elif entry.state == "verifying" and (ready is None or entry.id in ready):
+            elif entry.state == "verifying":
+                # Downloaded; a model the check did not load (Gemma once a
+                # chat model is saved) is not left spinning forever.
                 entry.state = "ready"
 
     def _watch(self, run: SetupRun, proc: subprocess.Popen) -> None:
@@ -858,7 +874,7 @@ class SetupRunner:
             if code != 0:
                 run.state = "failed"
                 # What finished downloading stays downloaded.
-                self._settle_models(None, {})
+                self._settle_models({})
                 if problem is not None:
                     # The raw exception stays in the log, behind "Details".
                     run.problem, run.error = problem, problem["message"]
@@ -881,7 +897,7 @@ class SetupRunner:
         except SetupError as e:
             with self._lock:
                 run.state, run.error = "failed", str(e)
-                self._settle_models(None, {})
+                self._settle_models({})
             return
         loads = status.get("models") or []
         failed = {
@@ -891,9 +907,7 @@ class SetupRunner:
         }
         with self._lock:
             run.status = status
-            self._settle_models(
-                {m["id"] for m in loads if m.get("loaded")} if loads else None, failed
-            )
+            self._settle_models(failed)
             if status.get("ready"):
                 run.state, run.text = "ready", "GAIA is ready"
             else:

@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/ui/modelsetup"
 )
 
 // ProceedMsg tells the host every precondition is satisfied (or the user
@@ -160,6 +161,12 @@ type Model struct {
 	// the option under the cursor.
 	choosing bool
 	choice   int
+
+	// setup is "choose your models" and the download after it, open over the
+	// checklist; nil when the checklist is on screen.
+	setup *modelsetup.Model
+	// motion is how much this screen animates (NO_MOTION and friends).
+	motion modelsetup.Motion
 }
 
 // New builds the gate for an agent the GAIA daemon supervises.
@@ -197,6 +204,7 @@ func newWith(r Runner, cfg Config, opts Options) Model {
 		cancel:    &cancelBox{},
 		autoTried: map[string]bool{},
 		stepsDone: opts.StepsDone,
+		motion:    setupMotion(),
 	}
 }
 
@@ -470,6 +478,11 @@ func (m Model) startProvision() (Model, tea.Cmd) {
 // --- update ----------------------------------------------------------------
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.setup != nil {
+		if next, cmd, handled := m.updateSetup(msg); handled {
+			return next, cmd
+		}
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -650,6 +663,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		// Matches the hub and chat: ctrl+c leaves the app, not just the screen.
+		m.Abandon()
 		m.Cancel()
 		m.provisionCh, m.phase = nil, phaseIdle
 		return m, tea.Quit
@@ -747,7 +761,12 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 		m.phase = phaseFixing
 		m.note = "Restarting the " + m.cfg.AgentName + " agent in the requested mode…"
 		return m, tea.Batch(m.quickFixCmd(KeySidecar, FixRestartSidecar, ensureTimeout), m.spin.Tick)
-	case FixPullModel, FixRunSetup, FixInstallServer:
+	case FixRunSetup:
+		if m.opensModelSetup() {
+			return m.openModelSetup()
+		}
+		return m.startProvision()
+	case FixPullModel, FixInstallServer:
 		return m.startProvision()
 	case FixUseRunningLemonade:
 		m.phase = phaseFixing
@@ -822,4 +841,14 @@ func (m Model) haltOutcomesCmd() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func (m Model) View() string { return m.render() }
+func (m Model) View() string {
+	if m.setup != nil {
+		return m.setup.View()
+	}
+	return m.render()
+}
+
+// Abandon stops a first-run model download the user is leaving: leaving the
+// screen cancels it, and finished models and partial files stay. The host
+// calls it when tearing the gate down.
+func (m Model) Abandon() { m.abandonSetup() }

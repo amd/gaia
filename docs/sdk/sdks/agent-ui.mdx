@@ -2341,7 +2341,11 @@ First-run hardware scan (issues #1726, #1727).
 ### Setup
 
 First-run setup. The Agent UI asks and runs the same `gaia init` the TUI does,
-so the two can never disagree about whether GAIA is set up.
+so the two can never disagree about whether GAIA is set up. The daemon serves
+these same handlers to the TUI under `/daemon/v1/setup/` (`plan`, `chat-model`,
+`models/skip`, `models/download`, `models/remove`, `run`, `status`, `cancel`),
+behind the daemon token instead of the `X-Gaia-UI` header, so both apps read one
+plan and make one set of choices.
 
 <AccordionGroup>
   <Accordion title="GET /api/setup/check">
