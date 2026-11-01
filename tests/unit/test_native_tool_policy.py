@@ -6,7 +6,8 @@
 Native ``tools=`` resends every tool schema on every call, ~12K tokens more than
 the in-text list for the flagship. A gateway model that follows the in-text
 format (DeepSeek V4.1 Flash) stays on it; one that writes its own tool markup
-there instead (Claude's ``<invoke>`` XML) is moved to native calls.
+there instead (Claude's ``<invoke>`` XML) is moved to native calls for that
+session only, so one stray reply never costs every later session the schemas.
 """
 
 import json
@@ -48,6 +49,13 @@ INVOKE = (
     'Reading it.\n<function_calls>\n<invoke name="read_file">\n'
     '<parameter name="file_path">a.py</parameter>\n</invoke>\n</function_calls>'
 )
+# DeepSeek's own markup, which it wrote once in ~90 text-format sessions.
+DSML = (
+    '<｜DSML｜function_calls><｜DSML｜invoke name="read_file">'
+    '<｜DSML｜parameter name="file_path" string="true">a.py'
+    "</｜DSML｜parameter></｜DSML｜invoke>"
+    "</｜DSML｜function_calls>"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +64,6 @@ def gateway(tmp_path, monkeypatch):
     monkeypatch.setattr("gaia.llm.gateway.GATEWAY_STATE_FILE", path)
     monkeypatch.setattr(lc, "_CLOUD_TOOL_CALLING", {})
     monkeypatch.setattr(lc, "_CLOUD_PROBE_FAILURES", {})
-    monkeypatch.setattr(lc, "_CLOUD_OWN_MARKUP", set())
     monkeypatch.setattr(lc, "_TOOL_CALLING_LOADED", False)
     previous = lc._CLOUD_MODELS
     lc.record_cloud_models(CATALOG)
@@ -69,7 +76,6 @@ def gateway(tmp_path, monkeypatch):
 
 def _forget_in_memory():
     lc._CLOUD_TOOL_CALLING.clear()
-    lc._CLOUD_OWN_MARKUP.clear()
     lc._TOOL_CALLING_LOADED = False
 
 
@@ -121,42 +127,21 @@ def test_a_probed_native_model_that_follows_the_text_format_stays_in_text():
     assert lc.uses_native_tool_calls("amd.Flash") is False
 
 
-def test_a_model_that_wrote_its_own_markup_goes_native_and_it_persists(gateway):
-    lc.record_own_tool_markup("amd.Opus")
-    assert lc.uses_native_tool_calls("amd.Opus") is True
-    assert json.loads(gateway.read_text())["own_tool_markup_models"] == ["amd.Opus"]
+def test_own_markup_switches_only_the_session_that_wrote_it(gateway):
+    before = gateway.read_bytes()
+    switched = _agent("amd.Opus")
+    switched._parse_llm_response(INVOKE)
+    assert switched._uses_native_tool_calls() is True
+    assert lc.uses_native_tool_calls("amd.Opus") is False
+    assert gateway.read_bytes() == before
     _forget_in_memory()
-    assert lc.uses_native_tool_calls("amd.Opus") is True
+    assert _text_shape(_agent("amd.Opus"))
 
 
-def test_a_record_keeps_what_another_process_saved_meanwhile(gateway):
-    lc._load_tool_calling()
-    saved = json.loads(gateway.read_text())
-    saved["own_tool_markup_models"] = ["amd.Other"]
-    gateway.write_text(json.dumps(saved))
-    lc.record_own_tool_markup("amd.Opus")
-    assert json.loads(gateway.read_text())["own_tool_markup_models"] == [
-        "amd.Opus",
-        "amd.Other",
-    ]
-
-
-def test_an_unwritable_gateway_file_keeps_the_switch_for_this_session(caplog):
-    with patch("gaia.llm.gateway.GatewayState.save", side_effect=OSError("denied")):
-        lc.record_own_tool_markup("amd.Opus")
-    assert lc.uses_native_tool_calls("amd.Opus") is True
-    assert "Could not persist the tool-call markup of amd.Opus" in caplog.text
-
-
-def test_a_bug_while_saving_is_not_swallowed():
-    with patch("gaia.llm.gateway.GatewayState.save", side_effect=TypeError("bug")):
-        with pytest.raises(TypeError):
-            lc.record_own_tool_markup("amd.Opus")
-
-
-def test_a_model_the_probe_found_not_native_never_goes_native():
-    lc.record_own_tool_markup("amd.Plain")
-    assert lc.uses_native_tool_calls("amd.Plain") is False
+def test_a_model_the_probe_found_not_native_never_goes_native(gateway):
+    agent = _agent("amd.Plain")
+    agent._parse_llm_response(INVOKE)
+    _stays_text(agent, gateway)
 
 
 def test_catalog_labels_and_local_models_are_unchanged():
@@ -204,8 +189,9 @@ def test_a_cold_gateway_model_starts_in_text(cold_catalog):
 
 
 def test_a_cold_gateway_model_that_wrote_markup_is_native(cold_catalog):
-    lc.record_own_tool_markup("amd.Opus")
-    assert lc.uses_native_tool_calls("amd.Opus") is True
+    agent = _agent("amd.Opus")
+    agent._parse_llm_response(INVOKE)
+    assert agent._uses_native_tool_calls() is True
 
 
 def test_a_cold_model_the_probe_found_not_native_never_goes_native(
@@ -220,7 +206,7 @@ def test_a_cold_gateway_model_switches_on_its_own_markup(cold_catalog, gateway):
     agent = _agent("amd.Opus")
     agent._parse_llm_response(INVOKE)
     assert agent._uses_native_tool_calls() is True
-    assert json.loads(gateway.read_text())["own_tool_markup_models"] == ["amd.Opus"]
+    assert "own_tool_markup_models" not in json.loads(gateway.read_text())
 
 
 def test_an_unprobed_model_does_not_flip_when_the_catalog_loads(cold_catalog, gateway):
@@ -283,7 +269,7 @@ def test_own_markup_runs_and_switches_the_model_to_native(gateway):
     assert agent._uses_native_tool_calls() is True
     assert [s["function"]["name"] for s in agent._openai_tools] == ["read_file"]
     assert "==== AVAILABLE TOOLS ====" not in agent.system_prompt
-    assert json.loads(gateway.read_text())["own_tool_markup_models"] == ["amd.Opus"]
+    assert "own_tool_markup_models" not in json.loads(gateway.read_text())
 
 
 def test_the_markup_parser_itself_never_switches(gateway):
@@ -348,12 +334,9 @@ def test_a_local_or_text_format_route_keeps_its_tool_messages():
         assert _recast(_agent(model_id), [dict(m) for m in orphan]) == orphan
 
 
-def test_a_new_session_starts_native_after_the_switch():
+def test_a_new_session_starts_in_text_after_the_switch():
     _agent("amd.Opus")._parse_llm_response(INVOKE)
-    _forget_in_memory()
-    agent = _agent("amd.Opus")
-    assert agent._openai_tools is not None
-    assert agent._response_format_template not in agent.system_prompt
+    assert _text_shape(_agent("amd.Opus"))
 
 
 def test_direct_claude_is_always_native():
@@ -369,8 +352,7 @@ def _stays_text(agent, gateway):
     assert agent._uses_native_tool_calls() is False
     assert _text_shape(agent)
     if gateway.exists():
-        saved = json.loads(gateway.read_text())
-        assert saved.get("own_tool_markup_models", []) == []
+        assert "own_tool_markup_models" not in json.loads(gateway.read_text())
 
 
 def test_markup_inside_a_code_fence_is_an_example_not_a_switch(gateway):
@@ -403,7 +385,7 @@ def test_an_already_native_or_local_model_records_nothing(gateway, model_id):
     agent = _agent(model_id)
     agent._parse_llm_response(INVOKE)
     assert agent._uses_native_tool_calls() is True
-    assert json.loads(gateway.read_text()).get("own_tool_markup_models") == []
+    assert "own_tool_markup_models" not in json.loads(gateway.read_text())
 
 
 def test_a_json_reply_quoting_markup_is_not_a_switch(gateway):
@@ -412,3 +394,61 @@ def test_a_json_reply_quoting_markup_is_not_a_switch(gateway):
     parsed = agent._parse_llm_response(reply)
     assert "tool" not in parsed
     _stays_text(agent, gateway)
+
+
+# --- adversarial: one stray reply never outlives its session ------------------
+
+
+def test_a_text_format_model_slipping_into_dsml_once_costs_only_that_session(
+    gateway,
+):
+    before = gateway.read_bytes()
+    slipped = _agent("amd.Flash")
+    assert slipped._parse_llm_response(DSML)["tool"] == "read_file"
+    assert slipped._uses_native_tool_calls() is True
+    assert gateway.read_bytes() == before
+    for _ in range(3):
+        later = _agent("amd.Flash")
+        assert later._uses_native_tool_calls() is False
+        assert _text_shape(later)
+
+
+def test_many_sessions_writing_markup_still_never_persist(gateway):
+    for _ in range(5):
+        _agent("amd.Flash")._parse_llm_response(DSML)
+        _agent("amd.Opus")._parse_llm_response(INVOKE)
+    _forget_in_memory()
+    assert lc.uses_native_tool_calls("amd.Flash") is False
+    assert lc.uses_native_tool_calls("amd.Opus") is False
+    assert _text_shape(_agent("amd.Flash"))
+
+
+def test_an_older_builds_markup_record_is_ignored_and_dropped_on_save(gateway):
+    from gaia.llm.gateway import GatewayState
+
+    saved = json.loads(gateway.read_text())
+    saved["own_tool_markup_models"] = ["amd.Flash", "amd.Opus"]
+    gateway.write_text(json.dumps(saved))
+    _forget_in_memory()
+    assert lc.uses_native_tool_calls("amd.Flash") is False
+    assert _text_shape(_agent("amd.Flash"))
+    GatewayState.load().save()
+    assert "own_tool_markup_models" not in json.loads(gateway.read_text())
+
+
+def test_the_switch_does_not_follow_a_model_change_in_the_session():
+    agent = _agent("amd.Opus")
+    agent._parse_llm_response(INVOKE)
+    assert agent._uses_native_tool_calls() is True
+    agent.model_id = "amd.Flash"
+    agent.__dict__.pop("_system_prompt_cache", None)
+    assert agent._uses_native_tool_calls() is False
+    assert _text_shape(agent)
+    agent.model_id = "amd.Opus"
+    assert agent._uses_native_tool_calls() is True
+
+
+def test_a_session_with_no_model_never_reads_as_switched():
+    agent = _agent(None)
+    assert agent._own_markup_model is None
+    assert agent._uses_native_tool_calls() is False

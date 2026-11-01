@@ -37,7 +37,6 @@ from typing import (
     Iterator,
     List,
     Optional,
-    Set,
     Tuple,
     Union,
 )
@@ -2280,8 +2279,6 @@ _NON_STREAMING_LOADED = False
 _CLOUD_TOOL_CALLING: Dict[str, bool] = {}
 # When each model's probe last failed, as epoch seconds.
 _CLOUD_PROBE_FAILURES: Dict[str, float] = {}
-# Models seen writing their own tool-call markup on GAIA's in-text format.
-_CLOUD_OWN_MARKUP: Set[str] = set()
 _TOOL_CALLING_LOADED = False
 
 
@@ -2322,7 +2319,6 @@ def _load_tool_calling() -> None:
             when = _parse_utc(at)
             if when is not None and model not in _CLOUD_PROBE_FAILURES:
                 _CLOUD_PROBE_FAILURES[model] = when
-        _CLOUD_OWN_MARKUP.update(state.own_tool_markup_models)
         # Marked only once filled, so a concurrent reader never sees it empty.
         _TOOL_CALLING_LOADED = True
 
@@ -2352,36 +2348,6 @@ def record_tool_calling(model_id: str, supported: bool) -> None:
         state.save()
     except Exception as e:  # noqa: BLE001 - the in-memory map still holds
         log.warning(f"Could not persist tool-calling support for {model_id}: {e}")
-
-
-def wrote_own_tool_markup(model_id: Optional[str]) -> bool:
-    """Whether *model_id* was seen writing its own tool-call markup in text."""
-    if not model_id:
-        return False
-    _load_tool_calling()
-    return model_id in _CLOUD_OWN_MARKUP
-
-
-def record_own_tool_markup(model_id: str) -> None:
-    """Remember *model_id*'s own markup, in memory and in ``gateway.json``."""
-    _load_tool_calling()
-    with _CLOUD_LOCK:
-        if model_id in _CLOUD_OWN_MARKUP:
-            return
-        _CLOUD_OWN_MARKUP.add(model_id)
-        models = set(_CLOUD_OWN_MARKUP)
-    from gaia.llm.gateway import GatewayError, GatewayState
-
-    try:
-        state = GatewayState.load()
-        # Union: another GAIA process may have recorded a model since we loaded.
-        state.own_tool_markup_models = sorted(
-            models | set(state.own_tool_markup_models)
-        )
-        state.save()
-    # The in-memory set still holds; only the next session pays one markup turn.
-    except (GatewayError, OSError) as e:
-        log.warning(f"Could not persist the tool-call markup of {model_id}: {e}")
 
 
 _PROBE_TOOL = {
@@ -2754,9 +2720,9 @@ def uses_native_tool_calls(model_id: Optional[str]) -> bool:
     """Whether an agent should hand *model_id* its tools as ``tools=`` schemas.
 
     Local models and catalog-labelled cloud models: whenever they take tools.
-    Any other cloud model stays on the in-text format (~12K fewer tokens per
-    call, calls batched in a plan) until it writes its own tool-call markup
-    there instead of GAIA's JSON.
+    Any other cloud model starts each session on the in-text format (~12K
+    fewer tokens per call, calls batched in a plan); an agent moves it to
+    native calls for that session only if it writes its own tool-call markup.
     """
     if not is_tool_calling_model(model_id):
         return False
@@ -2766,8 +2732,7 @@ def uses_native_tool_calls(model_id: Optional[str]) -> bool:
     # A gateway id is cloud before this process has read the catalog, too.
     if cloud is None and cloud_model_provider(model_id) is None:
         return True
-    # Only a probe-confirmed model: the catalog loading later must not flip it.
-    return learned_tool_calling(model_id) is True and wrote_own_tool_markup(model_id)
+    return False
 
 
 def _usage_dict(usage: Any) -> Dict[str, Any]:

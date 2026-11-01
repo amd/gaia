@@ -2474,6 +2474,8 @@ Do NOT wrap conversational replies in JSON.
         self._deliverable_cache: Dict[tuple, list] = {}
         # Step-budget notices already sent this turn, by threshold.
         self._budget_notices_sent: set = set()
+        # The model that wrote its own tool-call markup in this session, if any.
+        self._own_markup_model: Optional[str] = None
         self._budget_notices_on = budget_notices_enabled()
         self.conversation_history = (
             []
@@ -3045,8 +3047,14 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.llm.lemonade_client import uses_native_tool_calls
 
-        return bool(getattr(self, "_use_claude", False)) or uses_native_tool_calls(
-            getattr(self, "model_id", None)
+        model_id = getattr(self, "model_id", None)
+        return (
+            bool(getattr(self, "_use_claude", False))
+            or (
+                model_id is not None
+                and getattr(self, "_own_markup_model", None) == model_id
+            )
+            or uses_native_tool_calls(model_id)
         )
 
     def _hosted_native_tool_caller(self) -> bool:
@@ -4893,13 +4901,18 @@ Do NOT wrap conversational replies in JSON.
         }
 
     def _switch_to_native_tool_calls(self) -> None:
-        """Move a hosted model writing its own tool markup onto native tool calls."""
+        """Move a hosted model writing its own tool markup onto native tool calls.
+
+        For this agent's session only: a model that slips into its own markup
+        once (DeepSeek's DSML) must not pay ~12K tokens per call in every
+        later session, while one that always writes it (Claude's ``<invoke>``)
+        switches on its first reply anyway.
+        """
         from gaia.llm.lemonade_client import (
             cloud_model_info,
             cloud_model_provider,
             is_tool_calling_model,
             learned_tool_calling,
-            record_own_tool_markup,
         )
 
         model_id = getattr(self, "model_id", None)
@@ -4913,10 +4926,10 @@ Do NOT wrap conversational replies in JSON.
             or learned_tool_calling(model_id) is not True
         ):
             return
-        record_own_tool_markup(model_id)
+        self._own_markup_model = model_id
         logger.info(
-            "%s wrote its own tool-call markup; it gets native tool calls from "
-            "now on",
+            "%s wrote its own tool-call markup; it gets native tool calls for "
+            "the rest of this session",
             model_id,
         )
         # The text tool list and JSON format template leave the prompt.
