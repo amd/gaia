@@ -82,7 +82,8 @@ def _real_pip_run_pip(python_exe):
 
     def run_pip(args):
         subprocess.run(
-            [python_exe, "-m", "pip", "install", *args],
+            # No cache: with the home redirected, pip's lands in the checkout.
+            [python_exe, "-m", "pip", "install", "--no-cache-dir", *args],
             check=True,
             capture_output=True,
             text=True,
@@ -91,7 +92,9 @@ def _real_pip_run_pip(python_exe):
     return run_pip
 
 
-def test_hub_installed_wheel_agent_importable_in_fresh_process(tmp_path, monkeypatch):
+def test_hub_installed_wheel_agent_importable_in_fresh_process(
+    tmp_path, monkeypatch, python_with_pip
+):
     """Install for real, then check for the agent from a FRESH interpreter."""
     tmp_home = tmp_path / "home"
     tmp_home.mkdir()
@@ -118,7 +121,7 @@ def test_hub_installed_wheel_agent_importable_in_fresh_process(tmp_path, monkeyp
         manifest=manifest,
         base_url=BASE_URL,
         fetcher=fetcher,
-        run_pip=_real_pip_run_pip(sys.executable),
+        run_pip=_real_pip_run_pip(python_with_pip),
         install_root=install_root,
         active_env_site_packages=fake_active_env,
         # Deliberately NOT passing registry= -- this test is about proving

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -129,6 +130,16 @@ def fake_gmail():
     return _FakeGmail()
 
 
+def _age_action(db, action_id: str, *, seconds: int) -> None:
+    """Move an action into the past: Windows' clock can read the same twice."""
+    db.update(
+        "email_actions",
+        {"created_at": time.time() - seconds},
+        "action_id = :id",
+        {"id": action_id},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Quarantine tests
 # ---------------------------------------------------------------------------
@@ -226,8 +237,9 @@ class TestUnquarantineImpl:
             fake_gmail, db, message_id="msg6", is_phishing=True
         )
         action_id = result["action_id"]
+        _age_action(db, action_id, seconds=61)
         with pytest.raises(RuntimeError, match="undo window"):
-            unquarantine_impl(fake_gmail, db, action_id=action_id, window_seconds=0)
+            unquarantine_impl(fake_gmail, db, action_id=action_id, window_seconds=60)
 
 
 # ---------------------------------------------------------------------------
@@ -258,8 +270,7 @@ class TestUnquarantineWrapperErrorSurfacing:
     not a generic tool error."""
 
     def test_expired_window_returns_actionable_error_envelope(self, fake_gmail):
-        # window=0 → the action is immediately outside the undo window.
-        agent = _StubAgent(fake_gmail, undo_window_seconds=0)
+        agent = _StubAgent(fake_gmail, undo_window_seconds=60)
         agent._register_phishing_tools()
 
         # First quarantine a message (the impl is called directly so we have
@@ -269,6 +280,7 @@ class TestUnquarantineWrapperErrorSurfacing:
             fake_gmail, agent, message_id="msg_w", is_phishing=True
         )
         action_id = q["action_id"]
+        _age_action(agent, action_id, seconds=61)
 
         unquarantine = _TOOL_REGISTRY["unquarantine_message"]["function"]
         out = json.loads(unquarantine(action_id))

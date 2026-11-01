@@ -12,13 +12,26 @@ This conftest auto-clears ``GAIA_MEMORY_DISABLED`` when collecting tests
 from any ``test_memory_*.py`` file so the per-test mocks take effect.
 """
 
+import importlib.util
 import os
 import socket
 import sys
 import tempfile
+import venv
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(scope="session")
+def python_with_pip(tmp_path_factory):
+    """A Python with ``-m pip``, which a ``uv venv`` dev environment does not have."""
+    if importlib.util.find_spec("pip") is not None:
+        return sys.executable
+    env_dir = tmp_path_factory.mktemp("pip-venv")
+    venv.create(env_dir, with_pip=True)
+    bin_dir = "Scripts" if sys.platform == "win32" else "bin"
+    return str(env_dir / bin_dir / Path(sys.executable).name)
 
 
 @pytest.fixture
