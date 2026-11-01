@@ -12,7 +12,6 @@ import http.server
 import os
 import sys
 import threading
-from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath("src"))
 
@@ -86,6 +85,11 @@ def test_cli_telegram_health_port_defaults():
     assert custom.health_port == 18765
 
 
+async def _connect_then_exit(self, on_started=None):
+    """Stand in for the Bot API poll: report a successful start, then return."""
+    on_started(None)
+
+
 def _run_background_capture_health_port(monkeypatch, tmp_path, health_port_kwargs):
     """Start the adapter in background mode with a stubbed HTTPServer.
 
@@ -104,8 +108,7 @@ def _run_background_capture_health_port(monkeypatch, tmp_path, health_port_kwarg
 
     monkeypatch.setattr(os.path, "expanduser", fake_expanduser)
     monkeypatch.delenv("GAIA_TEST_MODE", raising=False)
-    monkeypatch.setitem(sys.modules, "telegram", MagicMock())
-    monkeypatch.setitem(sys.modules, "telegram.ext", MagicMock())
+    monkeypatch.setattr(telegram.TelegramAdapter, "_poll", _connect_then_exit)
 
     class FakeHTTPServer:
         def __init__(self, address, _handler):
@@ -120,7 +123,7 @@ def _run_background_capture_health_port(monkeypatch, tmp_path, health_port_kwarg
     adapter = telegram.TelegramAdapter(token="fake", allowed_users={12345})
     adapter.start(token="fake", background=True, **health_port_kwargs)
     # The daemon threads shut themselves down once the stubbed
-    # ``run_polling`` returns; join only the threads this test spawned so we
+    # ``_poll`` returns; join only the threads this test spawned so we
     # don't block on unrelated long-lived threads from earlier in the session.
     for thread in threading.enumerate():
         if thread in before or thread is threading.main_thread():
@@ -163,8 +166,7 @@ def test_run_telegram_forwards_health_port(monkeypatch, tmp_path):
 
     monkeypatch.setattr(os.path, "expanduser", fake_expanduser)
     monkeypatch.delenv("GAIA_TEST_MODE", raising=False)
-    monkeypatch.setitem(sys.modules, "telegram", MagicMock())
-    monkeypatch.setitem(sys.modules, "telegram.ext", MagicMock())
+    monkeypatch.setattr(telegram.TelegramAdapter, "_poll", _connect_then_exit)
 
     class FakeHTTPServer:
         def __init__(self, address, _handler):
