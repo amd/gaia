@@ -331,6 +331,16 @@ gaia eval agent --output-format markdown
   Start with `--audit-only` (free) to understand expected failures, then run individual categories to control costs during development.
 </Tip>
 
+### Which Claude account pays
+
+The judged evals (email drafting, action items, briefings, `gaia eval sessions`, retrieval) and PDF corpus generation choose their Claude transport the way `gaia eval agent` does:
+
+- **`ANTHROPIC_API_KEY` set:** the Messages API, billed per token to that console account.
+- **Otherwise:** your Claude Code subscription, through `claude -p`. The CLI's own login is enough. Where no interactive login is possible (CI), set `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. A subscription token is not an API key, so never export it as `ANTHROPIC_API_KEY`.
+- **Neither** (no key and no `claude` on `PATH`): the run stops with an error naming both options. It never falls back to a weaker scorer.
+
+On the subscription path, token counts and `total_cost_usd` come from the CLI's JSON output. The cost is the list price of those tokens, not money spent. Token counting (`count_tokens`) and inline PDF analysis exist only on the API path.
+
 ---
 
 ## Next Steps
