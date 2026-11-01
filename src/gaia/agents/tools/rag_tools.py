@@ -7,13 +7,14 @@ Provides document retrieval, querying, and evaluation tools.
 """
 
 import contextvars
+import functools
 import os
 import re
 import threading
 import time
 import weakref
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.file_snapshots import before_change
@@ -29,6 +30,7 @@ from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
 from gaia.rag.sdk import EmbeddingUnavailableError
 from gaia.tool_cancellation import raise_if_cancelled
+from gaia.utils.index_tracker import index_tracker
 
 logger = get_logger(__name__)
 
@@ -70,6 +72,10 @@ _INDEX_JOBS_LOCK = threading.Lock()
 _INDEX_JOBS: "weakref.WeakKeyDictionary[Any, Dict[str, Any]]" = (
     weakref.WeakKeyDictionary()
 )
+#: RAGSDK -> paths the app is indexing itself, attached to that agent's chat.
+_WATCHED_PATHS: "weakref.WeakKeyDictionary[Any, List[str]]" = (
+    weakref.WeakKeyDictionary()
+)
 
 
 class _IndexJob:
@@ -102,6 +108,20 @@ class _IndexJob:
         return int((self.total - self.embedded) / rate)
 
 
+class _TrackedIndexJob(_IndexJob):
+    """A document the app is indexing on its own; reported here, never started."""
+
+    def __init__(self, path: str, progress: Dict[str, Any]):
+        super().__init__(path)
+        self.started -= progress["elapsed_seconds"]
+        if progress["phase"] == "embedding":
+            self.embedded, self.total = progress["done"], progress["total"]
+        self._seconds_left = progress["seconds_left"]
+
+    def seconds_remaining(self) -> Optional[int]:
+        return self._seconds_left
+
+
 def _index_within_budget(
     rag: Any, path: str, budget: Optional[float] = None
 ) -> Tuple[Optional[Dict[str, Any]], _IndexJob]:
@@ -110,7 +130,13 @@ def _index_within_budget(
     Returns ``(result, job)``: ``result`` is ``rag.index_document``'s dict when
     it finished in time, else ``None`` while the job keeps running. A second
     call for the same path waits on the running job instead of starting another.
+    A file the app is already indexing is reported at once: reading it a second
+    time here would take as long again and finish no sooner.
     """
+    key = index_tracker.key_for(path)
+    progress = index_tracker.progress(key) if key else None
+    if progress:
+        return None, _TrackedIndexJob(path, progress)
     budget = INDEX_FOREGROUND_BUDGET_S if budget is None else budget
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.setdefault(rag, {})
@@ -151,13 +177,22 @@ def _index_within_budget(
     return job.result, job
 
 
+def watch_documents_indexing(rag: Any, paths: List[str]) -> None:
+    """Count *paths*, which the app is indexing itself, as still indexing for *rag*."""
+    with _INDEX_JOBS_LOCK:
+        _WATCHED_PATHS[rag] = list(paths)
+
+
 def documents_still_indexing(rag: Any) -> List[str]:
     """Paths *rag* is still indexing in the background; not searchable yet."""
     if rag is None:
         return []
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.get(rag) or {}
-        return sorted(path for path, job in jobs.items() if not job.done.is_set())
+        running = {path for path, job in jobs.items() if not job.done.is_set()}
+        watched = list(_WATCHED_PATHS.get(rag) or [])
+    running.update(path for path in watched if index_tracker.key_for(path))
+    return sorted(running)
 
 
 def _forget_evicted(indexed_files: set, evicted: List[str]) -> None:
@@ -353,6 +388,64 @@ _MARKER_NOTE = (
 )
 
 
+def _unread_images_notice(reading: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """What this search couldn't see yet, for the user and for the model."""
+    names = sorted({entry["name"] for entry in reading})
+    listed = ", ".join(names)
+    done = sum(entry["pages_done"] for entry in reading)
+    total = sum(entry["pages_total"] for entry in reading)
+    return {
+        "message": f"Still reading images in {listed}, so this answer may be incomplete.",
+        "instruction": (
+            f"\n\nThese documents are still being indexed: their text is searchable, "
+            f"but images in {listed} are not all read yet ({done} of {total} pages). "
+            "Say in your answer that it may be incomplete for that reason."
+        ),
+        "notice": {
+            "kind": "partial_index",
+            "names": names,
+            "pages_done": done,
+            "pages_total": total,
+        },
+    }
+
+
+def _reports_unread_images(mixin: Any):
+    """Tell the model and the user when a search ran on an unfinished index."""
+
+    def wrap(search: Callable[..., Dict[str, Any]]):
+        @functools.wraps(search)
+        def wrapper(*args, **kwargs) -> Dict[str, Any]:
+            result = search(*args, **kwargs)
+            rag = _require_rag(mixin)
+            if not rag or result.get("status") != "success":
+                return result
+            # A single-file search reports the file it resolved to.
+            searched = result.get("file")
+            reading = [
+                entry
+                for entry in rag.images_still_reading()
+                if searched is None
+                or searched == entry["path"]
+                or (searched == Path(searched).name and searched == entry["name"])
+            ]
+            if not reading:
+                return result
+            unread = _unread_images_notice(reading)
+            result["still_indexing"] = unread["notice"]
+            result["instruction"] = (
+                result.get("instruction", "") + unread["instruction"]
+            )
+            console = getattr(mixin, "console", None)
+            if console is not None:
+                console.print_index_notice(unread["message"], unread["notice"])
+            return result
+
+        return wrapper
+
+    return wrap
+
+
 def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     """How query_documents asks the model to cite: the full path, plus pages if any."""
     instruction = (
@@ -505,6 +598,7 @@ class RAGToolsMixin:
         @tool(
             atomic=True,
         )
+        @_reports_unread_images(self)
         def query_documents(
             query: str, debug: bool = False  # pylint: disable=unused-argument
         ) -> Dict[str, Any]:
@@ -930,6 +1024,7 @@ class RAGToolsMixin:
             # cap; at the default a big PDF is abandoned mid-index and re-indexed.
             timeout=600,
         )
+        @_reports_unread_images(self)
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
             Query a specific file for fast, targeted retrieval.

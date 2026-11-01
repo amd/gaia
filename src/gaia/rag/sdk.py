@@ -15,6 +15,8 @@ import json
 import os
 import re
 import secrets
+import shutil
+import tempfile
 import threading
 import time
 import zipfile
@@ -50,8 +52,11 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
+    resident_vision_model,
+    resolve_default_vision_model,
 )
 from gaia.logger import get_logger
+from gaia.rag import image_pass  # pylint: disable=wrong-import-position
 from gaia.rag.arabic_text import normalize_arabic_pdf_text
 from gaia.security import PathValidator
 from gaia.utils.document_formats import (
@@ -141,6 +146,26 @@ class ImageExtractionError(ValueError):
 # Each page is one VLM call (seconds to tens of seconds), so a fax-sized TIFF is
 # fine and a 500-page archive is a mistake to stop early.
 MAX_IMAGE_PAGES = 50
+# Past this much text a page's images are logos and photos, not its content.
+IMAGE_PAGE_TEXT_LIMIT = 200
+# On a page with its own text, an image smaller than this is a logo or an icon:
+# 116 of 121 of them held no text.
+MIN_IMAGE_PAGE_COVER = 0.02
+# How a vision model says it found nothing to read.
+_NO_IMAGE_TEXT = re.compile(
+    r"\b(?:no|not contain(?: any)?) (?:visible |legible |discernible |readable )?text\b",
+    re.I,
+)
+
+
+def _useful_image_texts(image_texts: list) -> list:
+    """Drop the images the vision model found nothing in."""
+    return [
+        image
+        for image in image_texts
+        if len(image.get("text", "").strip()) >= 40
+        and not _NO_IMAGE_TEXT.search(image["text"][:120])
+    ]
 
 
 def _flatten_for_vlm(img):
@@ -379,6 +404,7 @@ _CACHE_OWNED_FILE = re.compile(
     r"\.json(?:\.sig)?$"
     r"|_extracted\.md$"
     r"|^vectors_[0-9a-f]{24}\.npy$"
+    r"|^[0-9a-f]{32}_[0-9a-f]{8}_images(?:\.json|_source\.[a-z0-9]+)$"
 )
 
 
@@ -468,9 +494,14 @@ class RAGConfig:
         False  # Enable LLM-based intelligent chunking (requires LLM client)
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
-    vlm_model: str = DEFAULT_MODEL_NAME
+    vlm_model: str = field(default_factory=resolve_default_vision_model)
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
+    # True makes a document searchable from its text and reads its images in
+    # the background, for apps that stay open. False reads them during
+    # indexing, on pages short of text, so a script's result doesn't change
+    # with what a background thread has reached.
+    read_images_later: bool = False
     # Security settings
     allowed_paths: Optional[List[str]] = None
 
@@ -935,6 +966,25 @@ class RAGSDK:
             self.config.cache_dir, f"{key}_{self._chunking_fingerprint()}.json"
         )
 
+    def _cache_of_same_bytes(self, cache_path: str, content_key: str) -> str:
+        """``cache_path``, or the entry another path of these exact bytes left.
+
+        The library indexes an upload's temp copy and chats index the original,
+        so without this a chat reads every page again, images included.
+        """
+        if os.path.exists(cache_path):
+            return cache_path
+        content_hash = content_key.rsplit("_", 1)[-1]
+        if content_hash == "notfound":
+            return cache_path
+        suffix = f"_{content_hash}_{self._chunking_fingerprint()}.json"
+        try:
+            names = sorted(os.listdir(self.config.cache_dir))
+        except FileNotFoundError:
+            return cache_path
+        match = next((name for name in names if name.endswith(suffix)), None)
+        return os.path.join(self.config.cache_dir, match) if match else cache_path
+
     def _extracted_markdown_path(self, content_key: str) -> str:
         """Extracted text depends on content alone, so no chunking fingerprint."""
         return os.path.join(self.config.cache_dir, f"{content_key}_extracted.md")
@@ -1309,6 +1359,8 @@ class RAGSDK:
             - num_pages: int
             - vlm_pages: int (number of pages enhanced with VLM)
             - total_images: int (total images processed)
+            - image_pages_skipped: int (pages whose images were left unread)
+            - images_later: list of ``{"page", "short"}`` for the background pass
             - pdf_status: str ("readable", "degraded", "encrypted",
               "corrupted", "empty"). "degraded" means the document indexed but
               at least one page may be incomplete — see degraded_pages.
@@ -1376,6 +1428,8 @@ class RAGSDK:
             # Initialize VLM client (auto-enabled if available)
             vlm = None
             vlm_available = False
+            read_later = self.config.use_vlm and self.config.read_images_later
+            images_later = []
             try:
                 from gaia.llm import VLMClient
                 from gaia.rag.pdf_utils import (
@@ -1386,14 +1440,22 @@ class RAGSDK:
                 )
 
                 vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                    vlm_model=resident_vision_model(
+                        self.config.vlm_model, self.config.base_url
+                    ),
+                    base_url=self.config.base_url,
                 )
-                vlm_available = self.config.use_vlm and vlm.check_availability()
+                vlm_available = (
+                    self.config.use_vlm and not read_later and vlm.check_availability()
+                )
 
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from images")
                 elif (
-                    not vlm_available and self.config.use_vlm and self.config.show_stats
+                    not vlm_available
+                    and not read_later
+                    and self.config.use_vlm
+                    and self.config.show_stats
                 ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
@@ -1422,6 +1484,7 @@ class RAGSDK:
             pages_data = []
             vlm_pages_count = 0
             total_images_processed = 0
+            image_pages_skipped = 0
             degraded_pages = []
             page_warnings = {}
 
@@ -1436,7 +1499,7 @@ class RAGSDK:
                 has_imgs = False
                 num_imgs = 0
                 page_warning = None
-                if vlm_available:
+                if vlm_available or read_later:
                     try:
                         has_imgs, num_imgs = count_images_in_page(page, page_num=i)
                     except PdfPageInspectionError as e:
@@ -1453,7 +1516,12 @@ class RAGSDK:
 
                 # Step 3: Extract from images if present
                 image_texts = []
-                if has_imgs and vlm_available:
+                short_of_text = len(pypdf_text.strip()) < IMAGE_PAGE_TEXT_LIMIT
+                if has_imgs and read_later:
+                    images_later.append({"page": i, "short": short_of_text})
+                elif has_imgs and vlm_available and not short_of_text:
+                    image_pages_skipped += 1
+                elif has_imgs and vlm_available:
                     try:
                         try:
                             images = extract_images_from_page_pdfium(
@@ -1520,6 +1588,8 @@ class RAGSDK:
                 except Exception:  # pylint: disable=broad-except
                     pass
 
+            self._read_until_some_text(pdf_path, pages_data, images_later)
+
             extract_duration = time_module.time() - extract_start
 
             # Build full text
@@ -1547,7 +1617,7 @@ class RAGSDK:
                 print(f"{'='*60}\n")
 
             self.log.info(
-                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages)"
+                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages, {image_pages_skipped} text pages' images left unread)"
             )
 
             # If pypdf parsed the file but every page came back blank, surface
@@ -1579,6 +1649,8 @@ class RAGSDK:
                 "num_pages": total_pages,
                 "vlm_pages": vlm_pages_count,
                 "total_images": total_images_processed,
+                "image_pages_skipped": image_pages_skipped,
+                "images_later": images_later,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
                 "pdf_status": "degraded" if degraded_pages else "readable",
@@ -1742,6 +1814,10 @@ class RAGSDK:
                         "num_slides": pdf_pages,
                         "vlm_slides": pdf_metadata.get("vlm_pages", 0),
                         "total_images": pdf_metadata.get("total_images", 0),
+                        "images_later": pdf_metadata.get("images_later", []),
+                        "images_source": self._keep_for_images(
+                            pdf_conversion_path, pdf_metadata
+                        ),
                         "vlm_checked": pdf_metadata.get("vlm_checked", False),
                         "vlm_available": pdf_metadata.get("vlm_available", False),
                         "pptx_status": "readable",
@@ -1773,6 +1849,8 @@ class RAGSDK:
             # Initialize VLM client (auto-enabled if available)
             vlm = None
             vlm_available = False
+            read_later = self.config.use_vlm and self.config.read_images_later
+            images_later = []
             try:
                 from gaia.llm import (  # pylint: disable=import-outside-toplevel
                     VLMClient,
@@ -1783,9 +1861,14 @@ class RAGSDK:
                 )
 
                 vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                    vlm_model=resident_vision_model(
+                        self.config.vlm_model, self.config.base_url
+                    ),
+                    base_url=self.config.base_url,
                 )
-                vlm_available = self.config.use_vlm and vlm.check_availability()
+                vlm_available = (
+                    self.config.use_vlm and not read_later and vlm.check_availability()
+                )
 
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from slide images")
@@ -1839,7 +1922,7 @@ class RAGSDK:
                 # Step 3: Check for images
                 has_imgs = False
                 num_imgs = 0
-                if vlm_available:
+                if vlm_available or read_later:
                     try:
                         has_imgs, num_imgs = count_images_in_slide(slide)
                     except Exception as e:  # pylint: disable=broad-except
@@ -1849,7 +1932,14 @@ class RAGSDK:
 
                 # Step 4: Extract from images if present
                 image_texts = []
-                if has_imgs and vlm_available:
+                if has_imgs and read_later:
+                    images_later.append(
+                        {
+                            "page": i,
+                            "short": len(slide_text.strip()) < IMAGE_PAGE_TEXT_LIMIT,
+                        }
+                    )
+                elif has_imgs and vlm_available:
                     try:
                         images = extract_images_from_slide(slide, slide_num=i)
                         if images:
@@ -1902,6 +1992,8 @@ class RAGSDK:
                 except Exception as e:  # pylint: disable=broad-except
                     self.log.debug("VLM cleanup failed: %s", e)
 
+            self._read_until_some_text(pptx_path, pages_data, images_later)
+
             extract_duration = time_module.time() - extract_start
 
             # Build full text — uses [Page N] markers for downstream compatibility
@@ -1951,6 +2043,7 @@ class RAGSDK:
             metadata = {
                 "num_slides": total_slides,
                 "vlm_slides": vlm_slides_count,
+                "images_later": images_later,
                 "total_images": total_images_processed,
                 "vlm_checked": True,
                 "vlm_available": vlm_available,
@@ -1963,6 +2056,250 @@ class RAGSDK:
         except Exception as e:
             self.log.error(f"Error reading PPTX {pptx_path}: {e}")
             raise
+
+    def _read_page_images(
+        self,
+        file_path: str,
+        page_num: int,
+        min_cover: float = 0.0,
+        before_each: Optional[Callable[[], None]] = None,
+    ) -> list:
+        """Read one PDF page or slide's images with the vision model.
+
+        Raises:
+            VisionUnavailable: the model isn't there, so no page can be read.
+        """
+        from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
+
+        model = resident_vision_model(self.config.vlm_model, self.config.base_url)
+        vlm = VLMClient(vlm_model=model, base_url=self.config.base_url)
+        if not vlm.check_availability():
+            raise image_pass.VisionUnavailable(
+                f"The vision model {model} isn't available on the Lemonade server "
+                f"at {vlm.server_url}, so images can't be read. Download it with "
+                "GAIA's model setup."
+            )
+        if file_path.lower().endswith(".pptx"):
+            from pptx import Presentation  # pylint: disable=import-outside-toplevel
+
+            from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
+                extract_images_from_slide,
+            )
+
+            slide = Presentation(file_path).slides[page_num - 1]
+            images = extract_images_from_slide(slide, slide_num=page_num)
+        else:
+            from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
+                extract_images_from_page_pdfium,
+            )
+
+            images = extract_images_from_page_pdfium(
+                file_path, page_num=page_num, min_cover=min_cover
+            )
+        if not images:
+            return []
+        if before_each is None:
+            return vlm.extract_from_page_images(images, page_num=page_num)
+        return vlm.extract_from_page_images(
+            images, page_num=page_num, before_each=before_each
+        )
+
+    def _keep_for_images(
+        self, converted: str, metadata: Dict[str, Any]
+    ) -> Optional[str]:
+        """Copy a converted deck out of its temp folder if its images wait to be read."""
+        if not metadata.get("images_later"):
+            return None
+        handle, kept = tempfile.mkstemp(suffix=".pdf", dir=self.config.cache_dir)
+        os.close(handle)
+        shutil.copyfile(converted, kept)
+        return kept
+
+    def _read_until_some_text(
+        self, file_path: str, pages_data: list, images_later: list
+    ) -> None:
+        """Give a scan its first searchable text now, leaving the rest for later.
+
+        A page that can't be read waits for the background pass; only a scan no
+        page of which can be read fails, with the reason from its last page.
+        """
+        if not images_later or any(page["text"].strip() for page in pages_data):
+            return
+        problem = None
+        for queued in list(images_later):
+            _beat()
+            number = queued["page"]
+            try:
+                image_texts = _useful_image_texts(
+                    self._read_page_images(file_path, number)
+                )
+            except (IndexingStopped, LeaseWaitCancelled, image_pass.VisionUnavailable):
+                raise
+            except Exception as e:  # pylint: disable=broad-except
+                self.log.warning(
+                    "Could not read page %s of %s: %s", number, file_path, e
+                )
+                problem = e
+                continue
+            images_later.remove(queued)
+            if image_texts:
+                pages_data[number - 1]["text"] = self._merge_page_texts(
+                    pages_data[number - 1]["text"], image_texts, page_num=number
+                )
+                pages_data[number - 1]["vlm_used"] = True
+                return
+        if problem is not None:
+            raise problem
+
+    def _read_later(
+        self, file_path: str, key: str, cache_path: str, metadata: Dict[str, Any]
+    ) -> None:
+        """Queue a document's unread images. Runs before its cache is written,
+        so a document whose queue can't be written isn't cached without one."""
+        source = metadata.pop("images_source", None)
+        try:
+            image_pass.register(
+                self.config.cache_dir,
+                key,
+                source or file_path,
+                Path(file_path).name,
+                cache_path,
+                metadata["images_later"],
+            )
+        finally:
+            if source:
+                Path(source).unlink(missing_ok=True)
+
+    def _start_reading_images(self) -> None:
+        image_pass.ensure_running(self.config.cache_dir, self._read_queued_page)
+
+    def _read_queued_page(self, state: Dict[str, Any], number: int) -> int:
+        """Read one queued page into the document's cache; returns chunks added."""
+        page = next(p for p in state["pages"] if p["page"] == number)
+        cache_dir = self.config.cache_dir
+        image_texts = _useful_image_texts(
+            self._read_page_images(
+                image_pass.source_file(cache_dir, state),
+                number,
+                min_cover=0.0 if page["short"] else MIN_IMAGE_PAGE_COVER,
+                before_each=image_pass.give_way,
+            )
+        )
+        if not image_texts:
+            return 0
+        text = self._merge_page_texts("", image_texts, page_num=number)
+        new_chunks = self._split_text_into_chunks(text)
+        if not new_chunks:
+            return 0
+        _, _, embeddings = self._create_vector_index(
+            list(new_chunks), return_embeddings=True
+        )
+        cache_path = image_pass.cache_file(cache_dir, state)
+        cached = self._verify_and_load_cache(cache_path)
+        old_chunks = cached["chunks"]
+        vectors = self._load_vectors(self._vectors_path(old_chunks), len(old_chunks))
+        combined = old_chunks + new_chunks
+        metadata = cached.get("metadata", {})
+        metadata["vlm_pages"] = metadata.get("vlm_pages", 0) + 1
+        metadata["total_images"] = metadata.get("total_images", 0) + len(image_texts)
+        metadata["image_revision"] = state["revision"] + 1
+        self._save_cache(
+            cache_path,
+            {
+                "chunks": combined,
+                "full_text": cached.get("full_text", "") + "\n\n" + text,
+                "metadata": metadata,
+            },
+        )
+        if vectors is not None:
+            self._save_vectors(
+                self._vectors_path(combined),
+                np.vstack([vectors, embeddings.astype("float32")]),
+            )
+            Path(self._vectors_path(old_chunks)).unlink(missing_ok=True)
+        return len(new_chunks)
+
+    def resume_image_reading(self) -> None:
+        """Pick up images an ended process left unread."""
+        if image_pass.overview(self.config.cache_dir)["documents"]:
+            self._start_reading_images()
+
+    def refresh_image_text(self) -> None:
+        """Make text the background pass has added since last time searchable."""
+        for file_path, metadata in list(self.file_metadata.items()):
+            key = metadata.get("image_pass_key")
+            state = image_pass.status(self.config.cache_dir, key)
+            if state is None:
+                continue
+            if state["revision"] != metadata.get("image_revision", 0):
+                # One document's cache must not stop searches of the others.
+                try:
+                    self._absorb_image_text(file_path, state, metadata)
+                except (OSError, ValueError, EmbeddingUnavailableError) as e:
+                    self.log.warning(
+                        "Could not add image text from %s yet: %s", file_path, e
+                    )
+            if image_pass.progress(state):
+                self._start_reading_images()
+
+    def _absorb_image_text(
+        self, file_path: str, state: Dict[str, Any], metadata: Dict[str, Any]
+    ) -> None:
+        cached = self._verify_and_load_cache(
+            image_pass.cache_file(self.config.cache_dir, state)
+        )
+        chunks = cached["chunks"]
+        revision = cached.get("metadata", {}).get("image_revision", state["revision"])
+        with self._state_lock:
+            known = len(self.file_to_chunk_indices.get(file_path, []))
+        new_chunks = chunks[known:]
+        if not new_chunks:
+            metadata["image_revision"] = revision
+            return
+        vectors = self._load_vectors(self._vectors_path(chunks), len(chunks))
+        if vectors is not None:
+            embeddings = vectors[known:]
+        else:
+            _, _, embeddings = self._create_vector_index(
+                list(new_chunks), return_embeddings=True
+            )
+        embeddings = embeddings.astype("float32")
+        with self._state_lock:
+            if file_path not in self.file_to_chunk_indices or self.index is None:
+                return
+            if len(self.file_to_chunk_indices[file_path]) != known:
+                return
+            metadata["full_text"] = cached.get("full_text", "")
+            metadata["image_revision"] = revision
+            start = len(self.chunks)
+            indices = list(range(start, start + len(new_chunks)))
+            rebuilt_chunk_to_file = dict(self.chunk_to_file)
+            for index in indices:
+                rebuilt_chunk_to_file[index] = file_path
+            self.index.add(embeddings)
+            self.file_indices[file_path].add(embeddings)
+            self.file_embeddings[file_path] = np.vstack(
+                [self.file_embeddings[file_path], embeddings]
+            )
+            self.chunks = list(self.chunks) + list(new_chunks)
+            self.chunk_to_file = rebuilt_chunk_to_file
+            self.file_to_chunk_indices[file_path] = (
+                self.file_to_chunk_indices[file_path] + indices
+            )
+
+    def images_still_reading(self, paths: Optional[List[str]] = None) -> List[dict]:
+        """Documents searched with images unread, each with how far it has got."""
+        out = []
+        for file_path, metadata in list(self.file_metadata.items()):
+            if paths is not None and file_path not in paths:
+                continue
+            state = image_pass.status(
+                self.config.cache_dir, metadata.get("image_pass_key")
+            )
+            reading = image_pass.progress(state)
+            if reading:
+                out.append({**reading, "path": file_path})
+        return out
 
     def _merge_page_texts(
         self, pypdf_text: str, image_texts: list, page_num: int
@@ -2463,7 +2800,11 @@ These positions indicate where to split the text."""
         )
 
         file_name = Path(image_path).name
-        model = self.config.vlm_model
+        model = (
+            resident_vision_model(self.config.vlm_model, self.config.base_url)
+            if self.config.use_vlm
+            else self.config.vlm_model
+        )
 
         if not self.config.use_vlm:
             raise ImageExtractionError(
@@ -2598,6 +2939,7 @@ These positions indicate where to split the text."""
             metadata["num_pages"] = num_pages
             metadata["vlm_pages"] = pdf_metadata.get("vlm_pages", 0)
             metadata["total_images"] = pdf_metadata.get("total_images", 0)
+            metadata["images_later"] = pdf_metadata.get("images_later", [])
             # Carry the degraded-page report up. Dropping it here is what made
             # "which pages are incomplete" a log line nobody could act on.
             metadata["pdf_status"] = pdf_metadata.get("pdf_status", "readable")
@@ -2612,6 +2954,8 @@ These positions indicate where to split the text."""
             metadata["num_pages"] = num_slides
             metadata["vlm_pages"] = pptx_metadata.get("vlm_slides", 0)
             metadata["total_images"] = pptx_metadata.get("total_images", 0)
+            metadata["images_later"] = pptx_metadata.get("images_later", [])
+            metadata["images_source"] = pptx_metadata.get("images_source")
             return text, metadata
 
         # Image files (read by the vision model)
@@ -3512,6 +3856,10 @@ These positions indicate where to split the text."""
             _HEARTBEAT.fn = previous
         if display_name:
             stats["file_name"] = display_name
+            reading = stats.get("images_reading")
+            if reading:
+                image_pass.rename(self.config.cache_dir, reading["key"], display_name)
+                reading["name"] = display_name
             if stats.get("error"):
                 stats["error"] = name_file_for_user(
                     str(stats["error"]), file_path, display_name
@@ -3677,7 +4025,9 @@ These positions indicate where to split the text."""
             content_key = self._content_key(file_path, raise_locked=True)
         except PermissionError as e:
             return self._document_locked(stats, file_path, e)
-        cache_path = self._get_cache_path(file_path, content_key)
+        cache_path = self._cache_of_same_bytes(
+            self._get_cache_path(file_path, content_key), content_key
+        )
         md_cache_path = self._extracted_markdown_path(content_key)
 
         if os.path.exists(cache_path):
@@ -3815,6 +4165,14 @@ These positions indicate where to split the text."""
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 stats["from_cache"] = True
+                key = cached_metadata.get("image_pass_key")
+                if key and image_pass.status(self.config.cache_dir, key) is None:
+                    # Lost its queue, not finished: a stopped document keeps one.
+                    self._read_later(file_path, key, cache_path, cached_metadata)
+                reading = self.images_still_reading([file_path])
+                if reading:
+                    stats["images_reading"] = reading[0]
+                    self._start_reading_images()
                 if evicted:
                     stats["evicted"] = evicted
                 if not limits_ok:
@@ -3954,6 +4312,14 @@ These positions indicate where to split the text."""
                 # Persist before publishing any searchable state or ownership maps.
                 if self.config.show_stats:
                     print("💾 Caching processed chunks...")
+                if file_metadata.get("images_later"):
+                    # Content and chunking: what makes two caches the same one.
+                    images_key = (
+                        f"{content_key.rsplit('_', 1)[-1]}"
+                        f"_{self._chunking_fingerprint()}"
+                    )
+                    file_metadata["image_pass_key"] = images_key
+                    self._read_later(file_path, images_key, cache_path, file_metadata)
                 cache_data = {
                     "chunks": new_chunks,
                     "full_text": text,
@@ -4018,6 +4384,10 @@ These positions indicate where to split the text."""
             stats["num_chunks"] = len(new_chunks)
             stats["total_indexed_files"] = len(self.indexed_files)
             stats["total_chunks"] = len(self.chunks)
+            reading = self.images_still_reading([file_path])
+            if reading:
+                stats["images_reading"] = reading[0]
+                self._start_reading_images()
             if file_type == ".pdf":
                 # Whatever extraction reported — "readable" or "degraded".
                 # Hardcoding "readable" here erased the one signal saying some
@@ -4139,6 +4509,7 @@ These positions indicate where to split the text."""
         2. Searches smaller, file-specific FAISS index
         3. No need to rebuild index on each query
         """
+        self.refresh_image_text()
         with self._state_lock:
             if self.index is None or not self.chunks:
                 raise ValueError("No documents indexed. Call index_document() first.")
@@ -4248,6 +4619,7 @@ These positions indicate where to split the text."""
 
     def _search_chunks(self, query: str) -> Dict[str, Any]:
         """Retrieve relevant chunks and indices from a consistent snapshot."""
+        self.refresh_image_text()
         snapshot = self._snapshot_query_state()
         chunks_snapshot = snapshot["chunks"]
         index_snapshot = snapshot["index"]

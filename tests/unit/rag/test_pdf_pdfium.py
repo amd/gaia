@@ -109,6 +109,16 @@ class TestImageExtraction:
         pdf = _pdf(tmp_path / "twice.pdf", [[(red, 20, 50), (red, 20, 150)]])
         assert len(extract_images_from_page_pdfium(str(pdf), page_num=1)) == 1
 
+    def test_images_too_small_on_the_page_are_left_out(self, tmp_path):
+        pdf = _pdf(
+            tmp_path / "logo.pdf",
+            [[(_red((10, 10)), 20, 50), (_red((120, 120)), 20, 100)]],
+        )
+
+        assert len(extract_images_from_page_pdfium(str(pdf), page_num=1)) == 2
+        (image,) = extract_images_from_page_pdfium(str(pdf), page_num=1, min_cover=0.02)
+        assert image["width"] == 120
+
     def test_a_grayscale_image_is_extracted(self, tmp_path):
         gray = Image.new("L", (30, 30), 128)
         pdf = _pdf(tmp_path / "gray.pdf", [[(gray, 20, 50)]])

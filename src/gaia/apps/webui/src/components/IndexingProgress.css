@@ -52,6 +52,9 @@
 }
 
 .index-progress-label {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 12px;
     font-size: 12px;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;

@@ -1,0 +1,144 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* The line above the chat. */
+.index-indicator {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 6px;
+    margin: 8px 12px 0;
+    padding: 6px 10px;
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    font-size: 12px;
+}
+
+.index-images-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    min-inline-size: 0;
+}
+.index-images-blocked {
+    margin: 4px 0 0;
+    font-size: var(--fs-label);
+    color: var(--text-muted);
+}
+
+.index-indicator-open {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 8px;
+    min-inline-size: 0;
+    color: var(--text-primary);
+    text-align: start;
+}
+
+.index-indicator-open:hover .index-indicator-text {
+    text-decoration: underline;
+}
+
+.index-indicator-text {
+    display: flex;
+    flex: 1;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0 12px;
+    min-inline-size: 0;
+}
+
+.index-indicator-eta,
+.index-summary-eta {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.index-indicator-icon {
+    flex: none;
+    color: var(--text-muted);
+}
+
+.index-indicator-icon.is-done {
+    color: var(--accent-green);
+}
+
+.index-indicator-icon.is-problem,
+.index-chat-notice-icon.is-problem {
+    color: var(--accent-yellow);
+}
+
+.index-indicator-bar {
+    flex-basis: 100%;
+    margin-block-start: 4px;
+}
+
+/* The top of the library. */
+.index-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-block-end: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+}
+
+.index-summary-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0 12px;
+}
+
+.index-summary-head strong {
+    font-weight: 600;
+}
+
+.index-summary .index-progress {
+    margin-block-start: 0;
+}
+
+.index-summary-current,
+.index-summary-problem {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+/* Beside the chat's documents. */
+.index-chat-notice {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex-shrink: 0;
+    padding: 6px 24px;
+    border-block-end: 1px solid var(--border);
+    background: var(--bg-secondary);
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.index-chat-notice p {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin: 0;
+    min-inline-size: 0;
+}
+
+.index-chat-notice p > span {
+    flex: 1;
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+}
+
+.index-chat-notice-icon {
+    flex: none;
+    margin-block-start: 2px;
+}

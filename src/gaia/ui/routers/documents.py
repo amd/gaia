@@ -19,10 +19,12 @@ import sys
 import tempfile
 import uuid
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
+
+from gaia.utils.index_tracker import index_tracker
 
 from .._chat_helpers import UnreadableDocumentError, index_progress
 from ..database import ChatDatabase
@@ -30,9 +32,12 @@ from ..dependencies import get_db, get_indexing_tasks, get_upload_locks
 from ..models import (
     DocumentListResponse,
     DocumentResponse,
+    DocumentStatusResponse,
     DocumentUploadRequest,
+    ImagesReading,
     IndexFolderRequest,
     IndexFolderResponse,
+    IndexingOverview,
 )
 from ..utils import (
     ALLOWED_EXTENSIONS,
@@ -159,6 +164,123 @@ def _sanitize_stem(stem: str, max_length: int = 80) -> str:
     return cleaned or "file"
 
 
+def _needs_no_index(doc: dict, indexing_tasks: dict) -> bool:
+    """A file added again: it is indexing right now, or was indexed before."""
+    return doc["id"] in indexing_tasks or (
+        doc.get("indexing_status") == "complete" and doc.get("chunk_count", 0) > 0
+    )
+
+
+async def _background_index(
+    index_fn,
+    doc_id: str,
+    source: Path,
+    original_name: str,
+    db: ChatDatabase,
+    indexing_tasks: dict,
+    remove_source: bool,
+) -> None:
+    """Index one document as a task of its own and record how it ended."""
+    outcome, error = "failed", None
+    try:
+        logger.info("Background indexing started for %s (%s)", original_name, doc_id)
+        chunk_count = await index_fn(
+            source, display_name=original_name, progress_key=doc_id
+        )
+        if doc_id in indexing_tasks:
+            if chunk_count == 0:
+                error = "indexing produced 0 chunks"
+                db.update_document_status(
+                    doc_id, "failed", chunk_count=0, last_error=error
+                )
+                logger.warning(
+                    "Background indexing returned 0 chunks for %s", original_name
+                )
+            else:
+                outcome = "complete"
+                db.update_document_status(doc_id, "complete", chunk_count=chunk_count)
+                logger.info(
+                    "Background indexing complete for %s: %d chunks",
+                    original_name,
+                    chunk_count,
+                )
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        db.update_document_status(doc_id, "cancelled")
+        logger.info("Background indexing cancelled for %s", original_name)
+    except Exception as e:
+        error = str(e)
+        db.update_document_status(
+            doc_id,
+            "failed",
+            last_error=error,
+            error_kind=getattr(e, "kind", None),
+        )
+        logger.error(
+            "Background indexing failed for %s: %s",
+            original_name,
+            e,
+            exc_info=True,
+        )
+    finally:
+        index_tracker.finish(doc_id, outcome, error)
+        indexing_tasks.pop(doc_id, None)
+        if remove_source:
+            _cleanup_temp(source)
+
+
+def _start_background_index(
+    doc: dict,
+    source: Path,
+    original_name: str,
+    db: ChatDatabase,
+    indexing_tasks: dict,
+    remove_source: bool = False,
+) -> None:
+    """Show *doc* as indexing now and index *source* for it in the background."""
+    doc_id = doc["id"]
+    db.update_document_status(doc_id, "indexing", last_error=None)
+    index_tracker.enqueue(
+        doc_id, original_name, doc.get("filepath"), doc.get("file_size") or 0
+    )
+    indexing_tasks[doc_id] = asyncio.create_task(
+        _background_index(
+            _server_mod()._index_document,
+            doc_id,
+            source,
+            original_name,
+            db,
+            indexing_tasks,
+            remove_source,
+        )
+    )
+    doc["indexing_status"] = "indexing"
+    doc["last_error"] = None
+
+
+def _images_overview() -> dict:
+    """Documents with images still being read in the background."""
+    from gaia.rag import image_pass
+    from gaia.rag.sdk import default_rag_cache_dir
+
+    return image_pass.overview(default_rag_cache_dir())
+
+
+def _stop_reading_images(doc: dict) -> bool:
+    """Stop reading *doc*'s images, whichever name the reading goes by."""
+    from gaia.rag import image_pass
+    from gaia.rag.sdk import default_rag_cache_dir
+
+    content = (doc.get("file_hash") or "")[:32]
+    stopped = False
+    for entry in _images_overview()["details"]:
+        if entry["key"].split("_")[0] == content:
+            stopped = (
+                image_pass.cancel(default_rag_cache_dir(), entry["key"]) or stopped
+            )
+    return stopped
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 
@@ -168,9 +290,18 @@ async def list_documents(db: ChatDatabase = Depends(get_db)):
     docs = db.list_documents()
     total_size = sum(d.get("file_size", 0) for d in docs)
     total_chunks = sum(d.get("chunk_count", 0) for d in docs)
+    images = await asyncio.to_thread(_images_overview)
+    reading = {entry["key"].split("_")[0]: entry for entry in images["details"]}
+    gave_up = {key.split("_")[0]: n for key, n in images["gave_up"].items()}
+    responses = [doc_to_response(d) for d in docs]
+    for doc, response in zip(docs, responses):
+        content = (doc.get("file_hash") or "")[:32]
+        if content in reading:
+            response.images_reading = ImagesReading(**reading[content])
+        response.images_unread = gave_up.get(content, 0)
 
     return DocumentListResponse(
-        documents=[doc_to_response(d) for d in docs],
+        documents=responses,
         total=len(docs),
         total_size_bytes=total_size,
         total_chunks=total_chunks,
@@ -190,8 +321,9 @@ async def upload_by_path(
     location before indexing so downstream RAG operations work on a stable
     copy. Per-file locking serializes concurrent uploads of the same path.
 
-    Small files (<5 MB) are indexed synchronously. Larger files are
-    indexed in the background so the UI stays responsive.
+    Small files (<5 MB) are indexed synchronously unless the request sets
+    ``background``. Other files index in the background so the UI stays
+    responsive, and adding a file that is indexing or indexed starts nothing.
     """
     # An empty path resolves to the CWD, so it would be judged by whatever
     # directory the server happens to run from. Refuse it outright.
@@ -220,7 +352,7 @@ async def upload_by_path(
         _index_document = _server_mod()._index_document
 
         try:
-            if file_size <= LARGE_FILE_THRESHOLD:
+            if file_size <= LARGE_FILE_THRESHOLD and not request.background:
                 # Small file: index synchronously
                 index_error = None
                 error_kind = None
@@ -270,7 +402,7 @@ async def upload_by_path(
                 )
                 return doc_to_response(doc)
 
-            # Large file: create placeholder and index in background
+            # Create the row now and index in the background
             doc = db.add_document(
                 filename=safe_filepath.name,
                 filepath=str(safe_filepath),
@@ -279,71 +411,16 @@ async def upload_by_path(
                 chunk_count=0,
                 file_mtime=file_mtime,
             )
-            doc_id = doc["id"]
-            db.update_document_status(doc_id, "indexing")
-
-            # Transfer temp_path ownership to the background task
-            bg_temp = temp_path
-            temp_path = None  # prevent cleanup in finally below
-
-            async def _background_index(
-                doc_id: str, temp_file: Path, original_name: str
-            ):
-                try:
-                    logger.info(
-                        "Background indexing started for %s (%s)",
-                        original_name,
-                        doc_id,
-                    )
-                    chunk_count = await _index_document(
-                        temp_file, display_name=original_name, progress_key=doc_id
-                    )
-                    if doc_id in indexing_tasks:
-                        if chunk_count == 0:
-                            db.update_document_status(
-                                doc_id,
-                                "failed",
-                                chunk_count=0,
-                                last_error="indexing produced 0 chunks",
-                            )
-                            logger.warning(
-                                "Background indexing returned 0 chunks for %s",
-                                original_name,
-                            )
-                        else:
-                            db.update_document_status(
-                                doc_id, "complete", chunk_count=chunk_count
-                            )
-                            logger.info(
-                                "Background indexing complete for %s: %d chunks",
-                                original_name,
-                                chunk_count,
-                            )
-                except asyncio.CancelledError:
-                    db.update_document_status(doc_id, "cancelled")
-                    logger.info("Background indexing cancelled for %s", original_name)
-                except Exception as e:
-                    db.update_document_status(
-                        doc_id,
-                        "failed",
-                        last_error=str(e),
-                        error_kind=getattr(e, "kind", None),
-                    )
-                    logger.error(
-                        "Background indexing failed for %s: %s",
-                        original_name,
-                        e,
-                        exc_info=True,
-                    )
-                finally:
-                    indexing_tasks.pop(doc_id, None)
-                    _cleanup_temp(temp_file)
-
-            task = asyncio.create_task(
-                _background_index(doc_id, bg_temp, safe_filepath.name)
-            )
-            indexing_tasks[doc_id] = task
-            doc["indexing_status"] = "indexing"
+            if not _needs_no_index(doc, indexing_tasks):
+                _start_background_index(
+                    doc,
+                    temp_path,
+                    safe_filepath.name,
+                    db,
+                    indexing_tasks,
+                    remove_source=True,
+                )
+                temp_path = None  # the background task removes it
             return doc_to_response(doc)
 
         finally:
@@ -360,7 +437,9 @@ async def upload_by_path(
 @router.post("/api/documents/upload", response_model=DocumentResponse)
 async def upload_document_blob(
     file: UploadFile = File(...),
+    background: bool = False,
     db: ChatDatabase = Depends(get_db),
+    indexing_tasks: dict = Depends(get_indexing_tasks),
 ):
     """Index a document from an uploaded blob.
 
@@ -374,7 +453,9 @@ async def upload_document_blob(
     size check, deduplicated by SHA-256 content hash, then indexed via the
     standard RAG pipeline. Files are capped at ``MAX_DOCUMENT_UPLOAD_SIZE``.
 
-    On any failure, partial / orphaned files are cleaned up.
+    On any failure, partial / orphaned files are cleaned up. With
+    ``background`` the response comes before indexing starts, and a file that
+    then fails stays in the library as a failed row, ready for Retry.
     """
     # 1. Validate filename
     if not file.filename:
@@ -482,6 +563,25 @@ async def upload_document_blob(
     # the try so a rare filesystem hiccup post-rename doesn't leak the file.
     _index_document = _server_mod()._index_document
 
+    if background:
+        try:
+            doc = db.add_document(
+                filename=display_name,
+                filepath=str(final_path),
+                file_hash=file_hash,
+                file_size=bytes_written,
+                chunk_count=0,
+                file_mtime=final_path.stat().st_mtime,
+            )
+        except Exception:
+            _cleanup_temp(final_path)
+            raise
+        if Path(doc["filepath"]).resolve() != final_path.resolve():
+            _cleanup_temp(final_path)
+        elif not _needs_no_index(doc, indexing_tasks):
+            _start_background_index(doc, final_path, display_name, db, indexing_tasks)
+        return doc_to_response(doc)
+
     try:
         file_mtime = final_path.stat().st_mtime
         chunk_count = await _index_document(final_path, display_name=display_name)
@@ -552,7 +652,23 @@ async def monitor_status(request: Request):
     }
 
 
-@router.get("/api/documents/{doc_id}/status")
+@router.get("/api/documents/indexing", response_model=IndexingOverview)
+async def get_indexing_overview():
+    """Every document indexing now, with one combined bar and time estimate."""
+    images = await asyncio.to_thread(_images_overview)
+    images.pop("details")
+    images.pop("gave_up")
+    return {**index_tracker.overview(), "images": images}
+
+
+@router.post("/api/documents/indexing/{batch_id}/dismiss")
+async def dismiss_indexing_batch(batch_id: str):
+    """Clear a finished batch from the overview; a running one stays."""
+    index_tracker.dismiss(batch_id)
+    return {"dismissed": True}
+
+
+@router.get("/api/documents/{doc_id}/status", response_model=DocumentStatusResponse)
 async def get_document_status(
     doc_id: str,
     db: ChatDatabase = Depends(get_db),
@@ -619,15 +735,31 @@ async def cancel_indexing(
         )
     task.cancel()
     db.update_document_status(doc_id, "cancelled")
+    index_tracker.finish(doc_id, "cancelled")
     indexing_tasks.pop(doc_id, None)
     logger.info("Indexing cancelled by user for document %s", doc_id)
     return {"cancelled": True, "id": doc_id}
 
 
+@router.post("/api/documents/{doc_id}/cancel-images")
+async def cancel_image_reading(doc_id: str, db: ChatDatabase = Depends(get_db)):
+    """Stop reading a document's images; its text stays searchable."""
+    doc = db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if await asyncio.to_thread(_stop_reading_images, doc):
+        return {"cancelled": True, "id": doc_id}
+    raise HTTPException(
+        status_code=404, detail="This document has no images being read"
+    )
+
+
 @router.post("/api/documents/{doc_id}/reindex", response_model=DocumentResponse)
 async def reindex_document(
     doc_id: str,
+    background: bool = False,
     db: ChatDatabase = Depends(get_db),
+    indexing_tasks: dict = Depends(get_indexing_tasks),
 ):
     """Re-run the RAG indexing pipeline for a document.
 
@@ -635,10 +767,15 @@ async def reindex_document(
     indexing pipeline, then marks the document 'complete' on success or
     'failed' (with last_error set) on failure.  Always raises loudly on
     error — never returns 200 while leaving the document in a bad state.
+
+    With ``background`` it answers once indexing has started, and the outcome
+    lands on the document, where Cancel can also reach it.
     """
     doc = db.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc_id in indexing_tasks:
+        return doc_to_response(doc)
 
     filepath = doc.get("filepath")
     if not filepath or not Path(filepath).exists():
@@ -650,16 +787,23 @@ async def reindex_document(
     db.update_document_status(doc_id, "indexing", last_error=None)
 
     _index_document = _server_mod()._index_document
-    temp_path = None
+    temp_path: Optional[Path] = None
     try:
         # Index a process-controlled temp copy opened atomically with
         # O_NOFOLLOW + fstat -- the same TOCTOU/symlink hardening the upload
         # path uses, rather than re-reading the stored path directly.
         with safe_open_document(filepath) as (fd, _file_stat, safe_filepath):
             temp_path = _copy_fd_to_temp(fd, safe_filepath.suffix)
+        name = doc.get("filename") or safe_filepath.name
+        if background:
+            source, temp_path = temp_path, None
+            _start_background_index(
+                doc, source, name, db, indexing_tasks, remove_source=True
+            )
+            return doc_to_response(doc)
         chunk_count = await _index_document(
             temp_path,
-            display_name=doc.get("filename") or safe_filepath.name,
+            display_name=name,
             progress_key=doc_id,
         )
     except Exception as exc:
@@ -705,6 +849,8 @@ async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    await asyncio.to_thread(_stop_reading_images, doc)
+
     if not db.delete_document(doc_id):
         # Row vanished between fetch and delete (concurrent delete).
         # Treat as not found — idempotent for the caller.
@@ -718,18 +864,64 @@ async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
     return {"deleted": True}
 
 
+async def _queue_folder(
+    candidates: List[Path],
+    skipped: int,
+    db: ChatDatabase,
+    indexing_tasks: dict,
+) -> IndexFolderResponse:
+    """Add every file as a row now; each indexes on its own."""
+    documents: List[DocumentResponse] = []
+    errors: List[str] = []
+    queued = 0
+    loop = asyncio.get_running_loop()
+    for filepath in candidates:
+        try:
+            file_hash = await loop.run_in_executor(None, compute_file_hash, filepath)
+            file_stat = filepath.stat()
+            doc = db.add_document(
+                filename=filepath.name,
+                filepath=str(filepath),
+                file_hash=file_hash,
+                file_size=file_stat.st_size,
+                chunk_count=0,
+                file_mtime=file_stat.st_mtime,
+            )
+            if not _needs_no_index(doc, indexing_tasks):
+                _start_background_index(
+                    doc, filepath, filepath.name, db, indexing_tasks
+                )
+                queued += 1
+            documents.append(doc_to_response(doc))
+        except OSError as e:
+            logger.warning("Failed to add %s: %s", filepath, e)
+            errors.append(f"{filepath.name}: {e}")
+    return IndexFolderResponse(
+        failed=len(errors),
+        skipped=skipped,
+        queued=queued,
+        documents=documents,
+        errors=errors,
+    )
+
+
 @router.post("/api/documents/index-folder", response_model=IndexFolderResponse)
-async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(get_db)):
+async def index_folder(
+    request: IndexFolderRequest,
+    db: ChatDatabase = Depends(get_db),
+    indexing_tasks: dict = Depends(get_indexing_tasks),
+):
     """Index all supported documents in a folder.
 
     Scans the given folder for files with extensions in
     FOLDER_INDEX_EXTENSIONS and indexes each one using the RAG pipeline.
     Images are skipped: they index only when picked one by one.
     Indexing runs in a thread-pool executor to avoid blocking the
-    event loop.
+    event loop. With ``background`` the response comes as soon as every
+    file has a row, counting them in ``queued``.
 
     Args:
-        request: Contains folder_path and recursive flag.
+        request: Contains folder_path, recursive and background flags.
     """
     folder_path = request.folder_path
 
@@ -787,6 +979,9 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
         resolved,
         request.recursive,
     )
+
+    if request.background:
+        return await _queue_folder(candidate_files, skipped, db, indexing_tasks)
 
     _index_document = _server_mod()._index_document
     indexed_docs: List[DocumentResponse] = []

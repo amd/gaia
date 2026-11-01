@@ -468,6 +468,16 @@ export interface Document {
     id: string;
     filename: string;
     filepath: string;
+    /** Set while the document is searchable but its images are still being read. */
+    images_reading?: {
+        pages_done?: number;
+        pages_total?: number;
+        state?: string;
+        reason?: string | null;
+        seconds_left?: number | null;
+    } | null;
+    /** Pages whose images could not be read, so answers can't use them. */
+    images_unread?: number;
     file_size: number;
     chunk_count: number;
     indexed_at: string;
@@ -668,6 +678,8 @@ export interface IndexFolderResponse {
     failed: number;
     /** Files in the folder of a type GAIA doesn't index. */
     skipped?: number;
+    /** Files now indexing on their own. */
+    queued?: number;
     documents: Document[];
     errors: string[];
 }
@@ -773,6 +785,8 @@ export interface RetrievalChunk {
 /** A single step in the agent's execution. */
 export interface AgentStep {
     id: number;
+    /** On a status step: documents this turn couldn't fully search. */
+    notice?: IndexNotice;
     type: 'thinking' | 'commentary' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
     /** Short label shown in collapsed view. */
     label: string;
@@ -860,6 +874,14 @@ export type StreamEventType =
     | 'followup_unavailable' // The running turn can't take a message mid-turn
     | 'context_usage';    // What this turn's model call holds, by kind
 
+/** Documents a turn couldn't fully search, and why. */
+export interface IndexNotice {
+    kind: 'still_indexing' | 'not_indexed' | 'partial_index';
+    names: string[];
+    pages_done?: number;
+    pages_total?: number;
+}
+
 export interface StreamEvent {
     type: StreamEventType;
     content?: string;
@@ -875,6 +897,10 @@ export interface StreamEvent {
     message?: string;
     /** Model phase on a status event: reading, loading_model, reasoning, tool_call, … */
     phase?: string;
+    /** On `status`: documents this turn can't search, and why. */
+    notice?: IndexNotice;
+    /** On `status`: how far an index running inside this turn has got. */
+    index?: { name: string; phase: string; done: number; total?: number | null; seconds_left?: number | null; estimate?: string };
     step?: number;
     total?: number;
     tool?: string;

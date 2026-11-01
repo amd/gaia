@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 
 
 def prepare_image_for_vlm(image_bytes: bytes) -> dict:
-    """Downscale and re-encode an image as the PNG the VLM is sent.
+    """Downscale and re-encode an image as the PNG or JPEG the VLM is sent.
 
     Returns a dict with ``image_bytes``, ``width``, ``height``, ``format`` and
     ``size_kb``. Raises ``PIL.UnidentifiedImageError`` (an ``OSError``) when
@@ -59,51 +59,28 @@ def prepare_pil_image_for_vlm(img) -> dict:
     # Save as optimized PNG
     png_buffer = io.BytesIO()
     img.save(png_buffer, format="PNG", optimize=True, compress_level=6)
-    png_bytes = png_buffer.getvalue()
-    size_kb = len(png_bytes) / 1024
+    image_bytes = png_buffer.getvalue()
+    image_format = "png"
 
-    # Iteratively compress until target size is reached
-    MAX_SIZE_KB = 300
-    compression_iterations = 0
-    MAX_ITERATIONS = 5
-
-    while size_kb > MAX_SIZE_KB and compression_iterations < MAX_ITERATIONS:
-        compression_iterations += 1
-        logger.info(
-            f"   Compressing (iteration {compression_iterations}): {size_kb:.0f}KB → <{MAX_SIZE_KB}KB"
-        )
-
-        # Reduce size by 50% each iteration
-        img = img.resize(
-            (img.width // 2, img.height // 2),
-            Image.Resampling.LANCZOS,
-        )
-
-        png_buffer = io.BytesIO()
-        img.save(
-            png_buffer,
-            format="PNG",
-            optimize=True,
-            compress_level=9,
-        )
-        png_bytes = png_buffer.getvalue()
-        size_kb = len(png_bytes) / 1024
-
-    if size_kb <= MAX_SIZE_KB:
-        logger.info(
-            f"   ✅ Compressed to {size_kb:.0f}KB ({img.width}x{img.height}) in {compression_iterations} iteration(s)"
-        )
-    else:
-        logger.warning(
-            f"   ⚠️  Could not compress below {MAX_SIZE_KB}KB after {MAX_ITERATIONS} iterations (final: {size_kb:.0f}KB)"
-        )
+    # Halving a scan to fit makes small print unreadable, so change encoding.
+    MAX_PNG_KB = 300
+    if len(image_bytes) / 1024 > MAX_PNG_KB:
+        logger.info(f"   Re-encoding as JPEG: {len(image_bytes) / 1024:.0f}KB PNG")
+        if img.mode == "RGBA":
+            background = Image.new("RGB", img.size, "white")
+            background.paste(img, mask=img.getchannel("A"))
+            img = background
+        jpeg_buffer = io.BytesIO()
+        img.save(jpeg_buffer, format="JPEG", quality=88, optimize=True)
+        image_bytes = jpeg_buffer.getvalue()
+        image_format = "jpeg"
 
     return {
-        "image_bytes": png_bytes,
+        "image_bytes": image_bytes,
         "width": img.width,
         "height": img.height,
-        "format": "png",
-        "size_kb": size_kb,
+        "format": image_format,
+        "size_kb": len(image_bytes) / 1024,
     }
 
 
@@ -156,12 +133,15 @@ def _open_pdf_page(pdf_path, page_index: int):
         ) from e
 
 
-def extract_images_from_page_pdfium(pdf_path: str, page_num: int) -> List[dict]:
+def extract_images_from_page_pdfium(
+    pdf_path: str, page_num: int, min_cover: float = 0.0
+) -> List[dict]:
     """Extract the embedded images on one PDF page, ready for the VLM.
 
     Args:
         pdf_path: Path to PDF file
         page_num: Page number (1-indexed)
+        min_cover: Leave out images covering less than this share of the page
 
     Returns:
         One :func:`prepare_image_for_vlm` dict per distinct image; ``[]`` only
@@ -182,9 +162,13 @@ def extract_images_from_page_pdfium(pdf_path: str, page_num: int) -> List[dict]:
         pdf, page = _open_pdf_page(pdf_path, page_num - 1)
         try:
             try:
+                width, height = page.get_size()
                 image_objects = page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE])
                 for img_index, obj in enumerate(image_objects, 1):
                     try:
+                        left, bottom, right, top = obj.get_bounds()
+                        if (right - left) * (top - bottom) < min_cover * width * height:
+                            continue
                         bitmap = obj.get_bitmap(render=False)
                         try:
                             # to_pil() shares the bitmap's buffer; copy before closing.

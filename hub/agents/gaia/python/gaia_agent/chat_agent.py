@@ -557,6 +557,7 @@ class ChatAgent(
                 use_llm_chunking=config.use_llm_chunking,  # Enable semantic chunking
                 base_url=effective_base_url,  # Pass base_url to RAG for VLM client
                 allowed_paths=config.allowed_paths,  # Pass allowed paths to RAG SDK
+                read_images_later=True,
             )
         except Exception as e:
             logger.warning(

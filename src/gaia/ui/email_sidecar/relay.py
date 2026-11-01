@@ -61,6 +61,7 @@ from gaia.ui.sse_handler import (
 )
 from gaia.ui.sse_translation import MCP_TOOL_FIELDS, SUMMARY_VIEW_KEYS
 from gaia.ui.turn_insights import turn_record_problem
+from gaia.utils.turn_activity import is_chat_turn
 
 logger = get_logger(__name__)
 
@@ -274,6 +275,10 @@ def _dispatch_one(
         for key in ("phase", "words", "chars", "queue"):
             if key in event:
                 status[key] = event[key]
+        partial = event.get("partial_index")
+        if isinstance(partial, dict):
+            status["status"] = "info"
+            status["notice"] = {"kind": "partial_index", **partial}
         handler._emit(status)
 
     elif etype == "token":
@@ -515,6 +520,7 @@ def _best_effort_cancel(proxy: Any, rid: str) -> None:
         )
 
 
+@is_chat_turn
 def relay_query(
     handler: Any,
     proxy: Any,

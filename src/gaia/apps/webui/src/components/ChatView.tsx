@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, Loader2, X } from 'lucide-react';
 import { MessageBubble, isErrorContent } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
@@ -51,6 +51,8 @@ import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { useChatDraft } from '../hooks/useSavedDraft';
 import { getT, useT } from '../i18n/useT';
+import { statusEventLabel } from '../utils/indexingLabels';
+import { ChatIndexingNotice } from './IndexingOverview';
 
 /** Events that only come after the agent got past a permission prompt. */
 const RESOLVES_PROMPTS = new Set(['tool_start', 'tool_end', 'tool_result']);
@@ -983,7 +985,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // Consolidate consecutive ones into a single entry.
                 if (event.type === 'status') {
                     const status = event.status;
-                    const msg = (event.message || '').trim();
+                    const msg = (statusEventLabel(event, getT()) || '').trim();
                     if (status === 'history_cut') {
                         historyNotice = msg || undefined;
                         setLiveHistoryNotice(historyNotice ?? null);
@@ -1499,10 +1501,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Drag & drop — uploads the file blob directly rather than relying on
     // File.path (which is browser-undefined and was removed in Electron 32+).
-    // Dropped files index quietly and auto-attach to the current session;
+    // Dropped files index in the background and attach to the current session;
     // the Document Library panel is NOT forced open so the drop doesn't
-    // interrupt the chat view. Users can still open the library manually
-    // to see progress for large files. See issue #728.
+    // interrupt the chat view. See issue #728.
     const handleDrop = useCallback(async (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1626,20 +1627,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return bTime.localeCompare(aTime);
                 });
                 const visibleDocs = docsExpanded ? sorted : sorted.slice(0, 3);
+                const searchable = sessionDocs.filter((d) => (d.indexing_status ?? 'complete') === 'complete').length;
                 const hiddenCount = sorted.length - 3;
                 return (
                     <div
                         className={`doc-context-bar${docsExpanded ? ' doc-context-expanded' : ''}`}
-                        aria-label={`${sessionDocs.length} indexed document${sessionDocs.length !== 1 ? 's' : ''}`}
+                        aria-label={t('chat.docs.indexed', { n: searchable })}
                     >
                         <CheckCircle2 size={12} className="doc-context-icon" aria-hidden="true" />
                         <button type="button" className="doc-context-label" onClick={() => setShowDocLibrary(true)} title="Manage documents">
-                            {sessionDocs.length} indexed
+                            {t('chat.docs.indexed', { n: searchable })}
                         </button>
                         <div className={`doc-context-pills${docsExpanded ? ' doc-context-pills-expanded' : ''}`}>
                             {visibleDocs.map((d) => (
                                 <span key={d.id} className="doc-pill" title={d.filepath || d.filename}>
-                                    <FileText size={9} className="doc-pill-icon" aria-hidden="true" />
+                                    {d.indexing_status === 'indexing' || d.indexing_status === 'pending'
+                                        ? <Loader2 size={9} className="doc-pill-icon doc-spin" aria-hidden="true" />
+                                        : <FileText size={9} className="doc-pill-icon" aria-hidden="true" />}
                                     <span className="doc-pill-name">{d.filename}</span>
                                     <button
                                         className="doc-pill-remove"
@@ -1664,6 +1668,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     </div>
                 );
             })()}
+            <ChatIndexingNotice documents={sessionDocs} />
 
             <div className="messages-scroll" ref={messagesScrollRef} onScroll={handleScroll}>
                 <div className="messages-column">

@@ -4,7 +4,7 @@
 /** API client for GAIA Agent UI backend. */
 
 import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
-import type { ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
+import type { IndexingOverview, ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import { getApiBase } from '../utils/apiBase';
@@ -946,8 +946,9 @@ export async function listDocuments(): Promise<{ documents: Document[]; total: n
     return apiFetch('GET', '/documents');
 }
 
-export async function uploadDocumentByPath(filepath: string): Promise<Document> {
-    return apiFetch('POST', '/documents/upload-path', { filepath });
+/** Adds the file and, with `background`, answers before it is indexed. */
+export async function uploadDocumentByPath(filepath: string, background: boolean = true): Promise<Document> {
+    return apiFetch('POST', '/documents/upload-path', { filepath, background });
 }
 
 /**
@@ -963,7 +964,7 @@ export async function uploadDocumentByPath(filepath: string): Promise<Document> 
  * consistent with the rest of the app.
  */
 export async function uploadDocumentBlob(file: File): Promise<Document> {
-    const url = `${API_BASE}/documents/upload`;
+    const url = `${API_BASE}/documents/upload?background=true`;
     const t = log.api.time();
     log.api.info(`POST ${url}`, { fileName: file.name, size: file.size });
 
@@ -994,12 +995,27 @@ export async function deleteDocument(id: string): Promise<void> {
     return apiFetch('DELETE', `/documents/${id}`);
 }
 
-/** How far a running index has got: PDF pages read, then chunks embedded. */
+export type { IndexingOverview };
+
+/** How far an index has got: waiting its turn, PDF pages read, then chunks embedded. */
 export interface IndexProgress {
-    phase: 'reading' | 'embedding';
+    phase: string;
     done: number;
     /** Null when the count isn't known upfront (e.g. pages of a non-PDF). */
-    total: number | null;
+    total?: number | null;
+    /** Set when `estimate` is `ready` or `at_least`. */
+    seconds_left?: number | null;
+    /** `estimating`, `ready`, `at_least`, `waiting` (for a model) or `stalled`. */
+    estimate?: string;
+    elapsed_seconds?: number;
+}
+
+export async function getIndexingOverview(): Promise<IndexingOverview> {
+    return apiFetch('GET', '/documents/indexing');
+}
+
+export async function dismissIndexingBatch(batchId: string): Promise<void> {
+    return apiFetch('POST', `/documents/indexing/${encodeURIComponent(batchId)}/dismiss`);
 }
 
 export async function getDocumentStatus(id: string): Promise<{
@@ -1028,8 +1044,12 @@ export async function cancelIndexing(id: string): Promise<{ cancelled: boolean; 
     return apiFetch('POST', `/documents/${id}/cancel`);
 }
 
+export async function cancelImageReading(id: string): Promise<{ cancelled: boolean; id: string }> {
+    return apiFetch('POST', `/documents/${id}/cancel-images`);
+}
+
 export async function reindexDocument(id: string): Promise<Document> {
-    return apiFetch('POST', `/documents/${id}/reindex`);
+    return apiFetch('POST', `/documents/${id}/reindex?background=true`);
 }
 
 export async function attachDocument(sessionId: string, documentId: string): Promise<void> {
@@ -1047,8 +1067,8 @@ export async function browseFiles(path?: string): Promise<BrowseResponse> {
     return apiFetch('GET', `/files/browse${params}`);
 }
 
-export async function indexFolder(folderPath: string, recursive: boolean = true): Promise<IndexFolderResponse> {
-    return apiFetch('POST', '/documents/index-folder', { folder_path: folderPath, recursive });
+export async function indexFolder(folderPath: string, recursive: boolean = true, background: boolean = true): Promise<IndexFolderResponse> {
+    return apiFetch('POST', '/documents/index-folder', { folder_path: folderPath, recursive, background });
 }
 
 export async function openFileOrFolder(path: string, reveal: boolean = true): Promise<{ status: string; path: string }> {

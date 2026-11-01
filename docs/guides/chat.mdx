@@ -163,14 +163,11 @@ RAG (Retrieval-Augmented Generation) enables chatting with documents — includi
 </Tabs>
 
 <Note>
-  **Document Indexing Requirements:** Text in images is read by a Vision Language Model (VLM). By default that is `Gemma-4-E4B-it-GGUF`, the multimodal model `gaia init` already downloads for the `gaia`, `chat`, `rag` and `minimal` profiles. If you set your own `default_model`, `gaia init` skips Gemma, so download it yourself:
-  ```bash
-  lemonade pull Gemma-4-E4B-it-GGUF
-  ```
-  Or download it in the Lemonade Model Manager (`http://localhost:13305`). To use `Qwen3-VL-4B-Instruct-GGUF` instead, set `RAGConfig(vlm_model="Qwen3-VL-4B-Instruct-GGUF")` and download that model the same way.
+  **Document Indexing Requirements:** Text in images and scans is read by a Vision Language Model (VLM): a tested vision model that is already loaded, then your default chat model when it can read images, which `Gemma-4-E4B-it-GGUF` and `Qwen3.6-35B-A3B-GGUF` both can, and otherwise `Gemma-4-E4B-it-GGUF`. `gaia init` already downloads these, so nothing else is needed.
 
   - **Image files** (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.gif`, `.tif`, `.tiff`) are indexed only through the VLM. Without it, indexing the image fails with these instructions. Index images one at a time: folder indexing skips them.
   - **PDF and PPTX files** still index without the VLM, but only their text layer. Text inside their images is not indexed.
+  - **Images on PDF pages that already hold plenty of text** are not read. Scans and pages short of text are, which is where nearly all the text in images was found. Set `use_vlm=False` to skip images altogether.
 </Note>
 
 ### Interactive RAG Commands

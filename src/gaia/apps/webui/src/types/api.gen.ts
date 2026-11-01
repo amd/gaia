@@ -36,6 +36,7 @@ export interface ApiSchemas {
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
   DocumentResponse: DocumentResponse;
+  DocumentStatusResponse: DocumentStatusResponse;
   DocumentUploadRequest: DocumentUploadRequest;
   DownloadProgress: DownloadProgress;
   EvalMailboxRequest: EvalMailboxRequest;
@@ -58,8 +59,13 @@ export interface ApiSchemas {
   GpuMemoryRevertRequest: GpuMemoryRevertRequest;
   GrantRequest: GrantRequest;
   HTTPValidationError: HTTPValidationError;
+  ImagesOverview: ImagesOverview;
+  ImagesReading: ImagesReading;
   IndexFolderRequest: IndexFolderRequest;
   IndexFolderResponse: IndexFolderResponse;
+  IndexProgress: IndexProgress;
+  IndexingDocument: IndexingDocument;
+  IndexingOverview: IndexingOverview;
   InferenceCommit: InferenceCommit;
   InferenceCommitItem: InferenceCommitItem;
   InferenceStatsResponse: InferenceStatsResponse;
@@ -232,6 +238,9 @@ export interface AgentStepResponse {
   mcpServerLabel?: string | null;
   mcpTool?: string | null;
   narration?: string | null;
+  notice?: {
+    [k: string]: unknown | undefined;
+  } | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;
@@ -456,6 +465,8 @@ export interface DocumentResponse {
   filename: string;
   filepath: string;
   id: string;
+  images_reading?: ImagesReading | null;
+  images_unread?: number;
   indexed_at: string;
   indexing_status?: string;
   last_accessed_at?: string | null;
@@ -463,9 +474,41 @@ export interface DocumentResponse {
   sessions_using?: number;
 }
 /**
+ * A searchable document whose images are still being read.
+ */
+export interface ImagesReading {
+  pages_done?: number;
+  pages_total?: number;
+  reason?: string | null;
+  seconds_left?: number | null;
+  state?: string;
+}
+/**
+ * One document's indexing status.
+ */
+export interface DocumentStatusResponse {
+  chunk_count: number;
+  id: string;
+  indexing_status: string;
+  is_active: boolean;
+  progress?: IndexProgress | null;
+}
+/**
+ * How far one document's index has got, and how long is left.
+ */
+export interface IndexProgress {
+  done: number;
+  elapsed_seconds?: number;
+  estimate: string;
+  phase: string;
+  seconds_left?: number | null;
+  total?: number | null;
+}
+/**
  * Request to index a document by path.
  */
 export interface DocumentUploadRequest {
+  background?: boolean;
   filepath: string;
 }
 /**
@@ -640,9 +683,21 @@ export interface ValidationError {
   type: string;
 }
 /**
+ * Every document with images still being read in the background.
+ */
+export interface ImagesOverview {
+  blocked?: string | null;
+  documents?: number;
+  names?: string[];
+  pages_done?: number;
+  pages_total?: number;
+  seconds_left?: number | null;
+}
+/**
  * Request to index all supported documents in a folder.
  */
 export interface IndexFolderRequest {
+  background?: boolean;
   folder_path: string;
   recursive?: boolean;
 }
@@ -654,7 +709,36 @@ export interface IndexFolderResponse {
   errors?: string[];
   failed?: number;
   indexed?: number;
+  queued?: number;
   skipped?: number;
+}
+/**
+ * A document in the batch being indexed.
+ */
+export interface IndexingDocument {
+  error?: string | null;
+  filename: string;
+  id: string;
+  progress?: IndexProgress | null;
+  state: string;
+}
+/**
+ * All documents indexing now, or the last batch until it is dismissed.
+ */
+export interface IndexingOverview {
+  active?: boolean;
+  batch_id?: string | null;
+  cancelled?: number;
+  current?: string | null;
+  current_id?: string | null;
+  documents?: IndexingDocument[];
+  done?: number;
+  estimate?: string;
+  failed?: number;
+  images?: ImagesOverview;
+  percent?: number | null;
+  seconds_left?: number | null;
+  total?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];

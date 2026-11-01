@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import type { StreamEvent, AgentStep } from '../types';
+import { getT } from '../i18n/useT';
+import { statusEventLabel } from './indexingLabels';
 
 /** The backend's periodic "Model is processing... (Ns)" tick; the live line beside GAIA's name already times that wait. */
 export function isProgressTick(event: StreamEvent): boolean {
@@ -55,9 +57,10 @@ export function agentEventToStep(event: StreamEvent, stepIdRef: { current: numbe
             if (event.message?.startsWith('Agent: ')) return null;
             return {
                 id, type: 'status',
-                label: event.message || event.status || 'Working',
+                label: statusEventLabel(event, getT()) || event.status || 'Working',
                 active: event.status === 'working',
                 ...(event.status === 'warning' ? { success: false } : {}),
+                ...(event.notice?.kind === 'partial_index' ? { notice: event.notice } : {}),
                 timestamp: ts,
             };
         case 'agent_error':

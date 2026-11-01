@@ -8,6 +8,7 @@ import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, S
 import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import type { IndexingOverview } from '../types/api.gen';
 import { DEFAULT_LOCALE, applyLocale, isLocaleCode } from '../i18n/registry';
 import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
 
@@ -146,6 +147,9 @@ interface ChatState {
     awaitingBySession: Record<string, AwaitingUser>;
     /** When the last applied GET /api/chat/active was sent (ms); 0 before the first. */
     activeRunsAt: number;
+    /** Everything indexing now; see services/indexingPoll.ts. */
+    indexing: IndexingOverview | null;
+    setIndexing: (indexing: IndexingOverview) => void;
     /** Apply one GET /api/chat/active poll, sent at `requestedAt`. */
     setActiveRuns: (runs: ActiveRuns, requestedAt: number) => void;
     /** Messages typed while a chat answered, by chat. Each goes out when that
@@ -305,6 +309,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     queuedSessionIds: [],
     awaitingBySession: {},
     activeRunsAt: 0,
+    indexing: null,
+    setIndexing: (indexing) => set({ indexing }),
     setActiveRuns: (runs, requestedAt) =>
         set((state) => {
             const next: Partial<ChatState> = { activeRunsAt: requestedAt };

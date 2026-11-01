@@ -78,12 +78,22 @@ type CanonicalStatusEvent struct {
 	// HistoryCut is set when older turns just left the model's view; Message
 	// then carries the line to keep in the transcript.
 	HistoryCut *HistoryCut `json:"history_cut,omitempty"`
+	// PartialIndex is set when this turn searched documents still being read;
+	// Message then carries the line to keep in the transcript.
+	PartialIndex *PartialIndex `json:"partial_index,omitempty"`
 }
 
 // HistoryCut sizes the turns no longer replayed to the model.
 type HistoryCut struct {
 	Turns  int `json:"turns"`
 	Tokens int `json:"tokens"`
+}
+
+// PartialIndex says how much of the searched documents' images is still unread.
+type PartialIndex struct {
+	Names      []string `json:"names"`
+	PagesDone  int      `json:"pages_done"`
+	PagesTotal int      `json:"pages_total"`
 }
 
 // CanonicalTokenEvent — one incremental chunk of assistant answer text.

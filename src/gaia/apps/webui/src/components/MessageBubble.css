@@ -121,6 +121,21 @@
     background: color-mix(in srgb, var(--danger) 5%, transparent);
 }
 
+.msg-partial-index {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin: 10px 0 0;
+    padding-block-start: 8px;
+    border-block-start: 1px solid var(--border);
+    font-size: var(--fs-label);
+    color: var(--text-secondary);
+}
+.msg-partial-index svg {
+    flex-shrink: 0;
+    margin-block-start: 2px;
+}
+
 .msg-stopped {
     display: inline-flex;
     align-items: center;

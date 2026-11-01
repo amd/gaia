@@ -10,7 +10,7 @@ Handles model loading/unloading and image-to-text extraction via Lemonade server
 
 import base64
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.env import load_env
@@ -377,13 +377,19 @@ Output format: Clean markdown with the ACTUAL text from the image."""
 
         return f"Unexpected response format: {response}"
 
-    def extract_from_page_images(self, images: list, page_num: int) -> list:
+    def extract_from_page_images(
+        self,
+        images: list,
+        page_num: int,
+        before_each: Optional[Callable[[], None]] = None,
+    ) -> list:
         """
         Extract text from multiple images on a page.
 
         Args:
             images: List of image dicts with 'image_bytes', 'width', 'height', etc.
             page_num: Page number
+            before_each: Called before each image; raises to stop reading the page
 
         Returns:
             List of dicts:
@@ -400,6 +406,8 @@ Output format: Clean markdown with the ACTUAL text from the image."""
         results = []
 
         for img_idx, img_data in enumerate(images, 1):
+            if before_each:
+                before_each()
             extracted_text = self.extract_from_image(
                 image_bytes=img_data["image_bytes"],
                 image_num=img_idx,

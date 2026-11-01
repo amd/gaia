@@ -209,6 +209,10 @@ func RunOneShot(
 		switch e := evt.(type) {
 		case event.CanonicalStatusEvent:
 			debugf("status %q", e.Message)
+			if e.PartialIndex != nil {
+				fmt.Fprintf(errW, "  %s\n", e.Message)
+				return
+			}
 			if e.Phase != "" {
 				if e.Phase == lastPhase {
 					return

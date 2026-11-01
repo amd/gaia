@@ -521,6 +521,9 @@ class SSEOutputHandler(OutputHandler):
     #: the prompt shows more than that (see :meth:`note_call_args`).
     _noted_call: Optional["tuple[str, Dict[str, Any]]"] = None
 
+    #: Documents this turn already warned about (class default: subclasses
+    #: built without __init__ run turns too).
+    _index_notices: frozenset = frozenset()
     #: The sidecar prompt a relayed run is parked on (see __init__).
     _relay_confirm_id: Optional[str] = None
 
@@ -686,10 +689,21 @@ class SSEOutputHandler(OutputHandler):
 
     # === Core Progress/State Methods ===
 
+    def print_index_notice(self, message: str, notice: Dict[str, Any]) -> None:
+        # Once a turn, however many searches it runs.
+        names = tuple(notice["names"])
+        if names in self._index_notices:
+            return
+        self._index_notices = self._index_notices | {names}
+        self._emit(
+            {"type": "status", "status": "info", "message": message, "notice": notice}
+        )
+
     def print_processing_start(self, query: str, max_steps: int, model_id: str = None):
         self._start_time = time.time()
         self._step_count = 0
         self._tool_count = 0
+        self._index_notices = frozenset()
         self.delivered_answer = ""
         model_label = model_id or "LLM"
         self._emit(

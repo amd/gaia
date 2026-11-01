@@ -591,6 +591,8 @@ class AgentStepResponse(BaseModel):
     # card from history.
     render: Optional[str] = None
     data: Optional[Any] = None
+    # A reopened chat rebuilds the partial-index note under the answer from this.
+    notice: Optional[Dict[str, Any]] = None
 
 
 class InferenceStatsResponse(BaseModel):
@@ -715,6 +717,16 @@ class MessageListResponse(BaseModel):
 # ── Documents ───────────────────────────────────────────────────────────────
 
 
+class ImagesReading(BaseModel):
+    """A searchable document whose images are still being read."""
+
+    pages_done: int = 0
+    pages_total: int = 0
+    state: str = "reading"
+    reason: Optional[str] = None
+    seconds_left: Optional[int] = None
+
+
 class DocumentResponse(BaseModel):
     """A document in the library."""
 
@@ -734,6 +746,73 @@ class DocumentResponse(BaseModel):
     # "corrupted", "encrypted", "empty" (no extractable text), "empty_file"
     # (nothing to index) or "unsupported_workbook" (.xls or password-protected).
     error_kind: Optional[str] = None
+    # Set while the document is searchable but its images are still being read.
+    images_reading: Optional[ImagesReading] = None
+    # Pages whose images could not be read, so answers can't use them.
+    images_unread: int = 0
+
+
+class IndexProgress(BaseModel):
+    """How far one document's index has got, and how long is left."""
+
+    phase: str  # queued | reading | embedding
+    done: int
+    total: Optional[int] = None
+    # Null unless ``estimate`` is ready or at_least.
+    seconds_left: Optional[int] = None
+    # estimating | ready | at_least (a lower bound) | waiting (for a model)
+    # | stalled (no progress for much longer than expected)
+    estimate: str
+    elapsed_seconds: int = 0
+
+
+class DocumentStatusResponse(BaseModel):
+    """One document's indexing status."""
+
+    id: str
+    indexing_status: str
+    chunk_count: int
+    is_active: bool
+    progress: Optional[IndexProgress] = None
+
+
+class IndexingDocument(BaseModel):
+    """A document in the batch being indexed."""
+
+    id: str
+    filename: str
+    state: str  # queued | running | complete | failed | cancelled
+    progress: Optional[IndexProgress] = None
+    error: Optional[str] = None
+
+
+class ImagesOverview(BaseModel):
+    """Every document with images still being read in the background."""
+
+    documents: int = 0
+    pages_done: int = 0
+    pages_total: int = 0
+    seconds_left: Optional[int] = None
+    blocked: Optional[str] = None
+    names: List[str] = Field(default_factory=list)
+
+
+class IndexingOverview(BaseModel):
+    """All documents indexing now, or the last batch until it is dismissed."""
+
+    batch_id: Optional[str] = None
+    active: bool = False
+    total: int = 0
+    done: int = 0
+    failed: int = 0
+    cancelled: int = 0
+    current_id: Optional[str] = None
+    current: Optional[str] = None
+    percent: Optional[int] = None
+    seconds_left: Optional[int] = None
+    estimate: str = "estimating"
+    documents: List[IndexingDocument] = Field(default_factory=list)
+    images: ImagesOverview = Field(default_factory=ImagesOverview)
 
 
 class DocumentListResponse(BaseModel):
@@ -749,6 +828,8 @@ class DocumentUploadRequest(BaseModel):
     """Request to index a document by path."""
 
     filepath: str
+    # Answer at once and index on its own, whatever the file's size.
+    background: bool = False
 
 
 class AttachDocumentRequest(BaseModel):
@@ -796,6 +877,8 @@ class IndexFolderRequest(BaseModel):
 
     folder_path: str
     recursive: bool = True
+    # Add every file at once and index them on their own.
+    background: bool = False
 
 
 class IndexFolderResponse(BaseModel):
@@ -805,6 +888,8 @@ class IndexFolderResponse(BaseModel):
     failed: int = 0
     # Files in the folder that aren't a type GAIA indexes.
     skipped: int = 0
+    # Files now indexing on their own (a ``background`` request).
+    queued: int = 0
     documents: List[DocumentResponse] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
 
