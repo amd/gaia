@@ -2034,10 +2034,9 @@ def _driver_auth():
         if not _warned_dotenv_api_key:
             _warned_dotenv_api_key = True
             logger.warning(
-                "Ignoring %s from a .env file for the eval driver — it would "
-                "disable your Claude Code login. Export it in the shell to drive "
-                "the eval with that key instead.",
-                API_KEY_VAR,
+                "Ignoring ANTHROPIC_API_KEY from a .env file for the eval driver "
+                "— it would disable your Claude Code login. Export it in the "
+                "shell to drive the eval with that key instead."
             )
         return [], {k: v for k, v in os.environ.items() if k != API_KEY_VAR}
     return [], None
