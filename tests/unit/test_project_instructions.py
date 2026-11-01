@@ -418,6 +418,10 @@ def ruled_repo(repo, monkeypatch):
         "Gemma-4-E4B-it-GGUF",
         "Qwen3.6-35B-A3B-GGUF",
         "some-unknown-model",
+        # Local models named after Claude are still local models.
+        "user.Claude-3.7-Sonnet-Reasoning-Gemma3-12B-GGUF",
+        "hf.co/x/claude-distill-qwen-7b",
+        "claude-opus-5",
         None,
     ],
 )

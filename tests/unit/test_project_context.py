@@ -19,7 +19,7 @@ from gaia.project_context import (
     OFF,
     PROJECT_CONTEXT_ENV,
     ProjectContextError,
-    model_family,
+    is_hosted_claude,
     normalize_project_context,
     project_context_setting,
     wants_full_project_context,
@@ -37,25 +37,44 @@ def _config():
 
 
 @pytest.mark.parametrize(
-    "model, family",
+    "model",
     [
-        ("claude-opus-5", "claude"),
-        ("claude-sonnet-5", "claude"),
-        ("amd.Claude-Opus-5-5", "claude"),
-        ("amd.claude-opus-5.5", "claude"),
-        ("anthropic/claude-sonnet-5", "claude"),
-        ("us.anthropic.claude-sonnet-5-v1:0", "claude"),
-        ("amd.DeepSeek-V4.1-Flash", "deepseek"),
-        ("fireworks.deepseek-v4p1-flash", "deepseek"),
-        ("Gemma-4-E4B-it-GGUF", "gemma"),
-        ("Qwen3.6-35B-A3B-GGUF", "qwen3"),
-        ("user.Qwen3.8-Flash-Next-GGUF", "qwen3"),
-        ("", ""),
-        (None, ""),
+        "amd.Claude-Opus-5-5",
+        "amd.claude-opus-5.5",
+        "anthropic/claude-sonnet-5",
+        "anthropic.claude-sonnet-5-v1:0",
+        "us.anthropic.claude-sonnet-5-v1:0",
+        "eu.anthropic.claude-opus-5-v1:0",
+        "global.anthropic.claude-opus-5-v1:0",
     ],
 )
-def test_model_family(model, family):
-    assert model_family(model) == family
+def test_claude_on_an_anthropic_provider_is_hosted_claude(model):
+    assert is_hosted_claude(model)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        # Local GGUF / HF models named after Claude: the name is not the provider.
+        "user.Claude-3.7-Sonnet-Reasoning-Gemma3-12B-GGUF",
+        "Claude-3.7-Sonnet-Reasoning-Gemma3-12B-GGUF",
+        "hf.co/x/claude-distill-qwen-7b",
+        "hf.co/anthropic/claude-sonnet-5",
+        "user.anthropic.claude-sonnet-5",
+        "user.amd.Claude-Opus-5-5",
+        "local/anthropic/claude-sonnet-5",
+        "claude-opus-5",  # bare id without the Anthropic client: Lemonade serves it
+        "claude-distill-qwen-7b-GGUF",
+        "anthropic/notclaude-7b",
+        "amd.DeepSeek-V4.1-Flash",
+        "fireworks.claude-like-7b",
+        "",
+        None,
+    ],
+)
+def test_a_model_merely_named_after_claude_is_not_hosted_claude(model):
+    assert not is_hosted_claude(model)
+    assert not wants_full_project_context(AUTO, model)
 
 
 @pytest.mark.parametrize(
@@ -83,7 +102,8 @@ def test_auto_is_conservative_for_every_other_model(model):
         ("claude-opus-5", True),
         ("amd.Claude-Opus-5-5", False),  # the gateway, either client path
         ("amd.Claude-Opus-5-5", True),
-        ("claude-sonnet-5", False),
+        ("us.anthropic.claude-sonnet-5-v1:0", False),
+        ("anthropic/claude-sonnet-5", False),
     ],
 )
 def test_auto_gives_claude_the_full_context(model, use_claude):
@@ -92,6 +112,7 @@ def test_auto_gives_claude_the_full_context(model, use_claude):
 
 def test_the_anthropic_client_counts_as_claude_whatever_the_id():
     assert wants_full_project_context(AUTO, None, use_claude=True)
+    assert wants_full_project_context(AUTO, "claude-opus-5", use_claude=True)
 
 
 def test_full_and_off_override_the_model():

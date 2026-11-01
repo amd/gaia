@@ -147,7 +147,7 @@ spends about half again as many input tokens.
 
 | `project_context` | What the model gets |
 |-------------------|---------------------|
-| `auto` (default) | Claude models (through Anthropic or a gateway, such as `amd.Claude-Opus-5-5`) get everything below. Every other model, including any GAIA does not recognise, gets none of it: its prompt is the same as in a folder with no `CLAUDE.md`, `AGENTS.md` or `.claude/skills` |
+| `auto` (default) | Claude served by Anthropic (`--use-claude`, the gateway's `amd.Claude-*`, `anthropic/claude-*` or Bedrock's `us.anthropic.claude-*`) gets everything below. A local model merely named after Claude, such as `user.Claude-3.7-Sonnet-Reasoning-Gemma3-12B-GGUF`, does not. Every other model, including any GAIA does not recognise, gets none of it: its prompt is the same as in a folder with no `CLAUDE.md`, `AGENTS.md` or `.claude/skills` |
 | `full` | Every model gets everything below |
 | `off` | No model gets any of it |
 
