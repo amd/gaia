@@ -186,6 +186,7 @@ def test_force_stop_kills_the_adapter(mock_home, monkeypatch, capsys):
         _run_cli(monkeypatch, "stop", "--force")
 
         assert adapter.wait(timeout=10) is not None
+        assert not pid_path.exists()
         assert "Force-stopped" in capsys.readouterr().out
     finally:
         if adapter.poll() is None:

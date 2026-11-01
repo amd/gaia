@@ -1595,7 +1595,7 @@ def build_parser():
     t_stop.add_argument(
         "--force",
         action="store_true",
-        help="Force stop even if graceful shutdown fails",
+        help="Kill the adapter immediately (SIGKILL / taskkill /F)",
     )
 
     # Status subcommand
@@ -4937,10 +4937,7 @@ def main():
                         os.remove(pid_path)
                     return
                 if getattr(args, "force", False):
-                    # The adapter was identity-checked above, so this can use a
-                    # hard kill without risking an unrelated PID from a stale file.
-                    # Windows does not support a useful SIGKILL equivalent through
-                    # os.kill; taskkill also terminates any adapter children.
+                    # Identity-checked above; taskkill /T also reaps adapter children.
                     if os.name == "nt":
                         result = subprocess.run(
                             ["taskkill", "/F", "/T", "/PID", str(pid)],
@@ -4957,6 +4954,9 @@ def main():
                     else:
                         os.kill(pid, signal.SIGKILL)
                     print(f"Force-stopped Telegram adapter (pid {pid}).")
+                    # A hard-killed adapter cannot clean up its PID file.
+                    with contextlib.suppress(FileNotFoundError):
+                        os.remove(pid_path)
                 else:
                     # The adapter removes its own PID file once polling stops.
                     os.kill(pid, signal.SIGTERM)
