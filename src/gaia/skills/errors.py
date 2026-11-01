@@ -48,6 +48,14 @@ class SkillDriftError(SkillError):
     """
 
 
+class SkillUnavailableError(SkillError):
+    """The skill needs tools this agent's model is not offered.
+
+    A small model is not given features it fails (``gaia.agents.base.model_features``);
+    a skill built on one of them would load and then call tools that are not there.
+    """
+
+
 class SkillPermissionError(SkillError):
     """The skill declares a permission this phase cannot honor.
 
