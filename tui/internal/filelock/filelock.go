@@ -83,6 +83,19 @@ func (l *Lock) Release() {
 	l.f = nil
 }
 
+// ReadFile reads target while holding the same lock used by writers. The lock
+// is intentionally exclusive: Windows may reject a read during os.Rename, and
+// a short critical section keeps readers from observing a replacement in
+// progress without requiring platform-specific shared-lock semantics.
+func ReadFile(target string) ([]byte, error) {
+	lock, err := Acquire(target, Timeout)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Release()
+	return os.ReadFile(target)
+}
+
 // WriteAtomic replaces path with data. The bytes go to a temp file in the same
 // folder, are fsynced, and are renamed over path, so a reader (or a crash) sees
 // either the old file or the complete new one. The result has mode perm.

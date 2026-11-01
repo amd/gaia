@@ -91,7 +91,11 @@ func readDefaultDevice(p hostProbe) string {
 	if path == "" {
 		return ""
 	}
-	raw, err := p.readFile(path)
+	read := p.readConfig
+	if read == nil {
+		read = p.readFile
+	}
+	raw, err := read(path)
 	if err != nil {
 		return ""
 	}

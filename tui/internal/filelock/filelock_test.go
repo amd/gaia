@@ -35,6 +35,48 @@ func TestSecondAcquireTimesOutUntilReleased(t *testing.T) {
 	second.Release()
 }
 
+func TestReadFileWaitsForTheWriter(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := Acquire(target, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan struct {
+		body []byte
+		err  error
+	}, 1)
+	go func() {
+		body, err := ReadFile(target)
+		result <- struct {
+			body []byte
+			err  error
+		}{body, err}
+	}()
+
+	select {
+	case <-result:
+		t.Fatal("ReadFile returned while the writer still held the lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+	first.Release()
+
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatalf("ReadFile: %v", got.err)
+		}
+		if string(got.body) != "old" {
+			t.Fatalf("ReadFile = %q, want old", got.body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ReadFile did not continue after the writer released the lock")
+	}
+}
+
 func TestWriteAtomicReplacesAndCleansUp(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
