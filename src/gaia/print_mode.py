@@ -143,6 +143,7 @@ def run(
         )
     try:
         text = read_prompt(prompt)
+        model, route = _route(text, model, base_url)
         turn = dict(
             model=model,
             verbose=verbose,
@@ -156,6 +157,8 @@ def run(
             if attempts > 1
             else _run_turn(text, **turn)
         )
+        if route is not None:
+            record["route"] = route.as_record()
     except KeyboardInterrupt:
         return _emit_failure(output_format, "interrupted", code=130)
     except Exception as exc:  # noqa: BLE001 - CLI boundary: report, never a traceback
@@ -217,6 +220,30 @@ def _run_with_attempts(text: str, attempts: int, **turn: Any) -> Dict[str, Any]:
     for key in _SUMMED:
         record[key] += sum(int(r.get(key) or 0) for r in records)
     return record
+
+
+def _route(text: str, model: Optional[str], base_url: Optional[str]):
+    """``(model to run, route)``: a router's choice for this turn, else *model*.
+
+    Decided once, before any attempt starts, so every attempt and the final
+    turn run on the same candidate.
+    """
+    from gaia.llm.lemonade_client import LemonadeClient
+    from gaia.llm.routing import route_turn
+
+    model = _resolve_model(model)
+    if not model:
+        return model, None
+    detected = _start_server(model, base_url)
+    client = LemonadeClient(base_url=base_url or detected, verbose=False)
+    route = route_turn(client, model, text)
+    if route is None:
+        return model, None
+    print(
+        f"gaia -p: router {route.router} chose {route.model} ({route.label or route.rule})",
+        file=sys.stderr,
+    )
+    return route.model, route
 
 
 def _resolve_model(model: Optional[str]) -> Optional[str]:
