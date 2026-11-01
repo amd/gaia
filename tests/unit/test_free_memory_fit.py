@@ -11,14 +11,11 @@ window asked for, the load refused or sent), never a real load.
 
 from __future__ import annotations
 
-import json
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from gaia.installer.init_command import INIT_PROFILES
 from gaia.llm import lemonade_client as lc
 from gaia.llm import model_fit
 from gaia.llm.model_fit import FreeMemory, GpuMemoryUse, OsMemory
@@ -322,7 +319,7 @@ class TestDefaultPickedByFreeMemory:
         model_id, skipped = recommend(MAC_48, _ram(48, 20.4))
         assert model_id == GEMMA
         assert "free memory" in skipped[QWEN] and "20.4 GB" in skipped[QWEN]
-        assert "re-run `gaia init`" in skipped[QWEN]
+        assert "model settings" in skipped[QWEN]
 
     def test_the_same_mac_with_room_free_gets_qwen(self, recommend):
         assert recommend(MAC_48, _ram(48, 40))[0] == QWEN
@@ -343,6 +340,63 @@ class TestDefaultPickedByFreeMemory:
         model_id, skipped = recommend(MAC_48, _ram(48, 40))
         assert model_id == GEMMA
         assert "no memory reported" in skipped[QWEN]
+
+
+class TestFinishedSetupKeepsItsPick:
+    """A pick forced by free memory must outlive that moment, or the next launch
+    expects the larger model and sends a working user back to a 23 GB download."""
+
+    @pytest.fixture
+    def on(self, machine, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+
+        def run(info, os_memory):
+            machine(info, os_memory)
+            monkeypatch.setattr(
+                lc.LemonadeClient,
+                "health_check",
+                lambda self, timeout=None: {
+                    "version": "2026.40.0",
+                    "all_models_loaded": [],
+                },
+            )
+            return lc.LemonadeClient(base_url=URL, verbose=False)
+
+        return run
+
+    @staticmethod
+    def _finish_setup(client):
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="gaia", yes=True)
+        picked = cmd._chat_model(client)
+        cmd._chat_model_ready = cmd._setup_verified = True
+        GaiaConfig.update(cmd._record_chat_choice)
+        return picked
+
+    def test_more_memory_free_later_does_not_change_the_pick(self, on):
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import resolve_init_chat_model
+
+        assert self._finish_setup(on(MAC_48, _ram(48, 20.4))) == GEMMA
+        assert GaiaConfig.load().default_model == GEMMA
+
+        later = on(MAC_48, _ram(48, 40))
+        chosen = resolve_init_chat_model(later, reset_corrupt=False, enforce_fit=False)
+        assert chosen.model_id == GEMMA
+
+    def test_a_pc_that_only_holds_the_floor_is_not_pinned_to_it(self, on):
+        from gaia.config import GaiaConfig
+
+        assert self._finish_setup(on(CPU_16, _ram(16, 12))) == GEMMA
+        assert not GaiaConfig.load().default_model
+
+    def test_a_pick_that_was_not_forced_is_not_pinned(self, on):
+        from gaia.config import GaiaConfig
+
+        assert self._finish_setup(on(MAC_48, _ram(48, 40))) == QWEN
+        assert GaiaConfig.load().default_model == QWEN
 
 
 # ── The check before every load ────────────────────────────────────────────
@@ -568,58 +622,12 @@ def test_gemma_size_and_kv_cache_match_its_architecture():
 # ── First launch ──────────────────────────────────────────────────────────
 
 
-def _installer_init_argv():
-    """The `gaia init` arguments the desktop app's first install runs."""
+def test_the_installer_leaves_setup_to_the_app():
+    """A model pulled during install is one the user never got to choose (#5629)."""
     source = (
         REPO_ROOT / "src/gaia/apps/webui/services/backend-installer.cjs"
     ).read_text(encoding="utf-8")
-    match = re.search(r'\[\s*("init",[^\]]*)\]', source)
-    assert match, "backend-installer.cjs no longer runs `gaia init`"
-    # Spread elements (the Lemonade choice) are runtime-only; keep the literals.
-    literals = [
-        part.strip()
-        for part in match.group(1).split(",")
-        if part.strip() and not part.strip().startswith("...")
-    ]
-    return json.loads(f"[{', '.join(literals)}]")
-
-
-def test_first_launch_runs_setup_exactly_once(monkeypatch):
-    """The installer's init must leave the app's own setup check satisfied."""
-    from gaia.ui import setup_runner
-
-    runs = []
-    set_up = set()
-
-    def gaia_init(argv):
-        profile = argv[argv.index("--profile") + 1]
-        runs.append(profile)
-        set_up.update(INIT_PROFILES[profile]["models"])
-
-    def fake_run(cmd, **kwargs):
-        args = cmd[3:]  # [python, -m, gaia.cli, ...]
-        assert "--check" in args, f"setup ran {args} through subprocess.run"
-        profile = args[args.index("--profile") + 1]
-        ready = set(INIT_PROFILES[profile]["models"]) <= set_up
-        return subprocess.CompletedProcess(
-            cmd, 0 if ready else 1, stdout=json.dumps({"ready": ready}), stderr=""
-        )
-
-    monkeypatch.setattr(setup_runner.subprocess, "run", fake_run)
-
-    gaia_init(_installer_init_argv())  # first install
-    if not setup_runner.check()["ready"]:  # first launch: SetupScreen's gate
-        gaia_init(setup_runner.run_args(skip_chat_model=False))
-
-    assert len(runs) == 1, f"first launch ran gaia init {len(runs)} times: {runs}"
-
-
-def test_installer_runs_the_profile_the_app_checks():
-    from gaia.ui.setup_runner import PROFILE
-
-    argv = _installer_init_argv()
-    assert argv[argv.index("--profile") + 1] == PROFILE
-    assert "--yes" in argv
+    assert not re.search(r'\[\s*"init",', source)
 
 
 def test_warm_up_does_not_load_the_model_on_a_small_machine(monkeypatch):

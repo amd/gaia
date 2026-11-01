@@ -2377,7 +2377,7 @@ def free_memory_shortfall(client, requirement, capacity) -> Optional[str]:
     )
     return (
         f"not enough free memory to load it now: {verdict.reason}. {holder}, "
-        "then re-run `gaia init` to use it"
+        "then choose it in the model settings"
     )
 
 

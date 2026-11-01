@@ -309,6 +309,13 @@ class ChatModelChoice:
     skipped: list
     #: What the machine was judged against; None when the user chose.
     capacity: Optional[MachineCapacity] = None
+    #: The pick on capacity alone; differs from ``model_id`` when free memory decided.
+    capacity_pick: Optional[str] = None
+
+    @property
+    def forced_by_free_memory(self) -> bool:
+        """Saved as ``default_model``, or a later check expects the larger model."""
+        return bool(self.capacity_pick) and self.capacity_pick != self.model_id
 
 
 def resolve_init_chat_model(
@@ -356,8 +363,17 @@ def resolve_init_chat_model(
         return ChatModelChoice(model_id=configured, user_set=True, skipped=[])
     recommend = recommend_npu_chat_model if on_npu else recommend_default_chat_model
     model_id, skipped, capacity = recommend(client)
+    capacity_pick = (
+        recommend_default_chat_model(client, judge_free_memory=False)[0]
+        if capacity is not None and not on_npu
+        else None
+    )
     return ChatModelChoice(
-        model_id=model_id, user_set=False, skipped=skipped, capacity=capacity
+        model_id=model_id,
+        user_set=False,
+        skipped=skipped,
+        capacity=capacity,
+        capacity_pick=capacity_pick,
     )
 
 
@@ -2047,8 +2063,8 @@ class InitCommand:
         replaces a local ``default_model`` and ``last_model``, the one the Agent
         UI and TUI start on. A Claude or cloud model is left as it is.
         Records nothing when the pick is the floor model every agent already
-        defaults to or when setup did not download it (declined, or
-        ``--skip-models``) or could not verify it.
+        defaults to (unless free memory forced it) or when setup did not
+        download it (declined, or ``--skip-models``) or could not verify it.
         """
         from gaia.llm.lemonade_client import (
             DEFAULT_MODEL_NAME,
@@ -2077,7 +2093,7 @@ class InitCommand:
             return
         if choice.user_set or config.default_model:
             return
-        if choice.model_id != DEFAULT_MODEL_NAME:
+        if choice.model_id != DEFAULT_MODEL_NAME or choice.forced_by_free_memory:
             config.default_model = choice.model_id
 
     def _chat_model_choice(self, client) -> "ChatModelChoice":

@@ -22,7 +22,7 @@ GAIA today has three distribution channels — and the one most users actually w
 | Channel | Audience | Status | First-run install? |
 |---|---|---|---|
 | `pip install amd-gaia` | Python developers | ✅ Working | N/A (developer assumed to manage Python) |
-| `npm install -g @amd-gaia/agent-ui` | End users via Node | ✅ Working | ✅ `bin/gaia-ui.mjs` installs `uv` + Python venv + `amd-gaia[ui]` + `gaia init` |
+| `npm install -g @amd-gaia/agent-ui` | End users via Node | ✅ Working | ✅ `bin/gaia-ui.mjs` installs `uv` + Python venv + `amd-gaia[ui]`; the app's setup screen runs `gaia init` once the user picks cloud or local (#5629) |
 | **Desktop installer (current Squirrel `.exe`)** | **End users via download** | **❌ Broken UX** | **❌ No — gives up if `gaia` not on PATH** |
 
 **This is the front door for non-developers and it's broken.** A user who downloads the Squirrel installer, runs it, and double-clicks the GAIA Agent UI shortcut sees:
@@ -51,7 +51,7 @@ The implications of "primary install path":
 ### Goals
 
 - **One double-click install** on Windows / macOS / Linux
-- **Under 10 minutes** from download to first prompt (model download dominates; UX itself is < 1 minute and the rest is unattended progress)
+- **Under 10 minutes** from download to first prompt with a cloud model; a local model adds its download, which the setup screen shows with size, speed and time left (#5629)
 - **Auto-update** — users get new fixes and features without manual reinstall
 - **Native conventions per platform**: NSIS (Windows), DMG (macOS), DEB + AppImage (Linux)
 - **AMD-branded** wizard with consistent visual identity
@@ -82,7 +82,7 @@ The implications of "primary install path":
 `src/gaia/apps/webui/bin/gaia-ui.mjs` (572 lines) is the npm-installed CLI. It already does *everything* the desktop installer's first-run wizard needs:
 
 - **`ensureUv()`** — installs `uv` if missing
-- **`installBackend()`** — creates `~/.gaia/venv` with `uv venv --python 3.12`, installs `amd-gaia[ui]==<pinned-version>`, runs `gaia init --profile minimal`
+- **`installBackend()`** — creates `~/.gaia/venv` with `uv venv --python 3.12`, installs `amd-gaia[ui]==<pinned-version>`. It downloads no model and runs no `gaia init`: since #5629 the Agent UI's first-run setup screen does, after the user picks cloud or local
 - **`getInstalledVersion()` + `ensureBackend()`** — version-aware upgrade flow
 - **Linux CPU-only PyTorch** handling
 - **Detailed error messages** with manual-fallback instructions for every failure mode
@@ -144,7 +144,7 @@ This eliminates: silent half-installed venvs, force-quit-mid-install confusion, 
 │  Layer 2: Backend Bootstrap  (extracted from bin/gaia-ui)   │
 │  ├── services/backend-installer.cjs                         │
 │  │     • ensureUv()                                         │
-│  │     • installBackend() — venv, pip, gaia init            │
+│  │     • installBackend() — venv, pip (no models)           │
 │  │     • ensureBackend() — version-aware upgrade            │
 │  │     • State machine + recovery (§3.2)                    │
 │  │     • Pre-checks: disk space, network, perms             │
@@ -767,7 +767,7 @@ A non-developer user can:
 - [ ] Run the file (NSIS wizard on Windows, drag-to-Applications on Mac, `apt install` on Debian) without ever opening a terminal
 - [ ] Get a Start Menu / Applications / `.desktop` shortcut
 - [ ] Launch the app from the shortcut
-- [ ] See a clear progress dialog while the Python backend (uv + venv + amd-gaia + Lemonade + minimal model) installs automatically on first launch
+- [ ] See a clear progress dialog while the Python backend (uv + venv + amd-gaia) installs automatically on first launch, then choose cloud or local on the setup screen, which installs Lemonade and the chosen model with visible progress
 - [ ] If the install fails, see an error dialog with a Retry button, a "Manual install instructions" link, and a log file path
 - [ ] Send their first prompt within 10 minutes of starting the download (assuming minimal profile and reasonable connection)
 - [ ] On Windows, get auto-start at sign-in configured automatically (default ON via `customInstall`, can be disabled via Task Manager → Startup or the in-app tray menu)
