@@ -4936,9 +4936,31 @@ def main():
                     with contextlib.suppress(FileNotFoundError):
                         os.remove(pid_path)
                     return
-                # The adapter removes its own PID file once polling stops.
-                os.kill(pid, signal.SIGTERM)
-                print(f"Sent SIGTERM to Telegram adapter (pid {pid}).")
+                if getattr(args, "force", False):
+                    # The adapter was identity-checked above, so this can use a
+                    # hard kill without risking an unrelated PID from a stale file.
+                    # Windows does not support a useful SIGKILL equivalent through
+                    # os.kill; taskkill also terminates any adapter children.
+                    if os.name == "nt":
+                        result = subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(pid)],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        if result.returncode:
+                            detail = (result.stderr or result.stdout).strip()
+                            raise OSError(
+                                f"taskkill exited {result.returncode}"
+                                + (f": {detail}" if detail else "")
+                            )
+                    else:
+                        os.kill(pid, signal.SIGKILL)
+                    print(f"Force-stopped Telegram adapter (pid {pid}).")
+                else:
+                    # The adapter removes its own PID file once polling stops.
+                    os.kill(pid, signal.SIGTERM)
+                    print(f"Sent SIGTERM to Telegram adapter (pid {pid}).")
             except ProcessLookupError:
                 print("Process not found; removing stale PID file.")
                 with contextlib.suppress(FileNotFoundError):
