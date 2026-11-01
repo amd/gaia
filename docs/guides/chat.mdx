@@ -167,6 +167,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with documents — includi
 
   - **Image files** (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.gif`, `.tif`, `.tiff`) are indexed only through the VLM. Without it, indexing the image fails with these instructions. Index images one at a time: folder indexing skips them.
   - **PDF and PPTX files** still index without the VLM, but only their text layer. Text inside their images is not indexed.
+  - **Images on PDF pages that already hold plenty of text** are not read. Scans and pages short of text are, which is where nearly all the text in images was found. Set `use_vlm=False` to skip images altogether.
 </Note>
 
 ### Interactive RAG Commands
