@@ -213,7 +213,8 @@ def _catalog(
         return any(same(model_id, m) for m in ids)
 
     order: List[str] = []
-    for model_id in [*planned, *_known_chat_models()]:
+    known = [*planned, *_known_chat_models()]
+    for model_id in known:
         if not listed(model_id, order):
             order.append(model_id)
     for e in lemonade_list:
@@ -273,6 +274,8 @@ def _catalog(
                     or listed(model_id, base)
                 ),
                 "planned": is_planned,
+                # GAIA's own model, not one only this Lemonade has.
+                "gaia_model": listed(model_id, known),
                 "selected": listed(model_id, selected),
                 "skipped": model_choice.is_skipped(model_id, skipped),
                 "chat_choice": not is_embedding_model_id(model_id)
@@ -399,13 +402,34 @@ def build_plan(
 
 
 def run_disk_warning(
-    profile: str = PROFILE, skip_chat_model: bool = False
+    profile: str = PROFILE,
+    skip_chat_model: bool = False,
+    extra_models: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """The low-disk warning for the selected downloads, or None when they fit."""
-    plan = build_plan(profile, skip_chat_model)
+    plan = build_plan(profile, skip_chat_model, extra_models)
     return model_choice.disk_shortfall(
         [(m["id"], m["size_gb"]) for m in plan["models"]], plan["disk"]
     )
+
+
+def check_extra_models(model_ids: List[str]) -> List[str]:
+    """*model_ids* as the catalog names them; raises for one nobody has."""
+    if not model_ids:
+        return []
+    catalog = build_plan()["catalog"]
+    out = []
+    for model_id in model_ids:
+        entry = next(
+            (e for e in catalog if model_choice.ids_match(e["id"], model_id)), None
+        )
+        if entry is None:
+            raise SetupPlanError(
+                f"{model_id} is not a model GAIA knows or one in this Lemonade "
+                "Server, so setup can't download it."
+            )
+        out.append(entry["id"])
+    return out
 
 
 def _require_client(action: str):

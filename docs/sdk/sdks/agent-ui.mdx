@@ -2376,7 +2376,8 @@ so the two can never disagree about whether GAIA is set up.
     The same plan also carries what the model picker needs: `catalog` (every
     model the user can pick, with `roles`, `purpose`, `if_skipped`, `size_gb`
     left to download, `downloaded`, `recommended`, `selected`, `skipped`,
-    `chat_choice`, and `fits` with `need_gb` / `capacity_gb` / `fit_reason`),
+    `chat_choice`, `gaia_model` (GAIA's own model, not one only this
+    Lemonade has), and `fits` with `need_gb` / `capacity_gb` / `fit_reason`),
     `disk` (`path`, `free_gb`, `source`), `disk_warning`, and `skipped_models`.
     `gaia init --plan --json` prints the same object; its
     [CLI reference](/reference/cli#choosing-models) lists every field.
@@ -2421,10 +2422,17 @@ so the two can never disagree about whether GAIA is set up.
   <Accordion title="POST /api/setup/run">
     Start `gaia init --profile gaia --yes` in the background; follow it with
     `/api/setup/status`. Body: `{"skip_chat_model": false, "gaia_lemonade":
-    false, "acknowledge_low_disk": false, "keep_trying": false}`;
+    false, "acknowledge_low_disk": false, "keep_trying": false,
+    "extra_models": [], "server_only": false}`;
     `gaia_lemonade` runs `gaia init --gaia-lemonade`, which sets up and saves
     GAIA's own server instead of the user's. `keep_trying` waits out a dropped
-    connection for up to two minutes before a model fails. **409** when setup
+    connection for up to two minutes before a model fails. `extra_models`
+    pulls models the user ticked beside the plan's (`--download-model`), and
+    counts them in the disk check; a model nobody has is a **422**.
+    `server_only` starts the model server and stops there (`--skip-models`,
+    no load check), so a cold PC can choose its models against the server
+    before anything downloads; it takes no `extra_models` and skips the disk
+    check, and its status carries `server_only: true`. **409** when setup
     is already running, or `gaia_lemonade` is asked while `LEMONADE_BASE_URL`
     picks the server. **409** with `detail` `{"code": "low_disk", "message",
     "need_gb", "free_gb", "free_up_gb", "path", "drop", "acknowledge":

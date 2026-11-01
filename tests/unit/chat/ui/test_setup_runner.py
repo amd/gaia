@@ -70,6 +70,22 @@ def test_run_args_switch_to_gaias_own_server():
     assert "--gaia-lemonade" not in sr.run_args(False)
 
 
+def test_run_args_server_only_downloads_nothing():
+    args = sr.run_args(False, server_only=True)
+    assert "--skip-models" in args and "--download-model" not in args
+    assert "--skip-models" not in sr.run_args(False)
+
+
+def test_run_args_pull_each_ticked_extra_model():
+    args = sr.run_args(False, extra_models=["Qwen3-VL-4B-Instruct-GGUF", "gpt-oss-20b"])
+    assert args[-4:] == [
+        "--download-model",
+        "Qwen3-VL-4B-Instruct-GGUF",
+        "--download-model",
+        "gpt-oss-20b",
+    ]
+
+
 # ── parse_status ───────────────────────────────────────────────────────────
 
 
@@ -376,6 +392,18 @@ def test_view_names_the_chat_model_once_setup_picks_it():
     assert "Qwen3.6-35B-A3B-GGUF" in view["steps"][1]["detail"]
 
 
+def test_server_only_lists_just_the_server_step():
+    assert [s["key"] for s in sr.step_labels(False, server_only=True)] == ["server"]
+    mine = sr.step_labels(False, users_server="http://h:1/api/v1", server_only=True)
+    assert mine == [
+        {
+            "key": "server",
+            "label": "Use your Lemonade Server",
+            "detail": "http://h:1/api/v1",
+        }
+    ]
+
+
 def test_use_mine_replaces_the_install_step():
     steps = sr.step_labels(False, users_server="http://localhost:13305/api/v1")
     assert steps[0]["label"] == "Use your Lemonade Server"
@@ -463,6 +491,65 @@ def test_a_clean_run_is_verified_then_ready(monkeypatch):
     assert argv[3:] == sr.run_args(True)
     assert kwargs["stdin"] is subprocess.DEVNULL
     assert "[====] 100% (5 MB/5 MB)" in view["log_tail"]
+
+
+def test_a_server_only_run_is_ready_without_loading_models(monkeypatch):
+    calls = []
+    _popen(
+        monkeypatch,
+        _FakeProc(io.BytesIO(b"Step 1/2: Starting Lemonade Server...\n")),
+        calls,
+    )
+
+    def check(*_a, **_k):
+        raise AssertionError("a server-only run has no models to load")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, server_only=True)
+    view = _wait_done(runner)
+    assert view["state"] == "ready" and view["server_only"] is True
+    assert [s["key"] for s in view["steps"]] == ["server"]
+    assert view["steps"][0]["status"] == "done"
+    assert "--skip-models" in calls[0][0]
+
+
+def test_an_extra_model_with_no_load_check_ends_ready(monkeypatch):
+    plan = json.dumps(
+        {
+            "event": "plan",
+            "models": [
+                {"id": "Gemma-4-E4B-it-GGUF", "bytes_total": 10, "downloaded": True},
+                {"id": "gpt-oss-20b-GGUF", "bytes_total": 10, "downloaded": True},
+            ],
+        }
+    )
+    _popen(monkeypatch, _FakeProc(io.BytesIO((plan + chr(10)).encode())))
+    monkeypatch.setattr(
+        sr,
+        "check",
+        lambda *_a, **_k: {
+            "ready": True,
+            "models": [{"id": "Gemma-4-E4B-it-GGUF", "loaded": True}],
+        },
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, extra_models=["gpt-oss-20b-GGUF"])
+    view = _wait_done(runner)
+    assert view["state"] == "ready"
+    assert {m["id"]: m["state"] for m in view["models"]} == {
+        "Gemma-4-E4B-it-GGUF": "ready",
+        "gpt-oss-20b-GGUF": "ready",
+    }
+
+
+def test_a_failed_server_only_run_fails_like_any_run(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO("\u274c Port in use\n".encode()), 1))
+    monkeypatch.setattr(sr, "server_problem", lambda: None)
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, server_only=True)
+    view = _wait_done(runner)
+    assert view["state"] == "failed" and "Port in use" in view["error"]
 
 
 def test_a_run_follows_the_chat_model_and_the_users_server(monkeypatch):

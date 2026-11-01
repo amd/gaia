@@ -9,7 +9,7 @@ with the same ``gaia init --check``, so they can never disagree.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -146,12 +146,17 @@ class SetupRunRequest(BaseModel):
     """``skip_chat_model`` when the chat runs on a cloud provider;
     ``gaia_lemonade`` to set up GAIA's own server instead of the user's;
     ``acknowledge_low_disk`` to download past a too-small model drive;
-    ``keep_trying`` to wait up to two minutes out a dropped connection."""
+    ``keep_trying`` to wait up to two minutes out a dropped connection;
+    ``extra_models`` to pull models beside the plan's (the user ticked them);
+    ``server_only`` to start the model server and stop, so the models can be
+    chosen against it before anything downloads."""
 
     skip_chat_model: bool = False
     gaia_lemonade: bool = False
     acknowledge_low_disk: bool = False
     keep_trying: bool = False
+    extra_models: List[str] = []
+    server_only: bool = False
 
 
 @router.post("/api/setup/run")
@@ -161,10 +166,26 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
     When the selected models need more disk than is free, answers 409
     ``low_disk`` until ``acknowledge_low_disk`` confirms it.
     """
+    if body.server_only and body.extra_models:
+        raise HTTPException(
+            status_code=422,
+            detail="server_only starts the model server without downloading, "
+            "so it takes no extra_models.",
+        )
+    try:
+        extras = plan_api.check_extra_models(body.extra_models)
+    except SetupPlanError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     try:
         # Switching to GAIA's own server: the user's server's disk is moot.
-        if not body.gaia_lemonade and not body.acknowledge_low_disk:
-            warning = plan_api.run_disk_warning(skip_chat_model=body.skip_chat_model)
+        if (
+            not body.gaia_lemonade
+            and not body.acknowledge_low_disk
+            and not body.server_only
+        ):
+            warning = plan_api.run_disk_warning(
+                skip_chat_model=body.skip_chat_model, extra_models=extras
+            )
             if warning:
                 raise _confirm(warning)
         return runner.start(
@@ -172,6 +193,8 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
             body.gaia_lemonade,
             allow_low_disk=body.acknowledge_low_disk,
             keep_trying=body.keep_trying,
+            extra_models=extras,
+            server_only=body.server_only,
         )
     except SetupPlanError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e

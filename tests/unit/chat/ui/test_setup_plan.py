@@ -651,7 +651,77 @@ def test_run_endpoint_asks_before_downloading_past_the_free_space(
     assert seen == []
     r = client.post("/api/setup/run", json={"acknowledge_low_disk": True}, headers=UI)
     assert r.status_code == 200
-    assert seen == [{"allow_low_disk": True, "keep_trying": False}]
+    assert seen == [
+        {
+            "allow_low_disk": True,
+            "keep_trying": False,
+            "extra_models": [],
+            "server_only": False,
+        }
+    ]
+
+
+def test_run_endpoint_pulls_ticked_extras_and_counts_them_against_the_disk(
+    client, flm_box, monkeypatch
+):
+    flm_box(capacity=BIG_GPU, downloaded=(FLM, DEFAULT_MODEL_NAME), free_gb=10.0)
+    seen = []
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: seen.append(k) or {"state": "running"},
+    )
+    body = {"extra_models": [LARGE_DEFAULT_MODEL_NAME.lower()]}
+    r = client.post("/api/setup/run", json=body, headers=UI)
+    # Gemma is on disk; the ticked 23 GB model alone overflows 10 GB free.
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "low_disk"
+    assert LARGE_DEFAULT_MODEL_NAME in r.json()["detail"]["drop"]
+    r = client.post(
+        "/api/setup/run", json={**body, "acknowledge_low_disk": True}, headers=UI
+    )
+    assert r.status_code == 200
+    # Sent as the catalog names it, so `gaia init` matches it exactly.
+    assert seen[0]["extra_models"] == [LARGE_DEFAULT_MODEL_NAME]
+
+
+def test_run_endpoint_refuses_an_extra_model_nobody_has(client, flm_box, monkeypatch):
+    flm_box()
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post("/api/setup/run", json={"extra_models": ["nope-GGUF"]}, headers=UI)
+    assert r.status_code == 422 and "nope-GGUF" in r.json()["detail"]
+
+
+def test_server_only_run_skips_the_disk_check_and_takes_no_extras(
+    client, flm_box, monkeypatch
+):
+    flm_box(downloaded=(), free_gb=0.1)
+    seen = []
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: seen.append(k) or {"state": "running"},
+    )
+    r = client.post("/api/setup/run", json={"server_only": True}, headers=UI)
+    assert r.status_code == 200 and seen[0]["server_only"] is True
+    r = client.post(
+        "/api/setup/run",
+        json={"server_only": True, "extra_models": [DEFAULT_MODEL_NAME]},
+        headers=UI,
+    )
+    assert r.status_code == 422 and len(seen) == 1
+
+
+def test_catalog_separates_gaias_models_from_ones_only_in_lemonade(flm_box):
+    flm_box()
+    plan = sp.build_plan()
+    assert _entry(plan, FLM)["gaia_model"] is False
+    assert _entry(plan, DEFAULT_MODEL_NAME)["gaia_model"] is True
+    assert _entry(plan, LARGE_DEFAULT_MODEL_NAME)["gaia_model"] is True
+    assert _entry(plan, DEFAULT_EMBEDDING_MODEL)["gaia_model"] is True
 
 
 def test_plan_counts_a_model_downloaded_beside_the_profile(flm_box):

@@ -129,10 +129,13 @@ def run_args(
     gaia_lemonade: bool = False,
     allow_low_disk: bool = False,
     keep_trying: bool = False,
+    extra_models: Optional[List[str]] = None,
+    server_only: bool = False,
 ) -> List[str]:
     # --yes: nobody can answer a prompt on a pipe. --skip-webui-build: a source
     # checkout would otherwise rebuild the very UI that is running this.
     # --progress-json: per-model bytes and states for the progress rows.
+    # server_only: start the model server so the user can choose models next.
     args = [
         "init",
         "--profile",
@@ -149,6 +152,10 @@ def run_args(
         args.append("--skip-chat-model")
     if gaia_lemonade:
         args.append("--gaia-lemonade")
+    if server_only:
+        args.append("--skip-models")
+    for model_id in extra_models or []:
+        args += ["--download-model", model_id]
     return args
 
 
@@ -364,8 +371,24 @@ def step_labels(
     skip_chat_model: bool,
     users_server: Optional[str] = None,
     chat_model: Optional[str] = None,
+    server_only: bool = False,
 ) -> List[Dict[str, str]]:
     """The steps as the user reads them: their server, and the model setup chose."""
+    server = (
+        {
+            "key": PHASE_SERVER,
+            "label": "Use your Lemonade Server",
+            "detail": users_server,
+        }
+        if users_server
+        else {
+            "key": PHASE_SERVER,
+            "label": "Install the local model server",
+            "detail": "about 1 minute",
+        }
+    )
+    if server_only:
+        return [server]
     if skip_chat_model:
         models = "the embedding model, under 1 GB"
     elif chat_model:
@@ -373,19 +396,7 @@ def step_labels(
     else:
         models = "the chat model that fits this PC, plus the embedding model"
     return [
-        (
-            {
-                "key": PHASE_SERVER,
-                "label": "Use your Lemonade Server",
-                "detail": users_server,
-            }
-            if users_server
-            else {
-                "key": PHASE_SERVER,
-                "label": "Install the local model server",
-                "detail": "about 1 minute",
-            }
-        ),
+        server,
         {"key": PHASE_MODELS, "label": "Download the models", "detail": models},
         {"key": PHASE_FINISH, "label": "Check that the models load", "detail": ""},
     ]
@@ -495,11 +506,15 @@ class SetupRun:
     status: Optional[Dict[str, Any]] = None
     allow_low_disk: bool = False
     keep_trying: bool = False
+    #: Only start the model server; the models are chosen and pulled after.
+    server_only: bool = False
 
     def view(self) -> Dict[str, Any]:
         reached = PHASES.index(self.phase) if self.phase in PHASES else -1
         steps = []
-        labels = step_labels(self.skip_chat_model, self.users_server, self.chat_model)
+        labels = step_labels(
+            self.skip_chat_model, self.users_server, self.chat_model, self.server_only
+        )
         for i, step in enumerate(labels):
             if self.state == "ready" or i < reached:
                 status = "done"
@@ -524,6 +539,7 @@ class SetupRun:
             "log_tail": self.log[-40:],
             "skip_chat_model": self.skip_chat_model,
             "gaia_lemonade": self.gaia_lemonade,
+            "server_only": self.server_only,
             "chat_model": None if self.skip_chat_model else self.chat_model,
         }
 
@@ -582,8 +598,14 @@ class SetupRunner:
         gaia_lemonade: bool = False,
         allow_low_disk: bool = False,
         keep_trying: bool = False,
+        extra_models: Optional[List[str]] = None,
+        server_only: bool = False,
     ) -> Dict[str, Any]:
-        """Start setup; *gaia_lemonade* sets up and saves GAIA's own server."""
+        """Start setup; *gaia_lemonade* sets up and saves GAIA's own server.
+
+        *extra_models* are pulled beside the plan's. *server_only* starts the
+        model server and stops there, so the models can be chosen against it.
+        """
         if gaia_lemonade:
             from gaia.llm.lemonade_choice import env_override_note
 
@@ -606,13 +628,19 @@ class SetupRunner:
                 gaia_lemonade=gaia_lemonade,
                 allow_low_disk=allow_low_disk,
                 keep_trying=keep_trying,
+                server_only=server_only,
             )
             command = run_command(skip_chat_model, gaia_lemonade)
             try:
                 self._proc = subprocess.Popen(
                     _gaia_argv(
                         *run_args(
-                            skip_chat_model, gaia_lemonade, allow_low_disk, keep_trying
+                            skip_chat_model,
+                            gaia_lemonade,
+                            allow_low_disk,
+                            keep_trying,
+                            extra_models,
+                            server_only,
                         )
                     ),
                     stdout=subprocess.PIPE,
@@ -869,6 +897,10 @@ class SetupRunner:
                     f"{run.error or _last_line(chr(10).join(run.log))}"
                 )
                 return
+            if run.server_only:
+                # Nothing downloaded yet, so there is nothing to load.
+                run.state, run.text = "ready", "The local model server is running"
+                return
             run.state = "verifying"
             run.phase = PHASE_FINISH
             run.text = "Checking that the models load"
@@ -891,9 +923,12 @@ class SetupRunner:
         }
         with self._lock:
             run.status = status
-            self._settle_models(
-                {m["id"] for m in loads if m.get("loaded")} if loads else None, failed
-            )
+            loaded = {m["id"] for m in loads if m.get("loaded")}
+            # A model pulled beside the profile's (extra_models) has no load
+            # check: downloaded is as far as setup takes it.
+            checked = {m["id"] for m in loads}
+            loaded |= {i for i in self._models if i not in checked}
+            self._settle_models(loaded if loads else None, failed)
             if status.get("ready"):
                 run.state, run.text = "ready", "GAIA is ready"
             else:
