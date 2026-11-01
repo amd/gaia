@@ -1406,9 +1406,9 @@ describe('Chat App Integration', () => {
     });
 
     it('should choose the context size in Model, sized to what fits, not in Advanced', () => {
-      const modelContent = fs.readFileSync(path.join(settingsDir, 'ModelSettings.tsx'), 'utf8');
+      const inUseContent = fs.readFileSync(path.join(settingsDir, 'ModelInUse.tsx'), 'utf8');
       expect(advancedContent).not.toContain('ctx-preset-row');
-      expect(modelContent).toContain('<ModelContextSize model={activeLocal} />');
+      expect(inUseContent).toContain('<ModelContextSize model={model} />');
     });
 
     it('should have danger zone section in Privacy', () => {

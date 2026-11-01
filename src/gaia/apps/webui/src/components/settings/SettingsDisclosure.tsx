@@ -6,6 +6,8 @@ import { ChevronDown } from 'lucide-react';
 
 interface Props {
     title: string;
+    /** Lets a section label itself with the title, or move focus to it. */
+    titleId?: string;
     /** Shown as a pill after the title. */
     count?: number;
     /** One line under the title, readable while the section is closed. */
@@ -17,7 +19,7 @@ interface Props {
 }
 
 /** A collapsible section; its contents stay mounted, so their state survives closing it. */
-export function SettingsDisclosure({ title, count, hint, defaultOpen = false, forceOpen = false, children }: Props) {
+export function SettingsDisclosure({ title, titleId, count, hint, defaultOpen = false, forceOpen = false, children }: Props) {
     const [open, setOpen] = useState(defaultOpen);
     return (
         <details
@@ -28,7 +30,7 @@ export function SettingsDisclosure({ title, count, hint, defaultOpen = false, fo
             <summary onClick={(e) => { if (forceOpen) e.preventDefault(); }}>
                 <ChevronDown size={15} className="settings-disclosure-chevron" aria-hidden="true" />
                 <span className="settings-disclosure-text">
-                    <span className="settings-disclosure-title">{title}</span>
+                    <span className="settings-disclosure-title" id={titleId} tabIndex={titleId ? -1 : undefined}>{title}</span>
                     {hint && <span className="settings-disclosure-hint">{hint}</span>}
                 </span>
                 {count != null && <bdi dir="ltr" className="settings-disclosure-count">{count}</bdi>}

@@ -259,9 +259,8 @@ export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLEle
             </SettingsDisclosure>
 
             {(gpu?.applies || gpuError) && (
-                <SettingsDisclosure title={t('gpu.settingsTitle')} defaultOpen={!!gpu?.pending || !!gpuError}>
+                <SettingsDisclosure title={t('gpu.settingsTitle')} titleId="settings-gpu-title" defaultOpen={!!gpu?.pending || !!gpuError}>
                     <section className="settings-field models-pane-section" aria-labelledby="settings-gpu-title">
-                        <span className="visually-hidden" id="settings-gpu-title" tabIndex={-1}>{t('gpu.settingsTitle')}</span>
                         {gpuError && <p className="settings-error" role="alert">{gpuError}</p>}
                         {gpu?.applies && <GpuMemoryPanel status={gpu} onStatus={setGpu} mode="settings" names={names} headingId="settings-gpu-title" />}
                     </section>
