@@ -2448,7 +2448,10 @@ Do NOT wrap conversational replies in JSON.
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
         self._requested_skill_set = skill_set
-        self.error_history = []  # Store error history for learning
+        # Cumulative across queries (get_error_history); a result reports only
+        # the entries from _turn_error_start on.
+        self.error_history = []
+        self._turn_error_start = 0
         # Safe default so _execute_tool -> _fold_tool_usage never AttributeErrors
         # if called outside the normal process_query loop (e.g. directly in a
         # test); _process_query_impl resets this per-turn.
@@ -9019,9 +9022,13 @@ Do NOT wrap conversational replies in JSON.
         explicit = getattr(getattr(self, "config", None), "project_root", None)
         return resolve_project_root(explicit)
 
+    def _turn_errors(self) -> List[Any]:
+        """The errors recorded since the current query began."""
+        return self.error_history[getattr(self, "_turn_error_start", 0) :]
+
     def _mark_errors_recovered(self) -> None:
         """A reply parsed cleanly: earlier unusable replies were retried, not fatal."""
-        for entry in self.error_history:
+        for entry in self._turn_errors():
             if (
                 isinstance(entry, dict)
                 and entry.get("type") in _RECOVERABLE_ERROR_TYPES
@@ -9032,7 +9039,7 @@ Do NOT wrap conversational replies in JSON.
         """Errors that still stand at the end of the turn."""
         return [
             entry
-            for entry in self.error_history
+            for entry in self._turn_errors()
             if not (isinstance(entry, dict) and entry.get("recovered"))
         ]
 
@@ -9338,6 +9345,7 @@ Do NOT wrap conversational replies in JSON.
             Dict containing the final result and operation details
         """
         ns_id = self._namespaced_agent_id()
+        self._turn_error_start = len(self.error_history)
         # A level the model chose for the last request must not carry into this one.
         reset_effort = getattr(self, "reset_reasoning_effort", None)
         if reset_effort is not None:
@@ -12370,8 +12378,8 @@ Do NOT wrap conversational replies in JSON.
                 "steps_taken": steps_taken,
                 "timing_summary": timing_summary,
                 "duration": time.time() - start_time,
-                "error_count": len(self.error_history),
-                "error_history": self.error_history,
+                "error_count": len(self._turn_errors()),
+                "error_history": self._turn_errors(),
             }
             self.last_result["model_messages"] = messages.finish("")
             # Returns before the tail seal below. A front-end that ends the turn
@@ -12486,8 +12494,8 @@ Do NOT wrap conversational replies in JSON.
             "total_tokens": total_input_tokens
             + total_output_tokens,  # Combined token count
             "cached_tokens": _sum_cached_tokens(conversation),
-            "error_count": len(self.error_history),
-            "error_history": self.error_history,  # Include the full error history
+            "error_count": len(self._turn_errors()),
+            "error_history": self._turn_errors(),  # this query's errors only
             "tool_schema": self._trace_tool_schema(),
             "completion_gaps": completion_gaps,
             # Retries behind this turn's model calls, and whether the model
@@ -12948,11 +12956,14 @@ Do NOT wrap conversational replies in JSON.
                 f"Output written to: {display_result['output_file']}"
             )
 
-    def get_error_history(self) -> List[str]:
+    def get_error_history(self) -> List[Any]:
         """
-        Get the history of errors encountered by the agent.
+        Get every error this agent instance has recorded, across all queries.
+
+        A query's result carries only that query's errors (``error_count`` /
+        ``error_history``); this is the cumulative view.
 
         Returns:
-            List of error messages
+            A copy of the error entries (strings or dicts), oldest first.
         """
-        return self.error_history
+        return list(self.error_history)
