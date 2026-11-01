@@ -173,12 +173,33 @@ def set_skipped(model_id: str, skipped: bool) -> List[str]:
 # ── fit and disk ───────────────────────────────────────────────────────────
 
 
+def to_decimal_gb(model_fit_gb: float) -> float:
+    """A model_fit memory figure (Lemonade's GiB) in decimal GB, as the plan reports it.
+
+    A need and the memory it is judged against both come from model_fit in
+    the same unit, so scaling both keeps every verdict as it was.
+    """
+    from gaia.llm.gpu_memory import GB_PER_GIB
+
+    return model_fit_gb * GB_PER_GIB
+
+
+def memory_reason(need_gb: float, capacity) -> str:
+    """Why a model may not fit, in the decimal GB the plan reports, rounded to
+    0.1 like ``need_gb`` and ``capacity_gb`` so the sentence and numbers agree."""
+    return (
+        f"needs about {to_decimal_gb(need_gb):.1f} GB of memory; this PC has "
+        f"{to_decimal_gb(capacity.memory_gb):.1f} GB ({capacity.memory_source})"
+    )
+
+
 def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, Any]:
     """``fits`` / ``need_gb`` / ``capacity_gb`` / ``fit_reason`` for one model.
 
     Memory only: a model already on disk costs no disk, so disk is judged on
     the whole selection instead (:func:`disk_shortfall`). ``fits`` is None
-    when either the size or this PC's memory is unknown.
+    when either the size or this PC's memory is unknown. The verdict is
+    model_fit's; the numbers are converted to decimal GB.
     """
     from gaia.llm.lemonade_client import find_model_requirement, kv_cache_for
     from gaia.llm.model_fit import MachineCapacity, check_fit, required_memory_gb
@@ -187,18 +208,21 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
         return {
             "fits": None,
             "need_gb": None,
-            "capacity_gb": round(capacity.memory_gb, 1) if capacity else None,
+            "capacity_gb": (
+                round(to_decimal_gb(capacity.memory_gb), 1) if capacity else None
+            ),
             "fit_reason": None,
         }
     mr = find_model_requirement(model_id)
     kv = kv_cache_for(mr, capacity) if mr else 0.0
     memory_only = MachineCapacity(capacity.memory_gb, capacity.memory_source, None)
     verdict = check_fit(float(size_gb), memory_only, kv)
+    need = required_memory_gb(float(size_gb), kv)
     return {
         "fits": verdict.fits,
-        "need_gb": round(required_memory_gb(float(size_gb), kv), 1),
-        "capacity_gb": round(capacity.memory_gb, 1),
-        "fit_reason": verdict.reason or None,
+        "need_gb": round(to_decimal_gb(need), 1),
+        "capacity_gb": round(to_decimal_gb(capacity.memory_gb), 1),
+        "fit_reason": None if verdict.fits else memory_reason(need, capacity),
     }
 
 

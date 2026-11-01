@@ -584,7 +584,8 @@ def _guided_steps(
     """
     if machine.os == "windows":
         amd = _fmt(math.ceil(gb * GB / GIB))
-        gpu = _fmt(round(machine.gpu_gb_at(gb)))
+        # 0.1 GB, as gpu_gb and the presets give it, so the steps read the same number.
+        gpu = f"{round(machine.gpu_gb_at(gb), 1):.1f}"
         shared = machine.gpu_gb_at(gb) - gb >= TOOK_EFFECT_TOLERANCE_GB
         why = (WINDOWS_WHY_SHARED if shared else WINDOWS_WHY_UNITS).format(gpu=gpu)
         return [s.format(amd=amd, why=why) for s in WINDOWS_STEPS], amd

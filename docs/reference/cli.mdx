@@ -417,7 +417,8 @@ has `id`, `roles` (`chat`, `vision`, `embedding`), `purpose`, `if_skipped`,
 `size_gb` (what is left to download, partial files subtracted), `full_size_gb`,
 `downloaded`, `recommended` (for this PC), `selected` (setup will download it),
 `skipped`, `chat_choice`, and `fits` (`null` when unknown) with `need_gb`,
-`capacity_gb` and `fit_reason` (memory figures as Lemonade reports them, which are GiB).
+`capacity_gb` and `fit_reason` (decimal GB, converted from the GiB Lemonade reports, as
+the GPU memory API does).
 `disk` is the model drive's `path` and `free_gb` (decimal GB, like every size);
 `download_gb` and `disk_warning` cover the selected models. A choice that needs
 confirming exits `4` and prints `{"needs_acknowledgement": {...}}` with the `code`
