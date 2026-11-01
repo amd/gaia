@@ -22,6 +22,7 @@ import (
 // an empty filter offering all 7 needs a flagship-capable session.
 func TestSlashOnAnEmptyComposerOpensThePalette(t *testing.T) {
 	m := gaiaTestModel(t)
+	m.gpuApplies = true // /gpu is offered only on an integrated-GPU PC
 	m = typeInto(t, m, "/")
 
 	if !m.palette.open {
@@ -96,14 +97,14 @@ func TestPaletteFiltersAsYouType(t *testing.T) {
 
 	m = typeInto(t, m, "/m")
 	names := paletteNames(m.paletteFiltered())
-	if !containsAll(names, "/model", "/memory") || len(names) != 2 {
-		t.Fatalf("\"/m\" should narrow to /model and /memory, got %v", names)
+	if !containsAll(names, "/model", "/memory", "/models") || len(names) != 3 {
+		t.Fatalf("\"/m\" should narrow to /model, /models and /memory, got %v", names)
 	}
 
 	m = typeInto(t, m, "o")
 	names = paletteNames(m.paletteFiltered())
-	if len(names) != 1 || names[0] != "/model" {
-		t.Fatalf("\"/mo\" should narrow to just /model, got %v", names)
+	if len(names) != 2 || !containsAll(names, "/model", "/models") {
+		t.Fatalf("\"/mo\" should narrow to just /model and /models, got %v", names)
 	}
 }
 

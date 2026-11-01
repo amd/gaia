@@ -12,6 +12,7 @@ import { ModelSettings } from '../ModelSettings';
 import { useModelStore } from '../../../stores/modelStore';
 import { useChatStore } from '../../../stores/chatStore';
 import * as api from '../../../services/api';
+import { mockSetupApis } from '../../../test/setupApiMocks';
 import type { ActiveModel, CustomModelReport, ProviderInfo, ProviderModel } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -74,6 +75,7 @@ let models: ProviderModel[];
 
 beforeEach(() => {
     vi.clearAllMocks();
+    mockSetupApis(mockedApi);
     models = [local(GEMMA, { display_name: 'Gemma 4 E4B' })];
     useModelStore.setState({ active: ACTIVE, error: null, restoreNotice: null, names: {} });
     useChatStore.setState({ systemStatus: null });

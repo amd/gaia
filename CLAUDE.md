@@ -809,7 +809,7 @@ navigation — consult it rather than a hand-maintained copy here. Where things 
 
 ## Roadmap & Plans
 
-The roadmap is at [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://amd-gaia.ai/docs/roadmap)).
+Planned work is tracked in [GitHub milestones](https://github.com/amd/gaia/milestones); [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://amd-gaia.ai/docs/roadmap)) points there.
 Plan documents live in [`docs/plans/`](docs/plans/) (run `ls docs/plans/` for the full
 set — security-model, messaging, autonomy-engine, daemon-convergence, skill-format,
 adaptive memory/skills/recovery, desktop-installer, browser-use, eval-hillclimbing, and more).
