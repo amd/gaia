@@ -1500,6 +1500,39 @@ class TestDeferredWindowsVenvRemoval:
         )
         assert deferred == [venv]
 
+    def test_execute_plan_does_not_defer_linked_active_venv(
+        self, monkeypatch, tmp_path
+    ):
+        venv = tmp_path / ".gaia" / "venv"
+        plan = uc.build_plan(
+            venv=True,
+            purge=False,
+            purge_lemonade=False,
+            purge_models=False,
+            home=tmp_path,
+        )
+        removed = []
+
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(uc, "_is_link", lambda path: path == venv)
+        monkeypatch.setattr(uc, "_is_running_from_venv", lambda _path: True)
+        monkeypatch.setattr(
+            uc,
+            "_defer_windows_venv_removal",
+            lambda *_args, **_kwargs: pytest.fail(
+                "linked venvs must use the safe link-removal path"
+            ),
+        )
+        monkeypatch.setattr(
+            uc, "_remove_path", lambda path, **_kwargs: removed.append(path) or True
+        )
+
+        assert (
+            uc.execute_plan(plan, allowed_roots=[venv.parent], home=tmp_path)
+            == uc.EXIT_OK
+        )
+        assert removed == [venv]
+
     def test_execute_plan_reports_failed_active_venv_defer(self, monkeypatch, tmp_path):
         venv = tmp_path / ".gaia" / "venv"
         plan = uc.build_plan(
