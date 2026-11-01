@@ -9,6 +9,7 @@ import {
 import { useShallow } from 'zustand/react/shallow';
 import { useChatStore } from '../stores/chatStore';
 import { ModelStatusPill } from './ModelStatusPill';
+import { DownloadChip } from './setup/DownloadChip';
 import { useNotificationStore, selectUnreadCount, selectPromptingSessionIds } from '../stores/notificationStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -655,6 +656,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                 </nav>
             )}
 
+            {!isCollapsed && <DownloadChip />}
             <div className="sb-bottom">
                 {!isCollapsed && <ModelStatusPill />}
                 <div className="sb-bottom-actions">

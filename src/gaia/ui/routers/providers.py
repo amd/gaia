@@ -1080,6 +1080,7 @@ def _preferred_backend() -> Optional[str]:
 
 
 def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, Any]:
+    from gaia.installer.model_choice import to_decimal_gb
     from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
 
     from ..local_models import annotate_local_models, measured_speeds
@@ -1105,7 +1106,10 @@ def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, A
         m["download_progress"] = _get_download_progress(m["id"])
     return {
         "models": annotated,
-        "memory_gb": round(capacity.memory_gb, 1) if capacity else None,
+        # Decimal GB, as the setup plan and the GPU memory pane report it.
+        "memory_gb": (
+            round(to_decimal_gb(capacity.memory_gb), 1) if capacity else None
+        ),
         "memory_source": capacity.memory_source if capacity else None,
         "capacity_error": capacity_error,
     }
