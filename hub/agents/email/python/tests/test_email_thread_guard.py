@@ -65,3 +65,19 @@ def test_worker_that_died_from_an_escaping_exception_is_not_reported(monkeypatch
 
 def test_empty_state_returns_nothing():
     assert threads_left_running(threading.enumerate(), timeout=0) == []
+
+
+def test_timeout_is_shared_across_stuck_threads():
+    release = threading.Event()
+    before = threading.enumerate()
+    stuck = [_start(release.wait, name=f"stuck-{i}") for i in range(4)]
+    try:
+        started = time.monotonic()
+        names = threads_left_running(before, timeout=0.2)
+        elapsed = time.monotonic() - started
+        assert sorted(names) == [f"stuck-{i}" for i in range(4)]
+        assert elapsed < 0.6, f"waited {elapsed:.2f}s for 4 threads at a 0.2s budget"
+    finally:
+        release.set()
+        for t in stuck:
+            t.join(timeout=5)
