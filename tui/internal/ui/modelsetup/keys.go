@@ -144,6 +144,18 @@ func (m Model) answer(k string) (Model, tea.Cmd) {
 			p, err := api.Remove(ctx, id)
 			return removedMsg{plan: p, err: err}
 		}, m.tickCmd())
+	case askRedownload:
+		if no {
+			return m, nil
+		}
+		m.busy, m.busySince = "Removing "+m.askRow.name+"…", m.opts.Now()
+		api, id := m.api, m.askRow.id
+		return m, tea.Batch(func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+			defer cancel()
+			_, err := api.Remove(ctx, id)
+			return redownloadMsg{id: id, err: err}
+		}, m.tickCmd())
 	case askGPUConsent:
 		if no {
 			return m, nil
@@ -457,6 +469,12 @@ func (m Model) retryFocused(rows []setupapi.ModelProgress) (Model, tea.Cmd) {
 	}
 	if m.dl.run {
 		m.note = runOwnsRetry
+		return m, nil
+	}
+	if row.State == setupapi.StateFailed && row.ErrorKind != nil && *row.ErrorKind == "verify" {
+		// Downloaded but didn't load: only a fresh copy helps, and that
+		// deletes this one, so ask first.
+		m.ask, m.askRow = askRedownload, rowEntry{id: row.ID, name: m.nameOf(row.ID)}
 		return m, nil
 	}
 	return m.restartOne(row.ID)

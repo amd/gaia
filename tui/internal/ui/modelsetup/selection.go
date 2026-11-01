@@ -5,6 +5,7 @@ package modelsetup
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/amd/gaia/tui/internal/setupapi"
 )
@@ -37,7 +38,7 @@ type rowEntry struct {
 func entryFrom(e setupapi.CatalogEntry) rowEntry {
 	r := rowEntry{
 		id:          e.ID,
-		name:        shortName(e.ID),
+		name:        displayName(e),
 		chatable:    e.ChatChoice && !e.HasRole(setupapi.RoleEmbedding),
 		vision:      e.HasRole(setupapi.RoleVision),
 		embedding:   e.HasRole(setupapi.RoleEmbedding),
@@ -383,4 +384,13 @@ func (s selection) dirty(p setupapi.Plan) bool {
 		}
 	}
 	return false
+}
+
+// displayName is the name the backend gives a model, the one the Agent UI
+// shows, else its id as people read it.
+func displayName(e setupapi.CatalogEntry) string {
+	if strings.TrimSpace(e.Name) != "" {
+		return e.Name
+	}
+	return shortName(e.ID)
 }

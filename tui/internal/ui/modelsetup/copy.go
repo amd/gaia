@@ -49,9 +49,9 @@ const (
 
 	estimating     = "Estimating…"
 	stalledShort   = "No data for 15 seconds. Still trying…"
-	stalledLong    = "Download seems stuck. Press r to retry."
+	stalledLong    = "The download seems stuck. Press r to retry."
 	leavingCancels = "Leaving this screen cancels the download. Finished models stay."
-	leavingKeeps   = "Downloads keep going if you leave; the status line shows how far they are."
+	leavingKeeps   = "Downloads keep going if you switch away; the status line shows them."
 	noPerModel     = "Per-model progress isn't available from this server version."
 	cancelAsk      = "Stop downloading? Finished models stay. Partial downloads are kept so you can resume."
 	runOwnsRetry   = "Setup is still downloading its own models. Retry this one once it finishes."
@@ -61,17 +61,26 @@ const (
 	stoppingLine   = "stopping…"
 	everythingHere = "Everything is already on this PC."
 	lostContact    = "Lost contact with GAIA's background service. Press r to reconnect, or d for what went wrong."
-	verifyingLine  = "checking the file…"
+	verifyingLine  = "checking that it loads…"
 	verifyWaiting  = "downloaded · checked when the rest finish"
 	setupCancelled = "Download stopped. Finished models stay; press r to resume."
+	// The Agent UI's setup.progress.unchecked and setup.download.stoppedBeforeCheck,
+	// with its "Finish setup" button as the TUI's R.
+	uncheckedLine      = "Downloaded and kept. GAIA checks that it loads when you press R."
+	stoppedBeforeCheck = "Setup stopped before it could check that the models load. They are kept; press R to check them now."
+	setupStoppedNote   = "Setup stopped before it finished. Press r to try again, or d for what went wrong."
 
-	gpuKeepsFmt    = "GAIA keeps at least %s for Windows and your apps."
-	gpuConsentKey  = "Needs administrator permission and a restart."
+	gpuKeepsFmt    = "GAIA keeps at least %s for %s and your apps."
+	gpuConsentKey  = "Changing it needs administrator permission and a restart."
 	gpuWaitingText = "Waiting for permission…"
 	gpuDeniedText  = "Permission wasn't given, so nothing changed."
 	gpuGuidedNote  = "GAIA can't change this setting itself on this PC, so it shows you where to change it."
 	gpuIveDone     = "I've done this"
 	gpuNoChange    = "A bigger GPU share doesn't change which models fit this PC, so there is nothing to change here."
+	// gpuNothingToGive replaces the guided steps when the PC has no memory to
+	// move to the GPU: steps for 0 GB would starve it.
+	gpuNothingToGive = "This PC can't give the GPU more memory and still keep enough for the system."
+	gpuRestartHow    = "GAIA never restarts it for you; save your work first."
 )
 
 func introFor(settings bool) string {
@@ -91,6 +100,9 @@ func statusPartial(left float64) string { return formatGB(left) + " left" }
 // the same unit, so they carry the same label and compare directly. Whether a
 // model fits is still the backend's verdict, never re-derived here.
 
+// Sentences below match the Agent UI's setup copy (en.ts setup.* and gpu.*),
+// with the TUI's keys where the web has buttons.
+
 // fitLine is the focused row's memory line when the model fits.
 func fitLine(need, have float64) string {
 	return fmt.Sprintf("Needs about %s of memory; this PC has %s for models.", formatGBShort(need), formatGBShort(have))
@@ -98,12 +110,12 @@ func fitLine(need, have float64) string {
 
 // noFitLine is the warning under a model that won't fit this PC's memory.
 func noFitLine(need, have float64) string {
-	return fmt.Sprintf("[!] needs ~%s; this PC has %s. %s", formatGBShort(need), formatGBShort(have), mayBeSlow)
+	return fmt.Sprintf("[!] Needs about %s; this PC has %s. %s", formatGBShort(need), formatGBShort(have), mayBeSlow)
 }
 
 // noFitAsk replaces the footer before downloading a model that won't fit.
 func noFitAsk(need, have float64) string {
-	return fmt.Sprintf("Needs ~%s, this PC has %s.", formatGBShort(need), formatGBShort(have))
+	return fmt.Sprintf("Needs about %s; this PC has %s.", formatGBShort(need), formatGBShort(have))
 }
 
 // purposeLine says what a model is for, in a few words.
@@ -112,13 +124,11 @@ func purposeLine(e rowEntry) string {
 	case e.embedding:
 		return "Lets GAIA search your files and remember things."
 	case e.vision:
-		return "Reads images. Skip it and GAIA can't look at pictures."
+		return "Reads images and screenshots."
 	case e.npu:
-		return "Runs on the NPU."
-	case e.recommended:
-		return "Best answers for this PC."
+		return "Answers your chats. Runs on the NPU."
 	}
-	return "A chat model."
+	return "Answers your chats."
 }
 
 // skippedCaveat is the amber line under a model the user unticked that some
@@ -136,7 +146,7 @@ func skippedCaveat(e rowEntry) string {
 // diskSummary is the live totals line.
 func diskSummary(download float64, free *float64, drive string) string {
 	if free == nil {
-		return fmt.Sprintf("Download %s · free space unknown", formatGB(download))
+		return fmt.Sprintf("Download %s · Free space unknown", formatGB(download))
 	}
 	after := *free - download
 	if after < 0 {
@@ -163,19 +173,25 @@ func diskShortfall(need, free float64, drive, drop string, dropGB float64) strin
 func failureLine(kind, name, drive string, doneGB, leftGB float64) string {
 	switch kind {
 	case "disk_full":
-		return fmt.Sprintf("Ran out of disk space on %s after %s. Free %s and press r to retry. Nothing was lost; the download continues from where it stopped.",
-			drive, formatGB(doneGB), formatGB(leftGB))
+		return fmt.Sprintf("Ran out of disk space on %s after %s of %s. Free %s and press r. Nothing was lost; the download continues from where it stopped.",
+			drive, formatGB(doneGB), name, formatGB(leftGB))
 	case "network":
-		return "The connection dropped. Press r to retry; the download continues from where it stopped."
+		return "The connection dropped while downloading " + name + ". Press r to continue from where it stopped."
 	case "verify":
-		return "The file didn't pass its check. Press r to download it again."
+		return name + " downloaded but didn't load. Press r to delete it and download it again."
 	}
-	return "Lemonade couldn't download " + name + ". Press r to retry, or d for what it said."
+	return "Lemonade couldn't download " + name + ". Press d for its message, r to retry."
 }
 
 // retryingLine is a row waiting out a dropped connection the user opted into.
 func retryingLine(secondsLeft int) string {
-	return fmt.Sprintf("The connection dropped. GAIA will retry on its own for %s.", plural(secondsLeft, "more second"))
+	return fmt.Sprintf("The connection dropped. Trying again for %s…", plural(secondsLeft, "more second"))
+}
+
+// redownloadAsk is the confirm before retrying a model that failed its load
+// check: the retry deletes it first.
+func redownloadAsk(name string) string {
+	return name + " downloaded but didn't load. Delete it and download it again?"
 }
 
 // removeAsk is the confirm before deleting a model from this PC.
@@ -215,13 +231,9 @@ func gpuUnlocks(target float64, models []string) string {
 	return fmt.Sprintf("With %s for the GPU, %s and %s fit.", formatGBShort(target), models[0], models[1])
 }
 
-// gpuNothingToGive replaces the guided steps when the PC has no memory to
-// move to the GPU: steps for 0 GB would starve it.
-const gpuNothingToGive = "This PC has no memory to spare for the GPU, so there is nothing to change."
-
-func gpuConsent(pool float64) string {
-	return fmt.Sprintf("GAIA will give the GPU %s. This needs administrator permission and a restart. Nothing else changes, and you can change it back with /gpu: the current setting is saved for undo.",
-		formatGBShort(pool))
+func gpuConsent(name string, pool, now float64) string {
+	return fmt.Sprintf("GAIA will change %s so the GPU has %s. This needs administrator permission and a restart. Nothing else changes, and you can change it back with /gpu. The GPU has %s now. GAIA saves this setting so you can undo.",
+		name, formatGBShort(pool), formatGBShort(now))
 }
 
 // gpuDone and gpuPendingLine take the GPU memory as words: "40 GB", or "the
@@ -231,7 +243,7 @@ func gpuDone(pool string) string {
 }
 
 func gpuPendingLine(pool string) string {
-	return fmt.Sprintf("Restart your PC to use %s. GAIA checks the new split the next time it starts.", pool)
+	return fmt.Sprintf("Restart your PC to use %s. %s", pool, gpuRestartHow)
 }
 
 func gpuTookEffect(now float64) string {
@@ -257,7 +269,7 @@ func readyNotInstalled(names []string) string {
 	return "Not installed (add later in Settings, /models): " + strings.Join(names, ", ")
 }
 func readyGPU(now, was float64) string {
-	return fmt.Sprintf("GPU memory %s (was %s). Undo with /gpu.", formatGBShort(now), formatGBShort(was))
+	return fmt.Sprintf("GPU memory is now %s (was %s). Undo with /gpu.", formatGBShort(now), formatGBShort(was))
 }
 
 func plural(n int, word string) string {

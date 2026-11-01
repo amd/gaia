@@ -111,6 +111,9 @@ const (
 	askRemove
 	askGPUConsent
 	askBackendNoFit
+	// askRedownload: a model downloaded but failed its load check; retrying
+	// deletes it and downloads it again, so the user says yes first.
+	askRedownload
 )
 
 // Model is the setup screens. It is a value; Update returns the next one.
@@ -262,10 +265,10 @@ func (m Model) Outcome() (kind, detail string) {
 	}
 	for _, r := range m.shownRows() {
 		if m.shownState(r) == setupapi.StateFailed {
-			return "failed", shortName(r.ID)
+			return "failed", m.nameOf(r.ID)
 		}
 		if r.State == setupapi.StateCancelled {
-			return "failed", shortName(r.ID)
+			return "failed", m.nameOf(r.ID)
 		}
 	}
 	return "done", ""
@@ -275,7 +278,7 @@ func (m Model) Outcome() (kind, detail string) {
 // them can still forward their ticks and status reads.
 func IsMsg(msg tea.Msg) bool {
 	switch msg.(type) {
-	case loadedMsg, appliedMsg, startedMsg, statusMsg, tickMsg, gpuMsg, cancelledMsg, removedMsg:
+	case loadedMsg, appliedMsg, startedMsg, statusMsg, tickMsg, gpuMsg, cancelledMsg, removedMsg, redownloadMsg:
 		return true
 	}
 	return false
@@ -338,6 +341,13 @@ type cancelledMsg struct{ err error }
 type removedMsg struct {
 	plan setupapi.Plan
 	err  error
+}
+
+// redownloadMsg: a model that failed its load check was deleted, to download
+// again.
+type redownloadMsg struct {
+	id  string
+	err error
 }
 
 // --- commands ---------------------------------------------------------------
@@ -459,6 +469,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.dl.cancelled = true
 		m.dl.queue = nil
 		return m, m.pollNow()
+
+	case redownloadMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.note = msg.err.Error()
+			return m, nil
+		}
+		return m.restartOne(msg.id)
 
 	case removedMsg:
 		m.busy = ""
@@ -1512,4 +1530,19 @@ func (m Model) toModels() Model {
 	}
 	m.scr = scrModels
 	return m
+}
+
+// nameOf is a model's display name: the plan's, else its id as people read it.
+func (m Model) nameOf(id string) string {
+	if r, ok := m.sel.find(id); ok && r.name != "" {
+		return r.name
+	}
+	if m.plan != nil {
+		for _, e := range m.plan.Catalog {
+			if sameID(e.ID, id) {
+				return displayName(e)
+			}
+		}
+	}
+	return shortName(id)
 }

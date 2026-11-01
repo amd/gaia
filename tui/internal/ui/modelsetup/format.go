@@ -29,29 +29,22 @@ func formatGB(gb float64) string {
 	return fmt.Sprintf("%.1f GB", gb)
 }
 
-// formatGBShort is a memory size: whole GB from 10 up, one decimal below, and
-// never a trailing ".0".
+// formatGBShort is a memory size, one decimal like the Agent UI's
+// formatFitGb, so a number reads the same in both.
 func formatGBShort(gb float64) string {
-	if gb >= 10 {
-		return fmt.Sprintf("%.0f GB", math.Round(gb))
-	}
-	s := fmt.Sprintf("%.1f", gb)
-	return strings.TrimSuffix(s, ".0") + " GB"
+	return fmt.Sprintf("%.1f GB", gb)
 }
 
 func bytesGB(b int64) float64 { return float64(b) / 1e9 }
 
-// formatSpeed is a download rate.
+// formatSpeed is a download rate in MB/s, one decimal under 10, as the Agent
+// UI shows it.
 func formatSpeed(bps float64) string {
-	switch {
-	case bps >= 1e9:
-		return fmt.Sprintf("%.1f GB/s", bps/1e9)
-	case bps >= 1e6:
-		return fmt.Sprintf("%.0f MB/s", bps/1e6)
-	case bps >= 1e3:
-		return fmt.Sprintf("%.0f KB/s", bps/1e3)
+	mb := bps / 1e6
+	if mb >= 10 {
+		return fmt.Sprintf("%.0f MB/s", math.Round(mb))
 	}
-	return fmt.Sprintf("%.0f B/s", bps)
+	return fmt.Sprintf("%.1f MB/s", mb)
 }
 
 // formatETA is how long is left, rounded the way a person says it: seconds
@@ -60,7 +53,7 @@ func formatETA(d time.Duration) string {
 	s := d.Seconds()
 	switch {
 	case s < 90:
-		n := int(math.Ceil(s))
+		n := int(math.Round(s))
 		if n < 1 {
 			n = 1
 		}
@@ -106,4 +99,15 @@ func driveOf(path *string) string {
 // prefix and letter case.
 func sameID(a, b string) bool {
 	return strings.EqualFold(strings.TrimPrefix(a, "user."), strings.TrimPrefix(b, "user."))
+}
+
+// osName is the OS as the reserve line names it, the Agent UI's osName.
+func osName(os string) string {
+	switch os {
+	case "windows":
+		return "Windows"
+	case "linux":
+		return "Linux"
+	}
+	return os
 }

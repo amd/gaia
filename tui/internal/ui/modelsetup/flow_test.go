@@ -98,11 +98,11 @@ func TestTooBigModelAsksWithRealNumbersAndCanBeConfirmed(t *testing.T) {
 	h := newHarness(t, ModeFirstRun, api)
 	h.focusID(qwen)
 	h.key("space")
-	h.expect("[!] needs ~27 GB; this PC has 16 GB.")
+	h.expect("[!] Needs about 27.1 GB; this PC has 16.0 GB.")
 	h.expect("[!] won't fit")
 
 	h.key("enter")
-	h.expect("Needs ~27 GB, this PC has 16 GB.")
+	h.expect("Needs about 27.1 GB; this PC has 16.0 GB.")
 	h.expect("y download anyway")
 	h.expect("n pick another")
 	if api.Called("run") {
@@ -165,7 +165,7 @@ func TestUnknownFreeSpaceNeverGuesses(t *testing.T) {
 	p := coldPlan()
 	p.Disk.FreeGB = nil
 	h := newHarness(t, ModeFirstRun, &f.Fake{P: p, G: discreteGPU()})
-	h.expect("free space unknown")
+	h.expect("Free space unknown")
 	h.expectNot("after")
 	h.expect("enter continue")
 }
@@ -338,28 +338,28 @@ func TestIntegratedGPUShowsTheStepWithConsentAndCancelByDefault(t *testing.T) {
 	h.key("enter")
 	h.expect("Give the GPU more memory")
 	h.expect("step 2 of 2 · part 2 of 3")
-	h.expect("This PC shares 128 GB between the CPU and the GPU. The GPU has 24 GB now.")
-	h.expect("CPU 104 GB  |  GPU 24 GB")
+	h.expect("This PC shares 128.0 GB between the CPU and the GPU. The GPU has 24.0 GB now.")
+	h.expect("CPU 104.0 GB  |  GPU 24.0 GB")
 	// The GPU memory the user reads, and the setting that gives it.
-	h.expect("Target: GPU 40 GB")
+	h.expect("Target: GPU 40.0 GB")
 	// The target is the GPU memory the user gets, never a preset's setting.
 	h.expectNot("Set Variable Graphics Memory to")
-	h.expect("GAIA keeps at least 16 GB for Windows and your apps.")
-	h.expect("With 40 GB for the GPU, Qwen3.6-35B-A3B fits.")
+	h.expect("GAIA keeps at least 16.0 GB for Windows and your apps.")
+	h.expect("With 40.0 GB for the GPU, Qwen3.6-35B-A3B fits.")
 
 	h.key("right")
-	h.expect("Target: GPU 72 GB")
-	// Setup names only what the user chose: gpt-oss-120b also fits at 72 GB,
+	h.expect("Target: GPU 72.0 GB")
+	// Setup names only what the user chose: gpt-oss-120b also fits at 72.0 GB,
 	// but nobody ticked it.
-	h.expect("With 72 GB for the GPU, Qwen3.6-35B-A3B fits.")
+	h.expect("With 72.0 GB for the GPU, Qwen3.6-35B-A3B fits.")
 	h.expectNot("gpt-oss-120b")
 	h.key("left")
 
 	h.key("enter")
 	h.expect(gpuConsentKey)
-	h.expect("GAIA will give the GPU 40 GB.")
+	h.expect("GAIA will change Variable Graphics Memory so the GPU has 40.0 GB.")
 	h.expectNot("Variable Graphics Memory 32")
-	h.expect("the current setting is saved for undo.")
+	h.expect("GAIA saves this setting so you can undo.")
 	h.expect("y continue")
 	h.expect("n cancel")
 	// esc is no: the safe answer.
@@ -372,7 +372,7 @@ func TestIntegratedGPUShowsTheStepWithConsentAndCancelByDefault(t *testing.T) {
 	if !api.Called("gpu-apply 32") {
 		t.Fatalf("y did not apply: %v", api.CallList())
 	}
-	h.expect("Done. Restart your PC to use 40 GB.")
+	h.expect("Done. Restart your PC to use 40.0 GB.")
 	h.key("enter")
 	if h.m.Screen() != "download" {
 		t.Fatalf("after the GPU step the download should start, got %s", h.m.Screen())
@@ -481,15 +481,15 @@ func TestGuidedWalkthroughRereadsTheSplit(t *testing.T) {
 	if !api.Called("gpu-pending 32") {
 		t.Fatalf("an unchanged split must be recorded as pending: %v", api.CallList())
 	}
-	h.expect("Restart your PC to use 40 GB.")
+	h.expect("Restart your PC to use 40.0 GB.")
 }
 
 func TestAfterRestartTheSplitIsReportedHonestly(t *testing.T) {
 	g := gpuShared()
 	g.Pending = &setupapi.GPUPending{SettingGB: 32, State: setupapi.PendingNotApplied}
 	h := newHarness(t, ModeGPU, &f.Fake{G: g})
-	h.expect("The PC still reports 24 GB. The change may not have applied.")
-	h.expect("k keep 24 GB")
+	h.expect("The PC still reports 24.0 GB. The change may not have applied.")
+	h.expect("k keep 24.0 GB")
 	h.key("k")
 	if !h.api.Called("gpu-keep") {
 		t.Fatal("keep did not clear the pending record")
@@ -499,7 +499,7 @@ func TestAfterRestartTheSplitIsReportedHonestly(t *testing.T) {
 	g2.GPUGB, g2.Setting.CurrentGB = 40, 32
 	g2.Pending = &setupapi.GPUPending{SettingGB: 32, State: setupapi.PendingTookEffect}
 	h2 := newHarness(t, ModeGPU, &f.Fake{G: g2})
-	h2.expect("GPU memory is now 40 GB.")
+	h2.expect("GPU memory is now 40.0 GB.")
 }
 
 // --- download ---------------------------------------------------------------
@@ -640,7 +640,7 @@ func TestStalledDownloadSaysSoThenOffersRetry(t *testing.T) {
 	h.tick(16 * time.Second)
 	h.expect(stalledShort)
 	h.tick(50 * time.Second)
-	h.expect("Download seems stuck.")
+	h.expect("The download seems stuck.")
 }
 
 func TestCancelKeepsFilesAndResumeContinues(t *testing.T) {
@@ -755,7 +755,7 @@ func TestFailuresSayWhatHappenedAndRetryWorks(t *testing.T) {
 	h.api.SetRunState(setupapi.RunFailed)
 	h.poll()
 	h.focusOnProgress(qwen)
-	h.expect("Ran out of disk space on C: after 14.2 GB. Free 9.1 GB and press r to retry.")
+	h.expect("Ran out of disk space on C: after 14.2 GB of Qwen3.6-35B-A3B. Free 9.1 GB and press r.")
 	h.key("r")
 	if !h.api.Called("download " + qwen) {
 		t.Fatalf("retry did not download the model again: %v", h.api.CallList())
@@ -764,12 +764,12 @@ func TestFailuresSayWhatHappenedAndRetryWorks(t *testing.T) {
 	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateFailed, ErrorKind: strp("verify"), BytesTotal: total(gemma)})
 	h.poll()
 	h.focusOnProgress(gemma)
-	h.expect("The file didn't pass its check. Press r to download it again.")
+	h.expect("Gemma-4-E4B-it downloaded but didn't load. Press r to delete it and")
 
 	h.api.Progress(setupapi.ModelProgress{ID: emb, State: setupapi.StateFailed, ErrorKind: strp("network"), BytesTotal: total(emb)})
 	h.poll()
 	h.focusOnProgress(emb)
-	h.expect("The connection dropped. Press r to retry; the download continues from where it stopped.")
+	h.expect("The connection dropped while downloading embeddinggemma-300m. Press r to")
 }
 
 func TestRetryWhileSetupRunsSaysWhy(t *testing.T) {
@@ -907,7 +907,7 @@ func TestApplyShowsTheSameWarningsAsSetup(t *testing.T) {
 	h := newHarness(t, ModeModels, api)
 	h.focusID(qwen)
 	h.key("space", "a")
-	h.expect("Needs ~27 GB, this PC has 16 GB.")
+	h.expect("Needs about 27.1 GB; this PC has 16.0 GB.")
 	h.key("y")
 	h.expect("Needs 29.6 GB; only 10.0 GB free on C:.")
 	h.key("y")
@@ -1283,21 +1283,20 @@ func TestNothingToGiveHidesTheStepsAndTheValue(t *testing.T) {
 // setting no preset names reads as "the new GPU memory".
 func TestGPUMessagesNameGPUMemoryNotTheSetting(t *testing.T) {
 	h := newHarness(t, ModeGPU, &f.Fake{P: coldPlan(), G: gpuShared()})
-	if got := h.m.poolFor(32); got != "40 GB" {
-		t.Fatalf("poolFor(32) = %q, want the preset's 40 GB", got)
+	if got := h.m.poolFor(32); got != "40.0 GB" {
+		t.Fatalf("poolFor(32) = %q, want the preset's 40.0 GB", got)
 	}
 	if got := h.m.poolFor(17); got != "the new GPU memory" {
 		t.Fatalf("poolFor(17) = %q; an unnamed setting must not read as GPU memory", got)
 	}
 }
 
-// Retrying a model that failed its load check downloads it again through the
-// download route; nothing on screen removes a model without the user's
-// explicit remove-and-confirm in /models.
-func TestRetryNeverRemovesAModel(t *testing.T) {
+// A model that downloaded but failed its load check is only deleted and
+// downloaded again after the user says yes; no answer, or no, removes nothing.
+func TestRetryNeverRemovesAModelWithoutConfirmation(t *testing.T) {
 	h := startedDownload(t)
 	kind := "verify"
-	msg := "Setup stopped before GAIA could check that Gemma-4-E4B-it-GGUF loads."
+	msg := "Gemma-4-E4B-it-GGUF would not load."
 	h.api.SetRunState(setupapi.RunFailed)
 	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateFailed, ErrorKind: &kind, Error: &msg,
 		BytesDone: total(gemma), BytesTotal: total(gemma)})
@@ -1310,21 +1309,99 @@ func TestRetryNeverRemovesAModel(t *testing.T) {
 			h.m.focus = i
 		}
 	}
-	before := len(h.api.CallList())
+	removed := func() bool {
+		for _, c := range h.api.CallList() {
+			if strings.HasPrefix(c, "remove") {
+				return true
+			}
+		}
+		return false
+	}
 	h.key("r")
-	h.key("R")
-	retried := false
-	for _, c := range h.api.CallList()[before:] {
-		if strings.HasPrefix(c, "run") || strings.HasPrefix(c, "download "+gemma) {
-			retried = true
+	h.expect("Gemma-4-E4B-it downloaded but didn't load. Delete it and download it again?")
+	h.key("n")
+	if removed() {
+		t.Fatalf("no removed a model: %v", h.api.CallList())
+	}
+	h.key("r", "y")
+	if !h.api.Called("remove " + gemma) {
+		t.Fatalf("yes did not delete the broken copy: %v", h.api.CallList())
+	}
+	if !h.api.Called("download " + gemma) {
+		t.Fatalf("yes did not download it again: %v", h.api.CallList())
+	}
+}
+
+// A run that failed before its load check keeps what it downloaded: those rows
+// read "downloaded", are no failure, offer no retry, and the run's own note
+// shows only when no download failed (its row would already say why).
+func TestUncheckedModelsAreKeptNotFailed(t *testing.T) {
+	for _, modelFailed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "run stopped", true: "a download failed"}[modelFailed], func(t *testing.T) {
+			h := startedDownload(t)
+			h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateUnchecked, BytesDone: total(gemma), BytesTotal: total(gemma)})
+			h.api.Progress(setupapi.ModelProgress{ID: emb, State: setupapi.StateUnchecked, BytesDone: total(emb), BytesTotal: total(emb)})
+			if modelFailed {
+				kind, msg := "network", "The connection dropped."
+				h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateFailed, ErrorKind: &kind, Error: &msg, BytesDone: 5e9, BytesTotal: total(qwen)})
+			} else {
+				h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateUnchecked, BytesDone: total(qwen), BytesTotal: total(qwen)})
+			}
+			h.api.SetRunState(setupapi.RunFailed)
+			raw := "Traceback: init exited 1"
+			h.api.SetRunError(modelFailed, raw)
+			h.poll()
+			h.poll()
+			h.expect("downloaded · not checked yet")
+			h.expectNot("didn't pass its check")
+			h.expectNot(raw)
+			want := 0
+			if modelFailed {
+				want = 1
+			}
+			if got := h.m.failedCount(); got != want {
+				t.Fatalf("failed count = %d, want %d: unchecked models are not failures", got, want)
+			}
+			if modelFailed {
+				h.expectNot(stoppedBeforeCheck)
+			} else {
+				h.expect("Setup stopped before it could check that the models load.")
+			}
+			// Focus an unchecked row: r never re-downloads it on its own.
+			for i, r := range h.m.shownRows() {
+				if r.ID == emb {
+					h.m.focus = i
+				}
+			}
+			h.expect(uncheckedLine)
+			before := len(h.api.CallList())
+			h.key("r")
+			for _, c := range h.api.CallList()[before:] {
+				if strings.HasPrefix(c, "download "+emb) || strings.HasPrefix(c, "remove") {
+					t.Fatalf("r on a kept model re-downloaded or removed it: %v", h.api.CallList()[before:])
+				}
+			}
+			h.key("d")
+			h.expect(raw)
+		})
+	}
+}
+
+// Models read by the name the backend gives them, the one the Agent UI shows,
+// on the choice, the download rows and the GPU step.
+func TestModelsUseTheBackendsDisplayName(t *testing.T) {
+	p := coldPlan()
+	for i := range p.Catalog {
+		if p.Catalog[i].ID == qwen {
+			p.Catalog[i].Name = "Qwen3.6 35B A3B"
 		}
 	}
-	if !retried {
-		t.Fatalf("neither r nor R retried: %v", h.api.CallList()[before:])
-	}
-	for _, c := range h.api.CallList() {
-		if strings.HasPrefix(c, "remove") {
-			t.Fatalf("a retry removed a model: %v", h.api.CallList())
-		}
-	}
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: p, G: gpuShared()})
+	h.expect("Qwen3.6 35B A3B")
+	h.expect("Default chat: Qwen3.6 35B A3B")
+	h.key("enter")
+	h.expect("With 40.0 GB for the GPU, Qwen3.6 35B A3B fits.")
+	h.key("s")
+	h.expect("Qwen3.6 35B A3B")
+	h.expectNot("Qwen3.6-35B-A3B")
 }

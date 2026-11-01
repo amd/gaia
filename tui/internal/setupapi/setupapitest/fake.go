@@ -71,6 +71,14 @@ func (f *Fake) SetStatus(s setupapi.Status) {
 	f.S = s
 }
 
+// SetRunError sets why the run stopped and whether a download failed in it.
+func (f *Fake) SetRunError(modelFailed bool, msg string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.S.ModelFailed = modelFailed
+	f.S.Error = &msg
+}
+
 // SetStatusErr makes Status fail (a dropped daemon), or recover with nil.
 func (f *Fake) SetStatusErr(err error) {
 	f.mu.Lock()
@@ -288,7 +296,7 @@ func Entry(id string, roles []string, size float64, downloaded, planned, recomme
 	}
 	d := downloaded
 	e := setupapi.CatalogEntry{
-		ID: id, Name: id, Roles: roles, SizeGB: &left, FullSizeGB: &full,
+		ID: id, Name: strings.TrimSuffix(strings.TrimPrefix(id, "user."), "-GGUF"), Roles: roles, SizeGB: &left, FullSizeGB: &full,
 		Downloaded: &d, InLemonade: true, Recommended: recommended,
 		Planned: planned, Selected: planned, ChatChoice: !hasRole(roles, setupapi.RoleEmbedding),
 		Fits: fits,

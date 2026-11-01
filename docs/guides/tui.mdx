@@ -262,8 +262,8 @@ The models recommended for this PC are ticked.
   Choose your models                                 step 3 of 3 · part 1 of 2
   ────────────────────────────────────────────────────────────────────────────
   > [x] Gemma-4-E4B-it         Chat+Vision  6.0 GB    * recommended
-        Reads images. Skip it and GAIA can't look at pictures. Needs about 8.3
-        GB of memory; this PC has 32 GB for models.
+        Reads images and screenshots. Needs about 8.3 GB of memory; this PC
+        has 32.0 GB for models.
     [x] embeddinggemma-300m    Documents    330 MB    * recommended
     [x] Qwen3.6-35B-A3B        Chat         23.3 GB   * recommended
     [ ] ggml-gpt-oss-20b-MXFP4 Chat         12.1 GB
@@ -291,8 +291,8 @@ The models recommended for this PC are ticked.
 Unticking never deletes a model. Every warning is a caveat with numbers, not a
 block:
 
-- **Won't fit:** `[!] needs ~27 GB; this PC has 16 GB`. `Enter` asks
-  `Needs ~27 GB, this PC has 16 GB. y download anyway · n pick another`.
+- **Won't fit:** `[!] Needs about 27.1 GB; this PC has 16.0 GB`. `Enter` asks
+  `Needs about 27.1 GB; this PC has 16.0 GB. y download anyway · n pick another`.
 - **Disk:** when the selection needs more than is free, the line says how much to
   free and the one model to untick that would make it fit, and `Enter` becomes
   `continue anyway`.
@@ -328,14 +328,17 @@ Then the download, one row per model:
   t keep trying · d details · c cancel · esc back
 ```
 
-Each row names its state in words — queued, downloading, checking the file,
-ready, failed, cancelled. Speed and time left appear after 10 seconds of data
+Each row names its state in words — queued, downloading, checking that it
+loads, ready, failed, cancelled, or downloaded but not checked yet (setup
+stopped before its load check; the model is kept, and `R` checks it). Speed and time left appear after 10 seconds of data
 ("Estimating…" before), and a download with no data for 15 seconds says so. `c`
 stops it (asking first once over 1 GB is in); finished models and partial files
 stay, and `r` on a stopped row (or `R` for all of them) resumes from where it
 stopped. A failed row says why — the
-connection dropped, the disk filled up (with how much to free), or the file
-failed its check — and `r` retries it. `Esc` leaves, which cancels the download.
+connection dropped, the disk filled up (with how much to free), or the model
+downloaded but didn't load — and `r` retries it. A model that didn't load is
+deleted and downloaded again only after you confirm. Model names, sizes and
+these sentences read the same as in the Agent UI. `Esc` leaves, which cancels the download.
 Once every model is ready, a summary names the chat, vision and documents models
 and anything left out; `Enter` starts GAIA.
 

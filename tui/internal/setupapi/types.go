@@ -133,6 +133,9 @@ type Status struct {
 	ChatModel *string  `json:"chat_model"`
 	LogTail   []string `json:"log_tail"`
 	Command   string   `json:"command"`
+	// ModelFailed: a model's download failed in this run, and its row
+	// already says why, so the run needs no note of its own.
+	ModelFailed bool `json:"model_failed"`
 }
 
 // Run states.
@@ -157,6 +160,9 @@ const (
 	StateFailed      = "failed"
 	StateSkipped     = "skipped"
 	StateCancelled   = "cancelled"
+	// StateUnchecked: downloaded and kept, but the run stopped before its
+	// load check. Nothing is wrong with the file: no retry, no delete.
+	StateUnchecked = "unchecked"
 )
 
 // ModelProgress is one model's download.

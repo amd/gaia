@@ -220,6 +220,8 @@ func (m Model) askText() (q, yes, no string) {
 		return cancelAsk, "stop", "keep downloading"
 	case askRemove:
 		return removeAsk(m.askRow), "remove", "keep"
+	case askRedownload:
+		return redownloadAsk(m.askRow.name), "download again", "keep"
 	case askGPUConsent:
 		return gpuConsentKey, "continue", "cancel"
 	}
@@ -634,7 +636,7 @@ func (m Model) gpuView(w int) (body, foot []string) {
 			hint = "  (←/→ to change)"
 		}
 		body = append(body, pad(textStyle.Render("Target: GPU "+formatGBShort(pool))+dimStyle.Render(hint)))
-		body = append(body, indentAll(wrapStyled(dimStyle, fmt.Sprintf(gpuKeepsFmt, formatGBShort(g.ReserveGB)), width), indentW)...)
+		body = append(body, indentAll(wrapStyled(dimStyle, fmt.Sprintf(gpuKeepsFmt, formatGBShort(g.ReserveGB), osName(g.OS)), width), indentW)...)
 		if u := gpuUnlocks(pool, m.unlocks()); u != "" {
 			body = append(body, pad(okStyle.Render(u)))
 		}
@@ -658,7 +660,7 @@ func (m Model) gpuView(w int) (body, foot []string) {
 	}
 	if m.ask == askGPUConsent {
 		body = append(body, "")
-		body = append(body, indentAll(wrapStyled(textStyle, gpuConsent(pool), width), indentW)...)
+		body = append(body, indentAll(wrapStyled(textStyle, gpuConsent(g.Setting.Name, pool, g.GPUGB), width), indentW)...)
 	}
 	if m.busy != "" {
 		body = append(body, pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
@@ -710,7 +712,7 @@ func (m Model) unlocks() []string {
 			// Setup names only what the step is for; /gpu names everything.
 			continue
 		}
-		out = append(out, shortName(id))
+		out = append(out, m.nameOf(id))
 		if len(out) == 2 {
 			break
 		}
@@ -827,8 +829,8 @@ func (m Model) downloadView(w int) (body, foot []string) {
 	if m.lost != nil {
 		body = append(body, indentAll(wrapStyled(failStyle, "[!] "+lostContact, width), indentW)...)
 	}
-	if m.status != nil && m.status.State == setupapi.RunFailed && m.status.Error != nil && m.failedCount() == 0 && !m.dl.active {
-		body = append(body, indentAll(wrapStyled(failStyle, "[!] Setup stopped: "+*m.status.Error+" Press r to try again, d for details.", width), indentW)...)
+	if note := m.runStoppedNote(); note != "" {
+		body = append(body, indentAll(wrapStyled(warnStyle, "[!] "+note, width), indentW)...)
 	}
 	if m.dl.cancelled && !m.dl.active {
 		body = append(body, pad(dimStyle.Render(setupCancelled)))
@@ -886,7 +888,7 @@ func (m Model) stallLine(r setupapi.ModelProgress, now time.Time) string {
 	switch stall := rt.stalled(now); {
 	case stall >= stallStuck:
 		if m.dl.run {
-			return "Download seems stuck. Press c to stop it, then R to resume."
+			return "The download seems stuck. Press c to stop it, then R to resume."
 		}
 		return stalledLong
 	case stall >= stallNotice:
@@ -905,7 +907,8 @@ func (m Model) stuck(rows []setupapi.ModelProgress) bool {
 
 func (m Model) anyUnfinished(rows []setupapi.ModelProgress) bool {
 	for _, r := range rows {
-		if r.State == setupapi.StateFailed || r.State == setupapi.StateCancelled || r.State == setupapi.StateQueued {
+		switch r.State {
+		case setupapi.StateFailed, setupapi.StateCancelled, setupapi.StateQueued, setupapi.StateUnchecked:
 			return true
 		}
 	}
@@ -919,7 +922,7 @@ func (m Model) progressLine(i int, r setupapi.ModelProgress, w int, now time.Tim
 	if i == m.focus {
 		cursor = focusStyle.Render(">") + " "
 	}
-	name := shortName(r.ID)
+	name := m.nameOf(r.ID)
 	nw := 20
 	if w < 60 {
 		nw = 14
@@ -970,6 +973,9 @@ func (m Model) progressLine(i int, r setupapi.ModelProgress, w int, now time.Tim
 		if done := m.inPlanBytes(r, m.doneBytes(r)); done > 0 {
 			text += dimStyle.Render(", " + formatGB(bytesGB(done)) + " kept")
 		}
+	case setupapi.StateUnchecked:
+		// Lined up with ready rows: a finished download, just not checked.
+		return pad(cursor + okStyle.Render("[ok]") + "  " + textStyle.Render(nameCol) + " " + dimStyle.Render("downloaded · not checked yet"))
 	}
 	spin := "  "
 	if (r.State == setupapi.StateDownloading || r.State == setupapi.StateVerifying) && !m.opts.Motion.Reduced {
@@ -1004,7 +1010,7 @@ func (m Model) downloadingText(r setupapi.ModelProgress, room int, now time.Time
 				tail = formatSpeed(rt.speed)
 			}
 			if rt.showETA(now) {
-				tail += "  " + strings.TrimPrefix(formatETA(rt.eta), "about ")
+				tail += "  " + formatETA(rt.eta)
 			}
 		}
 	}
@@ -1052,7 +1058,7 @@ func (m Model) progressNote(r setupapi.ModelProgress, width int) []string {
 			kind = *r.ErrorKind
 		}
 		got := m.inPlanBytes(r, r.BytesDone)
-		line := failureLine(kind, shortName(r.ID), m.drive(), bytesGB(got), bytesGB(m.sizeOf(r)-got))
+		line := failureLine(kind, m.nameOf(r.ID), m.drive(), bytesGB(got), bytesGB(m.sizeOf(r)-got))
 		if kind == setupapi.ErrVerify && r.Error != nil && *r.Error != "" {
 			// The load check says which of its cases this is (would not load,
 			// or setup stopped before checking), in plain words.
@@ -1078,8 +1084,24 @@ func (m Model) progressNote(r setupapi.ModelProgress, width int) []string {
 		}
 	case setupapi.StateCancelled:
 		add(dimStyle, "Press r to resume from where it stopped.")
+	case setupapi.StateUnchecked:
+		add(dimStyle, uncheckedLine)
 	}
 	return lines
+}
+
+// runStoppedNote says why a run stopped when no model's row does: only when
+// no download failed (model_failed), in plain words, the raw error behind d.
+func (m Model) runStoppedNote() string {
+	if m.status == nil || m.status.State != setupapi.RunFailed || m.status.ModelFailed || m.dl.active || m.failedCount() > 0 {
+		return ""
+	}
+	for _, r := range m.shownRows() {
+		if r.State == setupapi.StateUnchecked {
+			return stoppedBeforeCheck
+		}
+	}
+	return setupStoppedNote
 }
 
 func (m Model) overallLine(w int, now time.Time) string {
