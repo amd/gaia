@@ -188,7 +188,9 @@ def test_a_switch_to_a_larger_model_unloads_nothing():
 
 
 def test_a_session_started_on_claude_keeps_every_feature(monkeypatch, full_tools):
-    # Gemma is this PC's default, but the session runs on Claude.
+    # Gemma is this PC's default, but the session runs on Claude. The client is
+    # built, never called, so a placeholder key is enough.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-placeholder")
     monkeypatch.setattr(
         "gaia_agent.chat_agent.resolve_default_chat_model",
         lambda: DEFAULT_MODEL_NAME,
