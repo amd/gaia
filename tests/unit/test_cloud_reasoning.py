@@ -1,10 +1,11 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Cloud models reason when they can, and their reasoning never runs as a call.
+"""Cloud reasoning is opt-in, and reasoning never runs as a call.
 
 DeepSeek on the AMD gateway reasons only when the request carries
-``reasoning_effort``; without it every agent step ran with thinking off.
+``reasoning_effort``. GAIA sends none unless ``cloud_reasoning_effort`` is set;
+the reasoning-handling fixes apply either way.
 """
 
 import contextlib
@@ -17,8 +18,9 @@ import pytest
 import responses
 from openai import OpenAI
 
+import gaia.config as config_mod
 from gaia.agents.base.agent import _split_reasoning
-from gaia.config import GaiaConfig, GaiaConfigError
+from gaia.config import GaiaConfig
 from gaia.llm import lemonade_client as lc
 from gaia.llm.gateway import GatewayState
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
@@ -106,6 +108,15 @@ def _sent(monkeypatch, model, stream, reply=None, **kwargs):
     return sent
 
 
+def _config_error():
+    # Another test reloads gaia.config; its raises use the reloaded class.
+    return config_mod.GaiaConfigError
+
+
+def _effort(level="high"):
+    GaiaConfig.save_key("cloud_reasoning_effort", level)
+
+
 def _probe_client(message, finish_reason="stop"):
     client = MagicMock()
     client.chat_completions.return_value = {
@@ -120,8 +131,17 @@ def _probe_client(message, finish_reason="stop"):
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_a_model_seen_reasoning_is_asked_to_reason_hard_by_default(monkeypatch, stream):
+def test_by_default_nothing_is_sent_even_to_a_model_seen_reasoning(monkeypatch, stream):
     lc._CLOUD_REASONING.record(FLASH, True)
+    (body,) = _sent(monkeypatch, FLASH, stream)
+    assert "reasoning_effort" not in body
+    assert "chat_template_kwargs" not in body
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_a_model_seen_reasoning_is_sent_the_configured_high(monkeypatch, stream):
+    lc._CLOUD_REASONING.record(FLASH, True)
+    _effort()
     (body,) = _sent(monkeypatch, FLASH, stream)
     # Top level, as the gateway reads it; never as a llama.cpp template kwarg.
     assert body["reasoning_effort"] == "high"
@@ -133,6 +153,7 @@ def test_a_model_seen_reasoning_is_asked_to_reason_hard_by_default(monkeypatch, 
 def test_an_unprobed_or_non_reasoning_model_is_sent_nothing(
     monkeypatch, stream, learned
 ):
+    _effort()
     if learned is not None:
         lc._CLOUD_REASONING.record(FLASH, learned)
     (body,) = _sent(monkeypatch, FLASH, stream)
@@ -143,6 +164,7 @@ def test_an_unprobed_or_non_reasoning_model_is_sent_nothing(
 def test_a_local_model_is_never_sent_a_cloud_effort(monkeypatch, stream):
     # Even a stray learned entry for a local id cannot reach llama.cpp.
     lc._CLOUD_REASONING.record(LOCAL, True)
+    _effort()
     (body,) = _sent(monkeypatch, LOCAL, stream)
     assert "reasoning_effort" not in body
 
@@ -150,7 +172,7 @@ def test_a_local_model_is_never_sent_a_cloud_effort(monkeypatch, stream):
 @pytest.mark.parametrize("effort", ["low", "medium"])
 def test_the_configured_effort_is_sent(monkeypatch, effort):
     lc._CLOUD_REASONING.record(FLASH, True)
-    GaiaConfig.save_key("cloud_reasoning_effort", effort)
+    _effort(effort)
     (body,) = _sent(monkeypatch, FLASH, False)
     assert body["reasoning_effort"] == effort
 
@@ -158,7 +180,7 @@ def test_the_configured_effort_is_sent(monkeypatch, effort):
 @pytest.mark.parametrize("stream", [False, True])
 def test_off_sends_nothing(monkeypatch, stream):
     lc._CLOUD_REASONING.record(FLASH, True)
-    GaiaConfig.save_key("cloud_reasoning_effort", "off")
+    _effort("off")
     (body,) = _sent(monkeypatch, FLASH, stream)
     assert "reasoning_effort" not in body
 
@@ -173,6 +195,7 @@ def test_an_explicit_effort_wins(monkeypatch):
 def test_a_side_call_leaves_the_model_in_its_own_mode(monkeypatch, stream):
     """A few-hundred-token JSON side call must not spend its budget reasoning."""
     lc._CLOUD_REASONING.record(FLASH, True)
+    _effort()
     (body,) = _sent(monkeypatch, FLASH, stream, **lc.no_thinking_kwargs(FLASH))
     assert "reasoning_effort" not in body
 
@@ -184,6 +207,7 @@ def test_side_call_kwargs_are_unchanged_for_local_models():
 
 def test_a_rejected_effort_fails_loudly_and_is_not_retried_without(monkeypatch):
     lc._CLOUD_REASONING.record(FLASH, True)
+    _effort()
     client = _client(monkeypatch)
     sent = []
 
@@ -209,6 +233,7 @@ def test_a_rejected_effort_fails_loudly_and_is_not_retried_without(monkeypatch):
 
 def test_a_rejected_effort_on_a_stream_fails_loudly_too(monkeypatch):
     lc._CLOUD_REASONING.record(FLASH, True)
+    _effort()
     client = _client(monkeypatch)
     sent = []
 
@@ -363,9 +388,46 @@ def test_the_tool_calling_probe_asks_for_the_providers_own_mode():
 # ---------------------------------------------------------------------------
 
 
+def test_the_default_never_probes(monkeypatch):
+    """Off by default: no startup call, nothing learned, nothing sent."""
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    client = MagicMock()
+    with patch("gaia.llm.lemonade_client.probe_cloud_reasoning") as probe:
+        LemonadeManager.learn_reasoning(client, FLASH)
+        LemonadeManager.learn_reasoning(client, FLASH, key_replayed=True)
+    probe.assert_not_called()
+    client.chat_completions.assert_not_called()
+    client._replay_cloud_key.assert_not_called()
+    assert lc.learned_reasoning(FLASH) is None
+    assert FLASH not in GatewayState.load().reasoning_probe_failures
+
+
+def test_off_set_explicitly_never_probes():
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    _effort("off")
+    with patch("gaia.llm.lemonade_client.probe_cloud_reasoning") as probe:
+        LemonadeManager.learn_reasoning(MagicMock(), FLASH)
+    probe.assert_not_called()
+
+
+def test_setting_a_level_probes_at_the_next_start():
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    client = MagicMock()
+    with patch("gaia.llm.lemonade_client.probe_cloud_reasoning") as probe:
+        LemonadeManager.learn_reasoning(client, FLASH)
+        probe.assert_not_called()
+        _effort("low")
+        LemonadeManager.learn_reasoning(client, FLASH)
+        probe.assert_called_once()
+
+
 def test_the_manager_probes_a_cloud_model_once():
     from gaia.llm.lemonade_manager import LemonadeManager
 
+    _effort()
     client = MagicMock()
     with patch(
         "gaia.llm.lemonade_client.probe_cloud_reasoning", return_value=True
@@ -383,6 +445,7 @@ def test_the_manager_probes_a_cloud_model_once():
 def test_a_failed_probe_is_not_repeated_until_the_window_passes(caplog):
     from gaia.llm.lemonade_manager import LemonadeManager
 
+    _effort()
     with patch(
         "gaia.llm.lemonade_client.probe_cloud_reasoning",
         side_effect=LemonadeClientError("down"),
@@ -397,6 +460,7 @@ def test_a_failed_probe_is_not_repeated_until_the_window_passes(caplog):
 def test_a_keyless_server_is_not_probed():
     from gaia.llm.lemonade_manager import LemonadeManager
 
+    _effort()
     client = MagicMock()
     client._replay_cloud_key.return_value = False
     with patch("gaia.llm.lemonade_client.probe_cloud_reasoning") as probe:
@@ -563,8 +627,9 @@ def test_reasoning_tokens_are_counted_wherever_the_usage_puts_them():
 # ---------------------------------------------------------------------------
 
 
-def test_the_default_is_high():
-    assert GaiaConfig.load().cloud_reasoning_effort == "high"
+def test_the_default_is_off():
+    assert GaiaConfig.load().cloud_reasoning_effort == "off"
+    assert GaiaConfig().cloud_reasoning_effort == "off"
 
 
 def test_a_level_is_normalised():
@@ -574,7 +639,7 @@ def test_a_level_is_normalised():
 
 @pytest.mark.parametrize("value", ["max", "none", "", "true"])
 def test_an_unknown_level_is_refused(value):
-    with pytest.raises(GaiaConfigError, match="cloud_reasoning_effort"):
+    with pytest.raises(_config_error(), match="cloud_reasoning_effort"):
         GaiaConfig().set("cloud_reasoning_effort", value)
 
 
@@ -582,7 +647,7 @@ def test_an_unknown_level_is_refused(value):
 def test_a_bad_level_in_the_file_fails_at_load(value):
     path = GaiaConfig.config_path()
     path.write_text(json.dumps({"cloud_reasoning_effort": value}), encoding="utf-8")
-    with pytest.raises(GaiaConfigError, match="cloud_reasoning_effort"):
+    with pytest.raises(_config_error(), match="cloud_reasoning_effort"):
         GaiaConfig.load()
 
 
@@ -591,5 +656,5 @@ def test_a_broken_config_fails_the_request_loudly(monkeypatch):
     GaiaConfig.config_path().write_text(
         json.dumps({"cloud_reasoning_effort": "extreme"}), encoding="utf-8"
     )
-    with pytest.raises(GaiaConfigError):
+    with pytest.raises(_config_error()):
         _sent(monkeypatch, FLASH, False)

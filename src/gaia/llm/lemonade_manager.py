@@ -1351,10 +1351,12 @@ class LemonadeManager:
     ) -> None:
         """Probe once whether a cloud model reasons when sent ``reasoning_effort``.
 
-        Until a probe says yes the model is sent no effort and runs in its
-        provider's default mode. A failed or inconclusive probe is logged and
-        not repeated for ``PROBE_RETRY_AFTER_S``.
+        Runs only when ``cloud_reasoning_effort`` is not ``off``. Until a probe
+        says yes the model is sent no effort and runs in its provider's default
+        mode. A failed or inconclusive probe is logged and not repeated for
+        ``PROBE_RETRY_AFTER_S``.
         """
+        from gaia.config import GaiaConfig
         from gaia.llm.lemonade_client import (
             PROBE_RETRY_AFTER_S,
             CloudProbeStopped,
@@ -1366,6 +1368,8 @@ class LemonadeManager:
         )
 
         if cloud_model_info(model) is None or learned_reasoning(model) is not None:
+            return
+        if GaiaConfig.load().cloud_reasoning_effort == "off":
             return
         retry_in = f"{PROBE_RETRY_AFTER_S // 60} minutes"
         if reasoning_probe_recently_failed(model):

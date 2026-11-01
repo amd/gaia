@@ -168,10 +168,11 @@ class GaiaConfig:
             or ``cpu``) GAIA asks Lemonade for when it loads a local chat
             model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
             Takes effect on the next load; the embedding model keeps its own.
-        cloud_reasoning_effort: How hard a cloud model reasons: ``low``,
-            ``medium`` or ``high`` (the default). Sent as ``reasoning_effort``
-            only to a cloud model a probe saw reason when asked; ``off`` sends
-            nothing, leaving every model at its provider's default.
+        cloud_reasoning_effort: ``off`` (the default) sends cloud models no
+            ``reasoning_effort``, leaving each at its provider's default.
+            ``low``, ``medium`` or ``high`` turns on a one-time probe per cloud
+            model and sends that effort to each one seen reasoning, at the cost
+            of more tokens and slower replies.
         context_sizes: Context window, in tokens, the user chose per local
             model in the Agent UI (model id -> tokens). Every load of that
             model uses it; a model not listed gets GAIA's automatic size.
@@ -194,7 +195,7 @@ class GaiaConfig:
     lemonade_api_key_stored: bool = False
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
-    cloud_reasoning_effort: str = "high"
+    cloud_reasoning_effort: str = "off"
     context_sizes: Dict[str, int] = field(default_factory=dict)
     undo_retention_days: int = 7
     undo_max_mb: int = 500
@@ -346,8 +347,8 @@ class GaiaConfig:
             raise GaiaConfigError(
                 f"{where}: 'cloud_reasoning_effort' must be one of "
                 f"{', '.join(cls.CLOUD_REASONING_EFFORT_CHOICES)}, but it is "
-                f"{value!r}. Run `gaia config set cloud_reasoning_effort high` to "
-                "restore the default, or `off` to stop asking cloud models to reason."
+                f"{value!r}. Run `gaia config set cloud_reasoning_effort off` to "
+                "restore the default."
             )
         return word
 
