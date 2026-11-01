@@ -2,6 +2,8 @@ package chat
 
 import (
 	"encoding/json"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +119,39 @@ func TestToolResultWithoutRenderMakesNoCard(t *testing.T) {
 	for _, msg := range m.messages {
 		if msg.Role == RoleCard {
 			t.Fatalf("a tool_result with no render key produced a card: %+v", msg)
+		}
+	}
+}
+
+func TestMediaResultWithAFileDrawsAnActionableCard(t *testing.T) {
+	path := t.TempDir() + "/result.png"
+	if err := os.WriteFile(path, []byte("png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := feed(t, newTestChat(t), event.CanonicalToolResultEvent{
+		Type: "tool_result", Tool: "generate_image", Render: "media",
+		Data: json.RawMessage(`{"kind":"media","path":` + strconv.Quote(path) + `,"media_type":"image"}`),
+	})
+
+	card := lastCard(t, m)
+	if card.Render != "media" || card.ToolName != "generate_image" {
+		t.Fatalf("card = {render:%q tool:%q}, want media generate_image", card.Render, card.ToolName)
+	}
+	if _, ok := m.latestMediaCard(); !ok {
+		t.Fatal("verified media card was not available to Ctrl+F/Ctrl+G")
+	}
+}
+
+func TestMissingMediaPathDoesNotBecomeAnInvalidCard(t *testing.T) {
+	m := feed(t, newTestChat(t),
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "generate_image"},
+		event.CanonicalToolResultEvent{
+			Type: "tool_result", Tool: "generate_image", Data: json.RawMessage(`{"summary":"missing output"}`),
+		},
+	)
+	for _, msg := range m.messages {
+		if msg.Role == RoleCard {
+			t.Fatalf("missing media output produced a card: %+v", msg)
 		}
 	}
 }

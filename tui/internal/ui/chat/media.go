@@ -54,9 +54,16 @@ func (m ChatModel) latestMediaCard() (mediaCard, bool) {
 
 func mediaStatus(path, action string, err error) string {
 	if err != nil {
+		if path == "" {
+			return fmt.Sprintf("could not %s: %v", action, err)
+		}
 		return fmt.Sprintf("could not %s %s: %v", action, path, err)
 	}
-	return fmt.Sprintf("%s %s", strings.Title(action), path)
+	label := "Opened"
+	if action == "reveal" {
+		label = "Revealed"
+	}
+	return fmt.Sprintf("%s %s", label, path)
 }
 
 func remoteSession() bool {
