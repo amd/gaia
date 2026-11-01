@@ -23,6 +23,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
+    _model_ids_match,
     cloud_model_provider,
     fit_ctx_to_free_memory,
     is_llm_model_entry,
@@ -31,6 +32,7 @@ from gaia.llm.lemonade_client import (
     resolve_effective_ctx_size,
     resolve_lemonade_base_url,
     running_embedded_lemonade_url,
+    runs_on_npu,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
 from gaia.logger import get_logger
@@ -746,7 +748,12 @@ class LemonadeManager:
         requested_ctx = min_context_size
         chat_model = model or resolve_default_chat_model()
         is_cloud = cloud_model_provider(chat_model) is not None
-        if min_context_size is None:
+        own_window_of = None
+        if min_context_size is None and runs_on_npu(chat_model):
+            # An FLM model's window is its own; the device profile's would reload it.
+            own_window_of = chat_model
+            min_context_size = resolve_ctx_size(model=chat_model, base_url=base_url)
+        elif min_context_size is None:
             min_context_size = resolve_ctx_size(device=device)
             if not is_cloud:
                 # The window the chat model's own load gets when memory is short.
@@ -922,7 +929,12 @@ class LemonadeManager:
                                 return True
 
                             if cls._try_reload_with_ctx(
-                                client, status, min_context_size, quiet, cls._lock
+                                client,
+                                status,
+                                min_context_size,
+                                quiet,
+                                cls._lock,
+                                own_window_of=own_window_of,
                             ):
                                 return True
                             # The reload can have failed because it just
@@ -1164,7 +1176,12 @@ class LemonadeManager:
                         return True
 
                     if cls._try_reload_with_ctx(
-                        client, status, min_context_size, quiet, cls._lock
+                        client,
+                        status,
+                        min_context_size,
+                        quiet,
+                        cls._lock,
+                        own_window_of=own_window_of,
                     ):
                         return True
                     # As above (#2992): a reload that failed because it just
@@ -1550,6 +1567,7 @@ class LemonadeManager:
         min_context_size: int,
         quiet: bool,
         lock: "threading.Lock",
+        own_window_of: Optional[str] = None,
     ) -> bool:
         """Attempt to reload the current LLM model with a larger context size.
 
@@ -1574,6 +1592,9 @@ class LemonadeManager:
         model_id = llm_models[0].get("model_name") or llm_models[0].get("id", "")
         if not model_id:
             return False
+        if own_window_of and not _model_ids_match(model_id, own_window_of):
+            # The window is the incoming model's; its load replaces this one.
+            return True
 
         # Proactive clamp (#2992): the model is already loaded, so its
         # catalog entry (and often ``status`` itself) already carries its

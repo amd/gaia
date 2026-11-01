@@ -773,7 +773,7 @@ def _inspect_npu_repo(
 ) -> Dict[str, Any]:
     """:func:`inspect_link` for a FastFlowLM repo, which resolves to a built-in."""
     from gaia.llm.lemonade_client import (
-        NPU_CHAT_MODELS,
+        NPU_MODEL_LADDER,
         _model_ids_match,
         find_model_requirement,
     )
@@ -880,7 +880,7 @@ def _inspect_npu_repo(
         )
 
     offered = next(
-        (m for m in NPU_CHAT_MODELS if _model_ids_match(m, build["model_id"])), None
+        (m for m in NPU_MODEL_LADDER if _model_ids_match(m, build["model_id"])), None
     )
     name = (
         find_model_requirement(offered).display_name

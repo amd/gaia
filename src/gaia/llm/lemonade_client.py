@@ -385,6 +385,12 @@ LARGE_DEFAULT_MODEL_NAME = "Qwen3.6-35B-A3B-GGUF"
 # than decode speed.
 FLASH_OPTION_MODEL_NAME = "user.Qwen3.8-Flash-Next-GGUF"
 
+# Gemma built for the Ryzen AI NPU (FastFlowLM). It loads into the system RAM
+# the OS sees, not the GPU's, so it leaves the iGPU free, and is judged against
+# that RAM (``model_fit.npu_capacity``). Qwen3.6's FLM build was too slow per
+# agent turn to ship.
+NPU_DEFAULT_MODEL_NAME = "gemma4-it-e4b-FLM"
+
 # gpt-oss always reasons; its template grades how much. "medium" is the
 # template's own default.
 GPT_OSS_REASONING_EFFORT = "medium"
@@ -554,11 +560,11 @@ DEFAULT_CONTEXT_SIZE = 32768
 # Context window per device profile, for callers that size a window without
 # naming a model. With a model, ``resolve_ctx_size`` reads its MODELS entry.
 #
-# These are deliberately NOT one global number: the NPU's FLM build is
-# registered at 32768 and cannot reach 65536, so collapsing them would cap
-# GPU doc-Q&A at 32K and re-open the #1030 context overflow.
+# These are deliberately NOT one global number: collapsing them to FastFlowLM's
+# default would cap GPU doc-Q&A at 32K and re-open the #1030 context overflow.
+# An FLM model that declares its memory cost scales like a GPU model.
 GPU_CTX_SIZE = 65536  # GPU/CPU — Gemma-4-E4B-it-GGUF (llama.cpp)
-NPU_CTX_SIZE = 32768  # NPU — gemma4-it-e2b-FLM (FastFlowLM ceiling)
+NPU_CTX_SIZE = 32768  # NPU — FastFlowLM's default, for builds without memory figures
 NPU_BACKEND_INSTALL_TIMEOUT = 600  # seconds; the FastFlowLM release download
 
 # llama.cpp flags for a chat model. One slot meant every side request with its
@@ -784,11 +790,17 @@ def add_model_load_listener(listener: Callable[[str], None]) -> None:
 def profile_ctx_size(device: Optional[str]) -> int:
     """Context window for *device*'s profile.
 
-    Resolve through here rather than defaulting to ``GPU_CTX_SIZE``: the NPU's
-    FLM build cannot load above ``NPU_CTX_SIZE``, so handing it the GPU window
-    fails the load outright.
+    With a model in hand, use :func:`resolve_ctx_size`, which sizes the window
+    to that model and this machine's memory.
     """
     return NPU_CTX_SIZE if (device or "").strip().lower() == "npu" else GPU_CTX_SIZE
+
+
+def npu_default_ctx(model: Optional[str] = None) -> int:
+    """The window *model* gets before this machine's memory is known: FastFlowLM's
+    default, or its MODELS floor when that is larger."""
+    requirement = find_model_requirement(model) if model else None
+    return max(NPU_CTX_SIZE, requirement.min_ctx_size if requirement else 0)
 
 
 def runs_on_npu(model: Optional[str]) -> bool:
@@ -856,6 +868,17 @@ def _is_local_url(url: str) -> bool:
     return host in ("localhost", "::1", "0.0.0.0") or host.startswith("127.")
 
 
+def _free_memory_for(url: str, model_id: str):
+    """:func:`_free_memory_snapshot` on the pool *model_id* loads into: the
+    system RAM the OS reports free for an NPU model, else the GPU's."""
+    if not runs_on_npu(model_id):
+        return _free_memory_snapshot(url)
+    from gaia.llm.model_fit import npu_free_memory, read_os_memory
+
+    _, resident = _free_memory_snapshot(url)
+    return npu_free_memory(_system_info(url), read_os_memory()), resident
+
+
 def _free_memory_snapshot(url: str):
     """``(FreeMemory or None, {loaded model: ctx})`` for the Lemonade at *url*.
 
@@ -874,17 +897,6 @@ def _free_memory_snapshot(url: str):
             options = entry.get("recipe_options") or {}
             resident[name] = int(options.get("ctx_size") or 0)
     return free, resident
-
-
-def _free_memory_for(url: str, model_id: str):
-    """:func:`_free_memory_snapshot` on the pool *model_id* loads into: the
-    NPU's system RAM for an FLM model, not the GPU's memory."""
-    if not runs_on_npu(model_id):
-        return _free_memory_snapshot(url)
-    from gaia.llm.model_fit import npu_free_memory, read_os_memory
-
-    _, resident = _free_memory_snapshot(url)
-    return npu_free_memory(_system_info(url), read_os_memory()), resident
 
 
 def _footprint_gb(requirement: "ModelRequirement", ctx: int) -> float:
@@ -1125,14 +1137,18 @@ def context_for_capacity(requirement: "ModelRequirement", capacity) -> int:
 
     A model that declares ``max_ctx_size`` and ``kv_bytes_per_token`` gets the
     largest window its KV cache can take after the weights and the co-resident
-    models, from ``min_ctx_size`` up to its native maximum. Any other model
-    loads at ``min_ctx_size``. The default-model fit check and the load both
-    call this, so they charge the same KV cache.
+    models, from ``min_ctx_size`` up to its native maximum, in the memory it
+    loads into. Any other model loads at ``min_ctx_size``. The default-model fit
+    check and the load both call this, so they charge the same KV cache.
     """
     if not requirement.scales_with_memory:
         return requirement.min_ctx_size
-    from gaia.llm.model_fit import largest_context
+    from gaia.llm.model_fit import largest_context, npu_capacity
 
+    if runs_on_npu(requirement.model_id):
+        capacity = npu_capacity(capacity)
+        if capacity is None:
+            return requirement.min_ctx_size
     return largest_context(
         size_gb=requirement.size_gb,
         kv_bytes_per_token=requirement.kv_bytes_per_token,
@@ -1220,13 +1236,11 @@ def resolve_ctx_size(
     model on an NPU-profile machine still runs on llama.cpp. Without a model,
     the *device* profile (default: ``GaiaConfig.default_device``) decides.
 
-    ``GAIA_CTX_SIZE`` overrides either. The NPU ceiling applies only to a model
-    that runs on the NPU, or to a model-less request on the NPU profile.
+    ``GAIA_CTX_SIZE`` overrides either, on any device.
     *base_url* is the Lemonade asked for this machine's memory.
     An explicit client ``ctx_size_override`` remains a separate exact pin.
     """
     if model:
-        on_npu = runs_on_npu(model)
         requirement = find_model_requirement(model)
         # GAIA_CTX_SIZE (applied below) wins, so it can rescue a size that no longer fits.
         pinned = bool(os.environ.get("GAIA_CTX_SIZE", "").strip())
@@ -1239,13 +1253,12 @@ def resolve_ctx_size(
                 model, _model_ctx_size(requirement, base_url), base_url
             )
         else:
-            ctx = NPU_CTX_SIZE if on_npu else GPU_CTX_SIZE
+            ctx = NPU_CTX_SIZE if runs_on_npu(model) else GPU_CTX_SIZE
     else:
         if device is None:
             from gaia.config import GaiaConfig
 
             device = GaiaConfig.load().default_device
-        on_npu = (device or "").strip().lower() == "npu"
         ctx = profile_ctx_size(device)
 
     override = os.environ.get("GAIA_CTX_SIZE", "").strip()
@@ -1261,13 +1274,6 @@ def resolve_ctx_size(
                 "GAIA_CTX_SIZE must be a positive integer (tokens); fix or unset it."
             )
 
-    if on_npu and ctx > NPU_CTX_SIZE:
-        get_logger(__name__).warning(
-            "Requested context %d exceeds the NPU ceiling; using %d tokens.",
-            ctx,
-            NPU_CTX_SIZE,
-        )
-        ctx = NPU_CTX_SIZE
     if override and ctx < DEFAULT_CONTEXT_SIZE:
         get_logger(__name__).warning(
             "GAIA_CTX_SIZE=%d is below the recommended %d tokens; agent prompts "
@@ -1539,6 +1545,10 @@ class ModelRequirement:
     # Sent as ``chat_template_kwargs.reasoning_effort`` (``low``/``medium``/
     # ``high``) for templates that grade reasoning instead of switching it.
     reasoning_effort: Optional[str] = None
+    # Which agent features the model gets (``gaia.agents.base.model_features``).
+    # A capability of the model, not the device: Gemma gets "compact" on the
+    # GPU and the NPU alike.
+    feature_tier: str = "full"
 
     @property
     def scales_with_memory(self) -> bool:
@@ -1616,6 +1626,7 @@ MODELS = {
         # are full attention: 2 KV heads x 512 dims x K+V x f16 = 16 KiB/token,
         # 1.1 GB at 64K. The sliding-window layers hold 512 tokens each.
         kv_bytes_per_token=16384,
+        feature_tier="compact",
     ),
     # --- Qwen3.8-Flash-Next: opt-in on a 128 GB Strix Halo, never a default ---
     # 125B MoE (6B active) + 51B n-gram embedding; needs llama.cpp's qwen4exp
@@ -1732,30 +1743,33 @@ MODELS = {
     # The E2B *FLM* accuracy baseline is a follow-up:
     # baseline_accuracy_e2b.json was recorded on the GGUF build, a different
     # variant.
-    # tool_calling=False: unlike the GGUF builds (native tool calls via
-    # --jinja), the FLM/NPU server 500-errors on an OpenAI ``tools`` payload
-    # ("type must be string, but is object" — verified on hardware). The agent
-    # therefore uses the embedded-JSON tool path for this model. Email triage
-    # itself parses a JSON object from a plain completion (no native tool
-    # calls), so triage is unaffected.
+    # Native tool calls work on FLM v1.0.7, streamed or not. Without them the
+    # flagship's JSON-in-text fallback came back as a bare "```json" (#6008).
     "gemma-4-e2b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="gemma4-it-e2b-FLM",
         display_name="Gemma 4 E2B (NPU/FLM)",
         min_ctx_size=NPU_CTX_SIZE,
-        tool_calling=False,
+        # No size_gb: the email agent runs it, and a size adds memory refusals.
+        max_ctx_size=131072,
+        tool_calling=True,
+        feature_tier="compact",
     ),
-    # The NPU build of GAIA's default model. Native tool calls verified on
-    # hardware with FastFlowLM 1.0.7.
+    # --- NPU twin of the GPU default (FastFlowLM build, a Lemonade built-in) ---
+    # Native tool calls work (FLM v1.0.7), as for E2B above.
     "gemma-4-e4b-npu": ModelRequirement(
         model_type=ModelType.LLM,
-        model_id="gemma4-it-e4b-FLM",
+        model_id=NPU_DEFAULT_MODEL_NAME,
         display_name="Gemma 4 E4B NPU",
-        min_ctx_size=NPU_CTX_SIZE,
+        # The flagship's prompt and tools alone run ~20K tokens. Lemonade reports
+        # 128K native; 22 KiB/token measured on FLM v1.0.7 (Strix Halo).
+        min_ctx_size=GPU_CTX_SIZE,
+        max_ctx_size=131072,
+        kv_bytes_per_token=22528,
         tool_calling=True,
-        recipe="flm",
-        size_gb=9.1,
         vision=True,
+        size_gb=9.1,
+        feature_tier="compact",
     ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
     "qwen3.5-35b": ModelRequirement(
@@ -2248,30 +2262,24 @@ def lemonade_server_version(client: "LemonadeClient") -> Optional[str]:
 #: Largest-first default chat models; the last is the floor every machine gets.
 DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
 
+#: NPU chat models the pickers offer. Only models whose agent evals ran on the
+#: NPU belong here.
+NPU_MODEL_LADDER = (NPU_DEFAULT_MODEL_NAME,)
+
+#: A GPU default's NPU twin: the same model, built for FastFlowLM.
+NPU_TWINS = {DEFAULT_MODEL_NAME: NPU_DEFAULT_MODEL_NAME}
+
 #: Supported chat models the pickers offer for download beside the defaults,
 #: on machines they fit. Never picked as a default.
 OPTIONAL_CHAT_MODELS = (GPT_OSS_20B_MODEL_NAME, "gpt-oss-120b-mxfp-GGUF")
 
 
-#: Gemma's NPU build with its size in GB, offered for download on a PC with an NPU
-#: it fits. Lemonade lists no FLM model until its NPU backend is installed, so it is
-#: named here. E2B stays out: its embedded-JSON tool path shows replies as raw JSON.
-NPU_CHAT_MODELS = {"gemma4-it-e4b-FLM": 9.1}
 NPU_BACKEND_SPEC = "flm:npu"
 
 
-def npu_chat_models_that_fit(capacity: Any) -> List[str]:
-    """``NPU_CHAT_MODELS`` this PC's NPU holds; none on a PC without one."""
-    from gaia.llm.model_fit import check_fit, npu_capacity
-
-    npu = npu_capacity(capacity)
-    if npu is None:
-        return []
-    return [m for m, size in NPU_CHAT_MODELS.items() if check_fit(size, npu).fits]
-
-
 def optional_chat_models_that_fit(capacity: Any) -> List[str]:
-    """``OPTIONAL_CHAT_MODELS`` that fit *capacity*, KV cache at their floor included."""
+    """``OPTIONAL_CHAT_MODELS`` that fit *capacity*, KV cache at their floor
+    included, then the NPU models that fit its NPU memory."""
     from gaia.llm.model_fit import check_fit, kv_cache_gb
 
     out = []
@@ -2280,7 +2288,55 @@ def optional_chat_models_that_fit(capacity: Any) -> List[str]:
         kv = kv_cache_gb(mr.kv_bytes_per_token, mr.min_ctx_size)
         if check_fit(mr.size_gb, capacity, kv).fits:
             out.append(model_id)
+    return out + npu_chat_models_that_fit(capacity)
+
+
+def npu_chat_models_that_fit(capacity: Any) -> List[str]:
+    """``NPU_MODEL_LADDER`` models this PC's NPU memory holds, KV cache at their
+    floor included; none without an NPU."""
+    from gaia.llm.model_fit import check_fit, kv_cache_gb, npu_capacity
+
+    npu = npu_capacity(capacity)
+    if npu is None:
+        return []
+    out = []
+    for model_id in NPU_MODEL_LADDER:
+        mr = find_model_requirement(model_id)
+        kv = kv_cache_gb(mr.kv_bytes_per_token, mr.min_ctx_size)
+        if check_fit(mr.size_gb, npu, kv).fits:
+            out.append(model_id)
     return out
+
+
+def recommend_npu_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
+    """:func:`recommend_default_chat_model` for ``--profile npu``.
+
+    Always picks ``NPU_DEFAULT_MODEL_NAME``. Raises :class:`~gaia.llm.model_fit.ModelFitError` on a PC whose report
+    names no NPU, since the NPU model cannot run there.
+    """
+    from gaia.llm.model_fit import (
+        ModelFitError,
+        capacity_from_system_info,
+        npu_capacity,
+        pick_default_model,
+    )
+
+    try:
+        capacity = capacity_from_system_info(client.get_system_info(timeout=15))
+    except (ModelFitError, LemonadeClientError):
+        return NPU_DEFAULT_MODEL_NAME, [], None
+    npu = npu_capacity(capacity)
+    if npu is None:
+        raise ModelFitError(
+            "Lemonade reports no available AMD NPU on this PC, so the NPU models "
+            f"({', '.join(NPU_MODEL_LADDER)}) cannot run. Run `gaia init` without "
+            "`--profile npu` to use the GPU, or see "
+            "https://amd-gaia.ai/docs/guides/npu for supported processors."
+        )
+    model = NPU_DEFAULT_MODEL_NAME
+    candidates = [(model, find_model_requirement(model).size_gb, 0.0)]
+    model_id, skipped = pick_default_model(candidates, npu)
+    return model_id, skipped, npu
 
 
 def _free_memory_rules_out(client, requirement, capacity) -> Optional[str]:
@@ -2882,7 +2938,13 @@ def uses_native_tool_calls(model_id: Optional[str]) -> bool:
     Any other cloud model starts each session on the in-text format (~12K
     fewer tokens per call, calls batched in a plan); an agent moves it to
     native calls for that session only if it writes its own tool-call markup.
+    Gateway Claude always gets ``tools=``: its Anthropic route takes native
+    calls and caches the schemas, and on the text format it invents results.
     """
+    from gaia.llm.gateway import gateway_claude_upstream_id
+
+    if gateway_claude_upstream_id(model_id):
+        return True
     if not is_tool_calling_model(model_id):
         return False
     cloud = _CLOUD_MODELS.get(model_id)
@@ -6426,16 +6488,16 @@ class LemonadeClient:
         timeout: int = 300,
     ) -> Dict[str, Any]:
         """
-        Generate an image from a text prompt using Stable Diffusion.
+        Generate an image with a downloaded Lemonade image model.
 
         Args:
             prompt: Text description of the image to generate
-            model: SD model - SD-1.5, SD-Turbo, SDXL-Base-1.0 (photorealistic), SDXL-Turbo
-            size: Image dimensions (auto-selected if None, or 512x512, 768x768, 1024x1024)
-            steps: Inference steps (auto-selected if None: Turbo=4, Base=20)
-            cfg_scale: CFG scale (auto-selected if None: Turbo=1.0, Base=7.5)
-            seed: Random seed for reproducibility (optional)
-            timeout: Request timeout in seconds (default: 300 for slower Base models)
+            model: Exact model ID (legacy Stable Diffusion or downloaded TheNoise)
+            size: Optional WIDTHxHEIGHT; legacy SD models have historical defaults
+            steps: Optional steps; legacy SD models have historical defaults
+            cfg_scale: Optional guidance; legacy SD models have historical defaults
+            seed: Optional reproducibility seed (randomized for legacy SD)
+            timeout: Request timeout in seconds
 
         Returns:
             Dict with 'data' containing list of generated images in b64_json format
@@ -6456,43 +6518,55 @@ class LemonadeClient:
                 model="SDXL-Turbo"
             )
         """
-        # Validate model
-        if model not in self.SD_MODELS:
+        # Lemonade routes image models by deployment label, not by the SD
+        # engine. TheNoise models belong here too. Discover non-legacy models
+        # instead of imposing the fixed SD-1.5 / SDXL model allowlist on them.
+        legacy_sd = model in self.SD_MODELS
+        if not legacy_sd and not any(
+            entry.get("id") == model for entry in self.list_sd_models()
+        ):
             raise LemonadeClientError(
-                f"Invalid model '{model}'. Choose from: {self.SD_MODELS}"
+                f"Invalid or not downloaded image model '{model}'. "
+                "Use list_sd_models() to choose a downloaded image model."
             )
 
-        # Apply model-specific defaults
-        defaults = self.SD_MODEL_DEFAULTS.get(model, {})
-        size = size or defaults.get("size", "512x512")
-        steps = steps if steps is not None else defaults.get("steps", 20)
-        cfg_scale = (
-            cfg_scale if cfg_scale is not None else defaults.get("cfg_scale", 7.5)
-        )
-
-        # Validate size
-        if size not in self.SD_SIZES:
-            raise LemonadeClientError(
-                f"Invalid size '{size}'. Choose from: {self.SD_SIZES}"
-            )
+        # Preserve historical defaults for the four legacy models. Newer
+        # recipes (including thenoise) declare their own image_defaults in
+        # Lemonade; sending 20 steps / CFG 7.5 would break distilled models.
+        if legacy_sd:
+            defaults = self.SD_MODEL_DEFAULTS[model]
+            size = size or defaults["size"]
+            steps = steps if steps is not None else defaults["steps"]
+            cfg_scale = cfg_scale if cfg_scale is not None else defaults["cfg_scale"]
+            if size not in self.SD_SIZES:
+                raise LemonadeClientError(
+                    f"Invalid size '{size}'. Choose from: {self.SD_SIZES}"
+                )
+        elif size is not None and not re.fullmatch(r"[1-9]\d{1,4}x[1-9]\d{1,4}", size):
+            raise LemonadeClientError(f"Invalid size '{size}'. Expected WIDTHxHEIGHT.")
 
         try:
-            # Generate random seed if not provided for varied results
+            # Keep the historical random-seed behaviour for legacy SD, but
+            # omit the field for new models so their backend may choose.
             import random
 
-            if seed is None:
+            if legacy_sd and seed is None:
                 seed = random.randint(0, 2**32 - 1)
 
             payload = {
                 "prompt": prompt,
                 "model": model,
-                "size": size,
                 "n": 1,
                 "response_format": "b64_json",
-                "cfg_scale": cfg_scale,
-                "steps": steps,
-                "seed": seed,
             }
+            for key, value in (
+                ("size", size),
+                ("cfg_scale", cfg_scale),
+                ("steps", steps),
+                ("seed", seed),
+            ):
+                if value is not None:
+                    payload[key] = value
 
             self.log.info(
                 f"Generating image: model={model}, size={size}, steps={steps}, cfg={cfg_scale}"
@@ -6585,24 +6659,20 @@ class LemonadeClient:
         except requests.RequestException as exc:
             raise LemonadeClientError(f"Lemonade 3D request failed: {exc}") from exc
 
-    def list_sd_models(self) -> List[Dict[str, Any]]:
-        """
-        List available Stable Diffusion models from the server.
+    def list_sd_models(self, show_all: bool = False) -> List[Dict[str, Any]]:
+        """Discover image-generation models served by Lemonade, including TheNoise.
 
-        Returns:
-            List of SD model info dicts with id, labels, and image_defaults
-
-        Example:
-            sd_models = client.list_sd_models()
-            for m in sd_models:
-                print(f"{m['id']}: {m.get('image_defaults', {})}")
+        By default list only downloaded models, so an agent does not silently
+        start a multi-GB download. Use ``show_all=True`` for discovery.
         """
         try:
-            models = self.list_models()
+            models = self.list_models(show_all=show_all)
             sd_models = [
                 m
                 for m in models.get("data", [])
-                if m.get("id") in self.SD_MODELS or "image" in m.get("labels", [])
+                if m.get("id") in self.SD_MODELS
+                or "image" in (m.get("labels") or [])
+                or m.get("recipe") in {"sd-cpp", "thenoise"}
             ]
             return sd_models
         except Exception as e:
@@ -6771,26 +6841,6 @@ class LemonadeClient:
         return self._send_request("get", url)
 
     def get_model_max_context_window(
-        self,
-        model_id: str,
-        status: Optional["LemonadeStatus"] = None,
-        *,
-        allow_catalog_lookup: bool = True,
-    ) -> Optional[int]:
-        """The largest window *model_id* can load with.
-
-        An FLM model stops at ``NPU_CTX_SIZE`` whatever it was trained for, so
-        nothing reloads it at a GPU profile's window. Otherwise its
-        :meth:`_trained_context_window`.
-        """
-        ceiling = self._trained_context_window(
-            model_id, status, allow_catalog_lookup=allow_catalog_lookup
-        )
-        if runs_on_npu(model_id):
-            return min(ceiling or NPU_CTX_SIZE, NPU_CTX_SIZE)
-        return ceiling
-
-    def _trained_context_window(
         self,
         model_id: str,
         status: Optional["LemonadeStatus"] = None,

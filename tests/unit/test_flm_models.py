@@ -473,7 +473,6 @@ def test_the_settings_download_reports_a_missing_npu(monkeypatch):
 
     progress = {}
     monkeypatch.setattr(LemonadeClient, "ensure_npu_backend", refuse)
-    monkeypatch.setattr(system, "LemonadeClient", lambda **k: LemonadeClient())
     monkeypatch.setattr(
         system, "_set_download_progress", lambda m, p: progress.update({m: p})
     )
@@ -503,29 +502,95 @@ def test_the_settings_download_reports_a_missing_npu(monkeypatch):
 # ── The context window ─────────────────────────────────────────────────────
 
 
-class _Status:
-    def __init__(self, model, trained):
-        self.loaded_models = [{"model_name": model, "max_context_window": trained}]
+E4B = lc.NPU_DEFAULT_MODEL_NAME
+E2B = "gemma4-it-e2b-FLM"
 
 
-def _ceiling(model, trained):
-    client = _Lemonade(_system_info())
-    client._find_loaded_entry = lambda status, name: status.loaded_models[0]
-    return client.get_model_max_context_window(model, status=_Status(model, trained))
+def _e4b_window(npu_gb, gpu_gb=8.0):
+    return lc.context_for_capacity(
+        lc.find_model_requirement(E4B),
+        MachineCapacity(gpu_gb, "AMD iGPU", 500.0, npu_memory_gb=npu_gb),
+    )
 
 
-def test_an_flm_model_stops_at_the_npu_ceiling_whatever_it_was_trained_for():
-    # A GPU profile's 64K window used to evict and reload it on every start.
-    assert _ceiling("gemma4-it-e4b-FLM", 262144) == lc.NPU_CTX_SIZE
-    assert _ceiling("qwen3-0.6b-FLM", 40960) == lc.NPU_CTX_SIZE
+def test_a_large_pc_gets_the_models_own_maximum():
+    assert _e4b_window(96.0) == lc.find_model_requirement(E4B).max_ctx_size
 
 
-def test_a_smaller_trained_window_still_wins_on_the_npu():
-    assert _ceiling("gemma4e-flash-e4b-FLM", 1024) == 1024
+def test_ram_sets_the_window_when_it_runs_out_before_the_model_does():
+    assert lc.GPU_CTX_SIZE < _e4b_window(16.0) < 131072
 
 
-def test_a_gpu_model_keeps_its_trained_window():
-    assert _ceiling("Gemma-4-E4B-it-GGUF", 131072) == 131072
+def test_the_window_follows_system_ram_not_the_igpu_share():
+    assert _e4b_window(96.0, gpu_gb=1.0) == _e4b_window(96.0, gpu_gb=64.0)
+
+
+def test_no_npu_means_the_registered_floor():
+    assert _e4b_window(None) == lc.GPU_CTX_SIZE
+
+
+@pytest.mark.parametrize("model", [E4B, E2B, "some-unknown-FLM"])
+def test_gaia_ctx_size_overrides_an_flm_window(monkeypatch, model):
+    monkeypatch.setenv("GAIA_CTX_SIZE", "131072")
+    assert lc.resolve_ctx_size(model) == 131072
+
+
+def test_settings_offers_e4b_up_to_what_this_pc_holds():
+    from gaia.llm.context_choice import context_range
+
+    span = context_range(E4B, _capacity(96.0))
+    assert span["max_fit"] == span["automatic"] == 131072
+    assert span["fit_checked"]
+    assert context_range(E4B, _capacity(16.0))["max_fit"] < 131072
+
+
+def test_settings_offers_e2b_to_its_maximum_unchecked():
+    from gaia.llm.context_choice import context_range
+
+    span = context_range(E2B, _capacity(96.0))
+    assert span["max_fit"] == 131072 and not span["fit_checked"]
+    assert span["automatic"] == lc.NPU_CTX_SIZE
+
+
+def test_settings_offers_an_unregistered_flm_model_its_trained_window():
+    from gaia.llm.context_choice import context_range
+
+    span = context_range("some-unknown-FLM", _capacity(96.0), trained_max=131072)
+    assert span["max_fit"] == 131072 and span["automatic"] == lc.NPU_CTX_SIZE
+
+
+def test_startup_asks_an_flm_model_for_its_own_window(monkeypatch):
+    # The device profile's window here reloaded the model on every start.
+    from gaia.llm import lemonade_manager as lm
+
+    class Stop(Exception):
+        pass
+
+    seen = {}
+
+    def resolve(**kwargs):
+        seen.update(kwargs)
+        raise Stop
+
+    monkeypatch.setattr(lm, "resolve_ctx_size", resolve)
+    with pytest.raises(Stop):
+        lm.LemonadeManager.ensure_ready(model=E2B, quiet=True)
+    assert seen["model"] == E2B
+
+
+def test_the_outgoing_model_is_not_reloaded_at_the_incoming_window():
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    class NoLoad:
+        def load_model(self, *a, **k):
+            raise AssertionError("a model on its way out must not reload")
+
+    class Status:
+        loaded_models = [{"model_name": "Gemma-4-E4B-it-GGUF", "type": "llm"}]
+
+    assert LemonadeManager._try_reload_with_ctx(
+        NoLoad(), Status, 98304, True, None, own_window_of=E4B
+    )
 
 
 # ── What is offered ────────────────────────────────────────────────────────
@@ -536,7 +601,7 @@ def _capacity(npu_gb, gpu_gb=8.0):
 
 
 def test_gemma_on_the_npu_is_offered_where_it_fits():
-    assert lc.npu_chat_models_that_fit(_capacity(64.0)) == list(lc.NPU_CHAT_MODELS)
+    assert lc.npu_chat_models_that_fit(_capacity(64.0)) == list(lc.NPU_MODEL_LADDER)
 
 
 @pytest.mark.parametrize("npu_gb", [None, 0.0, 1.0, 9.0])
@@ -588,7 +653,7 @@ def test_a_load_reads_free_system_ram_not_free_gpu_memory():
 
 
 def test_every_offered_model_is_a_registered_requirement():
-    for model_id in lc.NPU_CHAT_MODELS:
+    for model_id in lc.NPU_MODEL_LADDER:
         assert lc.find_model_requirement(model_id).pull_kwargs() == {}
 
 
@@ -605,7 +670,10 @@ def test_recommended_models_agree_with_the_requirements():
         ).read_text(encoding="utf-8")
     )
     rows = {m["id"]: m for m in doc["models"]}
-    for model_id in lc.NPU_CHAT_MODELS:
+    for model_id in lc.NPU_MODEL_LADDER:
         assert rows[model_id]["device"] == "npu"
-        assert rows[model_id]["size_gb"] == lc.NPU_CHAT_MODELS[model_id]
-        assert rows[model_id]["min_ctx_size"] == lc.NPU_CTX_SIZE
+        assert rows[model_id]["size_gb"] == lc.find_model_requirement(model_id).size_gb
+        assert (
+            rows[model_id]["min_ctx_size"]
+            == lc.find_model_requirement(model_id).min_ctx_size
+        )

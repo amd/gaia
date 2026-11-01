@@ -17,8 +17,6 @@ from pydantic import BaseModel, Field
 
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
-    LemonadeClient,
-    LemonadeClientError,
     _is_local_url,
     _model_ids_match,
     cloud_model_provider,
@@ -241,6 +239,8 @@ async def _auto_load_after_download(model_name: str) -> None:
 
 
 def _install_npu_backend(model_name: str) -> None:
+    from gaia.llm.lemonade_client import LemonadeClient
+
     LemonadeClient(verbose=False).ensure_npu_backend(model_name)
 
 
@@ -296,6 +296,8 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     # link, and we'd rather hold open than wrongly bail.
     client_timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
     headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    from gaia.llm.lemonade_client import LemonadeClientError
+
     try:
         if runs_on_npu(model_name):
             await asyncio.to_thread(_install_npu_backend, model_name)

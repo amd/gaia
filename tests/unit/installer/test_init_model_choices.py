@@ -26,6 +26,7 @@ from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
     LARGE_DEFAULT_MODEL_NAME,
+    NPU_DEFAULT_MODEL_NAME,
     LemonadeClient,
 )
 from gaia.ui import setup_plan as sp
@@ -44,9 +45,12 @@ class FakeLemonade(LemonadeClient):
     sends: the model name and the registration fields beside it.
     """
 
-    def __init__(self, store, downloaded=(), vram_gb=12, free_gb=500.0, extra=()):
+    def __init__(
+        self, store, downloaded=(), vram_gb=12, free_gb=500.0, extra=(), npu=False
+    ):
         super().__init__(base_url=URL, verbose=False)
         self.store, self.vram_gb, self.free_gb = str(store), vram_gb, free_gb
+        self.npu = npu
         self.entries = {
             m: {
                 "id": m,
@@ -74,14 +78,15 @@ class FakeLemonade(LemonadeClient):
         return {"status": "ok", "version": "11.8.0"}
 
     def get_system_info(self, timeout=None):
-        return {
-            "Physical Memory": "64.00 GB",
-            "devices": {
-                "amd_igpu": {"available": True, "vram_gb": self.vram_gb},
-                "amd_npu": {"available": True},
-            },
+        devices = {"amd_igpu": {"available": True, "vram_gb": self.vram_gb}}
+        info = {
+            "devices": devices,
             "model_storage": {"free_bytes": self.free_gb * GB, "path": self.store},
         }
+        if self.npu:
+            devices["amd_npu"] = {"available": True, "family": "XDNA2"}
+            info["Physical Memory"] = "64 GB"
+        return info
 
     def list_models(self, show_all=False):
         return {"data": [dict(e) for e in self.entries.values()]}
@@ -195,7 +200,7 @@ def test_warm_lemonade_pulls_nothing_and_asks_nothing(lemonade, monkeypatch):
 def test_flm_only_user_picks_their_npu_model_and_gets_no_gguf_chat_model(
     lemonade, home, capsys
 ):
-    fake = lemonade(downloaded=[FLM])
+    fake = lemonade(downloaded=[FLM], npu=True)
     sp.choose_chat_model(FLM)
     assert _config(home)["default_model"] == FLM
 
@@ -206,7 +211,7 @@ def test_flm_only_user_picks_their_npu_model_and_gets_no_gguf_chat_model(
 
 
 def test_flm_only_user_who_also_skips_the_embedder_downloads_nothing(lemonade, home):
-    fake = lemonade(downloaded=[FLM])
+    fake = lemonade(downloaded=[FLM], npu=True)
     sp.choose_chat_model(FLM)
     sp.set_model_skipped(DEFAULT_EMBEDDING_MODEL, True)
     assert _download(InitCommand(profile="gaia", yes=True))
@@ -420,7 +425,7 @@ def test_download_model_fetches_vision_for_a_user_whose_chat_model_replaced_it(
     lemonade, home
 ):
     """The caveat says `gaia init --download-model Gemma`; it must work."""
-    fake = lemonade(downloaded=[FLM, EMBEDDER])
+    fake = lemonade(downloaded=[FLM, EMBEDDER], npu=True)
     sp.choose_chat_model(FLM)
     cmd = InitCommand(profile="gaia", yes=True, extra_models=[DEFAULT_MODEL_NAME])
     assert _download(cmd)
@@ -449,11 +454,18 @@ def test_every_model_skipped_fails_loudly_and_still_sends_the_plan(
 
 
 def test_npu_profile_can_skip_its_own_flm_model(lemonade, home):
-    lemonade()
+    lemonade(npu=True, extra=[(NPU_DEFAULT_MODEL_NAME, 9.1, ["chat"], "flm")])
     with pytest.raises(sp.UnknownModel):
-        sp.set_model_skipped(FLM, True)  # not one of the gaia profile's models
-    sp.set_model_skipped(FLM, True, profile="npu")
-    assert _config(home)["skipped_models"] == [FLM]
+        # Not one of the gaia profile's models.
+        sp.set_model_skipped(NPU_DEFAULT_MODEL_NAME, True)
+    sp.set_model_skipped(NPU_DEFAULT_MODEL_NAME, True, profile="npu")
+    assert _config(home)["skipped_models"] == [NPU_DEFAULT_MODEL_NAME]
+
+
+def test_npu_plan_on_a_pc_without_an_npu_says_so(lemonade, home):
+    lemonade()
+    with pytest.raises(sp.SetupPlanError, match="no available AMD NPU"):
+        sp.build_plan("npu")
 
 
 def test_download_later_with_the_chat_model_skipped_succeeds_on_its_own_pull(

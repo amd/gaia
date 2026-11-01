@@ -67,11 +67,10 @@ def test_invalid_override_fails_loudly(monkeypatch, value):
         resolve_ctx_size(device="gpu")
 
 
-def test_npu_cap_warns_and_lower_override_is_honored(monkeypatch, caplog):
+def test_override_is_honored_on_the_npu(monkeypatch):
     monkeypatch.setenv("GAIA_CTX_SIZE", "131072")
-    assert resolve_ctx_size(device="NPU") == 32768
-    assert resolve_ctx_size("gemma4-it-e2b-FLM", "gpu") == 32768
-    assert "NPU ceiling" in caplog.text
+    assert resolve_ctx_size(device="NPU") == 131072
+    assert resolve_ctx_size("gemma4-it-e2b-FLM", "gpu") == 131072
     monkeypatch.setenv("GAIA_CTX_SIZE", "16384")
     assert resolve_ctx_size(device="npu") == 16384
 
@@ -188,7 +187,7 @@ def test_small_registered_model_does_not_warn_without_override(caplog):
     "model,device,window",
     [
         ("Gemma-4-E4B-it-GGUF", "gpu", 131072),
-        ("gemma4-it-e2b-FLM", "npu", 32768),
+        ("gemma4-it-e2b-FLM", "npu", 131072),
     ],
 )
 def test_agent_constructor_resolves_override_before_manager(
@@ -239,7 +238,7 @@ def test_installer_saved_recipe_uses_same_override(
 
 @pytest.mark.parametrize(
     "profile,previous,expected,gguf_load",
-    [("npu", "gpu", 32768, 131072), ("chat", "npu", 131072, 131072)],
+    [("npu", "gpu", 131072, 131072), ("chat", "npu", 131072, 131072)],
 )
 def test_installer_profile_wins_before_config_is_saved(
     monkeypatch, profile, previous, expected, gguf_load

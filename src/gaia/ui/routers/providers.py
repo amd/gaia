@@ -392,7 +392,6 @@ def _suggested_local_models() -> set:
 def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str, Any]]:
     """Chat models for *provider*; *offer_optional* adds the optional ones that fit."""
     from gaia.llm.lemonade_client import (
-        NPU_CHAT_MODELS,
         _model_ids_match,
         catalog_context_window,
         find_model_requirement,
@@ -457,8 +456,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
                     "labels": [],
                     "recipe": (req.recipe if req else None)
                     or ("flm" if runs_on_npu(model_id) else None),
-                    "size_gb": (req.size_gb if req else None)
-                    or NPU_CHAT_MODELS.get(model_id),
+                    "size_gb": req.size_gb if req else None,
                     "rank": None,
                     "note": None,
                     "evidence": None,
@@ -490,10 +488,7 @@ def _added_models() -> List[Dict[str, Any]]:
 
 def _optional_models_that_fit() -> List[str]:
     """Optional local models to offer for download: only those this PC holds."""
-    from gaia.llm.lemonade_client import (
-        npu_chat_models_that_fit,
-        optional_chat_models_that_fit,
-    )
+    from gaia.llm.lemonade_client import optional_chat_models_that_fit
     from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
 
     status, info = _lemonade("GET", "system-info")
@@ -505,10 +500,7 @@ def _optional_models_that_fit() -> List[str]:
         # Not offering what may not fit; downloaded models still list.
         logger.warning("Not offering optional local models: %s", e)
         return []
-    return [
-        *optional_chat_models_that_fit(capacity),
-        *npu_chat_models_that_fit(capacity),
-    ]
+    return optional_chat_models_that_fit(capacity)
 
 
 def _rank_gateway_models(models: List[Dict[str, Any]]) -> None:
@@ -1247,11 +1239,12 @@ def _context_view(model_id: str) -> Dict[str, Any]:
         _raise(e)
     except (ModelFitError, GaiaConfigError) as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    from gaia.llm.lemonade_client import GPU_CTX_SIZE, NPU_CTX_SIZE, runs_on_npu
+    from gaia.llm.lemonade_client import GPU_CTX_SIZE, npu_default_ctx, runs_on_npu
+    from gaia.llm.model_fit import NPU_RAM
 
     span = context_range(model_id, capacity, trained)
     # A model GAIA has no entry for loads at its device's flat window.
-    flat = NPU_CTX_SIZE if runs_on_npu(model_id) else GPU_CTX_SIZE
+    flat = npu_default_ctx(model_id) if runs_on_npu(model_id) else GPU_CTX_SIZE
     name = display_name(model_id)
     return {
         "model": model_id,
@@ -1262,7 +1255,7 @@ def _context_view(model_id: str) -> Dict[str, Any]:
         "max_fit": span["max_fit"] if span else None,
         "options": span["options"] if span else [],
         "loaded_ctx": loaded_ctx,
-        "memory_source": capacity.memory_source,
+        "memory_source": NPU_RAM if runs_on_npu(model_id) else capacity.memory_source,
         "note": _context_note(span, name),
     }
 
