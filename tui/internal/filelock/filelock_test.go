@@ -77,6 +77,65 @@ func TestReadFileWaitsForTheWriter(t *testing.T) {
 	}
 }
 
+func TestReadFileFallsBackWhenTheLockCannotBeCreated(t *testing.T) {
+	const target = "C:/provisioned/config.json"
+	readCalled := false
+	got, err := readFile(
+		target,
+		func(string, time.Duration) (*Lock, error) { return nil, os.ErrPermission },
+		func(path string) ([]byte, error) {
+			readCalled = true
+			if path != target {
+				t.Fatalf("read path = %q, want %q", path, target)
+			}
+			return []byte(`{"full_access":true}`), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("ReadFile fallback: %v", err)
+	}
+	if !readCalled || string(got) != `{"full_access":true}` {
+		t.Fatalf("fallback = %q, called=%v", got, readCalled)
+	}
+}
+
+func TestReadFileDoesNotHideALockTimeout(t *testing.T) {
+	readCalled := false
+	_, err := readFile(
+		"config.json",
+		func(string, time.Duration) (*Lock, error) { return nil, ErrTimeout },
+		func(string) ([]byte, error) {
+			readCalled = true
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("error = %v, want ErrTimeout", err)
+	}
+	if readCalled {
+		t.Fatal("ReadFile must not bypass a held lock")
+	}
+}
+
+func TestAcquireCreatesAPrivateDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX directory permissions")
+	}
+	target := filepath.Join(t.TempDir(), "gaia", "config.json")
+	lock, err := Acquire(target, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release()
+	info, err := os.Stat(filepath.Dir(target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("config directory permissions = %o, want no group/world access", info.Mode().Perm())
+	}
+}
+
 func TestWriteAtomicReplacesAndCleansUp(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
