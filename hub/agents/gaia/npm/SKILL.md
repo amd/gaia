@@ -10,7 +10,7 @@ frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-tui`).
 It ships no agent logic of its own, and it **builds neither binary at install
 time** — both are published artifacts it downloads and verifies. The terminal UI
 is the published `terminal-hub` component, the same binary a full GAIA install
-runs as `gaia tui`, so its behaviour cannot differ from that one. Everything runs on the local machine against
+runs as `gaia-tui`, so its behaviour cannot differ from that one. Everything runs on the local machine against
 a local model server — nothing you type or index leaves it.
 
 Two ways in:
@@ -375,7 +375,9 @@ Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
 Twelve of the agent's 101 tools mutate the machine and need explicit approval
-before they run. Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
+offered the scratchpad, email, image-generation or skill-hub tools, so
+`install_skill` and `remove_skill` never reach it.) Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns

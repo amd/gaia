@@ -82,6 +82,20 @@ def test_reset_retries_after_save_failure(agent, monkeypatch, capsys):
     assert output.count("Previous session saved") == 1
 
 
+def test_auto_save_failure_is_not_reported_as_success(caplog):
+    agent = SimpleNamespace(
+        current_session=SimpleNamespace(session_id="session-failed"),
+        save_current_session=Mock(return_value=False),
+        debug=True,
+    )
+
+    with caplog.at_level("WARNING"):
+        ChatAgent._auto_save_session(agent)
+
+    assert "Auto-save failed for session session-failed" in caplog.text
+    assert "Auto-saved session" not in caplog.text
+
+
 def test_quit_without_session_does_not_save(agent, monkeypatch, capsys):
     agent.current_session = None
     monkeypatch.setattr("builtins.input", Mock(return_value="/quit"))

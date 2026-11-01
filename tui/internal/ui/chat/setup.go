@@ -5,6 +5,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/ui/modelsetup"
 )
 
 // First-boot setup for a chat opened WITHOUT the readiness gate in front of it.
@@ -148,12 +150,19 @@ func (m ChatModel) handleSetupCheckResult(msg setupCheckResultMsg) (tea.Model, t
 	m.setupChecking = false
 
 	if msg.err != nil {
+		message := fmt.Sprintf(
+			"Could not check whether %s is set up: %v\nType /setup to try running it directly.",
+			m.agentName, msg.err)
+		if errors.Is(msg.err, gaiainit.ErrNoCLI) {
+			message = fmt.Sprintf(
+				"Could not check whether %s is set up: %v\nInstall the GAIA CLI first, then retry.",
+				m.agentName, msg.err)
+		} else {
+			message += fmt.Sprintf(" Or run `%s` in a terminal.", gaiainit.RunCommand(m.skipLocalChatSetup()))
+		}
 		m.messages = append(m.messages, Message{
-			Role: RoleError,
-			Content: fmt.Sprintf(
-				"Could not check whether %s is set up: %v\nType /setup to try running it directly, "+
-					"or run `%s` in a terminal.",
-				m.agentName, msg.err, gaiainit.RunCommand(m.skipLocalChatSetup())),
+			Role:    RoleError,
+			Content: message,
 		})
 		m.updateViewport()
 		return m, m.releaseAfterSetupGate()
@@ -163,42 +172,45 @@ func (m ChatModel) handleSetupCheckResult(msg setupCheckResultMsg) (tea.Model, t
 		return m, m.releaseAfterSetupGate()
 	}
 
-	return m.startSetupRun(true /* firstBoot */)
+	return m.openFirstRunSetup(true /* firstBoot */)
 }
 
-// startSetupRun launches (or re-launches) `gaia init` for the flagship
-// profile. firstBoot only changes the announcement's wording -- the
-// first-boot trigger and /setup share every other line of code, so a user
-// who reconfigures later gets exactly what a fresh machine gets.
-func (m ChatModel) skipLocalChatSetup() bool {
-	return m.claudeMode || m.modelRemote || lemonade.IsCloudID(m.modelID)
-}
-
-func (m ChatModel) startSetupRun(firstBoot bool) (tea.Model, tea.Cmd) {
-	ch, cancel, err := gaiainit.Start(m.skipLocalChatSetup())
-	if err != nil {
-		m.messages = append(m.messages, Message{
-			Role: RoleError,
-			Content: fmt.Sprintf(
-				"Could not start setup: %v\nRun `%s` in a terminal instead.",
-				err, gaiainit.RunCommand(m.skipLocalChatSetup())),
-		})
-		m.updateViewport()
-		return m, m.releaseAfterSetupGate()
-	}
-
-	intro := "Setting up " + m.agentName + " -- running `gaia init --profile " + gaiainit.Profile + "`"
-	if m.claudeMode {
-		intro += " (skipping the local chat model: this session runs on Claude)"
-	}
-	if m.modelRemote && !m.claudeMode {
-		intro += " (skipping the local chat model: chat runs via " + m.modelBackend + ")"
-	}
-	intro += ". This can take a few minutes on a slow connection. Press Esc to cancel."
+// openFirstRunSetup opens "choose your models": nothing downloads until the
+// user has seen the plan and pressed Continue.
+func (m ChatModel) openFirstRunSetup(firstBoot bool) (tea.Model, tea.Cmd) {
+	intro := "Setting up " + m.agentName + ": choose the models it downloads."
 	if firstBoot {
 		intro = "First run: " + intro
 	}
 	m.messages = append(m.messages, Message{Role: RoleStatus, Content: intro})
+	m.updateViewport()
+	return m.openModelSetup(modelsetup.ModeFirstRun)
+}
+
+// skipLocalChatSetup reports whether chat runs off this PC, so setup needs
+// only the embedding model.
+func (m ChatModel) skipLocalChatSetup() bool {
+	return m.claudeMode || m.modelRemote || lemonade.IsCloudID(m.modelID)
+}
+
+// startServerInstall runs setup's first step alone — install and start the
+// local model server, download nothing — then reopens the model choice. It is
+// the one `gaia init` this view runs: which models to download is chosen on
+// the setup screens, through the daemon.
+func (m ChatModel) startServerInstall() (tea.Model, tea.Cmd) {
+	ch, cancel, err := startServerOnly()
+	if err != nil {
+		m.messages = append(m.messages, Message{
+			Role: RoleError,
+			Content: fmt.Sprintf(
+				"Could not start setup: %v\nRun `%s` in a terminal instead, then /setup.",
+				err, gaiainit.ServerOnlyCommand()),
+		})
+		m.updateViewport()
+		return m, m.releaseAfterSetupGate()
+	}
+	m.messages = append(m.messages, Message{Role: RoleStatus, Content: "Installing the local model server -- running `" +
+		gaiainit.ServerOnlyCommand() + "`. This takes about a minute; no models download. Press Esc to cancel."})
 	m.upsertSetupProgress("starting…")
 
 	m.setupRunning = true
@@ -208,6 +220,9 @@ func (m ChatModel) startSetupRun(firstBoot bool) (tea.Model, tea.Cmd) {
 	m.updateViewport()
 	return m, waitForSetupEvent(ch)
 }
+
+// startServerOnly is gaiainit.StartServerOnly, a var so tests run no child.
+var startServerOnly = gaiainit.StartServerOnly
 
 // handleSetupEvent applies one line of `gaia init` output, or -- once Done
 // -- the run's terminal result.
@@ -238,10 +253,13 @@ func (m ChatModel) handleSetupEvent(evt gaiainit.Event) (tea.Model, tea.Cmd) {
 			Role: RoleError,
 			Content: fmt.Sprintf(
 				"Setup failed: %v\nRun `%s` in a terminal to see the full log, then /setup to retry.",
-				evt.Err, gaiainit.RunCommand(m.skipLocalChatSetup())),
+				evt.Err, gaiainit.ServerOnlyCommand()),
 		})
 	default:
-		m.messages = append(m.messages, Message{Role: RoleStatus, Content: "[✓] Setup complete."})
+		m.setupCancelRequested = false
+		m.messages = append(m.messages, Message{Role: RoleStatus, Content: "[✓] The local model server is running."})
+		m.updateViewport()
+		return m.openModelSetup(modelsetup.ModeFirstRun)
 	}
 	m.setupCancelRequested = false
 	m.updateViewport()

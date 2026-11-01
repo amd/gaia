@@ -933,8 +933,8 @@ def _default_run_pip(args: List[str]) -> None:
     """Install ``args`` via pip, trying frontends in order until one works.
 
     The standalone ``uv`` binary leads (fastest, honours the active venv), then
-    ``python -m uv``, then ``python -m pip`` -- guaranteed present in any
-    venv, so a machine with no ``uv`` on PATH (the #2358 dead end: a stock
+    ``python -m uv``, then ``python -m pip`` -- present in any venv uv did not
+    create, so a machine with no ``uv`` on PATH (the #2358 dead end: a stock
     ``pip install amd-gaia`` user hitting ``gaia init --profile chat``)
     still installs the wheel instead of hard-failing. Raises InstallError
     if every frontend fails, or at once when one is stuck or blocked on the

@@ -69,6 +69,7 @@ from .routers import documents as documents_router_mod
 from .routers import environment as environment_router_mod
 from .routers import files as files_router_mod
 from .routers import goals as goals_router_mod
+from .routers import gpu_memory as gpu_memory_router_mod
 from .routers import hub as hub_router_mod
 from .routers import lemonade as lemonade_router_mod
 from .routers import mcp as mcp_router_mod
@@ -972,6 +973,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(system_router_mod.router)
     app.include_router(onboarding_router_mod.router)
     app.include_router(setup_router_mod.router)
+    app.include_router(gpu_memory_router_mod.router)
     app.include_router(lemonade_router_mod.router)
     app.include_router(providers_router_mod.router)
     app.include_router(spending_router_mod.router)

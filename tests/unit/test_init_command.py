@@ -27,6 +27,15 @@ SMALL_MACHINE = {
     "devices": {"metal": {"available": True, "vram_gb": 11.8}},
     "model_storage": {"free_bytes": 200e9},
 }
+# A 16 GB Ryzen AI laptop: small GPU carve-out, an XDNA2 NPU.
+NPU_LAPTOP = {
+    "Physical Memory": "16 GB",
+    "devices": {
+        "amd_gpu": [{"available": True, "integrated": True, "vram_gb": 0.5}],
+        "amd_npu": {"available": True},
+    },
+    "model_storage": {"free_bytes": 200e9},
+}
 
 
 class TestLemonadeInfo(unittest.TestCase):
@@ -849,7 +858,7 @@ class TestDownloadModels(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
-            mock_client.get_system_info.return_value = SMALL_MACHINE
+            mock_client.get_system_info.return_value = NPU_LAPTOP
             mock_client.ensure_model_downloaded.return_value = True
             mock_client_class.return_value = mock_client
 
@@ -858,7 +867,7 @@ class TestDownloadModels(unittest.TestCase):
             pulled = {
                 c.args[0] for c in mock_client.ensure_model_downloaded.call_args_list
             }
-            self.assertEqual(pulled, {"gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"})
+            self.assertEqual(pulled, {"gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"})
             # Regression guard: no recipe-bearing pull_model call.
             mock_client.pull_model.assert_not_called()
 
@@ -1362,12 +1371,47 @@ class TestCheckSetupStatus(unittest.TestCase):
         ):
             client = self._loading_client(mock_client_class)
             client.check_model_available.return_value = False
+            client.list_models.return_value = {
+                "data": [{"id": "user.embeddinggemma-300m-GGUF", "size": 0.3}]
+            }
             status = check_setup_status(profile="gaia", skip_chat_model=True, load=True)
 
         self.assertEqual(status.stage, "setup")
         self.assertEqual(status.models[0].size_gb, 0.3)
         self.assertFalse(status.models[0].loaded)
         client.embeddings.assert_not_called()
+
+    def test_missing_model_sizes_match_the_setup_plan(self):
+        """The first-run step and "Choose your models" show one download size:
+        the catalog's size less what an interrupted pull left on disk."""
+        from gaia.installer import init_command
+        from gaia.installer.init_command import check_setup_status
+
+        with (
+            self._embedded(self._running()),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
+            patch.object(
+                init_command,
+                "bytes_already_on_disk",
+                side_effect=lambda _c, ids, store: {m: 100_000_000 for m in ids},
+            ) as on_disk,
+        ):
+            client = self._loading_client(mock_client_class)
+            client.check_model_available.return_value = False
+            client.list_models.return_value = {
+                "data": [{"id": "user.embeddinggemma-300m-GGUF", "size": 0.33}]
+            }
+            client.get_system_info.return_value = {
+                "model_storage": {"path": "/models", "free_bytes": 10**12}
+            }
+            status = check_setup_status(profile="gaia", skip_chat_model=True, load=True)
+
+        self.assertEqual(status.models[0].size_gb, 0.23)
+        self.assertEqual(on_disk.call_args.args[2], "/models")
+        self.assertEqual(
+            init_command.remaining_download_gb(0.33, 100_000_000),
+            status.models[0].size_gb,
+        )
 
 
 class TestInstallPipExtras(unittest.TestCase):
@@ -2200,7 +2244,7 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
         self.assertIn("gaia", HUB_INSTALL_AGENTS)
         # The NPU profile keeps its own FLM models and device keys.
         npu = INIT_PROFILES["npu"]
-        self.assertEqual(npu["models"], ["gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"])
+        self.assertEqual(npu["models"], ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"])
         self.assertEqual(npu["backend"], "flm:npu")
         # The flagship runs in the daemon / Agent UI, which [ui] installs.
         self.assertEqual(npu["pip_extras"], INIT_PROFILES["gaia"]["pip_extras"])
@@ -2660,7 +2704,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
                 _, out = self._render(cmd, rich)
                 self.assertIn("gaia chat --ui", out)
                 self.assertNotIn("gaia chat --device npu", out)
-                self.assertIn("gaia config set default_device gpu", out)
+                self.assertIn("gaia config set default_model <id>", out)
 
     def test_no_build_for_this_machine_is_not_a_failed_setup(self):
         cmd = self._make_cmd("npu", agent_available=False)

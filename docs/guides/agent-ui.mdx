@@ -182,8 +182,8 @@ Pick the install path that fits you best:
     your first message. Setup runs again on the next launch.
 
     **Artifact naming** (`electron-builder.yml`):
-    `gaia-agent-ui-<version>-<arch>-setup.<ext>` — e.g. `gaia-agent-ui-0.17.2-x64-setup.exe`
-    and `gaia-agent-ui-0.17.2-amd64.deb`.
+    `gaia-agent-ui-<version>-<arch>-setup.<ext>` — e.g. `gaia-agent-ui-X.Y.Z-x64-setup.exe`
+    and `gaia-agent-ui-X.Y.Z-amd64.deb`.
 
     **Windows (.exe):**
     1. Download **Install GAIA for Windows** from [amd-gaia.ai](https://amd-gaia.ai/#install) (`gaia-<version>-win-x64-setup.exe`) and run it.
@@ -267,11 +267,34 @@ Pick the install path that fits you best:
 
     **First run:** no separate setup command is needed. When the app opens on a
     PC that is not set up yet, it checks the PC (device, memory, disk), asks
-    where GAIA runs, names the chat model it will download and its size (you
-    can pick a smaller one first), then runs the same steps `gaia init` runs and
-    ends on a few tasks to start with. If you choose a Lemonade Server you
+    where GAIA runs, starts the local model server, and then shows the models
+    it will download before any byte moves: each with its purpose, the size
+    left to download, whether it is already on this PC, and a **Recommended
+    for this PC** mark. Untick any you don't want, tick others, or make a chat
+    model you already have in Lemonade (FLM/NPU included) the default. The
+    total updates against the free space on the drive Lemonade stores models
+    on; a model too big for this PC's memory or a selection too big for the
+    disk gets a warning with the numbers, and you can still go ahead. On an
+    integrated GPU (Strix Halo) where a bigger GPU share would let a larger
+    model run, setup offers to change it, or shows where to change it in AMD
+    Software, and checks the new split after you restart. It skips this step
+    when the larger model isn't one you want: you unticked it, or picked a
+    different chat model. Downloads then show
+    per-model and overall progress with speed and time left; Cancel keeps
+    what finished and what was partly downloaded, and **Retry** or **Resume**
+    continues from there. If one model fails, the ones that already downloaded
+    are kept and checked when you finish setup; only a model that downloaded
+    but won't load is deleted and downloaded again, after you confirm. Tick **Keep trying if the connection drops** to wait
+    out a dropped connection for up to two minutes; otherwise a dropped
+    connection fails at once with Retry. If you choose a Lemonade Server you
     already run, setup uses it instead of installing GAIA's own. Running
     `gaia init` yourself beforehand also works.
+
+    Every choice can be changed later in **Settings → Model**: the default chat
+    model, **Models on this PC** (tick a skipped model and **Apply** to
+    download it; **Remove** deletes one only after you confirm), **GPU memory**
+    on integrated-GPU PCs, and the downloads in progress, which also show in
+    the sidebar while they run.
   </Tab>
 </Tabs>
 
@@ -526,6 +549,9 @@ with `LEMONADE_BASE_URL`: GAIA never unloads its models or stops it.
   load did not name a backend and Lemonade picked it. *unknown* means this
   Lemonade does not report it.
 - **Context window** and the **Embedding model** with its backend.
+- One row for each other model this Lemonade has loaded (speech,
+  transcription, vision, reranking, image or 3D), labelled by its type, with
+  its name, backend and context window.
 
 To choose the backend, pick **Auto**, **Vulkan**, **ROCm** or **CPU** under
 *llama.cpp backend for chat models*. Only backends Lemonade can run on this PC
@@ -717,7 +743,7 @@ much they use now.
 
 One window with General (language; appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
-Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, or your Claude Code skill folders, with **Use** to try one),
+Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one),
 Connectors, Memory, Notifications, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).
@@ -764,8 +790,8 @@ colors the text shades adjust on their own so everything stays readable.
 **Language** switches the app's labels between **English** and **العربية
 (Arabic)**. In Arabic the whole layout reads right to left, with the sidebar on
 the right, and each label keeps its English in brackets, such as "محادثة جديدة
-(New chat)". It changes the app, not the language GAIA answers in, and this
-device remembers it. In either language, each paragraph of an answer runs in
+(New chat)", set smaller and lighter so the Arabic leads. It changes the app,
+not the language GAIA answers in, and this device remembers it. In either language, each paragraph of an answer runs in
 its own direction, so an answer mixing Arabic and English shows each part the
 right way round, and code always reads left to right.
 
@@ -1156,7 +1182,7 @@ For the REST API reference and backend classes, see the [Agent UI SDK Reference]
 ---
 
 <Note>
-  **Hardware:** Tested on AMD Ryzen AI MAX+ 395 with Qwen3.5-35B-A3B-GGUF via Lemonade Server. Other configurations may work — [report issues here](https://github.com/amd/gaia/issues/new).
+  **Hardware:** Tested on AMD Ryzen AI MAX+ 395 with Gemma-4-E4B-it-GGUF via Lemonade Server. Other configurations may work — [report issues here](https://github.com/amd/gaia/issues/new).
 </Note>
 
 <small style="color: #666;">

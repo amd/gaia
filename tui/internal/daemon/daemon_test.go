@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/filelock"
 )
 
 // sidecarSecret stands in for the sidecar bearer the daemon returns from
@@ -647,7 +649,7 @@ func TestHelperProcess(t *testing.T) {
 			fmt.Fprintf(os.Stderr, "helper: %v\n", err)
 			os.Exit(2)
 		}
-		if ok, err := tryLock(f); err != nil || !ok {
+		if ok, err := filelock.TryLock(f); err != nil || !ok {
 			fmt.Fprintf(os.Stderr, "helper: start lock is held by the caller (%v)\n", err)
 			os.Exit(1)
 		}

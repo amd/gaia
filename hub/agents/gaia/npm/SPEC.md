@@ -83,7 +83,7 @@ delivers one binary from one lane. A `1.x`-shaped lock is likewise rejected.
 
 The TUI is **consumed, not built here**. It is the same `tui/cmd/gaia` binary the
 core release publishes as the `terminal-hub` component and a core install runs as
-`gaia tui` — so behaviour is identical by construction rather than by convention.
+`gaia-tui` — so behaviour is identical by construction rather than by convention.
 Building a second copy under this package's lane would put the same bytes at a
 different version under a third naming convention, and the two would drift.
 
@@ -450,10 +450,12 @@ paths call the same `build_memory_dump()` and return the identical shape.
 the same roots the agent does — its bundled skills, `~/.gaia/skills`, Claude
 Code skill folders — so a host without the Python package (the bundled skills
 live inside the binary) can still show them. `source` names the root a skill
-came from: `agent-bundled`, `user` or `claude-import`, or `null` for any other
-root. An agent that predates `source` omits the field; a host must treat a list
-where any skill lacks it as ungrouped and show it flat, not drop the skill. A skill root that cannot be read is a `500`
-naming it.
+came from: `agent-bundled`, `user`, `claude-project` (contract ≥ 2.26: the
+`.claude/skills` of the project the agent works in) or `claude-import` (other
+Claude Code skill folders), or `null` for any other root. An agent that predates
+`source` omits the field; a host must treat a list where any skill lacks it, or
+carries a value the host does not know, as ungrouped and show it flat, never
+drop the skill. A skill root that cannot be read is a `500` naming it.
 
 `/query` streams the answer as `token` events before its terminal `final`. A
 run cancelled mid-answer (`/cancel`, or a dropped connection) ends with an

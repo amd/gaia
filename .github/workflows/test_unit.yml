@@ -276,10 +276,9 @@ jobs:
           # exercises the perf-vis plotting functions headlessly (Agg backend).
           # It stays out of the runtime extras on purpose — gaia.perf_analysis
           # imports it lazily and errors loudly when it is missing.
-          # pymupdf (fitz) is required by tests/unit/test_structured_vlm_extraction.py:
-          # the PDF branch of StructuredExtractor.extract() does `import fitz`, and
-          # mocker.patch("fitz.open") can only resolve that target if the module
-          # exists. It ships in the [ui]/[rag] extras, which this job does not install.
+          # pypdfium2 is required by tests/unit/test_structured_vlm_extraction.py and
+          # tests/unit/rag/test_pdf_pdfium.py, which render and extract from real
+          # PDFs. It ships in the [ui]/[rag] extras, which this job does not install.
           # cvss is required by tests/unit/test_cvss4.py and test_findings_to_sarif.py
           # (the security-audit scorer); it lives in the [dev] extra, not [api].
           # responses is required by tests/unit/test_lemonade_error_classification.py
@@ -295,7 +294,7 @@ jobs:
           # tests/unit/messaging/test_slack_sdk_contract.py importorskip them at
           # module level, so without them those files skip wholesale (#4206).
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
-                                  pyfakefs keyring httpx respx matplotlib "pymupdf<2" cvss responses \
+                                  pyfakefs keyring httpx respx matplotlib "pypdfium2>=5,<6" cvss responses \
                                   faiss-cpu pypdf python-docx python-pptx openpyxl reportlab slack-sdk
           uv pip install --system -e ".[api]"
 
@@ -552,7 +551,7 @@ jobs:
           # The unit job's test deps, plus [mcp]: tests/test_sdk.py and the
           # tests/mcp/ files import the MCP server SDK.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
-                                  pyfakefs keyring httpx respx matplotlib "pymupdf<2" cvss responses \
+                                  pyfakefs keyring httpx respx matplotlib "pypdfium2>=5,<6" cvss responses \
                                   faiss-cpu pypdf
           uv pip install --system -e ".[api,mcp,browser]"
 
@@ -625,7 +624,7 @@ jobs:
           # The Linux unit-tests job's set — see its install step for why each
           # one is needed. A missing one skips files that Linux runs.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
-                                  pyfakefs keyring httpx respx matplotlib "pymupdf<2" cvss responses \
+                                  pyfakefs keyring httpx respx matplotlib "pypdfium2>=5,<6" cvss responses \
                                   faiss-cpu pypdf python-docx python-pptx openpyxl reportlab slack-sdk
           uv pip install --system -e ".[api]"
 
@@ -697,7 +696,7 @@ jobs:
           # The Linux unit-tests job's set — see its install step for why each
           # one is needed.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
-                                  pyfakefs keyring httpx respx matplotlib "pymupdf<2" cvss responses \
+                                  pyfakefs keyring httpx respx matplotlib "pypdfium2>=5,<6" cvss responses \
                                   faiss-cpu pypdf python-docx python-pptx openpyxl reportlab slack-sdk
           uv pip install --system -e ".[api]"
 
