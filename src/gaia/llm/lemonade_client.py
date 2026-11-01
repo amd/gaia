@@ -6317,6 +6317,83 @@ class LemonadeClient:
             self.log.error(f"Error generating image: {str(e)}")
             raise LemonadeClientError(f"Error generating image: {str(e)}")
 
+    @guard_inference()
+    def generate_3d_model(
+        self,
+        image: str,
+        model: str = "TRELLIS-3D",
+        resolution: int = 512,
+        seed: int = 42,
+        bg_removal: str = "threshold",
+        timeout: int = 1800,
+    ) -> bytes:
+        """Generate a GLB mesh from a base64-encoded input image.
+
+        The 3D endpoint is deliberately opt-in and never downloads a model on
+        behalf of an agent.  Lemonade returns a binary glTF (GLB) document.
+        """
+        if not isinstance(image, str) or not image:
+            raise LemonadeClientError("3D generation requires a base64 image.")
+        if resolution not in {512, 1024, 1536}:
+            raise LemonadeClientError("3D resolution must be 512, 1024, or 1536.")
+        if not isinstance(seed, int):
+            raise LemonadeClientError("3D seed must be an integer.")
+        if bg_removal not in {"threshold", "rembg", "none"}:
+            raise LemonadeClientError(
+                "3D background removal must be threshold, rembg, or none."
+            )
+
+        catalog = self.list_models(show_all=True)
+        entries = catalog.get("data") or []
+        selected = next((entry for entry in entries if entry.get("id") == model), None)
+        if selected is None:
+            raise LemonadeClientError(
+                f"3D model '{model}' is not registered in Lemonade. "
+                "Install/register a TRELLIS model, then retry."
+            )
+        if selected.get("downloaded") is not True:
+            raise LemonadeClientError(
+                f"3D model '{model}' is not downloaded. Download it in Lemonade "
+                "first; GAIA will not silently download a multi-GB 3D model."
+            )
+        labels = set(selected.get("labels") or [])
+        if "3d" not in labels and selected.get("recipe") != "trellis":
+            raise LemonadeClientError(
+                f"Lemonade model '{model}' is not labelled as a TRELLIS 3D model."
+            )
+
+        payload = {
+            "model": model,
+            "image": image,
+            "resolution": resolution,
+            "seed": seed,
+            "bg_removal": bg_removal,
+        }
+        try:
+            response = requests.post(
+                f"{self.base_url}/3d/generations",
+                json=payload,
+                headers={"Content-Type": "application/json", **self._auth_headers()},
+                timeout=(10, timeout),
+            )
+            if response.status_code == 401:
+                raise LemonadeAuthError("Lemonade rejected the API key (401).")
+            if response.status_code >= 400:
+                raise LemonadeClientError(
+                    f"Lemonade 3D generation failed ({response.status_code}): "
+                    f"{http_body_text(response)[:600]}"
+                )
+            mesh = response.content
+            if not mesh.startswith(b"glTF"):
+                raise LemonadeClientError(
+                    "Lemonade returned a non-GLB response for 3D generation."
+                )
+            return mesh
+        except LemonadeClientError:
+            raise
+        except requests.RequestException as exc:
+            raise LemonadeClientError(f"Lemonade 3D request failed: {exc}") from exc
+
     def list_sd_models(self) -> List[Dict[str, Any]]:
         """
         List available Stable Diffusion models from the server.

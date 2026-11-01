@@ -26,6 +26,7 @@ Example:
 import base64
 import hashlib
 import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -85,6 +86,7 @@ class SDToolsMixin:
         default_size: Optional[str] = None,
         default_steps: Optional[int] = None,
         default_cfg: Optional[float] = None,
+        enable_3d_tools: bool = False,
     ) -> None:
         """
         Initialize SD tools and register them with the agent.
@@ -100,6 +102,7 @@ class SDToolsMixin:
             default_size: Default image size (None = auto: 512px for SD-1.5/Turbo, 1024px for SDXL)
             default_steps: Default inference steps (None = auto: 4 for Turbo, 20 for Base)
             default_cfg: Default CFG scale (None = auto: 1.0 for Turbo, 7.5 for Base)
+            enable_3d_tools: Register the opt-in image-to-3D tool.
 
         Example:
             # Fast generation with defaults (SDXL-Turbo)
@@ -131,6 +134,7 @@ class SDToolsMixin:
         self.sd_default_steps = default_steps
         self.sd_default_cfg = default_cfg
         self.sd_generations = []  # Instance-level list for session history
+        self.sd_enable_3d_tools = enable_3d_tools
 
         logger.debug(
             f"SD tools initialized: endpoint={self.sd_client.base_url}/images/generations, output={self.sd_output_dir}"
@@ -223,8 +227,71 @@ class SDToolsMixin:
                 "generations": recent,
             }
 
-        # Tools are automatically registered by the @tool decorator above
-        # No need to call register_tool() - it doesn't exist anyway
+        if self.sd_enable_3d_tools:
+            @tool(atomic=True, timeout=1800)
+            def generate_3d_model(
+                image_path: str,
+                model: str = "TRELLIS-3D",
+                resolution: int = 512,
+                seed: int = 42,
+                bg_removal: str = "threshold",
+            ) -> Dict[str, Any]:
+                """Generate a GLB 3D model from a local image.
+
+                The image must be inside the host's allowed folders and the TRELLIS
+                model must already be downloaded in Lemonade. The output is saved
+                beside generated images and is never silently downloaded.
+                """
+                from gaia.agents.tools.path_access import read_access_error
+
+                refusal = read_access_error(self, image_path)
+                if refusal:
+                    return refusal
+                source = Path(image_path).expanduser()
+                try:
+                    resolved = source.resolve(strict=True)
+                except OSError as exc:
+                    return {"status": "error", "error": f"Cannot read image: {exc}"}
+                if not resolved.is_file():
+                    return {"status": "error", "error": f"Image is not a file: {resolved}"}
+                try:
+                    encoded = base64.b64encode(resolved.read_bytes()).decode("ascii")
+                    mesh = self.sd_client.generate_3d_model(
+                        encoded,
+                        model=model,
+                        resolution=resolution,
+                        seed=seed,
+                        bg_removal=bg_removal,
+                    )
+                    safe_model = re.sub(r"[^\w\s-]", "", model).strip() or "trellis"
+                    output = self.sd_output_dir / (
+                        f"model3d_{safe_model}_{datetime.now():%Y%m%d_%H%M%S}.glb"
+                    )
+                    output = output.resolve()
+                    if self.sd_output_dir.resolve() not in output.parents:
+                        return {"status": "error", "error": "Unsafe 3D output path."}
+                    with tempfile.NamedTemporaryFile(
+                        dir=self.sd_output_dir, suffix=".part", delete=False
+                    ) as temp:
+                        staging = Path(temp.name)
+                        temp.write(mesh)
+                    before_change(output, "generate_3d_model")
+                    staging.replace(output)
+                    reload_chat = getattr(self, "_ensure_model_loaded", None)
+                    model_id = getattr(self, "model_id", None)
+                    if callable(reload_chat) and isinstance(model_id, str) and model_id:
+                        reload_chat(model_id)
+                    return {
+                        "status": "success",
+                        "model_path": str(output),
+                        "model": model,
+                        "format": "glb",
+                        "bytes": len(mesh),
+                    }
+                except (LemonadeClientError, OSError) as exc:
+                    return {"status": "error", "error": f"3D generation failed: {exc}"}
+
+        # Tools are automatically registered by the @tool decorator above.
 
     def _generate_image(
         self,
