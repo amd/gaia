@@ -265,10 +265,9 @@ test('window controls take the color of the sidebar beneath them', async ({ page
     ]);
     expect(last).toBe(sidebar);
 
-    await page.locator('.sb').getByRole('button', { name: /Settings/ }).first().click();
+    await page.locator('.sb').getByRole('button', { name: /الإعدادات/ }).first().click();
     await expect(page.locator('.settings-overlay')).toBeVisible();
-    const dimmed = await lastColor(page);
-    expect(brightness(dimmed)).toBeLessThan(brightness(sidebar));
+    await expect.poll(async () => brightness(await lastColor(page))).toBeLessThan(brightness(sidebar));
 
     await page.keyboard.press('Escape');
     await expect(page.locator('.settings-overlay')).toHaveCount(0);
@@ -299,7 +298,7 @@ test('composer chips stay whole at phone width', async ({ page }) => {
 
 test('the library path row fits a phone', async ({ page }) => {
     await open(page);
-    await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+    await page.locator('.sb').getByRole('button', { name: /المستندات/ }).click();
     await page.setViewportSize({ width: 390, height: 780 });
     const form = page.locator('.path-input-form');
     await expect(form).toBeVisible();
