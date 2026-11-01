@@ -1685,8 +1685,9 @@ def swebench_grade_run(
 ) -> Dict[str, Any]:
     """Grade a ``swebench`` run's predictions with the official harness; update the scorecard.
 
-    A task the agent left without a patch, or that errored, keeps its result;
-    every other task's pass is the harness's ``resolved``.
+    A task the agent left without a patch, that errored, or that read the
+    answer key keeps its result; every other task's pass is the harness's
+    ``resolved``.
     """
     card = read_scorecard(run_dir)
     if card.get("suite") != swebench.SUITE:
@@ -1709,7 +1710,11 @@ def swebench_grade_run(
         # A pass already set by an earlier grading is the harness's to revise.
         graded_before = "swebench" in entry
         entry["swebench"] = verdict.as_dict()
-        if entry.get("error") or (entry.get("passed") is False and not graded_before):
+        if (
+            entry.get("error")
+            or entry.get("contamination")
+            or (entry.get("passed") is False and not graded_before)
+        ):
             continue
         if verdict.resolved is None:
             entry["passed"], entry["why"] = None, f"not graded: {verdict.error}"
