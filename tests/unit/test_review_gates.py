@@ -117,6 +117,12 @@ def test_every_description_fits_a_commit_status(verdict):
         assert len(verdict.decide(review, HEAD, False, False)[1]) <= 140
 
 
+def test_a_commit_with_no_open_pr_says_so(verdict, monkeypatch, capsys):
+    monkeypatch.setattr(verdict, "_gh", lambda *args: "[]")
+    assert verdict.main(["--repo", "amd/gaia", "--sha", HEAD]) == 0
+    assert "No verdict posted" in capsys.readouterr().out
+
+
 def test_the_status_workflow_never_touches_pr_code():
     wf = yaml.safe_load((WORKFLOWS / "pr-review-verdict.yml").read_text("utf-8"))
     triggers = wf[True]
@@ -265,3 +271,7 @@ def test_audits_are_told_a_pr_merged_over_a_request_changes():
         pr("**Verdict: Request changes**", "**Verdict: Approve**")
     )
     assert not rc.unanswered_review({"comments": {"nodes": []}})
+
+    stamped = pr(f"**Verdict: Request changes**\n{STAMP}")
+    assert rc.unanswered_review({**stamped, "headRefOid": HEAD})
+    assert not rc.unanswered_review({**stamped, "headRefOid": OLD})

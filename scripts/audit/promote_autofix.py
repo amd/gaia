@@ -38,14 +38,19 @@ GH_TIMEOUT = 60
 
 
 def _gh(*args: str) -> str:
-    result = subprocess.run(
-        ["gh", *args],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-        timeout=GH_TIMEOUT,
-    )
+    try:
+        result = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=GH_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"gh {args[0]} {args[1]} timed out after {GH_TIMEOUT}s"
+        ) from e
     if result.returncode != 0:
         raise RuntimeError(f"gh {args[0]} {args[1]} failed: {result.stderr.strip()}")
     return result.stdout
@@ -90,7 +95,7 @@ def select(issues: list[dict], watermark: int) -> list[dict]:
 
 
 def promote(repo: str, ref: str, number: int) -> None:
-    _gh("issue", "edit", str(number), "--repo", repo, "--add-label", BUG_LABEL)
+    # Dispatch first: `bug` on an undispatched issue hides it from every later run.
     _gh(
         "workflow",
         "run",
@@ -102,6 +107,14 @@ def promote(repo: str, ref: str, number: int) -> None:
         "-f",
         f"issue_number={number}",
     )
+    try:
+        _gh("issue", "edit", str(number), "--repo", repo, "--add-label", BUG_LABEL)
+    except RuntimeError as e:
+        print(
+            f"::warning title=Label not added::#{number} is with auto-fix but has no "
+            f"`{BUG_LABEL}` label: {e}",
+            file=sys.stderr,
+        )
 
 
 def report(

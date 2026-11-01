@@ -61,7 +61,7 @@ exists as a local suite (`batch8_jan.json` in the bench lab) and needs porting i
 | Transcript reader for either harness, incl. which checks actually ran | `bench/transcripts.py` | #4335; JS runner summaries in [#4387](https://github.com/amd/gaia/pull/4387) |
 | Self-hosted AMD runner pool with parallel lanes, secret-scanned public artifacts | `eval_flagship.yml` | `main` |
 | Nightly Claude job that files one issue per defect, deduped by `cluster_key` | `claude-nightly-audit.yml`, `scripts/audit/prepare_synthesis.py` | `main` |
-| `bug` label → auto-fix job creates a branch and PR; humans gate every merge | `claude.yml` (`labeled` trigger, `contains(labels,'bug')`) | `main` |
+| `bug` label or audit dispatch → auto-fix job creates a branch and PR; humans gate every merge | `claude.yml` (`labeled` trigger, `contains(labels,'bug')`, `workflow_dispatch`) | `main` |
 
 The workflow is the missing piece, and #4335 says so in its "Not in this PR"
 section: every choice the workflow makes is already a flag, so it stays thin.

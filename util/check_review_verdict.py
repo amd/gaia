@@ -152,6 +152,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("pass exactly one of --pr and --sha")
 
     numbers = [args.pr] if args.pr else pulls_for(args.repo, args.sha)
+    if not numbers:
+        print(
+            f"::warning title=No verdict posted::no open PR has head {args.sha}, so "
+            "no status was posted"
+        )
     for number in numbers:
         evaluate(args.repo, number)
     return 0

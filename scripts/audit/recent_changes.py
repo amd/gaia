@@ -46,6 +46,7 @@ MAX_PRS = 150
 PR_BATCH = 50
 BOT_AUTHORS = {"github-actions", "app/github-actions", "github-actions[bot]"}
 VERDICT = re.compile(r"^\*\*Verdict: ([A-Za-z ]+?)\*\*", re.MULTILINE)
+STAMP = re.compile(r"<!-- reviewed-sha: ([0-9a-f]{40}) -->")
 BLOCKING = "Request changes"
 REVIEW_CHARS = 500
 COMMENTS_READ = 30
@@ -154,8 +155,8 @@ def fetch_prs(
     for start in range(0, len(wanted), PR_BATCH):
         batch = wanted[start : start + PR_BATCH]
         fields = " ".join(
-            f"p{n}: pullRequest(number: {n}) {{ number title body comments(last: "
-            f"{COMMENTS_READ}) {{ nodes {{ author {{ login }} body }} }} }}"
+            f"p{n}: pullRequest(number: {n}) {{ number title body headRefOid "
+            f"comments(last: {COMMENTS_READ}) {{ nodes {{ author {{ login }} body }} }} }}"
             for n in batch
         )
         query = (
@@ -201,7 +202,11 @@ def unanswered_review(pr: dict) -> str:
         body = comment.get("body") or ""
         verdict = VERDICT.search(body)
         if verdict:
-            if verdict.group(1) != BLOCKING:
+            stamps = STAMP.findall(body)
+            # A later push passed re-review, which posts nothing when all is fixed.
+            if verdict.group(1) != BLOCKING or (
+                stamps and stamps[-1] != pr.get("headRefOid")
+            ):
                 return ""
             visible = re.split(r"<details>", body, maxsplit=1, flags=re.I)[0]
             return " ".join(visible.split())[:REVIEW_CHARS]

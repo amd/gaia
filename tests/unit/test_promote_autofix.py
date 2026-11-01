@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -134,6 +135,23 @@ def test_a_failed_dispatch_fails_the_step_but_tries_the_rest(promote, gh, capsys
     assert promote.main(["--repo", "r/r", "--watermark", "1"]) == 1
     assert "issue_number=31" in {a for c in gh.calls for a in c}
     assert "#30" in capsys.readouterr().err
+    assert not any(c[:3] == ("issue", "edit", "30") for c in gh.calls)
+
+
+def test_a_failed_label_warns_because_the_fix_already_started(promote, gh, capsys):
+    gh.issues = [issue(30)]
+    gh.fail_on = "--add-label"
+    assert promote.main(["--repo", "r/r", "--watermark", "1"]) == 0
+    assert "has no `bug` label" in capsys.readouterr().err
+
+
+def test_a_stalled_gh_call_is_a_normal_failure(promote, monkeypatch):
+    def stall(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(promote.subprocess, "run", stall)
+    with pytest.raises(RuntimeError, match="timed out"):
+        promote._gh("workflow", "run")
 
 
 def test_no_candidates_is_a_clean_pass(promote, gh, tmp_path):
