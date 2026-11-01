@@ -552,6 +552,19 @@ or a `key` the session does not hold, is a `404`. **Offer `always` only to a
 peer at contract ≥ 2.26**: an older one grants it with no way to list or revoke
 it.
 
+### 5.4 Listing a session's tools (schema 2.27, flagship)
+
+**`GET /v1/gaia/sessions/{session_id}/tools`** →
+`{session_id, tools: [{name, description, category}]}`.
+
+The tools the session's own agent can call now, in registry order, skills
+loaded in earlier turns included. `description` is the text the model is
+given. `category` is a `KNOWN_TOOLS` mixin name (`rag`, `file_io`, `shell`,
+...), `mcp`, `skill`, or `agent` for a tool the agent class defines itself. An
+unknown session is a `404`: the route never builds an agent just to answer,
+since that agent would not be the one the session talks to. **Ask only a peer
+at contract ≥ 2.27**; an older one 404s the path itself.
+
 ---
 
 ## 6. Translation map — in-process handler → canonical contract

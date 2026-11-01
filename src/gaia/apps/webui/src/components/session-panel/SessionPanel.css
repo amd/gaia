@@ -256,6 +256,27 @@
 
 .sp-item-remove { flex-shrink: 0; }
 
+.sp-tools {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-space-3);
+}
+
+.sp-tool-group-title {
+    margin: 0 0 var(--sp-space-1);
+    font-size: var(--sp-fs-sm);
+    font-weight: 600;
+}
+
+.sp-tool {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.sp-tool code.sp-item-name { font-family: var(--font-mono); }
+
 .sp-output.is-inactive .sp-item-name {
     color: var(--text-muted);
     text-decoration: line-through;

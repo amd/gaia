@@ -16,7 +16,8 @@ Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
 ``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
 ``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
 2.14), ``/sessions/{session_id}/bypass``, ``/sessions/{session_id}/internet``
-(contract >= 2.23) and ``/sessions/{session_id}/grants`` (contract >= 2.26).
+(contract >= 2.23), ``/sessions/{session_id}/grants`` (contract >= 2.26) and
+``/sessions/{session_id}/tools`` (contract >= 2.27).
 ``needs_input`` is answered over
 ``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
 the same way over ``/tool_decision`` — but only when there is a session to
@@ -95,7 +96,8 @@ AGENT_ID = "gaia"
 #: 2.25 added ``/query``'s ``turns`` field and ``final.model_messages``.
 #: 2.26 added ``GET``/``DELETE /sessions/{id}/grants`` to list and revoke a
 #: session's "always" answers, and ``/skills``' ``claude-project`` source.
-API_VERSION = "2.26"
+#: 2.27 added ``GET /sessions/{id}/tools``: the tools the session's agent has.
+API_VERSION = "2.27"
 
 #: How long ``final`` waits for the turn's context measurement before going without.
 _CONTEXT_WAIT_SECONDS = 15.0
@@ -519,6 +521,24 @@ class GrantsResponse(_Strict):
 
     session_id: str
     grants: List[GrantView]
+
+
+class ToolView(_Strict):
+    name: str = Field(description="The tool's registered name.")
+    description: str = Field(description="What it does, as the model is told.")
+    category: str = Field(
+        description=(
+            "Where it comes from: a KNOWN_TOOLS mixin name (rag, file_io, ...), "
+            "mcp, skill, or agent for a tool the agent defines itself."
+        )
+    )
+
+
+class ToolsResponse(_Strict):
+    """The tools a session's agent can call (contract >= 2.27)."""
+
+    session_id: str
+    tools: List[ToolView]
 
 
 class _QueryRun:
@@ -2083,6 +2103,28 @@ async def list_grants(session_id: str) -> GrantsResponse:
     """
     session = _existing_session(session_id)
     return GrantsResponse(session_id=session_id, grants=session.permissions.grants())
+
+
+@router.get("/sessions/{session_id}/tools", response_model=ToolsResponse)
+async def list_tools(session_id: str) -> ToolsResponse:
+    """The tools the session's agent can call now, skills loaded so far included.
+
+    Read from the session's own agent, so it is what the next turn is offered.
+    An unknown session is a 404: building an agent just to list tools would
+    describe a different agent than the one the chat talks to.
+    """
+    _require_valid_session_id(session_id)
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists, so it has no agent to list "
+                "tools for. Send a query on that session first."
+            ),
+        )
+    tools = await asyncio.to_thread(session.agent.describe_tools)
+    return ToolsResponse(session_id=session_id, tools=tools)
 
 
 @router.delete("/sessions/{session_id}/grants", response_model=GrantsResponse)

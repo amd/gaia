@@ -8,7 +8,7 @@ import inspect
 import re
 import types
 import typing
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 # Set up logging via the project logger; importing this module must not
 # reconfigure the root logger.
@@ -414,3 +414,57 @@ def get_tool_metadata(tool_name: str):
     importing ``_TOOL_REGISTRY`` directly.
     """
     return _TOOL_REGISTRY.get(tool_name)
+
+
+#: Categories a tool can have besides a ``KNOWN_TOOLS`` mixin name.
+TOOL_CATEGORY_MCP = "mcp"
+TOOL_CATEGORY_SKILL = "skill"
+TOOL_CATEGORY_AGENT = "agent"
+
+
+def tool_category(tool_name: str, entry: Mapping[str, Any]) -> str:
+    """Where a registered tool comes from, for grouping it in a UI.
+
+    Args:
+        tool_name: The tool's registry key.
+        entry: Its registry entry.
+
+    Returns:
+        ``"mcp"`` for a tool an MCP server provides, ``"skill"`` for one a
+        skill registered (``<skill>/<tool>``), the ``KNOWN_TOOLS`` name of the
+        mixin that defines it (``"rag"``, ``"file_io"``, ...), else
+        ``"agent"``: a tool the agent class defines itself.
+    """
+    from gaia.agents.registry import KNOWN_TOOLS
+
+    if entry.get("_mcp_server") is not None:
+        return TOOL_CATEGORY_MCP
+    if "/" in tool_name:
+        return TOOL_CATEGORY_SKILL
+    module = getattr(entry.get("function"), "__module__", None)
+    for name, (module_path, _class_name) in KNOWN_TOOLS.items():
+        if module == module_path:
+            return name
+    return TOOL_CATEGORY_AGENT
+
+
+def describe_registry(
+    registry: Mapping[str, Mapping[str, Any]],
+) -> List[Dict[str, str]]:
+    """Name, description and category of every tool in *registry*, in its order.
+
+    Args:
+        registry: A tool registry (``_TOOL_REGISTRY`` or an agent's snapshot).
+
+    Returns:
+        One ``{"name", "description", "category"}`` dict per tool. The
+        description is the one the model is given.
+    """
+    return [
+        {
+            "name": name,
+            "description": entry.get("description") or "",
+            "category": tool_category(name, entry),
+        }
+        for name, entry in list(registry.items())
+    ]
