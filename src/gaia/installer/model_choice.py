@@ -186,9 +186,9 @@ def to_decimal_gb(model_fit_gb: float) -> float:
 
 def memory_reason(need_gb: float, capacity) -> str:
     """Why a model may not fit, in the decimal GB the plan reports, rounded to
-    0.1 like ``capacity_gb`` so the two never read differently."""
+    0.1 like ``need_gb`` and ``capacity_gb`` so the sentence and numbers agree."""
     return (
-        f"needs ~{to_decimal_gb(need_gb):.0f} GB of memory; this PC has "
+        f"needs about {to_decimal_gb(need_gb):.1f} GB of memory; this PC has "
         f"{to_decimal_gb(capacity.memory_gb):.1f} GB ({capacity.memory_source})"
     )
 

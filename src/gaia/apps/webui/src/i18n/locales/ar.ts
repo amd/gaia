@@ -750,6 +750,7 @@ const messages: Messages = {
     'setup.download.title': 'تنزيل النماذج والتحقق منها',
     'setup.download.verifying': 'جارٍ التحقق من تحميل النماذج…',
     'setup.download.finishNote': 'اكتملت التنزيلات. «إنهاء الإعداد» يتحقق من أنها تُحمَّل.',
+    'setup.download.stoppedBeforeCheck': 'توقف الإعداد قبل أن يتحقق من تحميل النماذج. احتُفظ بها؛ «إنهاء الإعداد» يتحقق منها الآن.',
     'setup.state.queued': 'في الانتظار',
     'setup.state.downloading': 'جارٍ التنزيل',
     'setup.state.verifying': 'جارٍ التحقق',

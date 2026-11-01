@@ -834,11 +834,22 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
                                         <button type="button" className="btn-secondary" onClick={() => void poll()}>{t('setup.reconnect')}</button>
                                     </div>
                                 )}
-                                {runFailed && downloadDone && fullRun.state === 'failed' && (
-                                    // No model failed, so the run stopped for another reason: say which.
+                                {runFailed && downloadDone && fullRun.state === 'failed' && !fullRun.model_failed && (
+                                    // No model failed, so the run stopped for another reason: say so, in
+                                    // fixed words, with the raw text behind Details.
                                     fullRun.problem
                                         ? <ServerProblem problem={fullRun.problem} onRetry={retryRun} onUseGaia={() => void start(true, lastRun.current.options)} />
-                                        : fullRun.error && <p className="setup-error" role="alert">{fullRun.error}</p>
+                                        : (
+                                            <div className="setup-error" role="alert">
+                                                <p>{t('setup.download.stoppedBeforeCheck')}</p>
+                                                {fullRun.error && (
+                                                    <details className="dl-details">
+                                                        <summary>{t('setup.progress.details')}</summary>
+                                                        <pre dir="ltr">{fullRun.error}</pre>
+                                                    </details>
+                                                )}
+                                            </div>
+                                        )
                                 )}
                                 {runFailed && downloadDone && (
                                     <div className="setup-row">
@@ -933,7 +944,7 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
                             <p>
                                 {t.compose((say) => [
                                     say('setup.ready.title'),
-                                    answering ? say(cloud ? 'setup.ready.answersCloud' : 'setup.ready.answersLocal', { model: shortModelName(answering) }) : null,
+                                    answering ? say(cloud ? 'setup.ready.answersCloud' : 'setup.ready.answersLocal', { model: cloud ? shortModelName(answering) : (names[answering] ?? finalPlan?.catalog?.find((e) => e.id === answering)?.name ?? shortModelName(answering)) }) : null,
                                 ].filter(Boolean).join(' '))}
                             </p>
                             <button type="button" className="btn-primary" onClick={() => void finish()} autoFocus>

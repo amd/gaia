@@ -194,7 +194,7 @@ describe('SetupScreen: first run, local', () => {
         mockedApi.getSetupPlan.mockResolvedValueOnce(COLD_BIG()).mockResolvedValue(plan([done(QWEN), done(GEMMA), done(EMBED), GPT_OSS]));
         const onReady = await startLocal();
         const card = await screen.findByText(/GAIA is ready\./);
-        expect(card).toHaveTextContent('GAIA is ready. Qwen3.6-35B-A3B-GGUF answers on this PC.');
+        expect(card).toHaveTextContent('GAIA is ready. Qwen3.6-35B-A3B answers on this PC.');
         const summary = await screen.findByText('Vision');
         expect(summary.closest('dl')).toHaveTextContent('ChatQwen3.6-35B-A3BVisionGemma-4-E4B-itDocumentsembeddinggemma-300m');
         fireEvent.click(await screen.findByRole('button', { name: /Check in/ }));
@@ -426,9 +426,25 @@ describe('SetupScreen: downloading', () => {
         mockedApi.startSetup.mockResolvedValue(stopped);
         await startLocal();
         expect(await screen.findByRole('button', { name: /Finish setup/ })).toBeInTheDocument();
-        // Why it stopped stays on screen: no model explains it.
-        expect(screen.getAllByRole('alert').some((a) => a.textContent === 'The model server stopped answering.')).toBe(true);
+        // Why it stopped stays on screen in fixed words; the raw text is behind Details.
+        const why = screen.getAllByRole('alert').find((a) => a.textContent?.includes('Setup stopped before it could check'))!;
+        expect(why).toHaveTextContent('They are kept; Finish setup checks them now.');
+        expect(within(why).getByText('The model server stopped answering.').closest('details')).not.toHaveAttribute('open');
         expect(mockedApi.removeSetupModel).not.toHaveBeenCalled();
+    });
+
+    it('shows no error once a failed download was retried and every model is done', async () => {
+        // The run exited 1 because Qwen failed; the user retried it and it finished.
+        const recovered = runStatus([
+            progress({ id: EMBED.id, roles: ['embedding'], state: 'unchecked', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
+            progress({ id: GEMMA.id, roles: ['vision'], state: 'ready', bytes_done: 5.97e9, bytes_total: 5.97e9 }),
+            progress({ id: QWEN.id, state: 'ready', bytes_done: 23.3e9, bytes_total: 23.3e9 }),
+        ], { state: 'failed', model_failed: true, error: '`gaia init --profile gaia` failed (exit 1): Failed to download Qwen3.6-35B-A3B-GGUF' });
+        mockedApi.startSetup.mockResolvedValue(recovered);
+        await startLocal();
+        expect(await screen.findByRole('button', { name: /Finish setup/ })).toBeInTheDocument();
+        expect(screen.queryAllByRole('alert').filter((a) => a.textContent)).toEqual([]);
+        expect(screen.queryByText(/gaia init/)).not.toBeInTheDocument();
     });
 
     it("keeps the server's remedy beside Finish setup when the server is why it stopped", async () => {

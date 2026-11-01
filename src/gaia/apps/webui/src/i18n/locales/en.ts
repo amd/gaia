@@ -750,6 +750,7 @@ export const enMessages = {
     'setup.download.title': 'Download and check the models',
     'setup.download.verifying': 'Checking that the models load…',
     'setup.download.finishNote': 'The downloads are done. Finish setup checks that they load.',
+    'setup.download.stoppedBeforeCheck': 'Setup stopped before it could check that the models load. They are kept; Finish setup checks them now.',
     'setup.state.queued': 'Queued',
     'setup.state.downloading': 'Downloading',
     'setup.state.verifying': 'Verifying',

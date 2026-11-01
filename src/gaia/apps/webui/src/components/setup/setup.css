@@ -225,7 +225,8 @@
     gap: 8px 12px;
 }
 .mc-default-label { color: var(--text-primary); font-size: 13px; font-weight: 600; }
-.mc-select { flex: 1; min-inline-size: 200px; max-inline-size: 100%; }
+/* Scoped under .mc-default to win over .settings-input's flex: 1, which loads later. */
+.mc-default .mc-select { flex: 1 1 12rem; min-inline-size: 0; max-inline-size: 100%; }
 
 .mc-row.is-skeleton { block-size: 58px; }
 .mc-skeleton {
@@ -598,7 +599,7 @@
     .setup-nav > button, .setup-present .setup-row > button:not(.link-btn) { flex: 1 1 0; }
     .setup-banner .setup-row > button { flex: 1 1 auto; }
     .confirm-actions > button { flex: 1 1 100%; }
-    .mc-select { min-inline-size: 0; inline-size: 100%; }
+    .mc-default .mc-select { flex: 1 1 100%; }
     .setup-summary-list > div { grid-template-columns: 1fr; gap: 0; }
 }
 

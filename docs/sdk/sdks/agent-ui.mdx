@@ -2462,7 +2462,8 @@ so the two can never disagree about whether GAIA is set up.
     own), and `switch_hint` (set when `LEMONADE_BASE_URL` picks the server, so
     only unsetting it switches). The raw error stays in the output lines.
     `gaia_lemonade` is true for a run switching to GAIA's own, so a retry
-    keeps switching.
+    keeps switching. `model_failed` is true when a model's download failed in
+    this run: its row already says why, so the run's own `error` adds nothing.
 
     `models` has one row per model of the run or of a single download: `id`,
     `roles`, `state` (`queued`, `downloading`, `verifying`, `ready`,

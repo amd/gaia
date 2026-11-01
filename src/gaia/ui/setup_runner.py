@@ -524,6 +524,8 @@ class SetupRun:
     server_only: bool = False
     #: Models pulled beside the profile's; setup has no load check for them.
     extra_models: List[str] = field(default_factory=list)
+    #: A model's download failed in this run: its row already says why.
+    model_failed: bool = False
 
     def view(self) -> Dict[str, Any]:
         reached = PHASES.index(self.phase) if self.phase in PHASES else -1
@@ -556,6 +558,7 @@ class SetupRun:
             "skip_chat_model": self.skip_chat_model,
             "gaia_lemonade": self.gaia_lemonade,
             "server_only": self.server_only,
+            "model_failed": self.model_failed,
             "chat_model": None if self.skip_chat_model else self.chat_model,
         }
 
@@ -849,6 +852,8 @@ class SetupRunner:
                 entry.error_kind = error_kind(message)
                 entry.state, entry.speed_bps = "failed", 0
                 entry.error = _failure_text(model_id, entry.error_kind)
+                if self._run is not None:
+                    self._run.model_failed = True
 
     def _mirror_totals(self, run: SetupRun) -> None:
         """Fill the run's single bar from the per-model totals. Caller holds the lock."""

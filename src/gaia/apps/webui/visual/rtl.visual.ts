@@ -318,6 +318,19 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
+        test('phone width: the default chat model select keeps its full width', async ({ page }) => {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await open(page, '', locale, (p) => withSetup(p));
+            await page.locator('.setup-step.is-current .btn-primary').click();
+            const select = page.locator('.mc-select');
+            await expect(select).toBeVisible();
+            const [box, row] = await Promise.all([select.boundingBox(), page.locator('.mc-default').boundingBox()]);
+            // Wrapped onto its own line at the row's full width, not squeezed beside the label.
+            expect(box!.width).toBeGreaterThan(row!.width * 0.9);
+            expect(await select.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
+            expect(await audit(page)).toEqual([]);
+        });
+
         test('narrow window: no sideways scroll', async ({ page }) => {
             await page.setViewportSize({ width: 320, height: 720 });
             await open(page, '', locale, (p) => withSetup(p));

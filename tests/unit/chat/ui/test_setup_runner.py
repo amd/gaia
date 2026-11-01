@@ -1433,6 +1433,20 @@ def test_a_later_download_failing_keeps_the_earlier_models(monkeypatch):
     assert rows[GEMMA]["state"] == "failed" and rows[GEMMA]["can_retry"]
     # Only the real failure counts.
     assert view["overall"]["failed"] == 1
+    # The run says a model is why it stopped, so the UI shows no second error.
+    assert view["model_failed"] is True
+
+
+def test_a_run_that_stopped_for_another_reason_names_no_model(monkeypatch):
+    lines = [_plan_event(), json.dumps({"event": "model_done", "model": QWEN})]
+    _popen(
+        monkeypatch,
+        _FakeProc(io.BytesIO((chr(10).join(lines) + chr(10)).encode()), returncode=1),
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    assert view["state"] == "failed" and view["model_failed"] is False
 
 
 def test_a_load_check_that_never_ran_leaves_models_unchecked(monkeypatch):

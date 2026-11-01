@@ -1033,6 +1033,8 @@ export interface SetupRunStatus {
     skip_chat_model?: boolean;
     /** The run is switching to GAIA's own server; a retry must keep switching. */
     gaia_lemonade?: boolean;
+    /** A model's download failed in this run; its row says why. */
+    model_failed?: boolean;
     /** The run only starts the model server; models are chosen and pulled after. */
     server_only?: boolean;
     /** The chat model setup chose, once it has said. */
