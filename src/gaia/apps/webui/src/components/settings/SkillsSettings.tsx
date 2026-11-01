@@ -44,7 +44,8 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
     const q = query.trim().toLowerCase();
     const shown = (skills ?? []).filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
 
-    const grouped = skills?.every((s) => s.source) ?? false;
+    // A source this build has no group for (a newer agent's) shows the list flat, never hides it.
+    const grouped = skills?.every((s) => GROUPS.some((g) => g.source === s.source)) ?? false;
 
     const renderRow = (s: SkillInfo) => (
         <li key={s.name} className="skill-row">

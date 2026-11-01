@@ -87,6 +87,20 @@ describe('SkillsSettings', () => {
         expect(within(imported).queryByText('web-research')).not.toBeInTheDocument();
     });
 
+    it('shows every skill, flat, when one comes from a source it has no group for', async () => {
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [
+                skill('web-research', 'Research', null, 'agent-bundled'),
+                skill('future-helper', 'From a newer agent', null, 'some-future-root' as SkillSource),
+            ],
+            invalid: {},
+        });
+        render(<SkillsSettings onUseSkill={vi.fn()} />);
+        expect(await screen.findByText('future-helper')).toBeInTheDocument();
+        expect(screen.getByText('web-research')).toBeInTheDocument();
+        expect(screen.queryByRole('region', { name: 'Built into GAIA' })).not.toBeInTheDocument();
+    });
+
     it("shows the project's own skills apart from other Claude Code skills", async () => {
         mockedApi.listSkills.mockResolvedValue({
             skills: [
