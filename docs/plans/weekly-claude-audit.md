@@ -102,8 +102,9 @@ surviving defect it does exactly one of three things:
 - **Comment on an existing issue** — when a backlog candidate would be closed by the same
   fix. This is the #1077 fix, and synthesis is told to err toward it.
 - **File ONE issue** (🔴/🟠, labelled `weekly-audit`) listing **every** location of that
-  defect. It carries each location's `evidence` and an **auto-fixable** flag; a maintainer
-  promotes it with **`bug`** (→ existing `auto-fix` job) or permanently silences it with
+  defect. It carries each location's `evidence` and an **auto-fixable** flag. Auto-fixable
+  issues go to the existing `auto-fix` job (`scripts/audit/promote_autofix.py`, capped per
+  run); a maintainer can promote any other with **`bug`** or permanently silence one with
   **`audit-wontfix`**. No new PR-creation code.
 
 The per-run report — a one-line tally, then a section per dimension in fixed order

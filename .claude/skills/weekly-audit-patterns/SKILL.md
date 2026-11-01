@@ -125,12 +125,11 @@ finding under the dimension it **declares** — it never re-buckets.
 
 ## Only 🔴/🟠 get an issue — 🟡 lives in the job summary
 
-Only high/medium defects are filed (and thus get one-click `bug`→auto-fix promotion). 🟡
+Only high/medium defects are filed (and thus can reach auto-fix). 🟡
 (low) findings appear in the run's job-summary report and nowhere else — this caps tracker
 churn; the first deep run filed 19 issues, ~13 of them low-value coverage nits. Each
-finding carries an `auto_fixable` boolean, and the issue body says whether applying `bug`
-will let auto-fix land it (locatable/small) or whether it needs a human (a test suite, a
-refactor) — so maintainers don't promote something auto-fix can't handle.
+finding carries an `auto_fixable` boolean, and the issue body says whether it goes to
+auto-fix (locatable/small) or needs a human (a test suite, a refactor).
 
 ## Findings are filtered in SYNTHESIS, never in the lenses
 
@@ -259,12 +258,19 @@ re-add a security dimension here or route a security finding into a public issue
 
 ## Promotion: `bug` label → existing auto-fix job
 
-Filed issues are opened **without** any auto-fix trigger label. A maintainer promotes
-one to a PR by applying the **`bug`** label; the existing `auto-fix` job in
-`claude.yml` (gated on `label.name == 'bug'` **and** `contains(labels,'bug')`) then
-creates the branch + PR. There is **no PR-creation code in this workflow** — humans
-gate every code change. A `documentation`/`tests` label alone does NOT trigger auto-fix;
-route promotions through `bug` unless you deliberately widen the auto-fix `if`.
+Synthesis files issues **without** `bug`. A deterministic step after it,
+`scripts/audit/promote_autofix.py`, takes each new issue whose body says
+`**Auto-fixable:** yes`, adds **`bug`**, and dispatches the `auto-fix` job in `claude.yml`,
+which creates the branch + PR. **The dispatch is load-bearing:** the audits run on
+GITHUB_TOKEN, whose events start no workflows, so the label alone fires nothing. While
+promotion was a manual step, 0 of 367 audit issues reached auto-fix.
+
+Three limits are deliberate. **At most 5 issues a run**, 🔴 first, because a fix can take 100
+Opus turns from the pool whose weekly limit forced the rotation; the rest are named in the
+job summary, and adding `bug` by hand still starts auto-fix. **Only new issues**, never the
+backlog, so one run cannot start dozens of fixes. **No PR-creation code in the audits, and
+no merging:** a human still reviews every PR. A `documentation`/`tests` label alone does
+NOT trigger auto-fix; route promotions through `bug`.
 
 ## Cost & safety invariants
 
