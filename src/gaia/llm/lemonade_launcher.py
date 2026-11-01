@@ -13,8 +13,9 @@ Modern Lemonade Server (10.7/10.8) removed the ``lemonade-server`` CLI:
 * macOS ships ``lemond`` (daemon) + ``lemonade`` (client) under
   ``/usr/local/bin``, installed by the Lemonade app. There is no systemd
   unit, so the daemon is started directly (or from the app).
-* Context size is passed via the ``LEMONADE_CTX_SIZE`` environment
-  variable, NOT a ``serve --ctx-size`` flag.
+* Modern Lemonade takes no context size at launch: there is no
+  ``--ctx-size`` flag and no environment variable for it. GAIA sends the
+  window with every ``/load`` instead.
 
 Legacy Lemonade still uses ``lemonade-server serve --ctx-size N`` (plus
 ``--no-tray`` on Windows). This module is the single shared primitive for
@@ -245,13 +246,16 @@ def get_installed_version(tooling: LemonadeTooling) -> Optional[str]:
 def build_start_command(tooling: LemonadeTooling, ctx_size: Optional[int]) -> StartSpec:
     """Build the argv + extra-env needed to start the resolved server.
 
-    Modern Windows -> ``LemonadeServer.exe --silent`` with
-    ``LEMONADE_CTX_SIZE`` in env. Modern Linux -> best-effort
+    Modern Windows -> ``LemonadeServer.exe --silent``. Modern Linux -> best-effort
     ``systemctl --user start lemond`` (the daemon is normally already up).
     Modern macOS -> the ``lemond`` daemon directly; macOS has no systemd, so
     the Linux form must never leak there.
     Legacy -> ``lemonade-server serve --ctx-size N`` (+ ``--no-tray`` on
     Windows), byte-identical to the historical argv.
+
+    Only the legacy form carries *ctx_size*. Modern Lemonade reads no
+    context-size flag or environment variable, so a modern spec has an empty
+    ``env``.
 
     Modern-vs-Windows dispatch keys off the tooling's ``server_launcher``
     (an ``.exe`` means the Windows server binary) rather than the host
@@ -265,14 +269,13 @@ def build_start_command(tooling: LemonadeTooling, ctx_size: Optional[int]) -> St
         )
 
     if tooling.kind == "modern":
-        env = {"LEMONADE_CTX_SIZE": str(ctx_size)} if ctx_size is not None else {}
         launcher = tooling.server_launcher or ""
         if launcher.lower().endswith(".exe"):
-            return StartSpec(argv=[launcher, "--silent"], env=env)
+            return StartSpec(argv=[launcher, "--silent"])
         if tooling.source == "env":
             # Explicit LEMONADE_SERVER_PATH override — run the named binary
             # verbatim rather than silently rerouting to systemctl.
-            return StartSpec(argv=[launcher], env=env)
+            return StartSpec(argv=[launcher])
         if platform.system() == "Darwin":
             # No systemd on macOS — start the daemon directly.
             if not launcher:
@@ -280,10 +283,10 @@ def build_start_command(tooling: LemonadeTooling, ctx_size: Optional[int]) -> St
                     "Modern macOS Lemonade tooling has no server_launcher; "
                     f"expected the {_MACOS_DAEMON_NAME!r} daemon path."
                 )
-            return StartSpec(argv=[launcher], env=env)
+            return StartSpec(argv=[launcher])
         # Linux daemon — best-effort user-unit start; the server is
         # normally already running under systemd.
-        return StartSpec(argv=["systemctl", "--user", "start", "lemond"], env=env)
+        return StartSpec(argv=["systemctl", "--user", "start", "lemond"])
 
     if tooling.kind == "legacy":
         argv = [tooling.server_launcher or "lemonade-server", "serve"]
@@ -350,11 +353,9 @@ def _render_powershell(argv: List[str], env: Dict[str, str]) -> str:
 def render_command(spec: StartSpec) -> str:
     """Render a :class:`StartSpec` as the line a user would actually have to run.
 
-    The env matters as much as the argv and is easy to lose: a modern install
-    carries the context window in ``LEMONADE_CTX_SIZE``, so a bare
-    ``" ".join(argv)`` produces a command that starts a server at the WRONG
-    window — health-green, and failing every long request. Windows quoting is
-    handled too, so the line is copy-pasteable in the shell it names.
+    The env is rendered with the argv, so a spec that needs a variable never
+    loses it to a bare ``" ".join(argv)``. Windows quoting is handled too, so
+    the line is copy-pasteable in the shell it names.
     """
     return _render_command(spec.argv, spec.env)
 

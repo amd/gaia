@@ -332,9 +332,9 @@ class TestEnsureModelLoadedCtxResolution:
 class TestLaunchServerCtxSize:
     """Verify launch_server passes ctx_size through to the launch command.
 
-    Pinned to LEGACY tooling: modern Lemonade carries ctx via the
-    LEMONADE_CTX_SIZE env var instead of a --ctx-size flag (issue #316);
-    the modern path is covered by TestLaunchServerModernLegacyDispatch in
+    Pinned to LEGACY tooling: modern Lemonade takes no context size at
+    launch (no --ctx-size flag, no env var — #316, #3320); the modern path
+    is covered by TestLaunchServerModernLegacyDispatch in
     tests/unit/test_lemonade_client_http.py. health_check is stubbed to fail so the
     already-healthy launch guard never short-circuits against a real local
     server.
