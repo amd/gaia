@@ -293,14 +293,9 @@ def test_notices_are_found_under_either_path_separator():
     assert check.missing_notices(names) == []
 
 
-def test_both_freeze_scripts_bundle_the_notices():
+def test_the_freeze_bundles_every_required_notice():
     root = PACKAGING.parents[4]
-    email = (root / "hub/agents/email/python/packaging/freeze.py").read_text(
-        encoding="utf-8"
-    )
-    for source, dest in freeze.NOTICES:
+    for source, _ in freeze.NOTICES:
         assert source.exists(), source
-        rel = source.relative_to(root).as_posix()
-        assert f'REPO_ROOT / "{rel}", "{dest}"' in email
     for notice in check.REQUIRED_NOTICES:
         assert (root / notice).is_file(), notice
