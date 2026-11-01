@@ -267,6 +267,30 @@ def test_reviewed_entry_outside_its_version_range_needs_review_again():
     assert "re-check the licence" in outside.detail
 
 
+def test_reviewed_entry_outside_range_uses_a_declared_expression():
+    permissive = check_licenses._classify_component(
+        "python", "python-dateutil", "4.0.0", "BSD-3-Clause", declared=True
+    )
+    copyleft = check_licenses._classify_component(
+        "python", "python-dateutil", "4.0.0", "GPL-3.0-only", declared=True
+    )
+    copyleft_classifier = check_licenses._classify_component(
+        "python",
+        "python-dateutil",
+        "4.0.0",
+        "BSD-3-Clause",
+        ["License :: OSI Approved :: GNU General Public License v3 (GPLv3)"],
+        declared=True,
+    )
+    undeclared = check_licenses._classify_component(
+        "python", "python-dateutil", "4.0.0", "BSD-3-Clause"
+    )
+    assert permissive.verdict == "ok"
+    assert copyleft.verdict == "denied"
+    assert copyleft_classifier.verdict == "denied"
+    assert undeclared.verdict == "unknown"
+
+
 def test_copyleft_classifier_overrides_a_permissive_licence_field():
     finding = check_licenses._classify_component(
         "python",
