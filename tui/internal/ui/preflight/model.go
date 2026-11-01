@@ -75,6 +75,9 @@ type Options struct {
 	// StepsDone carries the first-run steps an earlier gate finished this
 	// session into one the host rebuilt, so step 3 does not restart at 1.
 	StepsDone int
+	// Motion overrides how much the screen animates; nil reads NO_MOTION,
+	// GAIA_REDUCED_MOTION, TERM and whether output is a terminal.
+	Motion *modelsetup.Motion
 }
 
 // cancelBox holds the cancel func for whatever background work the screen has
@@ -204,7 +207,7 @@ func newWith(r Runner, cfg Config, opts Options) Model {
 		cancel:    &cancelBox{},
 		autoTried: map[string]bool{},
 		stepsDone: opts.StepsDone,
-		motion:    setupMotion(),
+		motion:    motionFrom(opts),
 	}
 }
 

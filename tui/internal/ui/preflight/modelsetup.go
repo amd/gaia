@@ -56,7 +56,7 @@ func (m Model) openModelSetup() (tea.Model, tea.Cmd) {
 	s := modelsetup.New(api, modelsetup.Options{
 		Mode:        modelsetup.ModeFirstRun,
 		Cloud:       cloud,
-		Motion:      setupMotion(),
+		Motion:      m.motion,
 		StepsBefore: before,
 	})
 	s, _ = s.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
@@ -118,6 +118,13 @@ func (m Model) abandonSetup() {
 	if err := m.setup.Abandon(); err != nil {
 		m.opts.Logf("preflight: could not stop the model download on exit: %v", err)
 	}
+}
+
+func motionFrom(opts Options) modelsetup.Motion {
+	if opts.Motion != nil {
+		return *opts.Motion
+	}
+	return setupMotion()
 }
 
 // spinPrefix is the spinner and its space in a running row, or nothing under

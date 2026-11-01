@@ -1030,7 +1030,13 @@ func (m Model) progressNote(r setupapi.ModelProgress, width int) []string {
 		if r.ErrorKind != nil {
 			kind = *r.ErrorKind
 		}
-		add(failStyle, "[!] "+failureLine(kind, shortName(r.ID), m.drive(), bytesGB(r.BytesDone), bytesGB(r.BytesTotal-r.BytesDone)))
+		line := failureLine(kind, shortName(r.ID), m.drive(), bytesGB(r.BytesDone), bytesGB(r.BytesTotal-r.BytesDone))
+		if kind == setupapi.ErrVerify && r.Error != nil && *r.Error != "" {
+			// The load check says which of its cases this is (would not load,
+			// or setup stopped before checking), in plain words.
+			line = *r.Error + " Press r to try again."
+		}
+		add(failStyle, "[!] "+line)
 		if m.dl.run {
 			add(dimStyle, runOwnsRetry)
 		}

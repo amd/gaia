@@ -989,3 +989,15 @@ func TestAReadFromBeforeTheRetryStartedIsNotItsResult(t *testing.T) {
 		t.Fatalf("screen = %s, want ready once the retry finished", h.m.Screen())
 	}
 }
+
+// A load-check failure says which case it is, in the backend's words.
+func TestALoadCheckFailureUsesTheBackendsWords(t *testing.T) {
+	h := startedDownload(t)
+	msg := "Setup stopped before GAIA could check that Gemma-4-E4B-it-GGUF loads. Fix the error above, then run setup again."
+	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateFailed, ErrorKind: strp("verify"), Error: &msg, BytesTotal: total(gemma)})
+	h.api.SetRunState(setupapi.RunFailed)
+	h.poll()
+	h.focusOnProgress(gemma)
+	h.expect("Setup stopped before GAIA could check that Gemma-4-E4B-it-GGUF loads.")
+	h.expect("Press r to try again.")
+}
