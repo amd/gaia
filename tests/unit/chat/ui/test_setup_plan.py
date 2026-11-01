@@ -847,6 +847,8 @@ def test_plan_memory_matches_the_gpu_memory_pane(
     fake = _IgpuLemonade(carve_gib, shared_gib)
     monkeypatch.setattr(sp, "_client", lambda url: fake)
     monkeypatch.setattr(gpu_memory, "_load_state", lambda: None)
+    # The pane exists only on Windows and Linux; run it as Linux on any CI host.
+    monkeypatch.setattr(gpu_memory, "_platform", lambda: "linux")
     monkeypatch.setattr(
         gpu_memory,
         "_linux_setup",
