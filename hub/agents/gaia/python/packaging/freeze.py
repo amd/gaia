@@ -80,6 +80,11 @@ SKILLS_DEST = "gaia_agent/skills"
 # Linux only: the bundled OpenSSL looks for CA certs where the BUILD distro keeps
 # them, so point it at the host's bundle (see the hook's docstring).
 LINUX_CA_HOOK = HERE / "rthook_linux_ca.py"
+#: Third-party licence notices for the libraries the binary bundles.
+NOTICES = [
+    (REPO_ROOT / "THIRD_PARTY_NOTICES.md", "."),
+    (REPO_ROOT / "licenses", "licenses"),
+]
 
 # Modules PyInstaller must pull in wholesale, and the distributions whose
 # metadata must travel with them. Declared once so the preflight guard below
@@ -413,7 +418,7 @@ def _resolve_add_data() -> list[tuple[Path, str]]:
             "sets could be declared and the hub metadata would be absent. "
             "Restore hub/agents/gaia/python/gaia-agent.yaml and re-run."
         )
-    add_data: list[tuple[Path, str]] = [(MANIFEST_SRC, "gaia_agent")]
+    add_data: list[tuple[Path, str]] = [(MANIFEST_SRC, "gaia_agent"), *NOTICES]
 
     skill_files = (
         sorted(p for p in SKILLS_SRC.rglob("*") if p.is_file() and p.name != ".gitkeep")

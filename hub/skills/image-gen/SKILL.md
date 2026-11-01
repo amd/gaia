@@ -25,6 +25,11 @@ chat model, so the reply after an image pauses while the chat model comes back.
 Generate when the user actually asked for a picture — not to illustrate an
 answer they did not ask to have illustrated.
 
+A slide, deck, presentation, poster with real copy, or chart is not a picture.
+Stable Diffusion cannot render readable text, so the user gets a blur of fake
+letters. Those are files: ask whether they want PowerPoint (.pptx) or HTML if
+they did not say, and build that instead.
+
 ## Check what is loaded before you promise anything
 
 Call `list_sd_models()` first. It lists downloaded image models, including

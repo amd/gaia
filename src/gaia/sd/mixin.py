@@ -23,11 +23,13 @@ Example:
 """
 
 import base64
+import binascii
 import hashlib
+import io
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.file_snapshots import before_change
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
@@ -35,6 +37,45 @@ from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def decode_image_response(
+    response: Any,
+) -> Tuple[bytes, Optional[str]]:
+    """Pull the PNG bytes out of an ``/images/generations`` reply.
+
+    Returns ``(bytes, None)``, or ``(b"", reason)`` naming what came back
+    instead of an image.
+    """
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+        return b"", f"the server reply had no image data ({str(response)[:200]})"
+    image_b64 = data[0].get("b64_json")
+    if not image_b64:
+        return b"", f"the server reply had an empty image ({str(data[0])[:200]})"
+    try:
+        return base64.b64decode(image_b64), None
+    except (binascii.Error, ValueError) as e:
+        return b"", f"the image data is not valid base64 ({e})"
+
+
+def image_problem(image_bytes: bytes) -> Optional[str]:
+    """Return why ``image_bytes`` is not a real picture, or None if it is.
+
+    A single-colour frame is rejected too: SDXL decoding in fp16 can
+    overflow to an all-black image while the server still reports 200.
+    """
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img.load()
+            extrema = img.convert("RGB").getextrema()
+    except (OSError, SyntaxError, ValueError, Image.DecompressionBombError) as e:
+        return f"the data is not a readable image ({e})"
+    if all(low == high for low, high in extrema):
+        return "the image is a single flat colour, so generation failed on the server"
+    return None
 
 
 class SDToolsMixin:
@@ -154,6 +195,10 @@ class SDToolsMixin:
             seed: Optional[int] = None,
         ) -> Dict[str, Any]:
             """Generate an image with a downloaded Lemonade image model.
+
+            Only for pictures. Never for a slide, deck, presentation, document
+            or chart: those are files (.pptx / .html), and SD cannot render
+            readable text.
 
             Args:
                 prompt: Text description of the image.
@@ -362,12 +407,28 @@ class SDToolsMixin:
 
             generation_time_s = round(time.time() - start_time, 1)
 
-            # Parse response
-            image_b64 = response["data"][0]["b64_json"]
-            image_bytes = base64.b64decode(image_b64)
+            image_bytes, problem = decode_image_response(response)
+            if problem is None:
+                problem = image_problem(image_bytes)
+            if problem is not None:
+                error_msg = (
+                    f"{model} returned no usable image: {problem}. Retry, or "
+                    "pick a different model with list_sd_models"
+                )
+                if console and hasattr(console, "print_error"):
+                    console.print_error(error_msg)
+                logger.error(error_msg)
+                return {"status": "error", "error": error_msg}
 
-            # Generate filename and save
             image_path = self._save_image(prompt, image_bytes, model)
+            if not image_path.is_file() or image_path.stat().st_size != len(
+                image_bytes
+            ):
+                error_msg = f"{model} image was not written to {image_path}"
+                if console and hasattr(console, "print_error"):
+                    console.print_error(error_msg)
+                logger.error(error_msg)
+                return {"status": "error", "error": error_msg}
 
             # Compute hash for deduplication
             image_hash = hashlib.sha256(image_bytes).hexdigest()[:16]
@@ -383,6 +444,7 @@ class SDToolsMixin:
                 "seed": seed,
                 "image_hash": image_hash,
                 "generation_time_s": generation_time_s,
+                "display_message": f"Saved {image_path}",
             }
 
             # Track in session history

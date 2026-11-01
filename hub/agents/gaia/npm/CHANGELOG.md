@@ -57,6 +57,14 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **A slide request gets a slide file, not a picture.** Asked for a slide or
+  deck, the agent ran Stable Diffusion and handed back a blurry image of one.
+  It now asks whether you want PowerPoint (.pptx) or HTML when you didn't say,
+  and builds nothing until you answer; then it builds that file.
+- **Image generation no longer reports an image it didn't make.** A server
+  reply with no image, an unreadable one, or a single flat colour (SDXL can
+  return an all-black frame) counted as success. Each is now an error naming
+  what came back, and success gives the saved file's path.
 - **A rate-limited page now says how long to wait.** `fetch_webpage` on an
   HTTP 429 or 503 with `Retry-After` returns the wait as `retry_after` with a
   hint not to fetch again before then. It returned only the status line, so
