@@ -2073,7 +2073,7 @@ Examples:
   gaia eval agent --save-baseline
 
   # Compare current run against saved baseline (auto-detects eval/results/baseline.json)
-  gaia eval agent --compare eval/results/latest/scorecard.json
+  gaia eval agent --compare eval/results/eval-20261021-141300/scorecard.json
 
   # Convert a real Agent UI conversation into a scenario YAML
   gaia eval agent --capture-session 29c211c7-31b5-4084-bb3f-1825c0210942
@@ -3145,7 +3145,7 @@ Examples:
 
     mcp_tui_parser = mcp_subparsers.add_parser(
         "tui",
-        help="Start TUI control MCP server (drives a running `gaia tui --control`)",
+        help="Start TUI control MCP server (drives a running `gaia-tui --control`)",
     )
     mcp_tui_parser.add_argument(
         "--host", default="localhost", help="Host to bind to (default: localhost)"
@@ -10893,7 +10893,7 @@ def handle_mcp_serve(args):
 
 
 def handle_mcp_tui(args):
-    """Start the TUI control MCP server (drives a running `gaia tui --control`)."""
+    """Start the TUI control MCP server (drives a running `gaia-tui --control`)."""
     log = get_logger(__name__)
 
     try:
@@ -10913,7 +10913,7 @@ def handle_mcp_tui(args):
             print("=" * 60)
             print("🖥️  GAIA TUI Control MCP Server")
             print("=" * 60)
-            print("   Target  : the running `gaia tui --control` session")
+            print("   Target  : the running `gaia-tui --control` session")
             print(f"   MCP     : http://{args.host}:{args.port}/mcp")
             try:
                 tool_count = len(
