@@ -70,9 +70,11 @@ beforeEach(() => {
     }));
 });
 
+const ROW_NAME = { selector: '.model-row-name' };
+
 async function renderLocal() {
     render(<ModelSettings />);
-    return screen.findByText('Gemma 4 E4B');
+    return screen.findByText('Gemma 4 E4B', ROW_NAME);
 }
 
 describe('ModelSettings local models', () => {
@@ -84,23 +86,90 @@ describe('ModelSettings local models', () => {
 
     it('shows each model\'s device, size, speed and fit', async () => {
         await renderLocal();
-        const qwen = screen.getByText('Qwen3.6 35B A3B', { selector: '.model-row-name' }).closest('li') as HTMLElement;
+        const qwen = screen.getByText('Qwen3.6 35B A3B', ROW_NAME).closest('li') as HTMLElement;
         expect(within(qwen).getByText('GPU · Vulkan · 21.7 GB on disk · 52 tok/s measured here')).toBeInTheDocument();
         expect(within(qwen).getByText('Fits this PC')).toBeInTheDocument();
         expect(within(qwen).getByText('Loaded')).toBeInTheDocument();
-        const gemma = screen.getByText('Gemma 4 E4B').closest('li') as HTMLElement;
+        const gemma = screen.getByText('Gemma 4 E4B', ROW_NAME).closest('li') as HTMLElement;
         expect(within(gemma).getByText(/GPU · Vulkan \(expected\)/)).toBeInTheDocument();
-        expect(screen.getByText('Qwen3.6 35B A3B')).toBeInTheDocument();
-        expect(screen.getByText('Gemma 4 E4B')).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Show all models' })).not.toBeInTheDocument();
     });
 
     it('lists models this PC cannot run separately, with why', async () => {
         await renderLocal();
-        const section = screen.getByText(/Not available on this PC \(1\)/).closest('details') as HTMLElement;
+        const section = screen.getByText('Not available on this PC').closest('details') as HTMLElement;
+        expect((section as HTMLDetailsElement).open).toBe(false);
+        expect(within(section).getByText('1')).toBeInTheDocument();
         expect(within(section).getByText('Gemma 4 E2B')).toBeInTheDocument();
         expect(within(section).getByText(/needs an AMD Ryzen AI NPU/)).toBeInTheDocument();
         expect(within(section).queryByRole('button', { name: /^Use / })).not.toBeInTheDocument();
+    });
+
+    it('leads with the model in use, what it runs on, and its context size', async () => {
+        await renderLocal();
+        const card = screen.getByRole('region', { name: 'Model in use' });
+        expect(within(card).getByText('Qwen3.6 35B A3B', { selector: '.model-in-use-name' })).toBeInTheDocument();
+        expect(within(card).getByText('GPU')).toBeInTheDocument();
+        expect(within(card).getByText('Loaded')).toBeInTheDocument();
+        expect(await within(card).findByLabelText('Context size')).toHaveValue('auto');
+    });
+
+    it('switches model from the top of the page, among models ready to use', async () => {
+        mockedApi.selectModel.mockResolvedValue({ ...ACTIVE, model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B' });
+        await renderLocal();
+        const select = screen.getByLabelText('Switch model');
+        expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Qwen3.6 35B A3B', 'Gemma 4 E4B']);
+        fireEvent.change(select, { target: { value: 'Gemma-4-E4B-it-GGUF' } });
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Gemma-4-E4B-it-GGUF'));
+    });
+
+    it('groups models and keeps the download group closed until it is needed', async () => {
+        mockedApi.listProviderModels.mockResolvedValue({
+            provider: 'local', memory_gb: 112, memory_source: 'AMD iGPU', capacity_error: null,
+            models: [...MODELS, local('Big-GGUF', { display_name: 'Big Model', downloaded: false, state: 'not_downloaded' })],
+        });
+        await renderLocal();
+        const group = (name: string) => screen.getByText(name).closest('details') as HTMLDetailsElement;
+        expect(group('Downloaded').open).toBe(true);
+        expect(group('Available to download').open).toBe(false);
+        expect(within(group('Available to download')).getByText('Big Model')).toBeInTheDocument();
+    });
+
+    it('opens every group a search matches, and closes them after', async () => {
+        const many = Array.from({ length: 6 }, (_, i) => local(`Extra-${i}`, { display_name: `Extra ${i}`, downloaded: false, state: 'not_downloaded' }));
+        mockedApi.listProviderModels.mockResolvedValue({
+            provider: 'local', models: [...MODELS, ...many], memory_gb: 112, memory_source: 'AMD iGPU', capacity_error: null,
+        });
+        await renderLocal();
+        const search = screen.getByRole('searchbox', { name: 'Search models' });
+        fireEvent.change(search, { target: { value: 'extra 3' } });
+        expect((screen.getByText('Available to download').closest('details') as HTMLDetailsElement).open).toBe(true);
+        fireEvent.change(search, { target: { value: '' } });
+        expect((screen.getByText('Available to download').closest('details') as HTMLDetailsElement).open).toBe(false);
+    });
+
+    it('holds a searched group open against a click on its header', async () => {
+        const many = Array.from({ length: 6 }, (_, i) => local(`Extra-${i}`, { display_name: `Extra ${i}`, downloaded: false, state: 'not_downloaded' }));
+        mockedApi.listProviderModels.mockResolvedValue({
+            provider: 'local', models: [...MODELS, ...many], memory_gb: 112, memory_source: 'AMD iGPU', capacity_error: null,
+        });
+        await renderLocal();
+        fireEvent.change(screen.getByRole('searchbox', { name: 'Search models' }), { target: { value: 'extra' } });
+        const summary = screen.getByText('Available to download').closest('summary') as HTMLElement;
+        expect(fireEvent.click(summary)).toBe(false);
+    });
+
+    it('keeps a running download on screen in its group', async () => {
+        mockedApi.listProviderModels.mockResolvedValue({
+            provider: 'local', memory_gb: 112, memory_source: 'AMD iGPU', capacity_error: null,
+            models: [...MODELS, local('Big-GGUF', {
+                display_name: 'Big Model', downloaded: false, state: 'not_downloaded',
+                download_progress: { state: 'downloading', percent: 40 } as ProviderModel['download_progress'],
+            })],
+        });
+        await renderLocal();
+        expect((screen.getByText('Available to download').closest('details') as HTMLDetailsElement).open).toBe(true);
+        expect(screen.getByRole('progressbar', { name: 'Downloading Big Model' })).toBeInTheDocument();
     });
 
     it('offers context sizes up to what fits, with Automatic first', async () => {

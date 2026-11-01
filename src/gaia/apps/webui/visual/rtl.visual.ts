@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, NOW, mockApi, useLocale, useTheme } from './fixtures';
+import { ANSWER_SESSION, MODEL_LIST, NOW, mockApi, useLocale, useTheme, withModelPage } from './fixtures';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -318,6 +318,135 @@ for (const locale of ['ar', 'en']) {
         const onTop = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-close'),
             [after.x + after.width / 2, after.y + after.height / 2]);
         expect(onTop, 'the close button is covered by scrolled content').toBe(true);
+    });
+}
+
+/** Saves what a test sees when GAIA_VISUAL_SHOTS names a folder, so a person can read it. */
+async function shot(page: Page, name: string): Promise<void> {
+    const dir = process.env.GAIA_VISUAL_SHOTS;
+    if (dir) await page.screenshot({ path: `${dir}/${name}.png` });
+}
+
+interface ModelPageOptions {
+    models?: unknown[];
+    status?: unknown;
+    theme?: 'light' | 'dark';
+}
+
+async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light' }: ModelPageOptions = {}): Promise<void> {
+    await open(page, '', locale, (p) => withModelPage(p, models, SETUP_PLAN, status), theme);
+    const sidebar = page.getByRole('button', { name: /Open sidebar/ });
+    if (await sidebar.isVisible()) await sidebar.click();
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await page.getByRole('dialog').locator('[data-section="model"]').click();
+    await expect(page.locator('.model-in-use-name')).toBeVisible();
+}
+
+const scrollPane = (page: Page, to: 'top' | 'bottom') =>
+    page.locator('.settings-scroll').evaluate((el, at) => { el.scrollTop = at === 'top' ? 0 : el.scrollHeight; }, to);
+
+const groups = (page: Page) => page.locator('.settings-card .settings-disclosure');
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`settings model page (${locale})`, () => {
+        test('the model in use and its controls sit above the list', async ({ page }) => {
+            await openModelPage(page, locale);
+            await expect(page.locator('#ctx-size')).toBeVisible();
+            const pane = await page.locator('.settings-scroll').boundingBox();
+            const context = await page.locator('#ctx-size').boundingBox();
+            expect(context!.y + context!.height).toBeLessThan(pane!.y + pane!.height);
+            await expect(page.locator('.settings-disclosure', { hasText: /Available to download/ }).locator('.model-row').first()).toBeHidden();
+            await shot(page, `model-${locale}-top`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('long list, every group and detail open', async ({ page }) => {
+            await openModelPage(page, locale);
+            const closed = await groups(page).evaluateAll((els) => els.filter((el) => !(el as HTMLDetailsElement).open).length);
+            expect(closed).toBeGreaterThan(0);
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await expect(page.getByText('needs 180 GB of memory', { exact: false }).first()).toBeVisible();
+            // A size inside a sentence stays whole only inside its own bidi isolate.
+            if (locale === 'ar') await expect(page.locator('.model-row-meta', { hasText: 'tok/s' }).first()).toContainText('\u206841 tok/s\u2069');
+            await shot(page, `model-${locale}-long`);
+            await scrollPane(page, 'bottom');
+            await shot(page, `model-${locale}-long-end`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('nothing downloaded yet: the download group starts open', async ({ page }) => {
+            const none = MODEL_LIST.map((m) => ({ ...m, downloaded: false, state: 'not_downloaded' }));
+            await openModelPage(page, locale, { models: none });
+            await expect(page.locator('.model-row').first()).toBeVisible();
+            await shot(page, `model-${locale}-none-downloaded`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('an empty list says so', async ({ page }) => {
+            await openModelPage(page, locale, { models: [] });
+            await expect(page.locator('.settings-card .settings-field > .settings-hint').first()).toBeVisible();
+            await shot(page, `model-${locale}-empty`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('downloading: the group opens and the row shows progress', async ({ page }) => {
+            const running = MODEL_LIST.map((m, i) => (i === 4
+                ? { ...m, download_progress: { state: 'downloading', percent: 38, bytes_done: 1.1e9, bytes_total: 3e9 } } : m));
+            await openModelPage(page, locale, { models: running });
+            await expect(page.locator('.model-row progress')).toBeVisible();
+            await page.locator('.model-row progress').scrollIntoViewIfNeeded();
+            await shot(page, `model-${locale}-downloading`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('setup downloads sit above the list, one row failed', async ({ page }) => {
+            await openModelPage(page, locale, { status: SETUP_RUNNING });
+            const downloads = page.locator('.models-downloads-slot');
+            await expect(downloads.locator('.dl-row.is-failed')).toBeVisible();
+            const [slot, first] = await Promise.all([downloads.boundingBox(), groups(page).first().boundingBox()]);
+            expect(slot!.y).toBeLessThan(first!.y);
+            await downloads.scrollIntoViewIfNeeded();
+            await shot(page, `model-${locale}-setup-downloads`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a failed link check lists each line', async ({ page }) => {
+            await openModelPage(page, locale);
+            const add = page.locator('.settings-disclosure', { has: page.locator('#custom-model-url') });
+            await add.locator('summary').click();
+            await page.locator('#custom-model-url').fill('https://huggingface.co/unsloth/flint-GGUF');
+            await add.locator('button[type="submit"]').click();
+            await expect(add.locator('.custom-model-checks li.is-failed')).toBeVisible();
+            await add.locator('.custom-model-checks li.is-failed').scrollIntoViewIfNeeded();
+            await shot(page, `model-${locale}-failed-check`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('cloud tab keeps the local model in use on screen', async ({ page }) => {
+            await openModelPage(page, locale);
+            await expect(page.locator('.model-in-use .is-device')).toHaveText('GPU');
+            await page.getByRole('radio', { name: /Fireworks AI/ }).click();
+            await expect(page.locator('.settings-card .model-row').first()).toBeVisible();
+            await expect(page.locator('.model-in-use .is-device')).toHaveText('GPU');
+            await shot(page, `model-${locale}-cloud`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('dark theme', async ({ page }) => {
+            await openModelPage(page, locale, { theme: 'dark' });
+            await shot(page, `model-${locale}-dark`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('phone width', async ({ page }) => {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await openModelPage(page, locale);
+            await shot(page, `model-${locale}-phone`);
+            await scrollPane(page, 'bottom');
+            await shot(page, `model-${locale}-phone-end`);
+            expect(await audit(page)).toEqual([]);
+        });
     });
 }
 
