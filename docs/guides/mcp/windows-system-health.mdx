@@ -111,7 +111,7 @@ If you see `Failed to connect to MCP server 'windows'`:
 
 1. Run `uvx --version`. If it is not found, install [uv](https://docs.astral.sh/uv/) (`uvx` comes with it).
 2. Run `uvx windows-mcp` by itself to see the server's own error.
-3. If it reports an unsupported Python version, run `uvx --python 3.13 windows-mcp` once; uv downloads that interpreter for the server.
+3. If it reports an unsupported Python version, run `uvx --python <the version the error names> windows-mcp`; uv downloads that interpreter for the server. Use the version the error names, because a lower one makes uv resolve an older `windows-mcp` release.
 
 ## Add Another MCP Server
 

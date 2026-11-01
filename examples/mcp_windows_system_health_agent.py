@@ -78,7 +78,7 @@ class WindowsSystemHealthAgent(Agent, MCPClientMixin):
             print("     If not, install uv: https://docs.astral.sh/uv/")
             print("  2. Run 'uvx windows-mcp' on its own to see the server's error.")
             print("  3. If it reports a Python version mismatch, retry with")
-            print("     'uvx --python 3.13 windows-mcp' (uv downloads that Python).")
+            print("     'uvx --python <version the error names> windows-mcp'.")
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the agent."""
