@@ -205,6 +205,9 @@ public:
     /// Read a BLOB column. NULL and zero-length blobs both read as empty.
     Blob columnBlob(int col) const;
 
+    /// True when the statement cannot change the database (sqlite3_stmt_readonly).
+    bool readOnly() const;
+
     /// The SQL this statement was prepared from.
     const std::string& sql() const noexcept { return sql_; }
 

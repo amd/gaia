@@ -5,7 +5,13 @@
 #include "gaia/security.h"
 
 #include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <fstream>
+#include <filesystem>
 #include <iostream>
+#include <regex>
+#include <iterator>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -51,71 +57,74 @@ Do NOT wrap conversational replies in JSON.
 
 Agent::Agent(const AgentConfig& config)
     : config_(config),
-      lemonade_(LemonadeClientConfig{config.baseUrl, config.modelId, config.contextSize, config.debug}) {
+      lemonade_(LemonadeClientConfig{config.baseUrl, config.modelId, config.contextSize, config.debug,
+                                     config.lemonadeApiKey}) {
 
-    // GAIA_BASE_URL / GAIA_CPP_BASE_URL (deprecated fallback)
-    std::string envUrl = getEnvVar("GAIA_BASE_URL");
-    if (envUrl.empty()) {
-        envUrl = getEnvVar("GAIA_CPP_BASE_URL");
-        if (!envUrl.empty()) {
-            std::cerr << "[GAIA] GAIA_CPP_BASE_URL is deprecated; use GAIA_BASE_URL instead\n";
-        }
-    }
-    if (!envUrl.empty()) {
-        config_.baseUrl = envUrl;
-        lemonade_.setBaseUrl(config_.baseUrl);
-    }
-
-    // GAIA_MODEL_ID
-    std::string envModel = getEnvVar("GAIA_MODEL_ID");
-    if (!envModel.empty()) {
-        config_.modelId = envModel;
-        lemonade_.setModel(config_.modelId);
-    }
-
-    // GAIA_MAX_STEPS
-    std::string envMaxSteps = getEnvVar("GAIA_MAX_STEPS");
-    if (!envMaxSteps.empty()) {
-        try {
-            int val = std::stoi(envMaxSteps);
-            if (val > 0) { config_.maxSteps = val; }
-            else { std::cerr << "[GAIA] GAIA_MAX_STEPS must be > 0; ignoring value " << val << "\n"; }
-        } catch (const std::exception&) {
-            std::cerr << "[GAIA] GAIA_MAX_STEPS='" << envMaxSteps << "' is not a valid integer; ignoring\n";
-        }
-    }
-
-    // GAIA_CONTEXT_SIZE / GAIA_CPP_CTX_SIZE (deprecated fallback)
-    std::string envCtx = getEnvVar("GAIA_CONTEXT_SIZE");
-    if (envCtx.empty()) {
-        envCtx = getEnvVar("GAIA_CPP_CTX_SIZE");
-        if (!envCtx.empty()) {
-            std::cerr << "[GAIA] GAIA_CPP_CTX_SIZE is deprecated; use GAIA_CONTEXT_SIZE instead\n";
-        }
-    }
-    if (!envCtx.empty()) {
-        try {
-            int val = std::stoi(envCtx);
-            if (val > 0) {
-                config_.contextSize = val;
-                lemonade_.setContextSize(config_.contextSize);
-            } else {
-                std::cerr << "[GAIA] GAIA_CONTEXT_SIZE must be > 0; ignoring value " << val << "\n";
+    if (config_.legacyEnvOverrides) {
+        // GAIA_BASE_URL / GAIA_CPP_BASE_URL (deprecated fallback)
+        std::string envUrl = getEnvVar("GAIA_BASE_URL");
+        if (envUrl.empty()) {
+            envUrl = getEnvVar("GAIA_CPP_BASE_URL");
+            if (!envUrl.empty()) {
+                std::cerr << "[GAIA] GAIA_CPP_BASE_URL is deprecated; use GAIA_BASE_URL instead\n";
             }
-        } catch (const std::exception&) {
-            std::cerr << "[GAIA] GAIA_CONTEXT_SIZE='" << envCtx << "' is not a valid integer; ignoring\n";
         }
-    }
+        if (!envUrl.empty()) {
+            config_.baseUrl = envUrl;
+            lemonade_.setBaseUrl(config_.baseUrl);
+        }
 
-    // GAIA_MAX_TOKENS
-    std::string envMaxTokens = getEnvVar("GAIA_MAX_TOKENS");
-    if (!envMaxTokens.empty()) {
-        try {
-            int val = std::stoi(envMaxTokens);
-            if (val > 0) { config_.maxTokens = val; }
-            else { std::cerr << "[GAIA] GAIA_MAX_TOKENS must be > 0; ignoring value " << val << "\n"; }
-        } catch (const std::exception&) {
-            std::cerr << "[GAIA] GAIA_MAX_TOKENS='" << envMaxTokens << "' is not a valid integer; ignoring\n";
+        // GAIA_MODEL_ID
+        std::string envModel = getEnvVar("GAIA_MODEL_ID");
+        if (!envModel.empty()) {
+            config_.modelId = envModel;
+            lemonade_.setModel(config_.modelId);
+        }
+
+        // GAIA_MAX_STEPS
+        std::string envMaxSteps = getEnvVar("GAIA_MAX_STEPS");
+        if (!envMaxSteps.empty()) {
+            try {
+                int val = std::stoi(envMaxSteps);
+                if (val > 0) { config_.maxSteps = val; }
+                else { std::cerr << "[GAIA] GAIA_MAX_STEPS must be > 0; ignoring value " << val << "\n"; }
+            } catch (const std::exception&) {
+                std::cerr << "[GAIA] GAIA_MAX_STEPS='" << envMaxSteps << "' is not a valid integer; ignoring\n";
+            }
+        }
+
+        // GAIA_CONTEXT_SIZE / GAIA_CPP_CTX_SIZE (deprecated fallback)
+        std::string envCtx = getEnvVar("GAIA_CONTEXT_SIZE");
+        if (envCtx.empty()) {
+            envCtx = getEnvVar("GAIA_CPP_CTX_SIZE");
+            if (!envCtx.empty()) {
+                std::cerr << "[GAIA] GAIA_CPP_CTX_SIZE is deprecated; use GAIA_CONTEXT_SIZE instead\n";
+            }
+        }
+        if (!envCtx.empty()) {
+            try {
+                int val = std::stoi(envCtx);
+                if (val > 0) {
+                    config_.contextSize = val;
+                    lemonade_.setContextSize(config_.contextSize);
+                } else {
+                    std::cerr << "[GAIA] GAIA_CONTEXT_SIZE must be > 0; ignoring value " << val << "\n";
+                }
+            } catch (const std::exception&) {
+                std::cerr << "[GAIA] GAIA_CONTEXT_SIZE='" << envCtx << "' is not a valid integer; ignoring\n";
+            }
+        }
+
+        // GAIA_MAX_TOKENS
+        std::string envMaxTokens = getEnvVar("GAIA_MAX_TOKENS");
+        if (!envMaxTokens.empty()) {
+            try {
+                int val = std::stoi(envMaxTokens);
+                if (val > 0) { config_.maxTokens = val; }
+                else { std::cerr << "[GAIA] GAIA_MAX_TOKENS must be > 0; ignoring value " << val << "\n"; }
+            } catch (const std::exception&) {
+                std::cerr << "[GAIA] GAIA_MAX_TOKENS='" << envMaxTokens << "' is not a valid integer; ignoring\n";
+            }
         }
     }
 
@@ -154,7 +163,6 @@ void Agent::setConfig(const AgentConfig& newConfig) {
     {
         std::lock_guard<std::mutex> lock(configMutex_);
         config_ = newConfig;
-        modelEnsured_ = false;
         systemPromptDirty_ = true;
     }
     // Update LemonadeClient outside configMutex_ to avoid holding the lock
@@ -169,7 +177,6 @@ void Agent::setModel(const std::string& modelId) {
     {
         std::lock_guard<std::mutex> lock(configMutex_);
         config_.modelId = modelId;
-        modelEnsured_ = false;
         // The model decides whether native tool calling is on, which decides
         // whether the response-format template belongs in the prompt.
         systemPromptDirty_ = true;
@@ -541,6 +548,11 @@ UsageStats extractUsage(const json& responseJson) {
 
 Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std::string& sysPrompt,
                                 const AgentConfig& cfg) {
+    // Re-check before every request: another client can reload the model at a smaller ctx mid-turn.
+    if (!cfg.modelId.empty()) {
+        lemonade_.ensureModelLoaded();
+    }
+
     // Build OpenAI-compatible request.
     // NOTE: n_ctx is intentionally omitted — context size is set at model load
     // time via LemonadeClient::loadModel() / ensureModelLoaded(), not per-request.
@@ -583,78 +595,76 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
     // ---- Streaming path ----
     if (config_.streaming) {
         std::string accumulated;
-        std::vector<ToolCall> streamedToolCalls;
-        std::string rawResponse = lemonade_.chatCompletionsStreaming(
+        ChatStreamResult stream = lemonade_.chatCompletionsStream(
             requestBody,
             [this, &accumulated](const std::string& token) {
                 accumulated += token;
                 console_->printStreamToken(token);
             },
-            streamedToolCalls
-        );
+            [this] { return cancelled_.load(); });
+        if (!accumulated.empty()) console_->printStreamEnd();
+        UsageStats usage;
+        try {
+            usage = extractUsage(json::parse(stream.raw));
+        } catch (const json::exception&) {
+            // An SSE body is not one JSON document; its usage is not reported.
+        }
+        // The loop sees the cancel and ends the turn; nothing partial is acted on.
+        if (stream.stopped) return {accumulated, usage, {}, "cancelled"};
 
         // Never consume tool_calls we did not ask for. Some servers volunteer
         // them (llama.cpp --jinja) even with no `tools` in the request; acting
         // on that would send an assistant tool_calls turn back with no `tools`
         // field, which strict servers reject — and would break an agent that
         // explicitly opted out via NativeToolCalls::Never.
-        if (!nativeTools) streamedToolCalls.clear();
+        if (!nativeTools) stream.toolCalls.clear();
 
         // A tool-calling model answers with tool_calls deltas and often no
         // content at all, so this is checked before the empty-stream error.
-        if (!streamedToolCalls.empty()) {
-            validateStreamedToolCalls(streamedToolCalls);
-            if (!accumulated.empty()) console_->printStreamEnd();
-            UsageStats usage;
-            try {
-                usage = extractUsage(json::parse(rawResponse));
-            } catch (...) {}
+        if (!stream.toolCalls.empty()) {
+            validateStreamedToolCalls(stream.toolCalls);
             if (cfg.debug) {
-                std::cerr << "[LLM] streamed tool_calls=" << streamedToolCalls.size() << std::endl;
+                std::cerr << "[LLM] streamed tool_calls=" << stream.toolCalls.size() << std::endl;
             }
-            return {accumulated, usage, std::move(streamedToolCalls)};
+            return {accumulated, usage, std::move(stream.toolCalls), stream.finishReason};
         }
 
-        if (!accumulated.empty()) {
-            console_->printStreamEnd();
-            // Streaming responses may include usage in the final chunk;
-            // attempt to extract from the raw bytes.
-            UsageStats usage;
-            try {
-                const json responseJson = json::parse(rawResponse);
-                usage = extractUsage(responseJson);
-            } catch (...) {}
-            return {accumulated, usage, {}};
+        if (!accumulated.empty()) return {accumulated, usage, {}, stream.finishReason};
+
+        // A thinking model can put its whole reply in reasoning_content, as on
+        // the non-streaming path.
+        if (cfg.stripThinking && !stream.reasoning.empty()) {
+            return {stream.reasoning, usage, {}, stream.finishReason};
         }
 
         // Fallback: server returned a non-streaming response despite "stream":true.
         // Parse the raw response body as a regular chat completions reply.
-        if (!rawResponse.empty()) {
-            try {
-                const json responseJson = json::parse(rawResponse);
-                if (responseJson.contains("choices") && !responseJson["choices"].empty()) {
-                    const auto& choice = responseJson["choices"][0];
-                    if (choice.contains("message")) {
-                        const auto& message = choice["message"];
-                        if (nativeTools && message.contains("tool_calls")
-                            && !message["tool_calls"].is_null()
-                            && !message["tool_calls"].empty()) {
-                            std::string text;
-                            if (message.contains("content") && message["content"].is_string()) {
-                                text = message["content"].get<std::string>();
-                            }
-                            return {text, extractUsage(responseJson),
-                                    parseToolCallsArray(message["tool_calls"])};
-                        }
+        if (!stream.raw.empty()) {
+            const json responseJson = json::parse(stream.raw, nullptr, false);
+            if (!responseJson.is_discarded() && responseJson.contains("choices") &&
+                responseJson["choices"].is_array() && !responseJson["choices"].empty()) {
+                const auto& choice = responseJson["choices"][0];
+                const std::string finish = choice.contains("finish_reason") && choice["finish_reason"].is_string()
+                                               ? choice["finish_reason"].get<std::string>()
+                                               : "";
+                if (choice.contains("message")) {
+                    const auto& message = choice["message"];
+                    if (nativeTools && message.contains("tool_calls")
+                        && !message["tool_calls"].is_null()
+                        && !message["tool_calls"].empty()) {
+                        std::string text;
                         if (message.contains("content") && message["content"].is_string()) {
-                            return {message["content"].get<std::string>(),
-                                    extractUsage(responseJson), {}};
+                            text = message["content"].get<std::string>();
                         }
+                        return {text, extractUsage(responseJson),
+                                parseToolCallsArray(message["tool_calls"]), finish};
+                    }
+                    if (message.contains("content") && message["content"].is_string()) {
+                        return {message["content"].get<std::string>(),
+                                extractUsage(responseJson), {}, finish};
                     }
                 }
-            } catch (const std::runtime_error&) {
-                throw; // malformed tool_calls — surface it, don't fall through
-            } catch (...) {}
+            }
         }
 
         throw std::runtime_error("Streaming response contained no tokens");
@@ -675,7 +685,10 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
 
     if (responseJson.contains("choices") && !responseJson["choices"].empty()) {
         const auto& choice = responseJson["choices"][0];
+        const std::string finish =
+            choice.contains("finish_reason") && choice["finish_reason"].is_string() ? choice["finish_reason"].get<std::string>() : "";
         if (choice.contains("message")) {
+            LlmResult r = [&]() -> LlmResult {
             const auto& message = choice["message"];
             // tool_calls first: a native call carries content: null, which the
             // content-only check below would reject as an unexpected format.
@@ -692,9 +705,23 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
                 return {text, extractUsage(responseJson),
                         parseToolCallsArray(message["tool_calls"])};
             }
+            if (message.contains("content") && message["content"].is_string() &&
+                !(cfg.stripThinking && message["content"].get<std::string>().empty())) {
+                return {message["content"].get<std::string>(), extractUsage(responseJson), {}};
+            }
+            // A thinking model can put its whole reply in reasoning_content.
+            if (cfg.stripThinking && message.contains("reasoning_content") &&
+                message["reasoning_content"].is_string()) {
+                return {message["reasoning_content"].get<std::string>(),
+                        extractUsage(responseJson), {}};
+            }
             if (message.contains("content") && message["content"].is_string()) {
                 return {message["content"].get<std::string>(), extractUsage(responseJson), {}};
             }
+            throw std::runtime_error("Unexpected LLM response format: " + responseBody.substr(0, 200));
+            }();
+            r.finishReason = finish;
+            return r;
         }
     }
     // Include truncated response body in error for debugging
@@ -975,6 +1002,257 @@ std::string truncateToolResult(const json& toolResult) {
     return resultStr;
 }
 
+// Remove `<think>` reasoning from a reply. Same three shapes Python's
+// _split_reasoning handles: closed blocks, text before a lone `</think>`, and
+// a reply that opens an unclosed `<think>` (all reasoning, no answer yet).
+std::string stripReasoning(const std::string& text) {
+    static const std::string kOpen = "<think>";
+    static const std::string kClose = "</think>";
+    std::string out = text;
+    const auto firstOpen = out.find(kOpen);
+    const auto firstClose = out.find(kClose);
+    if (firstClose != std::string::npos &&
+        (firstOpen == std::string::npos || firstClose < firstOpen)) {
+        out.erase(0, firstClose + kClose.size());
+    }
+    for (auto open = out.find(kOpen); open != std::string::npos; open = out.find(kOpen)) {
+        auto close = out.find(kClose, open + kOpen.size());
+        if (close == std::string::npos) {
+            const auto lead = out.find_first_not_of(" \t\r\n");
+            out = (lead == open) ? std::string() : out.substr(0, open);
+            break;
+        }
+        out.erase(open, close + kClose.size() - open);
+    }
+    const auto b = out.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) return "";
+    return out.substr(b, out.find_last_not_of(" \t\r\n") - b + 1);
+}
+
+struct BudgetNoticeLevel {
+    int stepsLeft;
+    double fractionLeft;
+    const char* text;
+};
+
+// Python's _BUDGET_NOTICES: {used}, {total} and {left} are substituted.
+const BudgetNoticeLevel kBudgetNotices[] = {
+    {20, 0.50,
+     "Step budget: {used} of {total} used, {left} left. Stop gathering context. If the task "
+     "asks for files or other deliverables, start producing them now from what you already "
+     "have, and mark any value you could not verify as unverified. If the part of this task "
+     "that changes something has not started yet, start it now."},
+    {10, 0.25,
+     "Step budget: {left} of {total} steps left. Write the requested deliverables now with "
+     "what you have, marking unverified values as unverified. A finished deliverable with its "
+     "gaps flagged is worth more than a better one never written; refine afterwards if there "
+     "is room."},
+    {5, 0.10,
+     "Step budget: {left} of {total} steps left. Do not research further. Write anything "
+     "requested that does not exist yet, then answer with your findings and what is still "
+     "missing. After the last step no tool can be called and anything not already written "
+     "is lost."},
+};
+constexpr int kMinStepsForBudgetNotices = 8;
+
+const char* const kStepCapAnswerPrompt =
+    "You have used all {steps} steps and can't call more tools. Give the user your final "
+    "answer now, using only what the tool results above show: what you found, what you "
+    "couldn't finish and why, and what they can do next.";
+
+const char* const kUnparsedToolCallNote = "[I tried to call a tool but it could not be parsed.]";
+const char* const kMalformedToolCallGiveUp =
+    "I had trouble formatting my tool call. Could you rephrase or break the request into "
+    "smaller pieces?";
+
+std::string substitute(std::string text, const std::string& key, const std::string& value) {
+    for (auto pos = text.find(key); pos != std::string::npos; pos = text.find(key, pos + value.size())) {
+        text.replace(pos, key.size(), value);
+    }
+    return text;
+}
+
+// The notice for this point in the turn, or "" when none is due. `sentLevels`
+// remembers what was already said so each level fires once, most urgent wins.
+// Rough token cost of a stored message: ~4 characters per token.
+std::size_t approxTokens(const Message& m) {
+    std::size_t chars = m.content.size();
+    for (const auto& tc : m.toolCalls) chars += tc.name.size() + tc.arguments.size();
+    return chars / 4 + 4;
+}
+
+// Keep stored history within half the context window, the way Python's
+// history planner does: first replace old tool output over 500 characters
+// with a stub naming the tool, then drop whole turns oldest-first, never the
+// newest one. Runs before prompt-JSON tool replies are folded into USER turns.
+void fitHistoryToContext(std::vector<Message>& messages, int contextTokens) {
+    const std::size_t budget = static_cast<std::size_t>(std::max(contextTokens, 2048)) / 2;
+    auto total = [&messages] {
+        std::size_t t = 0;
+        for (const auto& m : messages) t += approxTokens(m);
+        return t;
+    };
+    std::size_t used = total();
+    for (auto& m : messages) {
+        if (used <= budget) return;
+        if (m.role != MessageRole::TOOL || m.content.size() <= 500) continue;
+        const std::size_t before = approxTokens(m);
+        m.content = "[Left out of the conversation history to fit the context window: " +
+                    m.name.value_or("tool") + "; " + std::to_string(m.content.size()) +
+                    " chars. Run the tool again if you need its text.]";
+        used = used - before + approxTokens(m);
+    }
+    while (used > budget) {
+        // The second USER message starts the second-oldest turn; drop everything before it.
+        auto first = std::find_if(messages.begin(), messages.end(),
+                                  [](const Message& m) { return m.role == MessageRole::USER; });
+        if (first == messages.end()) return;
+        auto next = std::find_if(first + 1, messages.end(),
+                                 [](const Message& m) { return m.role == MessageRole::USER; });
+        if (next == messages.end()) return;
+        messages.erase(messages.begin(), next);
+        used = total();
+    }
+}
+
+const char* const kCutOffContinuePrompt =
+    "Your last reply was cut off at the output-token limit before it finished, so nothing in it was carried "
+    "out. Continue from where you stopped: keep your reasoning brief and make the next tool call, or give the "
+    "final answer if the task is complete.";
+const char* const kCutOffFailureAnswer =
+    "I could not finish this task: my replies kept getting cut off at the model's output-token limit, so the "
+    "work they described was never carried out. Retry with a higher output-token limit (max_tokens) or a model "
+    "that reasons more briefly.";
+const char* const kToolMarkupPrompt =
+    "Your answer contains a tool call written out as text (for example `<invoke name=...>` or a `{\"tool\": "
+    "...}` object), so it was never run. Issue it as a real tool call now, or give the final answer if the task "
+    "is complete.";
+const char* const kNarrationPrompt =
+    "You described your next step instead of doing it. Do it now with a tool call, or give the final answer if "
+    "the task is complete.";
+const char* const kLookFirstPrompt =
+    "You answered without opening anything, but the request is about {paths} in the workspace. Look with your "
+    "tools first (search for it if that exact path isn't there), then answer from what you find.";
+
+std::string withoutFences(const std::string& text) {
+    std::string out;
+    std::size_t pos = 0;
+    for (;;) {
+        const auto a = text.find("```", pos);
+        if (a == std::string::npos) {
+            out += text.substr(pos);
+            return out;
+        }
+        out += text.substr(pos, a - pos);
+        const auto b = text.find("```", a + 3);
+        if (b == std::string::npos) return out;
+        pos = b + 3;
+    }
+}
+
+std::string trimmed(const std::string& s) {
+    const auto b = s.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) return "";
+    return s.substr(b, s.find_last_not_of(" \t\r\n") - b + 1);
+}
+
+// Python's _unfinished_answer_kind: "tool_markup", "narration", or "".
+std::string unfinishedAnswerKind(std::string answer) {
+    for (auto pos = answer.find("\xE2\x80\x99"); pos != std::string::npos; pos = answer.find("\xE2\x80\x99")) {
+        answer.replace(pos, 3, "'");
+    }
+    const std::string text = trimmed(answer);
+    const std::string prose = withoutFences(text);
+    static const std::regex markup(R"(<invoke\s+name\s*=|<parameter\s+name\s*=|\{\s*"tool"\s*:)");
+    if (std::regex_search(prose, markup)) return "tool_markup";
+    if (text.empty() || (text.size() >= 3 && text.compare(text.size() - 3, 3, "```") == 0)) return "";
+    // Paragraphs of the prose.
+    std::vector<std::string> paragraphs;
+    static const std::regex blank(R"(\n\s*\n)");
+    for (std::sregex_token_iterator it(prose.begin(), prose.end(), blank, -1), end; it != end; ++it) {
+        const std::string p = trimmed(it->str());
+        if (!p.empty()) paragraphs.push_back(p);
+    }
+    if (paragraphs.empty()) return "";
+    const std::string& last = paragraphs.back();
+    std::string lastLine = last.substr(last.rfind('\n') == std::string::npos ? 0 : last.rfind('\n') + 1);
+    static const std::regex decoration(R"([*_`#>])");
+    lastLine = trimmed(std::regex_replace(lastLine, decoration, ""));
+    static const std::regex emojiEnd(R"(:[a-z0-9_+-]+:$)", std::regex::icase);
+    if (!lastLine.empty() && lastLine.back() == ':' && !std::regex_search(lastLine, emojiEnd)) return "narration";
+    if (last.size() > 500) return "";
+    // Last sentence of the last line.
+    std::string sentence = lastLine;
+    for (std::size_t i = lastLine.size(); i-- > 1;) {
+        if ((lastLine[i - 1] == '.' || lastLine[i - 1] == '!' || lastLine[i - 1] == '?') && std::isspace(static_cast<unsigned char>(lastLine[i]))) {
+            sentence = trimmed(lastLine.substr(i));
+            break;
+        }
+    }
+    static const std::regex intent(
+        R"(^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+)?(?:executing step|first step|(?:my|our) next step|now,? i need to|now,? i'll|now,? i will|i'll now|i will now|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)|fetching\b(?!.*\b(?:failed|returned|timed out)\b)|(?:now,? )?(?:i|we) (?:still |just )?need to))",
+        std::regex::icase);
+    if (std::regex_search(sentence, intent)) return "narration";
+    static const std::regex heading(R"(^(?:corrected|new|updated|revised) plan\b)", std::regex::icase);
+    std::vector<std::string> headingLines = {last.substr(0, last.find('\n'))};
+    if (paragraphs.size() > 1) {
+        const std::string& prev = paragraphs[paragraphs.size() - 2];
+        headingLines.push_back(prev.substr(0, prev.find('\n')));
+    }
+    for (const auto& h : headingLines) {
+        if (std::regex_search(trimmed(std::regex_replace(h, decoration, "")), heading)) return "narration";
+    }
+    return "";
+}
+
+bool isPlanningText(const std::string& answer) {
+    if (answer.size() >= 500) return false;
+    std::string l = answer;
+    std::transform(l.begin(), l.end(), l.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    static const char* phrases[] = {"let me now", "i'll now", "i will now search", "i will now query", "i'll check",
+                                    "let me check", "let me search", "let me query", "now search within",
+                                    "search within this", "now search for", "query it now", "search the document",
+                                    "let me look", "i'll look", "i will look", "let me retrieve", "i'll retrieve",
+                                    "let me find"};
+    for (const char* p : phrases) {
+        if (l.find(p) != std::string::npos) return true;
+    }
+    return false;
+}
+
+// File names the request mentions that exist in @p cwd (Python's named_workspace_paths, simplified).
+std::vector<std::string> namedWorkspacePaths(const std::string& request, const std::string& cwd) {
+    std::vector<std::string> out;
+    static const std::regex token(R"([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]{1,6})");
+    for (std::sregex_iterator it(request.begin(), request.end(), token), end; it != end; ++it) {
+        std::string t = it->str();
+        while (!t.empty() && (t.back() == '.' || t.back() == ',')) t.pop_back();
+        if (t.empty() || t.find("://") != std::string::npos) continue;
+        std::error_code ec;
+        const std::filesystem::path p = std::filesystem::u8path(t);
+        const std::filesystem::path full = p.is_absolute() ? p : std::filesystem::u8path(cwd) / p;
+        if (std::filesystem::exists(full, ec) && std::find(out.begin(), out.end(), t) == out.end()) out.push_back(t);
+    }
+    return out;
+}
+
+std::string budgetNotice(int used, int total, std::set<int>& sentLevels) {
+    if (used <= 0 || total < kMinStepsForBudgetNotices) return "";
+    const int left = total - used;
+    for (auto it = std::rbegin(kBudgetNotices); it != std::rend(kBudgetNotices); ++it) {
+        const int trigger =
+            std::min(it->stepsLeft, std::max(1, static_cast<int>(it->fractionLeft * total)));
+        if (sentLevels.count(it->stepsLeft) || left > trigger) continue;
+        for (const auto& level : kBudgetNotices) {
+            if (level.stepsLeft >= it->stepsLeft) sentLevels.insert(level.stepsLeft);
+        }
+        std::string text = substitute(it->text, "{used}", std::to_string(used));
+        text = substitute(text, "{total}", std::to_string(total));
+        return substitute(text, "{left}", std::to_string(left));
+    }
+    return "";
+}
+
 // Make native tool_calls and their role=tool replies consistent before the
 // history is stored. OpenAI-compatible servers reject both halves of a broken
 // pair, and history is replayed verbatim on the next turn.
@@ -1020,7 +1298,45 @@ void repairToolCallPairing(std::vector<Message>& messages) {
     }
     messages = std::move(kept);
 }
+
+// Keeps a trace readable when a tool returns a whole document.
+json traceCapped(const json& result) {
+    constexpr std::size_t kMax = 64 * 1024;
+    std::string text = result.dump(-1, ' ', false, json::error_handler_t::replace);
+    if (text.size() <= kMax) return result;
+    std::size_t cut = kMax;
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) --cut;
+    return json{{"truncated_from_bytes", text.size()}, {"head", text.substr(0, cut)}};
+}
+
+void writeTraceFile(const std::string& path, const json& trace) {
+    std::error_code ec;
+    const auto target = std::filesystem::u8path(path);
+    if (target.has_parent_path()) std::filesystem::create_directories(target.parent_path(), ec);
+    std::ofstream out(target, std::ios::binary | std::ios::trunc);
+    out << trace.dump(1, ' ', false, json::error_handler_t::replace);
+    if (!out) {
+        std::cerr << "gaia: could not write the trace to " << path
+                  << (ec ? " (" + ec.message() + ")" : std::string()) << "; pick a writable --trace location."
+                  << std::endl;
+    }
+}
 } // namespace
+
+namespace {
+constexpr const char* kTurnContextOpen = "[Context for this request]\n";
+constexpr const char* kTurnContextClose = "\n[End of context]\n\n";
+}  // namespace
+
+std::string withTurnContext(const std::string& context, const std::string& text) {
+    return kTurnContextOpen + context + kTurnContextClose + text;
+}
+
+std::string stripTurnContext(const std::string& text) {
+    if (text.rfind(kTurnContextOpen, 0) != 0) return text;
+    const auto end = text.find(kTurnContextClose);
+    return end == std::string::npos ? text : text.substr(end + std::char_traits<char>::length(kTurnContextClose));
+}
 
 void Agent::setHistory(std::vector<Message> history) {
     if (inFlight_.load()) {
@@ -1070,14 +1386,20 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
     int stepsLimit = (maxSteps > 0) ? maxSteps : cfg.maxSteps;
 
-    // Ensure the model is loaded with the requested context size (once per agent lifetime).
-    // Context size is a server-side setting applied at load time, not per-request.
-    if (!modelEnsured_ && !cfg.modelId.empty()) {
+    // Checked every turn: anything else on the server (another client, an
+    // embedder warm-up) can swap the resident model or its context size.
+    if (!cfg.modelId.empty()) {
         try {
             lemonade_.ensureModelLoaded(); // uses stored model_ and contextSize_
-            modelEnsured_ = true;
         } catch (const std::exception& e) {
-            console_->printWarning(std::string("Could not ensure model loaded: ") + e.what());
+            const std::string why = "Could not load " + cfg.modelId + " on Lemonade at " +
+                                    lemonade_.baseUrl() + ": " + e.what() +
+                                    ". Check that Lemonade is running and the model is downloaded.";
+            console_->printError(why);
+            return json{{"result", "Unable to complete task: " + why},
+                        {"steps_taken", 0},
+                        {"steps_limit", stepsLimit},
+                        {"error", why}};
         }
     }
 
@@ -1102,6 +1424,17 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
 
     const std::string userInput = summarizeUserInput(userMessages);
+    onTurnStart(userInput);
+
+    if (const std::string context = turnContext();
+        !context.empty() && !userMessages.empty() && messages.back().role == MessageRole::USER) {
+        Message& m = messages.back();
+        if (m.parts.has_value()) {
+            m.parts->insert(m.parts->begin(), ContentPart::makeText(withTurnContext(context, "")));
+        } else {
+            m.content = withTurnContext(context, m.content);
+        }
+    }
 
     console_->printProcessingStart(userInput, stepsLimit, cfg.modelId);
 
@@ -1112,6 +1445,92 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     std::vector<json> stepResults;
     std::vector<std::pair<std::string, json>> toolCallHistory; // (name, args) for loop detection
     UsageStats totalUsage;
+    std::set<int> budgetLevelsSent;
+    // Per-turn guidance (budget notices, the closing prompt): sent in this
+    // turn's requests, never saved, or the next turn opens with a stale notice.
+    std::vector<size_t> transientMessages;
+    std::string turnSystemPrompt;
+    std::vector<std::string> turnToolNames;
+    int malformedStreak = 0;
+    std::string llmError;  // set when the turn ended because the model could not be reached or read
+    int unfinishedReprompts = 0;
+    int cutOffContinuations = 0;
+    bool lookFirstReprompted = false;
+    std::string workDir;
+    {
+        std::error_code ec;
+        workDir = std::filesystem::current_path(ec).u8string();
+    }
+    // True when the reply must not end the turn: a correction was queued instead.
+    auto guardFinalAnswer = [&](const std::string& candidate, const std::string& finishReason) {
+        if (!cfg.finalAnswerGuards) return false;
+        auto correct = [&messages](const std::string& text) {
+            Message m;
+            m.role = MessageRole::USER;
+            m.content = text;
+            messages.push_back(std::move(m));
+        };
+        const bool roomLeft = stepsTaken < stepsLimit - 1;
+        if (finishReason == "length") {
+            if (cutOffContinuations < 2 && roomLeft) {
+                ++cutOffContinuations;
+                correct(kCutOffContinuePrompt);
+                return true;
+            }
+            finalAnswer = kCutOffFailureAnswer;
+            return false;
+        }
+        const std::string kind = unfinishedAnswerKind(candidate);
+        const bool canReprompt = roomLeft && unfinishedReprompts < 2;
+        if (kind == "tool_markup" && canReprompt) {
+            ++unfinishedReprompts;
+            correct(kToolMarkupPrompt);
+            return true;
+        }
+        if (!lookFirstReprompted && toolCallHistory.empty() && roomLeft && tools_.hasTool("read_file")) {
+            const auto unlooked = namedWorkspacePaths(userInput, workDir);
+            if (!unlooked.empty()) {
+                lookFirstReprompted = true;
+                std::string paths;
+                for (std::size_t i = 0; i < unlooked.size() && i < 3; ++i) paths += (i ? ", `" : "`") + unlooked[i] + "`";
+                correct(substitute(kLookFirstPrompt, "{paths}", paths));
+                return true;
+            }
+        }
+        if (isPlanningText(candidate) && roomLeft) {
+            correct(toolCallHistory.empty()
+                        ? "You said you would look that up but called no tools. Call the appropriate tool RIGHT NOW. "
+                          "Output a tool call — not another planning sentence."
+                        : "You produced planning text instead of an answer. You already have the data from the tool "
+                          "results above — output the final answer NOW based on what you retrieved. Do not call "
+                          "another tool. Just answer the question directly.");
+            return true;
+        }
+        if (kind == "narration" && canReprompt) {
+            ++unfinishedReprompts;
+            correct(kNarrationPrompt);
+            return true;
+        }
+        return false;
+    };
+    const bool tracing = !cfg.traceFile.empty();
+    json traceEvents = json::array();
+    const auto turnStart = std::chrono::steady_clock::now();
+    auto msSince = [](std::chrono::steady_clock::time_point t) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t).count();
+    };
+    auto traceTool = [&](const std::string& name, const json& args, const json& result, long long ms) {
+        if (!tracing) return;
+        traceEvents.push_back({{"type", "tool"}, {"step", stepsTaken}, {"name", name}, {"args", args},
+                               {"ms", ms}, {"result", traceCapped(result)}});
+    };
+    const ToolOutputBudget outputBudget = ToolOutputBudget::forContext(cfg.contextSize);
+    auto renderToolResult = [&](const std::string& toolName, const json& result) {
+        if (!cfg.toolOutputPaging) return truncateToolResult(result);
+        return condenseToolOutput(toolName,
+                                  result.dump(-1, ' ', false, json::error_handler_t::replace),
+                                  outputBudget, *toolOutputs_);
+    };
 
     while (stepsTaken < stepsLimit && finalAnswer.empty()) {
         // ---- Cancel check ----
@@ -1147,20 +1566,40 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             stepResults.clear();
         }
 
-        // Recomposed each step so mid-loop tool changes are visible, but always
-        // from the turn's config snapshot — the same one callLlm() uses to
-        // decide whether to send `tools`.
-        const std::string turnSystemPrompt = composeSystemPromptFor(cfg);
+        if (cfg.stepBudgetGuidance) {
+            std::string notice = budgetNotice(stepsTaken - 1, stepsLimit, budgetLevelsSent);
+            if (!notice.empty()) {
+                Message noticeMsg;
+                noticeMsg.role = MessageRole::USER;
+                noticeMsg.content = std::move(notice);
+                transientMessages.push_back(messages.size());
+                messages.push_back(std::move(noticeMsg));
+            }
+        }
+
+        // Recomposed only when the tool set changes: any other edit mid-turn would
+        // make the server re-read the whole prompt. Always from the turn's config
+        // snapshot — the same one callLlm() uses to decide whether to send `tools`.
+        if (auto names = tools_.enabledTools(); turnSystemPrompt.empty() || names != turnToolNames) {
+            turnToolNames = std::move(names);
+            turnSystemPrompt = composeSystemPromptFor(cfg);
+        }
 
         // Call LLM (retry once on failure).
         // Skip progress spinner when streaming — tokens serve as live progress.
         if (!config_.streaming) console_->startProgress("Thinking");
         LlmResult llmResult;
+        auto llmStart = std::chrono::steady_clock::now();
         try {
             llmResult = callLlm(messages, turnSystemPrompt, cfg);
         } catch (const std::exception& e) {
             if (!config_.streaming) console_->stopProgress();
             console_->printWarning(std::string("LLM call failed, retrying: ") + e.what());
+            if (tracing) {
+                traceEvents.push_back({{"type", "llm_error"}, {"step", stepsTaken}, {"ms", msSince(llmStart)},
+                                       {"error", e.what()}, {"retrying", true}});
+            }
+            llmStart = std::chrono::steady_clock::now();
 
             // Retry once
             if (!config_.streaming) console_->startProgress("Retrying");
@@ -1169,12 +1608,43 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             } catch (const std::exception& e2) {
                 if (!config_.streaming) console_->stopProgress();
                 console_->printError(std::string("LLM error: ") + e2.what());
+                if (tracing) {
+                    traceEvents.push_back({{"type", "llm_error"}, {"step", stepsTaken}, {"ms", msSince(llmStart)},
+                                           {"error", e2.what()}, {"retrying", false}});
+                }
                 finalAnswer = std::string("Unable to complete task due to LLM error: ") + e2.what();
+                llmError = e2.what();
                 break;
             }
         }
         if (!config_.streaming) console_->stopProgress();
+        if (tracing) {
+            json calls = json::array();
+            for (const auto& tc : llmResult.toolCalls) calls.push_back({{"name", tc.name}, {"arguments", tc.arguments}});
+            traceEvents.push_back({{"type", "llm"}, {"step", stepsTaken}, {"ms", msSince(llmStart)},
+                                   {"messages_sent", messages.size()}, {"finish_reason", llmResult.finishReason},
+                                   {"usage", llmResult.usage.toJson()}, {"content", llmResult.content},
+                                   {"tool_calls", std::move(calls)}});
+        }
 
+        if (cancelled_.load()) {
+            console_->printWarning("Cancelled by user");
+            finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
+            break;
+        }
+
+        if (cfg.stripThinking) {
+            llmResult.content = stripReasoning(llmResult.content);
+            if (llmResult.content.empty() && llmResult.toolCalls.empty()) {
+                Message nudge;
+                nudge.role = MessageRole::USER;
+                nudge.content = "Your last reply held only reasoning and no answer. "
+                                "Answer the user now, or call the tool you need.";
+                transientMessages.push_back(messages.size());
+                messages.push_back(std::move(nudge));
+                continue;
+            }
+        }
         const std::string& response = llmResult.content;
         totalUsage += llmResult.usage;
 
@@ -1206,9 +1676,28 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             }
             if (!decodeError.empty()) {
                 console_->printError("Malformed tool call: " + decodeError);
-                finalAnswer = "Unable to complete task due to LLM error: " + decodeError;
+                if (malformedStreak < cfg.malformedToolCallRetries) {
+                    ++malformedStreak;
+                    Message note;
+                    note.role = MessageRole::ASSISTANT;
+                    note.content = kUnparsedToolCallNote;
+                    messages.push_back(std::move(note));
+                    Message retry;
+                    retry.role = MessageRole::USER;
+                    retry.content =
+                        "Your last tool call could not be used: " + decodeError +
+                        "\nPlease try again with the arguments as one JSON object. If you "
+                        "don't need a tool, answer in plain text.";
+                    messages.push_back(std::move(retry));
+                    continue;
+                }
+                finalAnswer = cfg.malformedToolCallRetries > 0
+                                  ? std::string(kMalformedToolCallGiveUp)
+                                  : "Unable to complete task due to LLM error: " + decodeError;
+                if (cfg.malformedToolCallRetries == 0) llmError = decodeError;
                 break;
             }
+            malformedStreak = 0;
 
             Message nativeAssistantMsg;
             nativeAssistantMsg.role = MessageRole::ASSISTANT;
@@ -1241,7 +1730,9 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 console_->prettyPrintJson(toolArgs, "Tool Args");
                 console_->startProgress("Executing " + tc.name);
 
+                const auto toolStart = std::chrono::steady_clock::now();
                 json toolResult = executeTool(tc.name, toolArgs);
+                traceTool(tc.name, toolArgs, toolResult, msSince(toolStart));
 
                 console_->stopProgress();
                 console_->printToolComplete();
@@ -1254,7 +1745,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 toolMsg.role = MessageRole::TOOL;
                 toolMsg.name = tc.name;
                 toolMsg.toolCallId = tc.id;
-                toolMsg.content = truncateToolResult(toolResult);
+                toolMsg.content = renderToolResult(tc.name, toolResult);
                 messages.push_back(toolMsg);
 
                 if (toolResult.is_object() && toolResult.value("status", "") == "error") {
@@ -1288,7 +1779,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
         // ---- Handle final answer ----
         if (parsed.answer.has_value()) {
-            finalAnswer = parsed.answer.value();
+            if (guardFinalAnswer(parsed.answer.value(), llmResult.finishReason)) continue;
+            if (finalAnswer.empty()) finalAnswer = parsed.answer.value();
             if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }
@@ -1321,11 +1813,19 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 break;
             }
 
+            if (cancelled_.load()) {
+                console_->printWarning("Cancelled by user");
+                finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
+                break;
+            }
+
             console_->printToolUsage(toolName);
             console_->prettyPrintJson(toolArgs, "Tool Args");
             console_->startProgress("Executing " + toolName);
 
+            const auto toolStart = std::chrono::steady_clock::now();
             json toolResult = executeTool(toolName, toolArgs);
+            traceTool(toolName, toolArgs, toolResult, msSince(toolStart));
 
             console_->stopProgress();
             console_->printToolComplete();
@@ -1338,7 +1838,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             Message toolMsg;
             toolMsg.role = MessageRole::TOOL;
             toolMsg.name = toolName;
-            toolMsg.content = truncateToolResult(toolResult);
+            toolMsg.content = renderToolResult(toolName, toolResult);
             messages.push_back(toolMsg);
 
             // Check for error
@@ -1355,9 +1855,49 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
         // No tool call and no answer — treat response as conversational
         if (!parsed.toolName.has_value() && !parsed.answer.has_value()) {
-            finalAnswer = response;
+            if (guardFinalAnswer(response, llmResult.finishReason)) continue;
+            if (finalAnswer.empty()) finalAnswer = response;
             if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
+        }
+    }
+
+    // Out of steps: one closing reply with tools off, from what was gathered.
+    if (finalAnswer.empty() && cfg.stepBudgetGuidance && !cancelled_.load()) {
+        Message closing;
+        closing.role = MessageRole::USER;
+        closing.content = substitute(kStepCapAnswerPrompt, "{steps}", std::to_string(stepsLimit));
+        transientMessages.push_back(messages.size());
+        messages.push_back(std::move(closing));
+        AgentConfig closingCfg = cfg;
+        closingCfg.toolChoice = "none";
+        try {
+            const auto closingStart = std::chrono::steady_clock::now();
+            LlmResult closingResult =
+                callLlm(messages, turnSystemPrompt.empty() ? composeSystemPromptFor(cfg) : turnSystemPrompt,
+                        closingCfg);
+            if (tracing) {
+                traceEvents.push_back({{"type", "llm"}, {"step", stepsTaken}, {"closing", true},
+                                       {"ms", msSince(closingStart)}, {"finish_reason", closingResult.finishReason},
+                                       {"usage", closingResult.usage.toJson()}, {"content", closingResult.content}});
+            }
+            totalUsage += closingResult.usage;
+            std::string text = cfg.stripThinking ? stripReasoning(closingResult.content)
+                                                 : closingResult.content;
+            if (closingResult.toolCalls.empty() && !text.empty()) {
+                ParsedResponse parsed = parseLlmResponse(text);
+                finalAnswer = parsed.answer.value_or(parsed.toolName.has_value() ? "" : text);
+            }
+            if (!finalAnswer.empty()) {
+                Message answerMsg;
+                answerMsg.role = MessageRole::ASSISTANT;
+                answerMsg.content = finalAnswer;
+                messages.push_back(std::move(answerMsg));
+                if (!config_.streaming || config_.structuredEvents)
+                    console_->printFinalAnswer(finalAnswer, totalUsage);
+            }
+        } catch (const std::exception& e) {
+            console_->printWarning(std::string("Closing answer failed: ") + e.what());
         }
     }
 
@@ -1368,6 +1908,33 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
 
     console_->printCompletion(stepsTaken, stepsLimit);
+
+    if (tracing) {
+        json sent = json::array();
+        for (const auto& m : messages) sent.push_back(m.toJson());
+        json trace = {{"query", userInput},
+                      {"model", cfg.modelId},
+                      {"result", finalAnswer},
+                      {"steps_taken", stepsTaken},
+                      {"steps_limit", stepsLimit},
+                      {"duration_ms", msSince(turnStart)},
+                      {"usage", totalUsage.toJson()},
+                      {"error_count", errorCount},
+                      {"system_prompt", turnSystemPrompt.empty() ? composeSystemPromptFor(cfg) : turnSystemPrompt},
+                      {"events", std::move(traceEvents)},
+                      {"messages", std::move(sent)}};
+        if (!llmError.empty()) trace["llm_error"] = llmError;
+        writeTraceFile(cfg.traceFile, trace);
+    }
+
+    for (auto it = transientMessages.rbegin(); it != transientMessages.rend(); ++it) {
+        messages.erase(messages.begin() + static_cast<std::ptrdiff_t>(*it));
+    }
+    if (cfg.historyTokenBudget) {
+        fitHistoryToContext(messages, cfg.contextSize);
+    }
+
+    beforeHistorySave(messages);
 
     // Store conversation history for session persistence.
     // Prompt-JSON tool results are converted to USER messages so the LLM server
@@ -1396,6 +1963,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
     repairToolCallPairing(messages);
     conversationHistory_ = messages;
+    onTurnComplete(userInput, finalAnswer);
 
     json result = {
         {"result", finalAnswer},
@@ -1405,6 +1973,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     if (totalUsage.totalTokens > 0) {
         result["usage"] = totalUsage.toJson();
     }
+    if (!llmError.empty()) result["error"] = llmError;
     return result;
 }
 

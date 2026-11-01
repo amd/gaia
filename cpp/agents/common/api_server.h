@@ -27,13 +27,16 @@ class SessionStore;
 ///   GET  /sessions             -- list sessions
 ///   DELETE /sessions/:id       -- delete session
 ///
-/// Threading: httplib::Server runs its own thread pool. Agent::processQuery()
-/// is NOT re-entrant (guarded by inFlight_), so concurrent /v1/chat/completions
-/// requests will receive a 409 Conflict error. Tool execution and read-only
-/// endpoints are safe to call concurrently.
+/// Threading: httplib::Server runs its own thread pool. A chat turn and a
+/// direct tool call each hold the agent exclusively; a request that arrives
+/// while either is running gets 409 Conflict. Read-only endpoints run
+/// concurrently. Request bodies over 16 MB get 413.
+///
+/// A turn whose model could not be reached or read answers 502 with an
+/// OpenAI-style error body, never 200.
 ///
 /// Usage:
-///   BashAgent agent(config);
+///   FlagshipAgent agent(config, options);
 ///   ApiServer server(agent, 8200);
 ///   server.setSessionStore(store);
 ///   server.run();  // blocking
@@ -44,7 +47,11 @@ public:
 
     void setSessionStore(std::shared_ptr<SessionStore> store);
 
-    /// Start the server (blocking).
+    /// Bind 127.0.0.1 now; port 0 picks a free one. Returns the bound port.
+    /// @throws std::runtime_error when the port cannot be bound.
+    int bind();
+
+    /// Start the server (blocking). Binds first when bind() was not called.
     void run();
 
     /// Stop the server (call from another thread or signal handler).

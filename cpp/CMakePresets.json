@@ -1,0 +1,138 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "tiny",
+      "displayName": "gaia-agent, size-optimized, for this machine (zig)",
+      "description": "pip install ziglang cmake ninja, then: cmake --preset tiny && cmake --build --preset tiny",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/tiny",
+      "toolchainFile": "${sourceDir}/cmake/zig-toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "MinSizeRel",
+        "GAIA_TINY": "ON",
+        "GAIA_BUILD_TUI": "OFF",
+        "GAIA_BUILD_TESTS": "OFF",
+        "GAIA_BUILD_EXAMPLES": "OFF"
+      }
+    },
+    {
+      "name": "tiny-linux-x64",
+      "inherits": "tiny",
+      "displayName": "gaia-agent for Linux x64, fully static (musl)",
+      "binaryDir": "${sourceDir}/build/tiny-linux-x64",
+      "cacheVariables": {
+        "GAIA_ZIG_TARGET": "x86_64-linux-musl"
+      }
+    },
+    {
+      "name": "tiny-linux-arm64",
+      "inherits": "tiny",
+      "displayName": "gaia-agent for Linux arm64, fully static (musl)",
+      "binaryDir": "${sourceDir}/build/tiny-linux-arm64",
+      "cacheVariables": {
+        "GAIA_ZIG_TARGET": "aarch64-linux-musl"
+      }
+    },
+    {
+      "name": "tiny-windows-x64",
+      "inherits": "tiny",
+      "displayName": "gaia-agent for Windows x64",
+      "binaryDir": "${sourceDir}/build/tiny-windows-x64",
+      "cacheVariables": {
+        "GAIA_ZIG_TARGET": "x86_64-windows-gnu"
+      }
+    },
+    {
+      "name": "tiny-macos-arm64",
+      "inherits": "tiny",
+      "displayName": "gaia-agent for macOS on Apple silicon",
+      "binaryDir": "${sourceDir}/build/tiny-macos-arm64",
+      "cacheVariables": {
+        "GAIA_ZIG_TARGET": "aarch64-macos"
+      }
+    },
+    {
+      "name": "tiny-tui",
+      "inherits": "tiny",
+      "displayName": "gaia-agent with the full-screen TUI, size-optimized",
+      "binaryDir": "${sourceDir}/build/tiny-tui",
+      "cacheVariables": {
+        "GAIA_BUILD_TUI": "ON"
+      }
+    },
+    {
+      "name": "dev",
+      "displayName": "Everything, with tests (zig)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/dev",
+      "toolchainFile": "${sourceDir}/cmake/zig-toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "GAIA_BUILD_EXAMPLES": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "tiny",
+      "configurePreset": "tiny",
+      "targets": [
+        "gaia-agent"
+      ]
+    },
+    {
+      "name": "tiny-linux-x64",
+      "configurePreset": "tiny-linux-x64",
+      "targets": [
+        "gaia-agent"
+      ]
+    },
+    {
+      "name": "tiny-linux-arm64",
+      "configurePreset": "tiny-linux-arm64",
+      "targets": [
+        "gaia-agent"
+      ]
+    },
+    {
+      "name": "tiny-windows-x64",
+      "configurePreset": "tiny-windows-x64",
+      "targets": [
+        "gaia-agent"
+      ]
+    },
+    {
+      "name": "tiny-macos-arm64",
+      "configurePreset": "tiny-macos-arm64",
+      "targets": [
+        "gaia-agent"
+      ]
+    },
+    {
+      "name": "tiny-tui",
+      "configurePreset": "tiny-tui",
+      "targets": [
+        "gaia-agent"
+      ]
+    },
+    {
+      "name": "dev",
+      "configurePreset": "dev"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

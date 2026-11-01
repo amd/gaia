@@ -69,6 +69,14 @@ public:
     /// Return true if any tool_calls delta has been seen.
     bool hasToolCalls() const { return !toolCallsByIndex_.empty(); }
 
+    /// ``choices[0].finish_reason`` from the last chunk that carried one
+    /// ("stop", "length", "tool_calls"), or "" when none did.
+    const std::string& finishReason() const { return finishReason_; }
+
+    /// ``delta.reasoning_content`` joined across chunks. Never passed to the
+    /// token callback: reasoning is not part of the answer.
+    const std::string& reasoning() const { return reasoning_; }
+
 private:
     /// Process one complete SSE line (after newline stripping).
     void processLine(const std::string& line);
@@ -83,6 +91,8 @@ private:
     std::string   buffer_;     // Accumulates partial lines across feed() calls
     bool          done_      = false;
     bool          hasTokens_ = false;
+    std::string   finishReason_;
+    std::string   reasoning_;
 
     // Keyed by the delta's ``index`` so parallel calls stay separate and
     // out-of-order chunks land in the right slot. std::map keeps index order.

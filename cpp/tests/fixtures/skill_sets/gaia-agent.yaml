@@ -3,7 +3,7 @@
 #
 # A realistically shaped agent manifest used by test_skill_sets.cpp. It carries
 # the full set of hub publishing fields a packaged agent ships (see
-# cpp/agents/bash/gaia-agent.yaml) so the tests prove the skill-declaration
+# cpp/agents/gaia/gaia-agent.yaml) so the tests prove the skill-declaration
 # parser reads a real manifest and ignores everything that is not its business.
 id: mailroom
 name: Mailroom Agent

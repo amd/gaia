@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -23,7 +24,12 @@ struct GAIA_API ProcessResult {
     std::string stderr_output;  ///< Captured stderr
     int exitCode = -1;          ///< Process exit code (-1 if not started)
     bool timedOut = false;      ///< True if process was killed due to timeout
+    bool cancelled = false;     ///< True if process was killed because the cancel hook said so
 };
+
+/// Polled about every 100 ms while a command runs; returning true kills the
+/// command and everything it started.
+using ProcessCancelCheck = std::function<bool()>;
 
 /// Cross-platform process execution utility.
 ///
@@ -55,13 +61,17 @@ public:
     /// @param cwd             Working directory (empty = inherit current)
     /// @param env             Additional environment variables (merged with current)
     /// @param maxOutputBytes  Maximum bytes to capture per stream (default 64 KB)
+    /// @param cancelled       Optional cancel hook; when it returns true the
+    ///                        command's whole process tree is killed and the
+    ///                        result has `cancelled` set
     /// @return ProcessResult with captured output and exit code
     static ProcessResult run(
         const std::string& command,
         int timeoutMs = 30000,
         const std::string& cwd = "",
         const std::map<std::string, std::string>& env = {},
-        size_t maxOutputBytes = 65536
+        size_t maxOutputBytes = 65536,
+        const ProcessCancelCheck& cancelled = {}
     );
 
     /// Convenience: run and return stdout only, throw on non-zero exit.
@@ -120,10 +130,10 @@ public:
 ///   - stdin is `/dev/null`. An interactive command (`git commit` opening an
 ///     editor, `sudo`, `npm login`) returns immediately instead of sitting
 ///     until the timeout, because a tool call has no way to answer it.
-///   - On POSIX a timeout kills the command's whole process group, not just
+///   - A timeout or cancel kills the command's whole process tree, not just
 ///     the shell — a build or test command spawns children, and leaving them
-///     running is what makes a timed-out build loop worse than useless.
-///     Windows has no equivalent yet; it would need a Job Object.
+///     running is what makes a timed-out build loop worse than useless. POSIX
+///     uses a process group; Windows a Job Object.
 ///
 /// Example:
 /// @code
@@ -153,9 +163,11 @@ public:
     /// @param command         Shell command to execute
     /// @param timeoutMs       Timeout in milliseconds (0 = no timeout)
     /// @param maxOutputBytes  Maximum bytes captured per stream
+    /// @param cancelled       Optional cancel hook, as for ProcessRunner::run
     ProcessResult run(const std::string& command,
                       int timeoutMs = 30000,
-                      size_t maxOutputBytes = 65536);
+                      size_t maxOutputBytes = 65536,
+                      const ProcessCancelCheck& cancelled = {});
 
     /// Current working directory of the session.
     std::string cwd() const;

@@ -1,0 +1,176 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# gaia-native: the flagship agent as one static binary per platform, published
+# as plain GitHub release assets so anyone can fetch it with curl.
+#
+#   tag gaia-native-vX.Y.Z  →  run the unit tests, build all platforms with zig
+#                              (one Linux runner cross-compiles everything),
+#                              smoke-test each binary on its own OS, publish
+#   workflow_dispatch       →  tests, build + smoke test only (artifacts, no release)
+#
+# Assets: gaia-native-{windows-x64.exe, linux-x64, linux-arm64, macos-arm64}
+# plus SHA256SUMS, which cpp/packaging/install.{sh,ps1} verify.
+
+name: Release gaia-native
+
+on:
+  push:
+    tags: ['gaia-native-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gaia-native-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build all platforms (zig)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the tag matches the binary's version
+        if: startsWith(github.ref, 'refs/tags/gaia-native-v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#gaia-native-v}"
+          code=$(sed -n 's/.*kVersion = "\([^"]*\)".*/\1/p' cpp/agents/gaia/main.cpp)
+          manifest=$(sed -n 's/^version: *//p' cpp/agents/gaia/gaia-agent.yaml)
+          if [ "$tag" != "$code" ] || [ "$tag" != "$manifest" ]; then
+            echo "::error::tag $tag, main.cpp kVersion $code and gaia-agent.yaml version $manifest must all match"
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install the zig toolchain
+        run: python -m pip install ziglang==0.16.0 cmake==4.4.4 ninja==1.13.0
+
+      - name: Build every platform
+        shell: bash
+        working-directory: cpp
+        run: |
+          set -euo pipefail
+          mkdir -p ../dist
+          for pair in tiny-windows-x64:windows-x64.exe tiny-linux-x64:linux-x64 \
+                      tiny-linux-arm64:linux-arm64 tiny-macos-arm64:macos-arm64; do
+            preset="${pair%%:*}"; asset="gaia-native-${pair#*:}"
+            cmake --preset "$preset"
+            cmake --build --preset "$preset"
+            bin="build/$preset/gaia-agent"; [ -f "$bin.exe" ] && bin="$bin.exe"
+            cp "$bin" "../dist/$asset"
+            echo "$asset: $(stat -c%s "../dist/$asset") bytes"
+          done
+          cd ../dist && sha256sum gaia-native-* > SHA256SUMS && cat SHA256SUMS
+
+      - name: Size budget
+        shell: bash
+        run: |
+          # The point of this binary is that it is small. 6 MB leaves room to grow
+          # without letting a stray dependency double it unnoticed.
+          for f in dist/gaia-native-*; do
+            size=$(stat -c%s "$f")
+            if [ "$size" -gt 6291456 ]; then
+              echo "::error::$f is $size bytes, over the 6 MB budget"; exit 1
+            fi
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gaia-native
+          path: dist/
+          if-no-files-found: error
+
+  test:
+    name: Unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install OpenSSL (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libssl-dev
+
+      - name: Configure, build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release -DGAIA_BUILD_INTEGRATION_TESTS=OFF
+          cmake --build cpp/build --config Release --parallel
+          ctest --test-dir cpp/build -C Release --output-on-failure
+
+  smoke:
+    name: Smoke test (${{ matrix.os }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: gaia-native-windows-x64.exe
+          - os: ubuntu-latest
+            asset: gaia-native-linux-x64
+          - os: ubuntu-24.04-arm
+            asset: gaia-native-linux-arm64
+          - os: macos-latest
+            asset: gaia-native-macos-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: gaia-native
+          path: dist
+
+      - name: Run the binary
+        shell: bash
+        env:
+          GAIA_HOME: ${{ runner.temp }}/gaia-home
+          LEMONADE_BASE_URL: http://127.0.0.1:9/api/v1
+        run: |
+          set -euo pipefail
+          bin="dist/${{ matrix.asset }}"
+          chmod +x "$bin"
+          "$bin" --version
+          "$bin" --list-skills | tee skills.txt
+          grep -q "gaia-voice" skills.txt
+          # The stdio protocol opens with a status event even when no model server answers.
+          printf '' | "$bin" --stdio | head -n 1 | tee status.json
+          grep -q '"type":"status"' status.json
+          grep -q '"lemonade_reachable":false' status.json
+
+  release:
+    name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/gaia-native-v')
+    needs: [build, smoke, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: gaia-native
+          path: dist
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create --latest=false "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "gaia-native ${TAG#gaia-native-v}" \
+            --notes "The GAIA flagship agent as one static binary. Install: \`curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${TAG}/cpp/packaging/install.sh | sh\` (macOS/Linux) or \`irm https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${TAG}/cpp/packaging/install.ps1 | iex\` (Windows). Verify against SHA256SUMS."

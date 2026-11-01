@@ -17,8 +17,13 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <future>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "support/mock_llm_server.h"
@@ -144,6 +149,12 @@ TEST(ModelGateTest, MirrorsThePythonModelTableExactly) {
     // src/gaia/llm/lemonade_client.py.
     const std::vector<std::pair<std::string, bool>> expected = {
         {"Gemma-4-E4B-it-GGUF", true},
+        {"user.Qwen3.8-Flash-Next-GGUF", true},
+        {"Qwen3.6-35B-A3B-GGUF", true},
+        {"user.ggml-gpt-oss-20b-MXFP4-GGUF", true},
+        {"gpt-oss-20b-GGUF", true},
+        {"gpt-oss-120b-mxfp-GGUF", true},
+        {"gpt-oss-120b-GGUF", true},
         {"gemma4-it-e2b-FLM", false},
         {"Qwen3.5-35B-A3B-GGUF", true},
         {"Qwen3-0.6B-GGUF", true},
@@ -1153,3 +1164,185 @@ TEST(ToolSchemaTest, AllParamTypesMapToJsonSchemaTypes) {
     EXPECT_EQ(props["a"]["type"], "array");
     EXPECT_EQ(props["o"]["type"], "object");
 }
+
+// ---------------------------------------------------------------------------
+// The streaming path keeps the non-streaming loop guards, and stops on cancel
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string sseContent(const std::string& text, const char* finish = nullptr) {
+    json choice = {{"index", 0}, {"delta", {{"content", text}}}};
+    choice["finish_reason"] = finish ? json(finish) : json(nullptr);
+    return json{{"choices", json::array({choice})}}.dump();
+}
+
+std::string sseReasoning(const std::string& text) {
+    return json{{"choices", json::array({{{"index", 0}, {"delta", {{"reasoning_content", text}}}}})}}.dump();
+}
+
+std::string sseFinish(const char* finish) {
+    return json{{"choices", json::array({{{"index", 0}, {"delta", json::object()}, {"finish_reason", finish}}})}}.dump();
+}
+
+AgentConfig streamingCfg(const std::string& url) {
+    AgentConfig cfg = makeCfg(url, kToolCallingModel);
+    cfg.streaming = true;
+    cfg.stripThinking = true;
+    cfg.finalAnswerGuards = true;
+    cfg.responseMode = ResponseMode::Conversational;
+    return cfg;
+}
+
+} // namespace
+
+TEST(SseParserTest, ReportsFinishReasonAndKeepsReasoningOutOfTheTokens) {
+    std::string tokens;
+    SseParser parser([&](const std::string& t) { tokens += t; });
+    const std::string sse = "data: " + sseReasoning("thinking...") + "\n\n" + "data: " + sseContent("Hi") +
+                            "\n\n" + "data: " + sseFinish("length") + "\n\n" + "data: [DONE]\n\n";
+    parser.feed(sse.data(), sse.size());
+    EXPECT_EQ(tokens, "Hi");
+    EXPECT_EQ(parser.reasoning(), "thinking...");
+    EXPECT_EQ(parser.finishReason(), "length");
+}
+
+TEST(StreamingLoopTest, ReasoningOnlyStreamIsAnsweredLikeTheNonStreamingPath) {
+    bench::MockLlmServer mock;
+    mock.pushSseStream({sseReasoning("The answer "), sseReasoning("is 42."), sseFinish("stop")});
+    ToolAgent agent(streamingCfg(mock.baseUrl()));
+    agent.initForTest();
+    const json r = agent.processQuery("what is it?");
+    EXPECT_FALSE(r.contains("error")) << r.dump();
+    EXPECT_EQ(r["result"], "The answer is 42.");
+    EXPECT_EQ(mock.requestCount(), 1);
+}
+
+TEST(StreamingLoopTest, CutOffStreamIsContinuedNotTakenAsTheAnswer) {
+    bench::MockLlmServer mock;
+    mock.pushSseStream({sseContent("Here is the first half of"), sseFinish("length")});
+    mock.pushSseStream({sseContent("All done."), sseFinish("stop")});
+    ToolAgent agent(streamingCfg(mock.baseUrl()));
+    agent.initForTest();
+    const json r = agent.processQuery("write it out");
+    EXPECT_EQ(r["result"], "All done.");
+    ASSERT_EQ(mock.requestCount(), 2);
+    EXPECT_NE(mock.receivedBodies()[1].find("cut off at the output-token limit"), std::string::npos);
+}
+
+TEST(StreamingLoopTest, CancelStopsAStreamMidReply) {
+    bench::MockLlmServer mock;
+    std::vector<std::string> chunks;
+    for (int i = 0; i < 40; ++i) chunks.push_back(sseContent("word "));
+    mock.pushSseStream(chunks);
+    mock.setSseEventDelay(std::chrono::milliseconds(100));
+    ToolAgent agent(streamingCfg(mock.baseUrl()));
+    agent.initForTest();
+    std::thread canceller([&] {
+        while (mock.sseEventsSent() < 2) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        agent.requestCancel();
+    });
+    const auto started = std::chrono::steady_clock::now();
+    const json r = agent.processQuery("talk for a while");
+    canceller.join();
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(3));
+    EXPECT_NE(r["result"].get<std::string>().find("[Cancelled"), std::string::npos) << r.dump();
+    EXPECT_EQ(mock.requestCount(), 1);
+}
+
+TEST(StreamingLoopTest, CancelDuringTheModelCallNeverRunsTheToolItAskedFor) {
+    bench::MockLlmServer mock;
+    std::promise<void> release;
+    // The held reply is a prompt-JSON tool call.
+    mock.holdNextResponse(release.get_future().share(),
+                          R"({"choices":[{"message":{"content":"{\"tool\":\"echo\",\"tool_args\":{\"message\":\"x\"}}"}}]})");
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kNonToolCallingModel);
+    cfg.responseMode = ResponseMode::Conversational;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    std::thread canceller([&] {
+        while (mock.requestCount() < 1) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        agent.requestCancel();
+        release.set_value();
+    });
+    const json r = agent.processQuery("echo x");
+    canceller.join();
+    EXPECT_TRUE(agent.executed.empty());
+    EXPECT_NE(r["result"].get<std::string>().find("[Cancelled"), std::string::npos) << r.dump();
+}
+
+// ---------------------------------------------------------------------------
+// The model is checked every turn, and a failed load ends the turn loudly
+// ---------------------------------------------------------------------------
+
+TEST(ModelLoadTest, LoadIsRecheckedBeforeEveryRequest) {
+    // A server that keeps reporting the model unloaded (another client evicted
+    // it, or reloaded it at a smaller ctx) must get a load before each request.
+    bench::MockLlmServer mock(/*reportModelLoaded=*/false);
+    mock.pushResponses(kPlainAnswer, 2);
+    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    agent.initForTest();
+    agent.processQuery("one");
+    agent.processQuery("two");
+    ASSERT_EQ(mock.requestCount(), 2);
+    // One check at the start of each turn plus one before each chat request.
+    EXPECT_EQ(mock.loadRequestCount(), 4);
+}
+
+TEST(ModelLoadTest, AFailedLoadIsAnErrorNotAWarning) {
+    bench::MockLlmServer mock(/*reportModelLoaded=*/false);
+    mock.setLoadStatus(500);
+    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    agent.initForTest();
+    const json r = agent.processQuery("hello");
+    ASSERT_TRUE(r.contains("error")) << r.dump();
+    EXPECT_NE(r["error"].get<std::string>().find(kToolCallingModel), std::string::npos);
+    EXPECT_EQ(mock.requestCount(), 0);  // no chat request against the wrong model
+}
+
+// ---------------------------------------------------------------------------
+// --trace: every model call and tool call is written, with what the model saw
+// ---------------------------------------------------------------------------
+
+TEST(TraceTest, TurnTraceRecordsModelCallsToolCallsAndMessages) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(toolCallsResponse(
+        R"([{"id":"call_1","type":"function","function":{"name":"echo","arguments":"{\"message\":\"hi\"}"}}])"));
+    mock.pushResponse(kPlainAnswer);
+
+    const auto path = std::filesystem::temp_directory_path() / "gaia_trace_test" / "turn.json";
+    std::filesystem::remove_all(path.parent_path());
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.traceFile = path.u8string();
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("say hi");
+
+    std::ifstream in(path);
+    ASSERT_TRUE(in) << "no trace at " << path.u8string();
+    const json trace = json::parse(in);
+    in.close();  // Windows can't remove a file that is still open.
+    EXPECT_EQ(trace.at("query"), "say hi");
+    EXPECT_EQ(trace.at("result"), "All done.");
+    EXPECT_EQ(trace.at("steps_taken"), 2);
+    EXPECT_TRUE(trace.at("duration_ms").is_number());
+    EXPECT_EQ(trace.at("system_prompt").get<std::string>().rfind("You are a tool agent.", 0), 0u);
+
+    std::vector<std::string> kinds;
+    for (const auto& e : trace.at("events")) kinds.push_back(e.at("type"));
+    EXPECT_EQ(kinds, (std::vector<std::string>{"llm", "tool", "llm"}));
+    const json& llm = trace.at("events")[0];
+    EXPECT_EQ(llm.at("tool_calls")[0].at("name"), "echo");
+    const json& tool = trace.at("events")[1];
+    EXPECT_EQ(tool.at("name"), "echo");
+    EXPECT_EQ(tool.at("args"), (json{{"message", "hi"}}));
+    EXPECT_EQ(tool.at("result"), (json{{"echoed", "hi"}}));
+    EXPECT_TRUE(tool.at("ms").is_number());
+
+    // The messages the model saw, tool reply included, in order.
+    std::vector<std::string> roles;
+    for (const auto& m : trace.at("messages")) roles.push_back(m.at("role"));
+    EXPECT_EQ(roles, (std::vector<std::string>{"user", "assistant", "tool", "assistant"}));
+    std::filesystem::remove_all(path.parent_path());
+}
+

@@ -5,6 +5,18 @@
 
 The [GAIA](https://github.com/amd/gaia) C++ agent framework — a native C++17 port of the Python base agent. Part of AMD's open-source AI agent platform for Ryzen AI hardware. See the [Agent UI guide](../docs/guides/agent-ui.mdx) for the consumer desktop experience.
 
+## gaia-native: the flagship as one binary
+
+[`agents/gaia/`](agents/gaia/) builds `gaia-agent` (released as `gaia-native`): the GAIA flagship agent — chat, files, PDF/Office documents, data analysis, web research, memory and skills — as a single ~3 MB static executable with the Python flagship's tool names, defaults and skill catalogue. It also speaks the flagship's stdio protocol, so the Go TUI can drive it. Usage, install and the differences from Python: [docs/cpp/gaia-agent.mdx](../docs/cpp/gaia-agent.mdx).
+
+```bash
+pip install ziglang cmake ninja        # one portable toolchain for every platform
+cmake --preset tiny && cmake --build --preset tiny
+./build/tiny/gaia-agent "what's in this folder?"
+```
+
+`tiny-linux-x64`, `tiny-linux-arm64`, `tiny-macos-arm64` and `tiny-windows-x64` cross-compile from any host; `dev` builds everything with the tests. Releases come from `.github/workflows/release_gaia_native.yml` on a `gaia-native-v*` tag.
+
 Included demos:
 
 - **`health_agent`** — Windows System Health Agent that connects to the [Windows MCP server](https://pypi.org/project/windows-mcp/), gathers memory/disk/CPU metrics via PowerShell, and pastes a formatted report into Notepad — demonstrating the full computer-use (CUA) flow over the MCP client-server interface.

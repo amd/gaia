@@ -17,13 +17,14 @@ platforms, and the packaged binary filename per platform.
 | `process` | `examples/process_agent.cpp` | win-x64 |
 | `security-demo` | `examples/security_demo.cpp` | win-x64, linux-x64, darwin-arm64 |
 | `vlm` | `examples/vlm_agent.cpp` | win-x64, linux-x64, darwin-arm64 |
-| `bash` | `agents/bash/` | win-x64, linux-x64, darwin-arm64 |
+| `gaia-native` | `agents/gaia/` (`gaia-agent`) | win-x64, linux-x64, darwin-arm64 |
 
 `health`, `wifi`, and `process` use Windows-only APIs (`windows.h`, `psapi`,
 `netsh`/PowerShell), so they are built only on the `win-x64` matrix leg.
-`security-demo`, `vlm`, and `bash` are portable and prove the Linux and macOS
-legs. `bash` is the full coding agent (multi-file, in `agents/bash/`); the
-others are single-file demos in `examples/`.
+`security-demo`, `vlm`, and `gaia-native` are portable and prove the Linux and
+macOS legs. `gaia-native` is the flagship agent (multi-file, in `agents/gaia/`);
+the others are single-file demos in `examples/`. `agents/common/` holds the HTTP
+and MCP servers it embeds.
 
 ## How packaging works
 

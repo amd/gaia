@@ -1,0 +1,46 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Packaging manifest for gaia-agent, the native (C++) build of the GAIA
+# flagship. Built from cpp/agents/gaia/ and packaged into dist/gaia-native/ by
+# cpp/packaging/package_agents.py. Its skills are compiled into the binary, so
+# this manifest declares none.
+id: gaia-native
+name: GAIA (native)
+version: 0.1.0
+description: "The GAIA flagship as one native binary: conversation, files, data, web research, persistent memory and the skill library."
+author: AMD
+license: MIT
+
+category: general
+tags: [general, chat, memory, skills, research, native, cross-platform]
+icon: sparkles
+
+language: cpp
+min_gaia_version: "0.25.2"
+models: [Gemma-4-E4B-it-GGUF]
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+cpp:
+  static_linked: true
+  binaries:
+    win-x64: gaia-native-win-x64.exe
+    linux-x64: gaia-native-linux-x64
+    darwin-arm64: gaia-native-darwin-arm64
+
+permissions:
+  - filesystem:read
+  - filesystem:write
+  - process:execute
+  - system:read
+  - network:read
+
+interfaces:
+  tui: true
+  cli: true
+  pipe: true
+  api_server: true
+  mcp_server: true

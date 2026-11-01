@@ -7,8 +7,10 @@
 #include "api_server.h"
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 
@@ -58,6 +60,20 @@ static json errorJson(const std::string& message, const std::string& type = "ser
     return err;
 }
 
+constexpr std::size_t kMaxRequestBytes = 16 * 1024 * 1024;
+
+static void sendError(httplib::Response& res, int status, const std::string& message,
+                      const std::string& type, const std::string& code = "") {
+    res.status = status;
+    res.set_content(errorJson(message, type, code).dump(-1, ' ', false, json::error_handler_t::replace),
+                    "application/json");
+}
+
+static void sendBusy(httplib::Response& res) {
+    sendError(res, 409, "Agent is busy processing another request. Concurrent requests are not supported.",
+              "conflict", "agent_busy");
+}
+
 /// Extract the last user message content from an OpenAI-style messages array.
 static std::string extractUserInput(const json& messages) {
     // Walk backwards to find the last "user" role message.
@@ -93,13 +109,37 @@ struct ApiServer::Impl {
     int port;
     httplib::Server server;
     std::shared_ptr<SessionStore> sessionStore;
+    bool bound = false;
+    // One agent call at a time: a chat turn and a direct tool call share the agent's state.
+    std::mutex busy;
 
     Impl(Agent& a, int p) : agent(a), port(p) {}
 
-    // ---- CORS ----
+    // ---- Origin policy ----
+
+    // Only pages served from this machine may call the API: the tools read the
+    // user's files, so a website the user visits must not reach them.
+    static bool isLoopbackHost(std::string host) {
+        if (!host.empty() && host.front() == '[') {
+            const auto close = host.find(']');
+            host = close == std::string::npos ? host : host.substr(1, close - 1);
+        } else if (const auto colon = host.rfind(':'); colon != std::string::npos && host.find(':') == colon) {
+            host = host.substr(0, colon);
+        }
+        for (auto& c : host) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return host == "127.0.0.1" || host == "localhost" || host == "::1";
+    }
+
+    static bool isLoopbackOrigin(const std::string& origin) {
+        const auto scheme = origin.find("://");
+        if (scheme == std::string::npos) return false;
+        std::string host = origin.substr(scheme + 3);
+        if (const auto slash = host.find('/'); slash != std::string::npos) host.resize(slash);
+        return isLoopbackHost(host);
+    }
 
     void addCorsHeaders(httplib::Response& res) {
-        res.set_header("Access-Control-Allow-Origin", "*");
+        // Pre-routing already refused any non-loopback Origin.
         res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
         res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
     }
@@ -107,6 +147,48 @@ struct ApiServer::Impl {
     // ---- Route setup ----
 
     void setupRoutes() {
+        server.set_payload_max_length(kMaxRequestBytes);
+        // httplib answers an oversized or unreadable request itself; give it the API's error shape.
+        server.set_error_handler([](const httplib::Request&, httplib::Response& res) {
+            if (!res.body.empty()) return;
+            if (res.status == 413) {
+                sendError(res, 413, "Request body is larger than " + std::to_string(kMaxRequestBytes / (1024 * 1024)) +
+                                        " MB.", "invalid_request_error", "payload_too_large");
+            } else {
+                sendError(res, res.status, "Request failed with HTTP " + std::to_string(res.status) + ".",
+                          res.status < 500 ? "invalid_request_error" : "server_error");
+            }
+        });
+        server.set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
+            // Host guards against DNS rebinding; Origin against cross-site pages.
+            const std::string host = req.get_header_value("Host");
+            const std::string origin = req.get_header_value("Origin");
+            if ((!host.empty() && !isLoopbackHost(host)) || (!origin.empty() && !isLoopbackOrigin(origin))) {
+                res.status = 403;
+                res.set_content(errorJson("Requests are accepted only from this machine.", "forbidden").dump(),
+                                "application/json");
+                return httplib::Server::HandlerResponse::Handled;
+            }
+            if (!origin.empty()) res.set_header("Access-Control-Allow-Origin", origin);
+            // A chunked upload has no length to hold against the body limit.
+            if (req.method == "POST" && req.get_header_value("Transfer-Encoding").find("chunked") != std::string::npos) {
+                sendError(res, 411, "Send the request body with a Content-Length.", "invalid_request_error");
+                return httplib::Server::HandlerResponse::Handled;
+            }
+            // The body is not read yet here, so judge by the headers. A non-JSON type is
+            // what a cross-site form or no-preflight fetch would send.
+            const std::string type = req.get_header_value("Content-Type");
+            const std::string length = req.get_header_value("Content-Length");
+            const bool hasBody = !length.empty() && length != "0";
+            if (req.method == "POST" && (hasBody || !type.empty()) && type.rfind("application/json", 0) != 0) {
+                res.status = 415;
+                res.set_content(errorJson("Content-Type must be application/json.", "invalid_request_error").dump(),
+                                "application/json");
+                return httplib::Server::HandlerResponse::Handled;
+            }
+            return httplib::Server::HandlerResponse::Unhandled;
+        });
+
         // CORS preflight for all paths.
         server.Options(R"(.*)", [this](const httplib::Request& /*req*/, httplib::Response& res) {
             addCorsHeaders(res);
@@ -196,62 +278,74 @@ struct ApiServer::Impl {
         }
     }
 
+    /// Run one agent turn under the busy guard. Returns false (and fills @p res)
+    /// when the turn did not produce an answer.
+    bool runTurn(httplib::Response& res, const std::string& userInput, json& result) {
+        std::unique_lock<std::mutex> lock(busy, std::try_to_lock);
+        if (!lock.owns_lock()) {
+            sendBusy(res);
+            return false;
+        }
+        try {
+            result = agent.processQuery(userInput);
+        } catch (const std::runtime_error& e) {
+            // Agent is not re-entrant — another caller holds it.
+            if (std::string(e.what()).find("already running") != std::string::npos) {
+                sendBusy(res);
+            } else {
+                sendError(res, 500, std::string("Agent error: ") + e.what(), "server_error");
+            }
+            return false;
+        } catch (const std::exception& e) {
+            sendError(res, 500, std::string("Internal error: ") + e.what(), "server_error");
+            return false;
+        }
+        if (result.contains("error")) {
+            // The model could not be reached or read: an upstream failure, not an answer.
+            const std::string why = result["error"].is_string() ? result["error"].get<std::string>()
+                                                                : result["error"].dump();
+            sendError(res, 502, "The model did not answer: " + why, "upstream_error", "llm_unavailable");
+            return false;
+        }
+        return true;
+    }
+
+    static json usageOf(const json& result) {
+        json usage = {{"prompt_tokens", 0}, {"completion_tokens", 0}, {"total_tokens", 0}};
+        if (result.contains("usage") && result["usage"].is_object()) {
+            for (const char* k : {"prompt_tokens", "completion_tokens", "total_tokens"}) {
+                if (result["usage"].contains(k) && result["usage"][k].is_number_integer()) usage[k] = result["usage"][k];
+            }
+        }
+        return usage;
+    }
+
     void handleNonStreamingCompletion(httplib::Response& res,
                                       const std::string& userInput,
                                       const std::string& model,
                                       const std::string& completionId,
                                       int64_t created) {
-        try {
-            json result = agent.processQuery(userInput);
-            std::string content = result.value("result", "");
-
-            json response = {
-                {"id", completionId},
-                {"object", "chat.completion"},
-                {"created", created},
-                {"model", model},
-                {"choices", json::array({
-                    {
-                        {"index", 0},
-                        {"message", {
-                            {"role", "assistant"},
-                            {"content", content}
-                        }},
-                        {"finish_reason", "stop"}
-                    }
-                })},
-                {"usage", {
-                    {"prompt_tokens", 0},
-                    {"completion_tokens", 0},
-                    {"total_tokens", 0}
-                }}
-            };
-
-            res.status = 200;
-            res.set_content(response.dump(), "application/json");
-
-        } catch (const std::runtime_error& e) {
-            std::string what = e.what();
-            // Agent is not re-entrant — detect concurrency conflict.
-            if (what.find("already running") != std::string::npos) {
-                res.status = 409;
-                res.set_content(
-                    errorJson("Agent is busy processing another request. "
-                              "Concurrent requests are not supported.",
-                              "conflict", "agent_busy").dump(),
-                    "application/json");
-            } else {
-                res.status = 500;
-                res.set_content(
-                    errorJson("Agent error: " + what).dump(),
-                    "application/json");
-            }
-        } catch (const std::exception& e) {
-            res.status = 500;
-            res.set_content(
-                errorJson("Internal error: " + std::string(e.what())).dump(),
-                "application/json");
-        }
+        json result;
+        if (!runTurn(res, userInput, result)) return;
+        json response = {
+            {"id", completionId},
+            {"object", "chat.completion"},
+            {"created", created},
+            {"model", model},
+            {"choices", json::array({
+                {
+                    {"index", 0},
+                    {"message", {
+                        {"role", "assistant"},
+                        {"content", result.value("result", "")}
+                    }},
+                    {"finish_reason", "stop"}
+                }
+            })},
+            {"usage", usageOf(result)}
+        };
+        res.status = 200;
+        res.set_content(response.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
     }
 
     void handleStreamingCompletion(httplib::Response& res,
@@ -259,50 +353,15 @@ struct ApiServer::Impl {
                                    const std::string& model,
                                    const std::string& completionId,
                                    int64_t created) {
-        // Process the query first (we can't truly stream token-by-token since
-        // Agent::processQuery returns a complete result). We simulate SSE by
-        // sending the full result as a single chunk followed by [DONE].
-        std::string content;
-        bool agentBusy = false;
-        std::string errorMsg;
+        // Agent::processQuery returns a complete result, so the answer goes out
+        // as one SSE chunk followed by [DONE]. Failures stay plain HTTP errors.
+        json result;
+        if (!runTurn(res, userInput, result)) return;
+        const std::string content = result.value("result", "");
 
-        try {
-            json result = agent.processQuery(userInput);
-            content = result.value("result", "");
-        } catch (const std::runtime_error& e) {
-            std::string what = e.what();
-            if (what.find("already running") != std::string::npos) {
-                agentBusy = true;
-            }
-            errorMsg = what;
-        } catch (const std::exception& e) {
-            errorMsg = e.what();
-        }
-
-        if (agentBusy) {
-            res.status = 409;
-            res.set_content(
-                errorJson("Agent is busy processing another request. "
-                          "Concurrent requests are not supported.",
-                          "conflict", "agent_busy").dump(),
-                "application/json");
-            return;
-        }
-
-        if (!errorMsg.empty()) {
-            res.status = 500;
-            res.set_content(
-                errorJson("Agent error: " + errorMsg).dump(),
-                "application/json");
-            return;
-        }
-
-        // Send as SSE chunks via chunked transfer encoding.
-        res.set_header("Content-Type", "text/event-stream");
         res.set_header("Cache-Control", "no-cache");
         res.set_header("Connection", "keep-alive");
 
-        // Build the SSE data chunk with the full content.
         json chunk = {
             {"id", completionId},
             {"object", "chat.completion.chunk"},
@@ -320,7 +379,6 @@ struct ApiServer::Impl {
             })}
         };
 
-        // Stop chunk.
         json stopChunk = {
             {"id", completionId},
             {"object", "chat.completion.chunk"},
@@ -332,11 +390,12 @@ struct ApiServer::Impl {
                     {"delta", json::object()},
                     {"finish_reason", "stop"}
                 }
-            })}
+            })},
+            {"usage", usageOf(result)}
         };
 
         std::string body;
-        body += "data: " + chunk.dump() + "\n\n";
+        body += "data: " + chunk.dump(-1, ' ', false, json::error_handler_t::replace) + "\n\n";
         body += "data: " + stopChunk.dump() + "\n\n";
         body += "data: [DONE]\n\n";
 
@@ -411,6 +470,11 @@ struct ApiServer::Impl {
             toolName = resolved;
         }
 
+        std::unique_lock<std::mutex> lock(busy, std::try_to_lock);
+        if (!lock.owns_lock()) {
+            sendBusy(res);
+            return;
+        }
         try {
             // Execute through the mutable toolRegistry() to allow policy checks.
             json result = agent.toolRegistry().executeTool(toolName, args);
@@ -531,7 +595,22 @@ void ApiServer::setSessionStore(std::shared_ptr<SessionStore> store) {
     impl_->sessionStore = std::move(store);
 }
 
+int ApiServer::bind() {
+    if (impl_->bound) return impl_->port;
+    if (impl_->port == 0) {
+        impl_->port = impl_->server.bind_to_any_port("127.0.0.1");
+    } else if (!impl_->server.bind_to_port("127.0.0.1", impl_->port)) {
+        impl_->port = -1;
+    }
+    if (impl_->port <= 0) {
+        throw std::runtime_error("ApiServer failed to bind on 127.0.0.1. Check that the port is not already in use.");
+    }
+    impl_->bound = true;
+    return impl_->port;
+}
+
 void ApiServer::run() {
+    bind();
     std::cerr << "[ApiServer] Listening on port " << impl_->port << std::endl;
     std::cerr << "[ApiServer] Endpoints:" << std::endl;
     std::cerr << "  POST /v1/chat/completions  -- agent query" << std::endl;
@@ -541,10 +620,9 @@ void ApiServer::run() {
     std::cerr << "  GET  /sessions             -- list sessions" << std::endl;
     std::cerr << "  DELETE /sessions/:id       -- delete session" << std::endl;
 
-    if (!impl_->server.listen("127.0.0.1", impl_->port)) {
+    if (!impl_->server.listen_after_bind()) {
         throw std::runtime_error(
-            "ApiServer failed to bind on port " + std::to_string(impl_->port) +
-            ". Check that the port is not already in use.");
+            "ApiServer stopped listening on port " + std::to_string(impl_->port) + " unexpectedly.");
     }
 }
 
