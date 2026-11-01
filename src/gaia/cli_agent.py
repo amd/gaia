@@ -528,12 +528,21 @@ def cmd_version(args) -> None:
 
     if stamper.exists():
         for extra in ([], ["--check"]):
-            run = subprocess.run(
-                [sys.executable, str(stamper), *extra],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            try:
+                run = subprocess.run(
+                    [sys.executable, str(stamper), *extra],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=_STAMPER_TIMEOUT_S,
+                )
+            except subprocess.TimeoutExpired as e:
+                raise AgentWorkflowError(
+                    f"{stamper} {' '.join(extra)} did not finish within "
+                    f"{_STAMPER_TIMEOUT_S}s after bumping to {new}; the package's "
+                    f"version files may now disagree. Run it by hand to see where "
+                    f"it hangs."
+                ) from e
             if run.returncode != 0:
                 raise AgentWorkflowError(
                     f"{stamper} {' '.join(extra)} failed after bumping to {new} "
@@ -544,6 +553,8 @@ def cmd_version(args) -> None:
         print(f"{stamper.name}: every target -> {new}")
 
 
+# A stamper only rewrites a handful of local files; anything longer is a hang.
+_STAMPER_TIMEOUT_S = 60
 _PYPROJECT_VERSION_RE = re.compile(r'(?m)^version\s*=\s*"[^"]*"\s*$')
 _PYPROJECT_DYNAMIC_VERSION_RE = re.compile(r'(?m)^dynamic\s*=\s*\[[^\]]*"version"')
 _PY_VERSION_RE = re.compile(r'(?m)^((?:__version__|AGENT_VERSION)\s*=\s*)"[^"]*"')

@@ -158,6 +158,23 @@ def test_stamper_failure_is_raised_with_its_output(tmp_path):
     assert "file absent" in message
 
 
+def test_a_hung_stamper_is_bounded_and_raised(tmp_path, monkeypatch):
+    pkg = _copy_hub_agent("gaia", tmp_path)
+    seen = []
+
+    def hang(cmd, **kwargs):
+        seen.append((cmd, kwargs))
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(cli_agent.subprocess, "run", hang)
+    with pytest.raises(cli_agent.AgentWorkflowError, match="did not finish"):
+        cli_agent.cmd_version(_version_args("patch", pkg))
+
+    ((cmd, kwargs),) = seen
+    assert cmd == [sys.executable, str(pkg / "packaging" / "stamp_version.py")]
+    assert kwargs["timeout"] == cli_agent._STAMPER_TIMEOUT_S
+
+
 # --- packages outside the hub tree (no npm, no stamper) ---------------------
 
 
