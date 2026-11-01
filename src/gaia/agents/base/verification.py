@@ -39,6 +39,7 @@ from gaia.agents.base.checks import (
     check_kind,
     command_check_label,
     declares_check,
+    invokes_test_runner,
     runner_summary,
 )
 from gaia.agents.base.checks import summary_reports_failure as summary_counts_failure
@@ -156,10 +157,14 @@ def verification_check_label(
     name = (tool_name or "").strip()
     if name in ("execute_python_file", "run_python") and isinstance(result, dict):
         return_code = result.get("return_code")
+        # Only run_python's arguments carry the code; a file's source isn't here.
+        code = tool_args.get("code") if isinstance(tool_args, dict) else None
         if (
             not check_was_executed(result)
             or not isinstance(return_code, int)
             or isinstance(return_code, bool)
+            or not isinstance(code, str)
+            or not invokes_test_runner(code)
         ):
             return None
         output = "\n".join(

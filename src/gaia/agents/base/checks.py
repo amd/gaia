@@ -18,6 +18,7 @@ Pure and dependency-free: tools, the agent loop, and hub agents all import it.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import re
 from dataclasses import asdict, dataclass
@@ -326,15 +327,114 @@ def check_from_command(
     )
 
 
+#: In-process runner entry points, by the dotted name they are imported under.
+_RUNNER_CALLS: FrozenSet[str] = frozenset(
+    {
+        "pytest.main",
+        "unittest.main",
+        "unittest.TestProgram",
+        "unittest.TextTestRunner",
+        "unittest.runner.TextTestRunner",
+        "unittest.main.TestProgram",
+    }
+)
+
+#: Calls that start another program or module, which may be a runner.
+_LAUNCH_CALLS: FrozenSet[str] = frozenset(
+    {
+        "subprocess.run",
+        "subprocess.call",
+        "subprocess.check_call",
+        "subprocess.check_output",
+        "subprocess.Popen",
+        "os.system",
+        "os.popen",
+        "runpy.run_module",
+        "runpy.run_path",
+    }
+)
+
+
+def _dotted(node: ast.AST, aliases: Dict[str, str]) -> Optional[str]:
+    """``a.b.c`` for a Name/Attribute chain, with its import alias resolved."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(aliases.get(node.id, node.id))
+    return ".".join(reversed(parts))
+
+
+def invokes_test_runner(source: str) -> bool:
+    """True when Python *source* runs a test runner, not just prints its output.
+
+    A runner's summary line in the output is only evidence when the code
+    could have produced it: it calls ``pytest.main`` / ``unittest.main`` /
+    a ``TextTestRunner``, or launches a process (``subprocess``, ``os.system``,
+    ``runpy``) in code that names a check command. Printing a saved log does
+    neither. Unparseable source never ran, so it is not a runner.
+    """
+    try:
+        tree = ast.parse(source or "")
+    except (SyntaxError, ValueError):
+        return False
+    aliases: Dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for name in node.names:
+                aliases[name.asname or name.name.split(".")[0]] = (
+                    name.name if name.asname else name.name.split(".")[0]
+                )
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for name in node.names:
+                aliases[name.asname or name.name] = f"{node.module}.{name.name}"
+    launches = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _dotted(node.func, aliases)
+        if name in _RUNNER_CALLS:
+            return True
+        launches = launches or name in _LAUNCH_CALLS
+    if not launches:
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            text = node.value
+        elif isinstance(node, (ast.List, ast.Tuple)):
+            # An argv list: ['cargo', 'test'] names the command across items.
+            text = " ".join(
+                item.value
+                for item in node.elts
+                if isinstance(item, ast.Constant) and isinstance(item.value, str)
+            )
+        else:
+            continue
+        if _CHECK_COMMAND_RE.search(text):
+            return True
+    return False
+
+
 def check_from_python_run(
-    target: str, return_code: int, stdout: Any = "", stderr: Any = ""
+    target: str,
+    return_code: int,
+    stdout: Any = "",
+    stderr: Any = "",
+    *,
+    source: str,
 ) -> Optional[CheckResult]:
     """The test run a Python file or snippet performed, read from its output.
 
-    Python can run anything, so only a runner's own summary line makes it a
-    check. *target* identifies what ran — the file and its arguments, or
-    :func:`snippet_target` — so reruns of the same code group together.
+    Python can run anything, so it is a check only when *source* — the code
+    that ran — invokes a runner (:func:`invokes_test_runner`) and the output
+    carries that runner's own summary line. *target* identifies what ran —
+    the file and its arguments, or :func:`snippet_target` — so reruns of the
+    same code group together.
     """
+    if not invokes_test_runner(source):
+        return None
     found = runner_summary(_output(stdout, stderr))
     if found is None:
         return None

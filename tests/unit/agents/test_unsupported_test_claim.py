@@ -30,6 +30,7 @@ from gaia.agents.base.checks import (
     attach_check,
     check_from_command,
     check_from_python_run,
+    invokes_test_runner,
 )
 from gaia.agents.base.claims import (
     claims_success,
@@ -47,6 +48,9 @@ from gaia.agents.base.verification import (
     verification_record,
     verification_summary,
 )
+
+#: A snippet that really runs pytest, so its summary line is evidence.
+RUNS_PYTEST = "import pytest\npytest.main(['-q'])"
 
 #: Trimmed from the fabricating run.
 FABRICATED = (
@@ -175,14 +179,16 @@ def test_the_shell_tool_declares_a_non_check_so_the_footer_does_not_guess():
     ],
 )
 def test_a_python_run_reports_its_test_outcome(stdout, return_code, passed):
-    check = check_from_python_run("snippet:abc", return_code, stdout)
+    check = check_from_python_run(
+        "snippet:abc", return_code, stdout, source=RUNS_PYTEST
+    )
     assert check is not None
     assert check.kind == "test"
     assert check.passed is passed
 
 
 def test_a_python_run_without_a_runner_summary_is_not_a_check():
-    assert check_from_python_run("snippet:abc", 0, "42\n") is None
+    assert check_from_python_run("snippet:abc", 0, "42\n", source=RUNS_PYTEST) is None
 
 
 #: One passing and one failing summary per runner, as each runner prints it.
@@ -234,8 +240,8 @@ RUNNER_OUTPUTS = [
 )
 def test_every_runner_is_read_from_a_python_run(label, passing, failing):
     """A snippet that shells out to any runner exits 0 either way."""
-    passed = check_from_python_run("snippet:abc", 0, passing)
-    failed = check_from_python_run("snippet:abc", 0, failing)
+    passed = check_from_python_run("snippet:abc", 0, passing, source=RUNS_PYTEST)
+    failed = check_from_python_run("snippet:abc", 0, failing, source=RUNS_PYTEST)
     assert passed is not None and failed is not None
     assert (passed.label, passed.kind, passed.passed) == (label, "test", True)
     assert (failed.label, failed.kind, failed.passed) == (label, "test", False)
@@ -259,14 +265,14 @@ def test_every_runner_is_read_from_a_piped_command(label, passing, failing):
 
 def test_a_failing_go_package_fails_the_run_whatever_came_after_it():
     _, _, failing = next(r for r in RUNNER_OUTPUTS if r[0] == "go test")
-    check = check_from_python_run("snippet:abc", 0, failing)
+    check = check_from_python_run("snippet:abc", 0, failing, source=RUNS_PYTEST)
     assert check is not None and check.passed is False
     assert check.summary.startswith("FAIL github.com/x/pkg")
 
 
 def test_a_coloured_vitest_summary_still_reads():
     stdout = "\x1b[1m\x1b[32m      Tests  3 passed (3)\x1b[0m\n"
-    check = check_from_python_run("snippet:abc", 0, stdout)
+    check = check_from_python_run("snippet:abc", 0, stdout, source=RUNS_PYTEST)
     assert check is not None and (check.label, check.passed) == ("vitest", True)
 
 
@@ -285,7 +291,7 @@ def test_a_coloured_vitest_summary_still_reads():
     ],
 )
 def test_a_runner_that_ran_nothing_is_not_a_check(stdout):
-    assert check_from_python_run("snippet:abc", 0, stdout) is None
+    assert check_from_python_run("snippet:abc", 0, stdout, source=RUNS_PYTEST) is None
 
 
 def test_the_footer_reads_the_fact_without_the_text_parser():
@@ -352,7 +358,10 @@ def test_a_legacy_run_python_result_still_goes_through_the_fallback():
         "return_code": 0,
         "stdout": "70 passed, 19 subtests passed in 1.32s",
     }
-    assert verification_check_label("run_python", {}, result) == "pytest"
+    assert (
+        verification_check_label("run_python", {"code": RUNS_PYTEST}, result)
+        == "pytest"
+    )
 
 
 def test_a_malformed_check_fails_loudly():
@@ -842,3 +851,81 @@ def test_the_correction_asks_for_the_whole_answer_and_is_on_the_record(agent):
         if m.get("role") == "user" and m.get("content") == correction
     ]
     assert len(recorded) == 1, "the correction must be in the transcript"
+
+
+# ---------------------------------------------------------------------------
+# A summary in the output counts only when the code ran a runner (#4013)
+# ---------------------------------------------------------------------------
+
+SAVED_SUMMARY = "....\n4 passed in 0.05s\n"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "print(open('ci.log').read())",
+        "import pathlib\nprint(pathlib.Path('ci.log').read_text())",
+        "print('4 passed in 0.05s')",
+        "print('pytest.main()')",
+        "x = 'pytest -q'\nprint(x)",
+        "import pytest\nprint(pytest.__version__)",
+        "import subprocess\nsubprocess.run(['cat', 'ci.log'])",
+        "import os\nos.system('type ci.log')",
+        "def pytest_main(): pass\npytest_main()",
+        "exec('import pytest; pytest.main()')",
+        "this is not python (",
+        "",
+    ],
+    ids=lambda c: c[:40],
+)
+def test_printing_a_saved_summary_is_not_a_test_run(code):
+    assert invokes_test_runner(code) is False
+    assert check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code) is None
+    result = {"status": "success", "stdout": SAVED_SUMMARY, "return_code": 0}
+    assert verification_check_label("run_python", {"code": code}, result) is None
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import pytest\npytest.main(['-q'])",
+        "import sys, pytest\nsys.exit(pytest.main())",
+        "import pytest as pt\npt.main()",
+        "from pytest import main\nmain(['tests'])",
+        "from pytest import main as run_tests\nrun_tests()",
+        "import unittest\nunittest.main(module=None, argv=['x', 'discover'])",
+        "from unittest import main\nmain()",
+        "import unittest\nunittest.TextTestRunner(verbosity=2).run(suite)",
+        "import subprocess\nsubprocess.run(['python', '-m', 'pytest', '-q'])",
+        "import subprocess as sp\nr = sp.run('pytest -q', shell=True)",
+        "from subprocess import check_output\ncheck_output(['npx', 'jest'])",
+        "import os\nos.system('go test ./...')",
+        "import subprocess\ncmd = ['cargo', 'test']\nsubprocess.run(cmd)",
+        "import runpy\nrunpy.run_module('pytest', run_name='__main__')",
+    ],
+    ids=lambda c: c[:40],
+)
+def test_code_that_runs_a_runner_is_a_test_run(code):
+    assert invokes_test_runner(code) is True
+    check = check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code)
+    assert check is not None and check.label == "pytest" and check.passed
+
+
+def test_execute_python_file_fallback_cannot_see_the_script():
+    """A result that declares nothing and carries no code is never a check."""
+    result = {"status": "success", "stdout": SAVED_SUMMARY, "return_code": 0}
+    assert (
+        verification_check_label(
+            "execute_python_file", {"file_path": "print_log.py"}, result
+        )
+        is None
+    )
+
+
+def test_a_runner_without_a_summary_is_still_not_a_check():
+    assert check_from_python_run("snippet:x", 0, "42\n", source=RUNS_PYTEST) is None
+
+
+def test_source_is_required():
+    with pytest.raises(TypeError):
+        check_from_python_run("snippet:x", 0, SAVED_SUMMARY)  # type: ignore[call-arg]
