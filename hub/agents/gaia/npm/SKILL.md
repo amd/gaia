@@ -499,6 +499,11 @@ paths, and **the default is the user's home directory**. That is the honest scop
 for a personal document agent, and it is still a real boundary — system
 directories, program files, and other users' homes are refused, with the check
 run against the *resolved* path so a symlink out of scope doesn't slip through.
+In normal permission mode, a path outside the conversation's supplied scope
+requires an approval before it is granted. Full access (the session bypass
+route) may grant such a path without that separate prompt when the caller can
+answer for the session, but it does not override `GAIA_ALLOWED_PATHS` or the
+secret- and write-path denylists described below.
 
 **Being in scope is not the same as being safe, and two denylists apply inside
 it.** Reads refuse secrets — `.env`, `id_rsa`, `credentials.json`, `.netrc`,
@@ -518,8 +523,10 @@ part of the temp dir the agent may use.
 **To narrow it for a run, set `GAIA_ALLOWED_PATHS`** in the environment the
 sidecar starts in — absolute folders joined with `;` on Windows and `:` elsewhere.
 The scope becomes the overlap with the default; an entry outside it is ignored
-with a warning and never widens it, and out-of-scope paths are refused without a
-prompt, even under full access. The scratch directory stays writable. An empty,
+with a warning and never widens it. Out-of-scope paths are refused without a
+prompt when the sidecar is in normal permission mode; full access can grant a
+conversation-scoped path without that extra prompt, but still cannot widen this
+environment-level restriction. The scratch directory stays writable. An empty,
 relative or missing entry stops the sidecar at startup. It confines the agent's
 tools, not code they run: a `run_python` script or shell command can still read
 anything the OS user can, so isolating a run from files it must not see needs a

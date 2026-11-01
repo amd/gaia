@@ -317,8 +317,13 @@ caller computed it, so the agent works in the folders the caller's UI shows. A
 new session is built with exactly that scope; a retained session gains any
 entry it lacks and drops none until the session ends — neither what the user
 granted mid-chat nor an entry the caller has since stopped sending. `GAIA_ALLOWED_PATHS`
-still narrows it, and a path outside it is asked about, never silently
-granted. Omit it for the agent's default scope. Pre-2.18 binaries `422` the
+still narrows it. In the normal permission mode, a path outside the supplied
+scope is asked about before it is granted. If the session has full access
+(enabled through the session bypass route), a caller that can answer for the
+session may grant that path without a separate path prompt; this is the same
+full-access behavior as in-process. Full access does not override
+`GAIA_ALLOWED_PATHS`, the secret-path denylist, or the write denylist. Omit
+`allowed_paths` for the agent's default scope. Pre-2.18 binaries `422` the
 field. Whatever the scope, its existing folders are named in the system prompt
 once, when the session is built, with GAIA's documents folder first; a folder
 added to a retained session later is usable but not named. A caller that omits
