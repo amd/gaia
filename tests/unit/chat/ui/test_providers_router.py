@@ -1016,15 +1016,26 @@ def test_a_builtin_this_lemonade_does_not_list_is_not_offered(client, lemonade):
     lemonade.models = []
     lemonade.answers[("GET", "system-info")] = (200, _STRIX_128)
     ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
-    assert ids == ["user.ggml-gpt-oss-20b-MXFP4-GGUF"]
+    assert [i for i in ids if "gpt-oss" in i] == ["user.ggml-gpt-oss-20b-MXFP4-GGUF"]
 
 
 def test_unregistered_gpt_oss_carries_its_size_and_recipe(client, lemonade):
     lemonade.models = []
     lemonade.answers[("GET", "system-info")] = (200, _STRIX_128)
-    (row,) = client.get("/api/providers/local/models").json()["models"]
+    models = client.get("/api/providers/local/models").json()["models"]
+    (row,) = [m for m in models if "gpt-oss" in m["id"]]
     assert row["id"] == "user.ggml-gpt-oss-20b-MXFP4-GGUF"
     assert (row["recipe"], row["size_gb"], row["fits"]) == ("llamacpp", 12.1, True)
+    assert row["state"] == "not_downloaded"
+
+
+def test_unregistered_lfm3_is_offered_with_its_registration(client, lemonade):
+    lemonade.models = []
+    lemonade.answers[("GET", "system-info")] = (200, _GPU_24)
+    models = client.get("/api/providers/local/models").json()["models"]
+    (row,) = [m for m in models if "LFM3" in m["id"]]
+    assert row["id"] == "user.LFM3-1.7B-GGUF"
+    assert (row["recipe"], row["size_gb"], row["fits"]) == ("llamacpp", 1.0, True)
     assert row["state"] == "not_downloaded"
 
 

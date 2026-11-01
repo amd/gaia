@@ -389,6 +389,9 @@ FLASH_OPTION_MODEL_NAME = "user.Qwen3.8-Flash-Next-GGUF"
 # template's own default.
 GPT_OSS_REASONING_EFFORT = "medium"
 GPT_OSS_20B_MODEL_NAME = "user.ggml-gpt-oss-20b-MXFP4-GGUF"
+
+# Liquid AI's small agent model, registered as a ``user.`` model on first pull.
+LFM3_MODEL_NAME = "user.LFM3-1.7B-GGUF"
 REASONING_EFFORTS = ("low", "medium", "high")
 
 
@@ -1613,6 +1616,25 @@ MODELS = {
         max_ctx_size=262144,
         kv_bytes_per_token=20480,
     ),
+    # --- Liquid AI LFM3 1.7B: optional, never a default ---
+    # Needs llama.cpp's lfm3 architecture (b11960); no Lemonade release bundles
+    # it yet, so set min_lemonade_version to the first one that does.
+    "lfm3-1.7b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id=LFM3_MODEL_NAME,
+        display_name="LFM3 1.7B",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        checkpoint="LiquidAI/LFM3-1.7B-GGUF:Q4_K_M",
+        recipe="llamacpp",
+        reasoning=True,
+        size_gb=1.02,
+        # 6 of 24 layers are full attention (the sliding ones hold 256 tokens,
+        # the rest are convolutions): 4 KV heads x 128 dims x K+V x f16 =
+        # 12 KiB/token, 0.8 GB at 64K, 3 GB at 256K.
+        max_ctx_size=262144,
+        kv_bytes_per_token=12288,
+    ),
     # --- gpt-oss: Lemonade built-ins on llama.cpp, pulled by name ---
     # Alternate layers attend over a 128-token sliding window, so only the
     # full-attention half grows with context: 8 KV heads x 64 dims x K+V x f16
@@ -2187,7 +2209,11 @@ DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
 
 #: Supported chat models the pickers offer for download beside the defaults,
 #: on machines they fit. Never picked as a default.
-OPTIONAL_CHAT_MODELS = (GPT_OSS_20B_MODEL_NAME, "gpt-oss-120b-mxfp-GGUF")
+OPTIONAL_CHAT_MODELS = (
+    GPT_OSS_20B_MODEL_NAME,
+    "gpt-oss-120b-mxfp-GGUF",
+    LFM3_MODEL_NAME,
+)
 
 
 def optional_chat_models_that_fit(capacity: Any) -> List[str]:

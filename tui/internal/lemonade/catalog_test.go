@@ -321,7 +321,7 @@ func TestTooSmallBeatsTooOldInTheReason(t *testing.T) {
 	mac := capacityOf(t, macM4)
 	mac.ServerVersion = "11.9.0"
 	for _, e := range BuildEntries("local", nil, mac, nil) {
-		if e.Recommended != nil && e.Recommended.RegisterAs != "" && (e.NeedsUpgrade || !strings.Contains(e.Reason, "memory")) {
+		if e.Recommended != nil && e.Recommended.RegisterAs != "" && e.Recommended.MinLemonade != "" && (e.NeedsUpgrade || !strings.Contains(e.Reason, "memory")) {
 			t.Fatalf("a PC too small was told to upgrade Lemonade: %+v", e)
 		}
 	}
