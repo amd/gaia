@@ -116,9 +116,7 @@ class TestImageExtraction:
         )
 
         assert len(extract_images_from_page_pdfium(str(pdf), page_num=1)) == 2
-        (image,) = extract_images_from_page_pdfium(
-            str(pdf), page_num=1, min_cover=0.02
-        )
+        (image,) = extract_images_from_page_pdfium(str(pdf), page_num=1, min_cover=0.02)
         assert image["width"] == 120
 
     def test_a_grayscale_image_is_extracted(self, tmp_path):

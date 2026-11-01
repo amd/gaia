@@ -279,7 +279,7 @@ def resume_image_reading() -> None:
     """Carry on reading the images a previous run left unread."""
 
     def resume() -> None:
-        from gaia.rag.sdk import RAGConfig, RAGSDK
+        from gaia.rag.sdk import RAGSDK, RAGConfig
 
         RAGSDK(RAGConfig(show_stats=False)).resume_image_reading()
 

@@ -34,9 +34,9 @@ from ..models import (
     DocumentResponse,
     DocumentStatusResponse,
     DocumentUploadRequest,
+    ImagesReading,
     IndexFolderRequest,
     IndexFolderResponse,
-    ImagesReading,
     IndexingOverview,
 )
 from ..utils import (
