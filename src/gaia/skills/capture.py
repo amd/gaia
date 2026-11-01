@@ -26,7 +26,10 @@ fetches, and :class:`~gaia.skills.lock.SkillLock` for provenance.
 
 from __future__ import annotations
 
+import shlex
 import shutil
+import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -644,6 +647,11 @@ def code_is_deferred(skill: Skill) -> bool:
     """
     if not skill.gaia.tools and not _grants_a_binary(skill):
         return False
+    from gaia.skills.manager import ROOT_CLAUDE_PROJECT
+
+    # A repo's own .claude/skills arrive with a clone: having them is not consent.
+    if skill.root == ROOT_CLAUDE_PROJECT:
+        return True
     entry = capture_entry(skill)
     if entry is None:
         return False
@@ -661,6 +669,31 @@ def code_is_deferred(skill: Skill) -> bool:
         )
         return True
     return False
+
+
+def _shell_path(path: Path) -> str:
+    """*path* quoted for pasting into this platform's shell."""
+    if sys.platform == "win32":
+        return subprocess.list2cmdline([str(path)])
+    return shlex.quote(str(path))
+
+
+def deferred_remedy(skill: Skill) -> str:
+    """The terminal command(s) that lift :func:`code_is_deferred`, backticked.
+
+    A repo's ``.claude/skills`` copy is never promotable (promote governs the
+    user root): import puts an audited copy there, which outranks it, and
+    promote then trusts that copy.
+    """
+    from gaia.skills.manager import ROOT_CLAUDE_PROJECT
+
+    promote = f"`gaia skill promote {skill.name}`"
+    if skill.root == ROOT_CLAUDE_PROJECT:
+        flag = " --allow-experimental" if skill.gaia.tools else ""
+        return (
+            f"`gaia skill import {_shell_path(skill.directory)}{flag}`, then {promote}"
+        )
+    return promote
 
 
 def promote_skill(
@@ -768,6 +801,7 @@ __all__ = [
     "capture_entry",
     "capture_skill",
     "code_is_deferred",
+    "deferred_remedy",
     "import_bundle",
     "promote_skill",
 ]

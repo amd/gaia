@@ -808,7 +808,7 @@ def test_an_unexpected_error_fails_the_run_and_frees_the_runner(monkeypatch):
     assert view["state"] == "failed"
     # The cause stays in the server log, never in what the browser is sent.
     assert "marker file is read-only" not in view["error"]
-    assert "backend log" in view["error"]
+    assert "GAIA server log" in view["error"]
     # Not stranded in "verifying": a retry is allowed.
     monkeypatch.setattr(sr, "check", lambda *a, **k: {"ready": True})
     _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
@@ -1159,7 +1159,9 @@ def test_progress_json_lines_become_per_model_rows_not_log_lines():
     qwen = _models(runner)[QWEN]
     assert qwen["state"] == "downloading"
     assert qwen["eta_s"] == 1000
-    assert qwen["downloaded_before_gb"] == 3.3
+    # Bytes in the first event are not "already on this PC": a fresh pull's
+    # first report already carries a few MB.
+    assert qwen["downloaded_before_gb"] is None
     overall = runner.status()["overall"]
     assert overall["bytes_total"] == 23_630_000_000
     assert overall["speed_bps"] == 20_000_000
@@ -1201,12 +1203,60 @@ def test_a_finished_run_marks_what_loaded_ready_and_what_did_not_failed():
     assert rows[GEMMA]["state"] == "skipped"
 
 
+def test_a_downloaded_model_the_check_did_not_load_is_not_left_verifying():
+    """Once init saves the chat model, ``--check --load`` drops Gemma; its row
+    must still finish, or a front end waits on it forever."""
+    runner = sr.SetupRunner()
+    runner._on_event(
+        {
+            "event": "plan",
+            "models": [
+                {"id": QWEN, "bytes_total": 10, "downloaded": False},
+                {"id": GEMMA, "bytes_total": 10, "downloaded": False},
+            ],
+        }
+    )
+    for model in (QWEN, GEMMA):
+        runner._on_event({"event": "model_done", "model": model, "downloaded": True})
+    with runner._lock:
+        runner._settle_models(None, {})
+    rows = _models(runner)
+    assert rows[QWEN]["state"] == rows[GEMMA]["state"] == "ready"
+
+
+def test_the_init_child_never_inherits_the_daemons_broker_url(monkeypatch):
+    """Run from the daemon, the child got the broker URL with no credential and
+    every model load failed; it must find the daemon itself instead."""
+    from gaia.daemon.constants import BROKER_URL_ENV_VAR
+
+    monkeypatch.setenv(BROKER_URL_ENV_VAR, "http://127.0.0.1:5555")
+    monkeypatch.setenv("GAIA_HARNESS_MARK", "kept")
+    calls = []
+    _fake_run(monkeypatch, 0, '{"ready": true}\n', calls=calls)
+    sr.check()
+    env = calls[0][1]["env"]
+    assert BROKER_URL_ENV_VAR not in env
+    assert env["GAIA_HARNESS_MARK"] == "kept"
+
+    seen = []
+    proc = _FakeProc(io.BytesIO(b""))
+    _popen(monkeypatch, proc, calls=seen)
+    sr.SetupRunner().start(skip_chat_model=False)
+    env = seen[0][1]["env"]
+    assert BROKER_URL_ENV_VAR not in env
+    assert env["NO_COLOR"] == "1" and env["GAIA_HARNESS_MARK"] == "kept"
+
+
 class _PullClient:
     """Lemonade for one in-process pull: *events* streamed, then *ok*."""
 
-    def __init__(self, events, ok=True, gate=None):
+    def __init__(self, events, ok=True, gate=None, system_info=None):
         self.events, self.ok, self.gate = events, ok, gate
+        self.system_info = system_info or {}
         self.calls = []
+
+    def get_system_info(self, timeout=None):
+        return self.system_info
 
     def ensure_model_downloaded(self, model_id, on_progress=None, **kwargs):
         self.calls.append((model_id, kwargs))
@@ -1512,3 +1562,71 @@ def test_remove_is_refused_while_setup_runs_or_under_another_spelling(client):
     for spelling in (EMBED.removeprefix("user."), EMBED.upper()):
         r = test_client.post("/api/setup/models/remove", json={"model_id": spelling})
         assert r.status_code == 409, spelling
+
+
+def test_resumed_bytes_come_from_the_plan_not_the_first_progress_event():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._consume(run, _plan_event())
+    runner._consume(
+        run,
+        json.dumps({"event": "progress", "model": QWEN, "bytes_done": 10_000_000}),
+    )
+    assert _models(runner)[QWEN]["downloaded_before_gb"] is None
+
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    event = json.loads(_plan_event())
+    event["models"][1]["bytes_on_disk"] = 13_700_000_000
+    runner._consume(run, json.dumps(event))
+    runner._consume(
+        run,
+        json.dumps({"event": "progress", "model": QWEN, "bytes_done": 13_900_000_000}),
+    )
+    assert _models(runner)[QWEN]["downloaded_before_gb"] == 13.7
+
+
+def test_a_single_download_reads_what_is_already_on_disk(monkeypatch):
+    from gaia.installer import init_command
+
+    seen = {}
+
+    def on_disk(_client, ids, store):
+        seen["store"] = store
+        return {m: 2_500_000_000 for m in ids}
+
+    monkeypatch.setattr(init_command, "bytes_already_on_disk", on_disk)
+    runner = sr.SetupRunner()
+    gate = threading.Event()
+    client = _PullClient(
+        [],
+        gate=gate,
+        system_info={"model_storage": {"path": "/models", "free_bytes": 10**12}},
+    )
+    runner.download_model(client, GEMMA)
+    try:
+        assert _models(runner)[GEMMA]["downloaded_before_gb"] == 2.5
+        assert seen["store"] == "/models"
+    finally:
+        gate.set()
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "ready")
+
+
+def test_a_brand_new_single_download_is_not_called_resumed():
+    runner = sr.SetupRunner()
+    client = _PullClient(
+        [
+            {
+                "event": "progress",
+                "file": "m.gguf",
+                "bytes_downloaded": 10_000_000,
+                "bytes_total": 6_000_000_000,
+            },
+            {"event": "complete"},
+        ]
+    )
+    runner.download_model(client, GEMMA)
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "ready")
+    assert _models(runner)[GEMMA]["downloaded_before_gb"] is None

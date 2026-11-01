@@ -403,9 +403,11 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
             raise ModelFitError(f"default_model {model_id} {supported.reason}.")
 
 
-def pending_download_sizes(client, model_ids) -> dict:
+def pending_download_sizes(client, model_ids, full: bool = False) -> dict:
     """GB each model still costs to download: 0.0 when already on disk, None
-    when neither Lemonade's catalog nor GAIA's registry knows its size."""
+    when neither Lemonade's catalog nor GAIA's registry knows its size.
+
+    *full* gives a downloaded model's size instead of 0.0."""
     from gaia.llm.lemonade_client import _model_ids_match, find_model_requirement
 
     catalog = client.list_models(show_all=True).get("data", [])
@@ -414,7 +416,7 @@ def pending_download_sizes(client, model_ids) -> dict:
         entry = next(
             (e for e in catalog if _model_ids_match(e.get("id"), model_id)), None
         )
-        if entry and entry.get("downloaded"):
+        if entry and entry.get("downloaded") and not full:
             sizes[model_id] = 0.0
             continue
         size = entry.get("size") if entry else None
@@ -736,11 +738,7 @@ def check_setup_status(
     if reasons:
         # Sizes let a caller say what the download will cost before it starts;
         # ``downloaded`` lets it leave out models the server already has.
-        models = (
-            [_describe_model(client, m, downloaded.get(m)) for m in model_ids]
-            if load
-            else []
-        )
+        models = _describe_models(client, model_ids, downloaded) if load else []
         return SetupStatus(ready=False, reasons=reasons, stage="setup", models=models)
     if not load:
         return SetupStatus(ready=True, reasons=[])
@@ -762,17 +760,54 @@ def check_setup_status(
     return SetupStatus(ready=True, reasons=[], models=models)
 
 
+def remaining_download_gb(full_gb, on_disk_bytes) -> Optional[float]:
+    """GB still to download: the full size less what an interrupted pull left.
+
+    The setup plan and ``gaia init --check`` both size downloads with this, so
+    the two never show different totals for the same models.
+    """
+    if not isinstance(full_gb, (int, float)):
+        return None
+    partial_gb = round((on_disk_bytes or 0) / 1e9, 2)
+    return round(max(0.0, float(full_gb) - partial_gb), 2)
+
+
+def _describe_models(client, model_ids, downloaded: Dict[str, bool]) -> list:
+    """Each model setup needs, sized the way the setup plan sizes it."""
+    from gaia.llm.lemonade_client import LemonadeClientError
+    from gaia.llm.model_fit import model_store_free_gb
+
+    missing = [m for m in model_ids if downloaded.get(m) is False]
+    on_disk: dict = {}
+    if missing:
+        try:
+            _free, store = model_store_free_gb(client.get_system_info(timeout=15))
+            on_disk = bytes_already_on_disk(client, missing, store)
+        except LemonadeClientError as e:
+            # The sizes are still right for a model with nothing on disk; the
+            # reason is logged, and the check's own reasons carry on.
+            log.warning("Could not read partial downloads for the check: %s", e)
+    return [
+        _describe_model(client, m, downloaded.get(m), on_disk.get(m)) for m in model_ids
+    ]
+
+
 def _describe_model(
-    client, model_id: str, downloaded: Optional[bool] = None
+    client,
+    model_id: str,
+    downloaded: Optional[bool] = None,
+    on_disk_bytes: Optional[int] = None,
 ) -> "ModelLoad":
     """A model setup needs, its download size, and whether the server has it."""
     from gaia.llm.lemonade_client import LemonadeClientError
 
     role = "embedding" if is_embedding_model_id(model_id) else "chat"
     try:
-        size_gb = client.get_model_info(model_id)["size_gb"]
+        size_gb = pending_download_sizes(client, [model_id], full=True)[model_id]
     except LemonadeClientError as e:
         return ModelLoad(model_id, role, None, False, str(e), downloaded)
+    if downloaded is False:
+        size_gb = remaining_download_gb(size_gb, on_disk_bytes)
     return ModelLoad(model_id, role, size_gb, False, downloaded=downloaded)
 
 
@@ -2149,6 +2184,7 @@ class InitCommand:
             total_gb = sum(s for s in sizes.values() if s)
 
             disk_free_gb = None
+            on_disk: dict = {}
             if total_gb:
                 from gaia.llm.lemonade_client import LemonadeClientError
                 from gaia.llm.model_fit import (
@@ -2205,6 +2241,9 @@ class InitCommand:
                         "id": m,
                         "bytes_total": _gb_to_bytes(sizes.get(m)),
                         "downloaded": sizes.get(m) == 0,
+                        # What an interrupted pull left: the progress rows say
+                        # "resumed" from this, never from the first event.
+                        "bytes_on_disk": on_disk.get(m),
                     }
                     for m in model_ids
                 ],

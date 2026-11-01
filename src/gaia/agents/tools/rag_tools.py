@@ -28,6 +28,7 @@ from gaia.agents.tools.path_access import (
 from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
+from gaia.rag.keyword_search import rank_keyword_chunks
 from gaia.rag.sdk import EmbeddingUnavailableError, text_scripts
 from gaia.tool_cancellation import raise_if_cancelled
 
@@ -674,79 +675,30 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
-                # HYBRID SEARCH: Boost scores of chunks containing keywords
-                # Instead of creating new text snippets, we boost the scores of existing chunks
-                query_lower = query.lower()
-
-                # Identify important terms (not common words)
-
-                query_words = re.findall(r"\b[a-z]+\b", query_lower)
-                stop_words = {
-                    "the",
-                    "is",
-                    "what",
-                    "of",
-                    "and",
-                    "a",
-                    "an",
-                    "in",
-                    "to",
-                    "for",
-                }
-                important_terms = [
-                    w for w in query_words if w not in stop_words and len(w) > 2
-                ]
-
+                # HYBRID SEARCH: add the chunks that best match the query's words
                 keyword_boost_info = []
+                for chunk_idx, boost_score, matching_terms in rank_keyword_chunks(
+                    query, enumerate(rag.chunks)
+                ):
+                    # Deduplication below keeps a chunk's higher score.
+                    all_chunks.append(rag.chunks[chunk_idx])
+                    all_scores.append(boost_score)
 
-                if important_terms:
-                    # Check each indexed chunk for keyword matches
-                    for chunk_idx, chunk_text in enumerate(rag.chunks):
-                        chunk_lower = chunk_text.lower()
+                    # Get source file for this chunk
+                    source_file = rag.chunk_to_file.get(chunk_idx, "Unknown")
 
-                        # Count matching terms in this chunk (whole word matching)
-                        matching_terms = []
-                        for term in important_terms:
-                            # Use word boundary regex for whole-word matching
-                            if re.search(r"\b" + re.escape(term) + r"\b", chunk_lower):
-                                matching_terms.append(term)
-
-                        if matching_terms:
-                            # Calculate boost score based on match ratio
-                            match_ratio = (
-                                len(matching_terms) / len(important_terms)
-                                if important_terms
-                                else 0
-                            )
-                            boost_score = 0.6 + (0.2 * match_ratio)  # Range: 0.6-0.8
-
-                            # Add this chunk with boosted score if not already in all_chunks
-                            if chunk_text not in all_chunks:
-                                all_chunks.append(chunk_text)
-                                all_scores.append(boost_score)
-
-                                # Get source file for this chunk
-                                source_file = rag.chunk_to_file.get(
-                                    chunk_idx, "Unknown"
-                                )
-
-                                keyword_boost_info.append(
-                                    {
-                                        "chunk_index": chunk_idx,
-                                        "source_file": (
-                                            Path(source_file).name
-                                            if source_file != "Unknown"
-                                            else "Unknown"
-                                        ),
-                                        "matching_terms": matching_terms,
-                                        "boost_score": boost_score,
-                                        "match_ratio": match_ratio,
-                                    }
-                                )
-
-                                # Limit boosted chunks
-                                if len(keyword_boost_info) >= 5:
-                                    break
+                    keyword_boost_info.append(
+                        {
+                            "chunk_index": chunk_idx,
+                            "source_file": (
+                                Path(source_file).name
+                                if source_file != "Unknown"
+                                else "Unknown"
+                            ),
+                            "matching_terms": matching_terms,
+                            "boost_score": boost_score,
+                        }
+                    )
 
                 # Capture debug info for keyword boosting
                 if debug_info and keyword_boost_info:
@@ -1205,99 +1157,46 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
-                # HYBRID SEARCH: Boost scores of chunks containing keywords
-                # Instead of creating new text snippets, we boost the scores of existing chunks
+                # HYBRID SEARCH: add the chunks that best match the query's words
                 if (
                     str(target_file) in rag.file_metadata
                     and "full_text" in rag.file_metadata[str(target_file)]
                 ):
-                    query_lower = query.lower()
-
-                    # Identify important terms (not common words)
-
-                    query_words = re.findall(r"\b[a-z]+\b", query_lower)
-                    # Filter out common words
-                    stop_words = {
-                        "the",
-                        "is",
-                        "what",
-                        "of",
-                        "and",
-                        "a",
-                        "an",
-                        "in",
-                        "to",
-                        "for",
-                    }
-                    important_terms = [
-                        w for w in query_words if w not in stop_words and len(w) > 2
-                    ]
-
-                    if important_terms:
-                        file_keyword_info = []
-
-                        # Check each chunk from this file for keyword matches
-                        file_chunk_indices = rag.file_to_chunk_indices.get(
-                            str(target_file), []
+                    file_chunk_indices = rag.file_to_chunk_indices.get(
+                        str(target_file), []
+                    )
+                    file_keyword_info = []
+                    for chunk_idx, boost_score, matching_terms in rank_keyword_chunks(
+                        query,
+                        (
+                            (chunk_idx, rag.chunks[chunk_idx])
+                            for chunk_idx in file_chunk_indices
+                            if chunk_idx < len(rag.chunks)
+                        ),
+                    ):
+                        # Deduplication below keeps a chunk's higher score.
+                        all_chunks.append(rag.chunks[chunk_idx])
+                        all_scores.append(boost_score)
+                        file_keyword_info.append(
+                            {
+                                "chunk_index": chunk_idx,
+                                "matching_terms": matching_terms,
+                                "boost_score": boost_score,
+                            }
                         )
 
-                        for chunk_idx in file_chunk_indices:
-                            if chunk_idx < len(rag.chunks):
-                                chunk_text = rag.chunks[chunk_idx].lower()
-
-                                # Count matching terms in this chunk (whole word matching)
-                                matching_terms = []
-                                for term in important_terms:
-                                    # Use word boundary regex for whole-word matching
-                                    if re.search(
-                                        r"\b" + re.escape(term) + r"\b", chunk_text
-                                    ):
-                                        matching_terms.append(term)
-
-                                if matching_terms:
-                                    # Calculate boost score based on match ratio
-                                    match_ratio = (
-                                        len(matching_terms) / len(important_terms)
-                                        if important_terms
-                                        else 0
-                                    )
-                                    boost_score = 0.6 + (
-                                        0.2 * match_ratio
-                                    )  # Range: 0.6-0.8
-
-                                    # Add this chunk with boosted score if not already in all_chunks
-                                    chunk_content = rag.chunks[chunk_idx]
-                                    if chunk_content not in all_chunks:
-                                        all_chunks.append(chunk_content)
-                                        all_scores.append(boost_score)
-
-                                        file_keyword_info.append(
-                                            {
-                                                "chunk_index": chunk_idx,
-                                                "matching_terms": matching_terms,
-                                                "boost_score": boost_score,
-                                                "match_ratio": match_ratio,
-                                            }
-                                        )
-
-                                        # Limit boosted chunks
-                                        if len(file_keyword_info) >= 5:
-                                            break
-
-                        # Capture debug info for keyword search
-                        if debug_info and file_keyword_info:
-                            debug_info["keyword_retrieval"].append(
-                                {
-                                    "file": Path(target_file).name,
-                                    "chunks_boosted": len(file_keyword_info),
-                                    "boosted_chunks": file_keyword_info[
-                                        :5
-                                    ],  # Show first 5 boosted chunks
-                                }
-                            )
-                            logger.info(
-                                f"[DEBUG] Keyword search in {Path(target_file).name}: boosted {len(file_keyword_info)} chunks"
-                            )
+                    # Capture debug info for keyword search
+                    if debug_info and file_keyword_info:
+                        debug_info["keyword_retrieval"].append(
+                            {
+                                "file": Path(target_file).name,
+                                "chunks_boosted": len(file_keyword_info),
+                                "boosted_chunks": file_keyword_info,
+                            }
+                        )
+                        logger.info(
+                            f"[DEBUG] Keyword search in {Path(target_file).name}: boosted {len(file_keyword_info)} chunks"
+                        )
 
                 # Update debug info before deduplication - track which chunks before dedup
                 if debug_info:
