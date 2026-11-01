@@ -100,6 +100,30 @@ _GIT = ConnectorSpec(
     mcp_args=("mcp-server-git==2026.8.18",),
 )
 
+_DISCORD = ConnectorSpec(
+    id="mcp-discord",
+    display_name="Discord",
+    icon="🎮",
+    category="communication",
+    tier=2,
+    type="mcp_server",
+    description="Read and send messages in the Discord servers your bot has joined.",
+    docs_url="https://amd-gaia.ai/docs/connectors/discord",
+    mcp_command="npx",
+    mcp_args=("-y", "mcp-discord@1.3.4"),
+    mcp_env_keys=("DISCORD_TOKEN",),
+    config_schema=(
+        ConfigField(
+            key="DISCORD_TOKEN",
+            label="Discord Bot Token",
+            kind="secret",
+            placeholder="MTA…",
+            help_md="Create an application in the [Discord Developer Portal](https://discord.com/developers/applications), add a bot, turn on **Message Content Intent**, and copy its token. See the [setup guide](https://amd-gaia.ai/docs/connectors/discord).",
+            secret=True,
+        ),
+    ),
+)
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -109,6 +133,7 @@ _ALL_SPECS = (
     _TAVILY,
     _MEMORY,
     _GIT,
+    _DISCORD,
 )
 
 for _spec in _ALL_SPECS:
