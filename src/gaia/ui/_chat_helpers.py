@@ -4581,6 +4581,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 elif event_type == "tool_result" and not event.get("render"):
                     card = media_card(event, last_tool_args)
                     if card is not None:
+                        # A relayed result's summary-view ``data`` gives way to
+                        # the card; its summary and success are already set.
                         event = {**event, **card}
 
                 # Capture answer content for DB storage

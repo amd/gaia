@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { UnsupportedCard } from './UnsupportedCard';
 import { isOptionalString } from './primitiveShared';
 import { resolveMediaSrc } from './mediaSrc';
+import { useT } from '../../i18n/useT';
 
 /**
  * Inline base64 raster images, or an image GAIA generated
@@ -32,6 +33,7 @@ function isImagePayload(value: unknown): value is ImagePayload {
 }
 
 export function ImageCard({ data }: { data: unknown }) {
+    const t = useT();
     const [expanded, setExpanded] = useState(false);
     if (!isImagePayload(data)) {
         return <UnsupportedCard variant="invalid" render="image" data={data} />;
@@ -45,7 +47,7 @@ export function ImageCard({ data }: { data: unknown }) {
                 type="button"
                 className="render-image__toggle"
                 aria-expanded={expanded}
-                aria-label={expanded ? 'Show smaller' : 'Show full size'}
+                aria-label={expanded ? t('media.showSmaller') : t('media.showFull')}
                 onClick={() => setExpanded((v) => !v)}
             >
                 <img className="render-image__img" src={src} alt={data.alt ?? ''} />

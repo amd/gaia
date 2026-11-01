@@ -63,8 +63,10 @@ describe('image card with a generated image', () => {
 
         const toggle = screen.getByRole('button');
         expect(toggle.getAttribute('aria-expanded')).toBe('false');
+        expect(toggle.getAttribute('aria-label')).toBe('Show full size');
         fireEvent.click(toggle);
         expect(toggle.getAttribute('aria-expanded')).toBe('true');
+        expect(toggle.getAttribute('aria-label')).toBe('Show smaller');
         expect(container.querySelector('.render-image--expanded')).not.toBeNull();
     });
 
@@ -94,6 +96,7 @@ describe('audio card', () => {
         expect(audio?.hasAttribute('controls')).toBe(true);
         expect(screen.getByText('calm piano')).toBeInTheDocument();
         expect(container.textContent).toContain('music_1.wav · 1:35');
+        expect(container.querySelector('bdi[dir="ltr"]')?.textContent).toBe('1:35');
         expect(screen.queryByText(/Unsupported card type/)).toBeNull();
     });
 

@@ -166,6 +166,8 @@ const messages: Messages = {
     'code.copyAria': 'نسخ الشيفرة',
     'retry.button': 'إعادة المحاولة بنموذج آخر',
     'retry.head': 'إعادة المحاولة باستخدام…',
+    'media.showFull': 'عرض بالحجم الكامل',
+    'media.showSmaller': 'عرض بحجم أصغر',
 
     // Agent activity while GAIA works
     'activity.thinking': 'جارٍ التفكير',

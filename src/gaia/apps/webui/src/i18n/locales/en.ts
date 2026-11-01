@@ -166,6 +166,8 @@ export const enMessages = {
     'code.copyAria': 'Copy code',
     'retry.button': 'Retry with another model',
     'retry.head': 'Retry with…',
+    'media.showFull': 'Show full size',
+    'media.showSmaller': 'Show smaller',
 
     // Agent activity while GAIA works
     'activity.thinking': 'Thinking',

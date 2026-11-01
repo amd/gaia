@@ -51,7 +51,7 @@ export function AudioCard({ data }: { data: unknown }) {
                     <span className="render-audio__meta">
                         {fileName}
                         {fileName && data.duration_seconds !== undefined && ' · '}
-                        {data.duration_seconds !== undefined && formatDuration(data.duration_seconds)}
+                        {data.duration_seconds !== undefined && <bdi dir="ltr">{formatDuration(data.duration_seconds)}</bdi>}
                     </span>
                 )}
             </figcaption>
