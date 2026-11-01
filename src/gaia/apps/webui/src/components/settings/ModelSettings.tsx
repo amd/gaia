@@ -234,10 +234,10 @@ export function ModelSettings() {
 
     // Keeps the in-use model's device and size on screen while another provider's tab is open.
     const activeModel = active?.model;
+    const listedInUse = models?.find((m) => sameModelId(activeModel, m.id));
     useEffect(() => {
-        const row = models?.find((m) => sameModelId(activeModel, m.id));
-        if (row) setInUseRow(row);
-    }, [models, activeModel]);
+        if (listedInUse) setInUseRow(listedInUse);
+    }, [listedInUse]);
 
     const filtered = useMemo(() => {
         const q = query.trim().toLowerCase();
@@ -284,7 +284,7 @@ export function ModelSettings() {
             <h2 className="settings-pane-title">{t('settings.section.model')}</h2>
 
             <ModelInUse
-                row={sameModelId(inUseRow?.id, active?.model) ? inUseRow : null}
+                row={listedInUse ?? (sameModelId(inUseRow?.id, active?.model) ? inUseRow : null)}
                 providerName={providers?.find((p) => p.id === active?.provider)?.name ?? null}
                 choices={connected ? switchChoices : []}
                 labels={labels}
