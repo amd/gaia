@@ -46,16 +46,14 @@ def _unregistered_range(
     """
     from gaia.llm.lemonade_client import GPU_CTX_SIZE, NPU_CTX_SIZE, runs_on_npu
 
-    if not trained_max:
+    if not trained_max or trained_max < UNREGISTERED_MIN_CTX:
         return None
-    top = min(trained_max, NPU_CTX_SIZE) if runs_on_npu(model_id) else trained_max
-    if top < UNREGISTERED_MIN_CTX:
-        return None
+    flat = NPU_CTX_SIZE if runs_on_npu(model_id) else GPU_CTX_SIZE
     return {
         "min": UNREGISTERED_MIN_CTX,
-        "max_fit": top,
-        "automatic": min(NPU_CTX_SIZE if runs_on_npu(model_id) else GPU_CTX_SIZE, top),
-        "options": _steps(UNREGISTERED_MIN_CTX, top),
+        "max_fit": trained_max,
+        "automatic": min(flat, trained_max),
+        "options": _steps(UNREGISTERED_MIN_CTX, trained_max),
         "fit_checked": False,
     }
 
@@ -73,13 +71,17 @@ def context_range(
         co_resident_reserve_gb,
         context_for_capacity,
         find_model_requirement,
+        runs_on_npu,
     )
-    from gaia.llm.model_fit import largest_context
+    from gaia.llm.model_fit import largest_context, npu_capacity
 
     req = find_model_requirement(model_id)
     if req is None:
         return _unregistered_range(model_id, trained_max)
     floor = req.min_ctx_size
+    fit_checked = True
+    if runs_on_npu(model_id):
+        capacity = npu_capacity(capacity) or capacity
     if req.size_gb and req.kv_bytes_per_token and req.max_ctx_size:
         top = largest_context(
             size_gb=req.size_gb,
@@ -90,13 +92,15 @@ def context_range(
             reserve_gb=co_resident_reserve_gb(capacity),
         )
     else:
-        top = floor
+        # With no memory figures, a size too big fails at load.
+        fit_checked = not req.max_ctx_size
+        top = req.max_ctx_size or floor
     return {
         "min": floor,
         "max_fit": top,
         "automatic": context_for_capacity(req, capacity),
         "options": _steps(floor, top),
-        "fit_checked": True,
+        "fit_checked": fit_checked,
     }
 
 

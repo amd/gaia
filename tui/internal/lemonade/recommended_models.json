@@ -49,7 +49,8 @@
       "option": true,
       "size_gb": 9.1,
       "vision": true,
-      "min_ctx_size": 65536
+      "min_ctx_size": 65536,
+      "kv_bytes_per_token": 22528
     },
     {
       "id": "ggml-gpt-oss-20b-MXFP4-GGUF",

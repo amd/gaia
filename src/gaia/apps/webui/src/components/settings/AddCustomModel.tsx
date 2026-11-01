@@ -59,7 +59,7 @@ export function AddCustomModel({ onAdded }: { onAdded: (displayName: string) => 
         >
             <label className="settings-label" htmlFor="custom-model-url">Add a model from Hugging Face</label>
             <span className="settings-hint">
-                Paste the link to a GGUF model. GAIA checks that it is a chat model your model server can run and
+                Paste the link to a GGUF or FastFlowLM (NPU) model. GAIA checks that it is a chat model your model server can run and
                 that it fits this PC before adding it. It downloads when you choose Download.
             </span>
             <div className="settings-row">

@@ -529,7 +529,7 @@ export interface DownloadProgress {
     downloaded_bytes: number;
     /** Sum of every file's ``bytes_total`` in this download. */
     total_bytes: number;
-    /** Populated only when state === 'error'. */
+    /** Set on 'error', and on 'starting' while a backend installs first. */
     message: string | null;
 }
 

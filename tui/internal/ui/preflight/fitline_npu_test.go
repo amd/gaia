@@ -31,7 +31,7 @@ func TestFitLineJudgesAnNPUModelOnNPUMemory(t *testing.T) {
 }
 
 // The server-start window follows the NPU model: 64K for the twin, 32K for any
-// other FLM build, as lemonade_client.npu_ctx_ceiling does.
+// other FLM build, as lemonade_client.npu_default_ctx does.
 func TestServerWindowFollowsTheNPUModel(t *testing.T) {
 	probe := func(config string) hostProbe {
 		return hostProbe{

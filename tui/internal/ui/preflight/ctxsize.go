@@ -42,15 +42,13 @@ import (
 // depending on the `gaia` CLI being on PATH.
 
 // Context windows per device profile. These MUST equal
-// gaia.llm.lemonade_client.GPU_CTX_SIZE / NPU_CTX_SIZE: FastFlowLM builds such
-// as E2B load at 32768 and cannot reach 65536, so handing them the GPU window
-// fails the load outright — and collapsing them to one number would cap GPU
-// doc-Q&A at 32K and re-open the #1030 context overflow. An NPU model GAIA
-// recommends with a larger min_ctx_size raises its own ceiling, as
-// lemonade_client.npu_ctx_ceiling does.
+// gaia.llm.lemonade_client.GPU_CTX_SIZE / NPU_CTX_SIZE: collapsing them to one
+// number would cap GPU doc-Q&A at 32K and re-open the #1030 context overflow.
+// An NPU model GAIA recommends with a larger min_ctx_size starts from that, as
+// lemonade_client.npu_default_ctx does.
 const (
 	gpuCtxSize = 65536 // GPU/CPU — Gemma-4-E4B-it-GGUF (llama.cpp)
-	npuCtxSize = 32768 // NPU — the FastFlowLM ceiling for unmeasured FLM builds
+	npuCtxSize = 32768 // NPU — FastFlowLM's default, for builds without memory figures
 )
 
 // ctxSizeEnv is the variable modern Lemonade reads its context window from.

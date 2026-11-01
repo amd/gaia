@@ -360,7 +360,8 @@ class TestTuiDrift:
                 ), entry["id"]
                 if mr.kv_bytes_per_token:
                     assert entry["min_ctx_size"] == mr.min_ctx_size, entry["id"]
-                assert entry.get("size_gb") == mr.size_gb, entry["id"]
+                size = mr.size_gb
+                assert entry.get("size_gb") == size, entry["id"]
                 assert (
                     entry.get("min_lemonade_version") == mr.min_lemonade_version
                 ), entry["id"]

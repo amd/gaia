@@ -56,8 +56,13 @@ makes it the default from the start.
 
 `gemma4-it-e4b-FLM` is the same Gemma 4 E4B that GAIA runs on the GPU
 (`Gemma-4-E4B-it-GGUF`), built for the NPU by FastFlowLM. It is a 9.1 GB download, needs
-about 11 GB of system RAM (installed RAM less any GPU carve-out), sees images, calls
-tools natively, and loads with a 64K context window. The GPU stays free.
+about 12 GB of system RAM (installed RAM less any GPU carve-out), sees images and calls
+tools natively. The GPU stays free.
+
+GAIA sizes its context window to your PC: the smaller of the model's 128K maximum and what
+your free RAM holds, starting from 64K and dropping to 32K when memory is short. A larger
+window takes about 1.5 GB more RAM per 64K. To set it yourself, choose a size for the model
+in **Settings → Model**, or set `GAIA_CTX_SIZE`.
 
 Measured on a Ryzen AI MAX+ 395 (FLM v1.0.7, Lemonade 2026.43.3), a 31K-token prompt
 processes at 472 tokens/s and generates at 7 tokens/s, with a first answer in 67 s. In
@@ -97,6 +102,8 @@ gaia prompt "Hello" --device npu
 
 1. Launch with `gaia chat --ui`
 2. The Agent UI starts on the model you last picked. After `gaia init --profile npu` that is the NPU model; pick a GPU model in the model list to go back
+
+You don't need the NPU profile to try a model on the NPU. On a PC with an NPU, Settings › Model lists Gemma 4 E4B NPU when it fits that memory. **Download** installs Lemonade's FLM backend if it is missing, then fetches the model. The terminal UI's model picker does the same. To add another FastFlowLM model, paste its Hugging Face link under [Add a model from Hugging Face](/guides/ai-providers#add-a-model-from-hugging-face).
 
 ### Evaluation
 
@@ -158,7 +165,9 @@ Error pulling model: No built-in model with the name 'gemma4-it-e4b-FLM' is regi
 
 The FLM backend is missing, not the model. Lemonade discovers `*-FLM` models
 through the FLM runtime itself, so until `flm:npu` is installed none of them
-exist to pull. Install the backend first, then pull by name:
+exist to pull. Downloading the model from Settings › Model or the terminal UI's
+picker installs the backend for you. From a terminal, install it first, then pull by
+name:
 
 ```bash
 lemonade backends install flm:npu

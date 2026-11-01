@@ -69,7 +69,8 @@ func (e Entry) Selectable() bool {
 // Unavailable reports a recommended built-in this Lemonade does not offer, as
 // opposed to one that does not fit this PC.
 func (e Entry) Unavailable() bool {
-	return !e.Listed && e.Recommended != nil && e.Recommended.RegisterAs == ""
+	// An FLM model is unlisted until Pull installs the NPU backend.
+	return !e.Listed && e.Recommended != nil && e.Recommended.RegisterAs == "" && e.Recommended.Device != "npu"
 }
 
 // NeedsDownload reports whether choosing the row must pull the model first.
@@ -204,12 +205,13 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 		e := Entry{Model: Model{ID: rec.ID}, Recommended: &rec}
 		_, hasNPU := capacity.NPU()
 		switch {
-		case rec.Device == "npu" && (capErr != nil || !hasNPU):
-			// No NPU here: an NPU model is not an option, not a broken one.
+		case rec.Device == "npu" && !rec.Custom && (capErr != nil || !hasNPU):
+			// No NPU here: an NPU model is not an option, not a broken one. One
+			// the user added stays, so they can remove it.
 			continue
 		case rec.Device == "npu":
-			// Lemonade lists FLM models only once its NPU backend is installed.
-			e.Reason = "needs Lemonade's NPU backend; run `gaia init`"
+			// Lemonade lists FLM models only once its NPU backend is in; Pull installs it.
+			judge(&e)
 		case rec.RegisterAs == "":
 			// A built-in this Lemonade does not ship: it cannot be pulled by name.
 			e.Reason = "this Lemonade server does not offer it; update Lemonade with `gaia init`"
@@ -285,6 +287,15 @@ func (c *Client) Pull(ctx context.Context, e Entry, progress func(PullProgress))
 	base := c.current()
 	if err := validateURL(base, true); err != nil {
 		return err
+	}
+	if e.OnNPU() && !e.Listed {
+		// Lemonade lists no FLM model, and pulls none, until the backend is in.
+		// The install downloads a release, so like the pull only ctx bounds it.
+		installer := &Client{BaseURL: base, HTTP: &http.Client{CheckRedirect: c.HTTP.CheckRedirect}}
+		body := map[string]string{"recipe": "flm", "backend": "npu"}
+		if err := installer.request(ctx, "POST", "/install", body, nil); err != nil {
+			return fmt.Errorf("could not install Lemonade's NPU backend for %s: %w", e.Model.ID, err)
+		}
 	}
 	b, err := json.Marshal(PullRequest(e))
 	if err != nil {

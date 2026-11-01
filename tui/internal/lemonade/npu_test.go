@@ -101,8 +101,8 @@ func TestDownloadedFLMModelStaysSelectable(t *testing.T) {
 	}
 }
 
-// Lemonade hides FLM models until its NPU backend is installed.
-func TestUnlistedNPUModelsAreHiddenWithoutAnNPUAndExplainedWithOne(t *testing.T) {
+// Lemonade hides FLM models until its NPU backend is installed; Pull installs it.
+func TestUnlistedNPUModelsAreHiddenWithoutAnNPUAndDownloadableWithOne(t *testing.T) {
 	for _, e := range BuildEntries("local", nil, capacityOf(t, npuMissing), nil) {
 		if e.Recommended != nil && e.Recommended.Device == "npu" {
 			t.Fatalf("a PC with no NPU was shown %s", e.Model.ID)
@@ -111,7 +111,7 @@ func TestUnlistedNPUModelsAreHiddenWithoutAnNPUAndExplainedWithOne(t *testing.T)
 	by := entriesByID(BuildEntries("local", nil, capacityOf(t, haloNPU), nil))
 	for _, id := range []string{"gemma4-it-e4b-FLM"} {
 		e, ok := by[id]
-		if !ok || e.Selectable() || e.Reason != "needs Lemonade's NPU backend; run `gaia init`" {
+		if !ok || !e.Selectable() || !e.NeedsDownload() || e.Reason != "" {
 			t.Fatalf("%s on an NPU PC without the backend: %+v", id, e)
 		}
 	}

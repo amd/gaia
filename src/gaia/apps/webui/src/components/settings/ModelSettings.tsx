@@ -295,7 +295,7 @@ export function ModelSettings() {
                 {current ? (
                     <span className="model-row-current"><Check size={13} aria-hidden="true" /> In use</span>
                 ) : m.available === false ? null : progress ? (
-                    <span className="model-row-current"><Loader2 size={13} className="spin" /> {Math.round(progress.percent)}%</span>
+                    <span className="model-row-current"><Loader2 size={13} className="spin" /> {progress.message ?? `${Math.round(progress.percent)}%`}</span>
                 ) : !m.downloaded ? (
                     <button type="button" className="btn-secondary" onClick={() => void download(m.id)} disabled={busy !== null} aria-label={`Download ${labels[m.id]}`}>
                         {busy === `dl:${m.id}` ? <Loader2 size={13} className="spin" /> : null} Download

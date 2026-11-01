@@ -200,7 +200,7 @@ def test_warm_lemonade_pulls_nothing_and_asks_nothing(lemonade, monkeypatch):
 def test_flm_only_user_picks_their_npu_model_and_gets_no_gguf_chat_model(
     lemonade, home, capsys
 ):
-    fake = lemonade(downloaded=[FLM])
+    fake = lemonade(downloaded=[FLM], npu=True)
     sp.choose_chat_model(FLM)
     assert _config(home)["default_model"] == FLM
 
@@ -211,7 +211,7 @@ def test_flm_only_user_picks_their_npu_model_and_gets_no_gguf_chat_model(
 
 
 def test_flm_only_user_who_also_skips_the_embedder_downloads_nothing(lemonade, home):
-    fake = lemonade(downloaded=[FLM])
+    fake = lemonade(downloaded=[FLM], npu=True)
     sp.choose_chat_model(FLM)
     sp.set_model_skipped(DEFAULT_EMBEDDING_MODEL, True)
     assert _download(InitCommand(profile="gaia", yes=True))
@@ -425,7 +425,7 @@ def test_download_model_fetches_vision_for_a_user_whose_chat_model_replaced_it(
     lemonade, home
 ):
     """The caveat says `gaia init --download-model Gemma`; it must work."""
-    fake = lemonade(downloaded=[FLM, EMBEDDER])
+    fake = lemonade(downloaded=[FLM, EMBEDDER], npu=True)
     sp.choose_chat_model(FLM)
     cmd = InitCommand(profile="gaia", yes=True, extra_models=[DEFAULT_MODEL_NAME])
     assert _download(cmd)
