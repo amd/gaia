@@ -742,6 +742,7 @@ export interface LoadedModelInfo {
   backend_source?: string | null;
   ctx_size?: number | null;
   device?: string | null;
+  model_type?: string | null;
   name?: string | null;
   recipe?: string | null;
 }
@@ -875,6 +876,7 @@ export interface ModelServerInfo {
   embedding_model?: LoadedModelInfo | null;
   embedding_note?: string | null;
   error?: string | null;
+  loaded_models?: LoadedModelInfo[];
   owner: string;
   port?: number | null;
   preferred_backend?: string | null;

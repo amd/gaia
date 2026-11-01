@@ -139,6 +139,7 @@ class LoadedModelInfo(BaseModel):
     """One model Lemonade has loaded, as the Model server panel shows it."""
 
     name: Optional[str] = None
+    model_type: Optional[str] = None
     recipe: Optional[str] = None
     device: Optional[str] = None
     # vulkan | rocm | metal | cpu | npu | remote; None when Lemonade did not say.
@@ -168,6 +169,8 @@ class ModelServerInfo(BaseModel):
     version: Optional[str] = None
     chat_model: Optional[LoadedModelInfo] = None
     embedding_model: Optional[LoadedModelInfo] = None
+    # Other loaded models, such as vision, speech, image, and reranking models.
+    loaded_models: List[LoadedModelInfo] = Field(default_factory=list)
     # One plain sentence when GAIA chose the embedder's backend for a reason.
     embedding_note: Optional[str] = None
     default_backend: Optional[str] = None

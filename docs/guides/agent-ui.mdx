@@ -549,6 +549,9 @@ with `LEMONADE_BASE_URL`: GAIA never unloads its models or stops it.
   load did not name a backend and Lemonade picked it. *unknown* means this
   Lemonade does not report it.
 - **Context window** and the **Embedding model** with its backend.
+- One row for each other model this Lemonade has loaded (speech,
+  transcription, vision, reranking, image or 3D), labelled by its type, with
+  its name, backend and context window.
 
 To choose the backend, pick **Auto**, **Vulkan**, **ROCm** or **CPU** under
 *llama.cpp backend for chat models*. Only backends Lemonade can run on this PC
