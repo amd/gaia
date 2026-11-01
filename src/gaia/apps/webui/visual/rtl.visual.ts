@@ -238,6 +238,12 @@ test.describe('English', () => {
     });
 });
 
+const lastColor = (page: Page): Promise<string> =>
+    page.evaluate(() => (window as unknown as { __colors: { color: string }[] }).__colors.at(-1)?.color ?? '');
+
+const brightness = (hex: string): number =>
+    [1, 3, 5].reduce((sum, at) => sum + parseInt(hex.slice(at, at + 2), 16), 0);
+
 test('window controls take the color of the sidebar beneath them', async ({ page }) => {
     await page.addInitScript(() => {
         const calls: unknown[] = [];
@@ -258,4 +264,34 @@ test('window controls take the color of the sidebar beneath them', async ({ page
         getComputedStyle(document.documentElement).getPropertyValue('--bg-sidebar').trim(),
     ]);
     expect(last).toBe(sidebar);
+
+    await page.locator('.sb').getByRole('button', { name: /Settings/ }).first().click();
+    await expect(page.locator('.settings-overlay')).toBeVisible();
+    const dimmed = await lastColor(page);
+    expect(brightness(dimmed)).toBeLessThan(brightness(sidebar));
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.settings-overlay')).toHaveCount(0);
+    await expect.poll(() => lastColor(page)).toBe(sidebar);
+});
+
+test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
+    await open(page);
+    await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
+    await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
+});
+
+test('the library path row fits a phone', async ({ page }) => {
+    await open(page);
+    await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+    await page.setViewportSize({ width: 390, height: 780 });
+    const form = page.locator('.path-input-form');
+    await expect(form).toBeVisible();
+    const clipped = await form.locator('button, input').evaluateAll((els) =>
+        els.filter((el) => {
+            const box = el.getBoundingClientRect();
+            return box.left < 0 || box.right > innerWidth;
+        }).length,
+    );
+    expect(clipped).toBe(0);
 });

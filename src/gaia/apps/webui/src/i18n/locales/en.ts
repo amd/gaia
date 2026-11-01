@@ -122,6 +122,23 @@ export const enMessages = {
     'composer.stop': 'Stop',
     'composer.stopping': 'Stopping…',
     'composer.send': 'Send',
+    'composer.private': 'Private',
+    'composer.memoryOn': 'Memory on',
+    'composer.memoryOff': 'Memory off',
+    'composer.memoryUnknown': 'Memory unknown',
+    'composer.memoryOffTitle': 'Memory is off in Settings, so no chat is saved to memory',
+    'composer.memoryUnknownTitle': "Couldn't read the memory setting. Turn on private chat to keep this chat out of memory either way.",
+    'composer.privateOn': 'Turn on private chat',
+    'composer.privateOnTitle': "Turn on private chat. It won't be saved to memory.",
+    'composer.privateOff': 'Turn off private chat',
+    'composer.privateOffTitle': "Turn off private chat. This chat won't be saved to memory.",
+
+    // Notice when the GAIA agent is missing
+    'agentNotice.missing': "The GAIA agent isn't installed, so new chats can't start yet.",
+    'agentNotice.install': 'Install GAIA agent',
+    'agentNotice.installing': 'Installing the GAIA agent… {percent}%',
+    'agentNotice.failed': 'The GAIA agent could not be installed: {error}',
+    'agentNotice.retry': 'Try again',
 
     // A message and its actions
     'msg.sent': 'Sent {time}',

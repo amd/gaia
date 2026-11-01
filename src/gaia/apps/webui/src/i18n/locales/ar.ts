@@ -122,6 +122,23 @@ const messages: Messages = {
     'composer.stop': 'إيقاف',
     'composer.stopping': 'جارٍ الإيقاف…',
     'composer.send': 'إرسال',
+    'composer.private': 'خاصة',
+    'composer.memoryOn': 'الذاكرة مفعّلة',
+    'composer.memoryOff': 'الذاكرة متوقفة',
+    'composer.memoryUnknown': 'حالة الذاكرة غير معروفة',
+    'composer.memoryOffTitle': 'الذاكرة متوقفة في الإعدادات، لذا لا تُحفظ أي محادثة في الذاكرة',
+    'composer.memoryUnknownTitle': 'تعذّرت قراءة إعداد الذاكرة. فعّل المحادثة الخاصة لإبقاء هذه المحادثة خارج الذاكرة في كل الأحوال.',
+    'composer.privateOn': 'تفعيل المحادثة الخاصة',
+    'composer.privateOnTitle': 'تفعيل المحادثة الخاصة. لن تُحفظ في الذاكرة.',
+    'composer.privateOff': 'إيقاف المحادثة الخاصة',
+    'composer.privateOffTitle': 'إيقاف المحادثة الخاصة. لن تُحفظ هذه المحادثة في الذاكرة.',
+
+    // Notice when the GAIA agent is missing
+    'agentNotice.missing': 'وكيل GAIA غير مثبّت، لذا لا يمكن بدء محادثات جديدة بعد.',
+    'agentNotice.install': 'تثبيت وكيل GAIA',
+    'agentNotice.installing': 'جارٍ تثبيت وكيل GAIA… {percent}%',
+    'agentNotice.failed': 'تعذّر تثبيت وكيل GAIA: {error}',
+    'agentNotice.retry': 'إعادة المحاولة',
 
     // A message and its actions
     'msg.sent': 'أُرسلت في {time}',
