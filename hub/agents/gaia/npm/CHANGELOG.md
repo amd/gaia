@@ -29,6 +29,13 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   gets a labelled passage holding all its words instead of "no occurrence". A
   page with several links says how to list them, and `open_url` defers to the
   enforced network policy rather than having the model refuse on its own.
+- **With Claude, the agent follows a repository's own instructions.** Started in
+  a repository, a Claude model gets the project's `CLAUDE.md` / `AGENTS.md` in
+  its prompt and its `.claude/skills` in the skill list, as in Claude Code. Other
+  models get the prompt they had before, because they scored no better with it
+  and paid for it in tokens. `gaia config set project_context full|off|auto`
+  changes the choice.
+
 ### For integrators: contract 2.26
 
 - **"Always" answers can be listed and revoked** (contract **2.26**).
@@ -40,6 +47,10 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   own. An unknown session or key is a `404`.
 - **`needs_confirmation` carries `always_label`** beside `always_scope`: the
   same grant in plain words (`editing notes.md`), when there is one.
+- **`GET /v1/gaia/skills` can return `"source": "claude-project"`** for a skill
+  in the `.claude/skills` of the project the agent works in. A host that groups
+  rows by `source` must show a value it does not know ungrouped rather than
+  drop it: an Agent UI from before this release hides these skills.
 
 ### Fixed
 
@@ -51,6 +62,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   stored conversations, after the user approves it. A plain `recall` now says
   how many sensitive entries it held back, and `search_past_conversations`
   leaves out turns that mention something forgotten after they were said.
+- **A rate-limited page now says how long to wait.** `fetch_webpage` on an
+  HTTP 429 or 503 with `Retry-After` returns the wait as `retry_after` with a
+  hint not to fetch again before then. It returned only the status line, so
+  the agent re-fetched at once and could not tell the user when the limit
+  resets.
 - **One stray tool-call reply no longer triples a gateway model's token use.**
   A gateway model that wrote its own tool-call markup once was moved to native
   tool schemas (~12K more tokens per call) for every later session, so a single

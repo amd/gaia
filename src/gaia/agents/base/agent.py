@@ -3789,8 +3789,18 @@ Do NOT wrap conversational replies in JSON.
             return ""
         from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        catalog = render_catalog(self.skill_manager.discover())
+        catalog = render_catalog(
+            self.skill_manager.discover(), list_project=self._lists_project_skills()
+        )
         return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
+
+    def _lists_project_skills(self) -> bool:
+        """Whether the catalogue lists the project's ``.claude/skills``.
+
+        Off here; ``ProjectMapMixin`` turns it on for a model that gets the full
+        project context (:mod:`gaia.project_context`).
+        """
+        return False
 
     def _pin_skill_body(self, name: str, turns: Optional[int] = None) -> None:
         """Keep *name*'s body rendered for the next few filter refreshes.
@@ -4140,19 +4150,18 @@ Do NOT wrap conversational replies in JSON.
 
         # Captured code is inert until `gaia skill promote` — instructions
         # inject, tools.py is never imported (gaia.skills.capture).
-        from gaia.skills.capture import code_is_deferred
+        from gaia.skills.capture import code_is_deferred, deferred_remedy
 
         code_deferred = code_is_deferred(skill)
         if code_deferred:
             registered = {}
             logger.warning(
-                "Skill '%s' is captured and its code is not yet trusted: %d "
-                "tool(s) (%s) deferred — instructions loaded. Run "
-                "'gaia skill promote %s' in a terminal to enable them.",
+                "Skill '%s' is not yet trusted: %d tool(s) (%s) deferred — "
+                "instructions loaded. Run %s in a terminal to enable them.",
                 skill.name,
                 len(skill.gaia.tools),
                 ", ".join(skill.tool_names),
-                skill.name,
+                deferred_remedy(skill),
             )
         else:
             registered = register_skill_tools(skill)
@@ -4179,11 +4188,10 @@ Do NOT wrap conversational replies in JSON.
                     self.granted_binaries.grant(policy.binary, skill_name=skill.name)
             elif policies:
                 logger.warning(
-                    "Skill '%s' is captured and untrusted: binary grant(s) %s "
-                    "withheld until 'gaia skill promote %s'.",
+                    "Skill '%s' is untrusted: binary grant(s) %s withheld until %s.",
                     skill.name,
                     ", ".join(p.binary for p in policies),
-                    skill.name,
+                    deferred_remedy(skill),
                 )
 
             self.loaded_skills[name] = skill

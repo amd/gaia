@@ -65,8 +65,9 @@ func entryFrom(e setupapi.CatalogEntry) rowEntry {
 	return r
 }
 
-// purposeText is the fixed vocabulary: Chat, Vision, Documents.
-func (r rowEntry) purposeText(short bool) string {
+// purposeText is the fixed vocabulary: Chat, Vision, Documents. The vision
+// model reads Chat only while it is the chat model.
+func (r rowEntry) purposeText(short, isChat bool) string {
 	var parts []string
 	add := func(long, letter string) {
 		if short {
@@ -78,7 +79,7 @@ func (r rowEntry) purposeText(short bool) string {
 	if r.embedding {
 		add("Documents", "D")
 	}
-	if r.chatable {
+	if r.chatable && (!r.vision || isChat) {
 		add("Chat", "C")
 	}
 	if r.vision {

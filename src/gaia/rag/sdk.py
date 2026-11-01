@@ -50,6 +50,8 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
+    resident_vision_model,
+    resolve_default_vision_model,
 )
 from gaia.logger import get_logger
 from gaia.rag.arabic_text import normalize_arabic_pdf_text
@@ -141,6 +143,8 @@ class ImageExtractionError(ValueError):
 # Each page is one VLM call (seconds to tens of seconds), so a fax-sized TIFF is
 # fine and a 500-page archive is a mistake to stop early.
 MAX_IMAGE_PAGES = 50
+# Past this much text a page's images are logos and photos, not its content.
+IMAGE_PAGE_TEXT_LIMIT = 200
 
 
 def _flatten_for_vlm(img):
@@ -468,7 +472,7 @@ class RAGConfig:
         False  # Enable LLM-based intelligent chunking (requires LLM client)
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
-    vlm_model: str = DEFAULT_MODEL_NAME
+    vlm_model: str = field(default_factory=resolve_default_vision_model)
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
     # Security settings
@@ -1309,6 +1313,7 @@ class RAGSDK:
             - num_pages: int
             - vlm_pages: int (number of pages enhanced with VLM)
             - total_images: int (total images processed)
+            - image_pages_skipped: int (pages whose images were left unread)
             - pdf_status: str ("readable", "degraded", "encrypted",
               "corrupted", "empty"). "degraded" means the document indexed but
               at least one page may be incomplete — see degraded_pages.
@@ -1386,7 +1391,10 @@ class RAGSDK:
                 )
 
                 vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                    vlm_model=resident_vision_model(
+                        self.config.vlm_model, self.config.base_url
+                    ),
+                    base_url=self.config.base_url,
                 )
                 vlm_available = self.config.use_vlm and vlm.check_availability()
 
@@ -1422,6 +1430,7 @@ class RAGSDK:
             pages_data = []
             vlm_pages_count = 0
             total_images_processed = 0
+            image_pages_skipped = 0
             degraded_pages = []
             page_warnings = {}
 
@@ -1453,7 +1462,10 @@ class RAGSDK:
 
                 # Step 3: Extract from images if present
                 image_texts = []
-                if has_imgs and vlm_available:
+                read_images = len(pypdf_text.strip()) < IMAGE_PAGE_TEXT_LIMIT
+                if has_imgs and vlm_available and not read_images:
+                    image_pages_skipped += 1
+                elif has_imgs and vlm_available:
                     try:
                         try:
                             images = extract_images_from_page_pdfium(
@@ -1547,7 +1559,7 @@ class RAGSDK:
                 print(f"{'='*60}\n")
 
             self.log.info(
-                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages)"
+                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages, {image_pages_skipped} text pages' images left unread)"
             )
 
             # If pypdf parsed the file but every page came back blank, surface
@@ -1579,6 +1591,7 @@ class RAGSDK:
                 "num_pages": total_pages,
                 "vlm_pages": vlm_pages_count,
                 "total_images": total_images_processed,
+                "image_pages_skipped": image_pages_skipped,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
                 "pdf_status": "degraded" if degraded_pages else "readable",
@@ -1783,7 +1796,10 @@ class RAGSDK:
                 )
 
                 vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                    vlm_model=resident_vision_model(
+                        self.config.vlm_model, self.config.base_url
+                    ),
+                    base_url=self.config.base_url,
                 )
                 vlm_available = self.config.use_vlm and vlm.check_availability()
 
@@ -2463,7 +2479,11 @@ These positions indicate where to split the text."""
         )
 
         file_name = Path(image_path).name
-        model = self.config.vlm_model
+        model = (
+            resident_vision_model(self.config.vlm_model, self.config.base_url)
+            if self.config.use_vlm
+            else self.config.vlm_model
+        )
 
         if not self.config.use_vlm:
             raise ImageExtractionError(

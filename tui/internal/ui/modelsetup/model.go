@@ -206,6 +206,8 @@ type download struct {
 	ids []string
 	// cancelled is set after the user stopped it.
 	cancelled bool
+	// checking is a run started only to load-check what is already on disk.
+	checking bool
 	// startedAt is when the backend accepted the latest run or single
 	// download. starting is set from asking until it answers: a status read
 	// in that window still shows the model as it was (failed, say) and must
@@ -1120,7 +1122,7 @@ func (m Model) startCheckRun() (Model, tea.Cmd) {
 	ids := m.dl.ids
 	m.scr = scrDownload
 	m.note, m.runErr = checkingModels, ""
-	m.dl = download{active: true, run: true, starting: true, ids: ids}
+	m.dl = download{active: true, run: true, starting: true, checking: true, ids: ids}
 	m.total = rate{}
 	m.polling = true
 	return m, tea.Batch(m.runCmd(), m.tickCmd())
@@ -1212,7 +1214,12 @@ func (m Model) shownRows() []setupapi.ModelProgress {
 			if r, ok := m.sel.find(id); ok {
 				total = int64(r.left() * 1e9)
 			}
-			out = append(out, setupapi.ModelProgress{ID: id, State: setupapi.StateQueued, BytesTotal: total})
+			state := setupapi.StateQueued
+			if m.dl.checking && m.dl.active {
+				// Everything is on disk; the run lists it once `gaia init` starts.
+				state = setupapi.StateVerifying
+			}
+			out = append(out, setupapi.ModelProgress{ID: id, State: state, BytesTotal: total})
 		}
 	}
 	return out
