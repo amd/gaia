@@ -4,6 +4,9 @@
 /** Types shared across the GAIA Agent UI frontend. */
 
 import type { TurnSummaryResponse } from './api.gen';
+import type { SetupCatalogEntry, SetupModelProgress, SetupOverall } from './setup';
+
+export * from './setup';
 
 export interface Session {
     id: string;
@@ -1056,8 +1059,15 @@ export interface SetupRunStatus {
     skip_chat_model?: boolean;
     /** The run is switching to GAIA's own server; a retry must keep switching. */
     gaia_lemonade?: boolean;
+    /** A model's download failed in this run; its row says why. */
+    model_failed?: boolean;
+    /** The run only starts the model server; models are chosen and pulled after. */
+    server_only?: boolean;
     /** The chat model setup chose, once it has said. */
     chat_model?: string | null;
+    /** Each model's download, the run's and any single download's. */
+    models?: SetupModelProgress[];
+    overall?: SetupOverall;
 }
 
 /** GET /api/setup/plan: what setup will use and download, before it starts. */
@@ -1073,6 +1083,12 @@ export interface SetupPlan {
     options: Array<{ id: string; size_gb: number | null; fits: boolean | null; reason: string | null }>;
     models: Array<{ id: string; role: 'chat' | 'embedding'; size_gb: number | null }>;
     download_gb: number | null;
+    capacity_gb?: number | null;
+    /** The drive Lemonade stores models on; `free_gb` null when it couldn't be read. */
+    disk?: { path: string | null; free_gb: number | null; source: 'lemonade' | 'local' | null };
+    disk_warning?: string | null;
+    skipped_models?: string[];
+    catalog?: SetupCatalogEntry[];
 }
 
 /** A task a new chat offers, from what is set up on this PC. */

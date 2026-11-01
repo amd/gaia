@@ -17,6 +17,13 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   `chat`, `doc` or `file` agents get this agent instead; Agent UI chats saved
   under them stay read-only. MCP settings saved for `installed:chat` no
   longer apply (#6099).
+- **The binary ships no GPL or AGPL code.** PDF rendering and image
+  extraction moved from PyMuPDF (AGPL-3.0) to pypdfium2 (Apache-2.0 /
+  BSD-3-Clause), so `run_python` scripts get `pypdfium2` in place of
+  `pymupdf`. The binary also stopped carrying PyInstaller's own Python package,
+  GNU Readline and GNU dbm; scripts that `import readline` now get an
+  `ImportError`, and `shelve`/`dbm` keep working on `dbm.dumb`. The release
+  build fails if any of them come back.
 - **Reading a web page no longer dead-ends as early.** When a page splits a
   multi-word `fetch_page(find=...)` phrase across a table or sentence, the agent
   gets a labelled passage holding all its words instead of "no occurrence". A
@@ -36,6 +43,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **One stray tool-call reply no longer triples a gateway model's token use.**
+  A gateway model that wrote its own tool-call markup once was moved to native
+  tool schemas (~12K more tokens per call) for every later session, so a single
+  DeepSeek reply in its own format cost every run after it. The switch now
+  lasts only for the session that wrote the markup.
 - **The doc profile names a search tool it has.** Its discovery rules told the
   model to start with `find_files`, which that profile does not register, so the
   first discovery step failed. They now name `search_file`, which it does

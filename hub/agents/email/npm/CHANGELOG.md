@@ -6,6 +6,10 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **The binary no longer bundles GPL code.** It used to include PyInstaller's
+  own modules and Python's `readline` and `dbm` modules, which link GNU
+  Readline (GPL-3.0) and GDBM (GPL-3.0). They are excluded now, and the release
+  fails if any of them comes back. Nothing the agent does depended on them.
 - **No stray "unmapped agent event" line.** A sentence the model wrote before
   checking your mail showed up in the Agent UI as
   `[unmapped agent event: commentary]`. It no longer does.

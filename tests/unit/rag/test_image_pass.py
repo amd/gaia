@@ -319,11 +319,10 @@ def test_changing_the_chunking_keeps_its_own_queue(tmp_path):
 
 
 def test_a_page_that_can_not_be_found_is_not_counted_as_read(tmp_path):
-    from gaia.rag.pdf_utils import extract_images_from_page_pymupdf
+    from gaia.rag.pdf_utils import extract_images_from_page_pdfium
 
-    assert extract_images_from_page_pymupdf(str(tmp_path / "gone.pdf"), 1) == []
-    with pytest.raises(Exception):
-        extract_images_from_page_pymupdf(str(tmp_path / "gone.pdf"), 1, strict=True)
+    with pytest.raises(FileNotFoundError):
+        extract_images_from_page_pdfium(str(tmp_path / "gone.pdf"), 1)
 
 
 def test_one_unreadable_page_does_not_fail_a_scan(tmp_path):

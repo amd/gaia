@@ -8,11 +8,14 @@ PDF image extraction utilities for multi-modal RAG.
 Extracts individual images from PDF pages (not whole page conversion).
 """
 
+import hashlib
 import io
-import logging
 from typing import List, Tuple
 
-logger = logging.getLogger(__name__)
+from gaia.logger import get_logger
+from gaia.utils.parsing import PDFIUM_LOCK
+
+logger = get_logger(__name__)
 
 
 def prepare_image_for_vlm(image_bytes: bytes) -> dict:
@@ -81,71 +84,130 @@ def prepare_pil_image_for_vlm(img) -> dict:
     }
 
 
-def extract_images_from_page_pymupdf(
-    pdf_path: str, page_num: int, min_cover: float = 0.0, strict: bool = False
-) -> List[dict]:
+class PdfImageExtractionError(RuntimeError):
+    """A page's images could not be extracted.
+
+    ``images`` holds whatever did extract, so a caller can still use the
+    partial result while reporting the page as degraded.
     """
-    Extract images using PyMuPDF (more reliable than pypdf for images).
+
+    def __init__(self, message: str, page_num: int = 0, images=None):
+        self.page_num = page_num
+        self.images: List[dict] = list(images or [])
+        super().__init__(message)
+
+
+def _open_pdf_page(pdf_path, page_index: int):
+    """Open *pdf_path* with PDFium and return ``(document, page)``.
+
+    The caller holds ``PDFIUM_LOCK`` and closes both before releasing it.
+    Raises :class:`PdfImageExtractionError` naming the file and page when
+    either cannot be opened.
+    """
+    import pypdfium2 as pdfium
+
+    try:
+        pdf = pdfium.PdfDocument(pdf_path)
+    except pdfium.PdfiumError as e:
+        raise PdfImageExtractionError(
+            f"could not open {pdf_path} to read page {page_index + 1}: "
+            f"{str(e).rstrip('.')}. "
+            "The file may be damaged or password-protected; re-save it from a "
+            "PDF viewer (or remove the password) and index it again.",
+            page_index + 1,
+        ) from e
+    if not 0 <= page_index < len(pdf):
+        pages = len(pdf)
+        pdf.close()
+        raise PdfImageExtractionError(
+            f"page {page_index + 1} is not in {pdf_path} (it has {pages} pages)",
+            page_index + 1,
+        )
+    try:
+        return pdf, pdf[page_index]
+    except pdfium.PdfiumError as e:
+        pdf.close()
+        raise PdfImageExtractionError(
+            f"could not read page {page_index + 1} of {pdf_path}: {e}",
+            page_index + 1,
+        ) from e
+
+
+def extract_images_from_page_pdfium(
+    pdf_path: str, page_num: int, min_cover: float = 0.0
+) -> List[dict]:
+    """Extract the embedded images on one PDF page, ready for the VLM.
 
     Args:
         pdf_path: Path to PDF file
         page_num: Page number (1-indexed)
         min_cover: Leave out images covering less than this share of the page
-        strict: Raise instead of logging, for a caller that records the page as
-            read when nothing comes back
 
     Returns:
-        List of image dicts with bytes, dimensions, etc.
+        One :func:`prepare_image_for_vlm` dict per distinct image; ``[]`` only
+        when the page genuinely has no images.
+
+    Raises:
+        FileNotFoundError: *pdf_path* does not exist.
+        PdfImageExtractionError: the file or page could not be opened, or an
+            image on it could not be decoded. ``images`` carries the ones that
+            did decode.
     """
-    images = []
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as pdfium_c
 
-    try:
-        import fitz  # PyMuPDF
-
-        doc = fitz.open(pdf_path)
+    failures: List[str] = []
+    decoded = []
+    with PDFIUM_LOCK:
+        pdf, page = _open_pdf_page(pdf_path, page_num - 1)
         try:
-            page = doc[page_num - 1]  # PyMuPDF uses 0-indexed
-
-            image_list = page.get_images()
-
-            for img_index, img_info in enumerate(image_list):
-                try:
-                    xref = img_info[0]
-                    drawn = sum(
-                        rect.width * rect.height for rect in page.get_image_rects(xref)
-                    )
-                    if drawn < min_cover * page.rect.width * page.rect.height:
-                        continue
-
-                    # Extract image bytes (PyMuPDF handles decoding)
-                    base_image = doc.extract_image(xref)
-                    image = prepare_image_for_vlm(base_image["image"])
-                    images.append(image)
-
-                    logger.debug(
-                        f"Extracted image {img_index + 1}: "
-                        f"{image['width']}x{image['height']}, {image['size_kb']:.1f}KB"
-                    )
-
-                except Exception as e:
-                    if strict:
-                        raise
-                    logger.warning(
-                        f"Failed to extract image {img_index + 1} from page {page_num}: {e}"
-                    )
-                    continue
+            try:
+                width, height = page.get_size()
+                image_objects = page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE])
+                for img_index, obj in enumerate(image_objects, 1):
+                    try:
+                        left, bottom, right, top = obj.get_bounds()
+                        if (right - left) * (top - bottom) < min_cover * width * height:
+                            continue
+                        bitmap = obj.get_bitmap(render=False)
+                        try:
+                            # to_pil() shares the bitmap's buffer; copy before closing.
+                            decoded.append((img_index, bitmap.to_pil().copy()))
+                        finally:
+                            bitmap.close()
+                    except (pdfium.PdfiumError, ValueError, OSError) as e:
+                        failures.append(f"image {img_index}: {e}")
+            finally:
+                page.close()
         finally:
-            doc.close()
+            pdf.close()
 
-    except ImportError:
-        if strict:
-            raise
-        logger.error("PyMuPDF not installed. Install: uv pip install pymupdf")
-    except Exception as e:
-        if strict:
-            raise
-        logger.error(f"Error extracting images from page {page_num}: {e}")
+    images: List[dict] = []
+    seen = set()
+    for img_index, pil in decoded:
+        # One image placed twice is one image to the VLM.
+        key = (pil.size, pil.mode, hashlib.sha256(pil.tobytes()).digest())
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            image = prepare_pil_image_for_vlm(pil)
+        except (ValueError, OSError) as e:
+            failures.append(f"image {img_index}: {e}")
+            continue
+        images.append(image)
+        logger.debug(
+            f"Extracted image {img_index}: "
+            f"{image['width']}x{image['height']}, {image['size_kb']:.1f}KB"
+        )
 
+    if failures:
+        raise PdfImageExtractionError(
+            f"{len(failures)} image(s) on page {page_num} of {pdf_path} could not "
+            f"be decoded ({'; '.join(failures)})",
+            page_num,
+            images,
+        )
     return images
 
 
@@ -153,12 +215,14 @@ def extract_images_from_page(
     page, page_num: int  # pylint: disable=unused-argument
 ) -> List[dict]:
     """
-    DEPRECATED: Use extract_images_from_page_pymupdf instead.
+    DEPRECATED: Use extract_images_from_page_pdfium instead.
 
-    This function kept for backwards compatibility but PyMuPDF
-    is more reliable for image extraction.
+    Kept for backwards compatibility; it extracts nothing.
     """
-    logger.warning("Using deprecated pypdf image extraction - switch to PyMuPDF")
+    logger.warning(
+        "extract_images_from_page is deprecated and extracts nothing - "
+        "use extract_images_from_page_pdfium"
+    )
     return []
 
 
@@ -212,13 +276,14 @@ def count_images_in_page(page, page_num: int = 0) -> Tuple[bool, int]:
 
 def get_image_positions_on_page(pdf_path: str, page_num: int) -> List[dict]:
     """
-    Get positions of images on PDF page using PyMuPDF.
+    Get positions of images on a PDF page.
 
     Args:
         pdf_path: Path to PDF file
         page_num: Page number (0-indexed)
 
     Returns:
+        One entry per image placement, in top-left-origin page points:
         [
             {
                 "image_index": int,
@@ -229,44 +294,35 @@ def get_image_positions_on_page(pdf_path: str, page_num: int) -> List[dict]:
             },
             ...
         ]
+
+    Raises:
+        FileNotFoundError: *pdf_path* does not exist.
+        PdfImageExtractionError: the file or page could not be opened.
     """
-    positions: list[dict] = []
+    import pypdfium2.raw as pdfium_c
 
-    try:
-        import fitz  # PyMuPDF
-    except ImportError:
-        logger.debug("PyMuPDF not available for position detection")
-        return positions
-
-    try:
-        doc = fitz.open(pdf_path)
+    with PDFIUM_LOCK:
+        pdf, page = _open_pdf_page(pdf_path, page_num)
         try:
-            page = doc[page_num]
-
-            image_list = page.get_images()
-
-            for img_index, img_info in enumerate(image_list):
-                # Get image bounding box
-                xref = img_info[0]
-                image_rects = page.get_image_rects(xref)
-
-                if image_rects:
-                    rect = image_rects[0]  # First occurrence
-                    bbox = [rect.x0, rect.y0, rect.x1, rect.y1]
-
+            try:
+                page_height = page.get_height()
+                positions: List[dict] = []
+                image_objects = page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE])
+                for img_index, obj in enumerate(image_objects):
+                    # PDFium bounds are bottom-left origin; callers sort top-down.
+                    left, bottom, right, top = obj.get_bounds()
+                    y0 = page_height - top
                     positions.append(
                         {
                             "image_index": img_index,
-                            "bbox": bbox,
-                            "position_y": rect.y0,  # Top Y coordinate
-                            "width": int(rect.width),
-                            "height": int(rect.height),
+                            "bbox": [left, y0, right, page_height - bottom],
+                            "position_y": y0,
+                            "width": int(right - left),
+                            "height": int(top - bottom),
                         }
                     )
+                return positions
+            finally:
+                page.close()
         finally:
-            doc.close()
-
-    except Exception as e:
-        logger.warning(f"Could not get image positions for page {page_num}: {e}")
-
-    return positions
+            pdf.close()

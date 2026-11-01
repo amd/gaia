@@ -84,7 +84,7 @@ class TestInspectionIsThreeStateNotTwo:
 
 
 class TestAnUnreadablePageStillGetsATry:
-    """The inventory comes from pypdf; the extraction comes from PyMuPDF.
+    """The inventory comes from pypdf; the extraction comes from PDFium.
 
     A page pypdf cannot inspect may still extract fine, so "unknown" has to
     mean "attempt it", not "skip it" — which is what `(False, 0)` meant.
@@ -102,7 +102,7 @@ class TestAnUnreadablePageStillGetsATry:
 
         from gaia.rag import pdf_utils
 
-        signature = inspect.signature(pdf_utils.extract_images_from_page_pymupdf)
+        signature = inspect.signature(pdf_utils.extract_images_from_page_pdfium)
         assert list(signature.parameters)[:2] == ["pdf_path", "page_num"]
 
 
@@ -150,7 +150,7 @@ class TestTheIndexerRecordsWhatItCouldNotRead:
             "gaia.rag.pdf_utils.count_images_in_page", side_effect=inspect_results
         )
         mocker.patch(
-            "gaia.rag.pdf_utils.extract_images_from_page_pymupdf", return_value=[]
+            "gaia.rag.pdf_utils.extract_images_from_page_pdfium", return_value=[]
         )
         return sdk._extract_text_from_pdf(str(self._pdf))
 
@@ -200,7 +200,7 @@ class TestTheIndexerRecordsWhatItCouldNotRead:
         mocker.patch("gaia.llm.VLMClient", return_value=vlm)
         mocker.patch("gaia.rag.pdf_utils.count_images_in_page", return_value=(True, 1))
         mocker.patch(
-            "gaia.rag.pdf_utils.extract_images_from_page_pymupdf",
+            "gaia.rag.pdf_utils.extract_images_from_page_pdfium",
             return_value=[{"image_bytes": b"x", "width": 1, "height": 1, "size_kb": 1}],
         )
 

@@ -30,7 +30,7 @@ def extract_images_from_slide(slide, slide_num: int) -> list[dict]:
     Extract embedded images from a PPTX slide.
 
     Iterates picture shapes, extracts image blobs, and prepares them for the VLM
-    (resize / compress) identically to ``pdf_utils.extract_images_from_page_pymupdf``.
+    (resize / compress) identically to ``pdf_utils.extract_images_from_page_pdfium``.
 
     Args:
         slide: A ``pptx.slide.Slide`` object.

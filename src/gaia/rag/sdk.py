@@ -1433,9 +1433,10 @@ class RAGSDK:
             try:
                 from gaia.llm import VLMClient
                 from gaia.rag.pdf_utils import (
+                    PdfImageExtractionError,
                     PdfPageInspectionError,
                     count_images_in_page,
-                    extract_images_from_page_pymupdf,
+                    extract_images_from_page_pdfium,
                 )
 
                 vlm = VLMClient(
@@ -1503,7 +1504,7 @@ class RAGSDK:
                         has_imgs, num_imgs = count_images_in_page(page, page_num=i)
                     except PdfPageInspectionError as e:
                         # Unknown, not "none". The inventory comes from pypdf
-                        # and the extraction from PyMuPDF, so a page pypdf
+                        # and the extraction from PDFium, so a page pypdf
                         # cannot inspect may still extract — try it rather than
                         # indexing the page as blank (#3551).
                         page_warning = str(e)
@@ -1522,7 +1523,14 @@ class RAGSDK:
                     image_pages_skipped += 1
                 elif has_imgs and vlm_available:
                     try:
-                        images = extract_images_from_page_pymupdf(pdf_path, page_num=i)
+                        try:
+                            images = extract_images_from_page_pdfium(
+                                pdf_path, page_num=i
+                            )
+                        except PdfImageExtractionError as e:
+                            page_warning = f"image extraction failed on page {i}: {e}"
+                            self.log.warning(page_warning)
+                            images = e.images
                         if images:
                             image_texts = vlm.extract_from_page_images(
                                 images, page_num=i
@@ -2082,11 +2090,11 @@ class RAGSDK:
             images = extract_images_from_slide(slide, slide_num=page_num)
         else:
             from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
-                extract_images_from_page_pymupdf,
+                extract_images_from_page_pdfium,
             )
 
-            images = extract_images_from_page_pymupdf(
-                file_path, page_num=page_num, min_cover=min_cover, strict=True
+            images = extract_images_from_page_pdfium(
+                file_path, page_num=page_num, min_cover=min_cover
             )
         if not images:
             return []
