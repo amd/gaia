@@ -194,9 +194,6 @@ launch_agent_ui() {
   local cmd
   cmd="$(agent_ui_cmd)"
   [ -x "${cmd}" ] || die "${cmd} is not there to launch"
-  # gaia init downloads Lemonade and several GB of models; that needs hardware
-  # and is covered elsewhere. Everything up to a serving backend is under test.
-  export GAIA_SKIP_GAIA_INIT=1
   if [ "${OS}" = "Linux" ]; then
     nohup xvfb-run --auto-servernum "${cmd}" >"${LOGS}/app.out" 2>"${LOGS}/app.err" &
   else
