@@ -1033,7 +1033,7 @@ func (m Model) View() string {
 				marker = "› "
 			}
 			label := entryName(e, m.chosen())
-			if e.Recommended != nil && !e.Recommended.Custom {
+			if e.Featured() && !e.Recommended.Custom {
 				label = "★ " + label
 			}
 			if rank, note, ok := lemonade.Rank(e.Model.ID); ok {
@@ -1179,7 +1179,7 @@ func formatTokens(n int) string {
 // entryGroup is the heading a picker row sits under.
 func entryGroup(e lemonade.Entry) string {
 	switch {
-	case e.Recommended == nil:
+	case !e.Featured():
 		return "All models"
 	case e.Recommended.Custom:
 		return "Added by you"
