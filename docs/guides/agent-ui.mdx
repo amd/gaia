@@ -182,8 +182,8 @@ Pick the install path that fits you best:
     your first message. Setup runs again on the next launch.
 
     **Artifact naming** (`electron-builder.yml`):
-    `gaia-agent-ui-<version>-<arch>-setup.<ext>` — e.g. `gaia-agent-ui-0.17.2-x64-setup.exe`
-    and `gaia-agent-ui-0.17.2-amd64.deb`.
+    `gaia-agent-ui-<version>-<arch>-setup.<ext>` — e.g. `gaia-agent-ui-X.Y.Z-x64-setup.exe`
+    and `gaia-agent-ui-X.Y.Z-amd64.deb`.
 
     **Windows (.exe):**
     1. Download **Install GAIA for Windows** from [amd-gaia.ai](https://amd-gaia.ai/#install) (`gaia-<version>-win-x64-setup.exe`) and run it.
@@ -740,7 +740,7 @@ much they use now.
 
 One window with General (language; appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
-Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, or your Claude Code skill folders, with **Use** to try one),
+Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one),
 Connectors, Memory, Notifications, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).

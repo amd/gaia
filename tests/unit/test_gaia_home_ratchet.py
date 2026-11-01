@@ -20,7 +20,8 @@ Two shapes are counted, both outside docstrings:
   Prose that merely mentions ``~/.gaia`` mid-sentence is not counted, except
   in an f-string, where text right after a ``{...}`` starting ``~/.gaia`` is.
 
-``src/gaia/config.py`` is exempt: it is the resolver.
+``src/gaia/home.py`` (the resolver) and ``src/gaia/config.py`` (which
+re-exports it) are exempt.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from typing import Dict, List, Tuple
 
 _REPO = Path(__file__).resolve().parents[2]
 _ALLOWLIST = Path(__file__).with_name("gaia_home_allowlist.txt")
-_EXEMPT = {"src/gaia/config.py"}
+_EXEMPT = {"src/gaia/config.py", "src/gaia/home.py"}
 _SKIP_PARTS = {
     "tests",
     "build",
