@@ -415,7 +415,7 @@ func (m Model) itemLine(i int, it item, w int) string {
 	size := m.sizeText(r)
 	line := cursor + tickStyle.Render(tick) + " " +
 		nameStyle.Render(fmt.Sprintf("%-*s", nw, truncate(r.name, nw))) + " " +
-		dimStyle.Render(fmt.Sprintf("%-*s", pw, truncate(r.purposeText(short), pw))) + " " +
+		dimStyle.Render(fmt.Sprintf("%-*s", pw, truncate(r.purposeText(short, sameID(r.id, m.sel.chat)), pw))) + " " +
 		dimStyle.Render(fmt.Sprintf("%-*s", m.sizeCol(), truncate(size, m.sizeCol())))
 	if marks := m.marks(r, w-2*indentW-lipgloss.Width(line)-1); marks != "" {
 		line += " " + marks
@@ -823,7 +823,8 @@ func (m Model) downloadView(w int) (body, foot []string) {
 			body = append(body, strings.Repeat(" ", 8)+warnStyle.Render(s))
 		}
 	}
-	if len(rows) > 0 && m.lost == nil {
+	if _, total := m.overallBytes(); len(rows) > 0 && m.lost == nil && (m.dl.active || total > 0) {
+		// A finished download re-reads the plan, which then has nothing left.
 		body = append(body, m.overallLine(w, now))
 	}
 	if m.lost != nil {
