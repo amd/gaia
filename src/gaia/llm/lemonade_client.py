@@ -3101,6 +3101,9 @@ def _chosen_backend_hint(backend: Optional[str]) -> str:
 class LemonadeClientError(Exception):
     """Base exception for Lemonade client errors."""
 
+    #: HTTP status of the reply that raised it, when there was one.
+    http_status: Optional[int] = None
+
 
 class CloudProbeStopped(LemonadeClientError):
     """The user pressed Stop during a probe: it proved nothing about the model."""
