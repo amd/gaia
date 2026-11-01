@@ -68,6 +68,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List
 
+from gaia.agents.base.model_features import FULL
 from gaia.agents.tools.search_scope import in_env_scope
 from gaia.logger import get_logger
 
@@ -270,10 +271,16 @@ class SkillLibraryToolsMixin:
                     "skipped — they are listed under 'invalid'. Tell the user; "
                     "a broken skill is missing, not absent."
                 )
-            if not skills:
+            hub_offered = getattr(agent, "model_features", FULL).skill_hub
+            if not skills and hub_offered:
                 payload["hint"] = (
                     "No skills are installed. Use search_skill_hub to see what "
                     f"is published, then install_skill to add one. See {_DOCS_URL}"
+                )
+            elif not skills:
+                payload["hint"] = (
+                    "No skills are installed, and installing them needs a larger "
+                    f"model. Tell the user so. See {_DOCS_URL}"
                 )
             return payload
 
