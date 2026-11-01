@@ -35,11 +35,14 @@ import requests
 import yaml
 
 from gaia.eval.claude_outage import (
+    API_KEY_VAR,
     CREDENTIAL,
     HEADLINES,
     QUOTA,
     UNREACHABLE,
     classify_driver_failure,
+    dotenv_only_api_key,
+    driver_api_key,
     switch_to_backup_account,
 )
 from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
@@ -2011,7 +2014,38 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
-def _run_driver(cmd, *, input, timeout, cwd):  # pylint: disable=redefined-builtin
+_warned_dotenv_api_key = False
+
+
+def _driver_auth():
+    """Return ``(flags, env)`` for the ``claude -p`` driver's authentication.
+
+    ``--bare`` gives a clean subprocess (no hooks, no CLAUDE.md auto-load) but
+    also restricts auth to ``ANTHROPIC_API_KEY`` / ``apiKeyHelper`` — OAuth and
+    the keychain are never read. So it is used only with a key the operator
+    exported. A key that only a ``.env`` supplied is ignored *and* removed from
+    the child's environment, since the CLI prefers it over OAuth. ``env`` is
+    ``None`` when the child should inherit this process's environment as is.
+    """
+    global _warned_dotenv_api_key  # pylint: disable=global-statement
+    if driver_api_key():
+        return ["--bare"], None
+    if dotenv_only_api_key():
+        if not _warned_dotenv_api_key:
+            _warned_dotenv_api_key = True
+            logger.warning(
+                "Ignoring %s from a .env file for the eval driver — it would "
+                "disable your Claude Code login. Export it in the shell to drive "
+                "the eval with that key instead.",
+                API_KEY_VAR,
+            )
+        return [], {k: v for k, v in os.environ.items() if k != API_KEY_VAR}
+    return [], None
+
+
+def _run_driver(
+    cmd, *, input, timeout, cwd, env=None
+):  # pylint: disable=redefined-builtin
     """Run the eval driver; on timeout kill its whole process tree, then raise.
 
     Returns a ``CompletedProcess`` with text output, or raises
@@ -2031,6 +2065,7 @@ def _run_driver(cmd, *, input, timeout, cwd):  # pylint: disable=redefined-built
         encoding="utf-8",
         errors="replace",
         cwd=cwd,
+        env=env,
         **popen_kwargs,
     )
     try:
@@ -2119,18 +2154,8 @@ def run_scenario_subprocess(
 
     claude_bin = shutil.which("claude") or "claude"
 
-    # ``--bare`` gives a clean subprocess (skips hooks, CLAUDE.md auto-load,
-    # plugin sync, etc.) but per the Claude Code CLI docs it ALSO restricts
-    # Anthropic auth to ``ANTHROPIC_API_KEY`` / ``apiKeyHelper`` only —
-    # OAuth and keychain are never read. So on a subscription-only setup
-    # (the common case for Claude Code Max users), ``--bare`` makes the
-    # eval fail-fast with ``Not logged in · Please run /login`` because
-    # the SDK can't see the user's existing OAuth session. We opt in to
-    # ``--bare`` only when an explicit API key is available; otherwise we
-    # let the subprocess inherit the parent's OAuth credentials.
-    cmd = [claude_bin, "-p"]
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        cmd.append("--bare")
+    bare_flags, driver_env = _driver_auth()
+    cmd = [claude_bin, "-p", *bare_flags]
     cmd.extend(
         [
             "--no-session-persistence",  # don't save eval sessions to disk
@@ -2180,7 +2205,9 @@ def run_scenario_subprocess(
 
     assert_provider_permitted("the Claude Code CLI")
     try:
-        proc = _run_driver(cmd, input=prompt, timeout=timeout, cwd=str(REPO_ROOT))
+        proc = _run_driver(
+            cmd, input=prompt, timeout=timeout, cwd=str(REPO_ROOT), env=driver_env
+        )
         driver_proc = proc
         elapsed = time.time() - start
 
