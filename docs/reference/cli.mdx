@@ -1673,8 +1673,8 @@ gaia connectors <subcommand> [OPTIONS]
 | Subcommand | Description |
 |-----------|-------------|
 | `list` (alias `status`) | List connectors in the catalog with their status (`--json` for machine-readable output) |
-| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes |
-| `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys, OAuth client creds) |
+| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes, `--grant-agent <agent-id>` to also grant the connector to that agent (e.g. `installed:email`) in the same flow, `--device` for the device-code flow |
+| `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys), or `--client-id` / `--client-secret` to store an OAuth connector's client credentials (the secret is required for Google only; cannot be combined with `--set`/`--json`) |
 | `test <id>` | Run a health check for a configured connector |
 | `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. |
 | `grants {list\|grant\|revoke}` | Manage per-agent scope grants (credential access) |
@@ -2337,6 +2337,8 @@ gaia eval agent [OPTIONS]
 | `--audit-only` | flag | false | Run architecture audit without LLM calls (free) |
 | `--generate-corpus` | flag | false | Regenerate corpus documents and validate `manifest.json` |
 | `--fix` | flag | false | Auto-invoke Claude Code to diagnose and repair failures, then re-evaluate |
+| `--agent-model` | string | -- | Local model the agent must run (e.g. `Gemma-4-E4B-it-GGUF`). Each scenario's session is checked, and one that ran another model is discarded as `INFRA_ERROR`. It does not change the model; set `default_model` in the backend's GAIA home |
+| `--require-complete` | flag | false | With `--compare`, fail when baseline scenarios are missing or unmeasured |
 | `--max-fix-iterations` | integer | `3` | Maximum repair cycles in `--fix` mode |
 | `--target-pass-rate` | float | `0.90` | Stop fix iterations when judged pass rate reaches this threshold |
 | `--compare` | string(s) | -- | Compare two scorecard files, or one scorecard against saved baseline |
@@ -2416,6 +2418,24 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 [→ Full Agent Eval Guide](/guides/eval) · [→ Scenario Authoring](/guides/eval-scenarios) · [→ CI/CD Integration](/guides/eval-ci)
 
 ---
+
+### Session Replay
+
+Score the agent against real Claude Code sessions, driven through a running TUI (start it with `--control-port`).
+
+```bash
+gaia eval sessions [--control PATH] [--limit N] [--project DIR] [--out DIR] [--dataset-only]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--control` | `~/.gaia/tui/control.json` (or `$GAIA_TUI_HOME/control.json`) | The running TUI's control file |
+| `--limit` | `10` | Number of cases |
+| `--project` | all | Only sessions from one project directory under `~/.claude/projects` |
+| `--out` | `eval/results/sessions-<timestamp>` | Output directory |
+| `--dataset-only` | false | Build the dataset and stop; no agent run, no judge |
+
+Judging needs `ANTHROPIC_API_KEY`.
 
 ### Code Benchmark
 
@@ -3626,7 +3646,7 @@ gaia daemon start      # start the daemon, or attach if one is already running
 gaia daemon status     # pid, port, uptime + the supervised sidecar list
 gaia daemon stop       # graceful shutdown (tree-kills daemon + every sidecar, and GAIA's Lemonade Server)
 gaia daemon restart    # stop then start
-gaia daemon logs [--lines N] [--follow]   # tail the daemon log
+gaia daemon logs [--lines N] [--follow] [--agent AGENT_ID]   # tail the daemon log, or one sidecar agent's log (e.g. --agent email)
 gaia daemon agents                        # list supervised sidecar agents
 gaia daemon start-agent email [--mode user|dev] [--dev-src-dir <path>]  # start/attach one sidecar
 gaia daemon stop-agent email              # stop one sidecar, daemon stays up
