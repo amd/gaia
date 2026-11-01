@@ -406,6 +406,18 @@
         ],
         "title": "Narration"
       },
+      "notice": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Notice"
+      },
       "planNarrations": {
         "anyOf": [
           {

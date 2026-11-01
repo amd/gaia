@@ -591,6 +591,8 @@ class AgentStepResponse(BaseModel):
     # card from history.
     render: Optional[str] = None
     data: Optional[Any] = None
+    # A reopened chat rebuilds the partial-index note under the answer from this.
+    notice: Optional[Dict[str, Any]] = None
 
 
 class InferenceStatsResponse(BaseModel):

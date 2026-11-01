@@ -364,6 +364,16 @@ class TestAttachDocumentRequest:
 
 
 class TestAgentStepResponse:
+    def test_a_saved_partial_index_notice_survives_a_reload(self):
+        notice = {
+            "kind": "partial_index",
+            "names": ["a.pdf"],
+            "pages_done": 1,
+            "pages_total": 9,
+        }
+        step = AgentStepResponse(id=1, type="status", label="x", notice=notice)
+        assert step.model_dump()["notice"] == notice
+
     def test_mcp_fields_default_to_none(self):
         step = AgentStepResponse(id=1, type="tool", label="Used tool", timestamp=0)
         assert step.mcpServer is None
