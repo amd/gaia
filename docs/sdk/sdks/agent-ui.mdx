@@ -2382,8 +2382,9 @@ so the two can never disagree about whether GAIA is set up.
     left to download, `downloaded`, `recommended`, `selected`, `skipped`,
     `chat_choice`, `gaia_model` (GAIA's own model, not one only this
     Lemonade has), and `fits` with `need_gb` / `capacity_gb` / `fit_reason`;
-    memory figures are Lemonade's own, in GiB, while sizes and disk are
-    decimal GB),
+    every `*_gb` field is decimal GB; the memory figures are converted from
+    the GiB Lemonade reports, the same way `/api/gpu-memory` converts them, so
+    the two read the same number for the same PC),
     `disk` (`path`, `free_gb`, `source`), `disk_warning`, and `skipped_models`.
     `gaia init --plan --json` prints the same object; its
     [CLI reference](/reference/cli#choosing-models) lists every field.

@@ -114,7 +114,12 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
         kv_cache_for,
         lemonade_server_version,
     )
-    from gaia.llm.model_fit import ModelFitError, check_fit, check_server_supports
+    from gaia.llm.model_fit import (
+        ModelFitError,
+        check_fit,
+        check_server_supports,
+        required_memory_gb,
+    )
 
     catalog: Dict[str, float] = {}
     server_version = None
@@ -132,10 +137,13 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
         fits: Optional[bool] = None
         reason = None
         if capacity is not None and size:
-            verdict = check_fit(
-                size, capacity, kv_cache_for(mr, capacity) if mr else 0.0
-            )
+            kv = kv_cache_for(mr, capacity) if mr else 0.0
+            verdict = check_fit(size, capacity, kv)
             fits, reason = verdict.fits, verdict.reason or None
+            need = required_memory_gb(size, kv)
+            if need > capacity.memory_gb:
+                # The memory reason in the plan's decimal GB, like its numbers.
+                reason = model_choice.memory_reason(need, capacity)
         if fits and client is not None and mr and mr.min_lemonade_version:
             supported = check_server_supports(mr.min_lemonade_version, server_version)
             if not supported.fits:
@@ -405,9 +413,15 @@ def build_plan(
         "chat_model": chat,
         "recommended_model": recommended,
         "decided_after_server": client is None and not chat["user_set"],
-        "memory_gb": round(capacity.memory_gb) if capacity else None,
+        "memory_gb": (
+            round(model_choice.to_decimal_gb(capacity.memory_gb)) if capacity else None
+        ),
         "memory_source": capacity.memory_source if capacity else None,
-        "capacity_gb": round(capacity.memory_gb, 1) if capacity else None,
+        "capacity_gb": (
+            round(model_choice.to_decimal_gb(capacity.memory_gb), 1)
+            if capacity
+            else None
+        ),
         "disk": disk,
         "download_gb": (
             round(sum(s for s in sizes if s), 1)

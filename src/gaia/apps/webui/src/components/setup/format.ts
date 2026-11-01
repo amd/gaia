@@ -14,9 +14,9 @@ export function formatSize(gb: number): string {
 }
 
 /**
- * A number from the memory-fit calculation: a model's need or this PC's memory
- * for models. Both come from the same model_fit math in the same unit, so they
- * share this one label and a sentence never compares two units.
+ * A memory-fit number from the plan: a model's need or this PC's memory for
+ * models. The plan reports both in decimal GB, like the GPU memory pane, so
+ * every memory number on a screen carries this one label.
  */
 export function formatFitGb(gb: number): string {
     return `${gb.toFixed(1)} GB`;

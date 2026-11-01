@@ -20,6 +20,7 @@ import gaia.config
 from gaia.installer import model_choice
 from gaia.installer.init_command import InitCommand
 from gaia.llm import lemonade_client
+from gaia.llm.gpu_memory import GB_PER_GIB
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
@@ -340,7 +341,7 @@ def test_a_model_too_big_for_this_pc_needs_confirming(lemonade, home):
     with pytest.raises(sp.NeedsAcknowledgement) as ask:
         sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
     assert ask.value.detail["code"] == "no_fit"
-    assert ask.value.detail["capacity_gb"] == 12
+    assert ask.value.detail["capacity_gb"] == round(12 * GB_PER_GIB, 1)
     assert ask.value.detail["need_gb"] > 23
     assert "default_model" not in _config(home)
     sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME, acknowledge_no_fit=True)

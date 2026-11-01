@@ -10,6 +10,7 @@ import pytest
 
 import gaia.config
 from gaia.installer import model_choice as mc
+from gaia.llm.gpu_memory import GB_PER_GIB
 from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL_NAME
 from gaia.llm.model_fit import MachineCapacity
 
@@ -118,8 +119,8 @@ def test_fit_gives_the_numbers_behind_the_verdict():
     small = MachineCapacity(16, "AMD iGPU", disk_free_gb=1)
     fit = mc.memory_fit(QWEN, 23.3, small)
     assert fit["fits"] is False
-    assert fit["need_gb"] > 23.3 and fit["capacity_gb"] == 16
-    assert "16 GB" in fit["fit_reason"]
+    assert fit["need_gb"] > 23.3 and fit["capacity_gb"] == round(16 * GB_PER_GIB, 1)
+    assert "this PC has 17 GB" in fit["fit_reason"]
 
 
 def test_fit_ignores_disk_a_downloaded_model_no_longer_needs():

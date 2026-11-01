@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import gaia.config
+from gaia.llm.gpu_memory import GB_PER_GIB
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
@@ -148,7 +149,7 @@ def test_use_mine_on_a_big_pc_names_the_large_model_and_its_real_size(running):
     # The hardware's pick keeps Gemma beside it for images: what gaia init pulls.
     assert set(_plan_ids(plan)) >= {LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME}
     assert plan["download_gb"] == pytest.approx(23.3 + 5.6 + 0.3)
-    assert plan["memory_gb"] == 96
+    assert plan["memory_gb"] == round(96 * GB_PER_GIB)
 
 
 def test_an_already_downloaded_model_costs_nothing(running):
@@ -393,7 +394,8 @@ def test_chat_model_endpoint_asks_to_confirm_a_model_that_may_not_fit(client, ru
     r = client.post("/api/setup/chat-model", json=body, headers=UI)
     assert r.status_code == 409
     detail = r.json()["detail"]
-    assert detail["code"] == "no_fit" and detail["capacity_gb"] == 12
+    assert detail["code"] == "no_fit"
+    assert detail["capacity_gb"] == round(12 * GB_PER_GIB, 1)
     assert "may not run" in detail["message"]
     r = client.post(
         "/api/setup/chat-model",
@@ -490,8 +492,9 @@ def test_catalog_says_what_each_planned_model_is_for_and_costs(flm_box):
     assert "images" in gemma["if_skipped"]
     qwen = _entry(plan, LARGE_DEFAULT_MODEL_NAME)
     assert not qwen["recommended"] and not qwen["selected"]
-    assert qwen["fits"] is False and qwen["capacity_gb"] == 12
-    assert qwen["need_gb"] > 23 and "12 GB" in qwen["fit_reason"]
+    assert qwen["fits"] is False and qwen["capacity_gb"] == round(12 * GB_PER_GIB, 1)
+    assert qwen["need_gb"] > 23 and "12.9 GB" not in qwen["fit_reason"]
+    assert "this PC has 13 GB" in qwen["fit_reason"]
 
 
 def test_big_pc_recommends_the_large_model_and_keeps_gemma_for_vision(running):
@@ -778,3 +781,81 @@ def test_unreadable_free_memory_is_fit_unknown_not_the_error_text(running, monke
     )
     assert large["fits"] is None
     assert "secret" not in large["reason"] and "free memory" in large["reason"]
+
+
+# ── units: the plan's memory numbers are decimal GB, verdicts unchanged ───
+
+
+@pytest.mark.parametrize("memory_gib", [6, 8, 12, 16, 24, 27, 32, 48, 64, 96, 120])
+@pytest.mark.parametrize(
+    "model_id, size_gb",
+    [
+        (LARGE_DEFAULT_MODEL_NAME, 23.3),
+        (DEFAULT_MODEL_NAME, 5.6),
+        ("Qwen3-VL-4B-Instruct-GGUF", 3.3),
+    ],
+)
+def test_decimal_numbers_keep_every_fit_verdict(memory_gib, model_id, size_gb):
+    from gaia.installer import model_choice
+    from gaia.llm.lemonade_client import find_model_requirement, kv_cache_for
+    from gaia.llm.model_fit import check_fit
+
+    capacity = MachineCapacity(memory_gib, "AMD iGPU", None)
+    mr = find_model_requirement(model_id)
+    kv = kv_cache_for(mr, capacity) if mr else 0.0
+    before = check_fit(size_gb, capacity, kv).fits
+    fit = model_choice.memory_fit(model_id, size_gb, capacity)
+    assert fit["fits"] is before
+    assert fit["capacity_gb"] == round(memory_gib * GB_PER_GIB, 1)
+    # The numbers shown agree with the verdict shown (to the 0.1 they round to).
+    if before:
+        assert fit["need_gb"] <= fit["capacity_gb"] + 0.1
+    else:
+        assert fit["need_gb"] >= fit["capacity_gb"] - 0.1
+
+
+class _IgpuLemonade(_FakeLemonade):
+    """A Strix Halo-class iGPU reporting its carve-out and shared memory, in GiB."""
+
+    def __init__(self, carve_gib, shared_gib):
+        super().__init__(MachineCapacity(carve_gib + shared_gib, "AMD iGPU", 500))
+        self.carve_gib, self.shared_gib = carve_gib, shared_gib
+
+    def get_system_info(self, timeout=None):
+        return {
+            "Physical Memory": "128 GB",
+            "devices": {
+                "amd_igpu": {
+                    "available": True,
+                    "name": "AMD Radeon 8060S",
+                    "vram_gb": self.carve_gib,
+                    "virtual_mem_gb": self.shared_gib,
+                }
+            },
+            "model_storage": {"free_bytes": 500e9},
+        }
+
+
+@pytest.mark.parametrize(
+    "carve_gib, shared_gib", [(16, 0), (0.5, 15.5), (32, 31.5), (64, 0)]
+)
+def test_plan_memory_matches_the_gpu_memory_pane(
+    running, monkeypatch, carve_gib, shared_gib
+):
+    from gaia.llm import gpu_memory
+
+    fake = _IgpuLemonade(carve_gib, shared_gib)
+    monkeypatch.setattr(sp, "_client", lambda url: fake)
+    monkeypatch.setattr(gpu_memory, "_load_state", lambda: None)
+    monkeypatch.setattr(
+        gpu_memory,
+        "_linux_setup",
+        lambda: gpu_memory._LinuxSetup(
+            gpu_memory.METHOD_GUIDED, "", "ttm", "modprobe", None
+        ),
+    )
+    plan = sp.build_plan()
+    pane = gpu_memory.describe(fake.get_system_info())
+    assert pane["applies"] is True
+    # Settings shows both: the same machine must read the same number.
+    assert plan["capacity_gb"] == pane["gpu_gb"]
