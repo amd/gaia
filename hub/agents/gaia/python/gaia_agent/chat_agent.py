@@ -97,7 +97,6 @@ from gaia.llm.inference_location import InferenceLocation, resolve_inference_loc
 from gaia.llm.lemonade_client import (
     _endpoint_label,
     configured_lemonade_url,
-    is_tool_calling_model,
     resolve_default_chat_model,
     resolve_lemonade_base_url,
 )
@@ -1492,9 +1491,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         # built a loader for it (the "doc" and "full" profiles).
         load_tools_menu = ""
         loader = getattr(self, "tool_loader", None)
-        if loader is not None and is_tool_calling_model(
-            getattr(self, "model_id", None)
-        ):
+        if loader is not None and self._uses_native_tool_calls():
             load_tools_menu = (
                 "\n\n==== LOADABLE TOOL BUNDLES ====\n"
                 "Your visible tools are trimmed to what this turn needs. If a "
@@ -1822,10 +1819,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         """Auto-save current session (called after important operations)."""
         try:
             if self.current_session:
-                self.save_current_session()
-                if self.debug:
-                    logger.debug(
-                        f"Auto-saved session: {self.current_session.session_id}"
+                if self.save_current_session():
+                    if self.debug:
+                        logger.debug(
+                            f"Auto-saved session: {self.current_session.session_id}"
+                        )
+                else:
+                    logger.warning(
+                        "Auto-save failed for session %s; see the preceding error.",
+                        self.current_session.session_id,
                     )
         except Exception as e:
             logger.warning(f"Auto-save failed: {e}")
@@ -1960,7 +1962,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 project's packages. Any other script runs from its own folder.
                 Relative paths resolve against that working directory.
 
-                Has pypdf, pymupdf, docx, pptx, openpyxl, xlsxwriter,
+                Has pypdf, pypdfium2, docx, pptx, openpyxl, xlsxwriter,
                 reportlab, pandas, numpy, matplotlib; no pip.
 
                 Args:
@@ -2089,7 +2091,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 No access to your tools: `from gaia import <tool>` fails —
                 call it directly as a tool.
 
-                Has pypdf, pymupdf, docx, pptx, openpyxl, xlsxwriter,
+                Has pypdf, pypdfium2, docx, pptx, openpyxl, xlsxwriter,
                 reportlab, pandas, numpy, matplotlib; no pip.
 
                 Args:
@@ -2436,7 +2438,21 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     }
                 except Exception as e:  # tool boundary -> structured error
                     logger.warning("fetch_webpage failed for %s: %s", url, e)
-                    return {"status": "error", "url": url, "error": str(e)}
+                    failed = {"status": "error", "url": url, "error": str(e)}
+                    # raise_for_status keeps only the status line; a rate limit's wait is a header.
+                    response = getattr(e, "response", None)
+                    retry_after = (
+                        response.headers.get("Retry-After")
+                        if response is not None
+                        else None
+                    )
+                    if retry_after:
+                        failed["retry_after"] = retry_after
+                        failed["hint"] = (
+                            "The server is rate-limiting. Don't fetch this URL again "
+                            "until Retry-After has passed; tell the user when it resets."
+                        )
+                    return failed
 
         @tool
         def get_system_info() -> dict:
@@ -3085,9 +3101,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             f" search_web={'registered' if has_perplexity else 'skipped (no PERPLEXITY_API_KEY, or Local only)'}"
         )
 
-    def _index_documents(self, documents: List[str]) -> None:
-        """Index initial documents."""
+    def _index_documents(self, documents: List[str]) -> List[str]:
+        """Index initial documents and return any user-facing failure messages."""
+        failures = []
         for doc in documents:
+            doc_name = os.path.basename(doc)
             try:
                 if os.path.exists(doc):
                     # Naming a file to index is the grant to read it; a folder is never granted.
@@ -3104,13 +3122,17 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     else:
                         error = result.get("error", "Unknown error")
                         logger.error(f"Failed to index {doc}: {error}")
+                        failures.append(f"Failed to index {doc_name}: {error}")
                 else:
                     logger.warning(f"Document not found: {doc}")
+                    failures.append(f"Failed to index {doc_name}: file not found")
             except Exception as e:
                 logger.error(f"Failed to index {doc}: {e}")
+                failures.append(f"Failed to index {doc_name}: {e}")
 
         # Update system prompt after indexing to include the new documents
         self.rebuild_system_prompt()
+        return failures
 
     def _start_watching(self) -> None:
         """Start watching directories for changes."""

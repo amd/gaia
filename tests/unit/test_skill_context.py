@@ -701,6 +701,66 @@ def test_run_program_still_times_out_on_its_own(
     assert time.monotonic() - started < 20
 
 
+def test_run_program_interrupt_kills_its_process_tree(monkeypatch):
+    """Ctrl-C takes the same tree-cleanup path as a timeout."""
+
+    class InterruptedProcess:
+        pid = 42
+        returncode = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def communicate(self, **_kwargs):
+            raise KeyboardInterrupt
+
+    proc = InterruptedProcess()
+    killed = []
+    skill = SimpleNamespace(
+        name="interrupt-probe",
+        parsed_permissions=lambda: [Permission.parse("program:run:python")],
+    )
+    monkeypatch.setattr(skill_context, "find_program", lambda _name: sys.executable)
+    monkeypatch.setattr(
+        skill_context.subprocess, "Popen", lambda *_args, **_kwargs: proc
+    )
+    monkeypatch.setattr(
+        skill_context, "_terminate_program_tree", lambda process: killed.append(process)
+    )
+
+    with skill_context.bind(object(), skill), pytest.raises(KeyboardInterrupt):
+        skill_context.run_program(
+            "python", ["-c", "import time; time.sleep(60)"], timeout=60
+        )
+
+    assert killed == [proc]
+
+
+def test_run_program_timeout_kills_a_child_holding_its_pipes(
+    agent, tmp_path, allowed, python_as_program
+):
+    body = (
+        "ctx.run_program('python', ['-c', "
+        "'import subprocess, sys, time; "
+        'subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"]); '
+        "time.sleep(60)'], timeout=0.5)\n"
+        "return {'status': 'success'}\n"
+    )
+    _load(agent, tmp_path, "child-timeout-probe", ["program:run:python"], body)
+
+    started = time.monotonic()
+    result = agent._execute_tool(
+        "child-timeout-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result["status"] == "error"
+    assert "timed out" in result["error"]
+    assert time.monotonic() - started < 10
+
+
 def test_run_program_returns_output_and_exit_code(
     agent, tmp_path, allowed, python_as_program
 ):

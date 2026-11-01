@@ -71,6 +71,7 @@ from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
+from gaia.project_context import project_context_setting
 from gaia.skills.errors import SkillSetError
 
 logger = get_logger(__name__)
@@ -79,6 +80,20 @@ logger = get_logger(__name__)
 #: Bundled skills ship inside the package so they survive both the wheel and the
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+
+# Rendered in a code repository for a model that gets the full project context
+# (gaia.project_context). General software practice, not any one repo's rules:
+# those come from its CLAUDE.md/AGENTS.md and its .claude/skills.
+REPOSITORY_WORK_PROMPT = """**WORKING IN A CODE REPOSITORY**
+You are working in the code repository at the current directory. Work like a careful senior engineer:
+- Follow the project's own instructions (CLAUDE.md / AGENTS.md) over your habits. They are already in this prompt under PROJECT INSTRUCTIONS: do not read those files again. Before a task one of the project's skills covers (code review, issue replies, releases, testing...), load that skill and follow it.
+- Ground every claim in code you have read in this session. Before saying something exists, is missing, or appears N times, search the WHOLE repository (every top-level folder, not only src/) and count the hits; say which files you checked. If you could not verify something, say so instead of guessing.
+- Read with intent: search for the symbol, then read the lines around it. Read a large file in ranges; never assume what you did not read.
+- Trace a change across files: who calls it, what tests cover it, what docs or configs describe it, what the inverse path does (create vs. delete, install vs. uninstall, start vs. stop).
+- Reviews and audits: go through the diff or files systematically and keep going after the first few findings. Check that every command, path, flag, setting and file a change introduces or documents (docs, test plans, scripts, error messages) really exists and would work as written. Report only defects you can show from the code, with file:line and a concrete failure scenario; most severe first. Match severity to evidence: block or escalate only for defects that would break users or are real security holes, not for missing polish or hypotheticals.
+- When you change code: find the root cause and fix it for every input it affects, not only the reported example; look for the same bug at other call sites; key the fix on the real condition, not a heuristic stand-in for it (keyword matching, special-casing one path or value). Keep the change focused, match the surrounding style, add or update tests for the behaviour, and run only the tests that cover what you changed (one file or test, not the whole suite) before you say it works. Say exactly what you ran and its result. When you only read, review or write prose, do not run tests unless one specific claim needs it.
+- Output: produce exactly the format the task asks for, written to the file it names. Lead with the finding or verdict; no preamble, no thanks, no restating the task.
+- Before you finish, re-read the task's requirements and the project's writing rules and check your draft against each one: right format, required sections present, length within limits, nothing the rules forbid. Fix what fails, then deliver."""
 
 #: This file's parent folders in a source checkout, nearest first.
 _CHECKOUT_LAYOUT = ("gaia_agent", "python", "gaia", "agents", "hub")
@@ -311,6 +326,11 @@ class GaiaAgentConfig(ChatAgentConfig):
     # tell a fast session from one that happens to be narrow.
     fast: bool = False
 
+    # How much of the repository's CLAUDE.md, AGENTS.md and .claude/skills the
+    # prompt carries: "full", "off", or "auto" to decide per model. None reads
+    # GAIA_PROJECT_CONTEXT, then ``project_context`` in ~/.gaia/config.json.
+    project_context: Optional[str] = None
+
 
 def _code_search_start(allowed: List[str]) -> str:
     """Where code search starts when the session is not inside a project.
@@ -411,6 +431,8 @@ class GaiaAgent(
         # field so ``config.fast`` never disagrees with how the agent was built.
         override = fast_env_override()
         resolved.fast = override if override is not None else bool(resolved.fast)
+        # Resolved now so a bad value fails at startup, not mid-prompt.
+        resolved.project_context = project_context_setting(resolved.project_context)
         if resolved.fast:
             _apply_fast_mode(resolved)
             logger.info(
@@ -428,11 +450,13 @@ class GaiaAgent(
         if getattr(self, "_skill_manager", None) is None:
             from gaia.skills import SkillManager
 
+            # The project's .claude/skills join the catalogue, as in Claude Code.
             self._skill_manager = SkillManager(
                 agent_skill_dirs=[*self.SKILL_DIRS, *self._bundled_skill_dirs()],
                 excluded_names=(
                     () if self.config.developer_mode else (ENGINEERING_SKILL,)
                 ),
+                project_dir=self._project_map_root(),
             )
         return self._skill_manager
 
@@ -441,6 +465,20 @@ class GaiaAgent(
         if name == ENGINEERING_SKILL and not self.config.developer_mode:
             raise PermissionError("The engineering skill requires --developer-mode.")
         return super().load_skill(name, manager=manager)
+
+    def get_repository_work_system_prompt(self) -> str:
+        """How to work inside a code repository, for a model that gets it.
+
+        Keyed on the mapped project root, which already excludes GAIA's own
+        source (the dev sidecar's cwd) and folders outside GAIA_ALLOWED_PATHS.
+        Byte-stable for the session (prompt cache).
+        """
+        # Fast mode is the conversational path with no tools to work a repo with.
+        if self.config.fast or not self._project_map_root():
+            return ""
+        if not self._full_project_context():
+            return ""
+        return REPOSITORY_WORK_PROMPT
 
     @property
     def _always_on_skill_names(self):

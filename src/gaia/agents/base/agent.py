@@ -2474,6 +2474,8 @@ Do NOT wrap conversational replies in JSON.
         self._deliverable_cache: Dict[tuple, list] = {}
         # Step-budget notices already sent this turn, by threshold.
         self._budget_notices_sent: set = set()
+        # The model that wrote its own tool-call markup in this session, if any.
+        self._own_markup_model: Optional[str] = None
         self._budget_notices_on = budget_notices_enabled()
         self.conversation_history = (
             []
@@ -3043,10 +3045,16 @@ Do NOT wrap conversational replies in JSON.
         read by both the tool-block gate and the response-format gate in
         :meth:`_compose_system_prompt`.
         """
-        from gaia.llm.lemonade_client import is_tool_calling_model
+        from gaia.llm.lemonade_client import uses_native_tool_calls
 
-        return bool(getattr(self, "_use_claude", False)) or is_tool_calling_model(
-            getattr(self, "model_id", None)
+        model_id = getattr(self, "model_id", None)
+        return (
+            bool(getattr(self, "_use_claude", False))
+            or (
+                model_id is not None
+                and getattr(self, "_own_markup_model", None) == model_id
+            )
+            or uses_native_tool_calls(model_id)
         )
 
     def _hosted_native_tool_caller(self) -> bool:
@@ -3779,8 +3787,18 @@ Do NOT wrap conversational replies in JSON.
             return ""
         from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        catalog = render_catalog(self.skill_manager.discover())
+        catalog = render_catalog(
+            self.skill_manager.discover(), list_project=self._lists_project_skills()
+        )
         return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
+
+    def _lists_project_skills(self) -> bool:
+        """Whether the catalogue lists the project's ``.claude/skills``.
+
+        Off here; ``ProjectMapMixin`` turns it on for a model that gets the full
+        project context (:mod:`gaia.project_context`).
+        """
+        return False
 
     def _pin_skill_body(self, name: str, turns: Optional[int] = None) -> None:
         """Keep *name*'s body rendered for the next few filter refreshes.
@@ -4130,19 +4148,18 @@ Do NOT wrap conversational replies in JSON.
 
         # Captured code is inert until `gaia skill promote` — instructions
         # inject, tools.py is never imported (gaia.skills.capture).
-        from gaia.skills.capture import code_is_deferred
+        from gaia.skills.capture import code_is_deferred, deferred_remedy
 
         code_deferred = code_is_deferred(skill)
         if code_deferred:
             registered = {}
             logger.warning(
-                "Skill '%s' is captured and its code is not yet trusted: %d "
-                "tool(s) (%s) deferred — instructions loaded. Run "
-                "'gaia skill promote %s' in a terminal to enable them.",
+                "Skill '%s' is not yet trusted: %d tool(s) (%s) deferred — "
+                "instructions loaded. Run %s in a terminal to enable them.",
                 skill.name,
                 len(skill.gaia.tools),
                 ", ".join(skill.tool_names),
-                skill.name,
+                deferred_remedy(skill),
             )
         else:
             registered = register_skill_tools(skill)
@@ -4169,11 +4186,10 @@ Do NOT wrap conversational replies in JSON.
                     self.granted_binaries.grant(policy.binary, skill_name=skill.name)
             elif policies:
                 logger.warning(
-                    "Skill '%s' is captured and untrusted: binary grant(s) %s "
-                    "withheld until 'gaia skill promote %s'.",
+                    "Skill '%s' is untrusted: binary grant(s) %s withheld until %s.",
                     skill.name,
                     ", ".join(p.binary for p in policies),
-                    skill.name,
+                    deferred_remedy(skill),
                 )
 
             self.loaded_skills[name] = skill
@@ -4891,6 +4907,42 @@ Do NOT wrap conversational replies in JSON.
             "tool_calls": calls,
             "content": thought or None,
         }
+
+    def _switch_to_native_tool_calls(self) -> None:
+        """Move a hosted model writing its own tool markup onto native tool calls.
+
+        For this agent's session only: a model that slips into its own markup
+        once (DeepSeek's DSML) must not pay ~12K tokens per call in every
+        later session, while one that always writes it (Claude's ``<invoke>``)
+        switches on its first reply anyway.
+        """
+        from gaia.llm.lemonade_client import (
+            cloud_model_info,
+            cloud_model_provider,
+            is_tool_calling_model,
+            learned_tool_calling,
+        )
+
+        model_id = getattr(self, "model_id", None)
+        hosted = cloud_model_info(model_id) is not None or bool(
+            cloud_model_provider(model_id)
+        )
+        if (
+            self._uses_native_tool_calls()
+            or not hosted
+            or not is_tool_calling_model(model_id)
+            or learned_tool_calling(model_id) is not True
+        ):
+            return
+        self._own_markup_model = model_id
+        logger.info(
+            "%s wrote its own tool-call markup; it gets native tool calls for "
+            "the rest of this session",
+            model_id,
+        )
+        # The text tool list and JSON format template leave the prompt.
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
 
     @staticmethod
     def _regex_tool_args(response: str, tool: str) -> Dict[str, Any]:
@@ -5805,6 +5857,10 @@ Do NOT wrap conversational replies in JSON.
         if not _is_json(response):
             markup_call = self._parse_markup_tool_calls(response)
             if markup_call is not None:
+                names = [c["name"] for c in markup_call.get("tool_calls", [])]
+                names.append(markup_call.get("tool"))
+                if any(name in self._tools_registry for name in names):
+                    self._switch_to_native_tool_calls()
                 return markup_call
 
         # Log what we received for debugging (show more to see full JSON)
@@ -8429,6 +8485,36 @@ Do NOT wrap conversational replies in JSON.
                     break
         return msg
 
+    def _recast_unpaired_tool_results(self, messages: List[Dict[str, Any]]) -> None:
+        """On a hosted ``tools=`` route, make results no call asked for user text.
+
+        Strict OpenAI-style routes reject a ``role: tool`` message without a
+        matching call, which a single text-format call leaves behind.
+        """
+        if getattr(self, "_use_claude", False) or not self._hosted_native_tool_caller():
+            return
+        from gaia.agents.base.history import _RECORDED_RESULT_PREFIX
+
+        asked = set()
+        for index, message in enumerate(messages):
+            asked.update(call["id"] for call in message.get("tool_calls") or [])
+            if message.get("role") != "tool" or message.get("tool_call_id") in asked:
+                continue
+            content = message.get("content")
+            if isinstance(content, list):
+                content = "".join(
+                    block.get("text", "")
+                    for block in content
+                    if isinstance(block, dict)
+                )
+            elif not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            messages[index] = {
+                "role": "user",
+                "content": f"{_RECORDED_RESULT_PREFIX}"
+                f"{message.get('name', 'unknown')}] {content}",
+            }
+
     def _reasoning_request_kwargs(self) -> Dict[str, Any]:
         """The reasoning effort the agent chose (ReasoningEffortToolsMixin), if any."""
         chosen = getattr(self, "reasoning_effort_kwargs", None)
@@ -9840,6 +9926,7 @@ Do NOT wrap conversational replies in JSON.
                     messages.append(
                         self._create_tool_message(tool_name, truncated_result)
                     )
+                    self._recast_unpaired_tool_results(messages)
 
                     if self._turn_scope.turn_should_end:
                         final_answer, steps_taken = self._end_turn_on_scope(
@@ -11419,6 +11506,7 @@ Do NOT wrap conversational replies in JSON.
 
                 # Share tool output with subsequent LLM calls
                 messages.append(self._create_tool_message(tool_name, truncated_result))
+                self._recast_unpaired_tool_results(messages)
 
                 if self._turn_scope.turn_should_end:
                     final_answer, steps_taken = self._end_turn_on_scope(

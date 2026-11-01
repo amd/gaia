@@ -30,6 +30,15 @@ def _missing_deps_msg() -> str:
     return f"code_index dependencies missing. {missing_extra_hint('rag')}"
 
 
+def _check_dependencies() -> None:
+    """Fail before embedding when the code-index runtime is incomplete."""
+    try:
+        import faiss  # noqa: F401  # pylint: disable=unused-import
+        import numpy  # noqa: F401  # pylint: disable=unused-import
+    except ImportError as exc:
+        raise ImportError(_missing_deps_msg()) from exc
+
+
 # ---------------------------------------------------------------------------
 # Configuration and response dataclasses
 # ---------------------------------------------------------------------------
@@ -207,6 +216,9 @@ class CodeIndexSDK:
         start = time.time()
 
         self.log.info(f"Indexing repository: {self._repo_root}")
+
+        # Fail before the embedding pass, not after it at index construction.
+        _check_dependencies()
 
         # Load existing metadata (for incremental indexing)
         existing_meta = self._load_metadata()
