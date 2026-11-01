@@ -448,14 +448,26 @@ func TestGPUStepRuleOnAColdStrixHalo(t *testing.T) {
 			}
 			if tc.want {
 				h.expect("part 1 of 3")
-				h.key("enter")
-				if h.m.ask == askNoFit {
-					h.key("y") // a ticked model that doesn't fit yet asks first
-				}
+			} else {
+				h.expect("part 1 of 2")
+			}
+			// Enter saves the choice and re-reads the plan: the answer must
+			// survive it, not flip because the save recorded a chat model.
+			h.key("enter")
+			if h.m.ask == askNoFit {
+				h.key("y") // a ticked model that doesn't fit yet asks first
+			}
+			if tc.want {
 				if h.m.Screen() != "gpu" {
 					t.Fatalf("screen = %s, want the GPU step", h.m.Screen())
 				}
 				h.expect("Qwen3.6-35B-A3B fits.")
+				h.expect("part 2 of 3")
+			} else {
+				if s := h.m.Screen(); s == "gpu" || s == "gpu-guide" {
+					t.Fatalf("Enter opened the GPU step the choice ruled out")
+				}
+				h.expectNot("part 2 of 3")
 			}
 		})
 	}
@@ -1107,10 +1119,50 @@ func TestAReadFromBeforeTheRetryStartedIsNotItsResult(t *testing.T) {
 	if !h.m.dl.active {
 		t.Fatal("not following the retried download")
 	}
+	before := countPrefix(h.api.CallList(), "run")
 	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateReady, BytesDone: total(gemma), BytesTotal: total(gemma)})
 	h.poll()
+	// Downloaded by a single pull, so not load-checked: setup checks it now
+	// on its own, and until then it never reads "ready".
+	if countPrefix(h.api.CallList(), "run") != before+1 {
+		t.Fatalf("the load check did not start on its own: %v", h.api.CallList())
+	}
+	h.expect(checkingModels)
+	h.api.SetRunState(setupapi.RunReady)
+	h.poll()
+	h.poll()
 	if h.m.Screen() != "ready" {
-		t.Fatalf("screen = %s, want ready once the retry finished", h.m.Screen())
+		t.Fatalf("screen = %s, want ready once the check passed", h.m.Screen())
+	}
+}
+
+// A failed run, a retry that finishes, and a neighbour the run never checked:
+// the retried model reads "not checked yet" like its neighbour, and setup
+// runs the load check by itself instead of stalling at 100%.
+func TestARetryAfterAFailedRunFinishesSetupByItself(t *testing.T) {
+	h := startedDownload(t)
+	h.api.Progress(setupapi.ModelProgress{ID: emb, State: setupapi.StateUnchecked, BytesDone: total(emb), BytesTotal: total(emb)})
+	h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateUnchecked, BytesDone: total(qwen), BytesTotal: total(qwen)})
+	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateFailed, BytesDone: 5e8, BytesTotal: total(gemma), ErrorKind: strp("network")})
+	h.api.SetRunState(setupapi.RunFailed)
+	h.api.SetRunError(true, "gaia init failed")
+	h.poll()
+	h.poll()
+	h.focusOnProgress(gemma)
+	runs := countPrefix(h.api.CallList(), "run")
+	h.key("r")
+	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateDownloading, BytesDone: 3e9, BytesTotal: total(gemma)})
+	h.poll()
+	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateReady, BytesDone: total(gemma), BytesTotal: total(gemma)})
+	h.poll()
+	if got := countPrefix(h.api.CallList(), "run"); got != runs+1 {
+		t.Fatalf("setup did not finish by itself after the retry: %v", h.api.CallList())
+	}
+	h.expect(checkingModels)
+	for _, r := range h.m.shownRows() {
+		if r.ID == gemma && h.m.shownState(r) == setupapi.StateReady {
+			t.Fatal("the retried model read ready before any load check")
+		}
 	}
 }
 
@@ -1404,4 +1456,34 @@ func TestModelsUseTheBackendsDisplayName(t *testing.T) {
 	h.key("s")
 	h.expect("Qwen3.6 35B A3B")
 	h.expectNot("Qwen3.6-35B-A3B")
+}
+
+// /gpu names models as the rest of setup does.
+func TestSlashGPUUsesDisplayNames(t *testing.T) {
+	p := coldPlan()
+	for i := range p.Catalog {
+		if p.Catalog[i].ID == qwen {
+			p.Catalog[i].Name = "Qwen3.6 35B A3B"
+		}
+	}
+	h := newHarness(t, ModeGPU, &f.Fake{P: p, G: gpuShared()})
+	h.expect("With 40.0 GB for the GPU, Qwen3.6 35B A3B fits.")
+}
+
+// The run downloads Gemma but has no load check for it once another chat
+// model is saved: it stays "verifying" in the backend, and the summary still
+// counts it as on this PC rather than calling vision off.
+func TestTheSummaryCountsAModelTheRunDidNotCheck(t *testing.T) {
+	h := startedDownload(t)
+	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateVerifying, BytesDone: total(gemma), BytesTotal: total(gemma)})
+	h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateReady, BytesDone: total(qwen), BytesTotal: total(qwen)})
+	h.api.Progress(setupapi.ModelProgress{ID: emb, State: setupapi.StateReady, BytesDone: total(emb), BytesTotal: total(emb)})
+	h.api.SetRunState(setupapi.RunReady)
+	h.poll()
+	h.poll()
+	if h.m.Screen() != "ready" {
+		t.Fatalf("screen = %s, want ready", h.m.Screen())
+	}
+	h.expect("Vision     Gemma-4-E4B-it")
+	h.expectNot("Vision: off")
 }

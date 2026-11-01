@@ -100,7 +100,8 @@ func (f *Fake) ChooseChat(_ context.Context, id string, ack bool) (setupapi.Plan
 	if a, ok := f.NoFit[id]; ok && !ack {
 		return f.P, &a, nil
 	}
-	f.P.ChatModel.ID = id
+	// Like the backend: a saved chat model is recorded as the user's.
+	f.P.ChatModel.ID, f.P.ChatModel.UserSet = id, true
 	for i := range f.P.Catalog {
 		e := &f.P.Catalog[i]
 		if same(e.ID, id) {

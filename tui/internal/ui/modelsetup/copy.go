@@ -69,6 +69,7 @@ const (
 	uncheckedLine      = "Downloaded and kept. GAIA checks that it loads when you press R."
 	stoppedBeforeCheck = "Setup stopped before it could check that the models load. They are kept; press R to check them now."
 	setupStoppedNote   = "Setup stopped before it finished. Press r to try again, or d for what went wrong."
+	checkingModels     = "Everything is downloaded. Checking that the models load…"
 
 	gpuKeepsFmt    = "GAIA keeps at least %s for %s and your apps."
 	gpuConsentKey  = "Changing it needs administrator permission and a restart."

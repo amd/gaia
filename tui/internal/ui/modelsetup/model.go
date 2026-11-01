@@ -174,8 +174,11 @@ type Model struct {
 	// kept is the most of each model seen on disk this session. A resumed
 	// run reports a model as queued, with no bytes, until its pull starts
 	// again; the bytes are still there, so the bar keeps them.
-	kept  map[string]int64
-	since time.Time
+	kept map[string]int64
+	// notChecked are models a single pull finished in first-run setup: on
+	// disk, not yet load-checked by setup's run.
+	notChecked map[string]bool
+	since      time.Time
 	// runErr is why setup's own run stopped, kept for the ready summary.
 	runErr string
 }
@@ -217,17 +220,18 @@ func New(api setupapi.API, opts Options) Model {
 		opts.Now = time.Now
 	}
 	m := Model{
-		api:      api,
-		opts:     opts,
-		scr:      scrLoading,
-		width:    80,
-		height:   24,
-		ackedFit: map[string]bool{},
-		rates:    map[string]*rate{},
-		shown:    map[string]float64{},
-		readyAt:  map[string]time.Time{},
-		verifyAt: map[string]time.Time{},
-		kept:     map[string]int64{},
+		api:        api,
+		opts:       opts,
+		scr:        scrLoading,
+		width:      80,
+		height:     24,
+		ackedFit:   map[string]bool{},
+		rates:      map[string]*rate{},
+		shown:      map[string]float64{},
+		readyAt:    map[string]time.Time{},
+		verifyAt:   map[string]time.Time{},
+		kept:       map[string]int64{},
+		notChecked: map[string]bool{},
 	}
 	m.busy = readingModels
 	m.busySince = opts.Now()
@@ -363,8 +367,9 @@ func (m Model) loadCmd() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 		defer cancel()
 		out := loadedMsg{}
+		// /gpu reads the plan too, for the models' display names.
+		out.plan, out.planErr = api.Plan(ctx)
 		if mode != ModeGPU {
-			out.plan, out.planErr = api.Plan(ctx)
 			if st, err := api.Status(ctx); err == nil {
 				out.status = &st
 			}
@@ -503,6 +508,9 @@ func (m Model) loaded(msg loadedMsg) (Model, tea.Cmd) {
 		m.gpuWas = g.GPUGB
 	}
 	if m.opts.Mode == ModeGPU {
+		if msg.planErr == nil {
+			m = m.withPlan(msg.plan, false)
+		}
 		m.scr = scrGPU
 		if m.gpu == nil {
 			m.loadErr = msg.gpuErr
@@ -616,6 +624,18 @@ func (m Model) withPlan(p setupapi.Plan, keep bool) Model {
 	prev := m.sel
 	m.plan = &p
 	m.sel = newSelection(p, m.opts.Cloud)
+	if len(prev.rows) > 0 {
+		// A re-read plan (after saving, or a removal) is the same visit: what
+		// the user unticked by hand and whether they chose the chat model
+		// still decide the GPU step. A save records the chat model as set,
+		// which must not read as the user's own pick.
+		for id, v := range prev.unticked {
+			if v {
+				m.sel.unticked[id] = true
+			}
+		}
+		m.sel.chatChosen = prev.chatChosen
+	}
 	if keep {
 		for id, v := range prev.ticked {
 			if _, ok := m.sel.find(id); ok {
@@ -1024,11 +1044,14 @@ func (m Model) advance() (Model, tea.Cmd) {
 		return m, nil
 	}
 	st := m.status
+	ranRun := m.dl.run
 	if m.dl.run {
 		if st.Running() {
 			return m, m.tickCmd()
 		}
 		m.dl.run = false
+		// The run has reported on every model it checked.
+		m.notChecked = map[string]bool{}
 		if st.State == setupapi.RunCancelled {
 			m.dl.cancelled = true
 		}
@@ -1048,6 +1071,10 @@ func (m Model) advance() (Model, tea.Cmd) {
 		if !ok || row.State == setupapi.StateDownloading || row.State == setupapi.StateQueued {
 			return m, m.tickCmd()
 		}
+		if row.State == setupapi.StateReady && m.opts.Mode == ModeFirstRun {
+			// A single pull downloads; only setup's run checks that it loads.
+			m.notChecked[row.ID] = true
+		}
 		m.dl.current = ""
 	}
 	if len(m.dl.queue) > 0 && !m.dl.cancelled {
@@ -1055,12 +1082,48 @@ func (m Model) advance() (Model, tea.Cmd) {
 	}
 	m.dl.active = false
 	m.polling = false
+	if !ranRun && m.needsLoadCheck() {
+		// Everything is downloaded but not all of it checked: finish setup
+		// now, as the Agent UI's Finish setup does, instead of waiting at
+		// 100% for a key nobody knows to press.
+		return m.startCheckRun()
+	}
 	if m.allReady() {
 		m = m.checkFinished()
 		return m.refreshPlan()
 	}
 	m.focus = m.rootCause()
 	return m, nil
+}
+
+// needsLoadCheck reports whether first-run setup has every model downloaded
+// and some not yet load-checked, with nothing failed, queued or downloading.
+func (m Model) needsLoadCheck() bool {
+	if m.opts.Mode != ModeFirstRun || m.dl.cancelled {
+		return false
+	}
+	unchecked := false
+	for _, r := range m.shownRows() {
+		switch m.shownState(r) {
+		case setupapi.StateUnchecked:
+			unchecked = true
+		case setupapi.StateFailed, setupapi.StateQueued, setupapi.StateDownloading, setupapi.StateCancelled:
+			return false
+		}
+	}
+	return unchecked
+}
+
+// startCheckRun runs setup again to load-check what is already downloaded;
+// `gaia init` downloads nothing that is on disk.
+func (m Model) startCheckRun() (Model, tea.Cmd) {
+	ids := m.dl.ids
+	m.scr = scrDownload
+	m.note, m.runErr = checkingModels, ""
+	m.dl = download{active: true, run: true, starting: true, ids: ids}
+	m.total = rate{}
+	m.polling = true
+	return m, tea.Batch(m.runCmd(), m.tickCmd())
 }
 
 // rootCause is the row to put the cursor on when a download ends with
@@ -1185,6 +1248,9 @@ func (m Model) doneBytes(r setupapi.ModelProgress) int64 {
 // downloaded and waiting for setup's load check; once no run is going to do
 // that check (stopped, or finished), the model is simply on this PC.
 func (m Model) shownState(r setupapi.ModelProgress) string {
+	if r.State == setupapi.StateReady && m.notChecked[r.ID] {
+		return setupapi.StateUnchecked
+	}
 	if r.State == setupapi.StateVerifying && !(m.dl.active && m.dl.run) {
 		return setupapi.StateReady
 	}

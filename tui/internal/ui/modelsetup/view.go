@@ -1051,7 +1051,7 @@ func (m Model) progressNote(r setupapi.ModelProgress, width int) []string {
 			lines = append(lines, strings.Repeat(" ", indent)+s.Render(l))
 		}
 	}
-	switch r.State {
+	switch m.shownState(r) {
 	case setupapi.StateFailed:
 		kind := ""
 		if r.ErrorKind != nil {
@@ -1085,7 +1085,10 @@ func (m Model) progressNote(r setupapi.ModelProgress, width int) []string {
 	case setupapi.StateCancelled:
 		add(dimStyle, "Press r to resume from where it stopped.")
 	case setupapi.StateUnchecked:
-		add(dimStyle, uncheckedLine)
+		if !m.dl.active {
+			// While setup runs its check, the note above says so.
+			add(dimStyle, uncheckedLine)
+		}
 	}
 	return lines
 }
@@ -1112,7 +1115,8 @@ func (m Model) overallLine(w int, now time.Time) string {
 	}
 	parts := []string{fmt.Sprintf("%d%%", pct), fmt.Sprintf("%.1f/%s", bytesGB(done), formatGB(bytesGB(total)))}
 	switch {
-	case !m.dl.active:
+	case !m.dl.active, total > 0 && done >= total:
+		// Nothing left to download: no estimate to make.
 	case m.total.showETA(now):
 		parts = append(parts, formatETA(m.total.eta)+" left")
 	default:
@@ -1210,7 +1214,9 @@ func (m Model) readyView(w int) (body, foot []string) {
 // landed reports whether id finished downloading in this session.
 func (m Model) landed(id string) bool {
 	r, ok := m.progressFor(id)
-	return ok && r.State == setupapi.StateReady
+	// shownState: a model the run downloaded but had no check for (Gemma,
+	// once a chat model is saved) is on this PC too.
+	return ok && m.shownState(r) == setupapi.StateReady
 }
 
 func (m Model) docsRow() (rowEntry, bool) {
