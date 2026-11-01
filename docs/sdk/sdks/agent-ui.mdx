@@ -2487,8 +2487,9 @@ exception is `guided_value`, the value the steps ask the user to enter: 4 KiB
 pages for `ttm.pages_limit` on Linux, and on Windows the number AMD Software
 shows (it counts GiB and labels them GB). Front-ends should show `gpu_gb`
 for a target and `guided_value` as the value to enter, not a preset's
-`setting_gb`. When the PC has nothing to give, `guided_steps` is empty and
-`guided_value` is null.
+`setting_gb`. Every preset and `fits_at_setting_gb` is a raise that apply and
+`pending` accept. With nothing to offer above the current setting (and no
+`setting_gb` asked for), `guided_steps` is empty and `guided_value` is null.
 
 <AccordionGroup>
   <Accordion title="GET /api/gpu-memory">

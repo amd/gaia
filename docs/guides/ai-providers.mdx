@@ -208,9 +208,9 @@ Gemma 4 E4B stays at 65,536 tokens on every PC.
 
 On a PC whose GPU shares the system's memory (a Strix Halo or other Ryzen AI
 APU), how much of it the GPU may use decides which models fit. GAIA reads the
-split, shows which models a bigger share would fit, and always leaves at least
-16 GB that the GPU can never use, so the GPU and CPU figures add up to the
-PC's memory. Either way the change needs administrator rights and a restart, and
+split, shows which models a bigger share would fit, and never suggests a value
+that leaves less than 16 GB the GPU can't use. The GPU and CPU figures add up
+to the PC's memory. If the PC has nothing more to give, there are no steps. Either way the change needs administrator rights and a restart, and
 GAIA never restarts the PC itself. After the restart it reads the split again
 and says whether the change took effect.
 
@@ -224,11 +224,11 @@ and says whether the change took effect.
 - **Windows:** you change it in AMD Software: Adrenalin Edition, under
   Performance › Tuning › Variable Graphics Memory, then restart. AMD allows up to
   75% of RAM there. The steps give the one value to enter, as AMD Software
-  shows it. It is smaller than the GPU total GAIA shows, because Windows also
-  lets the GPU use half of the remaining memory. GAIA lists these steps rather
+  shows it, and say why it is smaller than the GPU total GAIA shows: usually
+  because Windows also lets the GPU use half of the remaining memory, otherwise
+  because AMD Software's GB are slightly larger. GAIA lists these steps rather
   than applying them, because AMD's interface for this setting restarts the PC
-  by itself. Without that
-  option, set UMA Frame Buffer Size in the BIOS.
+  by itself. Without that option, set UMA Frame Buffer Size in the BIOS.
 
 The Agent UI serves this at `/api/gpu-memory` and the daemon at
 `/daemon/v1/gpu-memory`, with `apply`, `revert` and `pending` routes under each.

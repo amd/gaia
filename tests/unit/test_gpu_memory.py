@@ -576,27 +576,109 @@ class TestTheSplitAddsUp:
             gm.record_pending(16)
 
 
-class TestHidingTheStepForTheUsersSelection:
-    """Front-ends hide the step unless a ticked model benefits; the API must say which."""
+def windows_igpu(physical_gib: int, vram_gib=None, shared_gib=None) -> dict:
+    """Windows /system-info; with *vram_gib*, Lemonade reports the split itself."""
+    gpu = dict(WINDOWS_IGPU["devices"]["amd_gpu"][0])
+    if vram_gib is not None:
+        gpu["vram_gb"] = vram_gib
+        gpu["virtual_mem_gb"] = shared_gib or 0.0
+    return {"Physical Memory": f"{physical_gib}.00 GB", "devices": {"amd_gpu": [gpu]}}
 
-    def test_unlocks_and_fit_points_agree(self, box):
-        box.info = linux_igpu(64, 16)
-        result = gm.describe(box.info, LOCAL)
-        for m in result["models"]:
-            in_some_preset = any(m["id"] in p["unlocks"] for p in result["presets"])
+
+#: (os, /system-info, Windows driver carve-out in GiB) across the sizes GAIA meets.
+SWEEP = (
+    [
+        ("linux", linux_igpu(total, gtt), None)
+        for total, gtt in [
+            (16, 7.75),
+            (32, 15.5),
+            (48, 23.75),
+            (64, 16),
+            (64, 31.5),
+            (128, 30),
+            (128, 62.5),
+            (128, 110),
+        ]
+    ]
+    + [
+        ("windows", windows_igpu(physical), carve)
+        for physical in (32, 64, 128)
+        for carve in (0.5, 8, 16, 48, 96)
+        if carve < physical
+    ]
+    + [
+        ("windows", windows_igpu(32, 8, 12), None),
+        ("windows", windows_igpu(64, 16, 24), None),
+    ]
+)
+
+
+@pytest.fixture(params=SWEEP, ids=lambda c: f"{c[0]}-{c[1]['Physical Memory']}-{c[2]}")
+def swept(request, box, monkeypatch):
+    os_name, info, carve = request.param
+    box.os = os_name
+    box.info = info
+    monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda n: carve or 0.0)
+    return gm.describe(info, LOCAL)
+
+
+class TestEveryOfferIsAccepted:
+    def test_presets_and_fit_points_pass_validation(self, swept):
+        limits = swept["setting"]
+        offers = [p["setting_gb"] for p in swept["presets"]] + [
+            m["fits_at_setting_gb"]
+            for m in swept["models"]
+            if m["fits_at_setting_gb"] is not None
+        ]
+        for value in offers:
+            assert gm._check_range(value, limits["min_gb"], limits["max_gb"]) == value
+            assert value > limits["current_gb"]
+
+    def test_no_steps_that_would_lower_the_setting(self, swept):
+        if not swept["presets"]:
+            assert swept["guided_steps"] == [] and swept["guided_value"] is None
+
+    def test_hide_rule_matches_unlocks(self, swept):
+        for m in swept["models"]:
+            in_some_preset = any(m["id"] in p["unlocks"] for p in swept["presets"])
             benefits = not m["fits_now"] and m["fits_at_setting_gb"] is not None
             assert in_some_preset == benefits, m
 
-    def test_a_selection_without_a_beneficiary_hides_the_step(self, box):
-        box.info = linux_igpu(64, 16)
-        result = gm.describe(box.info, LOCAL)
-        by_id = {m["id"]: m for m in result["models"]}
-        ticked = [lc.DEFAULT_MODEL_NAME]  # already fits: nothing to gain
-        assert not any(
-            not by_id[i]["fits_now"] and by_id[i]["fits_at_setting_gb"] is not None
-            for i in ticked
+    def test_the_split_adds_up_and_offers_keep_the_reserve(self, swept):
+        assert swept["gpu_gb"] + swept["cpu_gb"] == pytest.approx(
+            swept["total_gb"], abs=0.11
         )
-        assert by_id[QWEN]["fits_at_setting_gb"] is not None
+        for p in swept["presets"]:
+            assert swept["total_gb"] - p["gpu_gb"] >= swept["reserve_gb"] - 0.05
+
+
+class TestNothingToOffer:
+    def test_32gb_windows_at_the_default_carve_out(self, box, windows):
+        box.info = windows_igpu(32)
+        windows["gb"] = 0.5
+        result = gm.describe(box.info, LOCAL)
+        assert result["setting"]["max_gb"] < result["setting"]["min_gb"]
+        assert result["presets"] == []
+        assert result["guided_steps"] == [] and result["guided_value"] is None
+
+    def test_64gb_windows_already_above_the_cap_is_not_told_to_lower_it(
+        self, box, windows
+    ):
+        box.info = windows_igpu(64)
+        windows["gb"] = 48.0
+        result = gm.describe(box.info, LOCAL)
+        assert result["presets"] == []
+        assert result["guided_steps"] == [] and result["guided_value"] is None
+
+    def test_32gb_windows_when_lemonade_reports_the_split(self, box, windows):
+        box.info = windows_igpu(32, 8, 12)
+        result = gm.describe(box.info, LOCAL)
+        assert result["presets"] == []
+        assert result["guided_steps"] == [] and result["guided_value"] is None
+
+    def test_asking_for_a_value_still_renders_its_steps(self, box):
+        result = gm.describe(box.info, LOCAL, setting_gb=96)
+        assert result["guided_value"] == str(gm.pages_for(96))
 
 
 class TestEveryNumberIsTheSameUnit:

@@ -525,7 +525,7 @@ def _models(machine: _Machine) -> List[Dict[str, Any]]:
                 (
                     float(s)
                     for s in grid
-                    if s > machine.setting_gb
+                    if _offerable(machine, s)
                     and _fit(model_id, mr, machine.gpu_gb_at(s))[0]
                 ),
                 None,
@@ -543,14 +543,22 @@ def _models(machine: _Machine) -> List[Dict[str, Any]]:
     return out
 
 
+def _offerable(machine: _Machine, setting_gb: float) -> bool:
+    """A raise GAIA may suggest: one apply and record_pending accept."""
+    return (
+        MIN_SETTING_GB <= setting_gb <= machine.max_setting_gb
+        and setting_gb > machine.setting_gb + TOOK_EFFECT_TOLERANCE_GB
+    )
+
+
 def _presets(machine: _Machine, models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     top = machine.max_setting_gb
     values = [
         PRESET_STEP_GB * k
         for k in range(1, int(top // PRESET_STEP_GB) + 1)
-        if PRESET_STEP_GB * k > machine.setting_gb + TOOK_EFFECT_TOLERANCE_GB
+        if _offerable(machine, PRESET_STEP_GB * k)
     ]
-    if top > machine.setting_gb + TOOK_EFFECT_TOLERANCE_GB and top not in values:
+    if _offerable(machine, top) and top not in values:
         values.append(top)
     return [
         {
@@ -805,15 +813,13 @@ def describe(
     state = _load_state()
     linux_record = (state or {}).get("linux")
     gpu = machine.gpu_gb_at(machine.setting_gb)
+    # With nothing above the current setting to offer, steps would only lower it.
     steps_gb = (
-        setting_gb
-        or recommended
-        or (presets[-1]["setting_gb"] if presets else machine.max_setting_gb)
+        setting_gb or recommended or (presets[-1]["setting_gb"] if presets else None)
     )
-    if steps_gb >= MIN_SETTING_GB:
+    if steps_gb is not None:
         steps, guided_value = _guided_steps(machine, setup, steps_gb)
     else:
-        # Nothing this PC can give: steps for 0 GB would starve the GPU.
         steps, guided_value = [], None
     return {
         "applies": True,
