@@ -1587,9 +1587,11 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertIn("Ubuntu 22.04", result.error)
         mock_run.assert_not_called()
 
-    @patch("builtins.open", new_callable=mock_open, read_data=(
-        'ID=fedora\nVERSION_ID="41"\nPRETTY_NAME="Fedora Linux 41"\n'
-    ))
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=('ID=fedora\nVERSION_ID="41"\nPRETTY_NAME="Fedora Linux 41"\n'),
+    )
     def test_check_linux_version_rejects_non_debian_distros_with_manual_remedy(
         self, mock_os_release
     ):
