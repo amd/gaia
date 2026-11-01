@@ -426,7 +426,23 @@ describe('SetupScreen: downloading', () => {
         mockedApi.startSetup.mockResolvedValue(stopped);
         await startLocal();
         expect(await screen.findByRole('button', { name: /Finish setup/ })).toBeInTheDocument();
+        // Why it stopped stays on screen: no model explains it.
+        expect(screen.getAllByRole('alert').some((a) => a.textContent === 'The model server stopped answering.')).toBe(true);
         expect(mockedApi.removeSetupModel).not.toHaveBeenCalled();
+    });
+
+    it("keeps the server's remedy beside Finish setup when the server is why it stopped", async () => {
+        const stopped = runStatus([
+            progress({ id: QWEN.id, state: 'unchecked', bytes_done: 23.3e9, bytes_total: 23.3e9 }),
+        ], {
+            state: 'failed',
+            error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
+            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true, switch_hint: null },
+        });
+        mockedApi.startSetup.mockResolvedValue(stopped);
+        await startLocal();
+        expect(await screen.findByRole('button', { name: /Finish setup/ })).toBeInTheDocument();
+        expect(screen.getByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
     });
 
     it('deletes and re-downloads a model that failed its load check only after the user confirms', async () => {

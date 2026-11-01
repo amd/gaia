@@ -834,6 +834,12 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
                                         <button type="button" className="btn-secondary" onClick={() => void poll()}>{t('setup.reconnect')}</button>
                                     </div>
                                 )}
+                                {runFailed && downloadDone && fullRun.state === 'failed' && (
+                                    // No model failed, so the run stopped for another reason: say which.
+                                    fullRun.problem
+                                        ? <ServerProblem problem={fullRun.problem} onRetry={retryRun} onUseGaia={() => void start(true, lastRun.current.options)} />
+                                        : fullRun.error && <p className="setup-error" role="alert">{fullRun.error}</p>
+                                )}
                                 {runFailed && downloadDone && (
                                     <div className="setup-row">
                                         <button type="button" className="btn-primary" onClick={retryRun} disabled={busy}>{t('setup.finish')}</button>
