@@ -840,6 +840,8 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # `gh workflow run claude.yml`: the one event a GITHUB_TOKEN may trigger.
+      actions: write
     steps:
       - uses: actions/checkout@v7
 
@@ -960,8 +962,8 @@ jobs:
 
       # A dry run is only prompt-enforced, and a mode that silently isn't dry is worse
       # than no mode at all. Record the watermark now and check it afterwards.
-      - name: Record the issue watermark (dry run)
-        if: github.event.inputs.dry_run == 'true'
+      - name: Record the issue watermark
+        id: watermark
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -1039,7 +1041,7 @@ jobs:
             (This workflow finds no security issues -- that lens belongs to
             claude-security-audit.yml.) Write the body to a temp file, then
             `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`
-            WITHOUT the `bug` label.
+            WITHOUT the `bug` label. A following step adds it to issues marked auto-fixable.
 
             **One issue per DEFECT, listing every guide it breaks.** The title names the
             defect, never one guide: "The documented Lemonade start command no longer
@@ -1057,7 +1059,7 @@ jobs:
             <summary>🔍 Evidence and locations</summary>
 
             **Severity:** 🔴 high / 🟠 medium
-            **Auto-fixable:** yes — apply `bug` to let auto-fix open the PR  |  no — needs a human
+            **Auto-fixable:** yes — sent to auto-fix, which opens a PR for review  |  no — needs a human
 
             | Guide · step | Evidence (transcript excerpt) |
             |---|---|
@@ -1098,8 +1100,8 @@ jobs:
 
             ## Rules
             - No Claude attribution anywhere (no "Generated with", no Co-Authored-By).
-            - Do not open any PR and do not apply the `bug` label -- humans gate every
-              code change.
+            - Do not open any PR and do not apply the `bug` label yourself. Keep the
+              `**Auto-fixable:** yes` wording: the next step reads it to start auto-fix.
             - Never close any issue.
             - Lead with the finding; keep each line to one sentence (CLAUDE.md issue style).
           claude_args: |
@@ -1121,6 +1123,17 @@ jobs:
             exit 1
           fi
           echo "✅ Dry run confirmed: no issue created above #$before."
+
+      # Deterministic, and outside the filing prompt, so every auto-fixable issue is handed
+      # over the same way. always(): a synthesis that crashed may already have filed some.
+      - name: Send new auto-fixable issues to auto-fix
+        if: always() && steps.watermark.outcome == 'success' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/audit/promote_autofix.py --repo "${{ github.repository }}" \
+            --watermark "$(cat .issue-watermark)" --summary "$GITHUB_STEP_SUMMARY"
 
       # The run receipt. Replaces the per-run "Doc walkthrough — <run-id>" ISSUE: a CI
       # run's bookkeeping belongs in the run, not the tracker.

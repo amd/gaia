@@ -79,7 +79,7 @@ triggering event.
 | 4 | **Issue triage** *(new)* | issue opened | Jeremy/Kalin | Label (bug/feature/question/dup), severity, area, dedup-search, ask-for-repro |
 | 5 | **Issue review** *(new)* | issue opened / labeled | Jeremy/Kalin | Deeper "is this actionable / is root cause locatable" assessment |
 | 6 | **Issue & PR conversation** | new issue, `@agent` mention | `claude.yml` issue-handler + pr-comment | Conversational Q&A; docs-aware |
-| 7 | **Auto-fix** | `bug` label added | `claude.yml` auto-fix | Branch → fix → validate (lint+unit) → PR (draft if unvalidatable) → comment |
+| 7 | **Auto-fix** | `bug` label added, or an audit dispatch | `claude.yml` auto-fix | Branch → fix → validate (lint+unit) → PR (draft if unvalidatable) → comment |
 | 8 | **Release notes** | release tag published | `claude.yml` release-notes | Generate notes + MDX, bump version, update nav |
 | 9 | **PR postmortem** | PR merged | repo-manager (existing) | Retrospective analysis of merged work |
 | 10 | **Proactive audit** | every 3rd night (rotation) | `claude-nightly-audit.yml` | 5-dimension fan-out → ranked triage issues, human-gated, dedup keys |
@@ -710,8 +710,9 @@ beats per-repo YAML that can drift:
 - **Secret scrubbing** in any subprocess; credentials never echoed.
 - **Security findings stay private** — never post exploit detail publicly; count + run-log pointer
   + `@kovtcharov-amd` tag, mirroring the audit's protocol.
-- **Human-gated writes** — the audit files findings only; a maintainer applies `bug` to trigger a
-  fix; branch protection + mandatory review bound the auto-fix blast radius.
+- **Human-gated writes** — the audit sends findings it marks auto-fixable to auto-fix, up to 5 a
+  run; a maintainer applies `bug` for the rest; branch protection + mandatory review bound the
+  auto-fix blast radius.
 
 > **Plain English.** A bot that reads pull requests from strangers and holds a credential is a
 > juicy target. The current workflows have carefully-tuned guardrails against that (don't run the

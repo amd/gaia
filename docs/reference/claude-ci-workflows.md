@@ -31,11 +31,20 @@ Reacts to issue/PR activity. Six jobs:
 | Job | Fires when | What it does |
 |-----|-----------|--------------|
 | **pr-review** | PR opened / reopened / marked ready | Full diff review (works on fork PRs too) |
-| **pr-rereview** | New commits pushed to a PR (`synchronize`) | Lightweight Sonnet re-check; flags only *new* regressions, silent otherwise |
+| **pr-rereview** | New commits pushed to a PR (`synchronize`) | Lightweight re-check; flags *new* regressions and unfixed Request changes findings, silent otherwise |
 | **issue-handler** | New issue opened, or `@claude` in an issue/PR comment | Conversational reply |
 | **pr-comment** | Review comment left on a PR | Responds (non-fork PRs only — GitHub hides secrets from forks on this event) |
-| **auto-fix** | Issue gets the `bug` label (or a bug issue is reopened) | Attempts the fix: creates branch, opens a PR (draft + manual test plan if it can't self-validate), comments on the issue with test steps |
+| **auto-fix** | Issue gets the `bug` label (or a bug issue is reopened), or an audit dispatches it for a new auto-fixable issue | Attempts the fix: creates branch, opens a PR (draft + manual test plan if it can't self-validate), comments on the issue with test steps |
 | **release-notes** | "Publish Release" workflow succeeds on a `v*` tag | Generates GH release notes + docs, bumps version, updates `docs.json` |
+
+Every review also searches for sibling paths on PRs of 200+ changed lines, applies the
+known bug classes in `scripts/audit/missed_bug_classes.md` (base-branch copy), and checks
+for documentation drift.
+
+`pr-review-verdict.yml` turns the review into a commit status, `PR review verdict`. It fails
+while the latest review says Request changes, and a reply does not clear it. It clears when a
+push passes re-review or a maintainer adds the `review-override` label. It blocks a merge
+only if branch protection requires that status.
 
 ## 2. `claude-run.yml` — reusable runner (not triggered directly)
 
@@ -69,8 +78,8 @@ whole-codebase sweep when the last successful one is over 8 days old (every thir
 out one **read-only** Claude job per dimension — **correctness (the "fail loudly" rule), docs,
 tests, features** — then files **one issue per defect**, labelled `weekly-audit`, deduplicated
 against the whole open backlog. The run summary goes to the job summary, not an issue.
-**Human-gated**: reports findings only; a maintainer adds the `bug` label to hand one to the
-auto-fix job.
+New issues marked auto-fixable go straight to the auto-fix job, up to 5 a run, and a human
+reviews the PR it opens. Others wait for a maintainer to add the `bug` label.
 
 ## 5. `claude-security-audit.yml` — proactive security review
 
