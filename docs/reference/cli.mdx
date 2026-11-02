@@ -185,7 +185,8 @@ catches what the first missed.
   but with `--full-access` an attempt can still reach paths outside it, and
   each one reads and writes your GAIA memory like any `gaia -p` run.
 - An attempt that fails, or runs past two hours, is left out and its reason
-  logged; if every attempt fails, the run fails.
+  logged; if every attempt fails, the run fails. An attempt stopped at two
+  hours or by Ctrl+C is stopped together with every process it started.
   The attempts run in parallel; on a local model server that handles one
   request at a time they queue instead.
 

@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: MIT
 """Tests for ``gaia -p --attempts``: private workspaces, drafts, and cleanup."""
 
+import _thread
 import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
+from concurrent.futures import Future
 from pathlib import Path
 
 import pytest
@@ -252,6 +256,7 @@ def test_cleanup_that_cannot_delete_warns_instead_of_failing(
         raise PermissionError("in use")
 
     monkeypatch.setattr(attempts, "remove_tree", locked)
+    monkeypatch.setattr(attempts, "_REMOVE_WAIT_S", 0)
     attempts.try_remove(tmp_path)
     assert "could not remove" in capsys.readouterr().err
 
@@ -371,6 +376,7 @@ def test_home_folder_is_refused(folder, scratch, monkeypatch):
 
 
 def test_folder_holding_the_temp_dir_is_refused(folder, scratch, monkeypatch):
+    (folder / "tmp").mkdir()
     monkeypatch.setattr(attempts.tempfile, "gettempdir", lambda: str(folder / "tmp"))
     with pytest.raises(attempts.AttemptsError, match="home or temp folder"):
         attempts.prepare(folder, scratch / "w")
@@ -419,15 +425,17 @@ class _SerialPool:
     def __exit__(self, *exc):
         return False
 
-    def map(self, fn, items):
-        return [fn(i) for i in items]
+    def submit(self, fn, *args):
+        future = Future()
+        future.set_result(fn(*args))
+        return future
 
 
 def _fake_runs(monkeypatch, behaviours):
     """Each attempt edits its workspace, then answers or fails, per *behaviours*."""
     calls = []
 
-    def fake(prompt, workdir, flags):
+    def fake(prompt, workdir, flags, stop=None):
         k = len(calls)
         calls.append((prompt, workdir, list(flags)))
         _write(workdir / "pkg" / "a.py", f"x = {k + 10}\n")
@@ -560,7 +568,7 @@ def test_attempt_that_prints_no_result_is_an_error_record(tmp_path, monkeypatch)
         seen.update(argv=argv, **kw)
         return Done()
 
-    monkeypatch.setattr(attempts.subprocess, "run", fake_run)
+    monkeypatch.setattr(attempts, "_run", fake_run)
     record = attempts._run_attempt("the task", tmp_path, ["--full-access"])
     assert record["is_error"] and "exit 1" in record["error"]
     assert "KeyError" in record["error"]
@@ -579,25 +587,12 @@ def test_attempt_that_prints_no_result_is_an_error_record(tmp_path, monkeypatch)
     assert "GIT_DIR" not in seen["env"]
 
 
-def test_attempt_past_its_time_limit_is_an_error_record(tmp_path, monkeypatch):
-    seen = {}
-
-    def slow(argv, **kw):
-        seen.update(kw)
-        raise attempts.subprocess.TimeoutExpired(argv, kw["timeout"])
-
-    monkeypatch.setattr(attempts.subprocess, "run", slow)
-    record = attempts._run_attempt("t", tmp_path, [])
-    assert seen["timeout"] == attempts.ATTEMPT_TIMEOUT_S
-    assert record["is_error"] and "stopped after" in record["error"]
-
-
 def test_a_wedged_git_command_is_an_attempts_error(tmp_path, monkeypatch):
     def wedged(argv, **kw):
-        assert kw["timeout"]
+        assert kw["timeout"] == attempts._GIT_TIMEOUT_S
         raise attempts.subprocess.TimeoutExpired(argv, kw["timeout"])
 
-    monkeypatch.setattr(attempts.subprocess, "run", wedged)
+    monkeypatch.setattr(attempts, "_run", wedged)
     with pytest.raises(attempts.AttemptsError, match="did not finish"):
         attempts._git("status", cwd=tmp_path)
     with pytest.raises(attempts.AttemptsError, match="did not finish"):
@@ -608,7 +603,7 @@ def test_attempt_that_cannot_start_is_an_error_record(tmp_path, monkeypatch):
     def boom(argv, **kw):
         raise FileNotFoundError("python vanished")
 
-    monkeypatch.setattr(attempts.subprocess, "run", boom)
+    monkeypatch.setattr(attempts, "_run", boom)
     record = attempts._run_attempt("t", tmp_path, [])
     assert record["is_error"] and "python vanished" in record["error"]
 
@@ -619,7 +614,7 @@ def test_attempt_record_is_the_last_json_line(tmp_path, monkeypatch):
         stdout = '{"is_error": false, "result": "ok"}\n{not json, a stray log line\n'
         stderr = ""
 
-    monkeypatch.setattr(attempts.subprocess, "run", lambda argv, **kw: Done())
+    monkeypatch.setattr(attempts, "_run", lambda argv, **kw: Done())
     assert attempts._run_attempt("t", tmp_path, [])["result"] == "ok"
 
 
@@ -628,3 +623,149 @@ def test_paths_are_posix_relative(folder, scratch):
     _write(ws.cwd / "pkg" / "deep" / "n.py", "1\n")
     assert attempts.collect(ws, "", scratch / "d") == ["pkg/deep/n.py"]
     assert Path(scratch / "d" / "files" / "pkg" / "deep" / "n.py").is_file()
+
+
+# --- real process trees -------------------------------------------------------
+
+#: A stand-in for one attempt's ``gaia -p``: it starts a grandchild the way the
+#: shell tool does (its own session on POSIX), records both pids, then hangs.
+_STUB = r"""
+import os, subprocess, sys, time
+pids, mode = sys.argv[1], sys.argv[2]
+kw = {} if os.name == "nt" else {"start_new_session": True}
+if mode == "hold":  # holds a file open in the workspace
+    code = "import time; f = open('held.txt', 'w'); time.sleep(60)"
+    out = subprocess.DEVNULL
+else:  # "pipe" / "exit": holds this process's stdout
+    code = "import time; time.sleep(60)"
+    out = None
+grandchild = subprocess.Popen([sys.executable, "-c", code], stdout=out, **kw)
+with open(os.path.join(pids, f"{os.getpid()}.txt"), "w") as f:
+    f.write(f"{os.getpid()} {grandchild.pid}")
+if mode != "exit":
+    time.sleep(60)
+"""
+
+
+def _alive(pid):
+    """Still running 5 s on; a killed process can take a moment to be gone."""
+    psutil = pytest.importorskip("psutil")
+    try:
+        psutil.Process(pid).wait(timeout=5)
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.TimeoutExpired:
+        return True
+    return False
+
+
+@pytest.fixture
+def stub(tmp_path, monkeypatch):
+    """Attempts run the stub in *mode*; yields a reader of every pid it started."""
+    psutil = pytest.importorskip("psutil")
+    script = tmp_path / "stub.py"
+    script.write_text(_STUB, encoding="utf-8")
+    pids = tmp_path / "pids"
+    pids.mkdir()
+    mode = {"value": "hold"}
+    monkeypatch.setattr(
+        attempts,
+        "_child_argv",
+        lambda flags: [sys.executable, str(script), str(pids), mode["value"]],
+    )
+
+    def started():
+        return [int(p) for f in pids.glob("*.txt") for p in f.read_text().split()]
+
+    started.mode = mode
+    started.dir = pids
+    started.script = script
+    yield started
+    for pid in started():  # only the pids this test started
+        try:
+            psutil.Process(pid).kill()
+        except psutil.Error:
+            pass
+
+
+def _interrupt_once_started(pids_dir, count):
+    """Ctrl+C the main thread once *count* stubs have written their pids."""
+
+    def watch():
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if len(list(pids_dir.glob("*.txt"))) >= count:
+                time.sleep(0.5)
+                _thread.interrupt_main()
+                return
+            time.sleep(0.1)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
+def test_a_timed_out_attempt_dies_with_its_grandchild_and_leaves_nothing(
+    folder, stub, monkeypatch, private_temp
+):
+    monkeypatch.setattr(attempts, "ATTEMPT_TIMEOUT_S", 4)
+    started = time.monotonic()
+    with pytest.raises(attempts.AttemptsError, match="stopped after"):
+        attempts.run_attempts("t", 2, [], root=folder)
+    assert time.monotonic() - started < 40  # the grandchildren sleep 60 s
+    pids = stub()
+    assert len(pids) == 4  # two attempts, each with a grandchild
+    assert not any(_alive(p) for p in pids)
+    assert list(private_temp.iterdir()) == []  # removed though held.txt was open
+
+
+def test_a_grandchild_holding_the_output_cannot_stall_the_timeout(
+    tmp_path, stub, monkeypatch, private_temp
+):
+    stub.mode["value"] = "pipe"
+    monkeypatch.setattr(attempts, "ATTEMPT_TIMEOUT_S", 3)
+    started = time.monotonic()
+    record = attempts._run_attempt("t", tmp_path, [])
+    assert time.monotonic() - started < 20  # the grandchild sleeps 60 s
+    assert record["is_error"] and "stopped after" in record["error"]
+    assert not any(_alive(p) for p in stub())
+
+
+def test_an_attempt_that_exits_returns_though_its_grandchild_holds_the_output(
+    tmp_path, stub, monkeypatch, private_temp
+):
+    stub.mode["value"] = "exit"
+    monkeypatch.setattr(attempts, "_REMOVE_WAIT_S", 0)
+    started = time.monotonic()
+    record = attempts._run_attempt("t", tmp_path, [])
+    assert time.monotonic() - started < 20  # the grandchild sleeps 60 s
+    assert record["is_error"] and "printed no result" in record["error"]
+
+
+def test_ctrl_c_during_attempts_kills_every_tree_and_leaves_nothing(
+    folder, stub, monkeypatch, private_temp
+):
+    # Past the watcher's deadline, so a missed interrupt fails instead of hanging.
+    monkeypatch.setattr(attempts, "ATTEMPT_TIMEOUT_S", 40)
+    _interrupt_once_started(stub.dir, 2)
+    started = time.monotonic()
+    with pytest.raises(KeyboardInterrupt):
+        attempts.run_attempts("t", 2, [], root=folder)
+    assert time.monotonic() - started < 30
+    pids = stub()
+    assert len(pids) == 4
+    assert not any(_alive(p) for p in pids)
+    assert list(private_temp.iterdir()) == []
+
+
+def test_ctrl_c_during_a_git_command_kills_its_tree(tmp_path, stub):
+    # _git runs on the main thread; the stub stands in for git and its filters.
+    _interrupt_once_started(stub.dir, 1)
+    with pytest.raises(KeyboardInterrupt):
+        attempts._run(
+            [sys.executable, str(stub.script), str(stub.dir), "hold"],
+            cwd=tmp_path,
+            env=attempts.clean_env(),
+            timeout=60,
+        )
+    pids = stub()
+    assert len(pids) == 2
+    assert not any(_alive(p) for p in pids)

@@ -6,11 +6,11 @@ Each attempt runs as its own ``gaia -p`` in a private workspace, so no attempt
 sees another's changes and the real folder is untouched until the final turn.
 In a git repository the workspace is a clone that borrows the repository's
 objects and copies its branches, tags and remotes, holding the folder's current
-files, uncommitted work included and ignored files left out; its refs, stash
-and config are its own. Any other folder is copied. What an
-attempt changed, and its answer, become a draft; the final turn works in the
-real folder with the drafts to hand, keeps what it can confirm, and checks
-where they disagree. Two independent looks catch more than one.
+files, uncommitted work included, plus ignored files outside rebuilt folders
+such as ``node_modules`` and ``build``; its refs, stash and config are its own.
+Any other folder is copied. What an attempt changed, and its answer, become a
+draft; the final turn works in the real folder with the drafts to hand, keeps
+what it can confirm, and checks where they disagree. Two independent looks catch more than one.
 """
 
 from __future__ import annotations
@@ -23,12 +23,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from gaia.logger import get_logger
+from gaia.utils.process_tree import launch
 
 log = get_logger(__name__)
 
@@ -61,6 +64,11 @@ _PATCH_LIMIT = 2 * 1024 * 1024
 _GIT_TIMEOUT_S = 600
 #: One attempt past this is stopped and left out, so it can't hold the others.
 ATTEMPT_TIMEOUT_S = 2 * 60 * 60
+#: How often the wait on attempts wakes, so Ctrl+C is handled promptly.
+_POLL_S = 0.5
+#: Removing a scratch folder is tried this often, this far apart.
+_REMOVE_TRIES = 5
+_REMOVE_WAIT_S = 1.0
 
 ATTEMPT_INSTRUCTIONS = """
 
@@ -131,6 +139,55 @@ def clean_env(**extra: str) -> Dict[str, str]:
     return env
 
 
+@dataclass
+class _Done:
+    returncode: Optional[int]
+    stdout: str
+    stderr: str
+
+
+def _read(path: Path) -> str:
+    text = path.read_bytes().decode("utf-8", errors="replace")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _run(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    env: Dict[str, str],
+    timeout: float,
+    input: Optional[str] = None,  # pylint: disable=redefined-builtin
+    stop: Optional[threading.Event] = None,
+) -> _Done:
+    """*argv* in its own process tree, all of which dies on the timeout or Ctrl+C.
+
+    Raises ``subprocess.TimeoutExpired`` once the tree is dead.
+    """
+    io = Path(tempfile.mkdtemp(prefix="gaia-run-"))
+    try:
+        stdin_path = None
+        if input is not None:
+            stdin_path = io / "stdin"
+            stdin_path.write_bytes(input.encode("utf-8"))
+        code, timed_out = launch(
+            argv,
+            env=env,
+            cwd=cwd,
+            timeout_s=timeout,
+            stdout_path=io / "stdout",
+            stderr_path=io / "stderr",
+            stdin_path=stdin_path,
+            stop=stop,
+        )
+        if timed_out:
+            raise subprocess.TimeoutExpired(list(argv), timeout)
+        return _Done(code, _read(io / "stdout"), _read(io / "stderr"))
+    finally:
+        # A process the child left running may still hold its output open.
+        try_remove(io)
+
+
 def _git(
     *args: str,
     cwd: Path,
@@ -138,17 +195,12 @@ def _git(
     stdin: Optional[str] = None,
 ) -> str:
     try:
-        done = subprocess.run(
+        done = _run(
             # Long paths: workspaces sit deeper than the real folder.
             ["git", "-c", "core.longpaths=true", *args],
             cwd=cwd,
             env=env or clean_env(),
             input=stdin,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
             timeout=_GIT_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired as e:
@@ -308,15 +360,10 @@ def _clone(top: Path, dest: Path, tree: str) -> None:
 def _local_config(top: Path, pattern: str) -> str:
     """``key value`` lines of *top*'s own config matching *pattern*; "" if none."""
     try:
-        done = subprocess.run(
+        done = _run(
             ["git", "config", "--local", "--get-regexp", pattern],
             cwd=top,
             env=clean_env(),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
             timeout=_GIT_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired as e:
@@ -553,20 +600,21 @@ def _child_argv(flags: Sequence[str]) -> List[str]:
     return [sys.executable, "-c", _CHILD_MAIN, "-p", "--output-format", "json", *flags]
 
 
-def _run_attempt(prompt: str, workdir: Path, flags: Sequence[str]) -> Dict[str, Any]:
+def _run_attempt(
+    prompt: str,
+    workdir: Path,
+    flags: Sequence[str],
+    stop: Optional[threading.Event] = None,
+) -> Dict[str, Any]:
     """One ``gaia -p`` in *workdir*: its JSON record, or an error record saying why."""
     try:
-        done = subprocess.run(
+        done = _run(
             _child_argv(flags),
             input=prompt + ATTEMPT_INSTRUCTIONS,
             cwd=workdir,
             env=clean_env(),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
             timeout=ATTEMPT_TIMEOUT_S,
+            stop=stop,
         )
     except subprocess.TimeoutExpired:
         return {
@@ -630,10 +678,7 @@ def run_attempts(
     try:
         for k in range(1, count + 1):
             spaces.append(prepare(root, base / f"work-{k}" / root.name))
-        with ThreadPoolExecutor(max_workers=count) as pool:
-            records = list(
-                pool.map(lambda w: _run_attempt(prompt, w.cwd, flags), spaces)
-            )
+        records = _run_all(prompt, spaces, flags)
         written = 0
         for k, (ws, record) in enumerate(zip(spaces, records), start=1):
             if not record.get("is_error"):
@@ -658,16 +703,48 @@ def run_attempts(
     return prompt + MERGE_INSTRUCTIONS.format(drafts=drafts.as_posix()), records, base
 
 
+def _run_all(
+    prompt: str, spaces: List[Workspace], flags: Sequence[str]
+) -> List[Dict[str, Any]]:
+    """Every attempt at once; on Ctrl+C, every attempt's process tree is killed."""
+    stop = threading.Event()
+    with ThreadPoolExecutor(max_workers=len(spaces)) as pool:
+        futures = [
+            pool.submit(_run_attempt, prompt, ws.cwd, flags, stop) for ws in spaces
+        ]
+        try:
+            pending = set(futures)
+            # Timed waits, so Ctrl+C reaches this thread while attempts run.
+            while pending:
+                done, pending = wait(pending, timeout=_POLL_S)
+                for future in done:
+                    future.result()  # an attempt that crashed stops the rest
+            return [f.result() for f in futures]
+        except BaseException:
+            stop.set()  # each attempt kills its own tree; the pool waits for that
+            raise
+
+
 def _dispose_all(spaces: List[Workspace]) -> None:
     for ws in spaces:
         try_remove(ws.top)
 
 
 def try_remove(path: Path) -> None:
-    """Remove a scratch folder; if something holds it, say so and leave it."""
+    """Remove a scratch folder; if something still holds it, say so and leave it."""
+    for _ in range(_REMOVE_TRIES - 1):
+        try:
+            remove_tree(path)
+            return
+        except OSError:
+            # Windows can hold a just-killed process's files for a moment.
+            time.sleep(_REMOVE_WAIT_S)
     try:
         remove_tree(path)
     except OSError as e:
-        # A process an attempt started can still hold a file on Windows.
         log.warning("--attempts: could not remove %s: %s", path, e)
-        print(f"⚠️  gaia -p: could not remove {path}: {e}", file=sys.stderr)
+        print(
+            f"⚠️  gaia -p: could not remove {path}: {e}. Something still holds "
+            "it; delete the folder by hand once that has exited.",
+            file=sys.stderr,
+        )
