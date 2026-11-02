@@ -178,8 +178,8 @@ class LemonadeSupervisor:
 
         Args:
             ctx_size: the caller's profile window
-                (``lemonade_client.profile_ctx_size``). Only a legacy
-                ``lemonade-server serve`` takes it at start; modern Lemonade
+                (``lemonade_client.profile_ctx_size``). Only the legacy
+                Lemonade CLI takes it at start; modern Lemonade
                 reads no start-time window and gets it on each ``/load``.
             timeout: how long a freshly started server gets to answer.
 
