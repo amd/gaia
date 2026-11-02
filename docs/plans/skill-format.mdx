@@ -483,8 +483,9 @@ Every skill passes an automated audit before it can enter the hub catalog
 
 Skills are contributed **by pull request** — there is no self-serve publish path
 (the hub's publish endpoint is gated on a maintainer-held token secret), so the
-PR check *is* the gate: `BLOCK` fails it, `REVIEW` holds the PR for maintainer
-sign-off, `ALLOW` passes. Submit under `hub/skills/<name>/`; see
+PR check *is* the gate: for a skill in `hub/skills/` only `ALLOW` passes, since
+release publishing accepts nothing else (`REVIEW` elsewhere holds for maintainer
+sign-off). Submit under `hub/skills/<name>/`; see
 [CLI Reference → Skills](/reference/cli#skills).
 
 Authors run the same engine locally, so a clean local audit is the whole

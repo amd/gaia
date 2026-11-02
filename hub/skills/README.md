@@ -69,7 +69,7 @@ gaia skill audit ./hub/skills/<name>/    # exit 0 (ALLOW) is what merges cleanly
 ```
 
 The **Skill Audit (deterministic gate)** check is required on every PR that
-touches a skill — `BLOCK` fails outright, `REVIEW` holds for maintainer sign-off.
+touches a skill — in `hub/skills/`, anything other than `ALLOW` fails it.
 Merging is not a tier promotion: the audit verdict plus publisher signing decide
 the tier.
 

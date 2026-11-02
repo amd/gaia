@@ -2933,7 +2933,7 @@ Skills are discovered from these roots, highest precedence first:
     | `--fail-on SEVERITY` | Exit non-zero when any finding reaches this severity, even if the tier would allow it |
     | `--show-snippets` | Include the offending source text (withheld by default) |
 
-    Runs the pre-publish security audit ([#2468](https://github.com/amd/gaia/issues/2468)) over a skill's code *and* its instruction body, printing an `ALLOW` / `REVIEW` / `BLOCK` verdict with `file:line` findings and the fix for each. This is the same engine that gates both contribution paths — the **Skill Audit** PR check, and `gaia skill publish`, which runs it before upload — so a clean local audit is what either one requires: `BLOCK` fails, `REVIEW` holds for maintainer sign-off, `ALLOW` passes.
+    Runs the pre-publish security audit ([#2468](https://github.com/amd/gaia/issues/2468)) over a skill's code *and* its instruction body, printing an `ALLOW` / `REVIEW` / `BLOCK` verdict with `file:line` findings and the fix for each. This is the same engine that gates both contribution paths — the **Skill Audit** PR check, and `gaia skill publish`, which runs it before upload — so a clean local audit is what either one requires: only `ALLOW` publishes, and the PR check fails a `hub/skills/` skill on anything else.
 
     **Exit codes:** `0` allow · `5` review · `6` block · `4` the skill could not be parsed. `REVIEW` and `BLOCK` are distinct so CI can hold a skill without reporting it as rejected.
 

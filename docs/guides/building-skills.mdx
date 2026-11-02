@@ -77,8 +77,9 @@ metadata:
 
 # CSV Quality Report
 
-1. Load the file into a scratchpad table.
-2. Query for empty cells, duplicate rows, and columns that mix numbers and text.
+1. Load the file into a scratchpad table with `create_table` and `insert_data`.
+2. Use `query_data` to find empty cells, duplicate rows, and columns that mix
+   numbers and text.
 3. Report each problem with the column name and a row count. Say "no problems
    found" only if every query came back empty.
 ```
@@ -115,9 +116,9 @@ gaia skill info csv-quality-report --body
 `import` audits the folder and copies it into `~/.gaia/skills/`. A local import
 is always **experimental**, whatever the file claims: the tier records what has
 been verified, not what the author said. That is fine for trying it. A skill that
-asks for more than the experimental ceiling (`network:read` only) is refused at
-import, and one that ships code needs `--allow-experimental`, because that code
-runs in your agent's process.
+asks for more than the experimental ceiling (`network:read` and `scratch:write`)
+is refused at import, and one that ships code needs `--allow-experimental`,
+because that code runs in your agent's process.
 
 Then start `gaia chat` and ask the agent to load it ("load the csv-quality-report
 skill and check this file"). The agent's `list_skills` and `load_skill` tools
@@ -133,9 +134,10 @@ that only uses tools the agent already has.
 - Keep the list as short as the skill allows. Each extra grant is something a
   reviewer has to trust and a user has to approve. The audit notes permissions
   your code never uses.
-- Three tiers cap what a skill may ask for: `experimental` (`network:read` only),
-  `community` (adds `network:write` and `mcp:connect`; dangerous grants prompt
-  the user), `verified` (everything, AMD-audited). Claim `community`, as every
+- Three tiers cap what a skill may ask for: `experimental` (`network:read` and
+  `scratch:write`), `community` (adds `network:write`, `mcp:connect`,
+  `shell:execute:<binary>`, and `program:run`; dangerous grants prompt the user),
+  `verified` (everything, AMD-audited). Claim `community`, as every
   skill in `hub/skills/` does.
 - `filesystem`, `database`, `desktop`, and `env` permissions are refused today:
   there is no sandbox for them yet.
@@ -157,13 +159,13 @@ python -m pytest tests/unit/test_starter_skills.py -q
 | Exit code | Verdict | What it means |
 |-----------|---------|---------------|
 | `0` | `ALLOW` | Clean. |
-| `5` | `REVIEW` | Holds the PR for a maintainer. Fix the findings if you can. |
+| `5` | `REVIEW` | Fails the check for a skill in `hub/skills/`. Fix the findings. |
 | `6` | `BLOCK` | Fails the check. Fix it. |
 | `4` | (none) | The skill could not be parsed. |
 
-Aim for `ALLOW`. A `REVIEW` skill can merge after maintainer sign-off, but
-publishing refuses anything that is not `ALLOW`, so it will not reach the hub
-until the findings are resolved. To test a tier before you claim it, run
+Your skill must be `ALLOW` to merge. Publishing refuses anything else, so the
+PR check fails a `REVIEW` skill in `hub/skills/` and no maintainer label
+overrides it. To test a tier before you claim it, run
 `gaia skill audit <folder> --tier community`.
 
 ## 5. Open the pull request
@@ -172,10 +174,9 @@ until the findings are resolved. To test a tier before you claim it, run
 2. Fill in the [PR template](https://github.com/amd/gaia/blob/main/.github/pull_request_template.md);
    see [CONTRIBUTING](https://github.com/amd/gaia/blob/main/CONTRIBUTING.md).
 3. The **Skill Audit (deterministic gate)** check runs on every PR that touches a
-   skill. `BLOCK` or an unparseable skill fails it. `REVIEW` fails it until a
-   maintainer applies the `skill-audit-reviewed` label. The PR comment shows
-   counts and rule ids only; the details stay in the repository's private
-   Security tab.
+   skill. For a skill in `hub/skills/`, anything other than `ALLOW` fails it.
+   The PR comment shows counts and rule ids only; the details stay in the
+   repository's private Security tab.
 4. A maintainer reviews it: what the instructions and any `tools.py` actually do,
    whether the permissions match, and whether the skill is useful and safe to
    ship under AMD's signature.
