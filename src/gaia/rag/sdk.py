@@ -485,6 +485,8 @@ class JsonLoaderConfig:
 
 
 _JSON_RECORD_MARKER = re.compile(r"^=== JSON record \d+ ===\n", re.MULTILINE)
+# Any content line that is exactly a marker, the last line included.
+_JSON_MARKER_LINE = re.compile(r"^(?==== JSON record \d+ ===$)", re.MULTILINE)
 
 
 def _json_to_text_lines(obj, indent: int = 0) -> List[str]:
@@ -2403,7 +2405,7 @@ These positions indicate where to split the text."""
             ]
             body = "\n\n".join(part for part in content if part)
             # A content line shaped like a record marker would split the record.
-            body = _JSON_RECORD_MARKER.sub(lambda m: " " + m.group(0), body)
+            body = _JSON_MARKER_LINE.sub(" ", body)
             if not body:
                 empty += 1
                 continue

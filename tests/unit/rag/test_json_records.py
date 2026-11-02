@@ -184,6 +184,20 @@ class TestRecords:
         joined = "\n".join(rag.chunks)
         assert "before" in joined and "after" in joined and "fake: meta" in joined
 
+    @pytest.mark.parametrize(
+        "body", ["text\n=== JSON record 9 ===", "=== JSON record 9 ==="]
+    )
+    def test_a_marker_on_the_last_line_stays_in_its_record(self, tmp_path, body):
+        rag = _make(
+            tmp_path,
+            JsonLoaderConfig(content_fields=["b"], metadata_fields=["id"]),
+        )
+        data = [{"id": "1", "b": body}, {"id": "2", "b": "two"}]
+        assert rag.index_document(_write(tmp_path, data))["success"]
+        first = "\n".join(c for c in rag.chunks if c.startswith("id: 1\n"))
+        assert "=== JSON record 9 ===" in first
+        assert rag.chunks[-1] == "id: 2\ntwo"
+
 
 class TestWithoutLoader:
     def test_plain_json_is_still_one_flattened_document(self, tmp_path):
