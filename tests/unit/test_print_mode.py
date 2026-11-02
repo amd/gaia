@@ -944,6 +944,9 @@ def test_attempts_pass_flags_merge_in_place_and_sum_usage(
     assert record["cached_tokens"] == 10 and record["output_tokens"] == 55
     assert [a["is_error"] for a in record["attempts"]] == [False, True]
     assert "result" not in record["attempts"][0]  # drafts' text isn't repeated
+    # A partly failed run still says why each failed attempt failed.
+    assert record["attempts"][1]["error"] == "boom"
+    assert record["attempts"][0]["error"] is None
 
 
 def test_attempts_skip_permissions_only_when_asked(monkeypatch, tmp_path):

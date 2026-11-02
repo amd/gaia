@@ -211,7 +211,7 @@ def _run_with_attempts(text: str, attempts: int, **turn: Any) -> Dict[str, Any]:
     finally:
         try_remove(scratch)
     record["attempts"] = [
-        {k: r.get(k) for k in ("is_error", "status", "duration_s", *_SUMMED)}
+        {k: r.get(k) for k in ("is_error", "status", "error", "duration_s", *_SUMMED)}
         for r in records
     ]
     for key in _SUMMED:

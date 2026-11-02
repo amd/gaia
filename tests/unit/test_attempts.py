@@ -501,6 +501,16 @@ def test_failed_attempt_leaves_no_draft(folder, monkeypatch, private_temp):
         attempts.remove_tree(scratch)
 
 
+def test_a_partly_failed_run_logs_why_the_attempt_failed(
+    folder, monkeypatch, private_temp, caplog
+):
+    _fake_runs(monkeypatch, ["fail", "ok"])
+    with caplog.at_level("WARNING", logger=attempts.log.name):
+        _, _, scratch = attempts.run_attempts("t", 2, [], root=folder)
+    attempts.remove_tree(scratch)
+    assert "attempt 1 failed: boom 0" in caplog.text
+
+
 def test_every_attempt_failing_raises_and_leaves_nothing(
     folder, monkeypatch, private_temp
 ):
@@ -567,6 +577,31 @@ def test_attempt_that_prints_no_result_is_an_error_record(tmp_path, monkeypatch)
     ]
     assert seen["argv"][-1] == "--full-access" and seen["cwd"] == tmp_path
     assert "GIT_DIR" not in seen["env"]
+
+
+def test_attempt_past_its_time_limit_is_an_error_record(tmp_path, monkeypatch):
+    seen = {}
+
+    def slow(argv, **kw):
+        seen.update(kw)
+        raise attempts.subprocess.TimeoutExpired(argv, kw["timeout"])
+
+    monkeypatch.setattr(attempts.subprocess, "run", slow)
+    record = attempts._run_attempt("t", tmp_path, [])
+    assert seen["timeout"] == attempts.ATTEMPT_TIMEOUT_S
+    assert record["is_error"] and "stopped after" in record["error"]
+
+
+def test_a_wedged_git_command_is_an_attempts_error(tmp_path, monkeypatch):
+    def wedged(argv, **kw):
+        assert kw["timeout"]
+        raise attempts.subprocess.TimeoutExpired(argv, kw["timeout"])
+
+    monkeypatch.setattr(attempts.subprocess, "run", wedged)
+    with pytest.raises(attempts.AttemptsError, match="did not finish"):
+        attempts._git("status", cwd=tmp_path)
+    with pytest.raises(attempts.AttemptsError, match="did not finish"):
+        attempts._local_config(tmp_path, r"^remote.")
 
 
 def test_attempt_that_cannot_start_is_an_error_record(tmp_path, monkeypatch):

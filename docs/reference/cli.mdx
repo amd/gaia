@@ -144,7 +144,7 @@ subcommand instead.
 | `duration_s` | Wall-clock seconds for the turn, excluding server start-up |
 | `error_count` | Errors the agent recorded during the turn |
 | `error` | Only when `is_error`: why the turn failed |
-| `attempts` | Only with `--attempts` above 1: each attempt's `is_error`, `status`, `duration_s`, steps, tool calls and tokens. The top-level counts include them |
+| `attempts` | Only with `--attempts` above 1: each attempt's `is_error`, `status`, `error` (why it failed), `duration_s`, steps, tool calls and tokens. The top-level counts include them |
 | `conversation` | Only with `--verbose`: the turn's messages and tool calls |
 
 **Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other
@@ -174,7 +174,9 @@ catches what the first missed.
   dependency folders (`node_modules`, virtual environments) and caches. Its branches, stash and config are its own: nothing an
   attempt commits, stashes or deletes reaches your repository, and no
   repository hooks run. Submodule folders are empty, Git LFS files stay as
-  pointers, and untracked files over 2 GB in total are refused.
+  pointers, and untracked files over 2 GB in total are refused. Taking the
+  snapshot stores your current files, ignored ones included, as unreferenced
+  objects in the repository's `.git` folder; `git gc` prunes them later.
 - **Any other folder** is copied once per attempt, leaving out `node_modules`,
   virtual environments, build output and linked folders. The home folder, a
   drive root, and folders over 50,000 files or 2 GB are refused: make the
@@ -182,7 +184,8 @@ catches what the first missed.
 - **What is isolated is the folder.** Attempts are told to act only inside it,
   but with `--full-access` an attempt can still reach paths outside it, and
   each one reads and writes your GAIA memory like any `gaia -p` run.
-- An attempt that fails is left out; if every attempt fails, the run fails.
+- An attempt that fails, or runs past two hours, is left out and its reason
+  logged; if every attempt fails, the run fails.
   The attempts run in parallel; on a local model server that handles one
   request at a time they queue instead.
 

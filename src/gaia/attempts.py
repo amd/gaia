@@ -57,6 +57,10 @@ _SKIP_DIRS = frozenset(
 _HASH_LIMIT = 8 * 1024 * 1024
 #: A draft's CHANGES.patch is cut here; the changed files are in files/.
 _PATCH_LIMIT = 2 * 1024 * 1024
+#: A git command this long is wedged (a lock, a stuck filter), not slow.
+_GIT_TIMEOUT_S = 600
+#: One attempt past this is stopped and left out, so it can't hold the others.
+ATTEMPT_TIMEOUT_S = 2 * 60 * 60
 
 ATTEMPT_INSTRUCTIONS = """
 
@@ -133,18 +137,25 @@ def _git(
     env: Optional[Dict[str, str]] = None,
     stdin: Optional[str] = None,
 ) -> str:
-    done = subprocess.run(
-        # Long paths: workspaces sit deeper than the real folder.
-        ["git", "-c", "core.longpaths=true", *args],
-        cwd=cwd,
-        env=env or clean_env(),
-        input=stdin,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+    try:
+        done = subprocess.run(
+            # Long paths: workspaces sit deeper than the real folder.
+            ["git", "-c", "core.longpaths=true", *args],
+            cwd=cwd,
+            env=env or clean_env(),
+            input=stdin,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=_GIT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise AttemptsError(
+            f"git {' '.join(args[:3])} did not finish in {_GIT_TIMEOUT_S} s in "
+            f"{cwd}. Check for a stale .git/index.lock or a stuck git filter."
+        ) from e
     if done.returncode != 0:
         raise AttemptsError(
             f"git {' '.join(args[:3])} failed in {cwd}: "
@@ -296,16 +307,22 @@ def _clone(top: Path, dest: Path, tree: str) -> None:
 
 def _local_config(top: Path, pattern: str) -> str:
     """``key value`` lines of *top*'s own config matching *pattern*; "" if none."""
-    done = subprocess.run(
-        ["git", "config", "--local", "--get-regexp", pattern],
-        cwd=top,
-        env=clean_env(),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+    try:
+        done = subprocess.run(
+            ["git", "config", "--local", "--get-regexp", pattern],
+            cwd=top,
+            env=clean_env(),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=_GIT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise AttemptsError(
+            f"git config did not finish in {_GIT_TIMEOUT_S} s in {top}."
+        ) from e
     if done.returncode == 1:
         return ""  # no such keys
     if done.returncode != 0:
@@ -549,7 +566,14 @@ def _run_attempt(prompt: str, workdir: Path, flags: Sequence[str]) -> Dict[str, 
             encoding="utf-8",
             errors="replace",
             check=False,
+            timeout=ATTEMPT_TIMEOUT_S,
         )
+    except subprocess.TimeoutExpired:
+        return {
+            "is_error": True,
+            "status": "error",
+            "error": f"stopped after {ATTEMPT_TIMEOUT_S // 60} minutes",
+        }
     except OSError as e:
         return {"is_error": True, "status": "error", "error": f"could not start: {e}"}
     for line in reversed(done.stdout.splitlines()):
@@ -611,18 +635,18 @@ def run_attempts(
                 pool.map(lambda w: _run_attempt(prompt, w.cwd, flags), spaces)
             )
         written = 0
-        for ws, record in zip(spaces, records):
+        for k, (ws, record) in enumerate(zip(spaces, records), start=1):
             if not record.get("is_error"):
                 written += 1
                 collect(ws, record.get("result", ""), drafts / f"attempt-{written}")
+                continue
+            log.warning(
+                "--attempts: attempt %d failed: %s\n%s",
+                k,
+                record.get("error") or record.get("status"),
+                "\n".join(record.get("stderr_tail") or []),
+            )
         if not written:
-            for k, record in enumerate(records, start=1):
-                log.warning(
-                    "--attempts: attempt %d failed: %s\n%s",
-                    k,
-                    record.get("error"),
-                    "\n".join(record.get("stderr_tail") or []),
-                )
             raise AttemptsError(
                 f"every attempt failed; the last said: {records[-1].get('error')}"
             )
