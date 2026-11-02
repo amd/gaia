@@ -141,7 +141,8 @@ describe('SetupScreen: checking this PC', () => {
         renderSetup();
         expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
         await waitFor(() => expect(mockedApi.getSetupPlan).toHaveBeenCalled());
-        expect(screen.queryAllByRole('button')).toEqual([]);
+        // Only the troubleshooting report, which is always there.
+        expect(screen.queryAllByRole('button').map((b) => b.textContent)).toEqual(['Save a troubleshooting report']);
         expect(railStep('Check this PC')).toHaveClass('is-current');
         answer(HARDWARE);
         await planScreen();
@@ -1255,6 +1256,7 @@ describe("SetupScreen: the user's server isn't answering", () => {
         },
         command: 'gaia init --profile gaia',
         log_tail: [`❌ ${RAW}`],
+        logs: { check: ['$ gaia init --profile gaia --server-only', `❌ ${RAW}`] },
         models: [],
     };
 
@@ -1264,7 +1266,7 @@ describe("SetupScreen: the user's server isn't answering", () => {
         expect(await screen.findByRole('alert')).toHaveTextContent("Your Lemonade Server at 127.0.0.1:9 isn't answering.");
         expect(screen.getByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
         expect(screen.queryByText(/HTTPConnectionPool/)).not.toBeInTheDocument();
-        fireEvent.click(screen.getByRole('button', { name: /Details/ }));
+        fireEvent.click(screen.getByRole('button', { name: 'Checks log' }));
         expect(screen.getByText(/HTTPConnectionPool/)).toBeInTheDocument();
     });
 

@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.logger import get_logger
@@ -337,6 +338,55 @@ def _agent_turn_problem() -> Optional[str]:
     return None
 
 
+#: Setup's own record, in GAIA's home, which ``gaia diagnostics`` bundles.
+SETUP_REPORT = "setup-report.json"
+REPORT_NAME_RE = re.compile(r"diagnostics-\d{8}-\d{6}\.tgz")
+_REPORT_TIMEOUT_S = 120
+
+
+def write_report(record: Dict[str, Any]) -> Path:
+    """Save *record* beside GAIA's logs and bundle both for a bug report.
+
+    Returns the bundle: setup's record, every GAIA log and a system snapshot,
+    secrets redacted, as ``gaia diagnostics`` writes it.
+    """
+    from gaia.home import gaia_home
+
+    home = gaia_home()
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        (home / SETUP_REPORT).write_text(
+            json.dumps(record, indent=2, default=str), encoding="utf-8"
+        )
+    except OSError as e:
+        raise SetupError(f"Couldn't save setup's record in {home}: {e}") from e
+    out = home / f"diagnostics-{time.strftime('%Y%m%d-%H%M%S')}.tgz"
+    try:
+        proc = subprocess.run(
+            _gaia_argv("diagnostics", "--output", str(out)),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_REPORT_TIMEOUT_S,
+            check=False,
+            env=_child_env(),
+            **windows_hidden_popen_kwargs(),
+        )
+    except subprocess.TimeoutExpired as e:
+        raise SetupError(
+            f"The troubleshooting report took over {_REPORT_TIMEOUT_S} s and was stopped."
+        ) from e
+    except OSError as e:
+        raise SetupError(f"Couldn't start `gaia diagnostics`: {e}") from e
+    if proc.returncode != 0 or not out.is_file():
+        raise SetupError(
+            "Couldn't write the troubleshooting report: "
+            f"{_last_line(proc.stdout + chr(10) + proc.stderr)}"
+        )
+    return out
+
+
 def users_lemonade_url() -> Optional[str]:
     """The user's own Lemonade when they chose "Use mine", else None."""
     from gaia.config import GaiaConfigError
@@ -456,6 +506,13 @@ def step_labels(
         {"key": PHASE_MODELS, "label": "Download the models", "detail": models},
         {"key": PHASE_FINISH, "label": "Check that the models load", "detail": ""},
     ]
+
+
+#: The screen's stages that keep a log: the checks, the downloads, the Test step.
+STAGES = ("check", "download", "test")
+#: Lines each stage shows in Details; a troubleshooting report keeps them all.
+STAGE_LOG_SHOWN = 200
+_STAGE_LOG_KEPT = 4000
 
 
 #: Per-model states, in the order a model moves through them.
@@ -594,6 +651,29 @@ class SetupRun:
     components: Dict[str, str] = field(default_factory=dict)
     #: The Test step's rows, in the order they ran, by (job, subject).
     tests: Dict[Any, Dict[str, Any]] = field(default_factory=dict)
+    #: Everything this run printed or reported, by screen stage.
+    stage_logs: Dict[str, List[str]] = field(default_factory=dict)
+
+    def stage(self) -> str:
+        """The screen stage this run is at, for its log."""
+        if self.server_only:
+            return "check"
+        if self.phase == PHASE_FINISH or self.state == "verifying" or self.tests:
+            return "test"
+        return "download"
+
+    def note(self, line: str, printed: bool = False) -> None:
+        """Log one line under the current stage; *printed* lines are ``gaia
+        init``'s own output, which also feeds the failure reason. Caller holds
+        the runner's lock."""
+        if printed:
+            self.log.append(line)
+            if len(self.log) > 400:
+                del self.log[:-400]
+        kept = self.stage_logs.setdefault(self.stage(), [])
+        kept.append(line)
+        if len(kept) > _STAGE_LOG_KEPT:
+            del kept[:-_STAGE_LOG_KEPT]
 
     def view(self) -> Dict[str, Any]:
         reached = PHASES.index(self.phase) if self.phase in PHASES else -1
@@ -663,6 +743,26 @@ class SetupRunner:
         self._models: Dict[str, ModelProgress] = {}
         #: model id -> Stop flag of an in-process pull.
         self._pulls: Dict[str, threading.Event] = {}
+        #: The checks' log, kept when the run that started the server is replaced.
+        self._check_log: List[str] = []
+
+    def _logs(self, shown: Optional[int]) -> Dict[str, List[str]]:
+        """Each stage's log, its last *shown* lines. Caller holds the lock."""
+        logs = dict(self._run.stage_logs) if self._run else {}
+        if "check" not in logs and self._check_log:
+            logs["check"] = self._check_log
+        return {k: list(v[-shown:] if shown else v) for k, v in logs.items()}
+
+    def report(self) -> Dict[str, Any]:
+        """Everything setup knows about its last run, with every log line kept."""
+        with self._lock:
+            view = self._run.view() if self._run else {"state": "idle"}
+            chat = self._run.chat_model if self._run else None
+            view["models"] = [m.view(chat) for m in self._models.values()]
+            view["log_tail"] = list(self._run.log) if self._run else []
+            view["logs"] = self._logs(None)
+            view["check_result"] = self._run.status if self._run else None
+            return view
 
     def status(self) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -673,6 +773,7 @@ class SetupRunner:
             chat = self._run.chat_model if self._run else None
             view["models"] = [m.view(chat) for m in models]
             view["overall"] = overall(models)
+            view["logs"] = self._logs(STAGE_LOG_SHOWN)
             return view
 
     def busy_with(self, model_id: str) -> bool:
@@ -730,6 +831,8 @@ class SetupRunner:
                 extra_models=list(extra_models or []),
             )
             command = run_command(skip_chat_model, gaia_lemonade)
+            if self._run is not None and self._run.server_only:
+                self._check_log = list(self._run.stage_logs.get("check", []))
             try:
                 self._proc = subprocess.Popen(
                     _gaia_argv(
@@ -761,6 +864,7 @@ class SetupRunner:
                 ) from e
             self._run = run
             self._models = {}
+            run.note(f"$ {command}")
             proc = self._proc
             view = run.view()
         threading.Thread(target=self._watch, args=(run, proc), daemon=True).start()
@@ -814,6 +918,7 @@ class SetupRunner:
                 return stopped
             self._run.state = "cancelled"
             self._run.text = "Setup stopped"
+            self._run.note("Stopped by the user")
             for entry in self._models.values():
                 if entry.state in ("queued", "downloading"):
                     entry.state, entry.speed_bps = "cancelled", 0
@@ -892,10 +997,14 @@ class SetupRunner:
                     self._models[planned["id"]] = entry
                 for skipped in event.get("skipped") or []:
                     self._models[skipped] = ModelProgress(id=skipped, state="skipped")
+                if self._run is not None:
+                    planned = ", ".join(m["id"] for m in event.get("models") or [])
+                    self._run.note(f"Plan: {planned or 'no models'}")
                 return
             if kind == "component":
                 if self._run is not None:
                     self._run.components[event["component"]] = event["state"]
+                    self._run.note(f"{event['component']}: {event['state']}")
                 return
             if kind == "test":
                 if self._run is not None:
@@ -905,6 +1014,7 @@ class SetupRunner:
             if not model_id:
                 if kind == "error" and self._run is not None:
                     self._run.error = event.get("message") or self._run.error
+                    self._run.note(f"Error: {event.get('message')}")
                 return
             entry = self._models.setdefault(model_id, ModelProgress(id=model_id))
             if kind == "progress":
@@ -919,14 +1029,20 @@ class SetupRunner:
             elif kind == "model_done":
                 entry.state, entry.speed_bps = "verifying", 0
                 entry.bytes_done = max(entry.bytes_done, entry.bytes_total)
+                if self._run is not None:
+                    self._run.note(f"{model_id}: downloaded")
             elif kind == "retrying":
                 # The opted-in wait for a dropped connection: still downloading.
                 entry.state, entry.speed_bps = "downloading", 0
                 entry.error = entry.error_kind = None
                 entry.retrying_until = int(event.get("until") or 0)
+                if self._run is not None:
+                    self._run.note(f"{model_id}: connection dropped, still trying")
             elif kind == "error":
                 message = str(event.get("message") or "")
                 logger.warning("Download of %s failed: %s", model_id, message)
+                if self._run is not None:
+                    self._run.note(f"{model_id}: download failed: {message}")
                 entry.error_kind = error_kind(message)
                 entry.state, entry.speed_bps = "failed", 0
                 entry.error = _failure_text(model_id, entry.error_kind)
@@ -941,6 +1057,11 @@ class SetupRunner:
             for k in ("job", "subject", "state", "error", "kind", "seconds")
         }
         run.tests[(row["job"], row["subject"])] = row
+        if row["state"] != "running":
+            took = f" in {row['seconds']} s" if row.get("seconds") is not None else ""
+            why = f": {row['error']}" if row.get("error") else ""
+            subject = f" {row['subject']}" if row["subject"] else ""
+            run.note(f"Test {row['job']}{subject}: {row['state']}{took}{why}")
 
     def _mirror_totals(self, run: SetupRun) -> None:
         """Fill the run's single bar from the per-model totals. Caller holds the lock."""
@@ -981,6 +1102,7 @@ class SetupRunner:
                         "Setup stopped on an unexpected error. Details are in "
                         "the GAIA server log."
                     )
+                    run.note(f"Setup failed: {run.error}")
 
     def _pump(self, run: SetupRun, proc: subprocess.Popen) -> None:
         buf = b""
@@ -1024,16 +1146,19 @@ class SetupRunner:
                 if problem is not None:
                     # The raw exception stays in the log, behind "Details".
                     run.problem, run.error = problem, problem["message"]
+                    run.note(f"Setup failed: {run.error}")
                     return
                 run.error = (
                     f"`{run_command(run.skip_chat_model, run.gaia_lemonade)}` "
                     f"failed (exit {code}): "
                     f"{run.error or _last_line(chr(10).join(run.log))}"
                 )
+                run.note(f"Setup failed: {run.error}")
                 return
             if run.server_only:
                 # Nothing downloaded yet, so there is nothing to load.
                 run.state, run.text = "ready", "The local model server is running"
+                run.note(run.text)
                 return
             run.state = "verifying"
             run.phase = PHASE_FINISH
@@ -1047,6 +1172,7 @@ class SetupRunner:
         except SetupError as e:
             with self._lock:
                 run.state, run.error = "failed", str(e)
+                run.note(f"Load check failed: {e}")
                 self._settle_models(None, {}, run_failed=True)
             return
         loads = status.get("models") or []
@@ -1057,6 +1183,11 @@ class SetupRunner:
         }
         with self._lock:
             run.status = status
+            for m in loads:
+                outcome = (
+                    "loads" if m.get("loaded") else f"would not load: {m.get('error')}"
+                )
+                run.note(f"Load check {m['id']}: {outcome}")
             loaded = {m["id"] for m in loads if m.get("loaded")}
             # gaia init's Test step ran what the user ticked; this check only
             # covers the plan. Any other model it skipped stays unverified.
@@ -1073,6 +1204,7 @@ class SetupRunner:
                 run.error = "; ".join(status.get("reasons") or []) or (
                     "Setup finished but GAIA is still not ready."
                 )
+                run.note(f"Not ready: {run.error}")
         if not ready:
             return
         problem = None if run.skip_chat_model else self._test_agent(run)
@@ -1083,6 +1215,7 @@ class SetupRunner:
                 run.state, run.error = "failed", problem
             else:
                 run.state, run.text = "ready", "GAIA is ready"
+            run.note(run.error if problem else run.text)
 
     def _test_agent(self, run: SetupRun) -> Optional[str]:
         """One real turn through the agent: every model passing doesn't prove GAIA answers."""
@@ -1125,9 +1258,7 @@ class SetupRunner:
                 return
         progress = describe(line)
         with self._lock:
-            run.log.append(line)
-            if len(run.log) > 400:
-                del run.log[:-400]
+            run.note(line, printed=True)
             if progress is None:
                 return
             if progress.failed:

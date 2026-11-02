@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Cloud, Info, Loader2 } from 'lucide-react';
+import { Cloud, Info, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
 import { shortModelName, useModelStore } from '../stores/modelStore';
 import { lemonadeKeyRejected } from '../utils/lemonade';
@@ -19,6 +19,7 @@ import { DownloadProgress, downloadsActive } from './setup/DownloadProgress';
 import { formatFitGb, formatSize } from './setup/format';
 import { GpuMemoryPanel } from './setup/GpuMemoryPanel';
 import { tooBigText } from './setup/ModelChecklist';
+import { StageLogs } from './setup/StageLogs';
 import { SetupChecks } from './setup/SetupChecks';
 import { SetupRail, type RailStep } from './setup/SetupRail';
 import { TestStep } from './setup/TestStep';
@@ -281,7 +282,6 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const [startError, setStartError] = useState<string | null>(null);
     const [key, setKey] = useState('');
     const [keyState, setKeyState] = useState<{ busy: boolean; error: string | null; done: boolean; waiting?: string | null }>({ busy: false, error: null, done: false });
-    const [showLog, setShowLog] = useState(false);
     const [plan, setPlan] = useState<SetupPlan | null>(null);
     const [planError, setPlanError] = useState<string | null>(null);
     const [selection, setSelection] = useState<Selection | null>(null);
@@ -1096,14 +1096,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     </>
                 )}
 
-                {run && run.log_tail && run.log_tail.length > 0 && stage !== 'ready' && (
-                    <div className="setup-log">
-                        <button type="button" className="setup-log-toggle" onClick={() => setShowLog((v) => !v)} aria-expanded={showLog}>
-                            <ChevronRight size={13} className={showLog ? 'is-open' : ''} aria-hidden="true" /> {t('setup.progress.details')}
-                        </button>
-                        {showLog && <pre className="setup-log-pre" dir="ltr">{run.log_tail.join('\n')}</pre>}
-                    </div>
-                )}
+                <StageLogs run={run} />
             </div>
 
             {confirm?.kind === 'no_fit' && (

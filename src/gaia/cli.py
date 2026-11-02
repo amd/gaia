@@ -8856,7 +8856,7 @@ def handle_diagnostics_command(args):
     - every log :func:`_diag_log_files` lists, with its rotated files
       (``gaia.log.1`` ...); a file over 50 MB contributes only its last 50 MB,
       as ``<name>.tail``
-    - ``~/.gaia/electron-install-state.json``
+    - ``~/.gaia/electron-install-state.json`` and ``setup-report.json``
     - OS version (``uname``/``lsb_release`` on Linux, ``sw_vers`` on macOS,
       ``ver`` on Windows)
     - ``env`` entries matching ``gaia|lemonade|xdg|wayland|display`` (case-insensitive)
@@ -8892,8 +8892,12 @@ def handle_diagnostics_command(args):
         sys.exit(1)
 
     log_files = _diag_log_files(gaia_dir)
+    from gaia.home import gaia_home
+
     state_files = [
         gaia_dir / "electron-install-state.json",
+        # First-run setup's record: its run, plan and every stage's log.
+        gaia_home() / "setup-report.json",
     ]
 
     # System info snapshot

@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from gaia.logger import get_logger
@@ -26,6 +27,7 @@ from ..setup_plan import (
     choose_chat_model,
 )
 from ..setup_runner import (
+    REPORT_NAME_RE,
     LemonadeOverridden,
     SetupBusy,
     SetupError,
@@ -33,6 +35,7 @@ from ..setup_runner import (
     runner,
     step_labels,
     users_lemonade_url,
+    write_report,
 )
 
 logger = get_logger(__name__)
@@ -160,6 +163,33 @@ def setup_vision_model(body: VisionModelRequest) -> Dict[str, Any]:
         return build_plan()
     except SetupPlanError as e:
         raise _plan_error(e, f"{body.model_id} can't read images.") from e
+
+
+@router.post("/api/setup/report", dependencies=[Depends(require_ui_header)])
+def setup_report() -> Dict[str, Any]:
+    """Bundle setup's record, every GAIA log and a system snapshot for a bug report."""
+    record = runner.report()
+    try:
+        record["plan"] = build_plan()
+    except SetupPlanError as e:
+        # The report is for exactly this: say why the plan couldn't be read.
+        record["plan_error"] = str(e)
+    try:
+        path = write_report(record)
+    except SetupError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return {"name": path.name, "path": str(path), "size_bytes": path.stat().st_size}
+
+
+@router.get("/api/setup/report/{name}", dependencies=[Depends(require_ui_header)])
+def setup_report_file(name: str) -> FileResponse:
+    """A troubleshooting report written by ``POST /api/setup/report``."""
+    from gaia.home import gaia_home
+
+    path = gaia_home() / name
+    if not REPORT_NAME_RE.fullmatch(name) or not path.is_file():
+        raise HTTPException(status_code=404, detail=f"No report named {name}.")
+    return FileResponse(path, media_type="application/gzip", filename=name)
 
 
 _MODEL_JOBS = ("chat", "vision", "embedding", "speech", "voice", "image_creation")

@@ -1023,6 +1023,8 @@ export interface SetupProblem {
     switch_hint: string | null;
 }
 
+export type SetupLogStage = 'check' | 'download' | 'test';
+
 export interface SetupRunStatus {
     state: 'idle' | 'running' | 'verifying' | 'ready' | 'failed' | 'cancelled';
     steps?: SetupStep[];
@@ -1034,6 +1036,8 @@ export interface SetupRunStatus {
     problem?: SetupProblem | null;
     command?: string;
     log_tail?: string[];
+    /** Each stage's log, its last lines: the checks, the downloads, the Test step. */
+    logs?: Partial<Record<SetupLogStage, string[]>>;
     skip_chat_model?: boolean;
     /** The run is switching to GAIA's own server; a retry must keep switching. */
     gaia_lemonade?: boolean;

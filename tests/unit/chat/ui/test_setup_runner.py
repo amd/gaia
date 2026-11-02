@@ -1630,3 +1630,113 @@ def test_a_brand_new_single_download_is_not_called_resumed():
     runner.download_model(client, GEMMA)
     assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "ready")
     assert _models(runner)[GEMMA]["downloaded_before_gb"] is None
+
+
+# ── Stage logs and the troubleshooting report ──────────────────────────────
+
+
+def test_each_stage_keeps_its_own_log():
+    runner = sr.SetupRunner()
+    check = sr.SetupRun(skip_chat_model=False, server_only=True)
+    runner._run = check
+    runner._consume(check, "Starting Lemonade Server...")
+    runner._on_event({"event": "component", "component": "server", "state": "done"})
+
+    # The full run replaces the server's run; the checks' log stays.
+    runner._check_log = list(check.stage_logs["check"])
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event({"event": "plan", "models": [{"id": "m", "downloaded": False}]})
+    runner._on_event({"event": "model_done", "model": "m"})
+    runner._on_event(
+        {
+            "event": "test",
+            "job": "chat",
+            "subject": "m",
+            "state": "failed",
+            "error": "boom",
+            "seconds": 1.5,
+        }
+    )
+    runner._consume(run, "after the tests")
+
+    logs = runner.status()["logs"]
+    assert logs["check"] == ["Starting Lemonade Server...", "server: done"]
+    assert logs["download"] == ["Plan: m", "m: downloaded"]
+    assert logs["test"] == ["Test chat m: failed in 1.5 s: boom", "after the tests"]
+
+
+def test_the_screen_gets_the_tail_and_the_report_gets_everything():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    for i in range(sr.STAGE_LOG_SHOWN + 50):
+        runner._consume(run, f"line {i}")
+
+    assert len(runner.status()["logs"]["download"]) == sr.STAGE_LOG_SHOWN
+    assert runner.status()["logs"]["download"][-1] == f"line {sr.STAGE_LOG_SHOWN + 49}"
+    assert len(runner.report()["logs"]["download"]) == sr.STAGE_LOG_SHOWN + 50
+
+
+def test_a_cancelled_run_says_so_in_its_log(monkeypatch):
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdout=subprocess.DEVNULL,
+    )
+    assert runner.cancel()
+    runner._proc.wait(timeout=10)
+    assert run.stage_logs["download"][-1] == "Stopped by the user"
+
+
+def test_report_route_bundles_setups_record(client, gaia_home, monkeypatch):
+    http, runner = client
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._consume(run, "something went wrong")
+    monkeypatch.setattr(setup_router, "build_plan", lambda: {"profile": "gaia"})
+    written = {}
+
+    def fake_diagnostics(argv, **_kw):
+        out = argv[argv.index("--output") + 1]
+        written["record"] = json.loads((gaia_home / sr.SETUP_REPORT).read_text())
+        with open(out, "wb") as f:
+            f.write(b"tgz")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(sr.subprocess, "run", fake_diagnostics)
+    res = http.post("/api/setup/report")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert sr.REPORT_NAME_RE.fullmatch(body["name"])
+    assert written["record"]["logs"]["download"] == ["something went wrong"]
+    assert written["record"]["plan"] == {"profile": "gaia"}
+
+    got = http.get(f"/api/setup/report/{body['name']}")
+    assert got.status_code == 200
+    assert got.content == b"tgz"
+
+
+@pytest.mark.parametrize("name", ["../config.json", "gaia.log", "diagnostics-1.tgz"])
+def test_report_route_serves_nothing_but_a_report(client, gaia_home, name):
+    http, _ = client
+    gaia_home.mkdir(parents=True, exist_ok=True)
+    (gaia_home / "gaia.log").write_text("secret")
+    assert http.get(f"/api/setup/report/{name}").status_code == 404
+
+
+def test_report_route_names_a_failed_bundle(client, monkeypatch):
+    http, _ = client
+    monkeypatch.setattr(setup_router, "build_plan", lambda: {})
+    monkeypatch.setattr(
+        sr.subprocess,
+        "run",
+        lambda argv, **_kw: subprocess.CompletedProcess(
+            argv, 1, "", "❌ Error writing x: disk full"
+        ),
+    )
+    res = http.post("/api/setup/report")
+    assert res.status_code == 500
+    assert "disk full" in res.json()["detail"]
