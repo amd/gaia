@@ -591,6 +591,98 @@ def test_thinking_blocks_never_reach_answer_text(fake_anthropic):
     assert result == "The answer is 4."
 
 
+def test_thinking_only_max_tokens_reply_is_left_to_cut_off_recovery(
+    fake_anthropic, caplog
+):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response(
+        [SimpleNamespace(type="thinking", thinking="Need more budget.")],
+        stop_reason="max_tokens",
+    )
+
+    with caplog.at_level("WARNING", logger="gaia.llm.providers.claude"):
+        result = provider.chat([{"role": "user", "content": "Answer this."}])
+
+    assert result == ""
+    assert provider.get_last_finish_reason() == "length"
+    assert "stop_reason=max_tokens" in caplog.text
+    assert "block_types=thinking" in caplog.text
+
+
+def test_streamed_thinking_only_max_tokens_reply_is_left_to_cut_off_recovery(
+    fake_anthropic,
+):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = iter(
+        [
+            SimpleNamespace(
+                type="message_start",
+                message=SimpleNamespace(usage=SimpleNamespace(input_tokens=50)),
+            ),
+            SimpleNamespace(
+                type="content_block_start",
+                index=0,
+                content_block=SimpleNamespace(
+                    type="thinking", thinking="", signature=""
+                ),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="thinking_delta", thinking="Still going"),
+            ),
+            SimpleNamespace(
+                type="message_delta",
+                delta=SimpleNamespace(stop_reason="max_tokens"),
+                usage=SimpleNamespace(output_tokens=4096),
+            ),
+        ]
+    )
+
+    chunks = list(
+        provider.chat([{"role": "user", "content": "Answer this."}], stream=True)
+    )
+
+    assert chunks == []
+    assert provider.get_last_finish_reason() == "length"
+
+
+def test_thinking_only_reply_that_ended_its_turn_fails_loudly(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response(
+        [SimpleNamespace(type="thinking", thinking="Done thinking.")],
+        stop_reason="end_turn",
+    )
+
+    with pytest.raises(RuntimeError, match="only thinking blocks"):
+        provider.chat([{"role": "user", "content": "Answer this."}])
+
+
+def test_streamed_thinking_only_completed_turn_still_fails_loudly(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = iter(
+        [
+            SimpleNamespace(
+                type="message_start",
+                message=SimpleNamespace(usage=SimpleNamespace(input_tokens=10)),
+            ),
+            SimpleNamespace(
+                type="content_block_start",
+                index=0,
+                content_block=SimpleNamespace(type="thinking"),
+            ),
+            SimpleNamespace(
+                type="message_delta",
+                delta=SimpleNamespace(stop_reason="end_turn"),
+                usage=SimpleNamespace(output_tokens=5),
+            ),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="only thinking blocks"):
+        list(provider.chat([{"role": "user", "content": "Answer this."}], stream=True))
+
+
 def test_usage_captured_from_response(fake_anthropic):
     provider = _provider(fake_anthropic)
     provider._client.messages.create.return_value = _response(
