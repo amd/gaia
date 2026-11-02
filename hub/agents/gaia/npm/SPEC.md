@@ -625,7 +625,9 @@ in `GAIA_CHILD_ENV_DENY` (comma or space separated). User credentials such as `G
 From a `.env` in its working directory the sidecar reads only
 `ANTHROPIC_API_KEY`, for its own Claude calls; it ignores every other name in
 that file and logs one warning listing them. Export other settings in the
-launch environment instead.
+launch environment instead. A sidecar run from a source checkout still loads
+the `.env` at or above GAIA's install (the repo's `.env`) in full, as before;
+the packaged binary has no install `.env`.
 `GAIA_NO_DOTENV=1` in the sidecar's launch environment stops it loading `.env`
 files; a `.env` file cannot set that switch itself.
 
