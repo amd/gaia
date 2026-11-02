@@ -82,3 +82,28 @@ func TestDiffNarrowTerminalStillRenders(t *testing.T) {
 	assertWidth(t, out, 12)
 	assertContains(t, out, "+x")
 }
+
+// Tab-indented code must keep its indentation; clean alone would turn each tab
+// into one space and flatten a Go or Makefile hunk.
+func TestDiffExpandsTabsToStops(t *testing.T) {
+	out := Render("diff", raw(t, `{"title":"main.go","unified":"+\tif x {\n+\t\treturn\n \ta\tb\n"}`), width80)
+	assertWidth(t, out, width80)
+	assertContains(t, out, "+    if x {", "+        return", "     a   b")
+	assertNotContains(t, out, "\t")
+}
+
+func TestExpandDiffTabsKeepsColumnsAfterWideRunes(t *testing.T) {
+	cases := map[string]string{
+		"+no tabs":  "+no tabs",
+		"+\tx":      "+    x",
+		"+ab\tx":    "+ab  x",
+		"+abcd\tx":  "+abcd    x",
+		"+字\tx":     "+字  x",
+		"\t+marker": "\t+marker",
+	}
+	for in, want := range cases {
+		if got := expandDiffTabs(in); got != want {
+			t.Errorf("expandDiffTabs(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

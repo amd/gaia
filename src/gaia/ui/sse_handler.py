@@ -998,7 +998,9 @@ class SSEOutputHandler(OutputHandler):
         if render_card is not None:
             event["result_data"] = render_card
         elif self._pending_diff_card is not None:
+            # ChatView and step persistence read a card from ``data``.
             event["result_data"] = self._pending_diff_card
+            event["data"] = self._pending_diff_card
             event["render"] = "diff"
         self._pending_diff_card = None
 

@@ -7,14 +7,23 @@ handler attached; the handler's events go through the real canonical
 translator, and the test asserts the ``tool_result`` both clients draw from.
 """
 
+import asyncio
 import importlib
+import json
 import queue
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.security import PathValidator
+from gaia.ui import _chat_helpers as helpers
 from gaia.ui import sse_handler as sse_handler_module
+from gaia.ui.database import ChatDatabase
+from gaia.ui.email_sidecar.relay import _dispatch_one
+from gaia.ui.models import ChatRequest
+from gaia.ui.run_manager import RunManager
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 
@@ -252,3 +261,164 @@ class TestTranslatorRenderKey:
         out = translator.translate({"type": "tool_result", "render": bad})
         (result,) = [e for e in out if e["type"] == "tool_result"]
         assert "render" not in result
+
+
+# --- The diff card on the Agent UI's own /chat/send stream ----------------
+#
+# An in-process agent's handler events reach ChatView as they are, without the
+# canonical translator, so the card must already sit under ``data`` there.
+
+#: The in-process event the webui test feeds through ChatView and RenderCard.
+_WEBUI_EVENT_FIXTURE = (
+    Path(__file__).resolve().parents[4]
+    / "src/gaia/apps/webui/src/components/__tests__/fixtures"
+    / "inprocess-edit-diff-tool-result.json"
+)
+
+
+class _EditingAgent:
+    """Cached agent that edits one file through the real tool, then answers."""
+
+    def __init__(self, edit, answer, relayed=False):
+        self.model_id = "M-GGUF"
+        self.conversation_history = []
+        self.indexed_files = set()
+        self._cancel_event = None
+        self.console = None
+        self._session_id = None
+        self._edit = edit
+        self._answer = answer
+        self._relayed = relayed
+
+    def _register_tools(self):
+        pass
+
+    def process_query(self, message):
+        handler = helpers._active_sse_handlers.get(self._session_id)
+        if self._relayed:
+            # A sidecar runs the tool under its own handler and sends the
+            # canonical events, which the relay re-emits on this turn's handler.
+            sidecar = SSEOutputHandler()
+            self._edit(sidecar)
+            for event in _wire(sidecar):
+                _dispatch_one(handler, event)
+        else:
+            self._edit(handler)
+        return {
+            "result": self._answer,
+            "model_messages": [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": self._answer},
+            ],
+        }
+
+
+@pytest.fixture
+def chat_runtime():
+    db = ChatDatabase(":memory:")
+    manager = RunManager()
+    helpers._agent_cache.clear()
+    with (
+        patch("gaia.ui.run_manager.run_manager", manager),
+        patch.object(helpers, "_agent_registry", None),
+        patch.object(helpers, "_maybe_load_expected_model"),
+        patch.object(helpers, "_maybe_update_session_title", AsyncMock()),
+    ):
+        yield db
+    helpers._agent_cache.clear()
+    db.close()
+
+
+@pytest.fixture
+def edit_on(file_tools, tmp_path):
+    """Return ``edit(handler)``: a real approved edit of note.txt on *handler*."""
+    path = tmp_path / "note.txt"
+    path.write_text("alpha\n", encoding="utf-8")
+    file_tools("read_file")(str(path))
+
+    def edit(handler):
+        file_tools.mixin.console = handler
+        _run_call(
+            handler,
+            "edit_file",
+            {"file_path": str(path), "old_content": "alpha", "new_content": "beta"},
+            lambda: file_tools("edit_file")(str(path), "alpha", "beta"),
+        )
+
+    edit.path = path
+    return edit
+
+
+async def _send(db, agent):
+    session = db.create_session(model="M-GGUF", agent_type="chat")
+    agent._session_id = session["id"]
+    helpers._store_agent(session["id"], "M-GGUF", [], agent, "chat")
+    request = ChatRequest(session_id=session["id"], message="Fix it", stream=True)
+    events = []
+
+    async def consume():
+        async for chunk in helpers._stream_chat_response(db, session, request):
+            for line in chunk.splitlines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line[len("data: ") :]))
+
+    await asyncio.wait_for(consume(), timeout=15)
+    return session["id"], events
+
+
+def _of(events, kind):
+    return [e for e in events if e.get("type") == kind]
+
+
+@pytest.mark.asyncio
+class TestDiffCardOnTheChatStream:
+    async def test_in_process_event_carries_the_card_under_data(
+        self, chat_runtime, edit_on
+    ):
+        _, events = await _send(chat_runtime, _EditingAgent(edit_on, "Done."))
+
+        (result,) = _of(events, "tool_result")
+        assert result["render"] == "diff"
+        assert result["data"]["title"] == "note.txt"
+        assert "-alpha" in result["data"]["unified"]
+        assert "+beta" in result["data"]["unified"]
+        assert result["data"] == result["result_data"]
+
+    async def test_webui_fixture_is_the_real_in_process_event(
+        self, chat_runtime, edit_on
+    ):
+        _, events = await _send(chat_runtime, _EditingAgent(edit_on, "Done."))
+
+        (result,) = _of(events, "tool_result")
+        fixture = json.loads(_WEBUI_EVENT_FIXTURE.read_text(encoding="utf-8"))
+        assert set(result) == set(fixture)
+        for key in ("type", "render", "data", "result_data", "success"):
+            assert result[key] == fixture[key], key
+
+    @pytest.mark.parametrize("relayed", [False, True], ids=["in_process", "relay"])
+    async def test_card_persists_with_its_data(self, chat_runtime, edit_on, relayed):
+        sid, _ = await _send(
+            chat_runtime, _EditingAgent(edit_on, "Done.", relayed=relayed)
+        )
+
+        (step,) = chat_runtime.get_messages(sid)[-1]["agent_steps"]
+        assert step["render"] == "diff"
+        assert "+beta" in step["data"]["unified"]
+
+    @pytest.mark.parametrize("relayed", [False, True], ids=["in_process", "relay"])
+    async def test_edit_then_no_answer_still_says_no_answer_came(
+        self, chat_runtime, edit_on, relayed
+    ):
+        # The diff records the edit; it does not answer the user.
+        sid, events = await _send(
+            chat_runtime, _EditingAgent(edit_on, "", relayed=relayed)
+        )
+
+        assert edit_on.path.read_text(encoding="utf-8") == "beta\n"
+        [done] = _of(events, "done")
+        assert done["content"] == helpers._NO_ANSWER_AFTER_TOOLS_MSG
+        assert done["failed"] is True
+        saved = chat_runtime.get_messages(sid)[-1]
+        assert saved["content"] == helpers._NO_ANSWER_AFTER_TOOLS_MSG
+        assert saved["agent_steps"][0]["render"] == "diff"
+        assert chat_runtime.get_session(sid)["last_run_status"] == "failed"
