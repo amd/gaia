@@ -188,7 +188,15 @@ def _is_direct_media(url: str) -> bool:
 
 
 def _folder_size(directory: Path) -> int:
-    return sum(p.stat().st_size for p in directory.iterdir() if p.is_file())
+    total = 0
+    for path in directory.iterdir():
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+        except FileNotFoundError:
+            # The downloader renames and deletes its temporary files as it goes.
+            continue
+    return total
 
 
 def _fetch_direct(url: str, directory: Path) -> Path:
@@ -287,31 +295,36 @@ def _run_download(url: str, directory: Path, progress: Callable[[str], None]) ->
     last_output = time.monotonic()
     last_size_check = last_output
     stopped_for = None
-    while True:
-        try:
-            line = lines.get(timeout=_POLL_SECONDS)
-        except queue.Empty:
-            line = ""
-        if line is None:
-            break
-        if line:
-            last_output = time.monotonic()
-            output = (output + [line])[-_ERROR_KEEP_LINES:]
-            match = _PROGRESS_RE.search(line)
-            if match and float(match.group(1)) - shown >= 10:
-                shown = float(match.group(1))
-                progress(f"Downloading — {shown:.0f}%")
-        if cancel is not None and cancel.is_set():
-            stopped_for = "cancelled"
-        elif time.monotonic() - last_output >= _STALL_SECONDS:
-            stopped_for = "stalled"
-        elif time.monotonic() - last_size_check >= _SIZE_CHECK_SECONDS:
-            last_size_check = time.monotonic()
-            if _folder_size(directory) > MAX_DOWNLOAD_BYTES:
-                stopped_for = "too large"
-        if stopped_for:
-            process.kill()
-            break
+    try:
+        while True:
+            try:
+                line = lines.get(timeout=_POLL_SECONDS)
+            except queue.Empty:
+                line = ""
+            if line is None:
+                break
+            if line:
+                last_output = time.monotonic()
+                output = (output + [line])[-_ERROR_KEEP_LINES:]
+                match = _PROGRESS_RE.search(line)
+                if match and float(match.group(1)) - shown >= 10:
+                    shown = float(match.group(1))
+                    progress(f"Downloading — {shown:.0f}%")
+            if cancel is not None and cancel.is_set():
+                stopped_for = "cancelled"
+            elif time.monotonic() - last_output >= _STALL_SECONDS:
+                stopped_for = "stalled"
+            elif time.monotonic() - last_size_check >= _SIZE_CHECK_SECONDS:
+                last_size_check = time.monotonic()
+                if _folder_size(directory) > MAX_DOWNLOAD_BYTES:
+                    stopped_for = "too large"
+            if stopped_for:
+                process.kill()
+                break
+    except BaseException:
+        # Never leave the downloader running behind an error.
+        process.kill()
+        raise
 
     try:
         code = process.wait(timeout=_KILL_WAIT_SECONDS)

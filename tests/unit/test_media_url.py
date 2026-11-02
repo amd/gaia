@@ -191,6 +191,39 @@ class TestDownload:
 
         assert 5 <= len(said) <= 13
 
+    def test_a_temporary_file_vanishing_mid_count_is_skipped(self, tmp_path):
+        (tmp_path / "kept.m4a").write_bytes(b"12345")
+        (tmp_path / "gone.part").write_bytes(b"123")
+        real_stat = Path.stat
+
+        def stat(path, *args, **kwargs):
+            if path.name == "gone.part":
+                raise FileNotFoundError(path)
+            return real_stat(path, *args, **kwargs)
+
+        with patch.object(Path, "stat", stat):
+            assert media_url._folder_size(tmp_path) == 5
+
+    def test_an_error_while_watching_still_stops_the_downloader(self, tmp_path):
+        made = []
+
+        def fake(command, **kwargs):
+            directory = Path(command[command.index("-o") + 1]).parent
+            made.append(_Process(directory, ["[download] 1.0% of 10MiB\n"] * 3))
+            made[-1].kill = MagicMock()
+            return made[-1]
+
+        with (
+            patch.object(media_url, "ensure_downloader"),
+            patch("subprocess.Popen", fake),
+            patch.object(media_url, "_SIZE_CHECK_SECONDS", 0),
+            patch.object(media_url, "_folder_size", side_effect=PermissionError("x")),
+        ):
+            with pytest.raises(PermissionError):
+                fetch_media(PUBLIC, tmp_path, _say)
+
+        made[0].kill.assert_called()
+
 
 @pytest.mark.usefixtures("public_host")
 class TestFinishedDownloads:
