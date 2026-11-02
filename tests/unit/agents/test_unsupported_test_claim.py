@@ -1123,6 +1123,9 @@ def _odd_snippets(count: int = 200) -> list:
         "import subprocess\nsubprocess.run([" + ", ".join(["'a'"] * 20000) + "])",
         "x = 1\n" * 5000 + "import subprocess\nsubprocess.run(x)",
         "x = 'a'\n" + "x = x + x\n" * 3000 + "import os\nos.system(x)",
+        "x = 'a'\n" + "x += x\n" * 3000 + "import os\nos.system(x)",
+        "x = ['a']\n" + "x.extend(x)\n" * 3000 + "import subprocess\nsubprocess.run(x)",
+        "import subprocess\nx.append(x)\nx += x\nsubprocess.run(x)",
         "import subprocess\n" + chain + "subprocess.run(v0)",
         "import subprocess\n" + chain + "v2000 = v0\nsubprocess.run(v0)",
         "import os\nx = f'{f\"{x}\"}'\nos.system(x)",
@@ -1180,4 +1183,87 @@ def test_a_detector_crash_reads_as_no_runner_and_is_logged():
         assert invokes_test_runner(code) is False
         assert check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code) is None
         assert verification_check_label("run_python", {"code": code}, result) is None
-    assert log.debug.called
+    assert log.warning.called
+    assert log.warning.call_args.kwargs.get("exc_info") is True
+
+
+# ---------------------------------------------------------------------------
+# Repeated launchers are unwrapped in a loop, never by recursion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("prefix", [["uv", "run"], ["npx"]], ids=["uv run", "npx"])
+def test_thousands_of_launcher_prefixes_still_name_the_runner(prefix):
+    argv = prefix * 2000 + ["pytest", "-q"]
+    command = " ".join(argv)
+    assert argv_check_label(argv) == "pytest"
+    check = check_from_command(command, [argv], 0, SAVED_SUMMARY)
+    assert check is not None and check.label == "pytest" and check.passed
+    for code in (
+        f"import subprocess\nsubprocess.run({argv!r})",
+        f"import os\nos.system({command!r})",
+    ):
+        assert _detect_test_runner(code) is True
+        found = check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code)
+        assert found is not None and found.label == "pytest"
+
+
+def test_thousands_of_launcher_prefixes_around_a_non_runner_are_not_a_check():
+    argv = ["uv", "run"] * 2000 + ["cat", "pytest.log"]
+    assert argv_check_label(argv) is None
+    assert argv_check_label(["uv", "run"] * 2000) is None
+    assert check_from_command(" ".join(argv), [argv], 0, SAVED_SUMMARY) is None
+
+
+# ---------------------------------------------------------------------------
+# A command grown in place (``+=``, ``.extend``, ``.append``) is still read
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import subprocess, sys\ncmd = [sys.executable]\ncmd += ['-m', 'pytest']\n"
+        "subprocess.run(cmd)",
+        "import os\nc = 'python -m'\nc += ' pytest'\nos.system(c)",
+        "import subprocess\nc = 'python'\nc += ' -m'\nc += ' pytest'\n"
+        "subprocess.run(c, shell=True)",
+        "import subprocess, sys\ncmd = [sys.executable]\ncmd.extend(['-m', 'pytest'])\n"
+        "subprocess.run(cmd)",
+        "import subprocess\ncmd = []\ncmd.append('pytest')\ncmd.append('-q')\n"
+        "subprocess.run(cmd)",
+        "import subprocess\ncmd = ['pytest']\ncmd += extra_args\nsubprocess.run(cmd)",
+    ],
+    ids=lambda c: c[:60],
+)
+def test_a_command_grown_in_place_is_a_test_run(code):
+    assert _detect_test_runner(code) is True
+    check = check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code)
+    assert check is not None and check.label == "pytest" and check.passed
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import subprocess, sys\ncmd = [sys.executable, '-m', 'pip', 'install']\n"
+        "cmd += ['pytest']\nsubprocess.run(cmd)",
+        "import subprocess\ncmd = ['pip', 'install']\ncmd.extend(['pytest', 'ruff'])\n"
+        "subprocess.run(cmd)",
+        "import subprocess\ncmd = ['cat']\ncmd.append('pytest.log')\nsubprocess.run(cmd)",
+        "import os\nc = 'cat'\nc += ' pytest.log'\nos.system(c)",
+        "import subprocess\ncmd = ['python', 'setup.py']\ncmd += ['build']\n"
+        "subprocess.run(cmd)",
+        "import subprocess\ncmd = ['pytest']\ncmd = ['cat']\ncmd += ['pytest.log']\n"
+        "subprocess.run(cmd)",
+        "import subprocess\nx = 1\nx -= 1\nsubprocess.run(['cat', 'pytest.log'])",
+        "import subprocess\ncmd += ['pytest']\nsubprocess.run(cmd)",
+        "import subprocess\nlogs = []\nlogs.append('pytest')\nsubprocess.run(['echo', *logs])",
+        # Not followed: a command kept in a container. Errs safe, since a test
+        # claim built on it is challenged rather than accepted.
+        "import subprocess\ncfg = {'cmd': ['pytest']}\nsubprocess.run(cfg['cmd'])",
+    ],
+    ids=lambda c: c[:60],
+)
+def test_a_grown_command_that_is_not_a_runner_is_not_a_test_run(code):
+    assert _detect_test_runner(code) is False
+    assert check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code) is None

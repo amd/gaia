@@ -353,9 +353,11 @@ def argv_check_label(argv: Sequence[str]) -> Optional[str]:
     if not argv:
         return None
     words = [_program_name(argv[0]), *argv[1:]]
-    launched = _after_launcher(words)
-    if launched is not None:
-        return argv_check_label(launched)
+    # A loop, not recursion: ``uv run`` repeated 2000 times must not overflow.
+    while (launched := _after_launcher(words)) is not None:
+        if not launched:
+            return None
+        words = [_program_name(launched[0]), *launched[1:]]
     if words[0] == "python":
         module = _python_module_argv(words[1:])
         if module is not None:
@@ -525,14 +527,64 @@ def _imported_module(
     return arg.value
 
 
+#: List methods that grow a list in place, read as ``x = x + ...``.
+_GROW_METHODS = frozenset({"extend", "append"})
+
+
+def _grown(node: ast.AST, name: str, added: ast.AST) -> ast.BinOp:
+    """``name + added``, at *node*'s start so ``name`` reads the prior binding."""
+    at = {"lineno": node.lineno, "col_offset": node.col_offset}
+    at_end = {"end_lineno": node.lineno, "end_col_offset": node.col_offset}
+    left = ast.Name(id=name, ctx=ast.Load(), **at, **at_end)
+    return ast.BinOp(left=left, op=ast.Add(), right=added, **at, **at_end)
+
+
+def _assignment(node: ast.AST) -> Optional[Tuple[ast.AST, str, ast.AST]]:
+    """``(statement, name, value)`` when *node* binds one plain name, else None."""
+    if isinstance(node, (ast.Assign, ast.AnnAssign)):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if node.value is not None and len(targets) == 1:
+            if isinstance(targets[0], ast.Name):
+                return node, targets[0].id, node.value
+        return None
+    if isinstance(node, ast.AugAssign):
+        if isinstance(node.op, ast.Add) and isinstance(node.target, ast.Name):
+            return node, node.target.id, _grown(node, node.target.id, node.value)
+        return None
+    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+        call = node.value
+        func = call.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in _GROW_METHODS
+            and isinstance(func.value, ast.Name)
+            and len(call.args) == 1
+            and not call.keywords
+        ):
+            added = call.args[0]
+            if func.attr == "append":
+                added = ast.List(
+                    elts=[added],
+                    ctx=ast.Load(),
+                    lineno=added.lineno,
+                    col_offset=added.col_offset,
+                    end_lineno=added.end_lineno,
+                    end_col_offset=added.end_col_offset,
+                )
+            return node, func.value.id, _grown(node, func.value.id, added)
+    return None
+
+
 class _LaunchReader:
     """What a launch call in one parsed snippet would run.
 
     A name reads as its latest assignment that finished before the use, so
     ``args = ['pytest'] + args`` reads the right-hand ``args`` from the line
-    above. A use with none before it (a function body reading a global set
-    later) reads the name's last assignment, unless that one is already being
-    read: a cycle stays unresolved instead of recursing.
+    above. ``x += y``, ``x.extend(y)`` and ``x.append(y)`` read as
+    ``x = x + y`` (``[y]`` for append). A use with none before it (a function
+    body reading a global set later) reads the name's last assignment, unless
+    that one is already being read: a cycle stays unresolved instead of
+    recursing.
     """
 
     def __init__(self, tree: ast.AST, aliases: Dict[str, str]):
@@ -542,18 +594,13 @@ class _LaunchReader:
         self.assigned: Dict[str, List[Tuple[Tuple[int, int], int]]] = {}
         self._reading: set = set()
         self.steps = 0
-        assigns = [
-            n for n in ast.walk(tree) if isinstance(n, (ast.Assign, ast.AnnAssign))
-        ]
-        for node in sorted(assigns, key=lambda n: (n.lineno, n.col_offset)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if node.value is not None and len(targets) == 1:
-                if isinstance(targets[0], ast.Name):
-                    end = (node.end_lineno or node.lineno, node.end_col_offset or 0)
-                    self.assigned.setdefault(targets[0].id, []).append(
-                        (end, len(self.values))
-                    )
-                    self.values.append(node.value)
+        bindings = [b for n in ast.walk(tree) if (b := _assignment(n)) is not None]
+        for node, name, value in sorted(
+            bindings, key=lambda b: (b[0].lineno, b[0].col_offset)
+        ):
+            end = (node.end_lineno or node.lineno, node.end_col_offset or 0)
+            self.assigned.setdefault(name, []).append((end, len(self.values)))
+            self.values.append(value)
 
     def _binding(self, node: ast.AST) -> Optional[int]:
         """Index of the assignment a Name *node* reads, or None."""
@@ -613,6 +660,9 @@ class _LaunchReader:
 
     def word(self, node: ast.AST, depth: int = 0) -> str:
         """One argv word or string part; ``python`` for ``sys.executable``."""
+        # A literal is a leaf, so it costs no read step: a long argv still reads.
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
         if self._exhausted(depth):
             return _UNKNOWN
         index = self._binding(node)
@@ -770,13 +820,19 @@ def invokes_test_runner(source: str) -> bool:
     ``cat``, so it is not. Printing a saved log does neither. Unparseable
     source never ran, so it is not a runner.
 
+    Not detected, so a claim built on them is challenged: a command kept in a
+    container (``cfg['cmd']``) or changed through another name.
+
     Never raises: the run it inspects already happened, so a detector bug
-    reads as "no runner" (logged at debug) instead of failing the tool.
+    reads as "no runner" (logged as a warning) instead of failing the tool.
     """
     try:
         return _detect_test_runner(source)
-    except Exception as e:
-        log.debug("invokes_test_runner: detector failed, treating as no runner: %r", e)
+    except Exception:
+        log.warning(
+            "invokes_test_runner: detector failed; run not counted as a test run",
+            exc_info=True,
+        )
         return False
 
 
