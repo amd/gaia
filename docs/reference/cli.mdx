@@ -3300,11 +3300,13 @@ skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 
 ## Schedule
 
-Run a prompt on a recurring cron schedule and route its output to a sink. Schedules are stored in `~/.gaia/schedules.toml` (hand-editable). The `daemon` action runs a long-lived scheduler that fires each enabled schedule when due.
+Run a prompt on a recurring cron schedule, or once at a set time, and route its output to a sink. Schedules are stored in `~/.gaia/schedules.toml` (hand-editable). The `daemon` action runs a long-lived scheduler that fires each enabled schedule when due.
 
 The running daemon reloads schedules every second, so adding, pausing, resuming, removing, or editing a schedule does not require a restart. Pausing or removing a schedule prevents future runs; it does not interrupt a run already in progress.
 
 A run that comes due while the daemon is running but the machine is asleep or busy still fires once the daemon catches up, as long as that is within an hour of the due time; several missed runs collapse into one. A run more than an hour late, or one that comes due while the same schedule's previous run is still going, is skipped and logged at WARNING with the schedule name. A run that came due while the daemon itself was not running is not replayed on restart.
+
+A one-time schedule (`add --at`) runs once at or after its time, then shows `completed` (or `failed`, with the error in the daemon log) and never runs again; it stays listed until you remove it. If the daemon was not running or the machine was asleep at that time, it runs once, late, as soon as the daemon is up again — however late that is. Pausing it holds it back; resuming it after its time runs it at once. A run cut off by a crash is left `running` and is not retried. One-time schedules are never counted as missed.
 
 Runs that never happened are not silent: the ones a sleep skipped or collapsed, and the ones due while the daemon was not running, are counted on the schedule. `gaia schedule show` prints the total, `missed: 3 runs in all while the PC was off or asleep, or the schedule daemon wasn't running (latest due …)`, and `gaia schedule list` adds `missed=3`. Runs due while a schedule was paused are not counted. The total is kept until the schedule is removed; past 100,000 in one stretch it reads "at least", and the latest due time is still exact. Times are shown in local time.
 
@@ -3318,13 +3320,13 @@ gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 
 | Action | Description |
 |--------|-------------|
-| `add` | Register a new schedule (requires `--name`, `--cron`, and exactly one of `--prompt`/`--skill`) |
-| `list` | List all schedules with their next fire time, and how many runs each missed |
-| `show <name>` | Show one schedule's full configuration, next fire time, and missed runs |
+| `add` | Register a new schedule (requires `--name`, exactly one of `--cron`/`--at`, and exactly one of `--prompt`/`--skill`) |
+| `list` | List all schedules with their next fire time, and how many runs each missed; a one-time schedule shows `once=<state>` (`pending`, `running`, `completed` or `failed`) |
+| `show <name>` | Show one schedule's full configuration, next fire time, and missed runs; for a one-time schedule, its time, state, and when it ran |
 | `remove <name>` | Delete a schedule |
 | `pause <name>` | Disable a schedule without deleting it |
 | `resume <name>` | Re-enable a paused schedule |
-| `run <name>` | Fire a schedule once now (for testing) |
+| `run <name>` | Fire a schedule once now (for testing). A pending one-time schedule is used up by this; one that already ran is refused |
 | `daemon` | Run the long-lived scheduler (blocks until interrupted) |
 
 ### `add` Options
@@ -3332,8 +3334,9 @@ gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--name` | string | _required_ | Unique schedule name |
-| `--cron` | string | _required_ | Cron expression, e.g. `"0 7 * * 1-5"` |
-| `--prompt` | string | - | One-shot prompt to run on each fire (mutually exclusive with `--skill`) |
+| `--cron` | string | - | Repeat on a cron expression, e.g. `"0 7 * * 1-5"` (one of `--cron`/`--at` is required) |
+| `--at` | string | - | Run once: an ISO datetime, local time unless it has an offset (`"2026-11-02T09:00"`, `"2026-11-02T09:00Z"`), or a delay from now (`+30m`, `+2h`, `+1d12h`). A time in the past, a date with no time, or anything else unreadable is rejected and nothing is stored |
+| `--prompt` | string | - | Prompt to run on each fire (mutually exclusive with `--skill`) |
 | `--skill` | string | - | Skill to run — not supported yet, rejected at add time; see note below |
 | `--sink` | string | stdout | Where output goes: `stdout` \| `file:<path>` \| `notification` \| `telegram` |
 | `--to` | string | - | Recipient for the `telegram` sink (Telegram user/chat id) |
@@ -3346,6 +3349,13 @@ gaia schedule add \
   --name morning-brief \
   --cron "0 7 * * 1-5" \
   --prompt "Give me a 3-bullet summary of today's priorities"
+```
+
+```bash Run Once in Two Hours
+gaia schedule add \
+  --name check-build \
+  --at +2h \
+  --prompt "Summarize the latest build log"
 ```
 
 ```bash List Schedules

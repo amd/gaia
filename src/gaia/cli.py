@@ -1710,7 +1710,7 @@ def build_parser():
     # Schedule command — cron-based recurring skill/prompt dispatch (issue #892)
     schedule_parser = subparsers.add_parser(
         "schedule",
-        help="Run a skill or prompt on a cron schedule "
+        help="Run a prompt on a cron schedule or once at a set time "
         "(add|list|show|remove|pause|resume|run|daemon)",
         parents=[parent_parser],
     )
@@ -1720,11 +1720,17 @@ def build_parser():
 
     s_add = schedule_subparsers.add_parser("add", help="Register a new schedule")
     s_add.add_argument("--name", required=True, help="Unique schedule name")
-    s_add.add_argument(
-        "--cron", required=True, help='Cron expression, e.g. "0 7 * * 1-5"'
+    s_add_when = s_add.add_mutually_exclusive_group(required=True)
+    s_add_when.add_argument(
+        "--cron", help='Repeat on a cron expression, e.g. "0 7 * * 1-5"'
+    )
+    s_add_when.add_argument(
+        "--at",
+        help="Run once: an ISO datetime (local time unless it has an offset), "
+        'e.g. "2026-11-02T09:00", or a delay like +30m, +2h, +1d12h',
     )
     s_add_what = s_add.add_mutually_exclusive_group(required=True)
-    s_add_what.add_argument("--prompt", help="One-shot prompt to run on each fire")
+    s_add_what.add_argument("--prompt", help="Prompt to run on each fire")
     s_add_what.add_argument(
         "--skill",
         help="Skill to run — the scheduler is not wired to the skills runtime "
@@ -4464,8 +4470,9 @@ def _handle_schedule(args):
                 "is not wired to it, so a skill-backed schedule would never produce "
                 "output.\n"
                 "Use --prompt instead, e.g.:\n"
-                f'  gaia schedule add --name {args.name} --cron "{args.cron}" '
-                '--prompt "<text>"\n'
+                f"  gaia schedule add --name {args.name} "
+                + (f'--at "{args.at}"' if args.at else f'--cron "{args.cron}"')
+                + ' --prompt "<text>"\n'
                 "Track progress: https://github.com/amd/gaia/issues/1019",
                 file=sys.stderr,
             )
@@ -4475,14 +4482,24 @@ def _handle_schedule(args):
         # disk (#4143).
         from apscheduler.triggers.cron import CronTrigger
 
-        try:
-            CronTrigger.from_crontab(args.cron)
-        except ValueError as exc:
-            print(
-                f"❌ '{args.cron}' is not a valid cron expression: {exc}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+        from gaia.schedule.store import parse_at
+
+        at = None
+        if args.at:
+            try:
+                at = parse_at(args.at).isoformat()
+            except ValueError as exc:
+                print(f"❌ Cannot add schedule {args.name!r}: {exc}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            try:
+                CronTrigger.from_crontab(args.cron)
+            except ValueError as exc:
+                print(
+                    f"❌ '{args.cron}' is not a valid cron expression: {exc}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
         sink_args = {}
         if getattr(args, "to", None):
             sink_args["to"] = args.to
@@ -4496,13 +4513,20 @@ def _handle_schedule(args):
         schedule = Schedule(
             name=args.name,
             cron=args.cron,
+            at=at,
             skill=getattr(args, "skill", None),
             prompt=getattr(args, "prompt", None),
             sink=args.sink,
             sink_args=sink_args,
         )
         store.add(schedule)
-        print(f"✅ Added schedule {schedule.name!r} ({schedule.cron})")
+        if schedule.one_shot:
+            print(
+                f"✅ Added one-time schedule {schedule.name!r} "
+                f"(runs once at {schedule_daemon.next_fire(schedule)})"
+            )
+        else:
+            print(f"✅ Added schedule {schedule.name!r} ({schedule.cron})")
         return
 
     if action == "list":
@@ -4512,9 +4536,10 @@ def _handle_schedule(args):
             return
         for s in schedules.values():
             state = "enabled" if s.enabled else "paused"
-            nxt = schedule_daemon.next_fire_time(s.cron) if s.enabled else None
+            nxt = schedule_daemon.next_fire(s)
+            when = f"once={s.state}" if s.one_shot else f"cron={s.cron!r}"
             print(
-                f"{s.name}  [{state}]  cron={s.cron!r}  sink={s.sink}"
+                f"{s.name}  [{state}]  {when}  sink={s.sink}"
                 + (f"  next={nxt}" if nxt else "")
                 + (f"  missed={s.missed_count}" if s.missed_count else "")
             )
@@ -4523,7 +4548,11 @@ def _handle_schedule(args):
     if action == "show":
         s = store.get(args.name)
         print(f"name:       {s.name}")
-        print(f"cron:       {s.cron}")
+        if s.one_shot:
+            print(f"once at:    {s.due_at().astimezone().isoformat()}")
+            print(f"state:      {s.state}")
+        else:
+            print(f"cron:       {s.cron}")
         print(f"target:     {'skill=' + s.skill if s.skill else 'prompt=' + s.prompt}")
         print(f"sink:       {s.sink}  args={s.sink_args}")
         print(f"enabled:    {s.enabled}")
@@ -4534,7 +4563,14 @@ def _handle_schedule(args):
             return _datetime.fromisoformat(stamp).astimezone().isoformat()
 
         print(f"created_at: {_local(s.created_at) if s.created_at else ''}")
-        print(f"next_fire:  {schedule_daemon.next_fire_time(s.cron)}")
+        if s.one_shot and s.last_run:
+            print(f"ran_at:     {_local(s.last_run)}")
+        nxt = (
+            schedule_daemon.next_fire(s)
+            if s.one_shot
+            else schedule_daemon.next_fire_time(s.cron)
+        )
+        print(f"next_fire:  {nxt}")
         if s.missed_count:
             runs = "run" if s.missed_count == 1 else "runs"
             count = (
@@ -4562,6 +4598,20 @@ def _handle_schedule(args):
         from datetime import datetime, timezone
 
         schedule = store.get(args.name)
+        if schedule.one_shot:
+            claimed = store.claim_one_shot(
+                schedule.name, datetime.now(timezone.utc), due_only=False
+            )
+            if claimed is None:
+                print(
+                    f"❌ One-time schedule {schedule.name!r} already ran "
+                    f"(state: {schedule.state}). Remove it and add it again to "
+                    "run it once more.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            schedule_daemon.run_one_shot(claimed, store)
+            return
         schedule_runner.fire(schedule)
         store.mark_run(
             schedule.name,
