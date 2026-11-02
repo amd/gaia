@@ -114,7 +114,7 @@ def _check_empty_reply(stop_reason: str, api_blocks: List[dict]) -> None:
         raise RuntimeError(
             "Claude returned only thinking blocks "
             f"(stop_reason={reported_stop_reason}) and produced no answer text or "
-            "tool call. Retry the request; if it persists, increase max_tokens."
+            "tool call. Retry the request."
         )
     raise RuntimeError(
         "Claude returned no answer text or tool call "
