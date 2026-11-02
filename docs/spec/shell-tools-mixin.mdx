@@ -95,7 +95,8 @@ allowed-paths rule as an argument, on every segment.
 
 Refused by name are the loader and hook variables — anything that changes
 *which* binary runs or what code one loads: `PATH`, `SHELL`, `ENV`, `IFS`,
-`PAGER`/`EDITOR`/`VISUAL`, and the `LD_*`, `DYLD_*`, `GIT_*`, `GH_*`,
+`PAGER`/`EDITOR`/`VISUAL`, `MORE` (macOS `more` is `less` and reads its options
+from it), and the `LD_*`, `DYLD_*`, `GIT_*`, `GH_*`,
 `PYTEST_*`, `BASH_*`, `NODE_*`, `PERL*`, `RUBY*`, `LESS*`, `JAVA*`, `PS*`
 families. Names match case-insensitively, because Windows matches environment
 names that way. An assignment with no command after it, and one in front of
@@ -429,7 +430,7 @@ flags that write, change system state, or run something are inspected per
 pipeline segment and sent to the prompt (`TIER_CONFIRM`) instead of running
 unasked: `find -exec`/`-delete`/`-fprint*`, `sort -o`/`--compress-program`, a
 second `uniq` operand, `wmic /output`/`/append`/`/record`, `date -s` or a date
-operand, `sysctl -w`/`-p`/`-f`/`--system`/`name=value`, `hostname NAME`/`-F`/`-b`,
+operand (Windows `date /t` only prints, so it still runs), `sysctl -w`/`-p`/`-f`/`--system`/`name=value`, `hostname NAME`/`-F`/`-b`,
 `ipconfig /release`/`/renew`/`/flushdns`/`/registerdns`/`/setclassid`, `file -C`,
 `less`/`more` `-o`/`-O`/`-k`/`--log-file`/`--lesskey-*`/`+command` (a `+N` or `+G`
 line jump still runs), and `arch` with any argument. Short-flag clusters are read

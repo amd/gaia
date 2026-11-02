@@ -235,6 +235,9 @@ def _date_sets_clock(parts: list) -> Optional[str]:
         if skip_next:
             skip_next = False
             continue
+        if part.lower() == "/t":
+            # cmd's `date /t` only prints; GNU date rejects it as an operand.
+            continue
         if part.startswith("--"):
             name = part.split("=", 1)[0]
             matches = [f for f in _DATE_LONG_FLAGS if _long_flag_matches(part, f)]
@@ -910,6 +913,7 @@ DENIED_ENV_NAMES = frozenset(
         "LOCPATH",
         "NLSPATH",
         "TERMINFO",
+        "MORE",  # macOS `more` is `less`, and reads its options from MORE
     }
 )
 

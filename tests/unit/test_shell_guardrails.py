@@ -1482,6 +1482,10 @@ class TestBlanketApproval:
         assert refusal("git status") is None
         assert refusal("git status", auto_approve=True) is None
 
+    def test_windows_date_print_runs_under_either(self, env_pre_approves):
+        assert refusal("date /t") is None
+        assert refusal("date /T", auto_approve=True) is None
+
     def test_full_access_is_a_person_deciding(self, env_pre_approves):
         # `cp`, not `rm`: full access swaps the read-only policy for
         # DEVELOPER_COMMANDS (#3374), which leaves `rm` out on purpose.
@@ -1775,6 +1779,7 @@ class TestStateChangingFlags:
             "date --d x",  # ambiguous --date/--debug: over-read, asked
             "date -x",
             "DATE -s now",
+            "date /t 01-01-2020",
             "sysctl -w kern.maxfiles=1",
             "sysctl kern.maxfiles=1",
             "sysctl -n kern.x=1",
@@ -1866,6 +1871,9 @@ class TestStateChangingFlags:
             "date --rfc-3339=seconds",
             "date -R",
             "date --utc",
+            "date /t",
+            "date /T",
+            "DATE /T",
             "sysctl -a",
             "sysctl -n machdep.cpu.brand_string",
             "sysctl -an",
