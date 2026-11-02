@@ -400,6 +400,36 @@ class TestUpdate:
         assert "both new_start and new_end" in result["error"]
         assert agent.console.asked == []
 
+    @pytest.mark.parametrize(
+        "tool, args",
+        [
+            ("update_calendar_event", {**TARGET, "new_description": "x" * 501}),
+            (
+                "create_calendar_event",
+                {
+                    "title": "Budget review",
+                    "start": "2026-11-03T09:00:00-05:00",
+                    "end": "2026-11-03T10:00:00-05:00",
+                    "notify_attendees": [],
+                    "calendar_account": ACCOUNT,
+                    "description": "x" * 501,
+                },
+            ),
+        ],
+    )
+    def test_a_description_too_long_to_show_is_refused(self, make_agent, tool, args):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = _run(agent, tool, **args)
+        assert result["success"] is False and "500" in result["error"]
+        assert agent.console.asked == [] and fake.writes == []
+
+    def test_a_description_at_the_limit_shows_whole_in_the_prompt(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        text = "y" * 500
+        _run(agent, "update_calendar_event", **TARGET, new_description=text)
+        assert text in format_confirmation_args(agent.console.asked[0][1])
+
     def test_nothing_to_change_is_refused(self, make_agent):
         agent = make_agent(_FakeGoogle())
         result = _run(agent, "update_calendar_event", **TARGET)

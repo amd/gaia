@@ -60,6 +60,8 @@ CALENDAR_PROVIDERS: Tuple[str, ...] = (GOOGLE_CONNECTOR_ID, MICROSOFT_CONNECTOR_
 
 _DOCS_URL = "https://amd-gaia.ai/docs/guides/gaia"
 _DEFAULT_LIST_WINDOW_DAYS = 30
+# Under the CLI prompt's 600-character cut, so the person approves all of what is sent.
+_MAX_DESCRIPTION_CHARS = 500
 _MAX_LIST_LIMIT = 250
 _AVAILABILITY_MAX_EVENTS = 2500
 
@@ -170,6 +172,16 @@ def _people(addresses: Any) -> List[str]:
             f"notify_attendees must hold email addresses; these are not: {bad}."
         )
     return people
+
+
+def _check_description(text: Any) -> None:
+    length = len(str(text or "").strip())
+    if length > _MAX_DESCRIPTION_CHARS:
+        raise CalendarError(
+            f"The description is {length} characters, and the approval prompt can only "
+            f"show {_MAX_DESCRIPTION_CHARS} whole. Shorten it to that, or put a link "
+            "to the longer text in it, then retry."
+        )
 
 
 def _who_gets_told(event: CalendarEvent) -> List[str]:
@@ -478,6 +490,7 @@ class CalendarToolsMixin:
             try:
                 parse_slot(str(args.get("start") or ""), str(args.get("end") or ""))
                 _people(args.get("notify_attendees"))
+                _check_description(args.get("description"))
             except CalendarError as exc:
                 return _refusal("create_calendar_event", str(exc))
             if not str(args.get("title") or "").strip():
@@ -499,6 +512,7 @@ class CalendarToolsMixin:
         def _patch_from(args: Dict[str, Any]) -> EventPatch:
             new_start = str(args.get("new_start") or "").strip()
             new_end = str(args.get("new_end") or "").strip()
+            _check_description(args.get("new_description"))
             if bool(new_start) != bool(new_end):
                 raise CalendarError(
                     "Moving an event needs both new_start and new_end, so its length "
@@ -667,7 +681,7 @@ class CalendarToolsMixin:
                 notify_attendees: Email addresses to invite and notify; [] for none
                 calendar_account: The account it lands on, the `account` from list_calendar_events; a wrong one is refused and the right one named
                 location: Where it is
-                description: Details shown on the event
+                description: Details shown on the event, up to 500 characters
             """
             refusal = _check_create(
                 {
@@ -676,6 +690,7 @@ class CalendarToolsMixin:
                     "end": end,
                     "notify_attendees": notify_attendees,
                     "calendar_account": calendar_account,
+                    "description": description,
                 }
             )
             if refusal is not None:
@@ -736,7 +751,7 @@ class CalendarToolsMixin:
                 new_start: New start with UTC offset, or YYYY-MM-DD; needs new_end
                 new_end: New end with UTC offset, or the last day of an all-day event
                 new_location: New location
-                new_description: New description
+                new_description: New description, up to 500 characters
             """
             args = {
                 "event_id": event_id,
