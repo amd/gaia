@@ -149,6 +149,17 @@ const ROUTES: Record<string, unknown> = {
         removed: [], internet: true, enforced: true,
     },
     'GET /chat/active': { session_ids: [] },
+    'GET /providers/local/status': {
+        state: 'loaded', active_model: 'Gemma-4-E4B-it-GGUF', active_display_name: 'Gemma 4 E4B', active_remote: false,
+        model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B', placement: null, ctx_size: 65536, memory: null, memory_error: null,
+        error: null, base_url: 'http://127.0.0.1:13305', owner: 'gaia', busy: false, restarting: false, restart_error: null,
+    },
+    [`GET /chat/context/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, context: null },
+    [`GET /sessions/${ANSWER_SESSION}/changes`]: { turns: [] },
+    [`GET /sessions/${ANSWER_SESSION}/changes/total`]: {
+        files: [], totals: { files: 0, additions: 0, deletions: 0, uncounted: 0 }, turns: 0, pending: false, untracked: [], incomplete: false,
+    },
+    [`GET /sessions/${ANSWER_SESSION}/outputs`]: { session_id: ANSWER_SESSION, items: [] },
     'GET /chat/permissions': { default_mode: 'ask', sessions: [] },
     [`GET /chat/permissions/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] },
     'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null, publicIp: null },

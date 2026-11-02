@@ -7,6 +7,7 @@ import type { GaiaUpdaterBridge, UpdateState } from '../../hooks/useUpdateStatus
 import { tEn, useT, type Translate } from '../../i18n/useT';
 import { log } from '../../utils/logger';
 import { VersionPicker } from '../VersionPicker';
+import { SettingsDisclosure } from './SettingsDisclosure';
 
 /** "0.25.2-rc.3" is a release candidate; "0.25.2" is not. */
 export function isReleaseCandidate(version: string | null): boolean {
@@ -69,117 +70,120 @@ export function UpdatesSection() {
     const disabled = update.status === 'disabled';
     const working = busy || update.status === 'checking' || update.status === 'downloading';
 
+    const line = `${t('settings.updates.running', { version: update.currentVersion ?? t.bare('settings.advanced.unknown') })} ${describeUpdateStatus(update, t)}`;
+    const needsYou = ['available', 'downloaded', 'error'].includes(update.status) || !!update.pinnedVersion || !!update.configError || !!error;
+
     return (
-        <div className="settings-field" role="group" aria-labelledby="updates-label">
-            <span className="settings-label" id="updates-label">{t('settings.updates.title')}</span>
-            <p className="settings-hint" role="status">
-                {t('settings.updates.running', { version: update.currentVersion ?? t.bare('settings.advanced.unknown') })} {describeUpdateStatus(update, t)}
-            </p>
+        <SettingsDisclosure title={t('settings.updates.title')} hint={line} forceOpen={needsYou}>
+            <div className="settings-field" role="group" aria-labelledby="updates-label">
+                <span className="settings-label" id="updates-label">{t('settings.updates.title')}</span>
+                <p className="visually-hidden" role="status">{line}</p>
 
-            <label className="setting-row">
-                <span>{t('settings.updates.auto')}</span>
-                <span className="toggle-switch">
-                    <input
-                        type="checkbox"
-                        role="switch"
-                        checked={update.autoUpdate}
-                        aria-describedby="updates-auto-hint"
-                        aria-label={t('settings.updates.auto')}
-                        aria-busy={busy}
-                        disabled={disabled}
-                        onChange={() => {
-                            if (!busy) void run(t.bare('settings.updates.savingAuto'), (b) => b.setAutoUpdate(!update.autoUpdate));
-                        }}
-                    />
-                    <span className="toggle-track" />
-                </span>
-            </label>
-            <p className="settings-hint" id="updates-auto-hint">
-                {t('settings.updates.autoHint')}
-            </p>
+                <label className="setting-row">
+                    <span>{t('settings.updates.auto')}</span>
+                    <span className="toggle-switch">
+                        <input
+                            type="checkbox"
+                            role="switch"
+                            checked={update.autoUpdate}
+                            aria-describedby="updates-auto-hint"
+                            aria-label={t('settings.updates.auto')}
+                            aria-busy={busy}
+                            disabled={disabled}
+                            onChange={() => {
+                                if (!busy) void run(t.bare('settings.updates.savingAuto'), (b) => b.setAutoUpdate(!update.autoUpdate));
+                            }}
+                        />
+                        <span className="toggle-track" />
+                    </span>
+                </label>
+                <p className="settings-hint" id="updates-auto-hint">
+                    {t('settings.updates.autoHint')}
+                </p>
 
-            <label className="setting-row">
-                <span>{t('settings.updates.rc')}</span>
-                <span className="toggle-switch">
-                    <input
-                        type="checkbox"
-                        role="switch"
-                        checked={Boolean(update.includePrereleases)}
-                        aria-describedby="updates-rc-hint"
-                        aria-label={t('settings.updates.rc')}
-                        aria-busy={busy}
-                        disabled={disabled}
-                        onChange={() => {
-                            if (!busy) {
-                                void run(t.bare('settings.updates.savingRc'), (b) =>
-                                    b.setIncludePrereleases(!update.includePrereleases));
-                            }
-                        }}
-                    />
-                    <span className="toggle-track" />
-                </span>
-            </label>
-            <p className="settings-hint" id="updates-rc-hint">
-                {t('settings.updates.rcHint')}
-                {isReleaseCandidate(update.currentVersion) && ` ${t('settings.updates.rcCurrent')}`}
-            </p>
+                <label className="setting-row">
+                    <span>{t('settings.updates.rc')}</span>
+                    <span className="toggle-switch">
+                        <input
+                            type="checkbox"
+                            role="switch"
+                            checked={Boolean(update.includePrereleases)}
+                            aria-describedby="updates-rc-hint"
+                            aria-label={t('settings.updates.rc')}
+                            aria-busy={busy}
+                            disabled={disabled}
+                            onChange={() => {
+                                if (!busy) {
+                                    void run(t.bare('settings.updates.savingRc'), (b) =>
+                                        b.setIncludePrereleases(!update.includePrereleases));
+                                }
+                            }}
+                        />
+                        <span className="toggle-track" />
+                    </span>
+                </label>
+                <p className="settings-hint" id="updates-rc-hint">
+                    {t('settings.updates.rcHint')}
+                    {isReleaseCandidate(update.currentVersion) && ` ${t('settings.updates.rcCurrent')}`}
+                </p>
 
-            {update.pinnedVersion && (
-                <p className="settings-hint">
-                    {t('settings.updates.pinned', { version: update.pinnedVersion })}{' '}
+                {update.pinnedVersion && (
+                    <p className="settings-hint">
+                        {t('settings.updates.pinned', { version: update.pinnedVersion })}{' '}
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={busy}
+                            onClick={() => void run(t.bare('settings.updates.resuming'), (b) => b.resumeUpdates())}
+                        >
+                            {t('settings.updates.unpin')}
+                        </button>
+                    </p>
+                )}
+
+                <div className="setting-actions">
+                    {update.status === 'available' && !update.pinnedVersion && (
+                        <button
+                            type="button"
+                            className="btn-primary"
+                            disabled={busy}
+                            onClick={() => void run(t.bare('settings.updates.fetching'), (b) => b.downloadUpdate())}
+                        >
+                            {t('settings.updates.updateTo', { version: update.version ?? '' })}
+                        </button>
+                    )}
+                    {update.status === 'downloaded' && (
+                        <button
+                            type="button"
+                            className="btn-primary"
+                            disabled={busy}
+                            onClick={() => void run(t.bare('settings.updates.restarting'), (b) => b.restart())}
+                        >
+                            {t('settings.updates.restart')}
+                        </button>
+                    )}
                     <button
                         type="button"
                         className="btn-secondary"
-                        disabled={busy}
-                        onClick={() => void run(t.bare('settings.updates.resuming'), (b) => b.resumeUpdates())}
+                        disabled={working || disabled}
+                        onClick={() => void run(t.bare('settings.updates.check'), (b) => b.check())}
                     >
-                        {t('settings.updates.unpin')}
+                        {t('settings.updates.check')}
                     </button>
-                </p>
-            )}
+                    <button
+                        type="button"
+                        className="btn-secondary"
+                        disabled={working || disabled}
+                        onClick={() => setShowPicker(true)}
+                    >
+                        {t('settings.updates.pick')}
+                    </button>
+                </div>
 
-            <div className="setting-actions">
-                {update.status === 'available' && !update.pinnedVersion && (
-                    <button
-                        type="button"
-                        className="btn-primary"
-                        disabled={busy}
-                        onClick={() => void run(t.bare('settings.updates.fetching'), (b) => b.downloadUpdate())}
-                    >
-                        {t('settings.updates.updateTo', { version: update.version ?? '' })}
-                    </button>
-                )}
-                {update.status === 'downloaded' && (
-                    <button
-                        type="button"
-                        className="btn-primary"
-                        disabled={busy}
-                        onClick={() => void run(t.bare('settings.updates.restarting'), (b) => b.restart())}
-                    >
-                        {t('settings.updates.restart')}
-                    </button>
-                )}
-                <button
-                    type="button"
-                    className="btn-secondary"
-                    disabled={working || disabled}
-                    onClick={() => void run(t.bare('settings.updates.check'), (b) => b.check())}
-                >
-                    {t('settings.updates.check')}
-                </button>
-                <button
-                    type="button"
-                    className="btn-secondary"
-                    disabled={working || disabled}
-                    onClick={() => setShowPicker(true)}
-                >
-                    {t('settings.updates.pick')}
-                </button>
+                {update.configError && <p className="settings-error" role="alert">{update.configError}</p>}
+                {error && <p className="settings-error" role="alert">{error}</p>}
+                {showPicker && <VersionPicker onClose={() => setShowPicker(false)} />}
             </div>
-
-            {update.configError && <p className="settings-error" role="alert">{update.configError}</p>}
-            {error && <p className="settings-error" role="alert">{error}</p>}
-            {showPicker && <VersionPicker onClose={() => setShowPicker(false)} />}
-        </div>
+        </SettingsDisclosure>
     );
 }

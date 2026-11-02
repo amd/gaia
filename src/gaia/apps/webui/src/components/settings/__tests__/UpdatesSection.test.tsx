@@ -53,7 +53,7 @@ describe('UpdatesSection', () => {
 
     it('shows auto-update off by default', async () => {
         render(<UpdatesSection />);
-        await waitFor(() => expect(screen.getByText(/running gaia 0\.25\.0/i)).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' })).toBeInTheDocument());
         expect(autoSwitch()).not.toBeChecked();
     });
 
@@ -66,7 +66,7 @@ describe('UpdatesSection', () => {
 
     it('opting into release candidates leaves auto-update off', async () => {
         render(<UpdatesSection />);
-        await screen.findByText(/running gaia 0\.25\.0/i);
+        await screen.findByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' });
         expect(rcSwitch()).not.toBeChecked();
         expect(rcSwitch()).toBeEnabled();
 
@@ -87,7 +87,7 @@ describe('UpdatesSection', () => {
     it('says plainly when no release publishes an update for this platform', async () => {
         state = { ...state, status: 'no-channel', error: 'No GAIA release publishes a desktop update for this platform yet' };
         render(<UpdatesSection />);
-        expect(await screen.findByText(/no gaia release publishes a desktop update/i)).toBeInTheDocument();
+        expect(await screen.findByText(/no gaia release publishes a desktop update/i, { selector: '[role="status"]' })).toBeInTheDocument();
         expect(screen.queryByText(/up to date/i)).toBeNull();
     });
 

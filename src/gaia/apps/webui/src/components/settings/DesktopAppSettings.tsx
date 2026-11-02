@@ -6,6 +6,7 @@ import { ref, type MessageKey } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
 import type { TraySettings } from '../../types/agent';
 import { isMacPlatform } from '../../utils/platform';
+import { SettingsDisclosure } from './SettingsDisclosure';
 
 const TRAY = ref(isMacPlatform() ? 'settings.desktop.menuBar' : 'settings.desktop.tray');
 
@@ -47,31 +48,33 @@ export function DesktopAppSettings() {
     if (!tray) return null;
 
     return (
-        <div className="settings-field" role="group" aria-labelledby="desktop-app-label">
-            <span className="settings-label" id="desktop-app-label">{t('settings.desktop.title')}</span>
-            {TOGGLES.map(({ key, label, hint }) => (
-                <div key={key}>
-                    <label className="setting-row">
-                        <span>{t(label, { tray: TRAY })}</span>
-                        <span className="toggle-switch">
-                            <input
-                                type="checkbox"
-                                role="switch"
-                                checked={!!settings?.[key]}
-                                aria-describedby={`desktop-${key}-hint`}
-                                onChange={() => void toggle(key)}
-                                // The switch being saved stays focusable; disabling it would drop keyboard focus.
-                                disabled={!settings || (saving !== null && saving !== key)}
-                                aria-busy={saving === key}
-                                aria-label={t(label, { tray: TRAY })}
-                            />
-                            <span className="toggle-track" />
-                        </span>
-                    </label>
-                    <p className="settings-hint" id={`desktop-${key}-hint`}>{t(hint, { tray: TRAY })}</p>
-                </div>
-            ))}
-            {error && <p className="settings-error" role="alert">{error}</p>}
-        </div>
+        <SettingsDisclosure title={t('settings.desktop.title')}>
+            <div className="settings-field" role="group" aria-labelledby="desktop-app-label">
+                <span className="settings-label" id="desktop-app-label">{t('settings.desktop.title')}</span>
+                {TOGGLES.map(({ key, label, hint }) => (
+                    <div key={key}>
+                        <label className="setting-row">
+                            <span>{t(label, { tray: TRAY })}</span>
+                            <span className="toggle-switch">
+                                <input
+                                    type="checkbox"
+                                    role="switch"
+                                    checked={!!settings?.[key]}
+                                    aria-describedby={`desktop-${key}-hint`}
+                                    onChange={() => void toggle(key)}
+                                    // The switch being saved stays focusable; disabling it would drop keyboard focus.
+                                    disabled={!settings || (saving !== null && saving !== key)}
+                                    aria-busy={saving === key}
+                                    aria-label={t(label, { tray: TRAY })}
+                                />
+                                <span className="toggle-track" />
+                            </span>
+                        </label>
+                        <p className="settings-hint" id={`desktop-${key}-hint`}>{t(hint, { tray: TRAY })}</p>
+                    </div>
+                ))}
+                {error && <p className="settings-error" role="alert">{error}</p>}
+            </div>
+        </SettingsDisclosure>
     );
 }

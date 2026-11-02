@@ -538,8 +538,9 @@ for (const locale of ['ar', 'en']) {
         test(`desktop app and updates: ${state} (${locale})`, async ({ page }) => {
             await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p, update); });
             await page.getByRole('button', { name: /Settings/ }).first().click();
-            const updates = page.getByRole('group', { name: /Updates/ });
+            const updates = page.locator('.settings-disclosure', { hasText: /Updates/ });
             await expect(updates).toBeVisible();
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await updates.scrollIntoViewIfNeeded();
             await shot(page, `updates-${locale}-${state}`);
             expect(await audit(page)).toEqual([]);

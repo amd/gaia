@@ -127,6 +127,7 @@ export function NotificationSettings() {
                             <label htmlFor="battery-floor">{t('settings.alerts.battery')}</label>
                             <select
                                 id="battery-floor"
+                                className="settings-input settings-select-compact"
                                 value={settings.batteryFloor}
                                 disabled={!settings.keepAwake}
                                 onChange={(ev) => settings.update({ batteryFloor: Number(ev.target.value) })}

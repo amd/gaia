@@ -617,6 +617,12 @@
     gap: 4px;
 }
 
+.settings-select-compact {
+    flex: none;
+    inline-size: auto;
+    min-inline-size: 96px;
+}
+
 /* A section's own box and heading repeat the disclosure around it. */
 .settings-disclosure-body .settings-section {
     margin: 0;
