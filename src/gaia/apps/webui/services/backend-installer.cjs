@@ -58,6 +58,8 @@ const STATE_FILE = path.join(GAIA_HOME, "electron-install-state.json");
 const LOG_FILE = path.join(GAIA_HOME, "electron-install.log");
 // hub/installer.py writes this once the flagship is installed; first-run setup installs it.
 const FLAGSHIP_SENTINEL = path.join(GAIA_HOME, "agents", "gaia", ".installed");
+/** `gaia init --agent-only` kept the installed agent: the hub couldn't be reached. */
+const AGENT_KEPT_EXIT = 5;
 
 // Room for what this installer writes: Python 3.12, uv's wheel cache and the
 // `amd-gaia[ui]` venv (0.3 GB on macOS arm64 for 0.25.1rc5, under 1 GB in
@@ -1744,11 +1746,13 @@ async function installBackend(opts = {}) {
  * quit part way through refreshes again on the next launch.
  */
 async function refreshAgent(gaiaBin, opts = {}) {
+  const version = resolveBackendVersion(opts);
   if (!fs.existsSync(FLAGSHIP_SENTINEL)) {
     log("No GAIA agent installed yet — first-run setup installs it");
+    // Nothing to refresh: a refresh recorded earlier is done, not pending forever.
+    setState(STATES.READY, { version, installedVersion: getInstalledVersion(gaiaBin) });
     return;
   }
-  const version = resolveBackendVersion(opts);
   setState(STATES.INSTALLING, { stage: STAGES.AGENT_REFRESH, version });
   makeProgressReporter(opts.onProgress)(STAGES.AGENT_REFRESH, null, "Updating the GAIA agent");
 
@@ -1756,8 +1760,14 @@ async function refreshAgent(gaiaBin, opts = {}) {
     stageLabel: "agent",
     env: { ...process.env, COLUMNS: "1000" },
   });
+  const lastLine = `${result.stderr || ""}`.trim().split(/\r?\n/).pop();
+  if (result.code === AGENT_KEPT_EXIT) {
+    // Offline: the working agent stays, and the next launch tries the update again.
+    log(`Kept the installed GAIA agent; the update runs again next launch: ${lastLine}`);
+    setState(STATES.PARTIAL, { stage: STAGES.AGENT_REFRESH, version, message: lastLine });
+    return;
+  }
   if (result.code !== 0) {
-    const lastLine = `${result.stderr || ""}`.trim().split(/\r?\n/).pop();
     throw new InstallError(
       lastLine ? lastLine.replace(/^Error:\s*/, "") : `The GAIA agent update exited ${result.code}.`,
       { stage: STAGES.AGENT_REFRESH, code: result.code }
@@ -1773,6 +1783,8 @@ async function refreshAgent(gaiaBin, opts = {}) {
  * unfinished stage says no, so it reaches ensureBackend and the user.
  */
 function isBackendCurrent() {
+  // A local wheel is reinstalled on every launch, as ensureBackend says.
+  if (process.env.GAIA_LOCAL_WHEEL) return false;
   const bin = findGaiaBin();
   if (!bin) return false;
   const prev = getState();

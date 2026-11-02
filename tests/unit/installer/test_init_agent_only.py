@@ -96,7 +96,9 @@ def test_every_failure_exits_nonzero_with_its_cause_last(
     else:
         hub.side_effect = boom
 
-    assert run_agent_refresh() == 1
+    # An unreachable hub keeps the working agent: the app retries later.
+    kept = broken == "published_artifact_sha256"
+    assert run_agent_refresh() == (init_command.AGENT_KEPT_EXIT if kept else 1)
 
     last = capsys.readouterr().err.strip().splitlines()[-1]
     assert cause in last

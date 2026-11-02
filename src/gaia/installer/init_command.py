@@ -893,6 +893,10 @@ class MemoryShortfall(str):
     """A verification failure from too little free memory, not a broken model."""
 
 
+#: ``--agent-only`` kept the installed agent because the hub couldn't be reached.
+AGENT_KEPT_EXIT = 5
+
+
 class CheckTimedOut(str):
     """A verification that never finished, such as a server stuck reloading."""
 
@@ -1268,6 +1272,8 @@ class InitCommand:
         self._runtime_failed = False
         # Why the agent could not be checked or installed, for refresh_agent().
         self._agent_problem: Optional[str] = None
+        # The working agent stayed because the hub couldn't be asked about it.
+        self._agent_kept = False
 
     def _print(self, message: str, end: str = "\n"):
         """Print message to stdout."""
@@ -3413,15 +3419,18 @@ class InitCommand:
         """Bring the flagship up to this release, with no Lemonade or model step.
 
         The desktop app runs this after an update. Returns 1 with the cause as
-        the last line of stderr when the agent could not be checked or replaced.
+        the last line of stderr when the agent could not be checked or replaced,
+        and :data:`AGENT_KEPT_EXIT` when the hub couldn't be reached and the
+        installed agent stays, so the app can carry on and try again later.
         """
         try:
             self._ensure_hub_agent_installed()
         except Exception as e:  # noqa: BLE001 - reported below, exits non-zero
             self._agent_problem = str(e)
+            self._agent_kept = False
         if self._agent_problem:
             print(f"Error: {self._agent_problem}", file=sys.stderr)
-            return 1
+            return AGENT_KEPT_EXIT if self._agent_kept else 1
         return 0
 
     def _installed_agent_is_stale(self, agent_id: str, installed) -> bool:
@@ -3457,6 +3466,7 @@ class InitCommand:
                 f"download server ({exc}); keeping it ({installed.version}). Run "
                 f"`{self._flagship_install_command()}` again to retry."
             )
+            self._agent_kept = True
             return False
         return bool(want) and want.lower() != installed.artifact_sha256.lower()
 

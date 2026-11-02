@@ -360,7 +360,7 @@ gaia init [OPTIONS]
 | `--profile, -p` | string | gaia | Profile to initialize (gaia, minimal, sd, chat, rag, mcp, vlm, email, npu, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only set up Lemonade Server) |
-| `--agent-only` | flag | false | Only install or update the GAIA agent, with no Lemonade or model steps. The desktop app runs this after an update |
+| `--agent-only` | flag | false | Only install or update the GAIA agent, with no Lemonade or model steps. The desktop app runs this after an update. Exits `5` when the download server could not be reached and the installed agent was kept |
 | `--skip-webui-build` | flag | false | Skip building the Agent UI frontend (dev/source installs only; same effect as setting `GAIA_SKIP_WEBUI_BUILD`) |
 | `--force-reinstall` | flag | false | Reinstall GAIA's own Lemonade Server |
 | `--force-models` | flag | false | Force re-download models (deletes then re-downloads each model) |

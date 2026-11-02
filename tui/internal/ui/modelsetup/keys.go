@@ -22,6 +22,11 @@ func (m Model) key(msg tea.KeyMsg) (Model, tea.Cmd) {
 	if m.ask != askNone {
 		return m.answer(k)
 	}
+	// A request is on its way: a second Enter would send it again. Only Esc
+	// while the models are first read leaves; the reply lands on this screen.
+	if m.busy != "" && !(k == "esc" && m.scr == scrLoading) {
+		return m, nil
+	}
 	if m.tooSmall() && k != "esc" {
 		return m, nil
 	}
