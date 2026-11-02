@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """A task whose tools reached the answer key fails as contaminated (#4017)."""
 
+import argparse
 import json
 import os
 import shutil
@@ -291,8 +292,8 @@ def test_the_legitimate_corpus_is_large_enough():
 def _real_key_reads():
     text = KEY.read_text(encoding="utf-8")
     lines = text.splitlines()
-    first = next(i for i, l in enumerate(lines) if '"must_establish"' in l)
-    last = next(i for i, l in enumerate(lines) if '"genuine_answer"' in l)
+    first = next(i for i, line in enumerate(lines) if '"must_establish"' in line)
+    last = next(i for i, line in enumerate(lines) if '"genuine_answer"' in line)
     question = next(t for t in json.loads(text)["tasks"] if "genuine_answer" in t)
     return {
         "the file as read": text,
@@ -345,7 +346,7 @@ def test_one_field_alone_passes_the_field_check():
     # The accepted trade-off: a grep that shows only one field is not caught by
     # what came back, only by naming the path.
     lines = KEY.read_text(encoding="utf-8").splitlines()
-    shown = "\n".join(l for l in lines if "genuine_answer" in l)
+    shown = "\n".join(line for line in lines if "genuine_answer" in line)
     entries = _gaia(_tool("Grep", {"pattern": "genuine_answer"}, shown))
     assert ft.answer_key_contact(entries) == ""
 
@@ -499,11 +500,7 @@ def test_old_scorecards_without_the_field_still_summarize():
     assert ft.summarize(_card(entry))["contaminated"] == 0
 
 
-def test_the_gate_message_names_an_outage_and_contamination_together(
-    tmp_path, capsys
-):
-    import argparse
-
+def test_the_gate_message_names_an_outage_and_contamination_together(tmp_path, capsys):
     from gaia.cli import _handle_eval_tasks
 
     down = {**_entry("c"), "error": "unreachable", "error_kind": "unavailable"}
