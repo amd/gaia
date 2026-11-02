@@ -207,9 +207,10 @@ schemas live in [`schemas/`](./schemas):
   `capability_matrix` (latest version's SPEC.md / SKILL.md / EVALUATION.md /
   CAPABILITY_MATRIX.md markdown, `""` if none was published), `scorecard` (latest
   version's SCORECARD.md body with the YAML front matter stripped, `""` if none
-  was published), the optional `eval_scorecard_url` + `eval_score` (the raw
-  scorecard's public URL and its parsed 0–100 aggregate, absent when no scorecard
-  was published), the optional `npm_package` /
+  was published), the optional `eval_scorecard_url` + `eval_score` +
+  `eval_score_version` (the raw scorecard's public URL, its parsed 0–100
+  aggregate, and the agent version it was measured at, all absent when no
+  scorecard was published), the optional `npm_package` /
   `playground_url` (present only when the manifest declares them — they drive the
   hub page's npm install method and playground launcher), and the optional
   `package` (`{ filename, size_bytes, files: [{name, size_bytes}] }` — the
