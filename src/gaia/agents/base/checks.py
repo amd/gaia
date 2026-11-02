@@ -19,11 +19,16 @@ Pure and dependency-free: tools, the agent loop, and hub agents all import it.
 from __future__ import annotations
 
 import ast
+import bisect
 import hashlib
 import re
 import shlex
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
+
+from gaia.logger import get_logger
+
+log = get_logger(__name__)
 
 #: Result key a command-running tool sets on every call that ran:
 #: ``CheckResult.to_dict()`` for a check, ``None`` for anything else.
@@ -478,16 +483,24 @@ _SHELL_COMMAND_BREAK_RE = re.compile(r"&&|\|\||[;|&\n]")
 _LEADING_ENV_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 #: A word whose value the code does not fix.
 _UNKNOWN = "\0"
+#: How deeply nested an expression the reader follows before leaving it open.
+_MAX_EXPRESSION_DEPTH = 64
+#: How many sub-expressions the reader reads for one launch call.
+_MAX_READ_STEPS = 5000
+#: How many ``__import__(...).x(...)`` calls deep a dotted name is followed.
+_MAX_IMPORT_CHAIN = 8
 
 
-def _dotted(node: ast.AST, aliases: Dict[str, str]) -> Optional[str]:
+def _dotted(node: ast.AST, aliases: Dict[str, str], depth: int = 0) -> Optional[str]:
     """``a.b.c`` for a Name/Attribute chain, with its import alias resolved."""
     parts = []
     while isinstance(node, ast.Attribute):
         parts.append(node.attr)
         node = node.value
     if isinstance(node, ast.Call):
-        module = _imported_module(node, aliases)
+        if depth >= _MAX_IMPORT_CHAIN:
+            return None
+        module = _imported_module(node, aliases, depth + 1)
         if module is None:
             return None
         parts.append(module)
@@ -498,9 +511,11 @@ def _dotted(node: ast.AST, aliases: Dict[str, str]) -> Optional[str]:
     return ".".join(reversed(parts))
 
 
-def _imported_module(call: ast.Call, aliases: Dict[str, str]) -> Optional[str]:
+def _imported_module(
+    call: ast.Call, aliases: Dict[str, str], depth: int = 0
+) -> Optional[str]:
     """The module ``__import__('x')`` / ``importlib.import_module('x')`` returns."""
-    if _dotted(call.func, aliases) not in _IMPORT_CALLS or not call.args:
+    if _dotted(call.func, aliases, depth) not in _IMPORT_CALLS or not call.args:
         return None
     arg = call.args[0]
     if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
@@ -511,12 +526,22 @@ def _imported_module(call: ast.Call, aliases: Dict[str, str]) -> Optional[str]:
 
 
 class _LaunchReader:
-    """What a launch call in one parsed snippet would run."""
+    """What a launch call in one parsed snippet would run.
+
+    A name reads as its latest assignment that finished before the use, so
+    ``args = ['pytest'] + args`` reads the right-hand ``args`` from the line
+    above. A use with none before it (a function body reading a global set
+    later) reads the name's last assignment, unless that one is already being
+    read: a cycle stays unresolved instead of recursing.
+    """
 
     def __init__(self, tree: ast.AST, aliases: Dict[str, str]):
         self.aliases = aliases
-        # Last assignment in source order wins: ``cmd = [...]; run(cmd)``.
-        self.assigned: Dict[str, ast.AST] = {}
+        self.values: List[ast.AST] = []
+        #: name -> [(end position, index into values)], in source order.
+        self.assigned: Dict[str, List[Tuple[Tuple[int, int], int]]] = {}
+        self._reading: set = set()
+        self.steps = 0
         assigns = [
             n for n in ast.walk(tree) if isinstance(n, (ast.Assign, ast.AnnAssign))
         ]
@@ -524,66 +549,107 @@ class _LaunchReader:
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             if node.value is not None and len(targets) == 1:
                 if isinstance(targets[0], ast.Name):
-                    self.assigned[targets[0].id] = node.value
+                    end = (node.end_lineno or node.lineno, node.end_col_offset or 0)
+                    self.assigned.setdefault(targets[0].id, []).append(
+                        (end, len(self.values))
+                    )
+                    self.values.append(node.value)
 
-    def _resolve(self, node: ast.AST, depth: int = 0) -> ast.AST:
-        while isinstance(node, ast.Name) and node.id in self.assigned and depth < 8:
-            node = self.assigned[node.id]
-            depth += 1
-        return node
+    def _binding(self, node: ast.AST) -> Optional[int]:
+        """Index of the assignment a Name *node* reads, or None."""
+        if not isinstance(node, ast.Name):
+            return None
+        entries = self.assigned.get(node.id)
+        if not entries:
+            return None
+        use = (node.lineno, node.col_offset)
+        # Statements never overlap, so *entries* is sorted by end too.
+        before = bisect.bisect_right(entries, (use, len(self.values)))
+        index = entries[before - 1][1] if before else entries[-1][1]
+        return None if index in self._reading else index
 
-    def text(self, node: ast.AST) -> Optional[str]:
+    def _exhausted(self, depth: int) -> bool:
+        """True once a read is too deep or too costly (``x = x + x`` doubles)."""
+        self.steps += 1
+        return depth > _MAX_EXPRESSION_DEPTH or self.steps > _MAX_READ_STEPS
+
+    def _follow(self, index: int, read, depth: int):
+        self._reading.add(index)
+        try:
+            return read(self.values[index], depth + 1)
+        finally:
+            self._reading.discard(index)
+
+    def text(self, node: ast.AST, depth: int = 0) -> Optional[str]:
         """The string *node* evaluates to; ``_UNKNOWN`` marks parts left open."""
-        node = self._resolve(node)
+        if self._exhausted(depth):
+            return None
+        index = self._binding(node)
+        if index is not None:
+            return self._follow(index, self.text, depth)
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             return node.value
         if isinstance(node, ast.JoinedStr):
             return "".join(
-                v.value if isinstance(v, ast.Constant) else self.word(v.value)
+                (
+                    v.value
+                    if isinstance(v, ast.Constant)
+                    else self.word(v.value, depth + 1)
+                )
                 for v in node.values
             )
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
             # ``sys.executable + ' -m pytest'``; a list sum is argv(), not text.
-            left, right = self.text(node.left), self.text(node.right)
+            left = self.text(node.left, depth + 1)
+            right = self.text(node.right, depth + 1)
             if left is None and right is None:
                 return None
-            return self.word(node.left) + self.word(node.right)
+            return self.word(node.left, depth + 1) + self.word(node.right, depth + 1)
         if isinstance(node, ast.Call):
             name = _dotted(node.func, self.aliases)
             if name == "shutil.which" and node.args:
-                return self.text(node.args[0])
+                return self.text(node.args[0], depth + 1)
         return None
 
-    def word(self, node: ast.AST) -> str:
+    def word(self, node: ast.AST, depth: int = 0) -> str:
         """One argv word or string part; ``python`` for ``sys.executable``."""
-        if _dotted(self._resolve(node), self.aliases) in _PYTHON_EXPRESSIONS:
+        if self._exhausted(depth):
+            return _UNKNOWN
+        index = self._binding(node)
+        if index is not None:
+            return self._follow(index, self.word, depth)
+        if _dotted(node, self.aliases) in _PYTHON_EXPRESSIONS:
             return "python"
-        text = self.text(node)
+        text = self.text(node, depth)
         return _UNKNOWN if text is None else text
 
-    def argv(self, node: ast.AST) -> Optional[List[str]]:
+    def argv(self, node: ast.AST, depth: int = 0) -> Optional[List[str]]:
         """*node* as an argv list, or None when it is not one."""
-        node = self._resolve(node)
+        if self._exhausted(depth):
+            return None
+        index = self._binding(node)
+        if index is not None:
+            return self._follow(index, self.argv, depth)
         if isinstance(node, (ast.List, ast.Tuple)):
-            return [self.word(item) for item in node.elts]
+            return [self.word(item, depth + 1) for item in node.elts]
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
             # ``[sys.executable, '-m', 'pytest'] + sys.argv[1:]``: the head decides.
-            head = self.argv(node.left)
+            head = self.argv(node.left, depth + 1)
             if head is None:
                 return None
-            tail = self.argv(node.right)
+            tail = self.argv(node.right, depth + 1)
             return head + (tail if tail is not None else [_UNKNOWN])
         if not isinstance(node, ast.Call):
             return None
         if _dotted(node.func, self.aliases) == "shlex.split" and node.args:
-            text = self.text(node.args[0])
+            text = self.text(node.args[0], depth + 1)
             return None if text is None else _split_words(text)
         if (
             isinstance(node.func, ast.Attribute)
             and node.func.attr == "split"
             and not node.args
         ):
-            text = self.text(node.func.value)
+            text = self.text(node.func.value, depth + 1)
             return None if text is None else text.split()
         return None
 
@@ -703,10 +769,23 @@ def invokes_test_runner(source: str) -> bool:
     ``sh -c`` / ``cmd /c``. ``subprocess.run(['cat', 'pytest.log'])`` launches
     ``cat``, so it is not. Printing a saved log does neither. Unparseable
     source never ran, so it is not a runner.
+
+    Never raises: the run it inspects already happened, so a detector bug
+    reads as "no runner" (logged at debug) instead of failing the tool.
     """
     try:
+        return _detect_test_runner(source)
+    except Exception as e:
+        log.debug("invokes_test_runner: detector failed, treating as no runner: %r", e)
+        return False
+
+
+def _detect_test_runner(source: str) -> bool:
+    """:func:`invokes_test_runner` without its guard, so tests see a crash."""
+    try:
         tree = ast.parse(source or "")
-    except (SyntaxError, ValueError):
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        # Too deeply nested for the parser: it could not have run either.
         return False
     aliases: Dict[str, str] = {}
     for node in ast.walk(tree):
@@ -737,6 +816,7 @@ def invokes_test_runner(source: str) -> bool:
         if name in _RUNNER_CALLS:
             return True
         launch = _LAUNCH_CALLS.get(name or "")
+        reader.steps = 0
         if launch is not None and _launch_runs_check(node, *launch, reader):
             return True
     return False

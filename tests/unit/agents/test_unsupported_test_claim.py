@@ -18,6 +18,7 @@ Three layers:
 from __future__ import annotations
 
 import json
+import random
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,6 +27,7 @@ from gaia.agents.base.agent import _MAX_TEST_CLAIM_CORRECTIONS, Agent
 from gaia.agents.base.checks import (
     CHECK_RESULT_KEY,
     CheckResult,
+    _detect_test_runner,
     argv_check_label,
     attach_check,
     check_from_command,
@@ -1014,3 +1016,168 @@ def test_a_runner_without_a_summary_is_still_not_a_check():
 def test_source_is_required():
     with pytest.raises(TypeError):
         check_from_python_run("snippet:x", 0, SAVED_SUMMARY)  # type: ignore[call-arg]
+
+
+# ---------------------------------------------------------------------------
+# A name reassigned from itself reads its earlier value, never recurses
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import subprocess\nargs = ['-q']\nargs = ['pytest'] + args\nsubprocess.run(args)",
+        "import subprocess, sys\ncmd = [sys.executable]\ncmd = cmd + ['-m', 'pytest']\n"
+        "subprocess.run(cmd)",
+        "import subprocess\ncmd = 'python'\ncmd = cmd + ' -m pytest'\n"
+        "subprocess.run(cmd, shell=True)",
+        "import os\ncmd = 'python'\ncmd = cmd + ' -m pytest'\nos.system(cmd)",
+        "import os\ncmd = 'pytest'\ncmd = f'{cmd} -q'\nos.system(cmd)",
+        "import subprocess\na = ['pytest'] + b\nb = a + ['-q']\nsubprocess.run(b)",
+        "import subprocess\ndef go():\n    subprocess.run(CMD)\nCMD = ['pytest']\ngo()",
+    ],
+    ids=lambda c: c[:60],
+)
+def test_a_name_built_from_its_earlier_value_is_read_in_order(code):
+    assert _detect_test_runner(code) is True
+    check = check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code)
+    assert check is not None and check.label == "pytest" and check.passed
+    result = {"status": "success", "stdout": SAVED_SUMMARY, "return_code": 0}
+    assert verification_check_label("run_python", {"code": code}, result) is not None
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import subprocess\na = b + ['x']\nb = a + ['y']\nsubprocess.run(b)",
+        "import subprocess\na = b + 'x'\nb = a + 'y'\nsubprocess.run(a, shell=True)",
+        "import os\na = f'{b}'\nb = f'{a}'\nos.system(b)",
+        "import subprocess\nx = x\nsubprocess.run(x)",
+        "import subprocess\nx = [x]\nsubprocess.run(x)",
+        "import subprocess\nx = x + x\nsubprocess.run(x)",
+        "import subprocess\nx = y\ny = z\nz = x\nsubprocess.run(z)",
+        "import subprocess\nargs = ['-q']\nargs = args + ['cat']\nsubprocess.run(args)",
+    ],
+    ids=lambda c: c[:60],
+)
+def test_names_that_only_refer_to_each_other_are_not_a_runner(code):
+    assert _detect_test_runner(code) is False
+    assert check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code) is None
+
+
+def _odd_snippets(count: int = 200) -> list:
+    """Deterministic syntax errors, deep nesting, self-references, huge literals."""
+    rng = random.Random(4013)
+    launches = [
+        "subprocess.run({})",
+        "subprocess.run({}, shell=True)",
+        "os.system({})",
+        "os.execvp('x', {})",
+        "runpy.run_module({})",
+        "asyncio.create_subprocess_exec({}, {})",
+        "__import__('subprocess').run({})",
+    ]
+    values = [
+        "x",
+        "[x]",
+        "x + x",
+        "f'{x}'",
+        "['pytest'] + x",
+        "x + ['-m', 'pytest']",
+        "sys.executable + x",
+        "x.split()",
+        "shlex.split(x)",
+        "shutil.which(x)",
+        "y",
+        "[y, x]",
+        "'python -m pytest'",
+        "('npm', 'test')",
+        "None",
+        "1 + 2",
+    ]
+    chain = "".join(f"v{i} = v{i + 1}\n" for i in range(2000))
+    fixed = [
+        "",
+        "(",
+        ")))",
+        "subprocess.run(",
+        "x = = 1",
+        "def f(:\n  pass",
+        "\x00",
+        "import subprocess\nsubprocess.run(['pytest'",
+        "lambda: (yield)",
+        "import subprocess\nsubprocess.run()",
+        "import subprocess\nsubprocess.run(*args, **kw)",
+        "import os\nos.execl()",
+        "import os\nos.spawnv(os.P_WAIT)",
+        "(" * 200 + "1" + ")" * 200,
+        "[" * 90 + "]" * 90,
+        "import subprocess\nsubprocess.run(" + "[" * 90 + "'pytest'" + "]" * 90 + ")",
+        "import os\nos.system(" + " + ".join(["'a'"] * 3000) + ")",
+        "import subprocess\nsubprocess.run(" + " + ".join(["['a']"] * 3000) + ")",
+        "import subprocess\nsubprocess.run(x" + ".y" * 3000 + ")",
+        "f" + "()" * 500,
+        "__import__('a')" + ".b('c')" * 500 + ".main()",
+        "importlib.import_module(importlib.import_module('x'))",
+        "import os\nos.system('" + "x" * 100_000 + "')",
+        "import subprocess\nsubprocess.run([" + ", ".join(["'a'"] * 20000) + "])",
+        "x = 1\n" * 5000 + "import subprocess\nsubprocess.run(x)",
+        "x = 'a'\n" + "x = x + x\n" * 3000 + "import os\nos.system(x)",
+        "import subprocess\n" + chain + "subprocess.run(v0)",
+        "import subprocess\n" + chain + "v2000 = v0\nsubprocess.run(v0)",
+        "import os\nx = f'{f\"{x}\"}'\nos.system(x)",
+        "import subprocess\nsubprocess.run(args=args)",
+        'import subprocess\nsubprocess.run("\'unterminated")',
+        "import subprocess\nsubprocess.run(['sh', '-c', \"pytest '\"])",
+        "import subprocess\nsubprocess.run(['sh', '-c'])",
+        "import subprocess\nsubprocess.run(['cmd', '/c'])",
+        "import subprocess\nsubprocess.run(['uv', 'run'])",
+        "import subprocess\nsubprocess.run(['uv', 'run', '-m'])",
+        "import subprocess\nsubprocess.run(['python', '-X'])",
+        "import subprocess\nsubprocess.run([" + "'sh', '-c', " * 50 + "'pytest'])",
+        'import os\nos.system("' + "sh -c '" * 40 + "pytest" + "'" * 40 + '")',
+        "x: int\nimport subprocess\nsubprocess.run(x)",
+        "(a, b) = c = d = ['pytest']\nimport subprocess\nsubprocess.run(d)",
+    ]
+    snippets = list(fixed)
+    alphabet = "()[]{}'\"+=:,.\n x_fpytesm-"
+    while len(snippets) < count:
+        kind = rng.randrange(3)
+        if kind == 0:
+            size = rng.randrange(80)
+            snippets.append("".join(rng.choice(alphabet) for _ in range(size)))
+            continue
+        lines = ["import os, sys, shlex, shutil, runpy, asyncio, subprocess"]
+        for _ in range(rng.randrange(1, 8)):
+            lines.append(f"{rng.choice(['x', 'y'])} = {rng.choice(values)}")
+        call = rng.choice(launches)
+        lines.append(call.format(*(rng.choice(["x", "y"]) for _ in range(2))))
+        source = "\n".join(lines)
+        if kind == 2:
+            source = source[: rng.randrange(len(source) + 1)]
+        snippets.append(source)
+    return snippets[:count]
+
+
+def test_the_detector_never_raises_on_odd_code():
+    """Unguarded, so a crash fails here instead of hiding behind the guard."""
+    corpus = _odd_snippets()
+    assert len(corpus) == 200
+    for code in corpus:
+        assert _detect_test_runner(code) in (True, False), code[:80]
+
+
+def test_a_detector_crash_reads_as_no_runner_and_is_logged():
+    code = "import pytest\npytest.main()"
+    result = {"status": "success", "stdout": SAVED_SUMMARY, "return_code": 0}
+    with (
+        patch(
+            "gaia.agents.base.checks._detect_test_runner",
+            side_effect=RecursionError("boom"),
+        ),
+        patch("gaia.agents.base.checks.log") as log,
+    ):
+        assert invokes_test_runner(code) is False
+        assert check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code) is None
+        assert verification_check_label("run_python", {"code": code}, result) is None
+    assert log.debug.called
