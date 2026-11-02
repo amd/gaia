@@ -289,3 +289,44 @@ def test_examples_and_build_trees_are_ignored(cpp_tree):
         d.mkdir(parents=True)
         (d / "CMakeLists.txt").write_text(bad, encoding="utf-8")
     assert _errors(cpp_tree, _sbom(_good_packages())) == []
+
+
+@pytest.mark.parametrize(
+    "declare",
+    [
+        f'FetchContent_Declare(json URL "{JSON_URL}" URL_HASH "SHA256={JSON_SHA}")',
+        f"FetchContent_Declare(\n  json\n  URL {JSON_URL} URL_HASH SHA256={JSON_SHA}\n)",
+        f"FetchContent_Declare(json\r\n  URL {JSON_URL}\r\n  URL_HASH SHA256={JSON_SHA})",
+    ],
+    ids=["quoted-single-line", "url-and-hash-on-one-line", "crlf"],
+)
+def test_equivalent_declare_layouts_parse(declare):
+    deps = check_cpp_sbom.fetchcontent_dependencies(declare, "t")
+    assert [(d.url, d.sha256, d.version) for d in deps] == [
+        (JSON_URL, JSON_SHA, "3.11.3")
+    ]
+
+
+def test_lowercase_declare_is_still_checked(cpp_tree):
+    cmake = cpp_tree / "CMakeLists.txt"
+    cmake.write_text(
+        cmake.read_text(encoding="utf-8")
+        + "fetchcontent_declare(\n  fmt\n  URL https://github.com/fmtlib/fmt/archive/"
+        "refs/tags/10.2.1.tar.gz\n  URL_HASH SHA256=" + "f" * 64 + "\n)\n",
+        encoding="utf-8",
+    )
+    errors = _errors(cpp_tree, _sbom(_good_packages()))
+    assert any("fmtlib/fmt" in e and "no SBOM package" in e for e in errors), errors
+
+
+def test_bracket_comment_and_bom_do_not_fail(cpp_tree):
+    cmake = cpp_tree / "CMakeLists.txt"
+    cmake.write_text(
+        "#[[\nFetchContent_Declare(old\n  GIT_REPOSITORY https://x/y.git)\n]]\n"
+        + cmake.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (cpp_tree / "SBOM.spdx.json").write_text(
+        json.dumps(_sbom(_good_packages())), encoding="utf-8-sig"
+    )
+    assert check_cpp_sbom.check(cpp_tree, cpp_tree / "SBOM.spdx.json") == []

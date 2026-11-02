@@ -30,10 +30,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CPP_DIR = REPO_ROOT / "cpp"
 ROOT_PACKAGE = "gaia-cpp"
 
-_DECLARE_RE = re.compile(r"FetchContent_Declare\s*\((.*?)\)", re.DOTALL)
-_URL_RE = re.compile(r"^\s*URL\s+(\S+)\s*$", re.MULTILINE)
-_HASH_RE = re.compile(r"^\s*URL_HASH\s+SHA256=([0-9a-fA-F]{64})\s*$", re.MULTILINE)
-_GIT_RE = re.compile(r"^\s*GIT_REPOSITORY\s", re.MULTILINE)
+# CMake command names are case-insensitive; keyword arguments are not.
+_DECLARE_RE = re.compile(r"FetchContent_Declare\s*\((.*?)\)", re.DOTALL | re.IGNORECASE)
+_BRACKET_COMMENT_RE = re.compile(r"#\[(=*)\[.*?\]\1\]", re.DOTALL)
+_SHA256_RE = re.compile(r"SHA256=([0-9a-fA-F]{64})")
 _PROJECT_RE = re.compile(
     r"^\s*project\s*\(\s*gaia-cpp\s+VERSION\s+([0-9][0-9.]*)", re.MULTILINE
 )
@@ -49,7 +49,16 @@ class Dependency:
 
 
 def _strip_comments(cmake: str) -> str:
+    cmake = _BRACKET_COMMENT_RE.sub("", cmake)
     return "\n".join(line.split("#", 1)[0] for line in cmake.splitlines())
+
+
+def _value_after(args: List[str], keyword: str) -> Optional[str]:
+    if keyword in args:
+        i = args.index(keyword)
+        if i + 1 < len(args):
+            return args[i + 1]
+    return None
 
 
 def fetchcontent_dependencies(cmake_text: str, origin: str) -> List[Dependency]:
@@ -57,31 +66,28 @@ def fetchcontent_dependencies(cmake_text: str, origin: str) -> List[Dependency]:
     deps: List[Dependency] = []
     errors: List[str] = []
     for block in _DECLARE_RE.findall(_strip_comments(cmake_text)):
-        name = block.split()[0] if block.split() else "<unnamed>"
+        args = [a.strip('"') for a in block.split()]
+        name = args[0] if args else "<unnamed>"
         where = f"{origin} FetchContent_Declare({name})"
-        if _GIT_RE.search(block):
+        if "GIT_REPOSITORY" in args:
             errors.append(
                 f"{where} fetches from git; pin a release archive with URL + "
                 "URL_HASH SHA256 so the SBOM can record a checksum"
             )
             continue
-        url = _URL_RE.search(block)
-        sha = _HASH_RE.search(block)
+        url = _value_after(args, "URL")
+        sha = _SHA256_RE.fullmatch(_value_after(args, "URL_HASH") or "")
         if not url or not sha:
             errors.append(f"{where} needs both URL and URL_HASH SHA256=<hex>")
             continue
-        tag = _TAG_RE.search(url.group(1))
+        tag = _TAG_RE.search(url)
         if not tag:
             errors.append(
-                f"{where} URL {url.group(1)} is not a .../refs/tags/<version> "
+                f"{where} URL {url} is not a .../refs/tags/<version> "
                 "archive, so its version cannot be checked against the SBOM"
             )
             continue
-        deps.append(
-            Dependency(
-                where, url.group(1), sha.group(1).lower(), tag.group(1)
-            )
-        )
+        deps.append(Dependency(where, url, sha.group(1).lower(), tag.group(1)))
     if errors:
         raise ValueError("\n".join(errors))
     return deps
@@ -117,7 +123,7 @@ def vendored_dependencies(third_party: Path) -> List[Dependency]:
                 f"UPSTREAM_SHA256 and the version, found {len(manifests)}"
             )
         fields: Dict[str, str] = {}
-        for line in manifests[0].read_text(encoding="utf-8").splitlines():
+        for line in manifests[0].read_text(encoding="utf-8-sig").splitlines():
             if "=" in line:
                 key, _, value = line.partition("=")
                 fields[key.strip()] = value.strip()
@@ -143,7 +149,7 @@ def vendored_dependencies(third_party: Path) -> List[Dependency]:
 def vcpkg_dependencies(vcpkg_json: Path) -> List[str]:
     if not vcpkg_json.exists():
         return []
-    data = json.loads(vcpkg_json.read_text(encoding="utf-8"))
+    data = json.loads(vcpkg_json.read_text(encoding="utf-8-sig"))
     names = []
     for dep in data.get("dependencies", []):
         names.append(dep if isinstance(dep, str) else dep["name"])
@@ -161,7 +167,7 @@ def check(cpp_dir: Path, sbom_path: Path) -> List[str]:
     """Return a list of drift errors (empty when the SBOM matches the build)."""
     errors: List[str] = []
     try:
-        sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+        sbom = json.loads(sbom_path.read_text(encoding="utf-8-sig"))
     except FileNotFoundError:
         return [f"{sbom_path} does not exist"]
     except json.JSONDecodeError as exc:
@@ -194,7 +200,7 @@ def check(cpp_dir: Path, sbom_path: Path) -> List[str]:
     accounted = set()
 
     cmake_path = cpp_dir / "CMakeLists.txt"
-    cmake_text = cmake_path.read_text(encoding="utf-8")
+    cmake_text = cmake_path.read_text(encoding="utf-8-sig")
     root = by_name.get(ROOT_PACKAGE)
     project = _PROJECT_RE.search(cmake_text)
     if root is None:
@@ -213,7 +219,7 @@ def check(cpp_dir: Path, sbom_path: Path) -> List[str]:
         pinned = []
         for source in cmake_sources(cpp_dir):
             pinned += fetchcontent_dependencies(
-                source.read_text(encoding="utf-8"),
+                source.read_text(encoding="utf-8-sig"),
                 f"cpp/{source.relative_to(cpp_dir).as_posix()}",
             )
         pinned += vendored_dependencies(cpp_dir / "third_party")
