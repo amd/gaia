@@ -3,6 +3,7 @@
 """Verilog, SystemVerilog and VHDL files are chunked at design units (#871)."""
 
 import hashlib
+import time
 from pathlib import Path
 
 import pytest
@@ -293,6 +294,23 @@ class TestVerilog:
 
     def test_empty_file(self):
         assert chunk_code_file("empty.sv", "   \n\n") == []
+
+    @pytest.mark.parametrize(
+        "line",
+        ["(* a *) " * 2000 + "wire x;", "(* a " * 2000 + "wire x;", "(*" * 4000],
+        ids=["closed", "unclosed", "openers"],
+    )
+    def test_attribute_runs_parse_in_linear_time(self, line):
+        content = f"module top;\n{line}\nendmodule\n"
+        start = time.perf_counter()
+        chunks = chunk_code_file("long.sv", content)
+        assert time.perf_counter() - start < 1.0
+        assert {c.symbol_type for c in chunks} == {"module"}
+        assert all(c.symbol_name.startswith("top") for c in chunks)
+
+    def test_many_attributes_still_name_the_module(self):
+        header = "(* a *) " * 50 + "module many(input x);"
+        assert _symbols("m.sv", f"{header}\nendmodule\n") == [("module", "many")]
 
 
 class TestVhdl:

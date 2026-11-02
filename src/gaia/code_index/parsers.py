@@ -236,7 +236,8 @@ _LANG_PATTERNS: dict = {
 # Line-anchored so `endmodule`, `end process` and `// module x` never match.
 _SV_LIFETIME = r"(?:(?:automatic|static)\s+)?"
 # Line start plus any same-line `(* keep_hierarchy = "yes" *)` attributes.
-_SV_START = r"^[ \t]*(?:\(\*.*?\*\)[ \t]*)*"
+# The body can't cross a `*)`, so a long run of attributes can't backtrack exponentially.
+_SV_START = r"^[ \t]*(?:\(\*(?:[^*\n]|\*(?!\)))*\*\)[ \t]*)*"
 # A plain identifier, or an escaped one (`\foo-bar`) that runs to whitespace.
 _SV_NAME = r"(?P<name>\w+|\\\S+)"
 _VERILOG_PATTERNS = [
