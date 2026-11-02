@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
@@ -41,6 +42,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 from gaia_agent_email import (
     action_store,
     autonomy_kill,
+    autonomy_last_cycle,
     schedule_store,
     task_store,
     trust,
@@ -933,6 +935,7 @@ class EmailTriageAgent(
         task_store.init_schema(self)
         trust.init_trust_schema(self)
         autonomy_kill.init_schema(self)
+        autonomy_last_cycle.init_schema(self)
         # Session preferences persist in state.db (like the trust ledger), so
         # they survive restarts independent of the embedding model / MemoryStore
         # (#2427). Must precede _load_persisted_preferences() below.
@@ -2270,6 +2273,7 @@ class EmailTriageAgent(
             "trust_threshold": self.config.autonomy_trust_threshold,
             "trusted_scope_count": sum(1 for s in scopes if s["trusted"]),
             "scopes": scopes,
+            "last_cycle": autonomy_last_cycle.read_last(self),
         }
 
     def run_autonomy_cycle(
@@ -2281,13 +2285,37 @@ class EmailTriageAgent(
         CLI invokes (mirroring ``run_briefing_job`` for the briefing feature).
         Returns a JSON-serializable report — the ``Proposal`` objects are
         replaced by their persisted dict form.
+
+        Every cycle, completed or failed, also records a counts-only summary
+        that ``autonomy_status`` returns as ``last_cycle`` (#2618), so its
+        outcome survives a caller that timed out or a scheduler with no caller.
         """
-        report = self._run_email_autonomy_cycle(context)
-        persisted = []
-        for proposal in report["proposals"]:
-            self.propose(proposal)
-            persisted.append(proposal.to_dict())
-        report["proposals"] = persisted
+        started_at = time.time()
+        try:
+            report = self._run_email_autonomy_cycle(context)
+            persisted = []
+            for proposal in report["proposals"]:
+                self.propose(proposal)
+                persisted.append(proposal.to_dict())
+            report["proposals"] = persisted
+        except Exception as exc:
+            failure = _sanitize_autonomy_error(None, exc)
+            autonomy_last_cycle.record(
+                self,
+                autonomy_last_cycle.summarize_failure(
+                    self.config.autonomy_level,
+                    f"{failure['error_type']}: {failure['error']}",
+                    started_at=started_at,
+                    finished_at=time.time(),
+                ),
+            )
+            raise
+        autonomy_last_cycle.record(
+            self,
+            autonomy_last_cycle.summarize_report(
+                report, started_at=started_at, finished_at=time.time()
+            ),
+        )
         return report
 
     # -- Phase I3 batch-organize counter -----------------------------------

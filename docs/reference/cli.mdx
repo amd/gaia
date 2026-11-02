@@ -1046,6 +1046,7 @@ on stderr.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--query, -q` | string | - | Single query to execute |
+| `--agent` | string | flagship | Run a registered agent instead, such as a custom agent in `~/.gaia/agents/<id>/`. Ids come from `gaia agent status`. The agent keeps its own default model; only an explicit `--model` overrides it, and `default_model` from config does not. An unknown id exits `2` and lists the registered ids. The flagship-only flags (`--index`, `--watch`, `--chunk-size`, `--max-chunks`, `--max-indexed-files`, `--max-total-chunks`, `--mcp-tool-limit`, `--allowed-paths`, `--no-learned-skills`, `--ui`) are rejected with it. See [Custom agents](/guides/custom-agent#running-it-from-the-cli) |
 | `--model` | string | auto-selected by agent | Override the model the GAIA agent uses (`None` means let the agent pick; see `GaiaAgentConfig.model_id`). Falls back to `default_model` from config — see [Configuration](#configuration) |
 | `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |
@@ -1302,7 +1303,7 @@ gaia slack stop
 ```bash
 gaia email -q "Which messages need a reply today?"   # one-shot query
 gaia email -i                                        # interactive loop
-gaia email autonomy status                           # autonomy level and trust summary
+gaia email autonomy status                           # autonomy level, trust summary, last cycle
 ```
 
 | Option | Description |
@@ -1315,7 +1316,7 @@ gaia email autonomy status                           # autonomy level and trust 
 | `--logging-level` | Log level for this CLI process only; the agent runs in the daemon's email sidecar, whose logs are in `gaia daemon logs --agent email` |
 | `--spec` | Write the HTML endpoint spec to disk (`--output PATH`, default `~/.gaia/email/endpoint-spec.html`) and open it; needs no LLM |
 
-`gaia email autonomy` takes `status`, `trust`, `set-level`, `pause`, `resume`, `kill` and `run`.
+`gaia email autonomy` takes `status`, `trust`, `set-level`, `pause`, `resume`, `kill` and `run`. `status` also shows when the last cycle finished, how long it took and what it did (or that none has run, or that it failed and why), including cycles the agent ran on its own schedule. `run` waits as long as the daemon relay does (300 s, or longer with `GAIA_AGENT_TOOL_TIMEOUT`); if it gives up first, the cycle keeps going and `status` shows its result.
 
 [→ Email Guide](/guides/email)
 
@@ -1696,7 +1697,7 @@ gaia connectors <subcommand> [OPTIONS]
 | Subcommand | Description |
 |-----------|-------------|
 | `list` (alias `status`) | List connectors in the catalog with their status (`--json` for machine-readable output) |
-| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes, `--grant-agent <agent-id>` to also grant the connector to that agent (e.g. `installed:email`) in the same flow, `--device` for the device-code flow |
+| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes, `--grant-agent <agent-id>` to also grant the connector to that agent (e.g. `installed:email`) in the same flow, `--device` for the device-code flow. The browser sign-in link works for 15 minutes |
 | `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys), or `--client-id` / `--client-secret` to store an OAuth connector's client credentials (the secret is required for Google only; cannot be combined with `--set`/`--json`) |
 | `test <id>` | Run a health check for a configured connector |
 | `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. |
@@ -2588,7 +2589,7 @@ gaia eval benchmark [OPTIONS]
 | `--output-dir` | str | — | Write `scorecard.json` / `summary.md` / `variance.json` |
 | `--compare` | path | — | Compare throughput against a saved baseline (non-gating for throughput; a ctx-window mismatch vs the baseline is a hard error) |
 | `--save-baseline` | flag | off | Save this run's scorecard as the throughput baseline |
-| `--ctx-size` | int | `16384` | Exact ctx window to pin the model load to (#1892 envelope: 16384 target / 32768 max). Verified by readback and stamped into `scorecard.json` / `quality.json`; values above the envelope max are allowed but warned loudly |
+| `--ctx-size` | int | `16384` | Exact ctx window to pin the model load to (#1892 envelope: 16384 target / 32768 max). Verified by readback and stamped into `scorecard.json` / `quality.json`; values above the envelope max are allowed but warned loudly. A run whose triage prompt outgrows the window exits 1 with the token counts instead of reporting 0% accuracy |
 
 <CodeGroup>
 ```bash Benchmark the primary model

@@ -1113,10 +1113,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         .then((data) => {
                             // A queued message may already be streaming; its own end refetches.
                             if (isStale() || useChatStore.getState().isStreaming) return;
-                            // Saved steps rebuild only tool cards; the live list also
-                            // holds confirmation and question cards, so it wins when
-                            // the message has one (matched by id, else role+content).
-                            // stopState isn't persisted; carry it by id.
+                            // Only cards a tool step persisted come back from the
+                            // backend; keep the live ones (e.g. confirmations) by
+                            // id, else role+content.
+                            // stopState isn't persisted either; carry it by id.
                             const prevMsgs = useChatStore.getState().messages;
                             const prevWithCards = prevMsgs.filter((m) => m.cards && m.cards.length > 0);
                             const msgs: Message[] = fromApiMessages(data.messages).map((m) => {

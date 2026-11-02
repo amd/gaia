@@ -361,7 +361,7 @@ unknown `render` degrades to the generic result card (see §7).
 
 ### 4.3 Generic render primitives (#2108)
 
-Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers seven
+Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers eight
 **generic primitives** any agent can emit on `tool_result.render` without
 shipping its own frontend component. `data` must match the schema for the key:
 
@@ -370,7 +370,8 @@ shipping its own frontend component. `data` must match the schema for the key:
 | `table` | `{ title?: string, columns: string[], rows: Array<Array<string\|number\|boolean\|null>> }` |
 | `key_value` | `{ title?: string, items: Array<{key: string, value: string\|number\|boolean\|null}> }` |
 | `list` | `{ title?: string, ordered?: boolean, items: Array<string\|number> }` |
-| `image` | `{ src: string, alt?: string, caption?: string }` |
+| `image` | `{ src: string, alt?: string, caption?: string, path?: string }` |
+| `audio` | `{ src: string, caption?: string, path?: string, duration_seconds?: number }` — added (additive, MINOR) for generated music and sound effects (#540) |
 | `diff` | `{ title?: string, unified: string }` — a unified-diff text; lines are styled by their `+` / `-` / `@@` prefix |
 | `guide` | `{ kind: "guide", guideType: "recipe"\|"workout"\|"howto"\|"checklist"\|"itinerary", title: string, description: string, notes: string, servings: integer\|null, items: string[], steps: string[] }` — `items` are the ingredients, equipment, materials, checklist entries or packing list; `steps` are the recipe steps, exercises, how-to steps or one line per day ("Day 1 - Lisbon: …"), and `[]` for a checklist; `servings` is set only for a recipe. The flagship's `show_recipe`, `show_workout`, `show_how_to`, `show_checklist` and `show_itinerary` emit it |
 | `calculator` | `{ kind: "calculator", calculator: "tip", title: string, currency: string, inputs: { bill: number, tipPercent: number, people: integer } }` or `{ kind: "calculator", calculator: "loan", title: string, currency: string, inputs: { amount: number, annualRatePercent: number, years: number, downPayment: number } }` — starting numbers only; the card computes the tip, total and per-person share, or the monthly payment, total paid and interest, and recomputes as the person edits them. `title` may be `""`; `currency` is an ISO 4217 code such as `"EUR"`. The flagship's `show_tip_calculator` and `show_loan_calculator` emit it |
@@ -383,9 +384,22 @@ Rules every receiver implements and every producer can rely on:
   raw `data` so the turn stays debuggable. A card is never silently dropped
   and a bad card never blanks the message.
 - **`image.src` accepts only inline base64 raster data** matching
-  `^data:image/(png|jpe?g|gif|webp);base64,` — SVG is deliberately excluded
-  (it can carry script), and remote URLs (`http(s)://`) are rejected. Anything
-  else is an invalid payload.
+  `^data:image/(png|jpe?g|gif|webp);base64,`, **or a generated-media
+  reference** `/api/media/image/<name>` — SVG is deliberately excluded (it can
+  carry script), and remote URLs (`http(s)://`) are rejected. Anything else is
+  an invalid payload.
+- **`audio.src` accepts only a generated-media reference**
+  `/api/media/audio/<name>`. A generated-media reference names one
+  URL-encoded file name (no separators, no `..`) that the Agent UI backend
+  serves from GAIA's own generation folder (`GET /api/media/{kind}/{name}`);
+  `path` is that file on disk. A terminal can show neither, so the TUI draws
+  the caption, `path` and (for audio) the length instead.
+- **No sidecar emits `image`-by-reference or `audio` today.** The Agent UI
+  host builds them from a successful `generate_image` / `generate_music` /
+  `generate_sound_effect` result's `image_path` / `audio_path` (carried in
+  `tool_result.data`), whether the agent ran in-process or behind `/query`,
+  so no sidecar `apiVersion` changes. An older sidecar that omits
+  `audio_path` simply gets no audio card.
 - **500-item render cap.** `table` rows, `list` items, and `key_value` items
   render at most 500 entries; the card shows a visible `+N more (truncated)`
   row when capped. Producers should pre-trim to what the user actually needs.
@@ -553,6 +567,19 @@ from the very next gated call, including one in that turn. An unknown session,
 or a `key` the session does not hold, is a `404`. **Offer `always` only to a
 peer at contract ≥ 2.26**: an older one grants it with no way to list or revoke
 it.
+
+### 5.4 Listing a session's tools (schema 2.27, flagship)
+
+**`GET /v1/gaia/sessions/{session_id}/tools`** →
+`{session_id, tools: [{name, description, category}]}`.
+
+The tools the session's own agent can call now, in registry order, skills
+loaded in earlier turns included. `description` is the text the model is
+given. `category` is a `KNOWN_TOOLS` mixin name (`rag`, `file_io`, `shell`,
+...), `mcp`, `skill`, or `agent` for a tool the agent class defines itself. An
+unknown session is a `404`: the route never builds an agent just to answer,
+since that agent would not be the one the session talks to. **Ask only a peer
+at contract ≥ 2.27**; an older one 404s the path itself.
 
 ---
 

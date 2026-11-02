@@ -65,24 +65,26 @@ export function isEchoOfFailedTool(event: StreamEvent, steps: AgentStep[]): bool
     return last.success === false || (!!last.active && last.success == null);
 }
 
-/** The cards a saved turn drew: the server keeps each one on the tool step that made it. */
-export function cardsFromSteps(steps: unknown): RenderCardData[] | undefined {
-    if (!Array.isArray(steps)) return undefined;
-    const cards = steps
-        .filter((s): s is { render: string; data: unknown } => typeof s?.render === 'string' && s.render.length > 0)
-        .map((s) => ({ render: s.render, data: s.data }));
-    return cards.length ? cards : undefined;
+/** The cards a reloaded answer drew, from the steps that persisted them. */
+function cardsFromSteps(steps: AgentStep[] | undefined): RenderCardData[] | undefined {
+    const cards = (steps || [])
+        .filter((s) => typeof s.render === 'string' && s.render.length > 0)
+        .map((s) => ({ render: s.render as string, data: s.data }));
+    return cards.length > 0 ? cards : undefined;
 }
 
-/** Messages as the API sends them, with steps, stats and cards under the names the view reads. */
+/** Messages as the API sends them, with steps and stats under the names the view reads. */
 export function fromApiMessages(raw: unknown[] | undefined): Message[] {
-    return (raw || []).map((m: any) => ({
-        ...m,
-        agentSteps: m.agentSteps || m.agent_steps || undefined,
-        cards: m.cards || cardsFromSteps(m.agentSteps || m.agent_steps),
-        stats: m.stats || m.inference_stats || undefined,
-        turnSummary: m.turnSummary || m.turn_summary || undefined,
-    }));
+    return (raw || []).map((m: any) => {
+        const agentSteps = m.agentSteps || m.agent_steps || undefined;
+        return {
+            ...m,
+            agentSteps,
+            cards: m.cards || cardsFromSteps(agentSteps),
+            stats: m.stats || m.inference_stats || undefined,
+            turnSummary: m.turnSummary || m.turn_summary || undefined,
+        };
+    });
 }
 
 export function policyReceiptAnchor(receiptId: string): string {
