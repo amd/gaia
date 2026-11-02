@@ -1003,6 +1003,16 @@ The agent supports the **Model Context Protocol** in both directions — connect
     The usual cause is that GAIA isn't set up yet. The app shows its setup steps in that case; `gaia init` from a terminal does the same.
   </Accordion>
 
+  <Accordion title="Mobile access says ngrok is required">
+    Mobile access reaches this PC from your phone through [ngrok](https://ngrok.com/download), which you install once. The dialog shows the install command for your system with a **Copy** button; run it, then press **Retry**. ngrok also needs a free account's authtoken:
+
+    ```bash
+    ngrok config add-authtoken <YOUR_TOKEN>
+    ```
+
+    Copy the token from [your ngrok dashboard](https://dashboard.ngrok.com/get-started/your-authtoken).
+  </Accordion>
+
   <Accordion title="No model loaded">
     ```bash
     gaia download --agent chat

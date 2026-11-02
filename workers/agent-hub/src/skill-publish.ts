@@ -21,7 +21,7 @@ import { assertAuditGate, manifestDigest, parseAuditReport } from "./audit";
 import { rebuildIndex, upsertSkillVersion } from "./catalog";
 import { HttpError, json } from "./http";
 import {
-  ARTIFACT_FILENAME_RE,
+  assertArtifactFilename,
   maxBytes,
   optionalTextPart,
   requiredTextPart,
@@ -35,6 +35,7 @@ import {
   skillAuditKey,
   skillChangelogKey,
   skillDocKey,
+  SKILL_RESERVED_FILENAMES,
   writeSkillManifest,
 } from "./storage";
 import type { ArtifactInfo, Env, VersionEntry } from "./types";
@@ -107,14 +108,7 @@ export async function handleSkillPublish(
   );
 
   const filename = artifactFile.name;
-  if (!ARTIFACT_FILENAME_RE.test(filename)) {
-    throw new HttpError(
-      400,
-      "invalid_artifact",
-      `Artifact filename ${JSON.stringify(filename)} is invalid. Use a single path ` +
-        `segment of letters, digits, '.', '_', '+', '-' (e.g. 'web-research-0.1.0.zip').`
-    );
-  }
+  assertArtifactFilename(filename, SKILL_RESERVED_FILENAMES, "web-research-0.1.0.zip");
 
   // One id namespace across every catalog lane: hub URLs, install commands, and
   // the catalog are keyed by id, so a skill may not shadow an agent package.

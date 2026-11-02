@@ -110,6 +110,13 @@ public:
     /// body asks for one. Off by default so non-streaming tests are unaffected.
     void enableSseStreaming(bool enabled) { sseStreaming_ = enabled; }
 
+    /// Serve `rawSse` verbatim as the next streamed reply (needs
+    /// enableSseStreaming). Lets tests send error events and malformed frames.
+    void pushSseStream(const std::string& rawSse) {
+        std::lock_guard<std::mutex> lk(mu_);
+        sseQueue_.push_back(rawSse);
+    }
+
     void clearQueue() {
         std::lock_guard<std::mutex> lk(mu_);
         responseQueue_.clear();
@@ -161,6 +168,18 @@ private:
 
                           if (sseStreaming_ &&
                               req.body.find("\"stream\":true") != std::string::npos) {
+                              std::string raw;
+                              {
+                                  std::lock_guard<std::mutex> lk(mu_);
+                                  if (!sseQueue_.empty()) {
+                                      raw = std::move(sseQueue_.front());
+                                      sseQueue_.pop_front();
+                                  }
+                              }
+                              if (!raw.empty()) {
+                                  res.set_content(raw, "text/event-stream");
+                                  return;
+                              }
                               sendSseChatStream(res);
                               return;
                           }
@@ -283,6 +302,7 @@ private:
     bool reportModelLoaded_ = true;
     mutable std::mutex mu_;
     std::deque<QueuedResponse> responseQueue_;
+    std::deque<std::string> sseQueue_;
     std::vector<std::string> receivedBodies_;
     std::atomic<int> requestCount_{0};
     std::atomic<int> loadCount_{0};
