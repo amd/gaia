@@ -102,6 +102,8 @@ def test_no_judge_credential_returns_1_no_judge_no_report(monkeypatch):
     _set_model_env(monkeypatch)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    # A `claude` CLI on PATH is a subscription transport too.
+    monkeypatch.setattr("gaia.eval.judge_client.shutil.which", lambda _name: None)
     summary = _summary(_gate(False))
     fake_judge, fake_generate, fake_load_corpus, fake_score, fake_summarize = (
         _install_fakes(monkeypatch, summary)

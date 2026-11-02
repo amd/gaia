@@ -1076,14 +1076,21 @@ def build_parser():
         "current folder without asking. Implies --dangerously-skip-permissions",
     )
 
-    # Create a parent parser for common arguments
-    parent_parser = argparse.ArgumentParser(add_help=False)
-    parent_parser.add_argument(
+    # --stats is split out so a command whose handler never reads it (email)
+    # can take the rest without accepting a silent no-op.
+    base_flags_parser = argparse.ArgumentParser(add_help=False)
+    base_flags_parser.add_argument(
         "--logging-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         default="INFO",
         help="Set the logging level (default: INFO)",
     )
+    base_flags_parser.add_argument(
+        "--no-lemonade-check",
+        action="store_true",
+        help="Skip Lemonade server check (for CI/testing without Lemonade)",
+    )
+    parent_parser = argparse.ArgumentParser(add_help=False, parents=[base_flags_parser])
     # Shared --config flag. Attached only to commands that read the persistent
     # config (chat/llm/prompt + the `gaia config` subcommands).
     config_path_parser = argparse.ArgumentParser(add_help=False)
@@ -1101,11 +1108,6 @@ def build_parser():
         action="store_true",
         dest="show_stats",
         help="Show performance statistics",
-    )
-    parent_parser.add_argument(
-        "--no-lemonade-check",
-        action="store_true",
-        help="Skip Lemonade server check (for CI/testing without Lemonade)",
     )
 
     # Backend flags live on separate parents so each command accepts only the
@@ -1367,7 +1369,7 @@ def build_parser():
             "(Settings → Connectors)."
         ),
         parents=[
-            parent_parser,
+            base_flags_parser,
             model_parser,
             base_url_parser,
             trace_parser,
@@ -1395,14 +1397,6 @@ def build_parser():
             "Verbose mode — emit structured logs for every triage decision "
             "and tool call (recommended when benchmarking against other "
             "email agents)."
-        ),
-    )
-    email_parser.add_argument(
-        "--debug",
-        action="store_true",
-        help=(
-            "Debug mode — adds full prompt + LLM response logging to "
-            "verbose output. Sensitive payloads in logs."
         ),
     )
     email_parser.add_argument(
@@ -1542,11 +1536,6 @@ def build_parser():
         "--streaming",
         action="store_true",
         help="Enable real-time streaming of LLM responses",
-    )
-    api_parser.add_argument(
-        "--step-through",
-        action="store_true",
-        help="Enable step-through debugging mode (pause at each agent step)",
     )
     api_parser.set_defaults(action="api")
 
@@ -2045,7 +2034,7 @@ Examples:
   # Run all scenarios in a category
   gaia eval agent --category rag_quality
 
-  # Regenerate corpus documents and validate manifest
+  # Validate the corpus documents against manifest.json
   gaia eval agent --generate-corpus
 
   # Run architecture audit only (no LLM calls)
@@ -2115,7 +2104,10 @@ Examples:
     agent_eval_parser.add_argument(
         "--generate-corpus",
         action="store_true",
-        help="Regenerate corpus documents (CSV, etc.) and validate manifest.json",
+        help=(
+            "Validate the committed corpus documents against manifest.json "
+            "(fails if a listed file is missing)"
+        ),
     )
     agent_eval_parser.add_argument(
         "--backend",
@@ -2360,8 +2352,8 @@ Examples:
   gaia eval sessions --dataset-only --out eval/results/sessions
 
 A TUI must already be running with --control-port; this drives THAT session so
-the run is visible on screen. Judging needs ANTHROPIC_API_KEY (the repo .env is
-read automatically).
+the run is visible on screen. The judge uses your Claude Code login (the
+`claude` CLI), or ANTHROPIC_API_KEY when it is set.
 """,
     )
     sessions_eval_parser.add_argument(
@@ -5539,11 +5531,15 @@ Let me know your answer!
                 capture_session(capture_sid)
                 return
 
-            # --generate-corpus: regenerate corpus documents and validate manifest
+            # --generate-corpus: validate the committed corpus against its manifest
             if getattr(args, "generate_corpus", False):
                 from gaia.eval.runner import generate_corpus
 
-                generate_corpus()
+                try:
+                    generate_corpus()
+                except RuntimeError as e:
+                    print(f"[ERROR] {e}", file=sys.stderr)
+                    sys.exit(1)
                 return
 
             # --compare: diff two scorecard files, no eval run needed
@@ -5842,10 +5838,10 @@ Let me know your answer!
                     "--control <path to its control.json>."
                 )
 
-            from gaia.eval.claude import ClaudeClient
+            from gaia.eval.judge_client import make_judge_client
 
             driver = TUIDriver(Path(control))
-            client = ClaudeClient()
+            client = make_judge_client()
 
             def _progress(index, total, result):
                 mark = "OK " if result.passed else ("ERR" if result.error else "LOW")
@@ -6504,7 +6500,7 @@ def handle_email_command(args):
         if not success:
             sys.exit(1)
 
-    verbose = bool(getattr(args, "verbose", False) or getattr(args, "debug", False))
+    verbose = bool(getattr(args, "verbose", False))
     query = getattr(args, "query", None)
     interactive = getattr(args, "interactive", False)
 
@@ -6770,8 +6766,6 @@ def handle_api_command(args):
                 os.environ["GAIA_API_SHOW_PROMPTS"] = "1"
             if getattr(args, "streaming", False):
                 os.environ["GAIA_API_STREAMING"] = "1"
-            if getattr(args, "step_through", False):
-                os.environ["GAIA_API_STEP_THROUGH"] = "1"
 
             from gaia.api.local_http import (
                 UnauthenticatedBindError,
@@ -6800,7 +6794,6 @@ def handle_api_command(args):
                 getattr(args, "debug", False)
                 or getattr(args, "show_prompts", False)
                 or getattr(args, "streaming", False)
-                or getattr(args, "step_through", False)
             ):
                 print("\n🐛 Debug features enabled:")
                 if getattr(args, "debug", False):
@@ -6809,8 +6802,6 @@ def handle_api_command(args):
                     print("   • Show prompts")
                 if getattr(args, "streaming", False):
                     print("   • LLM streaming")
-                if getattr(args, "step_through", False):
-                    print("   • Step-through mode")
 
             print("\n📍 API Endpoint:")
             print(f"   http://{args.host}:{args.port}/v1/chat/completions")
@@ -7630,8 +7621,13 @@ def handle_cache_command(args):
             if is_available:
                 print("✓ Context7 is AVAILABLE (npx found, service working)")
             else:
-                print("✗ Context7 is UNAVAILABLE (npx not found or service failed)")
-                print("  Library documentation search is unavailable.")
+                print(
+                    "- Context7 (optional) is not available: npx not found or "
+                    "the service failed"
+                )
+                print(
+                    "  Library documentation search is off; nothing else is affected."
+                )
 
             # Show cache and rate limiter status
             cache = Context7Cache()
@@ -9412,6 +9408,8 @@ def _handle_daemon_agents():
 
 
 def _handle_daemon_start_agent(args):
+    import hashlib
+
     import requests
 
     from gaia.daemon import client
@@ -9419,6 +9417,7 @@ def _handle_daemon_start_agent(args):
     from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
     from gaia.daemon.sidecars.spec import (
         repo_root_from_agent_dev_src_dir,
+        resolve_caller_binary_lock,
         resolve_caller_dev_src_dir,
         resolve_caller_mode,
     )
@@ -9436,6 +9435,14 @@ def _handle_daemon_start_agent(args):
         except DevSrcDirResolutionError as e:
             print(f"❌ {e}")
             sys.exit(1)
+    # User mode's mirror (#2596): the daemon compares this checkout's binary
+    # pin against its own instead of silently serving its own.
+    caller_lock = None
+    caller_lock_sha256 = None
+    if resolved_mode == "user":
+        caller_lock = resolve_caller_binary_lock(args.agent_id)
+        if caller_lock is not None:
+            caller_lock_sha256 = hashlib.sha256(caller_lock.read_bytes()).hexdigest()
 
     try:
         inst = client.start_or_attach(on_progress=_print_daemon_start_progress)
@@ -9446,6 +9453,9 @@ def _handle_daemon_start_agent(args):
     body_payload = {"mode": resolved_mode}
     if dev_src_dir is not None:
         body_payload["dev_src_dir"] = str(dev_src_dir)
+    if caller_lock_sha256 is not None:
+        body_payload["binary_lock_sha256"] = caller_lock_sha256
+        body_payload["binary_lock_path"] = str(caller_lock)
 
     try:
         # Read generously: a first-run ensure may lazily fetch the binary.
@@ -9497,6 +9507,18 @@ def _handle_daemon_start_agent(args):
                 f"❌ the daemon reported dev source '{reported}' but expected "
                 f"'{dev_src_dir}' — the running daemon predates this fix and "
                 f"silently ignored the dev-mode source check. {remedy}"
+            )
+            sys.exit(1)
+
+    if caller_lock_sha256 is not None:
+        if body.get("binary_lock_sha256") != caller_lock_sha256:
+            print(
+                f"❌ the daemon did not confirm it checked the binary pin in "
+                f"{caller_lock} — it predates this check. It started agent "
+                f"'{args.agent_id}' anyway, possibly on a different binary than "
+                "this checkout pins. Stop it with `gaia daemon stop-agent "
+                f"{args.agent_id}`, then restart the daemon from this "
+                "checkout's Python environment, or upgrade it."
             )
             sys.exit(1)
 
