@@ -1849,3 +1849,28 @@ def test_a_new_run_forgets_which_model_the_last_one_was_downloading(monkeypatch)
     runner._log_model = "a-GGUF"
     runner.start(False)
     assert runner._log_model is None
+
+
+def test_the_where_to_look_hint_stays_with_the_failed_download():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event({"event": "plan", "models": [{"id": "a-GGUF"}]})
+    runner._consume(run, "Downloading: a-GGUF")
+    runner._on_event({"event": "error", "model": "a-GGUF", "message": "boom"})
+    runner._consume(
+        run, "   Read /home/you/.gaia/lemonade/lemonade.log for the server's own error."
+    )
+    runner._consume(run, "Testing chat model inference...")
+    assert runner._models["a-GGUF"].log == [
+        "Downloading: a-GGUF",
+        "Failed: boom",
+        "Read /home/you/.gaia/lemonade/lemonade.log for the server's own error.",
+    ]
+
+
+def test_gaias_own_console_bar_collapses_too():
+    m = sr.ModelProgress(id="a-GGUF")
+    m.add_log("   [━━━━──────]  40%  2.00 GB / 5.00 GB")
+    m.add_log("   [━━━━━━────]  60%  3.00 GB / 5.00 GB")
+    assert m.log == ["   [━━━━━━────]  60%  3.00 GB / 5.00 GB"]

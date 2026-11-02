@@ -534,7 +534,11 @@ _DOWNLOADING_RE = re.compile(
     r"^\s*(?:\S+\s+)?(?:Downloading|Pulling)\b[:\s]+(\S+)", re.I
 )
 #: A progress bar's redraw: only its latest state is worth keeping.
-_BAR_RE = re.compile(r"^\s*\[[=#>\-. ]*\]")
+_BAR_RE = re.compile(r"^\s*\[[=#>\-. ━─]*\]")
+#: What gaia init prints after a failed download: where to look next.
+_HINT_RE = re.compile(
+    r"^\s*(?:Read .* for the server's own error|Check the Lemonade Server at )"
+)
 _MODEL_LOG_KEPT = 300
 #: Lines each row shows; the troubleshooting report keeps them all.
 MODEL_LOG_SHOWN = 80
@@ -770,6 +774,8 @@ class SetupRunner:
         self._check_log: List[str] = []
         #: The model gaia init is downloading now, so its printed lines go to its row.
         self._log_model: Optional[str] = None
+        #: The last download that failed, which the "where to look" hint belongs to.
+        self._last_failed: Optional[str] = None
 
     def _logs(self, shown: Optional[int]) -> Dict[str, List[str]]:
         """Each stage's log, its last *shown* lines. Caller holds the lock."""
@@ -891,7 +897,7 @@ class SetupRunner:
                 ) from e
             self._run = run
             self._models = {}
-            self._log_model = None
+            self._log_model = self._last_failed = None
             run.note(f"$ {command}")
             proc = self._proc
             view = run.view()
@@ -1100,6 +1106,7 @@ class SetupRunner:
                 entry.add_log(f"Failed: {message}")
                 if self._log_model == model_id:
                     self._log_model = None
+                self._last_failed = model_id
                 if self._run is not None:
                     self._run.note(f"{model_id}: download failed: {message}")
                 entry.error_kind = error_kind(message)
@@ -1112,8 +1119,13 @@ class SetupRunner:
         """Give a printed line to the model it is about. Caller holds the lock."""
         from gaia.installer.model_choice import ids_match
 
+        if self._log_model is None and self._last_failed and _HINT_RE.match(line):
+            if self._last_failed in self._models:
+                self._models[self._last_failed].add_log(line.strip())
+            return
         m = _DOWNLOADING_RE.match(line)
         if m:
+            self._last_failed = None
             named = m.group(1).rstrip(".:,")
             self._log_model = next(
                 (k for k in self._models if ids_match(k, named)), self._log_model
