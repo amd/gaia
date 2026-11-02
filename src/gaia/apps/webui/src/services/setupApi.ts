@@ -134,7 +134,7 @@ export async function getStartScreen(): Promise<StartScreen> {
     return apiFetch('GET', '/onboarding/start');
 }
 
-/** A troubleshooting report: setup's record, GAIA's logs and a system snapshot, secrets redacted. */
+/** A troubleshooting report: setup's record, GAIA's logs and a system snapshot; logs go in as they are. */
 export interface SetupReport {
     name: string;
     /** Where the backend kept it, beside GAIA's logs. */

@@ -44,7 +44,8 @@ export function StageLogs({ run }: { run: SetupRunStatus | null }) {
             a.href = url;
             a.download = report.name;
             a.click();
-            URL.revokeObjectURL(url);
+            // Later, not now: the desktop app's save dialog reads the URL after the click.
+            setTimeout(() => URL.revokeObjectURL(url), 60_000);
             setSaved(report);
         } catch (err) {
             setError(t('setup.logs.reportFailed', { error: errorText(err) }));

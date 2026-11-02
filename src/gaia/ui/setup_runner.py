@@ -348,7 +348,7 @@ def write_report(record: Dict[str, Any]) -> Path:
     """Save *record* beside GAIA's logs and bundle both for a bug report.
 
     Returns the bundle: setup's record, every GAIA log and a system snapshot,
-    secrets redacted, as ``gaia diagnostics`` writes it.
+    secret environment variables redacted, as ``gaia diagnostics`` writes it.
     """
     from gaia.home import gaia_home
 
@@ -1117,7 +1117,7 @@ class SetupRunner:
         """Run the setup thread; an unexpected error fails the run, never strands it."""
         try:
             self._pump(run, proc)
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.exception("Setup thread failed")
             with self._lock:
                 if run.state in ("running", "verifying"):
@@ -1128,6 +1128,8 @@ class SetupRunner:
                     )
                     self._settle_models(None, {}, run_failed=True)
                     self._end_rows(run)
+                    # The cause stays out of the screen, but a report needs it.
+                    run.note(f"Setup failed: {type(e).__name__}: {e}")
             # Nothing reads its output any more: a child left running could
             # block on a full pipe and hold the server's models.
             if proc.poll() is None:
@@ -1138,7 +1140,6 @@ class SetupRunner:
                     logger.error(
                         "gaia init (pid %s) did not stop when killed", proc.pid
                     )
-                    run.note(f"Setup failed: {run.error}")
 
     def _pump(self, run: SetupRun, proc: subprocess.Popen) -> None:
         buf = b""

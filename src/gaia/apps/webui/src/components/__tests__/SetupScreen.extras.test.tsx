@@ -42,4 +42,23 @@ describe('optional model added during the download', () => {
         // Whisper was never fetched, yet the user lands on Ready with nothing said.
         expect(await screen.findByText(/Not downloaded: Whisper/)).toBeInTheDocument();
     });
+
+    it('Download anyway on the low-disk sheet takes the extra off the not-downloaded line', async () => {
+        const running = runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: 1e8 })]);
+        const ready: SetupRunStatus = { ...runStatus([progress({ id: QWEN.id, state: 'ready', bytes_done: 1e9 }), progress({ id: WHISPER.id, state: 'ready', bytes_done: 1e9 })]), state: 'ready' };
+        let now: SetupRunStatus = running;
+        mockedApi.getSetupStatus.mockImplementation(async () => now);
+        const detail = { code: 'low_disk', message: 'Needs 1.6 GB; only 1.0 GB free.', acknowledge: 'acknowledge_low_disk' };
+        mockedApi.startSetup.mockRejectedValueOnce(new api.ApiError(detail.message, 409, detail.message, null, [], detail));
+        render(<SetupScreen onReady={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+        now = ready;
+        mockedApi.startSetup.mockResolvedValue(ready);
+        fireEvent.click(await screen.findByRole('button', { name: 'Download anyway' }, { timeout: 4000 }));
+        await act(async () => {});
+        await act(async () => { await new Promise((r) => setTimeout(r, 1500)); });
+        expect(mockedApi.startSetup).toHaveBeenCalledTimes(2);
+        expect(mockedApi.startSetup.mock.calls[1][2]).toMatchObject({ acknowledgeLowDisk: true });
+        expect(screen.queryByText(/Not downloaded: Whisper/)).not.toBeInTheDocument();
+    });
 });

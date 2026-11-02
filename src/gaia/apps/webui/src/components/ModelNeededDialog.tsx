@@ -80,7 +80,11 @@ export function ModelNeededDialog() {
             if (err instanceof api.ApiError && err.body?.code === 'low_disk') setServerShort(true);
             return;
         }
-        if (shown.current !== asked) return;
+        if (shown.current !== asked) {
+            // Closed before the download had begun, so its cancel found nothing to stop.
+            api.cancelSetup(id).catch((err) => console.warn('[ModelNeededDialog] could not cancel the download', err));
+            return;
+        }
         stop();
         timer.current = setInterval(() => {
             api.getSetupStatus().then((status) => {

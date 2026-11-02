@@ -115,6 +115,47 @@ def test_a_broken_release_candidate_fails_loudly(hub, monkeypatch, capsys):
     assert "bad manifest" in capsys.readouterr().err
 
 
+def _offline_candidate(cause):
+    error = prerelease.PrereleaseFlagshipError("could not read the release")
+    error.__cause__ = cause
+    return MagicMock(side_effect=error)
+
+
+def test_an_offline_release_candidate_keeps_the_installed_agent(hub, monkeypatch):
+    import requests
+
+    monkeypatch.setattr(
+        prerelease,
+        "flagship_source",
+        _offline_candidate(requests.ConnectionError("no network")),
+    )
+    assert run_agent_refresh() == init_command.AGENT_KEPT_EXIT
+    hub.assert_not_called()
+
+
+def test_an_offline_release_candidate_with_no_agent_still_fails(hub, monkeypatch):
+    import requests
+
+    monkeypatch.setattr(InitCommand, "_is_hub_agent_available", lambda *a: False)
+    monkeypatch.setattr(
+        prerelease,
+        "flagship_source",
+        _offline_candidate(requests.Timeout("slow")),
+    )
+    assert run_agent_refresh() == 1
+
+
+def test_a_missing_release_candidate_build_still_fails(hub, monkeypatch):
+    import requests
+
+    monkeypatch.setattr(
+        prerelease,
+        "flagship_source",
+        _offline_candidate(requests.HTTPError("404 Not Found")),
+    )
+    assert run_agent_refresh() == 1
+
+
 def run_cli(monkeypatch, *argv):
     monkeypatch.setattr(sys, "argv", ["gaia", "init", *argv])
     with pytest.raises(SystemExit) as exit_info:

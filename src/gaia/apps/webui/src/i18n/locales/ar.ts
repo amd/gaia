@@ -1030,7 +1030,7 @@ const messages: Messages = {
     'setup.logs.download': 'سجل التنزيل',
     'setup.logs.test': 'سجل الاختبار',
     'setup.logs.report': 'حفظ تقرير لاستكشاف الأخطاء',
-    'setup.logs.reportNote': 'سجلات الإعداد وتفاصيل هذا الكمبيوتر، دون المفاتيح وكلمات المرور. أرفقه عند الإبلاغ عن مشكلة.',
+    'setup.logs.reportNote': 'سجلات الإعداد وسجلات GAIA وتفاصيل هذا الكمبيوتر في ملف واحد. لا تُضمَّن المفاتيح المحفوظة، لكن السجلات تُضاف كما هي، فراجعه قبل إرفاقه بالبلاغ.',
     'setup.logs.reportSaved': 'تم الحفظ ({size}). توجد نسخة أيضًا في',
     'setup.logs.reportFailed': 'تعذّر حفظ التقرير: {error}',
     'setup.progress.retry': 'إعادة المحاولة',

@@ -2486,7 +2486,7 @@ plan and make one set of choices.
     Write a troubleshooting report for a bug report: setup's record (its last
     run, the plan and every stage's full log) saved as `setup-report.json` in
     GAIA's home, bundled with GAIA's logs and a system snapshot by `gaia
-    diagnostics`, secrets redacted. Returns `{"name", "path", "size_bytes"}`.
+    diagnostics`, with secret environment variables redacted; logs go in as they are. Returns `{"name", "path", "size_bytes"}`.
     **500** naming the cause when the bundle can't be written.
   </Accordion>
 

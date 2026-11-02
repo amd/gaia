@@ -64,6 +64,19 @@ describe('the missing-model prompt', () => {
         expect(mocked.downloadSetupModel).toHaveBeenLastCalledWith('Gemma-4-E4B-it-GGUF', { acknowledgeLowDisk: true });
     });
 
+    it('cancels a download that only began after Not now', async () => {
+        let begin!: () => void;
+        mocked.downloadSetupModel.mockImplementation(() => new Promise((r) => { begin = () => r({} as SetupRunStatus); }));
+        mocked.cancelSetup.mockResolvedValue({} as never);
+        useModelNeededStore.setState({ need: ask(400) });
+        render(<ModelNeededDialog />);
+        fireEvent.click(screen.getByRole('button', { name: 'Download and continue' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+        mocked.cancelSetup.mockClear();
+        await act(async () => { begin(); });
+        expect(mocked.cancelSetup).toHaveBeenCalledWith('Gemma-4-E4B-it-GGUF');
+    });
+
     it('stops waiting on a download that never shows up', async () => {
         vi.useFakeTimers();
         mocked.getSetupStatus.mockResolvedValue({ models: [] } as unknown as SetupRunStatus);

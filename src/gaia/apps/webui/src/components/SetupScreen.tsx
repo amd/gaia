@@ -451,6 +451,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             lastRun.current = { gaiaLemonade, options };
             const s = await api.startSetup(cloud, gaiaLemonade, options);
             setRun(s);
+            const extras = options.extraModels ?? [];
+            if (extras.length) setNotFetched((n) => n.filter((id) => !extras.includes(id)));
             if (!options.serverOnly) setPhase('download');
             if (gaiaLemonade) setUsersServer(false);
             return true;

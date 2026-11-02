@@ -1030,7 +1030,7 @@ export const enMessages = {
     'setup.logs.download': 'Download log',
     'setup.logs.test': 'Test log',
     'setup.logs.report': 'Save a troubleshooting report',
-    'setup.logs.reportNote': "Setup's logs and this PC's details, with keys and passwords left out. Attach it when you report a problem.",
+    'setup.logs.reportNote': "Setup's logs, GAIA's logs and this PC's details in one file. Saved keys aren't included, but logs go in as they are, so look it over before you attach it to a report.",
     'setup.logs.reportSaved': 'Saved ({size}). A copy is also in',
     'setup.logs.reportFailed': "Couldn't save the report: {error}",
     'setup.progress.retry': 'Retry',

@@ -3310,15 +3310,33 @@ class InitCommand:
         """
         agent_id = INIT_PROFILES[self.profile]["agent"]
 
-        from gaia.hub import catalog as hub_catalog
-        from gaia.hub import prerelease
-
         # A release candidate's flagship comes from its own pre-release. A
         # broken pre-release raises here: init must not finish "successfully"
         # with an agent that predates the candidate.
-        rc_source = prerelease.flagship_source(
-            agent_id, fetcher=hub_catalog.fetch_bytes
-        )
+        import requests
+
+        from gaia.hub import catalog as hub_catalog
+        from gaia.hub import prerelease
+
+        try:
+            rc_source = prerelease.flagship_source(
+                agent_id, fetcher=hub_catalog.fetch_bytes
+            )
+        except prerelease.PrereleaseFlagshipError as exc:
+            # Offline is not a broken candidate: an installed agent stays, as
+            # it does when the hub can't be reached on a final release.
+            offline = isinstance(
+                exc.__cause__, (requests.ConnectionError, requests.Timeout)
+            )
+            if not offline or not self._is_hub_agent_available(agent_id):
+                raise
+            self._agent_problem = str(exc)
+            self._agent_kept = True
+            self._print_warning(
+                f"Could not reach the release candidate's download server "
+                f"({exc.__cause__}); keeping the installed '{agent_id}' agent."
+            )
+            return
         if rc_source is not None:
             self._ensure_release_candidate_flagship(agent_id, rc_source)
             return

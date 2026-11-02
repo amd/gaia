@@ -819,6 +819,20 @@ def test_an_unexpected_error_fails_the_run_and_frees_the_runner(monkeypatch):
     assert _wait_done(runner)["state"] == "ready"
 
 
+def test_an_unexpected_error_is_named_in_the_report_but_not_on_screen(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+
+    def check(*_a, **_k):
+        raise OSError("marker file is read-only")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    runner.start(False)
+    assert "marker file" not in _wait_done(runner)["error"]
+    every = [line for lines in runner.report()["logs"].values() for line in lines]
+    assert "Setup failed: OSError: marker file is read-only" in every
+
+
 def test_only_one_run_at_a_time_and_cancel(monkeypatch):
     proc = _FakeProc(_BlockingStdout())
     _popen(monkeypatch, proc)
