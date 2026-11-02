@@ -6403,6 +6403,33 @@ class LemonadeClient:
             self.model = active_model
 
     @guard_inference()
+    def rerank(
+        self,
+        query: str,
+        documents: List[str],
+        model: str,
+        timeout: int = DEFAULT_REQUEST_TIMEOUT,
+    ) -> Dict[str, Any]:
+        """Score *documents* against *query* with a downloaded Lemonade reranker.
+
+        The caller chooses a model from the downloaded catalog. This method does
+        not pull models, so a retrieval feature can never start a surprise model
+        download.
+        """
+        if not query.strip():
+            raise ValueError("Reranking query must not be empty.")
+        if not documents:
+            raise ValueError("Reranking requires at least one document.")
+        if not model.strip():
+            raise ValueError("Reranking requires a model ID.")
+        return self._send_request(
+            "POST",
+            f"{self.base_url}/rerank",
+            data={"model": model, "query": query, "documents": documents},
+            timeout=timeout,
+        )
+
+    @guard_inference()
     def generate_audio(
         self,
         payload: Dict[str, Any],
