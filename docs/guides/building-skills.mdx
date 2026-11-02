@@ -83,7 +83,7 @@ metadata:
    found" only if every query came back empty.
 ```
 
-- **`name`** must equal the folder name (lowercase, hyphens). A mismatch is a load error.
+- **`name`** must equal the folder name (lowercase, hyphens). The hub publishes under `name`, and `gaia skill import` installs under it even if the folder differs.
 - **`description`** is how the agent decides to use the skill. Say what it does and when.
 - **`version`** is required to publish, as `MAJOR.MINOR.PATCH`; `0.0.0` is refused.
 - **`license`**: use `MIT`, like every skill in the repo.
@@ -194,6 +194,8 @@ candidates do not publish.
 Once it is live, users find it with `gaia skill search`, by asking the agent, or
 at [amd-gaia.ai/hub](https://amd-gaia.ai/hub), then `gaia skill install <name>`.
 See [Starter Skills](/guides/starter-skills#find-and-install-skills-from-the-hub).
+Publishing makes it installable; it is not built into the `gaia` agent unless AMD
+adds it to the agent's bundle.
 
 ## 7. Updating a published skill
 

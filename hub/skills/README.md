@@ -5,9 +5,10 @@ a procedure written for a model to follow, plus the tools it needs. Unlike an
 agent, it does not run on its own, so it is a separate lane with its own package
 format and publish contract ([#2467](https://github.com/amd/gaia/issues/2467)).
 
-This directory is the AMD **starter pack** (#893): worked examples, each
+This directory is the AMD **starter pack** (#893): seventeen worked examples, each
 demonstrating a different platform primitive (RAG, scratchpad SQL, memory,
-browser, file I/O, image generation). They are meant to be copied and edited,
+browser, file I/O, CLI grants, email, audio and music, image generation, and a
+skill that ships its own tool in `rss-digest`). They are meant to be copied and edited,
 not used verbatim — see the
 [starter skills guide](https://amd-gaia.ai/docs/guides/starter-skills).
 
@@ -32,7 +33,7 @@ that surface: `SKILL.md`'s front matter already carries the identity
 matter and ships the directory beside it as the bundle — a second manifest would
 only create two places for the same facts to disagree.
 
-`name` must equal the directory name; a mismatch is a load error, not a warning.
+Keep `name` equal to the directory name. `gaia skill import` installs under the `name` in the file even if the folder is called something else.
 
 ## Use one
 
