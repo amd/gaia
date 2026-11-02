@@ -645,6 +645,8 @@ class CanonicalTranslator:
         # body is the one thing the decision turns on, shown once.
         if tool in COMMAND_SUMMARY_TOOLS or tool in CODE_SUMMARY_TOOLS:
             return render_command_summary(tool, args)
+        if tool in CALENDAR_WRITE_TOOLS:
+            return render_calendar_summary(args)
         if tool == PATH_ACCESS_PROMPT_TOOL and isinstance(args.get("path"), str):
             return _path_access_question(args)
         label = self._action_labels.get(tool, f"Run {tool!r}")
@@ -763,6 +765,12 @@ COMMAND_SUMMARY_TOOLS = frozenset(
     {"run_shell_command", "run_cli_command", "wait_for_condition"}
 )
 CODE_SUMMARY_TOOLS = frozenset({"run_python", "execute_python_file"})
+CALENDAR_WRITE_TOOLS = frozenset(
+    {"create_calendar_event", "update_calendar_event", "cancel_calendar_event"}
+)
+
+#: A model may copy an event's fence (``wrap_untrusted_field``) back into a call.
+_UNTRUSTED_FIELD_MARKER_RE = re.compile(r"<<<(?:END_)?UNTRUSTED_TEXT>>>")
 
 #: Longest a command may be before its middle is elided. Head AND tail are
 #: kept: for a shell line the part the decision turns on is often at the end.
@@ -884,6 +892,42 @@ def _split_leading_cd(command: str) -> "tuple[str, str]":
             if sep and tail.strip():
                 return target.strip().strip('"').strip("'"), tail.strip()
     return "", command
+
+
+def render_calendar_summary(args: Dict[str, Any]) -> str:
+    """What a calendar change does, whole: the generic clause cuts long attendee lists.
+
+    Attendees go last, because a terminal too short for them clips the middle and says
+    so, and the event and its changes must survive that.
+    """
+
+    def plain(key: str) -> str:
+        value = str(args.get(key) or "")
+        return _UNTRUSTED_FIELD_MARKER_RE.sub("", value).strip()
+
+    def span(begins: str, ends: str) -> str:
+        return f"{plain(begins)} to {plain(ends)}" if plain(ends) else plain(begins)
+
+    rows = [
+        ("Title", plain("title")),
+        ("Event", plain("expected_title")),
+        ("When", span("start", "end") or plain("expected_start")),
+        ("New title", plain("new_title")),
+        ("New time", span("new_start", "new_end")),
+        ("Account", plain("calendar_account")),
+        ("Location", plain("location")),
+        ("New location", plain("new_location")),
+        ("Description", plain("description")),
+        ("New description", plain("new_description")),
+    ]
+    lines = [f"{label}: {value}" for label, value in rows if value]
+    people = args.get("notify_attendees")
+    names = [
+        _UNTRUSTED_FIELD_MARKER_RE.sub("", str(p))
+        for p in (people if isinstance(people, list) else [])
+    ]
+    lines.append(f"Notifies: {', '.join(names) or 'nobody'}")
+    return "\n".join(lines)
 
 
 def render_command_summary(

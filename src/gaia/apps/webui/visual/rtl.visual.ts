@@ -508,6 +508,9 @@ test('calendar approval fits a phone (ar)', async ({ page }, info) => {
         }).length,
     );
     expect(offScreen).toBe(0);
+    const actions = page.locator('.perm-card-actions');
+    await actions.scrollIntoViewIfNeeded();
+    await expect(actions).toBeInViewport();
 });
 
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
