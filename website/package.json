@@ -12,19 +12,19 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@astrojs/check": "^0.9.4",
-    "@astrojs/tailwind": "^5.1.4",
-    "astro": "^4.16.18",
+    "@astrojs/check": "^0.9.12",
+    "@astrojs/tailwind": "^6.0.2",
+    "astro": "^7.4.4",
     "serve": "^14.2.6",
-    "tailwindcss": "^3.4.17",
-    "typescript": "^5.7.2",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@types/node": "^20.19.42",
-    "autoprefixer": "^10.4.20",
+    "@types/node": "^26.6.6",
+    "autoprefixer": "^10.6.2",
     "postcss": "^8.4.49",
-    "vitest": "^2.1.8"
+    "vitest": "^5.0.5"
   },
   "engines": {
     "node": "22.x"

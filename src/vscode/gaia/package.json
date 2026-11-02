@@ -41,10 +41,10 @@
     "publish": "vsce publish"
   },
   "devDependencies": {
-    "@types/node": "^18.0.0",
-    "@types/vscode": "^1.104.0",
-    "@vscode/vsce": "^3.2.1",
-    "typescript": "^5.0.0"
+    "@types/node": "^26.6.6",
+    "@types/vscode": "^1.144.0",
+    "@vscode/vsce": "^4.1.0",
+    "typescript": "^7.0.2"
   },
   "dependencies": {},
   "license": "MIT",
