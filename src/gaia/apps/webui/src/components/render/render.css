@@ -167,6 +167,41 @@
     display: block;
 }
 
+.render-image__toggle {
+    display: block;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: zoom-in;
+    max-width: min(100%, 400px);
+}
+
+.render-image--expanded .render-image__toggle {
+    max-width: 100%;
+    cursor: zoom-out;
+}
+
+/* ── audio ───────────────────────────────────────────────────────────── */
+
+.render-audio {
+    margin: 0;
+    max-width: 480px;
+}
+
+.render-audio__player {
+    width: 100%;
+    display: block;
+}
+
+.render-audio__caption {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    padding-top: 4px;
+}
+
 .render-image__caption {
     color: var(--text-secondary);
     font-size: 12px;

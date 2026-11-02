@@ -44,6 +44,7 @@ The LLM client package provides a unified interface for generating text from mul
 | `vision()` | ✓ | ✓ |
 | `generate_image()` | ✓ | ✗ |
 | `transcribe_audio()` | ✓ | ✗ |
+| `create_image_variation()` | ✓ | ✗ |
 | `get_performance_stats()` | ✓ | ✓ |
 | `load_model()` | ✓ | ✗ |
 | `unload_model()` | ✓ | ✗ |
@@ -100,6 +101,7 @@ Historical release notes describe the providers that shipped in those releases.
      - `vision()` - Vision/image understanding
      - `generate_image()` - Text-to-image generation
      - `transcribe_audio()` - Speech-to-text from a WAV file
+     - `create_image_variation()` - Variations of an existing PNG
      - `get_performance_stats()` - Performance statistics
      - `load_model()` - Load a model
      - `unload_model()` - Unload current model
@@ -348,6 +350,18 @@ class LLMClient(ABC):
             Only supported by: Lemonade
         """
         raise NotSupportedError(self.provider_name, "transcribe_audio")
+
+    def create_image_variation(self, image_path: str, **kwargs) -> dict:
+        """
+        Generate variations of an existing PNG, without a prompt.
+
+        Returns:
+            The server response; images are in ``data[].b64_json``
+
+        Note:
+            Only supported by: Lemonade
+        """
+        raise NotSupportedError(self.provider_name, "create_image_variation")
 
     def get_performance_stats(self) -> dict:
         """

@@ -156,8 +156,9 @@ class _TextOnly(LLMClient):
     [
         lambda c: c.generate_image("a lemon"),
         lambda c: c.transcribe_audio("/tmp/a.wav"),
+        lambda c: c.create_image_variation("/tmp/a.png"),
     ],
-    ids=["generate_image", "transcribe_audio"],
+    ids=["generate_image", "transcribe_audio", "create_image_variation"],
 )
 def test_a_provider_without_the_capability_says_so(call):
     with pytest.raises(NotSupportedError) as exc:
