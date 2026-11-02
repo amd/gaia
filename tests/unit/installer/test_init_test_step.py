@@ -503,8 +503,10 @@ def test_a_server_that_will_not_start_fetches_no_agent_either():
     agent.assert_not_called()
 
 
-def test_the_summary_names_what_setup_found_across_the_stack(monkeypatch):
+def test_the_summary_names_what_setup_found_across_the_stack(monkeypatch, tmp_path):
     from gaia.hub import installer as hub_installer
+
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
 
     info = {
         "OS Version": "Windows 11 Pro 6.3 (Build 26300)",
@@ -546,6 +548,7 @@ def test_the_summary_names_what_setup_found_across_the_stack(monkeypatch):
     assert [d["kind"] for d in found["devices"]] == ["cpu", "amd_gpu", "amd_npu"]
     assert found["devices"][1]["family"] == "gfx1151"
     assert found["gaia_version"]
+    assert found["gaia_home"] == str(tmp_path / "gaia-home")
 
 
 def test_the_summary_says_nothing_it_could_not_find(monkeypatch):

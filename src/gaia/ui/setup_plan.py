@@ -319,6 +319,7 @@ def _devices(system_info: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def _system_summary(system_info: Optional[Dict[str, Any]], client) -> Dict[str, Any]:
     """What setup found across the stack, for the user to check: GAIA, the
     model server, this PC. None where nothing here could find out."""
+    from gaia.home import gaia_home
     from gaia.hub import installer as hub_installer
     from gaia.llm.lemonade_client import lemonade_server_version
     from gaia.version import get_package_version
@@ -327,6 +328,8 @@ def _system_summary(system_info: Optional[Dict[str, Any]], client) -> Dict[str, 
     agent = hub_installer.read_sentinel("gaia")
     return {
         "gaia_version": get_package_version(),
+        # Settings, chats, logs and GAIA's own Lemonade all live here.
+        "gaia_home": str(gaia_home()),
         "agent_version": agent.version if agent else None,
         "lemonade_version": lemonade_server_version(client) if client else None,
         "os": info.get("OS Version"),

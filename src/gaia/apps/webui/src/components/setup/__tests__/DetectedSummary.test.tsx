@@ -21,7 +21,7 @@ const PLAN = (): SetupPlan => ({
         { recipe: 'ds4', backend: 'rocm', state: 'unsupported', version: null, default: true },
     ],
     system: {
-        gaia_version: '0.25.4', agent_version: '0.3.3', lemonade_version: '2026.44.1',
+        gaia_version: '0.25.4', gaia_home: 'C:\\Users\\you\\.gaia', agent_version: '0.3.3', lemonade_version: '2026.44.1',
         os: 'Windows 11 Pro 6.3 (Build 26300)', processor: 'AMD RYZEN AI MAX+ 395', physical_memory: '128.00 GB',
         devices: [
             { kind: 'cpu', name: 'AMD RYZEN AI MAX+ 395', family: 'x86_64', available: true, cores: 16, threads: 32 },
@@ -35,15 +35,30 @@ const PLAN = (): SetupPlan => ({
 describe('what setup found', () => {
     afterEach(() => vi.useRealTimers());
 
-    it('names every package version and what it runs on', () => {
+    it('leads with what decides setup, and where things are kept', () => {
         render(<DetectedSummary plan={PLAN()} hardware={null} />);
         const found = screen.getByRole('region', { name: 'What setup found' });
-        expect(found).toHaveTextContent('GAIA 0.25.4');
-        expect(found).toHaveTextContent('0.3.3');
-        expect(found).toHaveTextContent('Lemonade 2026.44.1');
-        expect(found).toHaveTextContent('llama.cpp vulkan b11393');
-        expect(found).toHaveTextContent('FastFlowLM npu v1.0.7');
+        expect(found).toHaveTextContent('AMD Radeon(TM) 8060S Graphics');
+        expect(found).toHaveTextContent('NPU');
+        expect(found).toHaveTextContent('103.1 GB of 128.0 GB');
+        expect(found).toHaveTextContent('653.2 GB');
+        expect(found).toHaveTextContent('GAIA 0.25.4 · Lemonade 2026.44.1 · llama.cpp b11393 · FastFlowLM v1.0.7');
+        expect(found).toHaveTextContent('C:\\Users\\you\\.cache\\huggingface\\hub');
+        expect(found).toHaveTextContent('C:\\Users\\you\\.gaia');
+        // The rest waits behind All details.
+        expect(found).not.toHaveTextContent('Kokoro');
+        expect(found).not.toHaveTextContent('16 cores');
+    });
+
+    it('All details names every runtime, the server and the devices', () => {
+        render(<DetectedSummary plan={PLAN()} hardware={null} />);
+        const more = screen.getByRole('button', { name: 'All details' });
+        expect(more).toHaveAttribute('aria-expanded', 'false');
+        fireEvent.click(more);
+        const found = screen.getByRole('region', { name: 'What setup found' });
         expect(found).toHaveTextContent('Kokoro cpu b17 · Update needed');
+        expect(found).toHaveTextContent('http://127.0.0.1:13305/api/v1');
+        expect(found).toHaveTextContent('0.3.3');
         expect(found).toHaveTextContent('AMD Radeon(TM) 8060S Graphics (gfx1151)');
         expect(found).toHaveTextContent('16 cores, 32 threads');
         expect(found).not.toHaveTextContent('Not here');
@@ -53,6 +68,7 @@ describe('what setup found', () => {
     it('says what it could not find instead of leaving it blank', () => {
         render(<DetectedSummary plan={{ ...PLAN(), system: undefined, backends: [] }} hardware={null} />);
         expect(screen.getAllByText('Not reported').length).toBeGreaterThan(0);
+        fireEvent.click(screen.getByRole('button', { name: 'All details' }));
         expect(screen.getAllByText('None found').length).toBe(2);
     });
 
@@ -68,7 +84,9 @@ describe('what setup found', () => {
         const text = writeText.mock.calls[0][0] as string;
         expect(text).toContain("Model server: GAIA's own Lemonade 2026.44.1 at http://127.0.0.1:13305/api/v1");
         expect(text).toContain('llama.cpp: vulkan b11393 (installed)');
-        expect(text).toContain('Memory: 128.00 GB, 103.1 GB for models (AMD iGPU)');
+        expect(text).toContain('Memory: 128.0 GB, 103.1 GB for models (AMD iGPU)');
+        expect(text).toContain('Models folder: C:\\Users\\you\\.cache\\huggingface\\hub (653.2 GB free)');
+        expect(text).toContain('GAIA data and logs: C:\\Users\\you\\.gaia');
     });
 
     it('says when the copy did not work', async () => {

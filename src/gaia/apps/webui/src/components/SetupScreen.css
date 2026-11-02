@@ -688,42 +688,44 @@ button.setup-rail-step:hover {
     margin-top: 20px;
 }
 
-/* What setup found: three groups of label and value, side by side when there is room. */
+/* What setup found: the facts that decide setup, where things are kept, then the rest. */
 .found {
     display: grid;
-    gap: 12px;
+    gap: 14px;
 }
 
-.found-groups {
+.found-glance,
+.found-paths,
+.found-details {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 16px 24px;
-}
-
-.found-group {
-    display: grid;
-    align-content: start;
-    gap: 6px;
-    min-inline-size: 0;
-}
-
-.found-heading {
+    gap: 10px 24px;
     margin: 0;
-    color: var(--text-secondary);
+}
+
+.found-glance {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.found-paths {
+    padding-block-start: 12px;
+    border-block-start: 1px solid var(--border);
+}
+
+.found-paths dd {
+    font-family: var(--font-mono);
     font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.03em;
+    user-select: all;
 }
 
-.found-list {
-    display: grid;
-    gap: 6px;
-    margin: 0;
+.found-details {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    padding-block-start: 4px;
 }
 
 .found-row {
     display: grid;
-    gap: 1px;
+    align-content: start;
+    gap: 2px;
     min-inline-size: 0;
 }
 
@@ -739,12 +741,34 @@ button.setup-rail-step:hover {
     overflow-wrap: anywhere;
 }
 
+.found-glance dd {
+    font-size: 14px;
+    font-weight: 500;
+}
+
 .found-line {
     display: block;
 }
 
 .found-muted {
     color: var(--text-muted);
+    font-weight: 400;
+}
+
+.found-chip {
+    display: inline-block;
+    margin-inline-start: 6px;
+    padding: 0 6px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    vertical-align: 1px;
+}
+
+.found-more {
+    justify-self: start;
 }
 
 .found-warnings {

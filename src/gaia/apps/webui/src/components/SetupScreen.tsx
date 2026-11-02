@@ -840,7 +840,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     {stage === 'check' && (
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.check.heading')}</h1>
-                            <p className="setup-lede">{t('setup.check.lede')}</p>
+                            <p className="setup-lede">{t(checksDone ? 'setup.check.ledeDone' : 'setup.check.lede')}</p>
                             <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} />
                             {checksDone && plan && <DetectedSummary plan={plan} hardware={hardware} />}
                             {checksDone && viewing == null && (

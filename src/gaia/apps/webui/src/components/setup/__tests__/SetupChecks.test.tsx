@@ -38,11 +38,10 @@ describe('Checking this PC', () => {
         expect(screen.getByRole('progressbar', { name: 'Check this PC' })).toHaveAttribute('value', '60');
     });
 
-    it('finishes when the server answers and the model list is read', () => {
+    it('folds into one line once every check passed', () => {
         show({ hardware: HARDWARE, plan: COLD_BIG() });
-        expect(row("GAIA's model server")).toHaveTextContent('Running');
-        expect(row('Supported backends and models')).toHaveClass('is-done');
-        expect(screen.getByText('Checks done: 5 of 5')).toBeInTheDocument();
+        expect(screen.getByRole('status')).toHaveTextContent('All 5 checks passed');
+        expect(screen.queryByText('Memory')).toBeNull();
     });
 
     it('marks the hardware rows failed when they could not be read, inventing no value', () => {

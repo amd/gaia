@@ -24,7 +24,7 @@ async function openSetUp(journey: import('./harness').Journey, open: () => Promi
     await expect(newChat(page, say)).toBeVisible({ timeout: 2 * 60_000 });
 }
 
-test('checks finish with no click, then download reaches Test and Ready, and a second launch skips setup', async ({ page, journey, say, shot, open }) => {
+test('checks stop on what they found, then download reaches Test and Ready, and a second launch skips setup', async ({ page, journey, say, shot, open }) => {
     await journey.startFake({ env: { FAKE_LEMONADE_PULL_SECONDS: '3' } });
     await journey.startBackend();
     // A held plan keeps the checks on screen long enough to read and photograph.
@@ -129,7 +129,7 @@ for (const [name, kind] of [['a failed download', 'lemonade'], ['a full disk', '
         await journey.startFake({ env: { FAKE_LEMONADE_PULL_FAIL: kind } });
         await journey.startBackend();
         await open();
-        await expect(start(page, say)).toBeVisible({ timeout: 2 * 60_000 });
+        await pastChecks(page, say);
         await start(page, say).click();
 
         const failed = page.locator('.dl-row.is-failed');
@@ -160,7 +160,7 @@ test('a model server that will not start recovers with Try again', async ({ page
     await journey.startFake({ port });
     // Hard-coded English in the server-problem card today, so either wording counts.
     await page.getByRole('button', { name: 'Try again' }).or(page.getByRole('button', { name: say('setup.tryAgain') })).first().click();
-    await expect(stepTitle(page)).toHaveText(say('setup.plan.title'), { timeout: 2 * 60_000 });
+    await pastChecks(page, say);
     await shot('server-back');
 });
 
@@ -197,7 +197,7 @@ test('Settings runs setup again', async ({ page, journey, say, shot, open }) => 
     await page.getByRole('dialog', { name: say('sidebar.settings') }).getByRole('button', { name: say('settings.section.setup'), exact: true }).click();
     await page.getByTestId('setup-run-again').click();
     await page.getByRole('button', { name: say('settings.setup.confirmYes') }).click();
-    await expect(stepTitle(page)).toHaveText(say('setup.plan.title'), { timeout: 2 * 60_000 });
+    await pastChecks(page, say);
     await shot('run-again');
     await page.getByRole('button', { name: say('setup.plan.startNoDownload') }).click();
     await testToReady(page, say, shot);

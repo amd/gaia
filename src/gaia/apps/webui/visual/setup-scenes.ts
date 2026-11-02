@@ -52,7 +52,7 @@ const PLAN = {
     download_gb: 6.3, disk_warning: null, skipped_models: [], options: [], models: [], catalog: CATALOG,
     components: COMPONENTS, backends: BACKENDS,
     system: {
-        gaia_version: '0.25.4', agent_version: '0.3.3', lemonade_version: '2026.44.1',
+        gaia_version: '0.25.4', gaia_home: 'C:\\Users\\you\\.gaia', agent_version: '0.3.3', lemonade_version: '2026.44.1',
         os: 'Windows 11 Pro 6.3 (Build 26300)', processor: 'AMD RYZEN AI MAX+ 395 w/ Radeon 8060S', physical_memory: '128.00 GB',
         devices: [
             { kind: 'cpu', name: 'AMD RYZEN AI MAX+ 395 w/ Radeon 8060S', family: 'x86_64', available: true, cores: 16, threads: 32 },

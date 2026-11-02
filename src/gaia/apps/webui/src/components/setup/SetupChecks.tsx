@@ -64,6 +64,17 @@ export function SetupChecks({ hardware, hardwareError, plan, serverRun }: Props)
     ];
     const finished = rows.filter((r) => r.state === 'done').length;
     const percent = Math.round((finished / rows.length) * 100);
+    // Every check passed: one line, since what they found is told in full below.
+    if (finished === rows.length) {
+        return (
+            <section className="setup-card setup-checks-done" aria-label={t('setup.check.title')}>
+                <p className="setup-result is-done" role="status">
+                    <Check size={13} aria-hidden="true" />
+                    <span className="setup-result-label">{t('setup.checks.allPassed', { n: String(rows.length) })}</span>
+                </p>
+            </section>
+        );
+    }
     return (
         <section className="setup-card" aria-label={t('setup.check.title')}>
             <div className="setup-bar-head">

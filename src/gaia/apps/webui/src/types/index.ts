@@ -1043,6 +1043,8 @@ export interface SetupDevice {
 
 export interface SetupSystem {
     gaia_version: string;
+    /** Settings, chats, logs and GAIA's own Lemonade. */
+    gaia_home: string | null;
     agent_version: string | null;
     lemonade_version: string | null;
     os: string | null;
