@@ -814,10 +814,13 @@ jobs:
       contents: read
       issues: write          # comment on issues
       pull-requests: write   # comment on PR conversations
-    # One group per thread: a burst of comments collapses to one running + one pending
-    # run (GitHub keeps only the newest pending), and the prompt answers them together.
+    # Per thread, one group for mentions and one for follow-ups: a burst of either kind
+    # collapses to one running + one pending run (GitHub keeps only the newest pending),
+    # and a follow-up can never displace a pending @claude run. The mention branch
+    # mirrors `if:` above. Anything `if:` skips gets a per-run group, so it can't touch
+    # either queue (GitHub's docs don't say whether a skipped job enters its group).
     concurrency:
-      group: claude-issue-handler-${{ github.event.issue.number }}
+      group: ${{ ((github.event_name == 'issues' && github.event.action == 'opened') || (github.event_name == 'issue_comment' && github.event.action == 'created' && contains(github.event.comment.body, '@claude'))) && format('claude-mention-{0}', github.event.issue.number) || (needs.conversation-gate.outputs.engaged == 'true' && format('claude-followup-{0}', github.event.issue.number)) || format('claude-unqueued-{0}', github.run_id) }}
       cancel-in-progress: false
     # Delegates to the reusable workflow, which does the fork-aware checkout + diff
     # for PR conversations, the Claude call with retry, and artifact verification.

@@ -16,8 +16,9 @@ What these tests pin:
   (including whoever opened the thread) can't start Opus runs without @claude;
 - "follows Claude" means a reply carrying the marker the posting step appends,
   not any github-actions[bot] comment;
-- a per-thread hourly cap on the gate's own passes, and one concurrency group
-  per thread that collapses a burst;
+- a per-thread hourly cap on the gate's own passes, and separate per-thread
+  queues for mentions and follow-ups, so a follow-up never displaces a mention
+  and a skipped run never enters either queue;
 - the loop-breaker: bot comments never pass the gate, and edits start no run on
   either the gate or the @claude path;
 - the gate only reads (it holds no write scope and no Claude secret);
@@ -150,10 +151,108 @@ def test_editing_a_comment_never_starts_a_run(handler, gate):
     assert branches.count(" || ") == 2, "a new trigger branch needs its own edit guard"
 
 
-def test_one_concurrency_group_per_thread(handler):
-    conc = handler["concurrency"]
-    assert conc["cancel-in-progress"] is False, "a running reply must not be killed"
-    assert conc["group"] == "claude-issue-handler-${{ github.event.issue.number }}"
+def _eval(expr: str, ctx: dict):
+    """Evaluate the small GitHub-expression subset these jobs use.
+
+    `&&` / `||` return an operand like Python's `and` / `or`, so the format()
+    fallbacks behave as on GitHub. Unknown paths resolve to None.
+    """
+    expr = _flat(expr)
+    if expr.startswith("${{") and expr.endswith("}}"):
+        expr = expr[3:-2].strip()
+
+    def lookup(path):
+        node = ctx
+        for part in path.split("."):
+            if not isinstance(node, dict) or part not in node:
+                return None
+            node = node[part]
+        return node
+
+    py = expr.replace("!cancelled()", "True")
+    py = re.sub(r"\b((?:github|needs)\.[\w.-]+)", lambda m: f"_get({m.group(1)!r})", py)
+    py = py.replace("&&", " and ").replace("||", " or ")
+    assert "!" not in py.replace("!=", ""), f"unsupported operator in {expr!r}"
+    return eval(  # noqa: S307 - the input is this repo's own workflow file
+        py,
+        {"__builtins__": {}},
+        {
+            "_get": lookup,
+            "True": True,
+            "contains": lambda hay, needle: needle in (hay or ""),
+            "format": lambda fmt, *a: fmt.format(*a),
+        },
+    )
+
+
+def _event(name, action, body=None, engaged=""):
+    event = {"action": action, "issue": {"number": 42}}
+    if body is not None:
+        event["comment"] = {"body": body}
+    return {
+        "github": {
+            "repository": "amd/gaia",
+            "event_name": name,
+            "run_id": "7001",
+            "event": event,
+        },
+        "needs": {"conversation-gate": {"outputs": {"engaged": engaged}}},
+    }
+
+
+QUEUE_CASES = {
+    "new-issue": (_event("issues", "opened"), True, "claude-mention-42"),
+    "mention": (
+        _event("issue_comment", "created", "@claude why?"),
+        True,
+        "claude-mention-42",
+    ),
+    "follow-up": (
+        _event("issue_comment", "created", "thanks", engaged="true"),
+        True,
+        "claude-followup-42",
+    ),
+    "declined": (
+        _event("issue_comment", "created", "thanks", engaged="false"),
+        False,
+        None,
+    ),
+    "edited-mention": (
+        _event("issue_comment", "edited", "@claude why?"),
+        False,
+        None,
+    ),
+    "edited-follow-up": (_event("issue_comment", "edited", "thanks"), False, None),
+    "issue-edited": (_event("issues", "edited"), False, None),
+    "pr-event": (_event("pull_request_target", "opened"), False, None),
+}
+
+
+@pytest.mark.parametrize("case", sorted(QUEUE_CASES))
+def test_handler_runs_and_queues_where_expected(handler, case):
+    ctx, runs, group = QUEUE_CASES[case]
+    assert bool(_eval(handler["if"], ctx)) is runs
+    got = _eval(handler["concurrency"]["group"], ctx)
+    if runs:
+        assert got == group
+    else:
+        assert (
+            got == "claude-unqueued-7001"
+        ), "a skipped run must get a per-run group, so it can't displace a pending one"
+
+
+def test_mentions_and_follow_ups_never_share_a_queue(handler):
+    group = handler["concurrency"]["group"]
+    mention = _eval(group, QUEUE_CASES["mention"][0])
+    follow_up = _eval(group, QUEUE_CASES["follow-up"][0])
+    assert mention != follow_up
+    # A comment can't be both: the gate only runs for comments without @claude.
+    both = _event("issue_comment", "created", "@claude hi", engaged="true")
+    assert _eval(group, both) == "claude-mention-42"
+
+
+def test_queue_never_cancels_a_running_reply(handler):
+    assert handler["concurrency"]["cancel-in-progress"] is False
 
 
 def test_handler_posts_through_the_workflow_with_the_marker(handler, gate):
