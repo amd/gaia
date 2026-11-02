@@ -1323,6 +1323,70 @@ def test_many_launches_of_one_costly_name_read_it_once(source):
     assert seconds < 10 * _parse_seconds(source) + 0.5
 
 
+_PYTEST_ARGV = "subprocess.run([sys.executable, '-m', 'pytest'])\n"
+_PYTEST_IN_A_DEF = "def run_tests():\n    " + _PYTEST_ARGV
+
+
+@pytest.mark.parametrize(
+    "storm",
+    [
+        "s = ''\n" + "s += 'echo a; '\nos.system(s)\n" * 5000,
+        "s = []\n" + "s += ['echo', 'a']\nsubprocess.run(s)\n" * 5000,
+        "s = 'echo'\n" + "s = f'{s} a'\nos.system(s)\n" * 5000,
+    ],
+    ids=["shell-text", "argv", "f-string"],
+)
+@pytest.mark.parametrize("runner", ["before", "after", "in-def"])
+def test_a_command_grown_and_launched_each_time_stays_linear(storm, runner):
+    # Launch k sees all k commands: unbounded, the checks add up to n**2 / 2.
+    source = (
+        _LAUNCH_HEADER
+        + {
+            "before": _PYTEST_ARGV + storm,
+            "after": storm + _PYTEST_ARGV,
+            "in-def": _PYTEST_IN_A_DEF + storm + "run_tests()\n",
+        }[runner]
+    )
+    with patch("gaia.agents.base.checks.log") as log:
+        found, seconds = _detect_seconds(source)
+    assert found is True
+    assert seconds < 10 * _parse_seconds(source) + 0.5
+    assert not log.warning.called
+    storm_only, seconds = _detect_seconds(_LAUNCH_HEADER + storm)
+    assert storm_only is False
+    assert seconds < 10 * _parse_seconds(_LAUNCH_HEADER + storm) + 0.5
+
+
+_WIDE = 5001
+
+
+@pytest.mark.parametrize(
+    "costly",
+    [
+        "a = 'q'\nx = ["
+        + ", ".join(["a"] * _WIDE)
+        + "]\n"
+        + "subprocess.run(x)\n" * 40,
+        "a = 'q'\nx = f'" + "{a}" * _WIDE + "'\n" + "os.system(x)\n" * 40,
+    ],
+    ids=["wide-list", "wide-f-string"],
+)
+@pytest.mark.parametrize("runner", ["literal", "through-a-name", "in-def"])
+def test_a_name_too_costly_to_read_does_not_hide_a_later_runner(costly, runner):
+    # A read cut short is remembered, so 40 launches cannot spend the snippet's budget.
+    source = (
+        _LAUNCH_HEADER
+        + {
+            "literal": costly + _PYTEST_ARGV,
+            "through-a-name": "cmd = 'pytest -q'\n" + costly + "os.system(cmd)\n",
+            "in-def": _PYTEST_IN_A_DEF + costly + "run_tests()\n",
+        }[runner]
+    )
+    found, seconds = _detect_seconds(source)
+    assert found is True
+    assert seconds < 10 * _parse_seconds(source) + 0.5
+
+
 @pytest.mark.parametrize("prefixes", [10, 30])
 def test_a_command_grown_many_times_is_still_read(prefixes):
     source = (

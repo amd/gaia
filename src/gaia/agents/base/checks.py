@@ -511,6 +511,10 @@ _MAX_SCRIPT_READ_STEPS = 200_000
 _MAX_QUOTED_COMMAND_CHARS = 32_768
 #: Longest string or argv the reader builds by joining parts (``x = x + x``).
 _MAX_BUILT_SIZE = 1_000_000
+#: Characters (and argv words) a snippet may build and check through names, as
+#: this floor plus a multiple of its own length, so detection stays linear.
+_MIN_SCRIPT_CHECKED_SIZE = 65_536
+_SCRIPT_CHECKED_SIZE_PER_CHAR = 1
 #: Characters that make shell text need ``shlex`` rather than a whitespace split.
 _SHELL_QUOTING_RE = re.compile(r"[\"'\\]")
 #: What ``shlex`` splits unquoted text on.
@@ -613,7 +617,12 @@ class _LaunchReader:
     recursing.
     """
 
-    def __init__(self, statements: Sequence[ast.stmt], aliases: Dict[str, str]):
+    def __init__(
+        self,
+        statements: Sequence[ast.stmt],
+        aliases: Dict[str, str],
+        source_size: int = 0,
+    ):
         self.aliases = aliases
         self.values: List[ast.AST] = []
         #: name -> [(end position, index into values)], in source order.
@@ -621,8 +630,15 @@ class _LaunchReader:
         self._reading: set = set()
         self.steps = 0
         self._script_steps = 0
-        #: Reads cut short by a step budget: never remembered.
+        #: Reads cut short by a step budget: remembered only as too costly.
         self._cuts = 0
+        #: (kind, binding index) -> fewest steps spent before a read of it was cut.
+        self._too_costly: Dict[Tuple[str, int], int] = {}
+        self._checked_size = 0
+        self._spent = False
+        self._max_checked_size = (
+            _MIN_SCRIPT_CHECKED_SIZE + _SCRIPT_CHECKED_SIZE_PER_CHAR * source_size
+        )
         #: Reads cut short by the depth limit: remembered for that depth on.
         self._depth_cuts = 0
         #: (kind, binding index) -> (value, shallowest depth it holds from).
@@ -664,12 +680,31 @@ class _LaunchReader:
             return True
         return False
 
-    def _follow(self, index: int, kind: str, read, depth: int):
-        """*read* of binding *index*; each binding is read once per snippet."""
+    def afford(self, size: int) -> bool:
+        """Charge *size* to the snippet's build-and-check budget; False once it is spent."""
+        if self._checked_size + size > self._max_checked_size:
+            # Bounded input guard, not a fallback: no real snippet builds this much.
+            if not self._spent:
+                self._spent = True
+                log.debug("Launch text past %d chars not read", self._max_checked_size)
+            return False
+        self._checked_size += size
+        return True
+
+    def _follow(self, index: int, kind: str, read, depth: int, cut: Any):
+        """*read* of binding *index*; each binding is read once per snippet.
+
+        A read the per-launch step budget cut short is remembered as too
+        costly, returning *cut*, for later reads that start no earlier.
+        """
         key = (kind, index)
         known = self._memo.get(key)
         if known is not None and depth >= known[1]:
             return known[0]
+        start = self.steps
+        if start >= self._too_costly.get(key, start + 1):
+            self._cuts += 1
+            return cut
         cuts, depth_cuts = self._cuts, self._depth_cuts
         self._reading.add(index)
         try:
@@ -678,6 +713,8 @@ class _LaunchReader:
             self._reading.discard(index)
         if self._cuts == cuts:
             self._memo[key] = (value, depth if self._depth_cuts != depth_cuts else 0)
+        elif self._script_steps <= _MAX_SCRIPT_READ_STEPS:
+            self._too_costly[key] = min(start, self._too_costly.get(key, start))
         return value
 
     def text(self, node: ast.AST, depth: int = 0) -> Optional[str]:
@@ -693,12 +730,17 @@ class _LaunchReader:
         # A literal is a leaf, so it costs no read step: a long argv still reads.
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             return node.value, node.value
+        if _is_python_expression(node, self.aliases):
+            return None, "python"
         if self._exhausted(depth):
             return None, _UNKNOWN
         index = self._binding(node)
         if index is not None:
-            return self._follow(index, "string", self._string, depth)
-        if _dotted(node, self.aliases) in _PYTHON_EXPRESSIONS:
+            return self._follow(index, "string", self._string, depth, (None, _UNKNOWN))
+        if (
+            isinstance(node, ast.Name)
+            and _dotted(node, self.aliases) in _PYTHON_EXPRESSIONS
+        ):
             return None, "python"
         text = self._composed(node, depth)
         return text, _UNKNOWN if text is None else text
@@ -720,14 +762,15 @@ class _LaunchReader:
                 if size > _MAX_BUILT_SIZE:
                     return None
                 parts.append(part)
-            return "".join(parts)
+            return "".join(parts) if self.afford(size) else None
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
             # ``sys.executable + ' -m pytest'``; a list sum is argv(), not text.
             left, left_word = self._string(node.left, depth + 1)
             right, right_word = self._string(node.right, depth + 1)
             if left is None and right is None:
                 return None
-            if len(left_word) + len(right_word) > _MAX_BUILT_SIZE:
+            size = len(left_word) + len(right_word)
+            if size > _MAX_BUILT_SIZE or not self.afford(size):
                 return None
             return left_word + right_word
         if isinstance(node, ast.Call):
@@ -738,11 +781,14 @@ class _LaunchReader:
 
     def argv(self, node: ast.AST, depth: int = 0) -> Optional[List[str]]:
         """*node* as an argv list, or None when it is not one."""
+        literal = _literal_argv(node, self.aliases)
+        if literal is not None:
+            return literal
         if self._exhausted(depth):
             return None
         index = self._binding(node)
         if index is not None:
-            return self._follow(index, "argv", self.argv, depth)
+            return self._follow(index, "argv", self.argv, depth, None)
         if isinstance(node, (ast.List, ast.Tuple)):
             return [self.word(item, depth + 1) for item in node.elts]
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
@@ -751,8 +797,10 @@ class _LaunchReader:
             if head is None or len(head) >= _MAX_BUILT_SIZE:
                 return head
             tail = self.argv(node.right, depth + 1)
-            argv = head + (tail if tail is not None else [_UNKNOWN])
-            return argv[:_MAX_BUILT_SIZE]
+            tail = tail if tail is not None else [_UNKNOWN]
+            if not self.afford(len(head) + len(tail)):
+                return None
+            return (head + tail)[:_MAX_BUILT_SIZE]
         if not isinstance(node, ast.Call):
             return None
         if _dotted(node.func, self.aliases) == "shlex.split" and node.args:
@@ -766,6 +814,29 @@ class _LaunchReader:
             text = self.text(node.func.value, depth + 1)
             return None if text is None else text.split()
         return None
+
+
+def _is_python_expression(node: ast.AST, aliases: Dict[str, str]) -> bool:
+    """True for ``sys.executable`` written out, which no assignment rebinds."""
+    return (
+        isinstance(node, ast.Attribute)
+        and _dotted(node, aliases) in _PYTHON_EXPRESSIONS
+    )
+
+
+def _literal_argv(node: ast.AST, aliases: Dict[str, str]) -> Optional[List[str]]:
+    """A list or tuple of string literals and ``sys.executable``, else None."""
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return None
+    words = []
+    for item in node.elts:
+        if isinstance(item, ast.Constant) and isinstance(item.value, str):
+            words.append(item.value)
+        elif _is_python_expression(item, aliases):
+            words.append("python")
+        else:
+            return None
+    return words
 
 
 def _split_words(text: str) -> List[str]:
@@ -852,43 +923,65 @@ def _shell_runs_check(text: str, depth: int = 0) -> bool:
 def _launch_runs_check(
     call: ast.Call, how: str, position: int, reader: _LaunchReader
 ) -> bool:
-    """True when *call*, a launch of kind *how*, starts a check runner."""
+    """True when *call*, a launch of kind *how*, starts a check runner.
+
+    What a launch reads through names is charged to :meth:`_LaunchReader.afford`,
+    so many launches of long built text stay linear; literals are always checked.
+    """
     args = call.args[position:]
-    if how == "varargs":
-        return bool(args) and _argv_runs_check([reader.word(a) for a in args])
-    if how in ("execv", "execl"):
+    if how in ("varargs", "execv", "execl"):
         if not args:
             return False
-        if how == "execl":
-            rest = [reader.word(a) for a in args[2:]]
+        if how == "varargs":
+            words = [reader.word(a) for a in args]
+        elif how == "execl":
+            words = [reader.word(args[0]), *(reader.word(a) for a in args[2:])]
         else:
             argv = reader.argv(args[1]) if len(args) > 1 else None
-            rest = argv[1:] if argv else []
-        return _argv_runs_check([reader.word(args[0]), *rest])
+            words = [reader.word(args[0]), *(argv[1:] if argv else [])]
+        literal = all(_is_literal(a, reader.aliases) for a in args)
+        return _affordable(reader, words, literal) and _argv_runs_check(words)
     target = args[0] if args else None
     if target is None:
         target = next((k.value for k in call.keywords if k.arg == "args"), None)
     if target is None:
         return False
-    if how == "module":
-        module = reader.text(target)
-        return module is not None and _argv_runs_check(["python", "-m", module])
-    if how == "path":
-        path = reader.text(target)
-        return path is not None and _argv_runs_check([path])
+    literal = _is_literal(target, reader.aliases)
+    if how in ("module", "path"):
+        text = reader.text(target)
+        if text is None or not _affordable(reader, [text], literal):
+            return False
+        return _argv_runs_check(["python", "-m", text] if how == "module" else [text])
     if how == "argv":
         argv = reader.argv(target)
         if argv is not None:
             known = reader.checked_argv.get(id(argv))
             if known is None:
-                known = reader.checked_argv[id(argv)] = (argv, _argv_runs_check(argv))
+                verdict = _affordable(reader, argv, literal) and _argv_runs_check(argv)
+                known = reader.checked_argv[id(argv)] = (argv, verdict)
             return known[1]
     text = reader.text(target)
     if text is None:
         return False
     if text not in reader.checked_text:
+        if not _affordable(reader, [text], literal):
+            return False
         reader.checked_text[text] = _shell_runs_check(text)
     return reader.checked_text[text]
+
+
+def _is_literal(node: ast.AST, aliases: Dict[str, str]) -> bool:
+    """True for a string literal or a list of them: its size is the source's own."""
+    if isinstance(node, ast.Constant):
+        return True
+    return (
+        _is_python_expression(node, aliases) or _literal_argv(node, aliases) is not None
+    )
+
+
+def _affordable(reader: _LaunchReader, words: Sequence[str], literal: bool) -> bool:
+    """True when *words* may be checked; a literal always may."""
+    return literal or reader.afford(len(words) + sum(len(w) for w in words))
 
 
 def invokes_test_runner(source: str) -> bool:
@@ -964,7 +1057,7 @@ def _detect_test_runner(source: str) -> bool:
             module = _imported_module(node.value, aliases)
             if module is not None:
                 aliases[node.targets[0].id] = module
-    reader = _LaunchReader(statements, aliases)
+    reader = _LaunchReader(statements, aliases, len(source or ""))
     for node in calls:
         name = _dotted(node.func, aliases)
         if name in _RUNNER_CALLS:
