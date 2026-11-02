@@ -15,6 +15,8 @@ import './ModelNeededDialog.css';
 const POLL_MS = 1000;
 /** Polls with no row for the model before the download counts as never started. */
 const NO_ROW_LIMIT = 15;
+/** Status reads in a row that may fail before the download counts as lost. */
+const MISS_LIMIT = 5;
 
 /**
  * A job needs a model that isn't on this PC: say which, how big and from where,
@@ -27,6 +29,10 @@ export function ModelNeededDialog() {
     const panel = useRef<HTMLDivElement>(null);
     const timer = useRef<ReturnType<typeof setInterval> | null>(null);
     const noRow = useRef(0);
+    const misses = useRef(0);
+    // The prompt a download belongs to: a closed or replaced one must not be answered by it.
+    const shown = useRef<typeof need>(null);
+    shown.current = need;
     const [percent, setPercent] = useState<number | null>(null);
     const [downloading, setDownloading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -59,20 +65,30 @@ export function ModelNeededDialog() {
 
     const download = useCallback(async (acknowledgeLowDisk: boolean) => {
         if (!need?.model) return;
+        const asked = need;
         const id = need.model.id;
         setError(null);
         setDownloading(true);
         noRow.current = 0;
+        misses.current = 0;
         try {
             await api.downloadSetupModel(id, { acknowledgeLowDisk });
         } catch (err) {
+            if (shown.current !== asked) return;
             setDownloading(false);
             setError(err instanceof Error ? err.message : String(err));
             if (err instanceof api.ApiError && err.body?.code === 'low_disk') setServerShort(true);
             return;
         }
+        if (shown.current !== asked) return;
+        stop();
         timer.current = setInterval(() => {
             api.getSetupStatus().then((status) => {
+                if (shown.current !== asked) {
+                    stop();
+                    return;
+                }
+                misses.current = 0;
                 const row = status.models?.find((m) => m.id === id);
                 if (!row) {
                     if (++noRow.current < NO_ROW_LIMIT) return;
@@ -91,6 +107,12 @@ export function ModelNeededDialog() {
                     setError(row.error ?? t('modelNeeded.failed'));
                 }
             }).catch((err) => {
+                if (shown.current !== asked) {
+                    stop();
+                    return;
+                }
+                // One unanswered read isn't a lost download: it keeps going on the server.
+                if (++misses.current < MISS_LIMIT) return;
                 stop();
                 setDownloading(false);
                 setError(err instanceof Error ? err.message : String(err));

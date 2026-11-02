@@ -301,6 +301,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const [firstTasks, setFirstTasks] = useState<StartCard[]>([]);
     // Optional models added from the Download step, fetched and tested after the run.
     const [queued, setQueued] = useState<string[]>([]);
+    /** Extras added during the run that never started, e.g. after a low-disk No. */
+    const [notFetched, setNotFetched] = useState<string[]>([]);
     // GAIA uses a Lemonade the user runs, so the Connect step changes nothing there.
     const [usersServer, setUsersServer] = useState(false);
     // What the last run was started with, so Resume and Retry repeat it.
@@ -361,6 +363,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         }
     }, []);
 
+    // A boolean, not the callback: a parent's new arrow each render would rerun every read.
+    const again = onClose != null;
     useEffect(() => {
         api.getLemonadeTarget()
             .then((tg) => setUsersServer(tg.source === 'config'))
@@ -372,16 +376,16 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             .then((s) => {
                 if (s.state === 'idle' && !s.models?.length) return;
                 // Run again starts over; only a run still going is picked up.
-                if (onClose && s.state !== 'running' && s.state !== 'verifying') return;
+                if (again && s.state !== 'running' && s.state !== 'verifying') return;
                 setRun(s);
                 if (!s.server_only) setPhase('download');
                 // A cloud run with no saved choice can't say which provider; the
                 // key step lets the user switch if this guess is wrong.
                 if (s.skip_chat_model) setChoice(readChoice() === 'amd' ? 'amd' : 'fireworks');
             })
-            .catch((err) => setStartError(`Could not read setup progress: ${errorText(err)}`))
+            .catch((err) => setStartError(t('setup.progressUnread', { error: errorText(err) })))
             .finally(() => setStatusRead(true));
-    }, [loadHardware, loadPlan, onClose]);
+    }, [loadHardware, loadPlan, again, t]);
 
     // The plan seeds the selection once, from what is planned and on disk.
     useEffect(() => {
@@ -434,7 +438,11 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         void loadGpu();
     }, [installed, loadHardware, loadPlan, loadGpu]);
 
+    // A second click while the first start is on its way would start a second run.
+    const starting = useRef(false);
     const start = useCallback(async (gaiaLemonade = false, options: api.SetupRunOptions = {}): Promise<boolean> => {
+        if (starting.current) return false;
+        starting.current = true;
         setStartError(null);
         setActionError(null);
         setResumeOffer(false);
@@ -454,6 +462,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             }
             setStartError(errorText(err));
             return false;
+        } finally {
+            starting.current = false;
         }
     }, [choice, cloud]);
 
@@ -478,14 +488,15 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const download = useCallback((acknowledgeLowDisk: boolean, latest: SetupPlan | null = plan) => {
         setStartPlan(latest);
         const extras = latest && selection && !cloud ? extraModels(latest, selection) : [];
-        void start(false, { acknowledgeLowDisk, keepTrying, extraModels: extras });
+        return start(false, { acknowledgeLowDisk, keepTrying, extraModels: extras });
     }, [plan, selection, cloud, keepTrying, start]);
 
     const [ackDisk, setAckDisk] = useState(false);
 
     /** Save the choices (chat model, vision model, skips), then download. */
+    const committing = useRef(false);
     const commit = useCallback(async (acknowledgeLowDisk: boolean, acknowledgeNoFit = noFitAcked) => {
-        if (!plan || !selection) return;
+        if (!plan || !selection || committing.current) return;
         setActionError(null);
         setAckDisk(acknowledgeLowDisk);
         const catalog = catalogOf(plan);
@@ -497,6 +508,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             }
         }
         setBusy(true);
+        committing.current = true;
         try {
             let latest = plan;
             if (!cloud && selection.defaultChat && selection.defaultChat !== latest.chat_model.id) {
@@ -519,10 +531,11 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 }
             }
             setPlan(latest);
-            download(acknowledgeLowDisk, latest);
+            await download(acknowledgeLowDisk, latest);
         } catch (err) {
             setActionError(errorText(err));
         } finally {
+            committing.current = false;
             setBusy(false);
         }
     }, [plan, selection, cloud, noFitAcked, download]);
@@ -633,16 +646,16 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             );
             const { models } = await api.listProviderModels(choice);
             const pick = models.find((m) => m.rank === 1) ?? models[0];
-            if (!pick) throw new Error('Connected, but the provider listed no chat models.');
+            if (!pick) throw new Error(t('setup.key.noModels'));
             await selectModel(pick.id);
             setCloudModel(pick.id);
             setKey('');
             setKeyState({ busy: false, error: null, done: true });
-            download(false);
+            void download(false);
         } catch (err) {
             setKeyState({ busy: false, error: errorText(err), done: false });
         }
-    }, [choice, key, selectModel, usersServer, download]);
+    }, [choice, key, selectModel, usersServer, download, t]);
 
     const switchCloud = useCallback((id: ProviderId) => {
         saveChoice(id);
@@ -662,8 +675,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         extending.current = true;
         void start(false, { keepTrying, extraModels: extras }).then((started) => {
             extending.current = false;
-            // Unstarted, they stay listed, and the error says why.
             setQueued((q) => q.filter((id) => !extras.includes(id)));
+            // Unstarted, the Ready screen says so rather than dropping them.
+            if (!started) setNotFetched((n) => [...n, ...extras.filter((id) => !n.includes(id))]);
         });
     }, [installed, queued, keepTrying, start]);
 
@@ -747,7 +761,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <Info size={14} aria-hidden="true" />
                         <span>{t('setup.resume.banner')}</span>
                         <span className="setup-row">
-                            <button type="button" className="btn-primary" onClick={() => download(false)}>{t('setup.resume.resume')}</button>
+                            <button type="button" className="btn-primary" onClick={() => void download(false)}>{t('setup.resume.resume')}</button>
                             <button type="button" className="btn-secondary" onClick={() => { setResumeOffer(false); customize(); }}>{t('setup.models.change')}</button>
                         </span>
                     </div>
@@ -1003,7 +1017,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         )}
                         {lostContact && (
                             <div className="setup-row" role="alert">
-                                <span className="setup-error">Lost contact with GAIA: {lostContact}</span>
+                                <span className="setup-error">{t('setup.lostContact', { error: lostContact })}</span>
                                 <button type="button" className="btn-secondary" onClick={() => void poll()}>{t('setup.reconnect')}</button>
                             </div>
                         )}
@@ -1086,6 +1100,11 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     {t('setup.ready.extraFailed', { job: t(`setup.test.job.${r.job}`) })}
                                 </p>
                             ))}
+                            {notFetched.length > 0 && !confirm && (
+                                <p className="setup-failed-extra" role="alert">
+                                    {t('setup.ready.extraNotFetched', { names: notFetched.map((id) => names[id] ?? id).join(', ') })}
+                                </p>
+                            )}
                             {firstTasks.length > 0 && (
                                 <>
                                     <p className="setup-hint">{t('setup.ready.tasks')}</p>
@@ -1096,6 +1115,11 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     </>
                 )}
 
+                {onClose && !running && stage !== 'plan' && stage !== 'ready' && (
+                    <div className="setup-row">
+                        <button type="button" className="link-btn" onClick={onClose}>{t('setup.again.notNow')}</button>
+                    </div>
+                )}
                 <StageLogs run={run} />
             </div>
 
