@@ -78,14 +78,43 @@ def restore_tool_registry():
     tool_registry._TOOL_REGISTRY.update(saved)
 
 
-def test_list_sd_models_tool_reports_the_real_defaults(tmp_path, restore_tool_registry):
-    with patch("gaia.sd.mixin.LemonadeClient"):
+def test_list_image_models_from_catalog(tmp_path, restore_tool_registry):
+    legacy = [
+        {
+            "id": name,
+            "recipe": "sd-cpp",
+            "image_defaults": {"steps": defaults["steps"]},
+        }
+        for name, defaults in LemonadeClient.SD_MODEL_DEFAULTS.items()
+    ]
+    thenoise = {
+        "id": "Qwen-Image-2.1-Turbo-INT8",
+        "recipe": "thenoise",
+        "image_defaults": {"steps": 8, "cfg_scale": 1, "width": 1440, "height": 1440},
+    }
+    with patch("gaia.sd.mixin.LemonadeClient") as client_class:
+        client_class.return_value.list_sd_models.return_value = legacy + [thenoise]
         SDToolsMixin().init_sd(output_dir=str(tmp_path))
 
-    listed = tool_registry._TOOL_REGISTRY["list_sd_models"]["function"]()["models"]
+    result = tool_registry._TOOL_REGISTRY["list_sd_models"]["function"]()
+    client_class.return_value.list_sd_models.assert_called_once_with()
+    assert result["status"] == "success"
+    assert result["default_model"] == "SDXL-Turbo"
+    listed = {item["name"]: item for item in result["models"]}
+    assert set(listed) == set(LemonadeClient.SD_MODELS) | {thenoise["id"]}
+    for name, defaults in LemonadeClient.SD_MODEL_DEFAULTS.items():
+        assert listed[name]["recommended_size"] == defaults["size"]
+        assert listed[name]["recommended_steps"] == defaults["steps"]
+        assert listed[name]["speed"]
+    assert listed[thenoise["id"]]["recipe"] == "thenoise"
+    assert listed[thenoise["id"]]["image_defaults"] == thenoise["image_defaults"]
+    assert "recommended_steps" not in listed[thenoise["id"]]
 
-    assert {m["name"] for m in listed} == set(LemonadeClient.SD_MODELS)
-    for entry in listed:
-        defaults = LemonadeClient.SD_MODEL_DEFAULTS[entry["name"]]
-        assert entry["recommended_size"] == defaults["size"], entry["name"]
-        assert entry["recommended_steps"] == defaults["steps"], entry["name"]
+
+def test_empty_image_catalog_does_not_advertise_legacy(tmp_path, restore_tool_registry):
+    with patch("gaia.sd.mixin.LemonadeClient") as client_class:
+        client_class.return_value.list_sd_models.return_value = []
+        SDToolsMixin().init_sd(output_dir=str(tmp_path))
+    result = tool_registry._TOOL_REGISTRY["list_sd_models"]["function"]()
+    assert result["status"] == "success"
+    assert result["models"] == []

@@ -131,6 +131,14 @@ eventual screenshot, don't block on it. The gap worth flagging is a UI-backed ch
 **Spot regression** subsection (a few *adjacent* operations exercised alongside the changed
 one) is expected content, not scope creep.
 
+**A failed evidence harness is not "N/A".** The bundle has three states: real evidence, `N/A`
+(nothing runnable changed), and `⚠️ EVIDENCE HARNESS FAILED` with a `Cause:` line (auth, quota,
+install, or a run that wrote no bundle). Only the third turns the review job red, through its
+last step "Evidence harness failed — this PR's surface was not exercised", and it names the
+cause in the job summary. Before merging past that red check, re-run the job once the cause is
+fixed, or put manual evidence on the PR. Making the check block merges is a branch-protection
+setting, not something this file can enforce.
+
 ## Length caps
 
 Keep reviews skimmable:
