@@ -28,7 +28,12 @@ export GAIA_API_STREAMING="1"  # stream LLM responses over the API
 export GAIA_AUTO_APPROVE_TOOLS="1"
 
 # GAIA loads the nearest .env at or above the working directory; a variable
-# already set in the environment wins over it.
+# already set in the environment wins over it. What a .env sets is for GAIA
+# only: the processes GAIA starts (shell commands, Python runs, MCP servers…)
+# get none of it except GAIA_CONFIG_DIR, GAIA_CONFIG_FILE, GAIA_CTX_SIZE,
+# GAIA_HOME, GAIA_LEMONADE_EMBEDDED, LEMONADE_BASE_URL, LEMONADE_CTX_SIZE,
+# LEMONADE_HOST, LEMONADE_MODEL, LEMONADE_PORT and LEMONADE_SERVER_PATH.
+# Export a variable for real, or set it in an MCP server's own env, to pass it on.
 # Skip loading .env files ("1", "true", "yes" or "on"). For an app that embeds
 # GAIA and supplies its own environment. Read from the startup environment, so
 # a .env file cannot turn it on or off.
