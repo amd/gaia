@@ -87,8 +87,8 @@ if _stubbed_modules:
 # of the #1030 fix).
 _BUDGET_CHARS = {
     # profile + indexed-doc count -> max chars
-    # Sized for the Windows environment block, the longest of the three OSes.
-    ("full", 0): 12_500,
+    # Windows environment block + #5977's SLIDES/DECKS rule (Windows: 12,597).
+    ("full", 0): 13_000,
     ("full", 1): 14_000,
     ("full", 5): 14_500,
     # Large-N budget — pins the scaling property so a regression that
@@ -156,10 +156,10 @@ def test_chat_system_prompt_within_budget(
     version, machine, home = _PLATFORMS[os_name]
     agent = _make_agent(profile, n_indexed)
     with (
-        patch("gaia_agent_chat.agent.platform.system", return_value=os_name),
-        patch("gaia_agent_chat.agent.platform.version", return_value=version),
-        patch("gaia_agent_chat.agent.platform.machine", return_value=machine),
-        patch("gaia_agent_chat.agent.Path.home", return_value=home),
+        patch("gaia_agent.chat_agent.platform.system", return_value=os_name),
+        patch("gaia_agent.chat_agent.platform.version", return_value=version),
+        patch("gaia_agent.chat_agent.platform.machine", return_value=machine),
+        patch("gaia_agent.chat_agent.Path.home", return_value=home),
     ):
         prompt = agent._get_system_prompt()
     budget = _BUDGET_CHARS[(profile, n_indexed)]
