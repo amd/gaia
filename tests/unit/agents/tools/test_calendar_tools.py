@@ -1,0 +1,714 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""The five calendar tools, through a real ``Agent`` where approval matters.
+
+A fake calendar behind ``httpx.MockTransport`` counts writes, and a recording
+console counts prompts, so "refused before the prompt" is observed rather than
+inferred. No network, no real calendar, no keychain.
+"""
+
+import json
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
+import httpx
+import pytest
+
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import AgentConsole, format_confirmation_args
+from gaia.agents.base.model_features import COMPACT, FEATURE_TOOLS, FULL, withheld_tools
+from gaia.agents.base.offline import ONLINE_SERVICE_TOOLS, offline_refusal
+from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools._calendar import GoogleCalendarBackend, GraphCalendarBackend
+from gaia.agents.tools._calendar.scopes import (
+    SCOPE_GOOGLE_CALENDAR_EVENTS,
+    SCOPE_GRAPH_CALENDARS_READWRITE,
+)
+from gaia.agents.tools._email.fixture import EVAL_MAILBOX_ENV
+from gaia.agents.tools.calendar_tools import CalendarToolsMixin
+
+WRITE_TOOLS = {
+    "create_calendar_event",
+    "update_calendar_event",
+    "cancel_calendar_event",
+}
+ALL_TOOLS = WRITE_TOOLS | {"list_calendar_events", "check_calendar_availability"}
+
+EVENT = {
+    "id": "g1",
+    "summary": "Budget review",
+    "start": {"dateTime": "2026-11-03T09:00:00-05:00"},
+    "end": {"dateTime": "2026-11-03T10:00:00-05:00"},
+    "organizer": {"self": True},
+    "attendees": [{"email": "dana@x.com"}],
+}
+TARGET = {
+    "event_id": "g1",
+    "expected_title": "Budget review",
+    "expected_start": "2026-11-03T14:00:00Z",
+    "notify_attendees": ["dana@x.com"],
+}
+
+
+class _FakeGoogle:
+    """A one-event Google calendar that records every request."""
+
+    def __init__(self, event=None, *, items=None, pages=None):
+        self.event = EVENT if event is None else event
+        self.items = items
+        self.pages = pages
+        self.delete_status = 204
+        self.requests = []
+
+    @property
+    def writes(self):
+        return [r for r in self.requests if r.method != "GET"]
+
+    def __call__(self, request):
+        self.requests.append(request)
+        if request.method == "GET" and request.url.path.endswith("/events"):
+            if self.pages:
+                return httpx.Response(200, json=self.pages.pop(0))
+            return httpx.Response(200, json={"items": self.items or []})
+        if self.event is None or self.event == {}:
+            return httpx.Response(404, json={})
+        if request.method == "DELETE":
+            return httpx.Response(self.delete_status)
+        return httpx.Response(200, json=self.event)
+
+    def backend(self):
+        return GoogleCalendarBackend(
+            lambda: "tok",
+            http_client=httpx.Client(transport=httpx.MockTransport(self)),
+        )
+
+
+class _RecordingConsole(AgentConsole):
+    def __init__(self):
+        super().__init__()
+        self.asked = []
+
+    def confirm_tool_execution(self, tool_name, tool_args):
+        self.asked.append((tool_name, tool_args))
+        return True
+
+
+class _CalendarAgent(Agent, CalendarToolsMixin):
+    CONFIRMATION_REQUIRED_TOOLS = frozenset(WRITE_TOOLS)
+
+    def _get_system_prompt(self) -> str:
+        return "calendar"
+
+    def _register_tools(self) -> None:
+        self.register_calendar_tools()
+        self._snapshot_tools()
+
+    def _create_console(self):
+        return _RecordingConsole()
+
+
+@pytest.fixture
+def make_agent():
+    saved = dict(_TOOL_REGISTRY)
+
+    def make(fake):
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            built = _CalendarAgent(silent_mode=True, skip_lemonade=True)
+        built.console = _RecordingConsole()
+        built._calendar_backend = fake.backend()
+        return built
+
+    try:
+        yield make
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+
+def _run(agent, tool, **args):
+    result = agent._execute_tool(tool, args)
+    return json.loads(result) if isinstance(result, str) else result
+
+
+def _asked(agent):
+    return [name for name, _ in agent.console.asked]
+
+
+class TestApprovalGate:
+    def test_matching_cancel_prompts_then_runs(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = _run(agent, "cancel_calendar_event", **TARGET)
+        assert _asked(agent) == ["cancel_calendar_event"]
+        assert result["outcome"] == "cancelled_for_everyone"
+        assert result["notified"] == ["dana@x.com"]
+        assert fake.writes[0].method == "DELETE"
+
+    @pytest.mark.parametrize(
+        "wrong",
+        [
+            {"expected_title": "Coffee"},
+            {"expected_start": "2026-11-03T15:00:00Z"},
+            {"expected_start": "2026-11-03"},
+            {"notify_attendees": []},
+            {"notify_attendees": ["other@x.com"]},
+        ],
+    )
+    @pytest.mark.parametrize(
+        "tool,extra",
+        [
+            ("cancel_calendar_event", {}),
+            ("update_calendar_event", {"new_title": "New"}),
+        ],
+    )
+    def test_a_mismatch_never_reaches_the_prompt(self, make_agent, tool, extra, wrong):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = _run(agent, tool, **{**TARGET, **extra, **wrong})
+        assert agent.console.asked == []
+        assert fake.writes == []
+        assert result["status"] == "error" and result["executed"] is False
+
+    def test_a_mismatch_names_the_real_event(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        result = _run(
+            agent, "cancel_calendar_event", **{**TARGET, "expected_title": "Coffee"}
+        )
+        assert "Budget review" in result["error"]
+        assert result["actual_event"]["id"] == "g1"
+
+    def test_the_same_moment_in_another_offset_matches(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        _run(
+            agent,
+            "cancel_calendar_event",
+            **{**TARGET, "expected_start": "2026-11-03T15:00:00+01:00"},
+        )
+        assert _asked(agent) == ["cancel_calendar_event"]
+
+    def test_title_match_ignores_case_and_spacing(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        _run(
+            agent,
+            "cancel_calendar_event",
+            **{**TARGET, "expected_title": " budget   REVIEW "},
+        )
+        assert _asked(agent) == ["cancel_calendar_event"]
+
+    def test_the_body_rechecks_after_the_prompt(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+
+        def renamed_while_waiting(tool_name, tool_args):
+            agent.console.asked.append((tool_name, tool_args))
+            fake.event = {**EVENT, "summary": "Renamed by someone else"}
+            return True
+
+        agent.console.confirm_tool_execution = renamed_while_waiting
+        result = _run(agent, "cancel_calendar_event", **TARGET)
+        assert result["status"] == "error"
+        assert "Renamed by someone else" in result["error"]
+        assert fake.writes == []
+
+    def test_a_refused_time_stops_create_before_the_prompt(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = _run(
+            agent,
+            "create_calendar_event",
+            title="Lunch",
+            start="2026-11-03T12:00:00",
+            end="2026-11-03T13:00:00",
+            notify_attendees=[],
+        )
+        assert agent.console.asked == [] and fake.requests == []
+        assert "no UTC offset" in result["error"]
+
+    def test_the_prompt_shows_title_time_and_who_gets_told_uncut(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        _run(agent, "cancel_calendar_event", **TARGET)
+        shown = format_confirmation_args(agent.console.asked[0][1])
+        assert "Budget review" in shown
+        assert "2026-11-03T14:00:00Z" in shown
+        assert "dana@x.com" in shown
+
+
+class TestCancel:
+    def test_gone_before_the_prompt_is_a_quiet_success(self, make_agent):
+        fake = _FakeGoogle(event={})
+        agent = make_agent(fake)
+        result = _run(agent, "cancel_calendar_event", **TARGET)
+        assert result["already_gone"] is True and result["success"] is True
+        assert agent.console.asked == [] and fake.writes == []
+
+    def test_gone_after_the_prompt_is_also_success(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+
+        def deleted_while_waiting(tool_name, tool_args):
+            fake.delete_status = 404
+            return True
+
+        agent.console.confirm_tool_execution = deleted_while_waiting
+        result = _run(agent, "cancel_calendar_event", **TARGET)
+        assert result["already_gone"] is True
+
+    def test_a_guest_cancels_only_their_copy(self, make_agent):
+        guest = {**EVENT, "organizer": {"email": "boss@x.com"}}
+        fake = _FakeGoogle(guest)
+        agent = make_agent(fake)
+        result = _run(
+            agent, "cancel_calendar_event", **{**TARGET, "notify_attendees": []}
+        )
+        assert result["outcome"] == "removed_from_your_calendar"
+        assert result["notified"] == []
+        assert "sendUpdates" not in fake.writes[0].url.params
+
+    def test_one_occurrence_of_a_series_says_so(self, make_agent):
+        fake = _FakeGoogle({**EVENT, "id": "g1_x", "recurringEventId": "g1"})
+        agent = make_agent(fake)
+        result = _run(agent, "cancel_calendar_event", **{**TARGET, "event_id": "g1_x"})
+        assert result["only_this_occurrence"] is True
+        assert fake.writes[0].url.path.endswith("/g1_x")
+
+    def test_a_whole_series_is_refused(self, make_agent):
+        fake = _FakeGoogle({**EVENT, "recurrence": ["RRULE:FREQ=WEEKLY"]})
+        agent = make_agent(fake)
+        result = _run(agent, "cancel_calendar_event", **TARGET)
+        assert "recurring series" in result["error"]
+        assert agent.console.asked == [] and fake.writes == []
+
+
+class TestUpdate:
+    def test_only_changed_fields_go_out(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = _run(agent, "update_calendar_event", **TARGET, new_location="Room 2")
+        assert json.loads(fake.writes[0].content) == {"location": "Room 2"}
+        assert fake.writes[0].url.params["sendUpdates"] == "all"
+        assert result["notified"] == ["dana@x.com"]
+
+    def test_someone_elses_event_is_refused_before_the_prompt(self, make_agent):
+        guest = {**EVENT, "organizer": {"email": "boss@x.com"}}
+        fake = _FakeGoogle(guest)
+        agent = make_agent(fake)
+        result = _run(
+            agent,
+            "update_calendar_event",
+            **{**TARGET, "notify_attendees": []},
+            new_title="Mine now",
+        )
+        assert "organized by someone else" in result["error"]
+        assert agent.console.asked == [] and fake.writes == []
+
+    def test_graph_non_organizer_patch_fails_clearly(self, make_agent):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "id": "m1",
+                    "subject": "Budget review",
+                    "start": {"dateTime": "2026-11-03T14:00:00.0", "timeZone": "UTC"},
+                    "end": {"dateTime": "2026-11-03T15:00:00.0", "timeZone": "UTC"},
+                    "isOrganizer": False,
+                    "type": "singleInstance",
+                },
+            )
+
+        agent = make_agent(_FakeGoogle())
+        agent._calendar_backend = GraphCalendarBackend(
+            lambda: "tok",
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        result = _run(
+            agent,
+            "update_calendar_event",
+            event_id="m1",
+            expected_title="Budget review",
+            expected_start="2026-11-03T14:00:00Z",
+            notify_attendees=[],
+            new_title="x",
+        )
+        assert "organized by someone else" in result["error"]
+        assert {r.method for r in requests} == {"GET"}
+
+    def test_moving_needs_both_ends(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        result = _run(
+            agent,
+            "update_calendar_event",
+            **TARGET,
+            new_start="2026-11-04T09:00:00-05:00",
+        )
+        assert "both new_start and new_end" in result["error"]
+        assert agent.console.asked == []
+
+    def test_nothing_to_change_is_refused(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        result = _run(agent, "update_calendar_event", **TARGET)
+        assert "Nothing to change" in result["error"]
+
+
+class TestCreate:
+    def test_all_day_end_is_the_last_day_at_the_tool_and_exclusive_on_the_wire(
+        self, make_agent
+    ):
+        created = {
+            **EVENT,
+            "start": {"date": "2026-11-03"},
+            "end": {"date": "2026-11-04"},
+            "attendees": [],
+        }
+        fake = _FakeGoogle(created)
+        agent = make_agent(fake)
+        result = _run(
+            agent,
+            "create_calendar_event",
+            title="Day off",
+            start="2026-11-03",
+            end="2026-11-03",
+            notify_attendees=[],
+        )
+        assert _asked(agent) == ["create_calendar_event"]
+        assert json.loads(fake.writes[0].content)["end"]["date"] == "2026-11-04"
+        assert result["event"]["end"] == "2026-11-03"
+
+    def test_attendees_are_invited_and_reported(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = _run(
+            agent,
+            "create_calendar_event",
+            title="Budget review",
+            start="2026-11-03T09:00:00-05:00",
+            end="2026-11-03T10:00:00-05:00",
+            notify_attendees=["dana@x.com"],
+        )
+        assert fake.writes[0].url.params["sendUpdates"] == "all"
+        assert result["notified"] == ["dana@x.com"]
+
+
+class TestList:
+    def test_defaults_to_a_forward_window(self, make_agent):
+        fake = _FakeGoogle(items=[])
+        agent = make_agent(fake)
+        before = datetime.now(timezone.utc) - timedelta(minutes=1)
+        result = _run(agent, "list_calendar_events")
+        params = fake.requests[0].url.params
+        begins = datetime.fromisoformat(params["timeMin"].replace("Z", "+00:00"))
+        ends = datetime.fromisoformat(params["timeMax"].replace("Z", "+00:00"))
+        assert begins >= before
+        assert timedelta(days=29) < ends - begins < timedelta(days=31)
+        assert result["count"] == 0 and result["truncated"] is False
+
+    def test_a_naive_bound_is_refused_without_a_request(self, make_agent):
+        fake = _FakeGoogle()
+        result = _run(make_agent(fake), "list_calendar_events", start="2026-11-03")
+        assert "no UTC offset" in result["error"]
+        assert fake.requests == []
+
+    def test_truncation_is_reported(self, make_agent):
+        fake = _FakeGoogle(pages=[{"items": [EVENT], "nextPageToken": "more"}])
+        result = _run(make_agent(fake), "list_calendar_events", limit=1)
+        assert result["truncated"] is True and "note" in result
+
+    def test_times_keep_the_same_moment_and_an_offset(self, make_agent):
+        result = _run(make_agent(_FakeGoogle(items=[EVENT])), "list_calendar_events")
+        start = datetime.fromisoformat(result["events"][0]["start"])
+        assert start.tzinfo is not None
+        assert start == datetime(2026, 11, 3, 14, tzinfo=timezone.utc)
+
+
+def _timed(event_id, start, end, **over):
+    return {
+        "id": event_id,
+        "summary": event_id,
+        "start": {"dateTime": start},
+        "end": {"dateTime": end},
+        **over,
+    }
+
+
+WINDOW = {"start": "2026-11-03T09:00:00-05:00", "end": "2026-11-03T17:00:00-05:00"}
+
+
+class TestAvailability:
+    def test_an_empty_calendar_is_free_for_the_whole_window(self, make_agent):
+        result = _run(
+            make_agent(_FakeGoogle(items=[])), "check_calendar_availability", **WINDOW
+        )
+        assert result["is_free"] is True
+        assert len(result["free_slots"]) == 1
+
+    def test_a_conflict_past_the_first_page_is_found(self, make_agent):
+        fake = _FakeGoogle(
+            pages=[
+                {"items": [], "nextPageToken": "p2"},
+                {
+                    "items": [
+                        _timed(
+                            "late",
+                            "2026-11-03T16:00:00-05:00",
+                            "2026-11-03T16:30:00-05:00",
+                        )
+                    ]
+                },
+            ]
+        )
+        result = _run(make_agent(fake), "check_calendar_availability", **WINDOW)
+        assert len(fake.requests) == 2
+        assert result["is_free"] is False
+        assert [b["id"] for b in result["busy"]] == ["late"]
+        assert [s["end"] for s in result["free_slots"]][0].startswith(
+            "2026-11-03T16:00:00"
+        )
+
+    def test_free_declined_and_events_outside_the_window_are_ignored(self, make_agent):
+        items = [
+            _timed(
+                "free",
+                "2026-11-03T10:00:00-05:00",
+                "2026-11-03T11:00:00-05:00",
+                transparency="transparent",
+            ),
+            _timed(
+                "declined",
+                "2026-11-03T12:00:00-05:00",
+                "2026-11-03T13:00:00-05:00",
+                attendees=[{"email": "me", "self": True, "responseStatus": "declined"}],
+            ),
+            _timed(
+                "adjacent",
+                "2026-11-03T17:00:00-05:00",
+                "2026-11-03T18:00:00-05:00",
+            ),
+        ]
+        result = _run(
+            make_agent(_FakeGoogle(items=items)),
+            "check_calendar_availability",
+            **WINDOW,
+        )
+        assert result["is_free"] is True
+        assert result["ignored_not_blocking"] == 2
+
+    def test_an_all_day_busy_event_blocks_the_day_in_the_windows_offset(
+        self, make_agent
+    ):
+        items = [
+            {
+                "id": "off",
+                "summary": "off",
+                "start": {"date": "2026-11-03"},
+                "end": {"date": "2026-11-04"},
+            }
+        ]
+        result = _run(
+            make_agent(_FakeGoogle(items=items)),
+            "check_calendar_availability",
+            **WINDOW,
+        )
+        assert result["is_free"] is False
+        assert result["free_slots"] == []
+
+    def test_an_all_day_event_ends_before_the_next_day_starts(self, make_agent):
+        items = [
+            {
+                "id": "off",
+                "summary": "off",
+                "start": {"date": "2026-11-02"},
+                "end": {"date": "2026-11-03"},
+            }
+        ]
+        result = _run(
+            make_agent(_FakeGoogle(items=items)),
+            "check_calendar_availability",
+            **WINDOW,
+        )
+        assert result["is_free"] is True
+
+    def test_too_many_events_is_unknown_never_free(self, make_agent):
+        pages = [{"items": [], "nextPageToken": str(i)} for i in range(60)]
+        result = _run(
+            make_agent(_FakeGoogle(pages=pages)),
+            "check_calendar_availability",
+            **WINDOW,
+        )
+        assert result["truncated"] is True
+        assert result["is_free"] is None
+        assert "free_slots" not in result
+
+    def test_a_backend_failure_is_an_error_not_free(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        agent._calendar_backend = GoogleCalendarBackend(
+            lambda: "tok",
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(lambda _: httpx.Response(500))
+            ),
+        )
+        result = _run(agent, "check_calendar_availability", **WINDOW)
+        assert "error" in result and "is_free" not in result
+
+
+GMAIL_READ = "https://www.googleapis.com/auth/gmail.readonly"
+
+
+class TestConnectionErrors:
+    @pytest.fixture
+    def agent(self, make_agent):
+        built = make_agent(_FakeGoogle())
+        built._calendar_backend = None
+        return built
+
+    @staticmethod
+    def _state(monkeypatch, connections, grants):
+        monkeypatch.setattr(
+            "gaia.connectors.api.get_connection", lambda p: connections.get(p)
+        )
+        monkeypatch.setattr(
+            "gaia.connectors.grants.list_agent_grants", lambda p: grants.get(p, {})
+        )
+
+    def test_not_connected_names_the_command(self, monkeypatch, agent):
+        self._state(monkeypatch, {}, {})
+        error = _run(agent, "list_calendar_events")["error"]
+        assert "gaia connectors connect google --grant-agent installed:gaia" in error
+        assert "gaia connectors connect microsoft" in error
+
+    def test_missing_scope_names_the_full_union_for_both_stores(
+        self, monkeypatch, agent
+    ):
+        self._state(
+            monkeypatch,
+            {"google": {"scopes": [GMAIL_READ, "openid"]}},
+            {"google": {"installed:gaia": [GMAIL_READ]}},
+        )
+        error = _run(agent, "list_calendar_events")["error"]
+        union = " ".join(sorted([GMAIL_READ, "openid", SCOPE_GOOGLE_CALENDAR_EVENTS]))
+        assert f"gaia connectors connect google --scopes {union}" in error
+        grant = " ".join(sorted([GMAIL_READ, SCOPE_GOOGLE_CALENDAR_EVENTS]))
+        assert f"grants grant google installed:gaia --scopes {grant}" in error
+        assert "mail keeps working" in error
+
+    def test_missing_grant_keeps_the_mail_grant_in_the_command(
+        self, monkeypatch, agent
+    ):
+        mail = "https://graph.microsoft.com/Mail.ReadWrite"
+        self._state(
+            monkeypatch,
+            {"microsoft": {"scopes": [mail, SCOPE_GRAPH_CALENDARS_READWRITE]}},
+            {"microsoft": {"installed:gaia": [mail]}},
+        )
+        error = _run(agent, "list_calendar_events")["error"]
+        union = " ".join(sorted([mail, SCOPE_GRAPH_CALENDARS_READWRITE]))
+        assert f"grants grant microsoft installed:gaia --scopes {union}" in error
+
+    def test_a_busy_connection_says_busy_and_recovers(self, monkeypatch, agent):
+        connections = {"google": {"scopes": [], "error": "busy"}}
+        grants = {"google": {"installed:gaia": [SCOPE_GOOGLE_CALENDAR_EVENTS]}}
+        self._state(monkeypatch, connections, grants)
+        error = _run(agent, "list_calendar_events")["error"]
+        assert "Retry in a moment" in error and "grant" not in error
+
+        connections["google"] = {"scopes": [SCOPE_GOOGLE_CALENDAR_EVENTS]}
+        monkeypatch.setattr(
+            "gaia.connectors.api.get_access_token_sync", lambda **_: "tok"
+        )
+        fake = _FakeGoogle(items=[])
+        monkeypatch.setattr(
+            "gaia.agents.tools._calendar.GoogleCalendarBackend",
+            lambda token: fake.backend(),
+        )
+        assert _run(agent, "list_calendar_events")["success"] is True
+
+    def test_a_busy_first_provider_is_not_skipped(self, monkeypatch, agent):
+        self._state(
+            monkeypatch,
+            {
+                "google": {"scopes": [], "error": "busy"},
+                "microsoft": {"scopes": [SCOPE_GRAPH_CALENDARS_READWRITE]},
+            },
+            {"microsoft": {"installed:gaia": [SCOPE_GRAPH_CALENDARS_READWRITE]}},
+        )
+        assert "google" in _run(agent, "list_calendar_events")["error"]
+
+    def test_the_second_provider_serves_when_the_first_has_no_scope(
+        self, monkeypatch, agent
+    ):
+        self._state(
+            monkeypatch,
+            {
+                "google": {"scopes": [GMAIL_READ]},
+                "microsoft": {"scopes": [SCOPE_GRAPH_CALENDARS_READWRITE]},
+            },
+            {"microsoft": {"installed:gaia": [SCOPE_GRAPH_CALENDARS_READWRITE]}},
+        )
+        agent._calendar_backend = None
+        backend = agent._build_calendar_backend()
+        assert isinstance(backend, GraphCalendarBackend)
+        assert agent._calendar_provider == "microsoft"
+
+    def test_the_eval_fixture_never_reaches_connectors(self, monkeypatch, agent):
+        monkeypatch.setenv(EVAL_MAILBOX_ENV, "/tmp/nowhere.json")
+
+        def explode(_):
+            raise AssertionError("consulted connectors under the eval fixture")
+
+        monkeypatch.setattr("gaia.connectors.api.get_connection", explode)
+        assert "evaluation" in _run(agent, "list_calendar_events")["error"]
+
+    def test_mail_still_resolves_without_calendar_scope(self, monkeypatch):
+        from gaia.agents.tools.email_tools import _classify_mailbox
+
+        self._state(
+            monkeypatch,
+            {"google": {"scopes": [GMAIL_READ]}},
+            {"google": {"installed:gaia": [GMAIL_READ]}},
+        )
+        assert _classify_mailbox("google") == (GMAIL_READ, "ready")
+
+    def test_the_mail_grant_remedy_keeps_a_calendar_grant(self, monkeypatch):
+        from gaia.agents.tools.email_tools import _classify_mailbox
+
+        self._state(
+            monkeypatch,
+            {"google": {"scopes": [GMAIL_READ, SCOPE_GOOGLE_CALENDAR_EVENTS]}},
+            {"google": {"installed:gaia": [SCOPE_GOOGLE_CALENDAR_EVENTS]}},
+        )
+        scope, why = _classify_mailbox("google")
+        assert scope is None
+        assert SCOPE_GOOGLE_CALENDAR_EVENTS in why and GMAIL_READ in why
+
+
+class TestGating:
+    @pytest.mark.parametrize("tool", sorted(ALL_TOOLS))
+    def test_offline_refuses_before_any_prompt_or_preflight(self, make_agent, tool):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        agent.internet_off = True
+        args = {**WINDOW} if tool == "check_calendar_availability" else {}
+        if tool in {"update_calendar_event", "cancel_calendar_event"}:
+            args = {**TARGET}
+        result = _run(agent, tool, **args)
+        assert result["executed"] is False
+        assert agent.console.asked == [] and fake.requests == []
+
+    def test_every_tool_is_online_only(self):
+        assert ALL_TOOLS <= ONLINE_SERVICE_TOOLS
+        assert offline_refusal("list_calendar_events", {}) is not None
+
+    def test_compact_withholds_and_full_keeps(self):
+        assert FEATURE_TOOLS["calendar"] == ALL_TOOLS
+        assert ALL_TOOLS <= withheld_tools(COMPACT)
+        assert not ALL_TOOLS & withheld_tools(FULL)
+
+    def test_composable_by_name(self):
+        from gaia.agents.registry import KNOWN_TOOLS
+
+        assert KNOWN_TOOLS["calendar"] == (
+            "gaia.agents.tools.calendar_tools",
+            "CalendarToolsMixin",
+        )

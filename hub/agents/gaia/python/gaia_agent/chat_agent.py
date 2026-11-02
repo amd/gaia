@@ -1485,7 +1485,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
 """
         # Only advertise web and media tools the profile registers.
-        unsupported = "**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md ."
+        scheduling = "" if self._offers_calendar() else " scheduling,"
+        unsupported = f"**UNSUPPORTED:** Email,{scheduling} cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md ."
         if "web_browse" in spec.tool_groups:
             unsupported += " Web browsing IS supported via `search_web` / `fetch_page` / `download_file`."
         unsupported += " Image analysis IS supported via `analyze_image`."
@@ -2953,6 +2954,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         """Image generation is on in the config and the model is offered it."""
         return bool(getattr(self.config, "enable_sd_tools", False)) and (
             self.model_features.image_generation
+        )
+
+    def _offers_calendar(self) -> bool:
+        """This agent has the calendar tools and the model is offered them."""
+        return hasattr(self, "register_calendar_tools") and (
+            self.model_features.calendar
         )
 
     def _register_loop_control_tools(self) -> None:
