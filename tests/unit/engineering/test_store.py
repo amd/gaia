@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 
@@ -238,27 +239,11 @@ def _install_fake_pywin32(monkeypatch, *, readback_sids=(USER_SID,), null_dacl=F
     return calls
 
 
-class _OsNamed:
-    """``os`` as seen by the store module only, with ``name`` overridden."""
-
-    def __init__(self, name):
-        self.name = name
-
-    def __getattr__(self, attr):
-        return getattr(os, attr)
-
-
-def _pretend_platform(monkeypatch, name):
-    # Never patch the real os.name: pathlib, pytest and coverage would build
-    # WindowsPath objects on Linux and crash the worker.
-    monkeypatch.setattr(store_module, "os", _OsNamed(name))
-
-
-def test_private_directory_locks_down_windows_acl(tmp_path, monkeypatch):
+def test_private_directory_locks_down_windows_acl(tmp_path, monkeypatch, fake_os_name):
     """The regression this fixes: chmod(0o700) alone is a no-op on NTFS, so a
     shared engineering snapshot was readable by any other local account.
     """
-    _pretend_platform(monkeypatch, "nt")
+    fake_os_name(store_module, "nt")
     calls = _install_fake_pywin32(monkeypatch)
 
     target = tmp_path / "engineering-root"
@@ -274,8 +259,19 @@ def test_private_directory_locks_down_windows_acl(tmp_path, monkeypatch):
     assert calls["set"][0]["path"] == str(target)
 
 
-def test_private_directory_skips_acl_lockdown_off_windows(tmp_path, monkeypatch):
-    _pretend_platform(monkeypatch, "posix")
+def test_faking_the_platform_leaves_the_real_os_name_alone(tmp_path, fake_os_name):
+    real = os.name
+    fake_os_name(store_module, "posix" if real == "nt" else "nt")
+
+    assert store_module.os.name != real
+    assert os.name == real, "pathlib and coverage would build the wrong Path type"
+    assert type(Path("x")) is type(tmp_path)
+
+
+def test_private_directory_skips_acl_lockdown_off_windows(
+    tmp_path, monkeypatch, fake_os_name
+):
+    fake_os_name(store_module, "posix")
     calls = _install_fake_pywin32(monkeypatch)
 
     private_directory(tmp_path / "engineering-root")
@@ -284,25 +280,27 @@ def test_private_directory_skips_acl_lockdown_off_windows(tmp_path, monkeypatch)
 
 
 def test_private_directory_refuses_a_directory_a_foreign_sid_can_still_read(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, fake_os_name
 ):
-    _pretend_platform(monkeypatch, "nt")
+    fake_os_name(store_module, "nt")
     _install_fake_pywin32(monkeypatch, readback_sids=(USER_SID, FOREIGN_SID))
 
     with pytest.raises(RuntimeError, match="other local users"):
         private_directory(tmp_path / "engineering-root")
 
 
-def test_private_directory_refuses_a_null_dacl(tmp_path, monkeypatch):
-    _pretend_platform(monkeypatch, "nt")
+def test_private_directory_refuses_a_null_dacl(tmp_path, monkeypatch, fake_os_name):
+    fake_os_name(store_module, "nt")
     _install_fake_pywin32(monkeypatch, null_dacl=True)
 
     with pytest.raises(RuntimeError, match="no DACL"):
         private_directory(tmp_path / "engineering-root")
 
 
-def test_private_directory_requires_pywin32_on_windows(tmp_path, monkeypatch):
-    _pretend_platform(monkeypatch, "nt")
+def test_private_directory_requires_pywin32_on_windows(
+    tmp_path, monkeypatch, fake_os_name
+):
+    fake_os_name(store_module, "nt")
     monkeypatch.delitem(sys.modules, "win32security", raising=False)
     monkeypatch.delitem(sys.modules, "win32api", raising=False)
     monkeypatch.delitem(sys.modules, "ntsecuritycon", raising=False)

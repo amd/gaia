@@ -704,11 +704,11 @@ def test_a_home_relative_path_is_not_read_as_inside_the_workspace(
 
 
 def test_a_file_that_would_shadow_a_program_is_never_auto_accepted(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, fake_os_name
 ):
     from gaia.agents.base import console
 
-    monkeypatch.setattr(console.os, "name", "nt")
+    fake_os_name(console, "nt")
     monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
     monkeypatch.setattr(
         console.shutil, "which", lambda name: "/bin/" + name if name == "git" else None
