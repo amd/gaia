@@ -207,6 +207,18 @@ class TestFailsLoudly:
         assert "jarvis" in err
         assert _events(gaia_home) == []
 
+    def test_unknown_id_fails_before_any_model_load(self, gaia_home, monkeypatch):
+        from gaia import cli
+
+        loads = []
+        monkeypatch.setattr(
+            cli, "initialize_lemonade_for_agent", lambda **kw: loads.append(kw)
+        )
+        _write_agent(gaia_home, "jarvis")
+        code = _run_main(["chat", "--agent", "nope", "-q", "hi"], monkeypatch)
+        assert code == 2
+        assert loads == []
+
     def test_unknown_id_list_matches_agent_status(self, gaia_home, monkeypatch, capsys):
         """The run surface and `gaia agent status` read the same registry."""
         from gaia.cli_agent import _build_registry
@@ -281,6 +293,7 @@ class TestFlagshipPathUnchanged:
 
         called = []
         monkeypatch.setattr(cli, "_run_registered_agent", lambda *a: called.append(a))
+        monkeypatch.setattr(cli, "_registry_with_agent", lambda *a: called.append(a))
         monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
         kwargs = {"no_lemonade_check": True, "query": "hi"}
         if agent:

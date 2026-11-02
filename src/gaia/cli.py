@@ -435,6 +435,13 @@ async def async_main(action, **kwargs):
         log_manager = configure()
         log_manager.configure_agent_console(debug=kwargs.get("debug", False))
 
+    # Reject an unknown --agent id before preloading a model for it.
+    agent_registry = None
+    if action == "chat" and kwargs.get("agent") not in (None, "gaia"):
+        agent_registry = _registry_with_agent(kwargs["agent"])
+        if agent_registry is None:
+            return 2
+
     # Map actions to agent profiles for Lemonade initialization
     # Each agent has specific model and context size requirements
     action_to_agent = {
@@ -488,8 +495,8 @@ async def async_main(action, **kwargs):
                 return {"response": response, "stats": stats}
         return {"response": response}
     elif action == "chat":
-        if kwargs.get("agent") not in (None, "gaia"):
-            return _run_registered_agent(kwargs["agent"], kwargs)
+        if agent_registry is not None:
+            return _run_registered_agent(kwargs["agent"], kwargs, agent_registry)
         # `gaia chat` runs the flagship; it ships as the gaia-agent-gaia wheel.
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -781,23 +788,28 @@ def _reject_flagship_only_flags(args) -> None:
         sys.exit(2)
 
 
-def _run_registered_agent(agent_id: str, kwargs: dict) -> int:
-    """Run ``gaia chat --agent <id>`` through the same registry the Agent UI
-    and ``gaia agent status`` use."""
+def _registry_with_agent(agent_id: str):
+    """Return the registry the Agent UI and ``gaia agent status`` use, or
+    ``None`` after printing the registered ids when *agent_id* is not in it."""
     from gaia.cli_agent import _build_registry
 
     registry = _build_registry()
-    if registry.get(agent_id) is None:
-        ids = sorted(reg.id for reg in registry.list())
-        print(
-            f"❌ No agent registered as '{agent_id}'. "
-            f"Registered agents: {', '.join(ids) or '(none)'}.\n"
-            "   Custom agents live in ~/.gaia/agents/<id>/agent.py; "
-            "`gaia agent status` lists every agent and its health.\n"
-            "   See https://amd-gaia.ai/docs/guides/custom-agent",
-            file=sys.stderr,
-        )
-        return 2
+    if registry.get(agent_id) is not None:
+        return registry
+    ids = sorted(reg.id for reg in registry.list())
+    print(
+        f"❌ No agent registered as '{agent_id}'. "
+        f"Registered agents: {', '.join(ids) or '(none)'}.\n"
+        "   Custom agents live in ~/.gaia/agents/<id>/agent.py; "
+        "`gaia agent status` lists every agent and its health.\n"
+        "   See https://amd-gaia.ai/docs/guides/custom-agent",
+        file=sys.stderr,
+    )
+    return None
+
+
+def _run_registered_agent(agent_id: str, kwargs: dict, registry) -> int:
+    """Run ``gaia chat --agent <id>`` on an agent *registry* already holds."""
 
     debug = kwargs.get("debug", False)
     create_kwargs = {
