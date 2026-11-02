@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import gaia
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.eval import flagship_tasks as ft
 from gaia.eval import task_setups as setups
@@ -874,6 +875,7 @@ def fake_agent(monkeypatch, tmp_path):
 def test_the_agent_never_sees_the_judges_credentials(fake_agent, tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-secret")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key-secret")
+    monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", "key-secret")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN_BACKUP", "backup-secret")
     ft.run_suite("one", "some-model", tmp_path / "out", tasks_file=fake_agent)
     assert _FakeAgent.seen[0]["credentials"] == {

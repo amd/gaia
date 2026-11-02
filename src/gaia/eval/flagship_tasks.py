@@ -49,6 +49,11 @@ from gaia.agents.base.verification import (
 )
 from gaia.eval.bench import config as bench_config
 from gaia.eval.bench import ghstub, harness, metering, swebench, therock, transcripts
+from gaia.eval.claude_outage import (
+    API_KEY_VAR,
+    driver_api_key_for,
+    driver_environment,
+)
 from gaia.eval.bench.config import BenchConfig
 from gaia.eval.bench.gateway import Gateway
 from gaia.eval.bench.leaks import Scrubber
@@ -1450,8 +1455,8 @@ def judge_command(model: str, env: Mapping[str, str]) -> List[str]:
         )
     cmd = [claude, "-p", "--model", model, "--output-format", "json"]
     cmd += ["--tools", "", "--no-session-persistence"]
-    # --bare restricts auth to ANTHROPIC_API_KEY, so only with a key.
-    if env.get("ANTHROPIC_API_KEY"):
+    # --bare restricts auth to ANTHROPIC_API_KEY, so only with an explicit key.
+    if driver_api_key_for(env):
         cmd.append("--bare")
     return cmd
 
@@ -1484,7 +1489,7 @@ def judge_batch(
             errors="replace",
             timeout=JUDGE_TIMEOUT_S,
             cwd=cwd,
-            env=dict(env),
+            env=driver_environment(env),
             check=False,
         )
     if proc.returncode != 0 and not proc.stdout.strip():

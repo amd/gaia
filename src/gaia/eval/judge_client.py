@@ -35,6 +35,7 @@ import tempfile
 from dataclasses import dataclass
 
 from gaia.env import load_env
+from gaia.eval.claude_outage import driver_api_key
 from gaia.eval.claude_usage import TOKEN_FIELDS, usage_from_cli
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
 from gaia.llm.local_only import assert_provider_permitted
@@ -47,10 +48,6 @@ log = get_logger(__name__)
 #: Seconds a single judge call may take. Judge prompts carry a full case inbox,
 #: and the CLI pays a process cold-start the SDK does not.
 DEFAULT_CLI_TIMEOUT = 300.0
-
-#: Env vars that can carry a judge credential, in the order they are preferred
-#: by :func:`make_judge_client`.
-JUDGE_CREDENTIAL_VARS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")
 
 #: Replaces Claude Code's agent system prompt so the CLI judge scores from the
 #: rubric alone, like the SDK judge whose baselines are committed.
@@ -90,8 +87,9 @@ def judge_credential_present() -> bool:
     time. It deliberately does not say whether the credential will be
     *accepted* — for that, probe it (see :func:`probe_judge_credential`).
     """
-    return (
-        any((os.getenv(var) or "").strip() for var in JUDGE_CREDENTIAL_VARS)
+    return bool(
+        driver_api_key()
+        or (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
         or shutil.which("claude") is not None
     )
 
@@ -281,7 +279,7 @@ def make_judge_client(model: str | None = None, max_tokens: int | None = None):
     CLI's own login. Raises when neither is available; never returns a
     degraded scorer. ``max_tokens`` applies to the API transport only.
     """
-    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    api_key = driver_api_key()
     oauth_token = (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
 
     if api_key:
