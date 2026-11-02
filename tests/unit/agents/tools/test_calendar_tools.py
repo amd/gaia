@@ -234,8 +234,18 @@ class TestApprovalGate:
 
 
 class TestCancel:
-    def test_gone_before_the_prompt_is_a_quiet_success(self, make_agent):
+    def test_a_wrong_id_is_an_error_never_a_cancelled_meeting(self, make_agent):
         fake = _FakeGoogle(event={})
+        agent = make_agent(fake)
+        result = _run(agent, "cancel_calendar_event", **TARGET)
+        assert result["success"] is False and "already_gone" not in result
+        assert "No event with id" in result["error"]
+        assert "nothing was changed" in result["error"]
+        assert "List the calendar" in result["error"]
+        assert agent.console.asked == [] and fake.writes == []
+
+    def test_an_event_google_reports_cancelled_is_already_gone(self, make_agent):
+        fake = _FakeGoogle({**EVENT, "status": "cancelled"})
         agent = make_agent(fake)
         result = _run(agent, "cancel_calendar_event", **TARGET)
         assert result["already_gone"] is True and result["success"] is True
@@ -280,6 +290,15 @@ class TestCancel:
 
 
 class TestUpdate:
+    def test_a_wrong_id_says_no_event_was_found(self, make_agent):
+        agent = make_agent(_FakeGoogle(event={}))
+        result = _run(
+            agent, "update_calendar_event", **TARGET, new_title="Budget sync"
+        )
+        assert result["success"] is False
+        assert "No event with id" in result["error"]
+        assert agent.console.asked == []
+
     def test_only_changed_fields_go_out(self, make_agent):
         fake = _FakeGoogle()
         agent = make_agent(fake)

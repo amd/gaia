@@ -14,7 +14,16 @@ class CalendarAuthError(CalendarError):
 
 
 class CalendarEventGone(CalendarError):
-    """The event no longer exists (404/410, or Google's ``cancelled`` status)."""
+    """The event was deleted (410, or Google's ``cancelled`` status)."""
 
 
-__all__ = ["CalendarAuthError", "CalendarError", "CalendarEventGone"]
+class CalendarEventNotFound(CalendarError):
+    """404: the event is gone or the id is wrong, and the provider can't say which."""
+
+
+__all__ = [
+    "CalendarAuthError",
+    "CalendarError",
+    "CalendarEventGone",
+    "CalendarEventNotFound",
+]

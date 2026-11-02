@@ -22,6 +22,7 @@ from gaia.agents.tools._calendar.errors import (
     CalendarAuthError,
     CalendarError,
     CalendarEventGone,
+    CalendarEventNotFound,
 )
 from gaia.agents.tools._calendar.model import (
     CalendarBackend,
@@ -298,6 +299,12 @@ class CalendarToolsMixin:
             told = _who_gets_told(event)
             stated = _people(args.get("notify_attendees"))
             start_ok = _start_matches(event, str(args.get("expected_start") or ""))
+        except CalendarEventNotFound:
+            return None, _refusal(
+                action,
+                f"No event with id {event_id} was found, so nothing was changed. "
+                "List the calendar again to find the right one.",
+            )
         except CalendarEventGone:
             if cancelling:
                 return None, {
@@ -634,7 +641,7 @@ class CalendarToolsMixin:
                     },
                     indent=2,
                 )
-            except CalendarEventGone:
+            except (CalendarEventGone, CalendarEventNotFound):
                 return json.dumps(
                     _refusal(
                         "update_calendar_event",
@@ -656,8 +663,9 @@ class CalendarToolsMixin:
             """Cancel an event. The person approves it first.
 
             Refused unless expected_title, expected_start and notify_attendees
-            match the real event, so take them from list_calendar_events. If the
-            person organizes it, it is cancelled for everyone. If not, it is only
+            match the real event, so take them from list_calendar_events. An id
+            with no event is an error: nothing was cancelled, so list again and
+            never say it is cancelled. If the person organizes it, it is cancelled for everyone. If not, it is only
             removed from their calendar and nobody is told: notify_attendees is
             []. For a recurring event this cancels that one occurrence, never the
             series. The result's `outcome` says which happened.
@@ -694,7 +702,8 @@ class CalendarToolsMixin:
                     },
                     indent=2,
                 )
-            except CalendarEventGone:
+            except (CalendarEventGone, CalendarEventNotFound):
+                # The check above found it, so this 404 means it was deleted since.
                 return json.dumps(
                     {
                         "status": "already_gone",

@@ -14,6 +14,7 @@ from gaia.agents.tools._calendar.errors import (
     CalendarAuthError,
     CalendarError,
     CalendarEventGone,
+    CalendarEventNotFound,
 )
 from gaia.agents.tools._calendar.model import (
     CalendarEvent,
@@ -156,8 +157,10 @@ class GraphCalendarBackend:
                 f"connect microsoft --grant-agent installed:gaia`. (request: {where}; "
                 f"code: {detail or 'forbidden'})"
             )
-        if code in (404, 410):
-            raise CalendarEventGone(f"Outlook has no such event ({where}).")
+        if code == 404:
+            raise CalendarEventNotFound(f"Outlook found no event ({where}).")
+        if code == 410:
+            raise CalendarEventGone(f"Outlook deleted this event ({where}).")
         if code == 429:
             raise CalendarError(
                 "Microsoft Graph is rate-limiting this account. Retry after "

@@ -13,6 +13,7 @@ from gaia.agents.tools._calendar.errors import (
     CalendarAuthError,
     CalendarError,
     CalendarEventGone,
+    CalendarEventNotFound,
 )
 from gaia.agents.tools._calendar.model import (
     CalendarEvent,
@@ -123,8 +124,10 @@ class GoogleCalendarBackend:
                 "Google Calendar rejected the access token (401). Reconnect with "
                 f"`gaia connectors connect google`, then retry. (request: {where})"
             )
-        if code in (404, 410):
-            raise CalendarEventGone(f"Google Calendar has no such event ({where}).")
+        if code == 404:
+            raise CalendarEventNotFound(f"Google Calendar found no event ({where}).")
+        if code == 410:
+            raise CalendarEventGone(f"Google Calendar deleted this event ({where}).")
         if code == 403 and reason == "accessNotConfigured":
             raise CalendarError(
                 "The Google Calendar API is not enabled for the Google Cloud project "

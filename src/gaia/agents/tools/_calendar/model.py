@@ -126,7 +126,7 @@ class CalendarBackend(Protocol):
         ...
 
     def cancel_event(self, event: CalendarEvent) -> CancelOutcome:
-        """Cancel or remove *event*; raises ``CalendarEventGone`` if already gone."""
+        """Cancel or remove *event*; a missing one raises ``CalendarEventGone`` or NotFound."""
         ...
 
 

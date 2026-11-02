@@ -16,6 +16,7 @@ from gaia.agents.tools._calendar import (
     CalendarAuthError,
     CalendarError,
     CalendarEventGone,
+    CalendarEventNotFound,
     CalendarWindow,
     CancelOutcome,
     EventPatch,
@@ -237,10 +238,12 @@ class TestGoogleWrites:
         assert "sendUpdates" not in seen[0].url.params
         assert outcome is CancelOutcome.REMOVED_FROM_YOUR_CALENDAR
 
-    @pytest.mark.parametrize("status", [404, 410])
-    def test_a_missing_event_is_gone(self, status):
+    @pytest.mark.parametrize(
+        "status, error", [(404, CalendarEventNotFound), (410, CalendarEventGone)]
+    )
+    def test_a_missing_event_says_how_it_is_missing(self, status, error):
         _, handler = _recording({}, status=status)
-        with pytest.raises(CalendarEventGone):
+        with pytest.raises(error):
             _google(handler).cancel_event(_event())
 
     def test_auth_and_api_disabled_errors_are_distinct(self):
@@ -405,9 +408,9 @@ class TestGraphWrites:
         )
         assert seen[0].method == "DELETE"
 
-    def test_a_second_cancel_is_gone(self):
+    def test_a_second_cancel_is_not_found(self):
         _, handler = _recording({"error": {"code": "ErrorItemNotFound"}}, status=404)
-        with pytest.raises(CalendarEventGone):
+        with pytest.raises(CalendarEventNotFound):
             _graph(handler).cancel_event(_event())
 
 
