@@ -2097,7 +2097,7 @@ class InitCommand:
         """
         from gaia.llm.lemonade_client import LemonadeClient
 
-        if self.skip_models or self._uses_saved_server():
+        if self.skip_models or self._uses_saved_server() or self._lemonade_base_url:
             return True
         backend = LemonadeClient(verbose=self.verbose)._default_llamacpp_backend()
         if not backend:
@@ -2257,13 +2257,16 @@ class InitCommand:
         if self.skip_chat_model:
             model_ids = [m for m in model_ids if is_embedding_model_id(m)]
 
-        for model_id in self.extra_models:
-            if not any(model_choice.ids_match(model_id, m) for m in model_ids):
-                model_ids.append(model_id)
-
         model_ids, self._skipped_now = model_choice.split_skipped(
             model_ids, self._skip_list()
         )
+        # Asked for by name in this run: the skip list doesn't apply to it.
+        for model_id in self.extra_models:
+            if not any(model_choice.ids_match(model_id, m) for m in model_ids):
+                model_ids.append(model_id)
+            self._skipped_now = [
+                m for m in self._skipped_now if not model_choice.ids_match(m, model_id)
+            ]
         chat = self._chat_choice.model_id if self._chat_choice else None
         for model_id in self._skipped_now:
             caveat = model_choice.if_skipped(
@@ -3049,7 +3052,13 @@ class InitCommand:
                             models_failed.append((model_id, error))
 
                 vision = self._vision_test_model(client)
-                if vision and client.check_model_available(vision):
+                # A vision-only model already failed its load test on this row.
+                load_failed = vision and any(
+                    model_choice.ids_match(m, vision) for m, _ in models_failed
+                )
+                if load_failed:
+                    pass
+                elif vision and client.check_model_available(vision):
                     success, error = self._run_test(
                         model_choice.ROLE_VISION,
                         vision,
@@ -3078,8 +3087,11 @@ class InitCommand:
             short_of_memory = [
                 (m, e) for m, e in models_failed if isinstance(e, MemoryShortfall)
             ]
+            stuck = [(m, e) for m, e in models_failed if isinstance(e, CheckTimedOut)]
             broken = [
-                (m, e) for m, e in models_failed if not isinstance(e, MemoryShortfall)
+                (m, e)
+                for m, e in models_failed
+                if not isinstance(e, (MemoryShortfall, CheckTimedOut))
             ]
             if models_failed:
                 self._print_warning(f"Models verified: {models_passed}/{total} passed")
@@ -3094,6 +3106,17 @@ class InitCommand:
                     "   [dim]Close memory-heavy apps and re-run, or choose a cloud "
                     "model or a smaller local model in the Agent UI (Settings > "
                     "Model).[/dim]"
+                )
+            if stuck:
+                names = ", ".join(m for m, _ in stuck)
+                self.console.print()
+                self.console.print(
+                    f"   [bold]Not tested ({names}): the model server stopped "
+                    "answering before the test finished.[/bold]"
+                )
+                self.console.print(
+                    "   [dim]The download itself is fine. Restart the model server "
+                    "or the PC and run setup again.[/dim]"
                 )
             if broken:
                 self.console.print()
@@ -3183,6 +3206,14 @@ class InitCommand:
                     f"{', '.join(m for m, _ in short_of_memory)}. Close "
                     "memory-heavy apps and re-run `gaia init`, or choose another "
                     "model; nothing needs re-downloading."
+                )
+                return False
+            if stuck:
+                self.console.print()
+                self._print_error(
+                    "The model server stopped answering while testing "
+                    f"{', '.join(m for m, _ in stuck)}. Restart it, or the PC, "
+                    "and re-run `gaia init`; nothing needs re-downloading."
                 )
                 return False
 

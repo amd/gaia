@@ -440,7 +440,10 @@ class _FakeProc:
         if isinstance(self.stdout, _BlockingStdout):
             self.stdout.killed.set()
 
-    def wait(self):
+    def poll(self):
+        return -9 if self.killed else self.returncode
+
+    def wait(self, timeout=None):
         return -9 if self.killed else self.returncode
 
 

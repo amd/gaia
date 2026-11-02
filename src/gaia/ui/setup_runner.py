@@ -922,6 +922,8 @@ class SetupRunner:
             for entry in self._models.values():
                 if entry.state in ("queued", "downloading"):
                     entry.state, entry.speed_bps = "cancelled", 0
+            self._settle_models(None, {}, run_failed=True)
+            self._end_rows(self._run, cancelled=True)
             self._proc.kill()
             return True
 
@@ -986,6 +988,8 @@ class SetupRunner:
         with self._lock:
             if kind == "plan":
                 for planned in event.get("models") or []:
+                    if not planned.get("id"):
+                        continue
                     entry = ModelProgress(
                         id=planned["id"],
                         state="verifying" if planned.get("downloaded") else "queued",
@@ -998,13 +1002,16 @@ class SetupRunner:
                 for skipped in event.get("skipped") or []:
                     self._models[skipped] = ModelProgress(id=skipped, state="skipped")
                 if self._run is not None:
-                    planned = ", ".join(m["id"] for m in event.get("models") or [])
+                    planned = ", ".join(
+                        str(m.get("id")) for m in event.get("models") or []
+                    )
                     self._run.note(f"Plan: {planned or 'no models'}")
                 return
             if kind == "component":
-                if self._run is not None:
-                    self._run.components[event["component"]] = event["state"]
-                    self._run.note(f"{event['component']}: {event['state']}")
+                component, state = event.get("component"), event.get("state")
+                if self._run is not None and component and state:
+                    self._run.components[component] = state
+                    self._run.note(f"{component}: {state}")
                 return
             if kind == "test":
                 if self._run is not None:
@@ -1089,6 +1096,23 @@ class SetupRunner:
             elif ready is None or entry.id in ready:
                 entry.state = "ready"
 
+    @staticmethod
+    def _end_rows(run: SetupRun, cancelled: bool = False) -> None:
+        """A run that ended leaves nothing working: a piece still fetching or
+        a test still running is failed, or on Cancel set back. Caller holds the lock."""
+        for component, state in list(run.components.items()):
+            if state == "active":
+                if cancelled:
+                    del run.components[component]
+                else:
+                    run.components[component] = "failed"
+        for row in run.tests.values():
+            if row["state"] == "running":
+                row["state"] = "skipped" if cancelled else "failed"
+                if not cancelled:
+                    row["error"] = "Setup stopped before this test finished."
+                    row["kind"] = "stuck"
+
     def _watch(self, run: SetupRun, proc: subprocess.Popen) -> None:
         """Run the setup thread; an unexpected error fails the run, never strands it."""
         try:
@@ -1101,6 +1125,18 @@ class SetupRunner:
                     run.error = (
                         "Setup stopped on an unexpected error. Details are in "
                         "the GAIA server log."
+                    )
+                    self._settle_models(None, {}, run_failed=True)
+                    self._end_rows(run)
+            # Nothing reads its output any more: a child left running could
+            # block on a full pipe and hold the server's models.
+            if proc.poll() is None:
+                proc.kill()
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    logger.error(
+                        "gaia init (pid %s) did not stop when killed", proc.pid
                     )
                     run.note(f"Setup failed: {run.error}")
 
@@ -1143,6 +1179,7 @@ class SetupRunner:
                 run.state = "failed"
                 # Downloaded but never checked: not shown as ready.
                 self._settle_models(None, {}, run_failed=True)
+                self._end_rows(run)
                 if problem is not None:
                     # The raw exception stays in the log, behind "Details".
                     run.problem, run.error = problem, problem["message"]
