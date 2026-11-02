@@ -37,7 +37,9 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   of 21,300. `search_tools` replaces `load_tools` and also finds installed skills.
   It is on by default; `gaia config set dynamic_tools false` or
   `GAIA_DYNAMIC_TOOLS=0` turns it off, and the Agent UI toggle under Settings now
-  reaches this agent. `GAIA_DYNAMIC_TOOLS_TAU` and `GAIA_DYNAMIC_TOOLS_MAX` no
+  reaches this agent. The toggle is now kept in `~/.gaia/config.json`, so a
+  choice made under the old Beta toggle, which only reached the `doc` profile,
+  is not carried over. `GAIA_DYNAMIC_TOOLS_TAU` and `GAIA_DYNAMIC_TOOLS_MAX` no
   longer do anything. Chat models now load with three llama.cpp slots.
 - **The agent ships as one Python package.** `ChatAgent`, the class the agent
   builds on, moved into `gaia-agent-gaia` (`gaia_agent.chat_agent`), so the

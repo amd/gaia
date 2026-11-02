@@ -193,19 +193,21 @@ def _core(agent):
     )
 
 
+def _dump(value):
+    return json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+
 def _render(request):
-    dump = lambda value: json.dumps(value, sort_keys=True, ensure_ascii=False)
     messages = request["messages"]
     return (
-        dump(messages[:1])
-        + dump(request["tools"])
-        + "".join(dump(m) for m in messages[1:])
+        _dump(messages[:1])
+        + _dump(request["tools"])
+        + "".join(_dump(m) for m in messages[1:])
     )
 
 
 def _prefix(request):
-    dump = lambda value: json.dumps(value, sort_keys=True, ensure_ascii=False)
-    return dump(request["messages"][:1]) + dump(request["tools"])
+    return _dump(request["messages"][:1]) + _dump(request["tools"])
 
 
 def _assert_extends(requests):

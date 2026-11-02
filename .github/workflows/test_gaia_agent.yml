@@ -63,6 +63,8 @@ on:
       - 'tests/unit/test_starter_skills.py'
       - 'tests/unit/test_stdio_permission_control.py'
       - 'tests/unit/test_tool_loader_token_budget.py'
+      - 'tests/unit/test_tool_list_invariants.py'
+      - 'tests/unit/test_warm_up.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
       - 'tests/unit/eval/conftest.py'
       - 'src/gaia/eval/tool_cost.py'
@@ -125,6 +127,8 @@ on:
       - 'tests/unit/test_starter_skills.py'
       - 'tests/unit/test_stdio_permission_control.py'
       - 'tests/unit/test_tool_loader_token_budget.py'
+      - 'tests/unit/test_tool_list_invariants.py'
+      - 'tests/unit/test_warm_up.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
       - 'tests/unit/eval/conftest.py'
       - 'src/gaia/eval/tool_cost.py'
@@ -238,6 +242,8 @@ jobs:
           # the cheapest lane that installs that wheel.
           python -m pytest \
             tests/unit/test_tool_loader_token_budget.py \
+            tests/unit/test_tool_list_invariants.py \
+            tests/unit/test_warm_up.py \
             tests/unit/eval/test_harness_flagship_target.py \
             -v --tb=short
 
