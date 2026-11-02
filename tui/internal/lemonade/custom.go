@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/filelock"
 )
 
 // customFloorCtx is ADDED_MODEL_CTX in gaia.llm.custom_models: the window an
@@ -38,7 +40,7 @@ func ReadCustomModels() ([]Recommended, error) {
 	if path == "" {
 		return nil, nil
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := filelock.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}

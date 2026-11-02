@@ -560,7 +560,7 @@ func (r Report) Blocker() (Row, bool) {
 }
 
 // String renders the report as plain text — for `--debug` logs and for the
-// headless callers that never mount the screen.
+// headless callers that never mount the screen, so remedies carry no keystrokes.
 func (r Report) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s preflight: %s\n", r.AgentName, r.Summary())
@@ -569,8 +569,8 @@ func (r Report) String() string {
 		if row.State == StateOK {
 			continue
 		}
-		if row.Remedy.Action != "" {
-			fmt.Fprintf(&b, "        %s\n", row.Remedy.Action)
+		if action := headlessAction(row.Remedy.Action); action != "" {
+			fmt.Fprintf(&b, "        %s\n", action)
 		}
 		for _, c := range row.Remedy.Commands() {
 			fmt.Fprintf(&b, "        %s %s\n", c.Label(), c.Line)

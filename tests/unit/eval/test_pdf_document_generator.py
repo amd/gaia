@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for ``gaia.eval.pdf_document_generator.PDFDocumentGenerator``.
 
-Mocks the Claude boundary (``ClaudeClient``) so no ``ANTHROPIC_API_KEY`` or
-network access is required. Generated PDFs are validated by actually opening
+Mocks the Claude boundary (``make_judge_client``) so no credential or network
+access is required. Generated PDFs are validated by actually opening
 them with ``pypdf`` — a generation bug here would quietly invalidate every
 downstream eval that consumes these synthetic fixtures.
 """
@@ -40,8 +40,8 @@ def _usage_response(content, input_tokens=100, output_tokens=200):
 
 @pytest.fixture
 def mock_claude_client(mocker):
-    """Patch ClaudeClient so PDFDocumentGenerator never touches the network."""
-    mock_cls = mocker.patch("gaia.eval.pdf_document_generator.ClaudeClient")
+    """Patch the client factory so PDFDocumentGenerator never touches the network."""
+    mock_cls = mocker.patch("gaia.eval.pdf_document_generator.make_judge_client")
     instance = mock_cls.return_value
     instance.model = "test-claude-model"
     return instance
@@ -65,14 +65,72 @@ def _open_pdf(path):
 # ---------------------------------------------------------------------------
 
 
-def test_init_raises_valueerror_when_claude_client_fails(mocker):
+def test_init_surfaces_the_missing_claude_error_unchanged(mocker):
+    from gaia.eval.judge_client import MISSING_CREDENTIAL_ERROR
+
     mocker.patch(
-        "gaia.eval.pdf_document_generator.ClaudeClient",
-        side_effect=Exception("ANTHROPIC_API_KEY not found"),
+        "gaia.eval.pdf_document_generator.make_judge_client",
+        side_effect=ValueError(MISSING_CREDENTIAL_ERROR),
     )
 
-    with pytest.raises(ValueError, match="Could not initialize Claude client"):
+    with pytest.raises(ValueError) as excinfo:
         PDFDocumentGenerator()
+    # The actionable guidance reaches the user, not a wrapper naming one path.
+    assert "/login" in str(excinfo.value)
+    assert "ANTHROPIC_API_KEY" in str(excinfo.value)
+
+
+def test_init_asks_for_the_model_and_output_cap(mocker):
+    factory = mocker.patch("gaia.eval.pdf_document_generator.make_judge_client")
+    PDFDocumentGenerator(claude_model="claude-sonnet-5", max_tokens=4096)
+    factory.assert_called_once_with(model="claude-sonnet-5", max_tokens=4096)
+
+
+def test_generates_on_a_subscription_without_an_api_key(monkeypatch, tmp_path):
+    """#1344: a logged-in `claude` CLI is enough; no ANTHROPIC_API_KEY needed."""
+    import subprocess
+
+    from gaia.eval import judge_client
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(judge_client.shutil, "which", lambda _: "/usr/bin/claude")
+    body = "Technical Spec\n\n" + ("Realistic section content. " * 100)
+    payload = {
+        "type": "result",
+        "is_error": False,
+        "result": body,
+        "total_cost_usd": 0.05,
+        "num_turns": 1,
+        "duration_api_ms": 900,
+        "usage": {
+            "input_tokens": 40,
+            "cache_creation_input_tokens": 60,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 700,
+        },
+    }
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(judge_client.subprocess, "run", fake_run)
+
+    gen = PDFDocumentGenerator(claude_model="claude-sonnet-5")
+    content, metadata = gen.generate_document("technical_spec", target_tokens=500)
+
+    assert isinstance(gen.claude_client, judge_client.ClaudeCliClient)
+    assert calls and calls[0][1] == "-p"
+    assert content == body.strip()
+    assert metadata["claude_model"] == "claude-sonnet-5"
+    assert metadata["claude_usage"] == {
+        "input_tokens": 100,
+        "output_tokens": 700,
+        "total_tokens": 800,
+    }
+    assert metadata["claude_cost"]["total_cost"] == 0.05
 
 
 def test_init_success_sets_up_document_templates(generator):
