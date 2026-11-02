@@ -1007,8 +1007,13 @@ def _run_ps1(tmp_path, base_url, snippet, tag=None):
     cut = text.rindex("\nMain\n") if "\nMain\n" in text else text.rindex("\r\nMain\r\n")
     bin_dir = tmp_path / "ps-bin"
     script = tmp_path / "run.ps1"
+    # An empty key makes Add-ToPath throw unless the snippet names a scratch
+    # key, so no test can reach the runner's real HKCU\Environment\Path.
     script.write_text(
-        text[:cut] + "\n$GAIA_BIN = $env:GAIA_TEST_BIN\n" + snippet + "\n}\n",
+        text[:cut]
+        + "\n$GAIA_BIN = $env:GAIA_TEST_BIN\n$USER_ENV_KEY = ''\n"
+        + snippet
+        + "\n}\n",
         encoding="utf-8-sig",
     )
     env = dict(os.environ)
@@ -1456,33 +1461,49 @@ needs_windows_registry = pytest.mark.skipif(
 
 
 @pytest.fixture
-def scratch_env_key(tmp_path):
+def real_user_path_unchanged(tmp_path):
+    import winreg
+
+    # "" is the HKCU root, where an empty $USER_ENV_KEY would write.
+    watched = ("Environment", "")
+    before = {sub: _real_user_path(sub) for sub in watched}
+    yield
+    for sub in watched:
+        real, after = before[sub], _real_user_path(sub)
+        if after == real:
+            continue
+        # Undo only our own write; anything else is someone else's change to keep.
+        if after is not None and str(tmp_path) in after[0]:
+            if real is None:
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER, sub, 0, winreg.KEY_SET_VALUE
+                ) as key:
+                    winreg.DeleteValue(key, "Path")
+            else:
+                _seed_user_path(sub, *real)
+            pytest.fail(f"Add-ToPath wrote HKCU\\{sub} Path; restored it")
+        pytest.fail(
+            f"HKCU\\{sub} Path changed during this test, though not with this "
+            f"test's paths; left as is.\nbefore: {real!r}\nafter:  {after!r}"
+        )
+
+
+@pytest.fixture
+def scratch_env_key(real_user_path_unchanged):
     import uuid
     import winreg
 
     subkey = rf"Software\GAIA-install-test-{uuid.uuid4().hex}"
-    real = _real_user_path()
     yield subkey
     try:
         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, subkey)
     except FileNotFoundError:
         pass
-    # Catches the scratch-key hook going stale and writing the real PATH.
-    after = _real_user_path()
-    if after != real and after is not None and str(tmp_path) in after[0]:
-        if real is None:
-            with winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
-            ) as key:
-                winreg.DeleteValue(key, "Path")
-        else:
-            _seed_user_path("Environment", *real)
-        pytest.fail("Add-ToPath changed the runner's real user PATH; restored it")
 
 
-def _real_user_path():
+def _real_user_path(subkey="Environment"):
     try:
-        return _read_user_path("Environment")
+        return _read_user_path(subkey)
     except FileNotFoundError:
         return None
 
@@ -1512,6 +1533,22 @@ def _run_add_to_path(tmp_path, subkey, times=1, broadcast=""):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Failed to add GAIA to PATH" not in result.stdout, result.stdout
     return result
+
+
+@needs_windows_registry
+def test_ps1_add_to_path_without_a_scratch_key_fails_closed(
+    tmp_path, real_user_path_unchanged
+):
+    """A snippet that forgets $USER_ENV_KEY must not reach the real PATH."""
+    snippet = (
+        '$GAIA_BIN = "$GAIA_HOME\\bin"\n'
+        "function Send-EnvironmentChange { }\n"
+        "Add-ToPath\n"
+    )
+    result, _ = _run_ps1(tmp_path, "http://127.0.0.1:1", snippet)
+
+    assert "Failed to add GAIA to PATH" in result.stdout, result.stdout
+    assert "USER_ENV_KEY is empty" in result.stdout, result.stdout
 
 
 @needs_windows_registry

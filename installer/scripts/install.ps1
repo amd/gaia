@@ -534,9 +534,17 @@ function Get-NormalizedPathEntry {
     return [Environment]::ExpandEnvironmentVariables($Entry.Trim().Trim('"')).TrimEnd('\', '/')
 }
 
+function Get-UserEnvKeyName {
+    # An empty name opens the HKCU root itself, so refuse it instead.
+    if ([string]::IsNullOrWhiteSpace($USER_ENV_KEY)) {
+        throw "USER_ENV_KEY is empty; it must name the HKCU subkey holding the user PATH."
+    }
+    return $USER_ENV_KEY
+}
+
 function Get-RawUserPath {
     # Unexpanded: writing back an expanded %USERPROFILE% would freeze it to this machine.
-    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($USER_ENV_KEY, $false)
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey((Get-UserEnvKeyName), $false)
     if ($null -eq $key) { return "" }
     try {
         return [string]$key.GetValue(
@@ -550,7 +558,7 @@ function Get-RawUserPath {
 
 function Set-RawUserPath {
     param([string]$Value)
-    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($USER_ENV_KEY)
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey((Get-UserEnvKeyName))
     try {
         # REG_EXPAND_SZ, as Windows creates it: REG_SZ leaves %VARS% unexpanded.
         $key.SetValue("Path", $Value, [Microsoft.Win32.RegistryValueKind]::ExpandString)
