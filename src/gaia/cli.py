@@ -2158,7 +2158,11 @@ Examples:
     agent_eval_parser.add_argument(
         "--fix",
         action="store_true",
-        help="After eval, invoke Claude Code to fix failures and re-eval (up to --max-fix-iterations)",
+        help=(
+            "After eval, invoke Claude Code to fix failures and re-eval (up to "
+            "--max-fix-iterations). Needs a checkout with no uncommitted tracked "
+            "changes; stops if a fixer iteration fails"
+        ),
     )
     agent_eval_parser.add_argument(
         "--max-fix-iterations",

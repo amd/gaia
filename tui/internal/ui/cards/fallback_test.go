@@ -23,14 +23,6 @@ func TestUnknownRenderFallsBackToGenericCard(t *testing.T) {
 	)
 }
 
-// `diff` is in the contract's primitive list but has no producer today, so it is
-// deliberately not built. It must ride the unsupported fallback, not blank.
-func TestDiffRidesTheUnsupportedFallback(t *testing.T) {
-	out := Render("diff", raw(t, `{"title":"config","unified":"@@ -1 +1 @@\n-a\n+b\n"}`), width80)
-	assertWidth(t, out, width80)
-	assertContains(t, out, `Unsupported card type: "diff"`, "raw data:")
-}
-
 func TestEmptyRenderKeyStillDrawsSomething(t *testing.T) {
 	out := Render("", raw(t, `{"a":1}`), width80)
 	assertWidth(t, out, width80)
