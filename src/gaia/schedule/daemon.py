@@ -81,14 +81,25 @@ def run_one_shot(schedule: Schedule, store: ScheduleStore) -> str:
     try:
         output = runner.fire(schedule)
     except BaseException:
-        store.finish_one_shot(
-            schedule.name, datetime.now(timezone.utc).isoformat(), ok=False
-        )
+        _finish_one_shot(schedule, store, ok=False)
         raise
-    store.finish_one_shot(
-        schedule.name, datetime.now(timezone.utc).isoformat(), ok=True
-    )
+    _finish_one_shot(schedule, store, ok=True)
     return output
+
+
+def _finish_one_shot(schedule: Schedule, store: ScheduleStore, ok: bool) -> None:
+    try:
+        store.finish_one_shot(
+            schedule.name, datetime.now(timezone.utc).isoformat(), ok=ok
+        )
+    except KeyError:
+        # Removed mid-run: nothing left to mark, and the run's own error wins.
+        log.warning(
+            "one-time schedule %r was removed while it ran; its outcome (%s) "
+            "was not recorded",
+            schedule.name,
+            "completed" if ok else "failed",
+        )
 
 
 def _one_shot_job(schedule: Schedule, store: ScheduleStore) -> None:

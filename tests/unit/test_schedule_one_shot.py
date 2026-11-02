@@ -192,6 +192,13 @@ class TestScheduleModel:
         with pytest.raises(ValueError, match="unreadable at"):
             store.get("x").due_at()
 
+    def test_hand_edited_naive_at_is_local_like_the_cli(self, store):
+        store.path.write_text(
+            '[schedules.x]\nat = "2030-01-02T09:00"\nprompt = "hi"\n',
+            encoding="utf-8",
+        )
+        assert store.get("x").due_at() == parse_at("2030-01-02T09:00", NOW)
+
 
 class TestClaim:
     def test_claim_when_due_moves_to_running_on_disk(self, store):
@@ -349,6 +356,32 @@ class TestDaemonFiresOnce:
         assert store.get("once").state == ONE_SHOT_FAILED
         assert "will not run again" in caplog.text
         assert _armed(store).get_jobs() == []
+
+    def test_removed_mid_run_keeps_the_run_error(self, store, monkeypatch, caplog):
+        def remove_then_fail(schedule):
+            store.remove(schedule.name)
+            raise RuntimeError("agent exploded")
+
+        monkeypatch.setattr(daemon.runner, "fire", remove_then_fail)
+        store.add(_one_shot())
+        claimed = store.claim_one_shot("once", NOW)
+        with pytest.raises(RuntimeError, match="agent exploded"):
+            daemon.run_one_shot(claimed, store)
+        assert "removed while it ran" in caplog.text
+        assert "once" not in store.load()
+
+    def test_removed_mid_successful_run_returns_output(
+        self, store, monkeypatch, caplog
+    ):
+        def remove_then_succeed(schedule):
+            store.remove(schedule.name)
+            return "done"
+
+        monkeypatch.setattr(daemon.runner, "fire", remove_then_succeed)
+        store.add(_one_shot())
+        claimed = store.claim_one_shot("once", NOW)
+        assert daemon.run_one_shot(claimed, store) == "done"
+        assert "outcome (completed) was not recorded" in caplog.text
 
     def test_paused_one_shot_is_not_armed_until_resumed(self, store, clock):
         store.add(_one_shot(enabled=False))

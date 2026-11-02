@@ -167,9 +167,8 @@ class Schedule:
                 f"schedule {self.name!r} has an unreadable at {self.at!r} in the "
                 "schedule store; fix or delete that line in schedules.toml"
             ) from e
-        return (due if due.tzinfo else due.replace(tzinfo=timezone.utc)).astimezone(
-            timezone.utc
-        )
+        # No offset means local time, as ``parse_at`` reads ``--at``.
+        return (due if due.tzinfo else due.astimezone()).astimezone(timezone.utc)
 
     def to_toml_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
