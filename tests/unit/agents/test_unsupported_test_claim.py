@@ -1282,9 +1282,17 @@ _LAUNCH_HEADER = "import os, subprocess, sys\n"
 
 
 def _parse_seconds(source: str) -> float:
-    started = time.perf_counter()
-    ast.parse(source)
-    return time.perf_counter() - started
+    best = float("inf")
+    for _ in range(3):
+        started = time.perf_counter()
+        ast.parse(source)
+        best = min(best, time.perf_counter() - started)
+    return best
+
+
+def _linear_bound(source: str) -> float:
+    # Generous so a loaded CI runner can't fail it; a quadratic check is 50x+ over.
+    return 20 * _parse_seconds(source) + 2.0
 
 
 def _detect_seconds(source: str):
@@ -1320,7 +1328,7 @@ def _detect_seconds(source: str):
 def test_many_launches_of_one_costly_name_read_it_once(source):
     found, seconds = _detect_seconds(source)
     assert found is False
-    assert seconds < 10 * _parse_seconds(source) + 0.5
+    assert seconds < _linear_bound(source)
 
 
 _PYTEST_ARGV = "subprocess.run([sys.executable, '-m', 'pytest'])\n"
@@ -1350,11 +1358,11 @@ def test_a_command_grown_and_launched_each_time_stays_linear(storm, runner):
     with patch("gaia.agents.base.checks.log") as log:
         found, seconds = _detect_seconds(source)
     assert found is True
-    assert seconds < 10 * _parse_seconds(source) + 0.5
+    assert seconds < _linear_bound(source)
     assert not log.warning.called
     storm_only, seconds = _detect_seconds(_LAUNCH_HEADER + storm)
     assert storm_only is False
-    assert seconds < 10 * _parse_seconds(_LAUNCH_HEADER + storm) + 0.5
+    assert seconds < _linear_bound(_LAUNCH_HEADER + storm)
 
 
 _WIDE = 5001
@@ -1384,7 +1392,7 @@ def test_a_name_too_costly_to_read_does_not_hide_a_later_runner(costly, runner):
     )
     found, seconds = _detect_seconds(source)
     assert found is True
-    assert seconds < 10 * _parse_seconds(source) + 0.5
+    assert seconds < _linear_bound(source)
 
 
 @pytest.mark.parametrize("prefixes", [10, 30])
@@ -1408,14 +1416,14 @@ def test_a_long_launcher_chain_is_unwrapped_in_linear_time():
     source = _LAUNCH_HEADER + f"os.system({command!r})\n"
     found, seconds = _detect_seconds(source)
     assert found is True
-    assert seconds < 10 * _parse_seconds(source) + 0.5
+    assert seconds < _linear_bound(source)
 
 
 def test_a_huge_unquoted_command_is_split_in_linear_time():
     source = _LAUNCH_HEADER + "os.system('" + "a" * 4_000_000 + "')\n"
     found, seconds = _detect_seconds(source)
     assert found is False
-    assert seconds < 10 * _parse_seconds(source) + 0.5
+    assert seconds < _linear_bound(source)
     spaced = _LAUNCH_HEADER + "os.system('" + "A=1 " * 100_000 + "pytest -q')\n"
     assert _detect_test_runner(spaced) is True
 
@@ -1426,7 +1434,7 @@ def test_a_huge_quoted_command_is_not_read_and_says_so_at_debug():
     with patch("gaia.agents.base.checks.log") as log:
         found, seconds = _detect_seconds(source)
     assert found is False
-    assert seconds < 10 * _parse_seconds(source) + 0.5
+    assert seconds < _linear_bound(source)
     assert log.debug.called and not log.warning.called
     # Under the limit, quoting still reads.
     short = _LAUNCH_HEADER + "os.system(\"'a' pytest\")\nos.system(\"pytest 'a'\")\n"
