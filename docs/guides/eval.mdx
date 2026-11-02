@@ -282,7 +282,7 @@ Fix mode runs in a loop:
 4. Compare results -- stop when `--target-pass-rate` is reached
 
 <Warning>
-  Fix mode patches `src/gaia/` source files directly. Always review diffs before committing. Run `python util/lint.py --all --fix` after fix iterations.
+  Fix mode patches `src/gaia/` source files directly, so it refuses to start while tracked files have uncommitted changes — commit your work or run it from a separate worktree. A fixer iteration that times out or fails stops the loop; check `git diff` for partial edits. Always review diffs before committing. Run `python util/lint.py --all --fix` after fix iterations.
 </Warning>
 
 ### Capturing Real Sessions

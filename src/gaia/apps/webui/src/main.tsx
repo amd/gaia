@@ -11,6 +11,7 @@ import { applyTheme, markTitleBar, resolveTheme, syncTitleBar, watchTitleBarScri
 import { applyPalette } from './utils/palette';
 import { useChatStore } from './stores/chatStore';
 import { applyLocale } from './i18n/registry';
+import { registerServiceWorker } from './pwa/register';
 import './styles/index.css';
 import './styles/palettes.css';
 import './styles/motion.css';
@@ -38,3 +39,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         {isInstallScreen() ? <EngineInstallScreen /> : <App />}
     </React.StrictMode>,
 );
+
+window.addEventListener('load', () => {
+    void registerServiceWorker({
+        isProduction: import.meta.env.PROD,
+        protocol: window.location.protocol,
+        serviceWorker: 'serviceWorker' in navigator ? navigator.serviceWorker : undefined,
+    });
+});

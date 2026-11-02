@@ -2158,7 +2158,11 @@ Examples:
     agent_eval_parser.add_argument(
         "--fix",
         action="store_true",
-        help="After eval, invoke Claude Code to fix failures and re-eval (up to --max-fix-iterations)",
+        help=(
+            "After eval, invoke Claude Code to fix failures and re-eval (up to "
+            "--max-fix-iterations). Needs a checkout with no uncommitted tracked "
+            "changes; stops if a fixer iteration fails"
+        ),
     )
     agent_eval_parser.add_argument(
         "--max-fix-iterations",
@@ -3152,6 +3156,17 @@ Examples:
         "--stdio",
         action="store_true",
         help="Use stdio transport instead of HTTP (for Claude Code integration)",
+    )
+
+    mcp_code_index_parser = mcp_subparsers.add_parser(
+        "code-index",
+        help="Serve semantic code search over stdio (for Claude Code, Cursor, etc.)",
+    )
+    mcp_code_index_parser.add_argument(
+        "--repo",
+        type=Path,
+        default=None,
+        help="Repository to index and search (default: current directory)",
     )
 
     # MCP Client commands (connect to external MCP servers).
@@ -10003,6 +10018,10 @@ def handle_mcp_command(args):
         handle_mcp_serve(args)
     elif args.mcp_action == "tui":
         handle_mcp_tui(args)
+    elif args.mcp_action == "code-index":
+        from gaia.mcp.servers.code_index_mcp import main as code_index_main
+
+        code_index_main([] if args.repo is None else ["--repo", str(args.repo)])
     elif args.mcp_action == "list":
         handle_mcp_list(args)
     elif args.mcp_action == "tools":

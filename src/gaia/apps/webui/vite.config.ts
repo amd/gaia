@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
+import { serviceWorkerPlugin } from './src/pwa/serviceWorkerPlugin';
 
 // Read the GAIA version from version.py (single source of truth)
 function getGaiaVersion(): string {
@@ -26,7 +27,7 @@ function getGaiaVersion(): string {
 const gaiaVersion = getGaiaVersion();
 
 export default defineConfig({
-    plugins: [react({ jsxImportSource: '@gaia/jsx' })],
+    plugins: [react({ jsxImportSource: '@gaia/jsx' }), serviceWorkerPlugin(resolve(__dirname, 'src/pwa/sw.js'))],
     resolve: { alias: { '@gaia/jsx': resolve(__dirname, 'src/i18n/jsx') } },
     base: './',
     define: {
