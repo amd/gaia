@@ -89,7 +89,9 @@ _ERROR_HTML = (
 )
 
 
-_FLOW_TIMEOUT_SECONDS = 120
+# Long enough for a first-time user to read an unverified-app consent screen
+# and click through Google's interstitial.
+_FLOW_TIMEOUT_SECONDS = 900
 
 
 @dataclass
@@ -374,7 +376,7 @@ async def start_authorization(
 
 async def complete_authorization(flow_id: str) -> Dict[str, Any]:
     """
-    Wait up to 120 seconds for the loopback callback to fulfil the flow.
+    Wait up to 15 minutes for the loopback callback to fulfil the flow.
 
     Returns a ``ConnectorState`` dict
     ``{provider, account_email, scopes, connected_at}`` once the token
@@ -396,8 +398,10 @@ async def complete_authorization(flow_id: str) -> Dict[str, Any]:
             return await asyncio.wait_for(flow.future, timeout=_FLOW_TIMEOUT_SECONDS)
         except asyncio.TimeoutError as e:
             raise FlowTimeoutError(
-                f"OAuth flow {flow_id!r} timed out after "
-                f"{_FLOW_TIMEOUT_SECONDS}s. Restart the flow."
+                f"Sign-in to {flow.provider_id} was not finished within "
+                f"{_FLOW_TIMEOUT_SECONDS // 60} minutes, so the sign-in link you "
+                "were given no longer works. Run `gaia connectors connect "
+                f"{flow.provider_id}` (or click Connect again) for a fresh link."
             ) from e
     finally:
         await _teardown_flow(flow_id)

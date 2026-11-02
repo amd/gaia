@@ -1697,7 +1697,7 @@ gaia connectors <subcommand> [OPTIONS]
 | Subcommand | Description |
 |-----------|-------------|
 | `list` (alias `status`) | List connectors in the catalog with their status (`--json` for machine-readable output) |
-| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes, `--grant-agent <agent-id>` to also grant the connector to that agent (e.g. `installed:email`) in the same flow, `--device` for the device-code flow |
+| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes, `--grant-agent <agent-id>` to also grant the connector to that agent (e.g. `installed:email`) in the same flow, `--device` for the device-code flow. The browser sign-in link works for 15 minutes |
 | `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys), or `--client-id` / `--client-secret` to store an OAuth connector's client credentials (the secret is required for Google only; cannot be combined with `--set`/`--json`) |
 | `test <id>` | Run a health check for a configured connector |
 | `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. |

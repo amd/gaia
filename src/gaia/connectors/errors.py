@@ -325,7 +325,7 @@ class ConsentDeniedError(ConnectorsError):
 
 
 class FlowTimeoutError(ConnectorsError):
-    """OAuth flow exceeded its 120-second callback timeout."""
+    """OAuth flow's browser sign-in window lapsed before the callback."""
 
 
 class FlowInProgressError(ConnectorsError):
