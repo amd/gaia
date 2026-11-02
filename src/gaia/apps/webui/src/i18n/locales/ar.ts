@@ -36,6 +36,9 @@ const messages: Messages = {
     'sidebar.notificationsUnread': 'الإشعارات، غير المقروءة: {n}',
     'sidebar.mobileAccess': 'الوصول من الهاتف',
     'sidebar.mobileAccessOn': 'الوصول من الهاتف مفعّل',
+    'mobileAccess.installTitle': 'أبقِ GAIA على هاتفك',
+    'mobileAccess.installSteps': 'بعد فتح GAIA، أضِفه إلى الشاشة الرئيسية: في Safari، أو Chrome على iPhone، اضغط على مشاركة ثم إضافة إلى الشاشة الرئيسية. في Chrome على Android، افتح القائمة ⋮ واضغط على إضافة إلى الشاشة الرئيسية.',
+    'mobileAccess.linkLifetime': 'يتوقف هذا الرابط عن العمل عند إيقاف الوصول من الهاتف. في كل مرة تشغّله، امسح الرمز الجديد. إذا لم يعد GAIA على شاشتك الرئيسية يتصل، فافتح الرابط الجديد وأضِفه مرة أخرى.',
     'sidebar.settings': 'الإعدادات',
 
     // A chat's row in the sidebar
@@ -174,6 +177,8 @@ const messages: Messages = {
     'code.copyAria': 'نسخ الشيفرة',
     'retry.button': 'إعادة المحاولة بنموذج آخر',
     'retry.head': 'إعادة المحاولة باستخدام…',
+    'media.showFull': 'عرض بالحجم الكامل',
+    'media.showSmaller': 'عرض بحجم أصغر',
 
     // Agent activity while GAIA works
     'activity.thinking': 'جارٍ التفكير',
@@ -516,6 +521,14 @@ const messages: Messages = {
     'out.goToAria': 'الانتقال إلى الدور الذي أنشأ {name}',
     'out.fewer': 'إظهار أقل',
     'out.more': 'إظهار المزيد ({n})',
+    'tools.title': 'معلومات الوكيل',
+    'tools.listLabel': 'الأدوات التي يمكن لوكيل هذه المحادثة استخدامها',
+    'tools.listError': 'تعذّر سرد أدوات هذا الوكيل: {error}',
+    'tools.empty': 'لا يملك هذا الوكيل أدوات: يجيب من النموذج وحده.',
+    'tools.notRunning': 'وكيل هذه المحادثة لا يعمل بعد. يبدأ مع رسالتك التالية، وتظهر أدواته هنا بعد ذلك.',
+    'tools.cat.mcp': 'الموصلات',
+    'tools.cat.skill': 'المهارات',
+    'tools.cat.agent': 'مدمجة',
     'chg.title': 'التغييرات',
     'chg.files.one': 'الملفات: {n}',
     'chg.files.other': 'الملفات: {n}',
