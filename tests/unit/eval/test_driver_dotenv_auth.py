@@ -5,6 +5,7 @@
 import json
 import logging
 import os
+from unittest.mock import MagicMock, patch
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +16,8 @@ from gaia.eval.claude_outage import (
     QUOTA,
     claude_account,
     driver_api_key,
+    driver_api_key_for,
+    driver_environment,
     switch_to_backup_account,
 )
 
@@ -39,11 +42,8 @@ def key_env(monkeypatch):
     return apply
 
 
-def _launch(tmp_path, mocker):
-    mocker.patch.object(runner.shutil, "which", return_value="/test/claude")
-    run = mocker.patch.object(
-        runner,
-        "_run_driver",
+def _launch(tmp_path):
+    run = MagicMock(
         return_value=SimpleNamespace(
             returncode=0,
             stdout=json.dumps(
@@ -59,22 +59,25 @@ def _launch(tmp_path, mocker):
             stderr="",
         ),
     )
-    runner.run_scenario_subprocess(
-        tmp_path / "s1.yaml",
-        {"id": "s1", "category": "tool_selection", "setup": {}, "turns": []},
-        tmp_path,
-        "http://localhost:4200",
-        "test-model",
-        "1.00",
-        30,
-    )
+    with patch.object(runner.shutil, "which", return_value="/test/claude"), patch.object(
+        runner, "_run_driver", run
+    ):
+        runner.run_scenario_subprocess(
+            tmp_path / "s1.yaml",
+            {"id": "s1", "category": "tool_selection", "setup": {}, "turns": []},
+            tmp_path,
+            "http://localhost:4200",
+            "test-model",
+            "1.00",
+            30,
+        )
     return run.call_args.args[0], run.call_args.kwargs["env"]
 
 
-def test_dotenv_only_key_drops_bare_and_the_key(tmp_path, mocker, key_env, caplog):
+def test_dotenv_only_key_drops_bare_and_the_key(tmp_path, key_env, caplog):
     key_env(shell=None, current="sk-ant-stale-from-dotenv")
     with caplog.at_level(logging.WARNING, logger="gaia.eval.runner"):
-        cmd, env = _launch(tmp_path, mocker)
+        cmd, env = _launch(tmp_path)
     assert "--bare" not in cmd
     # Not passing --bare is not enough: the CLI prefers an inherited key to OAuth.
     assert env is not None and KEY not in env
@@ -84,9 +87,9 @@ def test_dotenv_only_key_drops_bare_and_the_key(tmp_path, mocker, key_env, caplo
     assert "sk-ant-stale-from-dotenv" not in caplog.text
 
 
-def test_shell_key_keeps_bare_and_inherits(tmp_path, mocker, key_env):
+def test_shell_key_keeps_bare_and_inherits(tmp_path, key_env):
     key_env(shell="sk-ant-shell", current="sk-ant-shell")
-    cmd, env = _launch(tmp_path, mocker)
+    cmd, env = _launch(tmp_path)
     assert cmd[:3] == ["/test/claude", "-p", "--bare"]
     assert env is None
 
@@ -101,17 +104,17 @@ def test_shell_key_keeps_bare_and_inherits(tmp_path, mocker, key_env):
         ("sk-ant-shell", ""),
     ],
 )
-def test_no_usable_key_means_no_bare(tmp_path, mocker, key_env, shell, current):
+def test_no_usable_key_means_no_bare(tmp_path, key_env, shell, current):
     key_env(shell=shell, current=current)
-    cmd, env = _launch(tmp_path, mocker)
+    cmd, env = _launch(tmp_path)
     assert "--bare" not in cmd
     assert env is None
 
 
-def test_blank_shell_key_does_not_bless_a_dotenv_value(tmp_path, mocker, key_env):
+def test_blank_shell_key_does_not_bless_a_dotenv_value(tmp_path, key_env):
     # load_dotenv never overrides a set variable, but an in-process rewrite could.
     key_env(shell="", current="sk-ant-from-somewhere")
-    cmd, env = _launch(tmp_path, mocker)
+    cmd, env = _launch(tmp_path)
     assert "--bare" not in cmd
     assert KEY not in env
 
@@ -122,6 +125,14 @@ def test_warning_is_logged_once_per_process(key_env, caplog):
         runner._driver_auth()
         runner._driver_auth()
     assert sum(".env" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_explicit_environment_mapping_can_supply_a_key(key_env):
+    key_env(shell=None, current="sk-ant-dotenv")
+
+    assert driver_api_key_for({KEY: "sk-ant-explicit"}) == "sk-ant-explicit"
+    assert driver_environment({KEY: "sk-ant-explicit"})[KEY] == "sk-ant-explicit"
+    assert KEY not in driver_environment({KEY: "sk-ant-dotenv"})
 
 
 def test_account_label_ignores_a_dotenv_key(monkeypatch, key_env):
@@ -145,11 +156,12 @@ def test_backup_switch_is_not_blocked_by_a_dotenv_key(monkeypatch, key_env):
     assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-backup"
 
 
-def test_run_driver_passes_env_to_popen(mocker, tmp_path):
-    popen = mocker.patch.object(runner.subprocess, "Popen")
+def test_run_driver_passes_env_to_popen(tmp_path):
+    popen = MagicMock()
     popen.return_value.communicate.return_value = ("", "")
     popen.return_value.returncode = 0
-    runner._run_driver(
-        ["claude"], input="x", timeout=5, cwd=str(tmp_path), env={"A": "1"}
-    )
+    with patch.object(runner.subprocess, "Popen", popen):
+        runner._run_driver(
+            ["claude"], input="x", timeout=5, cwd=str(tmp_path), env={"A": "1"}
+        )
     assert popen.call_args.kwargs["env"] == {"A": "1"}

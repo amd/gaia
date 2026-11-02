@@ -25,7 +25,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Mapping, Optional
 
 from gaia.eval.claude_refusal import (
     CREDENTIAL_CODES,
@@ -99,6 +99,32 @@ def driver_api_key() -> str:
     shell_key = (gaia.pre_dotenv_env(API_KEY_VAR) or "").strip()
     current = (os.environ.get(API_KEY_VAR) or "").strip()
     return current if shell_key and current else ""
+
+
+def driver_api_key_for(environ: Mapping[str, str]) -> str:
+    """Return the driver key represented by an explicit environment snapshot.
+
+    The CLI passes a copied environment into the benchmark judge. In normal
+    execution that copy is the current process environment, so the startup
+    snapshot still distinguishes a shell export from a ``.env`` value. Tests
+    and embedders may pass an independent environment mapping; such a mapping
+    is already the caller's explicit auth choice and is treated as exported.
+    """
+    value = (environ.get(API_KEY_VAR) or "").strip()
+    if not value:
+        return ""
+    current = (os.environ.get(API_KEY_VAR) or "").strip()
+    if value != current:
+        return value
+    return driver_api_key()
+
+
+def driver_environment(environ: Mapping[str, str]) -> dict:
+    """Copy *environ*, removing a dotenv-only API key before spawning Claude."""
+    clean = dict(environ)
+    if dotenv_only_api_key() and clean.get(API_KEY_VAR) == os.environ.get(API_KEY_VAR):
+        clean.pop(API_KEY_VAR, None)
+    return clean
 
 
 def dotenv_only_api_key() -> bool:
