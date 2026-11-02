@@ -104,6 +104,31 @@ describe('what setup found', () => {
         expect(screen.queryByRole('status')).toBeNull();
     });
 
+    it('says which GAIA it is: a release candidate, a local build, or from source', () => {
+        const withBuild = (gaia_build: NonNullable<NonNullable<SetupPlan['system']>['gaia_build']>): SetupPlan => ({
+            ...PLAN(), system: { ...PLAN().system!, gaia_version: gaia_build.version, gaia_build },
+        });
+        const { rerender } = render(<DetectedSummary plan={withBuild({ version: '0.25.5rc2', kind: 'release_candidate', rc: '2', commit: null })} hardware={null} />);
+        const found = () => screen.getByRole('region', { name: 'What setup found' });
+        expect(found()).toHaveTextContent('GAIA 0.25.5 RC 2');
+        expect(found()).toHaveTextContent('Release candidate');
+        rerender(<DetectedSummary plan={withBuild({ version: '0.25.4', kind: 'local', rc: null, commit: null })} hardware={null} />);
+        expect(found()).toHaveTextContent('Local build');
+        rerender(<DetectedSummary plan={withBuild({ version: '0.25.4', kind: 'source', rc: null, commit: '57d72c9a' })} hardware={null} />);
+        expect(found()).toHaveTextContent('GAIA 0.25.4 (57d72c9a)');
+        expect(found()).toHaveTextContent('From source');
+        expect(specText(withBuild({ version: '0.25.4', kind: 'local', rc: null, commit: null }), null)).toContain('GAIA: 0.25.4, local build');
+        rerender(<DetectedSummary plan={withBuild({ version: '0.25.4', kind: 'release', rc: null, commit: null })} hardware={null} />);
+        expect(found()).not.toHaveTextContent('Local build');
+    });
+
+    it('links to the memory split when this PC has one to change', () => {
+        const change = vi.fn();
+        render(<DetectedSummary plan={PLAN()} hardware={null} onChangeMemory={change} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Change how memory is split' }));
+        expect(change).toHaveBeenCalled();
+    });
+
     it('says when the copy did not work', async () => {
         Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')) } });
         render(<DetectedSummary plan={PLAN()} hardware={null} />);

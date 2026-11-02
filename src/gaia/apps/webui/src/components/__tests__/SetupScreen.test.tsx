@@ -150,9 +150,9 @@ describe('SetupScreen: checking this PC', () => {
         renderSetup();
         expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
         await waitFor(() => expect(mockedApi.getSetupPlan).toHaveBeenCalled());
-        // While it checks, only the troubleshooting report can be pressed.
-        const enabled = () => screen.queryAllByRole('button').filter((b) => !(b as HTMLButtonElement).disabled).map((b) => b.textContent);
-        expect(enabled()).toEqual(['Save a troubleshooting report']);
+        // While it checks, only its log and the troubleshooting report can be pressed.
+        const enabled = () => screen.queryAllByRole('button').filter((b) => !(b as HTMLButtonElement).disabled).map((b) => b.textContent?.trim());
+        expect(enabled()).toEqual(['Checks log', 'Save a troubleshooting report']);
         expect(railStep('Check this PC')).toHaveAttribute('aria-current', 'step');
         answer(HARDWARE);
         expect(await screen.findByRole('region', { name: 'What setup found' })).toBeInTheDocument();
@@ -160,6 +160,17 @@ describe('SetupScreen: checking this PC', () => {
         await planScreen();
         expect(railStep('Check this PC')).toHaveClass('is-done');
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
+    });
+
+    it('the top Next arrow does what Continue does once the checks are done', async () => {
+        renderSetup();
+        await screen.findByRole('region', { name: 'What setup found' });
+        const next = screen.getByRole('button', { name: 'Next step' });
+        expect(next).toBeEnabled();
+        fireEvent.click(next);
+        expect(await screen.findByRole('region', { name: 'Recommended setup' })).toBeInTheDocument();
+        // From the plan, moving on starts a download: the arrow leaves that to the button.
+        expect(screen.getByRole('button', { name: 'Next step' })).toBeDisabled();
     });
 
     it('opening Check this PC again stays there', async () => {

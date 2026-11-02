@@ -1,11 +1,12 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { Check, Circle, Loader2, X } from 'lucide-react';
+import { Check, Circle, HelpCircle, Loader2, X } from 'lucide-react';
 import { useT } from '../../i18n/useT';
 import type { PreflightReport, SetupPlan, SetupRunStatus } from '../../types';
 
-type RowState = 'done' | 'active' | 'waiting' | 'failed';
+/** `question`: waiting on the user, not on work. */
+type RowState = 'done' | 'active' | 'waiting' | 'failed' | 'question';
 
 interface Row {
     id: string;
@@ -18,6 +19,7 @@ function RowIcon({ state }: { state: RowState }) {
     if (state === 'done') return <Check size={13} aria-hidden="true" />;
     if (state === 'active') return <Loader2 size={13} className="spin" aria-hidden="true" />;
     if (state === 'failed') return <X size={13} aria-hidden="true" />;
+    if (state === 'question') return <HelpCircle size={13} aria-hidden="true" />;
     return <Circle size={13} aria-hidden="true" />;
 }
 
@@ -26,10 +28,12 @@ interface Props {
     hardwareError: string | null;
     plan: SetupPlan | null;
     serverRun: SetupRunStatus | null;
+    /** The user's own Lemonade was found and setup waits for them to choose. */
+    awaitingChoice?: boolean;
 }
 
 /** "Check this PC": five real checks, with a bar that counts the finished ones. */
-export function SetupChecks({ hardware, hardwareError, plan, serverRun }: Props) {
+export function SetupChecks({ hardware, hardwareError, plan, serverRun, awaitingChoice = false }: Props) {
     const t = useT();
     const serverUp = !!plan?.lemonade.reachable;
     const serverFailed = serverRun?.state === 'failed' || serverRun?.state === 'cancelled';
@@ -52,8 +56,9 @@ export function SetupChecks({ hardware, hardwareError, plan, serverRun }: Props)
         {
             id: 'server',
             label: t('setup.checks.server'),
-            value: serverUp ? t('setup.checks.serverUp') : null,
-            state: serverUp ? 'done' : serverFailed ? 'failed' : hardware ? 'active' : 'waiting',
+            value: serverUp ? t('setup.checks.serverUp') : awaitingChoice ? t('setup.checks.serverChoose') : null,
+            // Waiting on the user is not work in progress: no spinner.
+            state: serverUp ? 'done' : serverFailed ? 'failed' : awaitingChoice ? 'question' : hardware ? 'active' : 'waiting',
         },
         {
             id: 'models',

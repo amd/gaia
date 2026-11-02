@@ -15,11 +15,19 @@ const HARDWARE = {
 const DOWN: SetupPlan = { ...COLD_BIG(), lemonade: { mode: 'gaia', url: null, reachable: false } };
 const row = (name: string) => screen.getByText(name).closest('li') as HTMLElement;
 
-function show(over: { hardware?: PreflightReport | null; hardwareError?: string | null; plan?: SetupPlan | null; serverRun?: SetupRunStatus | null } = {}) {
+function show(over: { hardware?: PreflightReport | null; hardwareError?: string | null; plan?: SetupPlan | null; serverRun?: SetupRunStatus | null; awaitingChoice?: boolean } = {}) {
     render(<SetupChecks hardware={null} hardwareError={null} plan={null} serverRun={null} {...over} />);
 }
 
 describe('Checking this PC', () => {
+    it('shows the server check as a question, not work, while it waits on the user', () => {
+        show({ hardware: HARDWARE, plan: DOWN, awaitingChoice: true });
+        const server = row("GAIA's model server");
+        expect(server).toHaveClass('is-question');
+        expect(server).toHaveTextContent('Choose below');
+        expect(server.querySelector('.spin')).toBeNull();
+    });
+
     it('starts with the hardware being read and the server waiting its turn', () => {
         show();
         expect(row('Processor, GPU and NPU')).toHaveClass('is-active');

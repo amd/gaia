@@ -38,6 +38,12 @@ describe('setup logs', () => {
         expect(screen.queryByText(/downloaded/)).toBeNull();
     });
 
+    it('shows what the checks saw before any run printed a line', () => {
+        render(<StageLogs run={null} before={{ check: ['Found your Lemonade v2026.44.1 at http://localhost:13305/api/v1', 'Waiting for you to choose which Lemonade GAIA uses'] }} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Checks log' }));
+        expect(screen.getByText(/Waiting for you to choose/)).toBeInTheDocument();
+    });
+
     it('offers the report even before anything ran', () => {
         render(<StageLogs run={null} />);
         expect(screen.getByRole('button', { name: 'Save a troubleshooting report' })).toBeEnabled();

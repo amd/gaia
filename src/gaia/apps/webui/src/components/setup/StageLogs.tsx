@@ -19,7 +19,7 @@ function errorText(err: unknown): string {
  * The report carries setup's whole record, so a user who hits a problem has
  * everything we need without a terminal.
  */
-export function StageLogs({ run }: { run: SetupRunStatus | null }) {
+export function StageLogs({ run, before = {} }: { run: SetupRunStatus | null; before?: Partial<Record<SetupLogStage, string[]>> }) {
     const t = useT();
     const [open, setOpen] = useState<Set<SetupLogStage>>(() => new Set());
     const [saving, setSaving] = useState(false);
@@ -54,11 +54,13 @@ export function StageLogs({ run }: { run: SetupRunStatus | null }) {
         }
     }, [t]);
 
-    const stages = STAGES.filter((s) => (run?.logs?.[s]?.length ?? 0) > 0);
+    // What the screen saw before the run, then what the run printed.
+    const linesOf = (stage: SetupLogStage) => [...(before[stage] ?? []), ...(run?.logs?.[stage] ?? [])];
+    const stages = STAGES.filter((s) => linesOf(s).length > 0);
     return (
         <section className="setup-logs" aria-label={t('setup.logs.title')}>
             {stages.map((stage) => {
-                const lines = run?.logs?.[stage] ?? [];
+                const lines = linesOf(stage);
                 const shown = open.has(stage);
                 return (
                     <div key={stage} className="setup-log">

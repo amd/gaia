@@ -4,9 +4,11 @@
 import logging
 import re
 import subprocess
+import sys
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as get_package_version_metadata
-from typing import Optional, Tuple
+from pathlib import Path
+from typing import Dict, Optional, Tuple
 
 __version__ = "0.25.4"
 
@@ -59,15 +61,15 @@ def get_package_version() -> str:
         return __version__
 
 
-def get_git_hash(hash_length: int = 8) -> str:
+def get_git_hash(hash_length: int = 8, cwd: Optional[str] = None) -> str:
     """Get the current git hash.
-    Only used during build/installer process.
 
     Args:
         hash_length: Length of the hash to return
+        cwd: The checkout to ask; the current directory when None
 
     Returns:
-        str: The git hash or 'unknown' if git is not available
+        str: The git hash, or "" when this is not a git checkout or git is missing
     """
     try:
         git_hash = subprocess.check_output(
@@ -75,11 +77,52 @@ def get_git_hash(hash_length: int = 8) -> str:
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=10,
+            cwd=cwd,
         ).strip()
         return git_hash[:hash_length]
-    except Exception:
-        logging.warning("Failed to get Git hash")
+    except (OSError, subprocess.SubprocessError) as e:
+        logging.warning("Failed to get Git hash: %s", e)
         return ""
+
+
+def build_info() -> Dict[str, Optional[str]]:
+    """Which GAIA is running: a published ``release`` or ``release_candidate``,
+    a ``local`` build installed from a wheel file, or ``source`` run from a
+    checkout (with its commit). Read from what pip recorded at install time."""
+    import json
+    from importlib.metadata import distribution
+
+    current = get_package_version()
+    rc = re.search(r"rc(\d+)$", current)
+    kind = "release_candidate" if rc else "release"
+    try:
+        recorded = distribution("amd-gaia").read_text("direct_url.json")
+    except PackageNotFoundError:
+        # No package metadata at all: running straight from a checkout.
+        recorded, kind = None, "source"
+    if recorded:
+        origin = json.loads(recorded)
+        if (origin.get("dir_info") or {}).get("editable"):
+            kind = "source"
+        elif str(origin.get("url", "")).startswith("file:"):
+            kind = "local"
+    # Code outside any site-packages runs from a checkout, whatever metadata says;
+    # a frozen binary is a published build.
+    here = {part.lower() for part in Path(__file__).resolve().parts}
+    if not getattr(sys, "frozen", False) and not here & {
+        "site-packages",
+        "dist-packages",
+    }:
+        kind = "source"
+    commit = None
+    if kind == "source":
+        commit = get_git_hash(cwd=str(Path(__file__).resolve().parent)) or None
+    return {
+        "version": current,
+        "kind": kind,
+        "rc": rc.group(1) if rc else None,
+        "commit": commit,
+    }
 
 
 def get_version_with_hash() -> str:

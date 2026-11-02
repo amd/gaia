@@ -960,3 +960,20 @@ button.setup-rail-step:hover {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
+
+/* A check waiting on the user's answer: a question, in the accent, never a spinner. */
+.setup-result.is-question {
+    color: var(--text-primary);
+}
+
+.setup-result.is-question svg,
+.setup-result.is-question .setup-result-value {
+    color: var(--accent);
+}
+
+.found-link {
+    display: block;
+    margin-block-start: 2px;
+    font-size: 12px;
+    font-weight: 400;
+}

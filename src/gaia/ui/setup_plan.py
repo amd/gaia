@@ -322,12 +322,14 @@ def _system_summary(system_info: Optional[Dict[str, Any]], client) -> Dict[str, 
     from gaia.home import gaia_home
     from gaia.hub import installer as hub_installer
     from gaia.llm.lemonade_client import lemonade_server_version
-    from gaia.version import get_package_version
+    from gaia.version import build_info
 
     info = system_info or {}
     agent = hub_installer.read_sentinel("gaia")
     return {
-        "gaia_version": get_package_version(),
+        # A release, a release candidate, or a build from a checkout, and which.
+        "gaia_build": build_info(),
+        "gaia_version": build_info()["version"],
         # Settings, chats, logs and GAIA's own Lemonade all live here.
         "gaia_home": str(gaia_home()),
         "agent_version": agent.version if agent else None,

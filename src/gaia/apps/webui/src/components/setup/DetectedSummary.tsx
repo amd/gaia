@@ -4,7 +4,7 @@
 import { AlertCircle, Check, ChevronRight, Copy } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useT } from '../../i18n/useT';
-import type { PreflightReport, SetupDevice, SetupPlan } from '../../types';
+import type { PreflightReport, SetupDevice, SetupGaiaBuild, SetupPlan } from '../../types';
 import { formatSize } from './format';
 
 /** A technical value: names, versions and paths read the same in every language. */
@@ -52,6 +52,21 @@ function totalMemory(reported: string | null | undefined, ramGb: number | null |
     return ramGb != null ? formatSize(ramGb) : null;
 }
 
+/** GAIA's version as people say it: "0.25.5 RC 2", or the commit of a source build. */
+function gaiaVersion(build: SetupGaiaBuild | undefined, plain: string | undefined): string | null {
+    if (!build) return plain ?? null;
+    if (build.kind === 'release_candidate' && build.rc) return `${build.version.replace(/rc\d+$/, '')} RC ${build.rc}`;
+    if (build.kind === 'source' && build.commit) return `${build.version} (${build.commit})`;
+    return build.version;
+}
+
+const BUILD_WORDS: Record<SetupGaiaBuild['kind'], string> = {
+    release: 'release',
+    release_candidate: 'release candidate',
+    local: 'local build',
+    source: 'from source',
+};
+
 /** The facts the summary is built from, read once for the screen and the copy. */
 function facts(plan: SetupPlan, hardware: PreflightReport | null) {
     const sys = plan.system;
@@ -68,8 +83,10 @@ function facts(plan: SetupPlan, hardware: PreflightReport | null) {
         npu: npus[0] ?? null,
         runtimes,
         // The versions that decide whether chat works: GAIA, its model server, and what runs chat on it.
+        gaia: gaiaVersion(sys?.gaia_build, sys?.gaia_version),
+        build: sys?.gaia_build?.kind ?? null,
         software: [
-            sys?.gaia_version ? `GAIA ${sys.gaia_version}` : null,
+            gaiaVersion(sys?.gaia_build, sys?.gaia_version) ? `GAIA ${gaiaVersion(sys?.gaia_build, sys?.gaia_version)}` : null,
             sys?.lemonade_version ? `Lemonade ${sys.lemonade_version}` : null,
             ...runtimes.filter(({ b }) => CHAT_RUNTIMES.has(b.recipe) && b.state === 'installed')
                 .map(({ name, b }) => `${name} ${b.version ?? b.backend}`),
@@ -88,7 +105,7 @@ export function specText(plan: SetupPlan, hardware: PreflightReport | null): str
     const f = facts(plan, hardware);
     const server = plan.lemonade.mode === 'external' ? "the user's own" : "GAIA's own";
     return [
-        `GAIA: ${f.sys?.gaia_version ?? 'unknown'} (agent ${f.sys?.agent_version ?? 'not installed yet'})`,
+        `GAIA: ${f.gaia ?? 'unknown'}${f.build ? `, ${BUILD_WORDS[f.build]}` : ''} (agent ${f.sys?.agent_version ?? 'not installed yet'})`,
         `Model server: ${server} Lemonade ${f.sys?.lemonade_version ?? '(version not reported)'}${plan.lemonade.url ? ` at ${plan.lemonade.url}` : ''}`,
         ...f.runtimes.map(({ name, b }) => `${name}: ${b.backend}${b.version ? ` ${b.version}` : ''} (${STATE_WORDS[b.state ?? ''] ?? 'not installed'})`),
         `OS: ${f.sys?.os ?? hardware?.os ?? 'unknown'}`,
@@ -106,7 +123,7 @@ export function specText(plan: SetupPlan, hardware: PreflightReport | null): str
  * downloads: the few facts that decide the setup up front, where things are
  * kept, and the rest one click away.
  */
-export function DetectedSummary({ plan, hardware }: { plan: SetupPlan; hardware: PreflightReport | null }) {
+export function DetectedSummary({ plan, hardware, onChangeMemory }: { plan: SetupPlan; hardware: PreflightReport | null; onChangeMemory?: () => void }) {
     const t = useT();
     const f = facts(plan, hardware);
     const [open, setOpen] = useState(false);
@@ -152,12 +169,14 @@ export function DetectedSummary({ plan, hardware }: { plan: SetupPlan; hardware:
                         ? t('setup.found.memoryOf', { size: formatSize(plan.capacity_gb), total: f.totalMemory })
                         : plan.capacity_gb != null ? <Tech>{formatSize(plan.capacity_gb)}</Tech>
                             : f.totalMemory ? <Tech>{f.totalMemory}</Tech> : unknown}
+                    {onChangeMemory && <button type="button" className="link-btn found-link" onClick={onChangeMemory}>{t('setup.found.changeMemory')}</button>}
                 </Row>
                 <Row label={t('setup.found.space')}>
                     {f.freeGb != null ? <Tech>{formatSize(f.freeGb)}</Tech> : unknown}
                 </Row>
                 <Row label={t('setup.found.software')}>
                     {f.software.length ? <Tech>{f.software.join(' · ')}</Tech> : unknown}
+                    {f.build && f.build !== 'release' && <span className="found-chip">{t(`setup.found.build.${f.build}`)}</span>}
                 </Row>
             </dl>
 

@@ -1041,8 +1041,19 @@ export interface SetupDevice {
     threads?: number | null;
 }
 
+export interface SetupGaiaBuild {
+    version: string;
+    /** A published release or release candidate, a wheel built from a checkout, or a checkout itself. */
+    kind: 'release' | 'release_candidate' | 'local' | 'source';
+    /** The candidate's number, e.g. "2" for 0.25.5rc2. */
+    rc: string | null;
+    /** The checkout's commit, for a source build. */
+    commit: string | null;
+}
+
 export interface SetupSystem {
     gaia_version: string;
+    gaia_build?: SetupGaiaBuild;
     /** Settings, chats, logs and GAIA's own Lemonade. */
     gaia_home: string | null;
     agent_version: string | null;

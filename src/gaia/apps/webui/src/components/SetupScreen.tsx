@@ -77,7 +77,7 @@ const OFFERED: ReadonlyArray<LemonadeFound['status']> = ['ok', 'needs_key', 'too
  * First run on a PC that already runs Lemonade: offer it, so GAIA does not
  * install a second server and a second copy of every model.
  */
-function ExistingLemonadeOffer({ onChosen, onNothingToOffer }: { onChosen: (mode: 'external' | 'gaia') => void; onNothingToOffer?: () => void }) {
+function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChosen: (mode: 'external' | 'gaia') => void; onNothingToOffer?: () => void; onFound?: (found: LemonadeFound) => void }) {
     const t = useT();
     const [offer, setOffer] = useState<{ target: LemonadeTarget; found: LemonadeFound } | null>(null);
     const [checkError, setCheckError] = useState<string | null>(null);
@@ -105,6 +105,7 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer }: { onChosen: (mode
             setUnchecked(found ? [] : missed);
             if (found && OFFERED.includes(found.status)) {
                 setOffer({ target, found });
+                onFound?.(found);
                 setNeedsKey(found.status === 'needs_key');
                 if (found.status === 'too_old') onNothingToOffer?.();
             } else {
@@ -116,7 +117,7 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer }: { onChosen: (mode
         } finally {
             if (live.current) setChecking(false);
         }
-    }, [onNothingToOffer]);
+    }, [onNothingToOffer, onFound]);
 
     useEffect(() => {
         live.current = true;
@@ -321,6 +322,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const [statusRead, setStatusRead] = useState(false);
     const [lemonadeSettled, setLemonadeSettled] = useState(false);
     const lemonadeNothing = useCallback(() => setLemonadeSettled(true), []);
+    /** The user's own Lemonade the checks found, while they choose; then what they chose. */
+    const [lemonadeFound, setLemonadeFound] = useState<LemonadeFound | null>(null);
+    const [lemonadeChoice, setLemonadeChoice] = useState<'external' | 'gaia' | null>(null);
     // A connect waiting on an OS prompt stops asking once setup is gone.
     const mounted = useRef(true);
     useEffect(() => {
@@ -764,6 +768,27 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const at = trail.findIndex((s) => s.id === liveStage);
     // A step can be opened once setup has reached it.
     const runStep = (id: Stage) => id === 'download' || id === 'test' || id === 'ready';
+    // What the checks did before any run printed a line, so the Checks log is never empty.
+    const checkNotes: string[] = [];
+    if (hardware) {
+        checkNotes.push(`This PC: ${[hardware.gpu_name, hardware.npu_detected ? 'NPU' : null].filter(Boolean).join(', ') || 'no GPU reported'}; `
+            + `${hardware.ram_gb ?? '?'} GB memory; ${hardware.disk_free_gb != null ? Math.round(hardware.disk_free_gb) : '?'} GB free on disk`);
+    } else if (hardwareError) {
+        checkNotes.push(`Couldn't read this PC: ${hardwareError}`);
+    }
+    if (lemonadeFound) {
+        checkNotes.push(`Found your Lemonade${lemonadeFound.version ? ` ${lemonadeFound.version}` : ''} at ${lemonadeFound.url}`);
+        checkNotes.push(lemonadeChoice === 'external' ? 'You chose your own Lemonade'
+            : lemonadeChoice === 'gaia' ? "You chose GAIA's own Lemonade"
+                : 'Waiting for you to choose which Lemonade GAIA uses');
+    }
+    if (plan) {
+        checkNotes.push(plan.lemonade.reachable
+            ? `Model server answering at ${plan.lemonade.url ?? 'its address'}`
+            : 'No model server answering yet');
+    } else if (planError) {
+        checkNotes.push(`Couldn't read the model list: ${planError}`);
+    }
     const reachable = (id: Stage, i: number) => i <= at || (visited.has(id) && !runStep(id));
     const railSteps: RailStep[] = trail.map((s, i) => ({
         id: s.id,
@@ -786,7 +811,13 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         lastShownAt.current = shownAt;
     }
     const prevStep = shownAt > 0 ? trail[shownAt - 1].id : null;
-    const nextStep = shownAt >= 0 && shownAt < trail.length - 1 && reachable(trail[shownAt + 1].id, shownAt + 1) ? trail[shownAt + 1].id : null;
+    const reachedNext = shownAt >= 0 && shownAt < trail.length - 1 && reachable(trail[shownAt + 1].id, shownAt + 1) ? trail[shownAt + 1].id : null;
+    // Where the step's own Continue goes when it only moves on (never one that starts a download).
+    const plainNext: Stage | null = viewing != null ? null
+        : stage === 'check' && checksDone ? 'plan'
+            : stage === 'pc' ? (showGpu ? 'gpu' : 'models')
+                : stage === 'gpu' ? 'models' : null;
+    const nextStep = reachedNext ?? plainNext;
     navRef.current = { prev: prevStep, next: nextStep };
     const choiceStep = stage === 'pc' || stage === 'gpu' || stage === 'models' || stage === 'key';
     // Opened from further on while a run is going: the choices there wait for it.
@@ -841,8 +872,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.check.heading')}</h1>
                             <p className="setup-lede">{t(checksDone ? 'setup.check.ledeDone' : 'setup.check.lede')}</p>
-                            <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} />
-                            {checksDone && plan && <DetectedSummary plan={plan} hardware={hardware} />}
+                            <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} awaitingChoice={!!lemonadeFound && !lemonadeSettled} />
+                            {checksDone && plan && <DetectedSummary plan={plan} hardware={hardware} onChangeMemory={showGpu && viewing == null ? () => { setCustomizing(true); stepTo('gpu'); } : undefined} />}
                             {checksDone && viewing == null && (
                                 <div className="setup-row setup-found-next">
                                     <button type="button" className="btn-primary" onClick={() => stepTo('plan')}>{t('setup.continue')}</button>
@@ -851,7 +882,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             {statusRead && plan && !plan.lemonade.reachable && !serverRun && (
                                 <ExistingLemonadeOffer
                                     onNothingToOffer={lemonadeNothing}
-                                    onChosen={(mode) => { setUsersServer(mode === 'external'); setLemonadeSettled(true); loadHardware(); void loadPlan(); }}
+                                    onFound={setLemonadeFound}
+                                    onChosen={(mode) => { setUsersServer(mode === 'external'); setLemonadeChoice(mode); setLemonadeSettled(true); loadHardware(); void loadPlan(); }}
                                 />
                             )}
                             {serverRun && runFailed && (
@@ -1200,7 +1232,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 {runGoing && (choiceStep || stage === 'plan') && (
                     <p className="setup-hint" role="status">{t('setup.nav.runGoing')}</p>
                 )}
-                <StageLogs run={run} />
+                <StageLogs run={run} before={{ check: checkNotes }} />
             </div>
 
             {confirm?.kind === 'no_fit' && (
