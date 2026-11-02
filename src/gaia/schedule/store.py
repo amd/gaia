@@ -54,6 +54,8 @@ ONE_SHOT_STATES = (
 _RELATIVE_AT = re.compile(r"\+((?:\d+[dhm])+)")
 _RELATIVE_PART = re.compile(r"(\d+)([dhm])")
 _UNIT_SECONDS = {"d": 86400, "h": 3600, "m": 60}
+#: The furthest ahead ``--at`` reaches, the same on every OS and timezone.
+_MAX_AHEAD = timedelta(days=100 * 365)
 _AT_EXAMPLES = (
     "an ISO datetime like 2026-11-02T09:00 or a delay like +30m, +2h or +1d12h"
 )
@@ -78,14 +80,11 @@ def parse_at(value: str, now: Optional[datetime] = None) -> datetime:
             raise ValueError(
                 f"--at {value!r} is not in the future; give {_AT_EXAMPLES}"
             )
-        try:
-            due = (now + timedelta(seconds=seconds)).replace(microsecond=0)
-            due.astimezone()
-        except (OverflowError, OSError) as e:
+        if seconds > _MAX_AHEAD.total_seconds():
             raise ValueError(
-                f"--at {value!r} is too far away; give {_AT_EXAMPLES}"
-            ) from e
-        return due
+                f"--at {value!r} is more than 100 years away; give {_AT_EXAMPLES}"
+            )
+        return (now + timedelta(seconds=seconds)).replace(microsecond=0)
     # A date alone would silently mean midnight.
     if text.startswith("+") or not re.search(r"\d[T ]\d", text):
         raise ValueError(
@@ -99,14 +98,22 @@ def parse_at(value: str, now: Optional[datetime] = None) -> datetime:
         raise ValueError(
             f"--at {value!r} is not a time GAIA can read; give {_AT_EXAMPLES}"
         ) from e
+    # Decided by year first: OSes disagree on converting years near 1 or 9999.
+    if moment.year > now.year + 100:
+        raise ValueError(
+            f"--at {value!r} is more than 100 years away; give {_AT_EXAMPLES}"
+        )
+    if moment.year < now.year - 1:
+        raise ValueError(
+            f"--at {value!r} is in the past; give a future time, {_AT_EXAMPLES}"
+        )
     try:
         # No offset means the user's wall clock.
         moment = (moment if moment.tzinfo else moment.astimezone()).astimezone(
             timezone.utc
         )
-        # It is shown in local time, which must exist too.
-        moment.astimezone()
-    except (OverflowError, OSError) as e:
+    except (ValueError, OverflowError, OSError) as e:
+        # Linux says ValueError, Windows OSError, for a year it can't convert.
         raise ValueError(
             f"--at {value!r} is outside the dates this PC can schedule; "
             f"give {_AT_EXAMPLES}"
@@ -115,6 +122,10 @@ def parse_at(value: str, now: Optional[datetime] = None) -> datetime:
         raise ValueError(
             f"--at {value!r} is in the past (it is now "
             f"{now.astimezone():%Y-%m-%d %H:%M %Z}); give a future time"
+        )
+    if moment - now > _MAX_AHEAD:
+        raise ValueError(
+            f"--at {value!r} is more than 100 years away; give {_AT_EXAMPLES}"
         )
     return moment
 

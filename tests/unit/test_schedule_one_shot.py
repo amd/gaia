@@ -131,18 +131,32 @@ class TestParseAt:
         "value", ["+99999999d", "+999999999999999999999999m", "+2914000d"]
     )
     def test_huge_delay_is_a_value_error(self, value):
-        with pytest.raises(ValueError, match="too far away"):
+        with pytest.raises(ValueError, match="more than 100 years away"):
             parse_at(value, NOW)
 
     @pytest.mark.parametrize(
-        "value", ["9999-12-31T23:59", "9999-12-31T23:59:59+14:00", "0001-01-01T00:00"]
+        "value",
+        [
+            "9999-12-31T23:59",
+            "9999-12-31T23:59:59+14:00",
+            "9999-12-31T23:59-14:00",
+            "2200-01-01T00:00Z",
+        ],
     )
-    def test_dates_at_the_calendar_edge_are_value_errors(self, value):
-        with pytest.raises(ValueError, match="--at"):
+    def test_far_future_is_rejected_the_same_everywhere(self, value):
+        with pytest.raises(ValueError, match="more than 100 years away"):
             parse_at(value, NOW)
 
+    def test_just_under_the_limit_is_accepted(self):
+        assert parse_at(f"+{100 * 365}d", NOW) == NOW + timedelta(days=100 * 365)
+
+    def test_year_one_local_time_is_a_value_error(self):
+        # Linux raises ValueError, Windows OSError, converting it from local.
+        with pytest.raises(ValueError, match="in the past"):
+            parse_at("0001-01-01T00:00", NOW)
+
     def test_1960_is_rejected_as_past_or_out_of_range(self):
-        with pytest.raises(ValueError, match="in the past|outside the dates"):
+        with pytest.raises(ValueError, match="in the past"):
             parse_at("1960-01-01T00:00", NOW)
 
     @pytest.mark.parametrize("value", ["+0m", "+0h0m", "+0d"])
@@ -227,7 +241,9 @@ class TestScheduleModel:
             store.get("x").due_at()
         assert "'x'" in str(exc.value) and "schedules.toml" in str(exc.value)
 
-    @pytest.mark.parametrize("at", ["1960-01-01T00:00", "9999-12-31T23:59"])
+    @pytest.mark.parametrize(
+        "at", ["0001-01-01T00:00", "9999-12-31T23:59-14:00", "not-a-time"]
+    )
     def test_hand_edited_out_of_range_at_is_a_value_error(self, store, at):
         store.path.write_text(
             f'[schedules.x]\nat = "{at}"\nprompt = "hi"\n', encoding="utf-8"
@@ -606,8 +622,8 @@ class TestCli:
             ("+0m", "not in the future"),
             ("2099-01-02", "not a time GAIA can read"),
             ("1960-01-01T00:00", "--at '1960-01-01T00:00'"),
-            ("9999-12-31T23:59", "--at '9999-12-31T23:59'"),
-            ("+99999999d", "too far away"),
+            ("9999-12-31T23:59", "more than 100 years away"),
+            ("+99999999d", "more than 100 years away"),
         ],
     )
     def test_add_bad_at_fails_and_stores_nothing(
