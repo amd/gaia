@@ -161,7 +161,11 @@ def test_handler_posts_through_the_workflow_with_the_marker(handler, gate):
     assert with_["comment_file"] == "/tmp/reply.md"
     marker = gate["steps"][0]["env"]["CLAUDE_REPLY_MARKER"]
     assert with_["comment_marker"] == marker
-    assert re.fullmatch(r"<!-- [a-z-]+ -->", marker), "the marker must stay invisible"
+    # An HTML comment with a plain slug inside stays invisible when rendered.
+    inner = marker.removeprefix("<!-- ").removesuffix(" -->")
+    assert (
+        inner != marker and inner and set(inner) <= set("abcdefghijklmnopqrstuvwxyz-")
+    )
     assert "/tmp/reply.md" in with_["prompt"]
     assert "write NO file" in _flat(with_["prompt"])
 
