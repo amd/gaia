@@ -171,7 +171,12 @@ def test_install_writes_the_run_value_only_to_put_a_users_back():
         install,
     )
     assert install.count("WriteRegStr") == 1
-    assert "--minimized" not in install
+    # The one literal value is for a user who already chose it before the rename.
+    assert install.count("--minimized") == 1
+    assert re.search(
+        r'\$\{If\} \$GaiaRunValue == ""\s+\$\{AndIf\} \$GaiaRunLegacy != ""\s+StrCpy',
+        install,
+    )
 
 
 def test_uninstall_still_removes_the_run_value():
@@ -184,7 +189,7 @@ def test_uninstall_still_removes_the_run_value():
 def test_the_run_value_var_exists_only_where_it_is_used():
     # An unreferenced Var is a warning, and electron-builder builds with -WX.
     assert re.search(
-        r"^!ifndef BUILD_UNINSTALLER\n\s*Var GaiaRunValue\n!endif",
+        r"^!ifndef BUILD_UNINSTALLER\n\s*Var GaiaRunValue\n\s*Var GaiaRunLegacy\n!endif",
         _text(INSTALLER_NSH),
         re.M,
     )

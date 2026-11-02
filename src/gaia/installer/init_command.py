@@ -936,7 +936,7 @@ def _tone_wav(path: str, seconds: float = 1.0, rate: int = 16000) -> None:
         struct.pack("<h", int(8000 * math.sin(2 * math.pi * 440 * i / rate)))
         for i in range(int(rate * seconds))
     )
-    with wave.open(path, "wb") as out:
+    with wave.Wave_write(path) as out:
         out.setnchannels(1)
         out.setsampwidth(2)
         out.setframerate(rate)

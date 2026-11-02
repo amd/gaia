@@ -13,6 +13,7 @@
 
 !ifndef BUILD_UNINSTALLER
   Var GaiaRunValue
+  Var GaiaRunLegacy
 !endif
 
 ; On an update electron-builder runs the old uninstaller, customUnInstall
@@ -20,10 +21,8 @@
 !macro customInit
   ReadRegStr $GaiaRunValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
       "${PRODUCT_NAME}"
-  ${If} $GaiaRunValue == ""
-    ReadRegStr $GaiaRunValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
-        "GAIA Agent UI"
-  ${EndIf}
+  ReadRegStr $GaiaRunLegacy HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
+      "GAIA Agent UI"
 !macroend
 
 !macro customInstall
@@ -31,6 +30,12 @@
   ; who upgrade from "GAIA Agent UI" don't end up with an orphaned
   ; Run entry pointing at a binary path that no longer exists.
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "GAIA Agent UI"
+
+  ; The old value points at the old binary, so only the choice carries over.
+  ${If} $GaiaRunValue == ""
+  ${AndIf} $GaiaRunLegacy != ""
+    StrCpy $GaiaRunValue '"$INSTDIR\${PRODUCT_FILENAME}.exe" --minimized'
+  ${EndIf}
 
   ${If} $GaiaRunValue != ""
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \

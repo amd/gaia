@@ -66,6 +66,8 @@ try {
     beforeQuit: () => {
       fatalQuitting = true;
     },
+    // The install screen takes focus before anything has proved it can run.
+    holdCrashCount: () => showingInstallScreen,
   }));
 } catch (err) {
   try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
