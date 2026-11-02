@@ -23,6 +23,7 @@ from __future__ import annotations
 import difflib
 import json
 import os
+import posixpath
 import re
 import shutil
 import statistics
@@ -623,13 +624,19 @@ def workspace_diff(workdir: Path, original: Path) -> str:
 
 # ---------------------------------------------------------------------------
 # Running the flagship
-#: A path into the suite's own folder: the task file and its fixtures. A bare
-#: ``tasks.json`` is not matched, since a SWE-bench repository may have one, and
-#: neither is a longer name ending in ``eval`` (``lm_eval/tasks``).
+#: ``eval/tasks`` as a whole path segment; ``_names_task_dir`` then decides
+#: whether the path leading to it is this checkout's (``lm_eval/tasks`` and a
+#: project's own ``tests/eval/tasks`` are not).
 _ANSWER_KEY_PATH = re.compile(r"(?<![\w.-])eval[\\/]+tasks(?![\w.-])", re.IGNORECASE)
-#: Field names only the task file carries. Their text in a tool result means
-#: the answer key came back, however the agent spelled the path.
+#: Characters that end a path when walking back from ``eval/tasks``.
+_PATH_STOP = frozenset(" \t\r\n\"'`=;|&<>(){}[],")
+_SLASHES = re.compile(r"[\\/]+")
+#: Field names only the task file carries.
 ANSWER_KEY_FIELDS = ("genuine_answer", "must_establish", "wrong_answers")
+#: One of them as a mapping key: JSON, JSON inside a JSON string, or a Python repr.
+_ANSWER_KEY_FIELD = re.compile(
+    r"[\"'](" + "|".join(ANSWER_KEY_FIELDS) + r")\\*[\"']\s*:"
+)
 
 
 def _text(value: Any) -> str:
@@ -658,27 +665,63 @@ def _raw_call_requests(transcript: Mapping[str, Any]) -> List[Tuple[str, str]]:
     return found
 
 
-def answer_key_contact(transcript: Mapping[str, Any]) -> str:
+def _norm_path(path: str) -> str:
+    return posixpath.normpath(_SLASHES.sub("/", path)).casefold()
+
+
+def _task_dir_spellings() -> Tuple[str, ...]:
+    """``TASKS_DIR`` as a tool may write it: native, ``/c/...`` (MSYS, WSL) or ``~/...``."""
+    native = str(TASKS_DIR)
+    found = {_norm_path(native)}
+    drive, rest = os.path.splitdrive(native)
+    if len(drive) == 2 and drive[1] == ":":
+        found.add(_norm_path(f"/{drive[0]}{rest}"))
+    home = Path(os.path.expanduser("~"))
+    if TASKS_DIR.is_relative_to(home):
+        found.add(_norm_path("~/" + TASKS_DIR.relative_to(home).as_posix()))
+    return tuple(found)
+
+
+def _names_task_dir(text: str, hit: "re.Match[str]", workdir: Optional[Path]) -> bool:
+    """Whether the path ending at *hit* is this checkout's ``eval/tasks``."""
+    start = hit.start()
+    while start and text[start - 1] not in _PATH_STOP:
+        start -= 1
+    raw = _SLASHES.sub("/", text[start : hit.end()])
+    spellings = _task_dir_spellings()
+    # endswith, so a JSON escape glued to the front (``\nC:/...``) still matches.
+    if _norm_path(raw).endswith(spellings):
+        return True
+    if workdir is None or raw.startswith(("/", "~")) or re.match(r"[A-Za-z]:", raw):
+        return False
+    return _norm_path(os.path.join(str(workdir), raw)) in spellings
+
+
+def answer_key_contact(
+    transcript: Mapping[str, Any], workdir: Optional[Path] = None
+) -> str:
     """How the agent's tools reached the suite's answer key, or ``""``.
 
     Read from the tool record, never the model's wording: a call that named
-    the task file or its folder, or a tool result carrying the task file's own
-    fields. Both harnesses' transcripts are read (``transcripts.tool_calls``).
+    this checkout's ``eval/tasks`` (relative paths resolved against
+    *workdir*), or a tool result carrying the task file's own fields. Both
+    harnesses' transcripts are read (``transcripts.tool_calls``).
     """
     requests = [
         (name, _text(args)) for name, args, _r in transcripts.tool_calls(transcript)
     ]
     for name, text in requests + _raw_call_requests(transcript):
-        hit = _ANSWER_KEY_PATH.search(text)
-        if hit:
-            return f"{name} named {hit.group(0)!r}"
+        for hit in _ANSWER_KEY_PATH.finditer(text):
+            if _names_task_dir(text, hit, workdir):
+                return f"{name} named {hit.group(0)!r}"
     for name, _args, result in transcripts.tool_calls(transcript):
         if result is None:
             continue
-        text = _text(result)
-        for marker in ANSWER_KEY_FIELDS:
-            if marker in text:
-                return f"{name} returned the task file's {marker!r} field"
+        # Two different fields as keys; a result showing only one passes this check.
+        fields = sorted(set(_ANSWER_KEY_FIELD.findall(_text(result))))
+        if len(fields) >= 2:
+            shown = ", ".join(repr(f) for f in fields)
+            return f"{name} returned the task file's {shown} fields"
     return ""
 
 
@@ -1017,7 +1060,7 @@ def run_task(
                 result.after_answer = calls_after_answer(
                     ran.conversation, prompt, workdir
                 )
-            result.contamination = answer_key_contact(ran.transcript)
+            result.contamination = answer_key_contact(ran.transcript, workdir)
             if result.contamination:
                 # Fails whatever the project looks like: the fix may be copied.
                 result.passed = False

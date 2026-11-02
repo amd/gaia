@@ -4423,13 +4423,16 @@ def _handle_eval_tasks(args):
             f"<run_dir> --propose {expect_path}` from a run of main to gate this model."
         )
         return
-    unmeasured = ft.summarize(card)["unmeasured"]
+    summary = ft.summarize(card)
+    unmeasured, contaminated = summary["unmeasured"], summary["contaminated"]
     missed = [c.metric for c in checks if not c.ok]
     if unmeasured:
         problem = (
             f"{unmeasured} task(s) not measured: the model backend was unreachable. "
             "That is an infrastructure failure, not a verdict on the agent; re-run."
         )
+        if contaminated:
+            problem += f" {contaminated} task(s) also read the answer key."
     elif missed:
         problem = f"Missed expectations: {', '.join(missed)}."
     else:

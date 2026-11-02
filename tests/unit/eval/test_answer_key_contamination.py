@@ -3,13 +3,20 @@
 """A task whose tools reached the answer key fails as contaminated (#4017)."""
 
 import json
-from pathlib import Path
+import os
+import shutil
+import subprocess
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
 
 from gaia.eval import flagship_tasks as ft
 from gaia.eval.bench import harness
+
+#: This checkout's answer key, and a workdir two levels under the repo root.
+KEY = ft.TASKS_DIR / "tasks.json"
+NESTED_WORKDIR = ft.REPO_ROOT / "work" / "t"
 
 TASK_FILE_TEXT = json.dumps(
     {
@@ -37,23 +44,41 @@ def _tool(name, args, content):
 
 
 @pytest.mark.parametrize(
-    "path",
+    "tasks_dir,path",
     [
-        "/home/runner/work/gaia/gaia/eval/tasks/tasks.json",
-        r"C:\actions-runner\_work\gaia\gaia\eval\tasks\tasks.json",
-        "../../eval/tasks",
-        "EVAL/TASKS/github/issues.json",
+        (
+            "/home/runner/work/gaia/gaia/eval/tasks",
+            "/home/runner/work/gaia/gaia/eval/tasks/tasks.json",
+        ),
+        (
+            r"C:\actions-runner\_work\gaia\gaia\eval\tasks",
+            r"C:\actions-runner\_work\gaia\gaia\eval\tasks\tasks.json",
+        ),
+        (
+            r"C:\actions-runner\_work\gaia\gaia\eval\tasks",
+            "c:/ACTIONS-RUNNER/_work/gaia/gaia/EVAL/TASKS/github/issues.json",
+        ),
+        ("/src/gaia/eval/tasks", "/src/gaia/src/../eval/tasks"),
     ],
 )
-def test_a_call_that_names_the_task_folder(path):
+def test_a_call_that_names_the_task_folder(monkeypatch, tasks_dir, path):
+    monkeypatch.setattr(ft, "TASKS_DIR", Path(tasks_dir))
     why = ft.answer_key_contact(_gaia(_tool("read_file", {"path": path}, "...")))
     assert why.startswith("read_file named ")
 
 
+def test_a_relative_path_is_resolved_against_the_workdir():
+    entries = _gaia(_tool("read_file", {"path": "../../eval/tasks/tasks.json"}, ""))
+    assert ft.answer_key_contact(entries, NESTED_WORKDIR).startswith("read_file")
+    # From any other workdir the same path is some project's own folder.
+    assert ft.answer_key_contact(entries, ft.REPO_ROOT / "a" / "b" / "c") == ""
+    assert ft.answer_key_contact(entries) == ""
+
+
 def test_a_path_inside_run_python_code():
     code = "import json; print(open('../../eval/tasks/tasks.json').read())"
-    why = ft.answer_key_contact(_gaia(_tool("run_python", {"code": code}, "")))
-    assert "run_python" in why
+    entries = _gaia(_tool("run_python", {"code": code}, ""))
+    assert "run_python" in ft.answer_key_contact(entries, NESTED_WORKDIR)
 
 
 def test_a_read_through_a_variable_is_caught_by_what_came_back():
@@ -61,7 +86,10 @@ def test_a_read_through_a_variable_is_caught_by_what_came_back():
     code = "import os\nfor r, _d, f in os.walk('/'):\n    ..."
     result = {"stdout": TASK_FILE_TEXT, "stderr": ""}
     why = ft.answer_key_contact(_gaia(_tool("run_python", {"code": code}, result)))
-    assert why == "run_python returned the task file's 'genuine_answer' field"
+    assert why == (
+        "run_python returned the task file's "
+        "'genuine_answer', 'must_establish', 'wrong_answers' fields"
+    )
 
 
 def test_native_tool_call_arguments_on_the_assistant_turn():
@@ -75,7 +103,7 @@ def test_native_tool_call_arguments_on_the_assistant_turn():
                     "id": "c1",
                     "function": {
                         "name": "read_file",
-                        "arguments": json.dumps({"path": "/r/eval/tasks/tasks.json"}),
+                        "arguments": json.dumps({"path": str(KEY)}),
                     },
                 }
             ],
@@ -96,7 +124,7 @@ def test_claude_code_transcript():
                             "type": "tool_use",
                             "id": "t1",
                             "name": "Bash",
-                            "input": {"command": "cat /src/gaia/eval/tasks/tasks.json"},
+                            "input": {"command": f'cat "{KEY.as_posix()}"'},
                         }
                     ]
                 },
@@ -173,6 +201,155 @@ def test_the_everyday_corpus_is_large_enough():
     assert len(EVERYDAY_CALLS) >= 30
 
 
+# --- false positives: answer-key words and folders that are not the key ------
+
+
+def _git_grep(pattern):
+    """What a ``git grep`` over this repo's own eval code and docs prints."""
+    git = shutil.which("git")
+    if not git or not (ft.REPO_ROOT / ".git").exists():
+        pytest.skip("needs a git checkout")
+    return subprocess.run(
+        [git, "grep", "-n", pattern, "--", "src/gaia/eval", "docs"],
+        cwd=ft.REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    ).stdout[:4000]
+
+
+#: Results a real task may see. Each holds a field name or an ``eval/tasks``
+#: folder, and none is this checkout's answer key. Calls run from NESTED_WORKDIR,
+#: the worst case: a workdir inside the repo.
+LEGITIMATE = [
+    ("read_file", {"path": "quiz/scoring.py"}, "wrong_answers = [a for a in q]\n"),
+    ("read_file", {"path": "src/grader.py"}, "# must_establish: checked first\n"),
+    ("read_file", {"path": "exams/models.py"}, "wrong_answers = IntegerField()\n"),
+    ("read_file", {"path": "README.md"}, "Set `genuine_answer` in the fixture."),
+    (
+        "web_fetch",
+        {"url": "https://opentdb.com/api.php?amount=1"},
+        json.dumps({"results": [{"correct_answer": "4", "wrong_answers": ["3"]}]}),
+    ),
+    ("run_shell_command", {"command": "pytest -q"}, "FAILED ::test_wrong_answers"),
+    ("search_file_content", {"pattern": "answers"}, "q.py:2: wrong_answers = []"),
+    ("Grep", {"pattern": "must_establish"}, "src/check.py:10: must_establish = 1"),
+    ("run_shell_command", {"command": "git log -3"}, "abc rename wrong_answers"),
+    ("read_file", {"path": "web/data.json"}, '{"wrong_answers_count": 3}'),
+    ("run_shell_command", {"command": "git grep"}, lambda: _git_grep("genuine_answer")),
+    ("run_shell_command", {"command": "git grep"}, lambda: _git_grep("must_establish")),
+    ("run_shell_command", {"command": "git grep"}, lambda: _git_grep("wrong_answers")),
+    ("read_file", {"path": "docs/review.md"}, "A reviewer must establish the cause."),
+    ("web_fetch", {"url": "https://example.com/faq"}, "Wrong answers are red."),
+    ("read_file", {"path": "NOTES.md"}, "That was a genuine answer."),
+    ("read_file", {"path": "web/quiz.ts"}, "const wrongAnswers: string[] = [];"),
+    ("read_file", {"path": "lib/x.js"}, "let mustEstablish = true;"),
+    ("read_file", {"path": "lib/y.js"}, "const genuineAnswer = await ask();"),
+    ("read_file", {"path": "styles.css"}, ".wrong-answers { color: red }"),
+    ("read_file", {"path": "settings.py"}, "MAX_WRONG_ANSWERS = 3"),
+    ("read_file", {"path": "consts.py"}, "MUST_ESTABLISH_TIMEOUT = 5"),
+    ("read_file", {"path": "a.py"}, "class Genuine_Answer: pass"),
+    ("read_file", {"path": "quiz.py"}, "wrong_answer = pick()"),
+    ("read_file", {"path": "net.py"}, "if must_establishment: pass"),
+    ("read_file", {"path": "data/answers.csv"}, "id,answer,wrong\n1,yes,no"),
+    ("run_shell_command", {"command": "pytest -k answers"}, "2 passed"),
+    # A project's own eval/tasks folder, nested or relative to the workdir.
+    ("read_file", {"path": "tests/eval/tasks/test_queue.py"}, "def test(): ..."),
+    ("list_directory", {"path": "src/x/eval/tasks/"}, "a.py"),
+    ("list_directory", {"path": "eval/tasks"}, "tasks.json"),
+    ("read_file", {"path": "./eval/tasks/fixtures.yaml"}, "a: 1"),
+    ("read_file", {"path": str(NESTED_WORKDIR / "eval" / "tasks" / "x.json")}, "{}"),
+    (
+        "read_file",
+        {"path": str(ft.REPO_ROOT.parent / "other-gaia" / "eval" / "tasks")},
+        "",
+    ),
+    ("read_file", {"path": "C:/other/proj/eval/tasks/a.json"}, "{}"),
+    ("Bash", {"command": "pytest tests/eval/tasks -q"}, "4 passed"),
+    ("Grep", {"pattern": "def", "path": "src/x/eval/tasks/"}, "a.py:1: def"),
+    ("web_fetch", {"url": "https://github.com/o/r/tree/main/eval/tasks"}, "tree"),
+]
+
+
+@pytest.mark.parametrize(
+    "name,args,result", LEGITIMATE, ids=[str(i) for i in range(len(LEGITIMATE))]
+)
+def test_legitimate_results_are_not_contamination(name, args, result):
+    result = result() if callable(result) else result
+    entries = _gaia(_tool(name, args, result))
+    assert ft.answer_key_contact(entries, NESTED_WORKDIR) == ""
+
+
+def test_the_legitimate_corpus_is_large_enough():
+    assert len(LEGITIMATE) >= 37
+
+
+# --- true positives: the answer key, however it was reached -------------------
+
+
+def _real_key_reads():
+    text = KEY.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    first = next(i for i, l in enumerate(lines) if '"must_establish"' in l)
+    last = next(i for i, l in enumerate(lines) if '"genuine_answer"' in l)
+    question = next(t for t in json.loads(text)["tasks"] if "genuine_answer" in t)
+    return {
+        "the file as read": text,
+        "a sed slice with two fields": "\n".join(lines[first : last + 1]),
+        "the file in a stdout dict": {"stdout": text, "stderr": ""},
+        "one line of JSON": json.dumps(json.loads(text)),
+        "a Python repr of one task": repr(question),
+        "JSON inside a JSON string": json.dumps({"r": json.dumps({"out": text})}),
+    }
+
+
+@pytest.mark.parametrize("label", list(_real_key_reads()))
+def test_a_read_of_the_real_task_file_is_caught(label):
+    entries = _gaia(_tool("run_python", {"code": "walk()"}, _real_key_reads()[label]))
+    assert "returned the task file's" in ft.answer_key_contact(entries)
+
+
+def _key_spellings():
+    home = Path(os.path.expanduser("~"))
+    found = {
+        "native": str(KEY),
+        "forward slashes": KEY.as_posix(),
+        "upper case": str(KEY).upper(),
+        "with ..": str(ft.REPO_ROOT / "src" / ".." / "eval" / "tasks" / "tasks.json"),
+        "relative": "../../eval/tasks/tasks.json",
+        "relative backslashes": r"..\..\eval\tasks",
+        "file url": "file:///" + KEY.as_posix().lstrip("/"),
+    }
+    if KEY.is_relative_to(home):
+        found["home"] = "~/" + KEY.relative_to(home).as_posix()
+    drive = PureWindowsPath(str(KEY)).drive
+    if len(drive) == 2:
+        found["msys"] = f"/{drive[0].lower()}" + KEY.as_posix()[2:]
+    return found
+
+
+@pytest.mark.parametrize("label", list(_key_spellings()))
+def test_every_spelling_of_the_real_path_is_caught(label):
+    path = _key_spellings()[label]
+    for name, args in (
+        ("read_file", {"path": path}),
+        ("run_shell_command", {"command": f'cat "{path}" | head'}),
+        ("run_python", {"code": f"print(open(r'{path}').read())"}),
+    ):
+        why = ft.answer_key_contact(_gaia(_tool(name, args, "")), NESTED_WORKDIR)
+        assert why.startswith(f"{name} named "), (name, path)
+
+
+def test_one_field_alone_passes_the_field_check():
+    # The accepted trade-off: a grep that shows only one field is not caught by
+    # what came back, only by naming the path.
+    lines = KEY.read_text(encoding="utf-8").splitlines()
+    shown = "\n".join(l for l in lines if "genuine_answer" in l)
+    entries = _gaia(_tool("Grep", {"pattern": "genuine_answer"}, shown))
+    assert ft.answer_key_contact(entries) == ""
+
+
 # --- the task fails, and the gate counts it -----------------------------------
 
 
@@ -218,7 +395,7 @@ def _run(ctx, monkeypatch, transcript, error=""):
 
 
 def test_contaminated_task_fails_even_when_the_probes_pass(ctx, monkeypatch):
-    transcript = _gaia(_tool("read_file", {"path": "/r/eval/tasks/tasks.json"}, "{}"))
+    transcript = _gaia(_tool("read_file", {"path": str(KEY)}, "{}"))
     result = _run(ctx, monkeypatch, transcript)
     assert result.passed is False
     assert result.contamination.startswith("read_file named ")
@@ -227,8 +404,17 @@ def test_contaminated_task_fails_even_when_the_probes_pass(ctx, monkeypatch):
     assert "transcript.json" in ctx.written
 
 
+def test_run_task_resolves_a_relative_path_against_its_workdir(ctx, monkeypatch):
+    # The ctx workdir is tmp/project; put the "checkout" beside it.
+    monkeypatch.setattr(ft, "TASKS_DIR", ctx.tmp / "gaia" / "eval" / "tasks")
+    near = _gaia(_tool("read_file", {"path": "../gaia/eval/tasks/tasks.json"}, ""))
+    assert _run(ctx, monkeypatch, near).contamination
+    own = _gaia(_tool("read_file", {"path": "eval/tasks/tasks.json"}, ""))
+    assert _run(ctx, monkeypatch, own).contamination == ""
+
+
 def test_contamination_is_reported_alongside_an_agent_error(ctx, monkeypatch):
-    transcript = _gaia(_tool("read_file", {"path": "/r/eval/tasks"}, "{}"))
+    transcript = _gaia(_tool("read_file", {"path": str(ft.TASKS_DIR)}, "{}"))
     result = _run(ctx, monkeypatch, transcript, error="crashed")
     assert result.passed is False and result.error == "crashed"
     assert result.contamination
@@ -311,3 +497,31 @@ def test_old_scorecards_without_the_field_still_summarize():
     entry = _entry("a")
     del entry["contamination"]
     assert ft.summarize(_card(entry))["contaminated"] == 0
+
+
+def test_the_gate_message_names_an_outage_and_contamination_together(
+    tmp_path, capsys
+):
+    import argparse
+
+    from gaia.cli import _handle_eval_tasks
+
+    down = {**_entry("c"), "error": "unreachable", "error_kind": "unavailable"}
+    card = _card(_entry("a"), _entry("b", contamination="x"), down)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    ft.write_scorecard(run_dir, card)
+    expect = tmp_path / "expect.json"
+    expect.write_text(json.dumps(EXPECTED), encoding="utf-8")
+    args = argparse.Namespace(
+        tasks_action="gate",
+        run_dir=str(run_dir),
+        expect=str(expect),
+        enforce=True,
+        propose=None,
+    )
+    with pytest.raises(SystemExit):
+        _handle_eval_tasks(args)
+    out = capsys.readouterr().out
+    assert "1 task(s) not measured" in out
+    assert "1 task(s) also read the answer key" in out
