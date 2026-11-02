@@ -350,8 +350,10 @@ class TomlScheduleStore:
                 pending.unlink(missing_ok=True)
 
     def add(self, schedule: Schedule) -> None:
-        # A new schedule counts the runs it misses from the moment it exists.
-        schedule.missed_since = schedule.missed_since or schedule.created_at
+        # A new schedule counts the runs it misses from the moment it exists;
+        # a one-time schedule never misses a run, it runs late.
+        if not schedule.one_shot:
+            schedule.missed_since = schedule.missed_since or schedule.created_at
         with store_lock(self.path):
             schedules = self.load()
             if schedule.name in schedules:

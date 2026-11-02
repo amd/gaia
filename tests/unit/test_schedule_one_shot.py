@@ -217,6 +217,7 @@ class TestScheduleModel:
         assert loaded.state == ONE_SHOT_PENDING
         raw = store.path.read_text(encoding="utf-8")
         assert "cron" not in raw
+        assert "missed_since" not in raw
 
     def test_cron_schedule_still_round_trips(self, store):
         store.add(Schedule(name="c", cron="0 9 * * *", prompt="hi"))
