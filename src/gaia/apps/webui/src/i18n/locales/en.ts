@@ -693,6 +693,7 @@ export const enMessages = {
     'setup.server.aboutMinute': 'about 1 minute',
     'setup.server.yours': 'Use your Lemonade Server',
     'setup.back': 'Back',
+    'setup.backToGaia': 'Back to GAIA',
     'setup.continue': 'Continue',
     'setup.continueAnyway': 'Continue anyway',
     'setup.cancel': 'Cancel',
@@ -979,6 +980,8 @@ export const enMessages = {
     'settings.advanced.runningAt': 'Running v{version}',
     'settings.advanced.unavailable': 'Status unavailable',
     'settings.advanced.notRunning': 'Not Running',
+    'settings.advanced.notInstalled': 'Not Installed',
+    'settings.advanced.notInstalledHint': 'Set it up to run models on this PC. Cloud providers still work.',
     'settings.advanced.notRunningHint': 'It normally starts on its own. Models on this PC work again once it is back.',
     'settings.advanced.queryFailed': 'Could not query it: {reason}',
     'settings.advanced.noneLoaded': 'None loaded',
@@ -1107,7 +1110,7 @@ export const enMessages = {
 
     // The connection banner
     'banner.serverStopped': "The model server isn't running.",
-    'banner.finishSetup': "Finish GAIA's setup to use models on this PC, or choose a cloud model in Settings.",
+    'banner.finishSetup': 'Set up models on this PC, or choose a cloud model in Settings.',
 
     // The update chip
     'update.now': 'Update now',
@@ -1124,6 +1127,9 @@ export const enMessages = {
     'update.dismissError': 'Dismiss update error',
 
     // Settings: sub-panels and errors
+    'settings.errors.setUpLocal': 'Set up local models',
+    'settings.errors.notInstalledTitle': "Models on this PC aren't set up yet",
+    'settings.errors.notInstalled': 'GAIA needs a model server to run models on this PC, and setup installs it for you. Cloud providers still work.',
     'settings.errors.serverDownTitle': "GAIA can't reach its model server",
     'settings.errors.serverDown': 'Models on this PC are unavailable until it is back. It normally starts on its own, so this can clear in a moment. Cloud providers still work.',
     'settings.errors.details': 'Technical details',

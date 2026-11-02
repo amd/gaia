@@ -630,6 +630,20 @@ for (const locale of ['ar', 'en']) {
         }).length);
         expect(clipped).toBe(0);
         await shot(page, `advanced-${locale}-stopped`);
+
+        // No server installed is never a dead end: setup reopens, and can be left again.
+        await withSetup(page);
+        await page.getByRole('dialog').locator('.settings-card .btn-primary').first().click();
+        const back = page.locator('.setup-close');
+        await expect(back).toBeVisible();
+        await shot(page, `setup-${locale}-reopened`);
+        expect(await audit(page)).toEqual([]);
+        await back.click();
+        await expect(page.locator('.setup')).toHaveCount(0);
+        const banner = page.locator('.connection-banner');
+        await expect(banner.locator('button.connection-banner__retry')).toHaveCount(2);
+        await shot(page, `banner-${locale}-not-installed`);
+        expect(await audit(page)).toEqual([]);
     });
 }
 

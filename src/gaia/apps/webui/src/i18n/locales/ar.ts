@@ -692,6 +692,7 @@ const messages: Messages = {
     'setup.server.install': 'تثبيت خادم النماذج المحلي',
     'setup.server.aboutMinute': 'نحو دقيقة واحدة',
     'setup.server.yours': 'استخدام خادم Lemonade الخاص بك',
+    'setup.backToGaia': 'العودة إلى GAIA',
     'setup.back': 'رجوع',
     'setup.continue': 'متابعة',
     'setup.continueAnyway': 'المتابعة على أي حال',
@@ -979,6 +980,8 @@ const messages: Messages = {
     'settings.advanced.runningAt': 'يعمل v{version}',
     'settings.advanced.unavailable': 'الحالة غير متاحة',
     'settings.advanced.notRunning': 'لا يعمل',
+    'settings.advanced.notInstalled': 'غير مثبّت',
+    'settings.advanced.notInstalledHint': 'أعدّه لتشغيل النماذج على هذا الجهاز. ما زالت مزوّدات السحابة تعمل.',
     'settings.advanced.notRunningHint': 'يبدأ عادة من تلقاء نفسه. تعود النماذج على هذا الجهاز للعمل عند عودته.',
     'settings.advanced.queryFailed': 'تعذّر الاستعلام عنه: {reason}',
     'settings.advanced.noneLoaded': 'لا يوجد نموذج محمّل',
@@ -1107,7 +1110,7 @@ const messages: Messages = {
 
     // The connection banner
     'banner.serverStopped': 'خادم النماذج لا يعمل.',
-    'banner.finishSetup': 'أكمل إعداد GAIA لاستخدام النماذج على هذا الجهاز، أو اختر نموذجًا سحابيًا من الإعدادات.',
+    'banner.finishSetup': 'أعدّ النماذج على هذا الجهاز، أو اختر نموذجًا سحابيًا من الإعدادات.',
 
     // The update chip
     'update.now': 'تحديث الآن',
@@ -1124,6 +1127,9 @@ const messages: Messages = {
     'update.dismissError': 'إغلاق خطأ التحديث',
 
     // Settings: sub-panels and errors
+    'settings.errors.setUpLocal': 'إعداد النماذج المحلية',
+    'settings.errors.notInstalledTitle': 'لم تُعدّ النماذج على هذا الجهاز بعد',
+    'settings.errors.notInstalled': 'يحتاج GAIA إلى خادم نماذج لتشغيل النماذج على هذا الجهاز، وسيثبّته الإعداد نيابة عنك. ما زالت مزوّدات السحابة تعمل.',
     'settings.errors.serverDownTitle': 'لا يستطيع GAIA الوصول إلى خادم النماذج',
     'settings.errors.serverDown': 'لن تتوفر النماذج على هذا الجهاز حتى يعود. يبدأ عادة من تلقاء نفسه، لذا قد يزول هذا بعد لحظة. ما زالت مزوّدات السحابة تعمل.',
     'settings.errors.details': 'تفاصيل تقنية',

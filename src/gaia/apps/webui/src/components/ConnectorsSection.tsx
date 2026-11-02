@@ -1092,7 +1092,6 @@ function AgentMcpsSection({
     expanded: string | null;
     onToggle: (key: string) => void;
 }) {
-    const t = useT();
     return (
         <div className="agent-mcps-section">
             <div className="connectors-list">

@@ -99,8 +99,8 @@ export function ModelSettings() {
     const awaitingPermission = !!providers?.some((p) => p.key_state === 'waiting_for_os_permission');
     useEffect(() => {
         if (!awaitingPermission) return;
-        const t = setInterval(() => { void loadProviders(); }, DOWNLOAD_POLL_MS);
-        return () => clearInterval(t);
+        const timer = setInterval(() => { void loadProviders(); }, DOWNLOAD_POLL_MS);
+        return () => clearInterval(timer);
     }, [awaitingPermission, loadProviders]);
     const activeProvider = active?.provider;
     useEffect(() => { if (activeProvider && !requested) setChosen(activeProvider); }, [activeProvider, requested]);
@@ -229,8 +229,8 @@ export function ModelSettings() {
     }, [anyDownloading, refreshActive]);
     useEffect(() => {
         if (chosen !== 'local' || !anyDownloading) return;
-        const t = setInterval(() => { void loadModels('local', true); }, DOWNLOAD_POLL_MS);
-        return () => clearInterval(t);
+        const timer = setInterval(() => { void loadModels('local', true); }, DOWNLOAD_POLL_MS);
+        return () => clearInterval(timer);
     }, [anyDownloading, chosen, loadModels]);
 
     // Keeps the in-use model's device and size on screen while another provider's tab is open.

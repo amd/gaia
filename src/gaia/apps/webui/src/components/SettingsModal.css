@@ -18,6 +18,7 @@
 }
 
 .status-grid { display: flex; flex-direction: column; gap: 8px; }
+.status-grid > button { align-self: flex-start; }
 
 .status-row {
     display: flex;

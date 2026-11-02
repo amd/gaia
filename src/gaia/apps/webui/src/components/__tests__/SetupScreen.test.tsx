@@ -108,6 +108,71 @@ async function startLocal() {
 
 const stepNumbers = () => [...document.querySelectorAll('.setup-step-num')].map((n) => n.textContent).filter((x) => x && /^\d+$/.test(x));
 
+describe('SetupScreen: reopened to add local models', () => {
+    async function reopen() {
+        const onReady = vi.fn();
+        const onClose = vi.fn();
+        render(<SetupScreen onReady={onReady} onClose={onClose} />);
+        await waitFor(() => expect(mockedApi.getSetupStatus).toHaveBeenCalled());
+        await waitFor(() => expect(mockedApi.getSetupPlan).toHaveBeenCalled());
+        return { onReady, onClose };
+    }
+
+    it('offers a way back, which first-run setup does not', async () => {
+        await open();
+        expect(screen.queryByRole('button', { name: 'Back to GAIA' })).not.toBeInTheDocument();
+        cleanup();
+        const { onClose } = await reopen();
+        fireEvent.click(screen.getByRole('button', { name: 'Back to GAIA' }));
+        expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts on local models, even after a finished cloud setup', async () => {
+        localStorage.setItem('gaia-setup-choice', 'fireworks');
+        mockedApi.getSetupStatus.mockResolvedValue({ ...READY, skip_chat_model: true });
+        await reopen();
+        expect(await screen.findByRole('radio', { name: /On this PC/ })).toBeChecked();
+        expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Start chatting' })).not.toBeInTheDocument();
+    });
+
+    it('picks up a setup still running', async () => {
+        mockedApi.getSetupStatus.mockResolvedValue(runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: 1e9, bytes_total: 23.3e9 })]));
+        await reopen();
+        await waitFor(() => expect(document.querySelector('.setup-steps')).toHaveTextContent('Qwen'));
+        expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument();
+    });
+
+    it('ends on the model it installed, so a cloud user really moves to this PC', async () => {
+        mockedApi.selectModel.mockResolvedValue({ provider: 'local', model: QWEN.id, label: 'Qwen', remote: false, is_default: true });
+        const { onReady } = await reopen();
+        await continueFromWhere();
+        await screen.findByRole('group', { name: 'Choose your models' });
+        fireEvent.click(screen.getByRole('button', { name: /^ ?Continue$/ }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Start chatting' }));
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith(QWEN.id));
+        await waitFor(() => expect(onReady).toHaveBeenCalled());
+    });
+
+    it('stays and says so when the switch to the installed model fails', async () => {
+        mockedApi.selectModel.mockRejectedValue(new Error('The model did not load'));
+        const { onReady } = await reopen();
+        await continueFromWhere();
+        await screen.findByRole('group', { name: 'Choose your models' });
+        fireEvent.click(screen.getByRole('button', { name: /^ ?Continue$/ }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Start chatting' }));
+        expect(await screen.findByText('The model did not load')).toBeInTheDocument();
+        expect(onReady).not.toHaveBeenCalled();
+    });
+
+    it('never switches models at the end of first-run setup', async () => {
+        const onReady = await startLocal();
+        fireEvent.click(await screen.findByRole('button', { name: 'Start chatting' }));
+        await waitFor(() => expect(onReady).toHaveBeenCalled());
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
+    });
+});
+
 describe('SetupScreen: first run, local', () => {
     it('reads as progress before anything starts, with no stale error', async () => {
         await open();

@@ -11,7 +11,7 @@ import { formatGb } from '../../utils/modelLabels';
 import { useT } from '../../i18n/useT';
 import type { SystemStatus, MCPServerStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
-import { namesSetupCommand } from './ErrorNotice';
+import { namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
 import { ModelServerPanel } from './ModelServerPanel';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../SettingsModal.css';
@@ -161,13 +161,16 @@ export function AdvancedSettings() {
                                 label={t('settings.advanced.modelServer')}
                                 value={status.lemonade_running
                                     ? (status.lemonade_version ? t('settings.advanced.runningAt', { version: status.lemonade_version }) : t('settings.advanced.running'))
+                                    : needsLocalSetup(status) ? t('settings.advanced.notInstalled')
                                     : status.lemonade_error ? t('settings.advanced.unavailable') : t('settings.advanced.notRunning')}
                                 ok={status.lemonade_running}
                                 hint={!status.lemonade_running
-                                    ? (status.lemonade_error ? t('settings.advanced.queryFailed', { reason: status.lemonade_error })
+                                    ? (needsLocalSetup(status) ? t('settings.advanced.notInstalledHint')
+                                        : status.lemonade_error ? t('settings.advanced.queryFailed', { reason: status.lemonade_error })
                                         : status.start_instruction && !namesSetupCommand(status.start_instruction) ? status.start_instruction : t('settings.advanced.notRunningHint'))
                                     : undefined}
                             />
+                            {needsLocalSetup(status) && <SetUpLocalButton className="btn-primary" />}
                             <StatusRow
                                 label={t('settings.section.model')}
                                 value={status.model_loaded || t('settings.advanced.noneLoaded')}
