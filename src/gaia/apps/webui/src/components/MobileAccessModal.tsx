@@ -291,6 +291,14 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                         </div>
                     )}
 
+                    {status?.active && !error && (
+                        <div className="mobile-install-hint">
+                            <div className="mobile-install-hint-title">{t('mobileAccess.installTitle')}</div>
+                            <p>{t('mobileAccess.installSteps')}</p>
+                            <p>{t('mobileAccess.linkLifetime')}</p>
+                        </div>
+                    )}
+
                     {/* Actions */}
                     <div className="mobile-access-actions">
                         {status?.active && onStop && (

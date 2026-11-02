@@ -36,6 +36,9 @@ const messages: Messages = {
     'sidebar.notificationsUnread': 'الإشعارات، غير المقروءة: {n}',
     'sidebar.mobileAccess': 'الوصول من الهاتف',
     'sidebar.mobileAccessOn': 'الوصول من الهاتف مفعّل',
+    'mobileAccess.installTitle': 'أبقِ GAIA على هاتفك',
+    'mobileAccess.installSteps': 'بعد فتح GAIA، أضِفه إلى الشاشة الرئيسية: في Safari، أو Chrome على iPhone، اضغط على مشاركة ثم إضافة إلى الشاشة الرئيسية. في Chrome على Android، افتح القائمة ⋮ واضغط على إضافة إلى الشاشة الرئيسية.',
+    'mobileAccess.linkLifetime': 'يتوقف هذا الرابط عن العمل عند إيقاف الوصول من الهاتف. في كل مرة تشغّله، امسح الرمز الجديد. إذا لم يعد GAIA على شاشتك الرئيسية يتصل، فافتح الرابط الجديد وأضِفه مرة أخرى.',
     'sidebar.settings': 'الإعدادات',
 
     // A chat's row in the sidebar
