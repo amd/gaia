@@ -2276,6 +2276,20 @@ def cached_session_agent(session_id: str):
         return entry["agent"] if entry is not None else None
 
 
+def cached_session_agent_of(session_id: str, agent_type: str):
+    """The session's cached agent if it is still a *agent_type* agent, else None.
+
+    A chat switched to another agent keeps the old one cached until its next
+    turn; that one no longer speaks for the chat.
+    """
+    canonical = _canonical_agent_type(agent_type)
+    with _agent_cache_lock:
+        entry = _agent_cache.get(session_id)
+        if entry is None or entry.get("agent_type") != canonical:
+            return None
+        return entry["agent"]
+
+
 def _restore_model_history(
     agent, db, session_id: str, query: str, sse_handler=None
 ) -> None:

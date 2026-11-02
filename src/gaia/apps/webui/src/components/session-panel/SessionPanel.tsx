@@ -4,9 +4,10 @@
 /**
  * The session panel (#5279): one docked, resizable pane per chat that keeps
  * the facts that build trust in view — this answer's sources, where the chat
- * runs and what it may touch, what fills the context, what it produced, and
- * what it changed. It absorbs the per-answer side rail (#5222) as its first
- * section, so the transcript loses one column's width, not two.
+ * runs and what it may touch, what fills the context, what it produced, what
+ * it changed, and which tools its agent has. It absorbs the per-answer side
+ * rail (#5222) as its first section, so the transcript loses one column's
+ * width, not two.
  *
  * Nothing in it polls: sections read on open, on expand, and when a reply
  * ends; closed or collapsed, they are unmounted.
@@ -24,6 +25,7 @@ import { PanelSection } from './PanelSection';
 import { EnvironmentSection } from './EnvironmentSection';
 import { OutputsSection } from './OutputsSection';
 import { ChangesSection } from './ChangesSection';
+import { AgentInfoSection } from './AgentInfoSection';
 import type { ContextUsage, Message } from '../../types';
 import { useT } from '../../i18n/useT';
 import './SessionPanel.css';
@@ -170,6 +172,7 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
                     </PanelSection>
                     <OutputsSection sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
                     <ChangesSection sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
+                    <AgentInfoSection sessionId={sessionId} busy={busy} />
                 </div>
             </aside>
         </>

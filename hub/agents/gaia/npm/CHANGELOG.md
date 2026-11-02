@@ -49,6 +49,14 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   and paid for it in tokens. `gaia config set project_context full|off|auto`
   changes the choice.
 
+### For integrators: contract 2.27
+
+- **A session's tools can be listed** (contract **2.27**).
+  `GET /v1/gaia/sessions/{session_id}/tools` returns the tools the session's
+  agent can call now, as `{ name, description, category }`, skills loaded so
+  far included. The Agent UI shows them in the chat's Agent info. An unknown
+  session is a `404`.
+
 ### For integrators: contract 2.26
 
 - **"Always" answers can be listed and revoked** (contract **2.26**).

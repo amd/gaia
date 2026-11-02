@@ -139,6 +139,7 @@ from gaia.agents.base.tool_outcome import (
 from gaia.agents.base.tools import (
     _TOOL_REGISTRY,
     bare_tool_name,
+    describe_registry,
     tool_call_progress_message,
 )
 from gaia.agents.base.turn_scope import (
@@ -4835,6 +4836,18 @@ Do NOT wrap conversational replies in JSON.
     def get_tools(self) -> List[Dict[str, Any]]:
         """Get a list of registered tools for the agent."""
         return list(self._tools_registry.values())
+
+    def describe_tools(self) -> List[Dict[str, str]]:
+        """The tools this agent can call, for showing them to a user.
+
+        Returns:
+            One ``{"name", "description", "category"}`` dict per registered
+            tool, in registry order. ``category`` is a ``KNOWN_TOOLS`` mixin
+            name, ``"mcp"``, ``"skill"`` or ``"agent"`` (see
+            :func:`gaia.agents.base.tools.tool_category`).
+        """
+        # Copy first: a running turn can load a skill's tools meanwhile.
+        return describe_registry(dict(self._tools_registry))
 
     def _announce_model_call(self, after_tools: bool) -> None:
         """Say what the model is doing until its first token, and keep saying it.
