@@ -1,0 +1,87 @@
+---
+title: "Memory"
+icon: "brain"
+description: "Give GAIA agents a knowledge-graph scratchpad through the reference Memory MCP server."
+---
+
+<Info>
+  **Connector ID:** `mcp-memory` · **Type:** `mcp_server` · **Catalog entry:** [`src/gaia/connectors/catalog/mcp_servers.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/mcp_servers.py)
+</Info>
+
+## What you'll need
+
+The connector is the reference
+[`@modelcontextprotocol/server-memory`](https://www.npmjs.com/package/@modelcontextprotocol/server-memory)
+MCP server (pinned to `2026.8.31`). It stores entities, relations, and observations as a
+knowledge graph that an agent can add to and search (`create_entities`,
+`create_relations`, `add_observations`, `search_nodes`, `read_graph`, and similar).
+It needs **no account and no API key**, only Node 18+ so `npx` is on your `PATH`:
+
+```bash
+node --version   # must be >= 18
+which npx        # must resolve to a real path
+```
+
+<Note>
+  This is a separate, optional tool server. It is not GAIA's built-in
+  [Agent Memory](/guides/memory), which the flagship agent uses on its own and does not
+  need this connector.
+</Note>
+
+## Step 1 — Enable it
+
+There is nothing to paste. Enabling the connector writes its launch entry to
+`~/.gaia/mcp_servers.json`.
+
+**From the CLI:**
+
+```bash
+gaia connectors configure mcp-memory
+```
+
+**From the Agent UI:**
+
+1. Launch the Agent UI: `gaia chat --ui`.
+2. **Settings** (gear) → **Connectors** → click the **Memory** tile.
+3. Enable it.
+
+## Step 2 — Grant and activate it for an agent
+
+```bash
+gaia connectors grants grant mcp-memory installed:gaia --scopes "*"
+gaia connectors activations activate mcp-memory installed:gaia
+```
+
+(In the UI: the tile's **Per-agent** toggle flips both at once.) Activation defaults to
+OFF, so a grant alone does not make the tools visible to the agent. See the
+[connections security model](/security/connections).
+
+Then ask the agent, for example: *"Remember that Dana owns the Acme renewal."*
+
+## Common issues
+
+### `npx: command not found`
+
+Install Node 18+ and make sure `npx` is on your `PATH` (see above), then run
+`gaia connectors test mcp-memory`.
+
+### The agent doesn't use it
+
+Check that the connector is both granted and activated for that agent:
+
+```bash
+gaia connectors grants list mcp-memory
+gaia connectors activations list mcp-memory
+```
+
+## Revoking access
+
+- **Per agent:** `gaia connectors grants revoke mcp-memory installed:gaia`.
+- **Entirely:** Settings → Connectors → Memory → **Disconnect**, or
+  `gaia connectors disconnect mcp-memory`.
+
+## See also
+
+- [Connectors overview](/connectors)
+- [Memory MCP server](https://www.npmjs.com/package/@modelcontextprotocol/server-memory)
+- [Connectors security model](/security/connections)

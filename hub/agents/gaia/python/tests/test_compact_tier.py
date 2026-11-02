@@ -1,0 +1,201 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""The flagship on a compact model: the features Gemma fails are gone, and nothing else."""
+
+from __future__ import annotations
+
+import contextlib
+
+import pytest
+from gaia_agent import stdio
+from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+
+from gaia.agents.base.model_features import COMPACT, FULL, TIER_ENV, withheld_tools
+from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_NAME,
+    LARGE_DEFAULT_MODEL_NAME,
+    NPU_DEFAULT_MODEL_NAME,
+)
+from gaia.skills.errors import SkillUnavailableError
+
+# Each needs a tool from one compact-withheld feature.
+SKILLS_ON_WITHHELD_TOOLS = ("data-explore", "image-gen", "inbox-triage")
+
+
+@contextlib.contextmanager
+def _agent(model_id, dynamic_tools=False, **config):
+    saved = dict(_TOOL_REGISTRY)
+    _TOOL_REGISTRY.clear()
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("GAIA_MEMORY_DISABLED", "1")
+            mp.setenv("GAIA_DYNAMIC_TOOLS", "1" if dynamic_tools else "0")
+            mp.delenv("GAIA_FAST", raising=False)
+            mp.delenv(TIER_ENV, raising=False)
+            yield GaiaAgent(
+                config=GaiaAgentConfig(silent_mode=True, model_id=model_id, **config)
+            )
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+
+@pytest.fixture(scope="module")
+def full_tools():
+    with _agent(LARGE_DEFAULT_MODEL_NAME) as agent:
+        return set(agent._tools_registry)
+
+
+@pytest.fixture(params=[DEFAULT_MODEL_NAME, NPU_DEFAULT_MODEL_NAME], ids=["gpu", "npu"])
+def gemma(request):
+    with _agent(request.param) as agent:
+        yield agent
+
+
+def test_gemma_loses_exactly_the_compact_features_tools(gemma, full_tools):
+    withheld = withheld_tools(COMPACT)
+    # Every name in the table is a real tool, or the table is guarding nothing.
+    assert withheld <= full_tools, sorted(withheld - full_tools)
+    assert full_tools - set(gemma._tools_registry) == withheld
+
+
+def test_gemma_keeps_installed_skills_and_documents(gemma):
+    for name in ("load_skill", "list_skills", "capture_skill", "analyze_data_file"):
+        assert name in gemma._tools_registry
+
+
+def test_gemma_is_not_told_about_withheld_features(gemma):
+    prompt = gemma.system_prompt
+    assert "DATA ANALYSIS WORKFLOW (Scratchpad)" not in prompt
+    assert "**IMAGE GENERATION:** Not available in this session." in prompt
+
+
+def test_gemma_catalog_hides_skills_it_cannot_run(gemma):
+    catalog = gemma.get_skill_catalog_system_prompt()
+    for name in SKILLS_ON_WITHHELD_TOOLS:
+        assert f"- {name}:" not in catalog
+    assert "- research-report:" in catalog
+
+
+@pytest.mark.parametrize("name", SKILLS_ON_WITHHELD_TOOLS)
+def test_gemma_refuses_to_load_a_skill_it_cannot_run(gemma, name):
+    with pytest.raises(SkillUnavailableError, match="larger model"):
+        gemma.load_skill(name)
+    assert name not in gemma.loaded_skills
+
+
+@pytest.mark.parametrize("model_id", [NPU_DEFAULT_MODEL_NAME, "gemma4-it-e2b-FLM"])
+def test_npu_gemma_takes_native_tool_calls(model_id):
+    # Tools in JSON text came back from E2B as a bare "```json" reply (#6008).
+    with _agent(model_id) as agent:
+        assert agent._uses_native_tool_calls()
+
+
+def test_a_larger_model_lists_every_skill():
+    with _agent(LARGE_DEFAULT_MODEL_NAME) as agent:
+        catalog = agent.get_skill_catalog_system_prompt()
+    for name in SKILLS_ON_WITHHELD_TOOLS:
+        assert f"- {name}:" in catalog
+
+
+def _switch(agent, model_id):
+    stdio._apply_switch(
+        agent,
+        use_claude=False,
+        model_id=model_id,
+        claude_model=None,
+        new_client=agent.chat.llm_client,
+    )
+
+
+def test_switching_gemma_to_a_larger_model_and_back(gemma, full_tools):
+    _switch(gemma, LARGE_DEFAULT_MODEL_NAME)
+    assert gemma.model_features is FULL
+    assert set(gemma._tools_registry) == full_tools
+    assert "DATA ANALYSIS WORKFLOW (Scratchpad)" in gemma.system_prompt
+    assert gemma._scratchpad is not None
+    catalog = gemma.get_skill_catalog_system_prompt()
+    for name in SKILLS_ON_WITHHELD_TOOLS:
+        assert f"- {name}:" in catalog
+
+    _switch(gemma, DEFAULT_MODEL_NAME)
+    assert gemma.model_features is COMPACT
+    assert full_tools - set(gemma._tools_registry) == withheld_tools(COMPACT)
+    assert "DATA ANALYSIS WORKFLOW (Scratchpad)" not in gemma.system_prompt
+
+
+def test_a_larger_model_switched_to_gemma_loses_the_features(full_tools):
+    with _agent(LARGE_DEFAULT_MODEL_NAME) as agent:
+        _switch(agent, NPU_DEFAULT_MODEL_NAME)
+        assert full_tools - set(agent._tools_registry) == withheld_tools(COMPACT)
+        with pytest.raises(SkillUnavailableError, match="larger model"):
+            agent.load_skill("image-gen")
+
+
+def test_a_failed_switch_keeps_the_old_features(gemma):
+    before = set(gemma._tools_registry)
+
+    def _boom():
+        raise RuntimeError("prompt composition bug")
+
+    gemma.rebuild_system_prompt = _boom
+    with pytest.raises(RuntimeError, match="rolled back"):
+        _switch(gemma, LARGE_DEFAULT_MODEL_NAME)
+    assert gemma.model_features is COMPACT
+    assert set(gemma._tools_registry) == before
+
+
+@pytest.mark.parametrize("model_id", [DEFAULT_MODEL_NAME, NPU_DEFAULT_MODEL_NAME])
+def test_gemma_with_dynamic_tools_selects_without_a_drift_error(model_id):
+    with _agent(model_id, dynamic_tools=True) as agent:
+        assert agent.tool_loader is not None
+        agent.tool_loader.select = lambda *a, **k: []
+        # Withheld tools are absent on purpose, not registry drift.
+        agent._select_tools_for_turn("summarize my notes")
+        with pytest.raises(ValueError, match="missing from the registry"):
+            agent.tool_loader.validate_registry(agent._tools_registry)
+
+
+def test_switching_to_gemma_unloads_a_skill_it_cannot_run(monkeypatch):
+    with _agent(LARGE_DEFAULT_MODEL_NAME) as agent:
+        agent.load_skill("data-explore")
+        agent.load_skill("research-report")
+        monkeypatch.setattr(
+            stdio,
+            "_reachable_lemonade_models",
+            lambda *a: ("http://localhost:13305/api/v1", [DEFAULT_MODEL_NAME]),
+        )
+        # A client with no catalog to refresh: the switch must not reach a server.
+        monkeypatch.setattr(stdio, "create_client", lambda **k: object())
+        statuses = []
+        stdio._apply_local_switch(agent, DEFAULT_MODEL_NAME, statuses.append)
+        assert statuses == [
+            f"Unloaded data-explore: {DEFAULT_MODEL_NAME} isn't offered the tools "
+            "they need. Switch to a larger model to use them."
+        ]
+        assert "data-explore" not in agent.loaded_skills
+        assert "research-report" in agent.loaded_skills
+        assert "create_table" not in agent.system_prompt
+
+
+def test_a_switch_to_a_larger_model_unloads_nothing():
+    with _agent(LARGE_DEFAULT_MODEL_NAME) as agent:
+        agent.load_skill("data-explore")
+        _switch(agent, LARGE_DEFAULT_MODEL_NAME)
+        assert agent.unload_skills_needing_withheld_tools() == []
+        assert "data-explore" in agent.loaded_skills
+
+
+def test_a_session_started_on_claude_keeps_every_feature(monkeypatch, full_tools):
+    # Gemma is this PC's default, but the session runs on Claude. The client is
+    # built, never called, so a placeholder key is enough.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-placeholder")
+    monkeypatch.setattr(
+        "gaia_agent.chat_agent.resolve_default_chat_model",
+        lambda: DEFAULT_MODEL_NAME,
+    )
+    with _agent(None, use_claude=True, claude_model="claude-sonnet-5") as agent:
+        assert agent.model_features is FULL
+        assert "create_table" in agent._tools_registry
+        assert set(agent._tools_registry) == full_tools

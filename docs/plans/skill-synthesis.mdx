@@ -224,9 +224,12 @@ tool-loader's cache-warm seam, which recomputes the system prompt only when the 
 The spec therefore caps the injection at a default **`MAX_RECALL_BODY_CHARS = 1500`
 per body** at `top_k = 2` — a ≤ 3 KB worst-case prompt addition. `DISTILL_SYSTEM_PROMPT`
 already targets short, single-screen procedures, so the cap is a guardrail rather than
-the common path; a body over the cap is truncated at injection with an explicit
-`… (truncated)` marker while the **full** body stays in the `procedures` row. The exact
-value is tunable against a small-model eval at PR.
+the common path. A body over the cap is never sliced mid-step: if a complete procedure
+ranks above it, it is dropped from the injection; otherwise it is cut at the last step,
+bullet, heading or paragraph boundary inside the cap, marked `… INCOMPLETE`, and the
+block's header tells the model the procedure is not proven as shown and to plan the
+remaining steps itself. Each drop or cut is logged, and the **full** body stays in the
+`procedures` row. The exact value is tunable against a small-model eval at PR.
 
 ### Thresholds
 

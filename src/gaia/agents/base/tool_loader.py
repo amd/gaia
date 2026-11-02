@@ -65,7 +65,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, FrozenSet, List, Optional, Sequence
+from typing import Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence
 
 import numpy as np
 
@@ -218,12 +218,15 @@ class ToolLoader:
         """True once an embedding failure has disabled selection for the session."""
         return self._session_disabled
 
-    def validate_registry(self, registry: Dict[str, dict]) -> None:
+    def validate_registry(
+        self, registry: Dict[str, dict], withheld: Iterable[str] = ()
+    ) -> None:
         """Raise if CORE or any bundle names a tool absent from *registry*.
 
         Names in ``optional_tools`` are exempt — they are absent by construction
         on some installs (env-gated backends, subclass-only mixins), so treating
-        them as drift would fail a healthy agent.
+        them as drift would fail a healthy agent. So are *withheld* names: tools
+        the agent's model is not offered (:mod:`gaia.agents.base.model_features`).
 
         Checks the config→registry direction only (no dead/misspelled CORE or
         bundle names). The host agent calls this once on first activation
@@ -234,7 +237,7 @@ class ToolLoader:
         CORE/bundles, which would silently never be surfaced) is the CI bundle
         test's job — it compares both sets exactly.
         """
-        names = set(registry) | self._optional
+        names = set(registry) | self._optional | set(withheld)
         missing_core = sorted(self._core - names)
         missing_bundle = sorted({m for b in self._bundles for m in b.members} - names)
         if missing_core or missing_bundle:

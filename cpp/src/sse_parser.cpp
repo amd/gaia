@@ -65,9 +65,17 @@ void SseParser::processData(const std::string& payload) {
         return;
     }
 
-    // Parse the JSON payload and extract the delta content token
+    // An empty data: field is legal SSE (keep-alive shims send one).
+    if (data.empty()) return;
+
+    std::string token;
     try {
         const json j = json::parse(data);
+
+        if (j.is_object() && j.contains("error") && !j["error"].is_null()) {
+            if (errorEvent_.is_null()) errorEvent_ = j;
+            return;
+        }
 
         if (!j.contains("choices") || !j["choices"].is_array() || j["choices"].empty()) {
             return;
@@ -84,14 +92,28 @@ void SseParser::processData(const std::string& payload) {
 
         if (!delta.contains("content") || delta["content"].is_null()) return;
 
-        const std::string token = delta["content"].get<std::string>();
-        if (!token.empty()) {
-            hasTokens_ = true;
-            callback_(token);
+        token = delta["content"].get<std::string>();
+    } catch (const json::exception&) {
+        if (malformedEvents_++ == 0) {
+            constexpr size_t kMaxSnippet = 200;
+            firstMalformed_ = data.size() > kMaxSnippet ? data.substr(0, kMaxSnippet) + "..."
+                                                        : data;
         }
-    } catch (...) {
-        // Silently skip malformed JSON — servers occasionally send partial events
+        return;
     }
+
+    if (!token.empty()) {
+        hasTokens_ = true;
+        callback_(token);
+    }
+}
+
+void SseParser::finish() {
+    if (done_ || buffer_.empty()) return;
+    std::string line;
+    line.swap(buffer_);
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    processLine(line);
 }
 
 void SseParser::accumulateToolCalls(const json& deltaToolCalls) {
