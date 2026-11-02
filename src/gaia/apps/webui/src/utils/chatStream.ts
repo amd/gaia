@@ -111,14 +111,30 @@ export function persistedQuestion(server: Message[], local: Message[], target: M
     return saved[next]?.content === target.content ? saved[next] : null;
 }
 
-/** The server's rows, keeping Try again on a failed reply they stand in for. */
+/** Whether *row* is the server's saved copy of the failure *reply* stands in for. */
+export function isSavedFailure(row: Message | undefined, reply: Message): boolean {
+    return !!row && row.role === 'assistant' && !!reply.failureText
+        && row.content.trim() === reply.failureText.trim();
+}
+
+/**
+ * Whether Try again may replace *question* on the server: nothing follows it
+ * there but the saved copy of *reply*'s failure. Anything else is an answer
+ * written since (another window, or a run that finished after the view lost it).
+ */
+export function onlyFailureAfter(server: Message[], question: Message, reply: Message): boolean {
+    const after = server.slice(server.findIndex((m) => m.id === question.id) + 1);
+    return after.length === 0 || (after.length === 1 && isSavedFailure(after[0], reply));
+}
+
+/** The server's rows, keeping Try again only on the server's copy of a failed reply. */
 export function keepFailedReply(local: Message[], server: Message[]): Message[] {
     const last = local[local.length - 1];
     const twin = server[server.length - 1];
-    if (!last?.failed || twin?.role !== 'assistant') return server;
+    if (!last?.failed || !isSavedFailure(twin, last)) return server;
     const lastQuestion = (rows: Message[]) => [...rows].reverse().find((m) => m.role === 'user')?.content;
     if (lastQuestion(local) !== lastQuestion(server)) return server;
-    return [...server.slice(0, -1), { ...twin, failed: true }];
+    return [...server.slice(0, -1), { ...twin, failed: true, failureText: last.failureText }];
 }
 
 export function policyReceiptAnchor(receiptId: string): string {

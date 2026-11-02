@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from 'vitest';
-import { keepFailedReply, persistedQuestion } from '../chatStream';
+import { keepFailedReply, onlyFailureAfter, persistedQuestion } from '../chatStream';
 import type { Message } from '../../types';
 
 const msg = (id: number, role: 'user' | 'assistant', content: string, extra: Partial<Message> = {}): Message => ({
@@ -63,11 +63,13 @@ describe('persistedQuestion', () => {
     });
 });
 
+const SAVED = 'Sorry, something went wrong on my end.';
+
 describe('keepFailedReply', () => {
-    const local = [msg(1_780_000_000_000, 'user', 'q'), msg(1_780_000_000_002, 'assistant', 'plain cause', { failed: true })];
+    const local = [msg(1_780_000_000_000, 'user', 'q'), msg(1_780_000_000_002, 'assistant', 'plain cause', { failed: true, failureText: SAVED })];
 
     it("marks the server's reply for the same turn as failed", () => {
-        const server = [msg(1, 'user', 'q'), msg(2, 'assistant', 'Sorry, something went wrong.')];
+        const server = [msg(1, 'user', 'q'), msg(2, 'assistant', SAVED)];
         const kept = keepFailedReply(local, server);
         expect(kept.map((m) => m.id)).toEqual([1, 2]);
         expect(kept[1].failed).toBe(true);
@@ -87,12 +89,52 @@ describe('keepFailedReply', () => {
 
     it('keeps Try again when an earlier unsaved turn makes the lists differ in length', () => {
         const withLost = [msg(1_779_000_000_000, 'user', 'lost'), msg(1_779_000_000_002, 'assistant', 'x', { failed: true }), ...local];
-        const server = [msg(1, 'user', 'q'), msg(2, 'assistant', 'Sorry, something went wrong.')];
+        const server = [msg(1, 'user', 'q'), msg(2, 'assistant', SAVED)];
         expect(keepFailedReply(withLost, server)[1].failed).toBe(true);
     });
 
     it('never marks a question as a failed reply', () => {
         const server = [msg(1, 'assistant', 'hi'), msg(2, 'user', 'q')];
         expect(keepFailedReply(local, server)).toBe(server);
+    });
+});
+
+describe('keepFailedReply never marks a real answer', () => {
+    it('leaves an answer to the same question written elsewhere alone', () => {
+        const local = [msg(1_780_000_000_000, 'user', 'q'), msg(1_780_000_000_002, 'assistant', 'x', { failed: true, failureText: 'Failed to fetch' })];
+        const server = [msg(1, 'user', 'q'), msg(2, 'assistant', 'REAL ANSWER')];
+        expect(keepFailedReply(local, server)).toBe(server);
+    });
+
+    it('needs the failure text to compare against', () => {
+        const local = [msg(1_780_000_000_000, 'user', 'q'), msg(1_780_000_000_002, 'assistant', 'x', { failed: true })];
+        const server = [msg(1, 'user', 'q'), msg(2, 'assistant', '')];
+        expect(keepFailedReply(local, server)).toBe(server);
+    });
+});
+
+describe('onlyFailureAfter', () => {
+    const reply = msg(1_780_000_000_002, 'assistant', 'x', { failed: true, failureText: SAVED });
+    const q = msg(1, 'user', 'q');
+
+    it('allows a question with nothing after it', () => {
+        expect(onlyFailureAfter([q], q, reply)).toBe(true);
+    });
+
+    it("allows a question followed only by this turn's saved failure", () => {
+        expect(onlyFailureAfter([q, msg(2, 'assistant', ` ${SAVED}
+`)], q, reply)).toBe(true);
+    });
+
+    it('refuses when an answer follows', () => {
+        expect(onlyFailureAfter([q, msg(2, 'assistant', 'REAL ANSWER')], q, reply)).toBe(false);
+    });
+
+    it('refuses when more turns follow the failure', () => {
+        expect(onlyFailureAfter([q, msg(2, 'assistant', SAVED), msg(3, 'user', 'next')], q, reply)).toBe(false);
+    });
+
+    it('refuses a reply without failure text when anything follows', () => {
+        expect(onlyFailureAfter([q, msg(2, 'assistant', SAVED)], q, { ...reply, failureText: undefined })).toBe(false);
     });
 });

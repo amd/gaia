@@ -93,7 +93,8 @@ async function sendAndFail(error: Error) {
     });
     expect(sends).toHaveLength(1);
     await act(async () => {
-        if (persists) server.push(row('assistant', 'Sorry, something went wrong on my end.'));
+        // The backend saves the same text its error event carries.
+        if (persists) server.push(row('assistant', error.message));
         sends[0].cbs.onError(error);
     });
     // The finished turn's bubble fades out before the stored reply shows.
@@ -294,5 +295,81 @@ describe('Try again on a failed turn', () => {
         expect(sends).toHaveLength(1);
         expect(useChatStore.getState().messages.some((m) => m.id === reply.id)).toBe(true);
         expect(screen.getByRole('button', { name: 'Try again' })).not.toBeNull();
+    });
+});
+
+describe('Try again never deletes an answer written since the failure', () => {
+    const pollServer = async () => {
+        await act(async () => {
+            document.dispatchEvent(new Event('visibilitychange'));
+        });
+    };
+    const answeredElsewhere = () => {
+        server = [row('user', 'summarize the report'), row('assistant', 'REAL ANSWER')];
+    };
+
+    it('shows an answer from another window as a normal answer after the poll', async () => {
+        persists = false;
+        await sendAndFail(new TypeError('Failed to fetch'));
+        answeredElsewhere();
+
+        await pollServer();
+
+        await waitFor(() => expect(useChatStore.getState().messages.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']));
+        expect(useChatStore.getState().messages.some((m) => m.failed)).toBe(false);
+        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        expect(document.querySelector('.msg-error')).toBeNull();
+        expect(server.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']);
+    });
+
+    it('does not delete that answer when Try again is pressed before the poll', async () => {
+        persists = false;
+        await sendAndFail(new TypeError('Failed to fetch'));
+        answeredElsewhere();
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        });
+
+        await waitFor(() => expect(useChatStore.getState().messages.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']));
+        expect(mockedApi.deleteMessagesFrom).not.toHaveBeenCalled();
+        expect(sends).toHaveLength(1);
+        expect(server.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']);
+    });
+
+    it('keeps a run that finished after this view lost its response', async () => {
+        // The request reached the server and its run finished; only the response was lost.
+        persists = false;
+        await sendAndFail(new TypeError('Failed to fetch'));
+        server = [row('user', 'summarize the report'), row('assistant', 'REAL ANSWER')];
+
+        await pollServer();
+        await waitFor(() => expect(useChatStore.getState().messages[1]?.content).toBe('REAL ANSWER'));
+        expect(useChatStore.getState().messages[1].failed).toBeFalsy();
+        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        expect(server.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']);
+    });
+
+    it('asks again through the background queue when the chat is left mid-delete', async () => {
+        await sendAndFail(new Error('Lemonade returned 500'));
+        let release!: () => void;
+        const gate = new Promise<void>((r) => { release = r; });
+        const realDelete = mockedApi.deleteMessagesFrom.getMockImplementation()!;
+        mockedApi.deleteMessagesFrom.mockImplementationOnce(async (sid, id) => {
+            await gate;
+            return realDelete(sid, id);
+        });
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        });
+        await waitFor(() => expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledTimes(1));
+        await act(async () => {
+            useChatStore.setState({ currentSessionId: 'other-chat' });
+            release();
+        });
+
+        await waitFor(() => expect(useChatStore.getState().messageQueues[SESSION.id]?.map((m) => m.text)).toEqual(['summarize the report']));
+        expect(server).toEqual([]);
     });
 });

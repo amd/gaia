@@ -6,7 +6,7 @@ import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle
 import { MessageBubble, isErrorContent } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
-import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
+import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -1253,6 +1253,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     created_at: new Date().toISOString(),
                     rag_sources: null,
                     failed: !mayStillFinish(err),
+                    failureText: err.message || undefined,
                 };
                 addMessage(errMsg);
                 setStreaming(false);
@@ -1343,7 +1344,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Resend a user message: delete it and everything below, then re-send
     const resendingRef = useRef(false);
-    const handleResendMessage = useCallback(async (message: Message) => {
+    const handleResendMessage = useCallback(async (message: Message, failedReply?: Message) => {
         if (isStreaming || message.role !== 'user' || resendingRef.current) return;
         resendingRef.current = true;
         const text = message.content;
@@ -1353,9 +1354,21 @@ export function ChatView({ sessionId }: ChatViewProps) {
             // The shown id may still be the temporary one; delete the server's own row.
             const data = await api.getMessages(sessionId);
             if (isStale()) return;
-            const row = persistedQuestion(fromApiMessages(data.messages), useChatStore.getState().messages, message);
+            const server = fromApiMessages(data.messages);
+            const row = persistedQuestion(server, useChatStore.getState().messages, message);
+            if (row && failedReply && !onlyFailureAfter(server, row, failedReply)) {
+                // Answered since it failed here: show that answer instead of deleting it.
+                log.chat.info(`Message ${message.id} was answered since it failed; not resending`);
+                setMessages(server);
+                lastMsgCountRef.current = server.length;
+                return;
+            }
             if (row) await api.deleteMessagesFrom(sessionId, row.id);
-            if (isStale()) return;
+            if (isStale()) {
+                // The question is gone from the server; the background dispatcher asks it again.
+                setQueue((q) => messageQueue.enqueue(q, text, 'queued'));
+                return;
+            }
         } catch (err) {
             log.chat.error(`Could not resend message ${message.id} in session=${sessionId}`, err);
             const cause = err instanceof Error ? classifyChatError(err) : null;
@@ -1380,7 +1393,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         removeMessagesFrom(message.id);
         sendMessage(text);
-    }, [sessionId, isStreaming, removeMessagesFrom, sendMessage, isStale, addNotification, t]);
+    }, [sessionId, isStreaming, removeMessagesFrom, setMessages, setQueue, sendMessage, isStale, addNotification, t]);
 
     // This view sends its chat's queue while open; the background dispatcher does it otherwise.
     useEffect(() => claimView(sessionId), [sessionId]);
@@ -1436,6 +1449,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
         for (let i = messages.length - 1; i >= 0; i--) {
             if (messages[i].role === 'user') {
                 handleResendMessage(messages[i]);
+                return;
+            }
+        }
+    }, [messages, handleResendMessage]);
+
+    // Try again on a failed reply: resend the question it answers.
+    const handleTryAgain = useCallback((reply: Message) => {
+        const at = messages.indexOf(reply);
+        for (let i = at - 1; i >= 0; i--) {
+            if (messages[i].role === 'user') {
+                handleResendMessage(messages[i], reply);
                 return;
             }
         }
@@ -1711,7 +1735,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     ) : canTryAgain ? (
                                         <button
                                             className="msg-action-btn"
-                                            onClick={handleRetryLast}
+                                            onClick={() => handleTryAgain(msg)}
                                             title={t('msg.tryAgain')}
                                             aria-label={t('msg.tryAgain')}
                                         >
