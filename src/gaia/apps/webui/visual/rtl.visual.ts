@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, NOW, mockApi, useLocale, useTheme } from './fixtures';
+import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, mockApi, useLocale, useTheme, withConnectors, withDesktopBridges, withModelPage, withSettingsPanes } from './fixtures';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -298,6 +298,8 @@ for (const locale of ['ar', 'en']) {
         await dialog.locator('[data-section="advanced"]').click();
         const title = dialog.locator('.settings-pane-title');
         await expect(title).toBeVisible();
+        // Advanced fits the dialog until its sections are open.
+        await dialog.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
 
         const close = dialog.locator('.settings-close');
         const before = await close.boundingBox();
@@ -320,6 +322,379 @@ for (const locale of ['ar', 'en']) {
         expect(onTop, 'the close button is covered by scrolled content').toBe(true);
     });
 }
+
+/** Saves what a test sees when GAIA_VISUAL_SHOTS names a folder, so a person can read it. */
+async function shot(page: Page, name: string): Promise<void> {
+    const dir = process.env.GAIA_VISUAL_SHOTS;
+    if (dir) await page.screenshot({ path: `${dir}/${name}.png` });
+}
+
+interface ModelPageOptions {
+    models?: unknown[];
+    status?: unknown;
+    theme?: 'light' | 'dark';
+}
+
+async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light' }: ModelPageOptions = {}): Promise<void> {
+    await open(page, '', locale, (p) => withModelPage(p, models, SETUP_PLAN, status), theme);
+    const sidebar = page.getByRole('button', { name: /Open sidebar/ });
+    if (await sidebar.isVisible()) await sidebar.click();
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await page.getByRole('dialog').locator('[data-section="model"]').click();
+    await expect(page.locator('.model-in-use-name')).toBeVisible();
+}
+
+const scrollPane = (page: Page, to: 'top' | 'bottom') =>
+    page.locator('.settings-scroll').evaluate((el, at) => { el.scrollTop = at === 'top' ? 0 : el.scrollHeight; }, to);
+
+const groups = (page: Page) => page.locator('.settings-card .settings-disclosure');
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`settings model page (${locale})`, () => {
+        test('the model in use and its controls sit above the list', async ({ page }) => {
+            await openModelPage(page, locale);
+            await expect(page.locator('#ctx-size')).toBeVisible();
+            const pane = await page.locator('.settings-scroll').boundingBox();
+            const context = await page.locator('#ctx-size').boundingBox();
+            expect(context!.y + context!.height).toBeLessThan(pane!.y + pane!.height);
+            await expect(page.locator('.settings-disclosure', { hasText: /Available to download/ }).locator('.model-row').first()).toBeHidden();
+            await shot(page, `model-${locale}-top`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('long list, every group and detail open', async ({ page }) => {
+            await openModelPage(page, locale);
+            const closed = await groups(page).evaluateAll((els) => els.filter((el) => !(el as HTMLDetailsElement).open).length);
+            expect(closed).toBeGreaterThan(0);
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await expect(page.getByText('needs 180 GB of memory', { exact: false }).first()).toBeVisible();
+            // A size inside a sentence stays whole only inside its own bidi isolate.
+            if (locale === 'ar') await expect(page.locator('.model-row-meta', { hasText: 'tok/s' }).first()).toContainText('\u206841 tok/s\u2069');
+            await shot(page, `model-${locale}-long`);
+            await scrollPane(page, 'bottom');
+            await shot(page, `model-${locale}-long-end`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('nothing downloaded yet: the download group starts open', async ({ page }) => {
+            const none = MODEL_LIST.map((m) => ({ ...m, downloaded: false, state: 'not_downloaded' }));
+            await openModelPage(page, locale, { models: none });
+            await expect(page.locator('.model-row').first()).toBeVisible();
+            await shot(page, `model-${locale}-none-downloaded`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('an empty list says so', async ({ page }) => {
+            await openModelPage(page, locale, { models: [] });
+            await expect(page.locator('.settings-card .settings-field > .settings-hint').first()).toBeVisible();
+            await shot(page, `model-${locale}-empty`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('downloading: the group opens and the row shows progress', async ({ page }) => {
+            const running = MODEL_LIST.map((m, i) => (i === 4
+                ? { ...m, download_progress: { state: 'downloading', percent: 38, bytes_done: 1.1e9, bytes_total: 3e9 } } : m));
+            await openModelPage(page, locale, { models: running });
+            await expect(page.locator('.model-row progress')).toBeVisible();
+            await page.locator('.model-row progress').scrollIntoViewIfNeeded();
+            await shot(page, `model-${locale}-downloading`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('setup downloads sit above the list, one row failed', async ({ page }) => {
+            await openModelPage(page, locale, { status: SETUP_RUNNING });
+            const downloads = page.locator('.models-downloads-slot');
+            await expect(downloads.locator('.dl-row.is-failed')).toBeVisible();
+            const [slot, first] = await Promise.all([downloads.boundingBox(), groups(page).first().boundingBox()]);
+            expect(slot!.y).toBeLessThan(first!.y);
+            await downloads.scrollIntoViewIfNeeded();
+            await shot(page, `model-${locale}-setup-downloads`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a failed link check lists each line', async ({ page }) => {
+            await openModelPage(page, locale);
+            const add = page.locator('.settings-disclosure', { has: page.locator('#custom-model-url') });
+            await add.locator('summary').click();
+            await page.locator('#custom-model-url').fill('https://huggingface.co/unsloth/flint-GGUF');
+            await add.locator('button[type="submit"]').click();
+            await expect(add.locator('.custom-model-checks li.is-failed')).toBeVisible();
+            await add.locator('.custom-model-checks li.is-failed').scrollIntoViewIfNeeded();
+            await shot(page, `model-${locale}-failed-check`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('cloud tab keeps the local model in use on screen', async ({ page }) => {
+            await openModelPage(page, locale);
+            await expect(page.locator('.model-in-use .is-device')).toHaveText('GPU');
+            await page.getByRole('radio', { name: /Fireworks AI/ }).click();
+            await expect(page.locator('.settings-card .model-row').first()).toBeVisible();
+            await expect(page.locator('.model-in-use .is-device')).toHaveText('GPU');
+            await shot(page, `model-${locale}-cloud`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('dark theme', async ({ page }) => {
+            await openModelPage(page, locale, { theme: 'dark' });
+            await shot(page, `model-${locale}-dark`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('phone width', async ({ page }) => {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await openModelPage(page, locale);
+            await shot(page, `model-${locale}-phone`);
+            await scrollPane(page, 'bottom');
+            await shot(page, `model-${locale}-phone-end`);
+            expect(await audit(page)).toEqual([]);
+        });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
+        test(`settings ${section} pane (${locale})`, async ({ page }) => {
+            await open(page, '', locale, withSettingsPanes);
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.getByRole('dialog').locator(`[data-section="${section}"]`).click();
+            await expect(page.locator('.settings-pane-title')).toBeVisible();
+            await expect(page.locator('.loading-text, .spin')).toHaveCount(0);
+            await shot(page, `pane-${section}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+
+            await page.locator('.settings-disclosure:not([open]) > summary, .settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await scrollPane(page, 'bottom');
+            await shot(page, `pane-${section}-${locale}-open`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
+}
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`settings connectors (${locale})`, () => {
+        const openConnectors = async (page: Page, rows?: unknown[]) => {
+            await open(page, '', locale, (p) => withConnectors(p, rows));
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.getByRole('dialog').locator('[data-section="connectors"]').click();
+            await expect(page.locator('.settings-pane-title')).toBeVisible();
+            await expect(page.locator('.connectors-loading')).toHaveCount(0);
+        };
+
+        test('groups: connected open, the rest closed', async ({ page }) => {
+            await openConnectors(page);
+            await expect(page.locator('.connector-tile').first()).toBeVisible();
+            await expect(page.locator('details[open] .connector-tile')).toHaveCount(3);
+            await shot(page, `connectors-${locale}-top`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('every group and a tile open, with no button inside a button', async ({ page }) => {
+            await openConnectors(page);
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.connector-tile-header', { hasText: 'Microsoft' }).click();
+            await expect(page.locator('.connector-detail')).toBeVisible();
+            await page.locator('.connector-detail').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-open`);
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            await expect(page.locator('.oauth-setup-form')).toBeVisible();
+            await page.locator('.oauth-setup-form').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-setup`);
+            await expect(page.locator('button button')).toHaveCount(0);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('nothing connected: accounts start open', async ({ page }) => {
+            await openConnectors(page, [{ id: 'microsoft', display_name: 'Microsoft', type: 'oauth_pkce', description: 'Mail', configured: false, configurable: true, mcp_env_keys: [], oauth_setup_fields: [] }]);
+            await expect(page.locator('.connector-tile')).toBeVisible();
+            await shot(page, `connectors-${locale}-none`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('phone width: a long account stays on screen', async ({ page }) => {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await open(page, '', locale, (p) => withConnectors(p));
+            await page.getByRole('button', { name: /Open sidebar/ }).click();
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.getByRole('dialog').locator('[data-section="connectors"]').click();
+            await expect(page.locator('.connector-tile').first()).toBeVisible();
+            await shot(page, `connectors-${locale}-phone`);
+            expect(await audit(page)).toEqual([]);
+        });
+    });
+}
+
+const UPDATE_STATES: Array<[string, Record<string, unknown>]> = [
+    ['idle', {}],
+    ['available', { status: 'available', version: '0.26.0' }],
+    ['downloading', { status: 'downloading', version: '0.26.0', progress: 42 }],
+    ['ready', { status: 'downloaded', version: '0.26.0' }],
+    ['failed', { status: 'error', error: 'net::ERR_INTERNET_DISCONNECTED' }],
+    ['pinned', { pinnedVersion: 'v0.25.3', currentVersion: '0.25.3-rc.2' }],
+];
+
+for (const locale of ['ar', 'en']) {
+    for (const [state, update] of UPDATE_STATES) {
+        test(`desktop app and updates: ${state} (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p, update); });
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            const updates = page.locator('.settings-disclosure', { hasText: /Updates/ });
+            await expect(updates).toBeVisible();
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await updates.scrollIntoViewIfNeeded();
+            await shot(page, `updates-${locale}-${state}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+        });
+    }
+
+    test(`notifications on the desktop app (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p); });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="notifications"]').click();
+        await expect(page.locator('#battery-floor')).toBeVisible();
+        await shot(page, `notifications-${locale}-desktop`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+}
+
+/** Visible text left in English on an Arabic screen; names and paths sit in <bdi>. */
+const untranslated = (page: Page): Promise<string[]> =>
+    page.evaluate(() => {
+        const root = document.querySelector('.settings-scroll') as Element;
+        const left = new Set<string>();
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+            const text = n.textContent?.trim() ?? '';
+            const el = n.parentElement as Element;
+            if (!/[A-Za-z]{3}/.test(text) || /[\u0600-\u06ff]/.test(text) || !el.checkVisibility()) continue;
+            if (el.closest('.i18n-gloss, code, bdi, kbd, select, .provider-tab, .skill-row-name, .connector-tile-type, .beta-badge, .status-label, .status-value')) continue;
+            left.add(text.slice(0, 60));
+        }
+        return [...left];
+    });
+
+for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
+    test(`settings ${section} pane has no leftover English`, async ({ page }) => {
+        await open(page, '', 'ar', withSettingsPanes);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator(`[data-section="${section}"]`).click();
+        await expect(page.locator('.settings-pane-title')).toBeVisible();
+        await expect(page.locator('.loading-text, .spin')).toHaveCount(0);
+        await page.locator('.settings-disclosure:not([open]) > summary, .settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+        await page.waitForTimeout(100);
+        expect(await untranslated(page)).toEqual([]);
+    });
+}
+
+const RAW_SERVER_ERROR = "The local model server is not reachable at http://127.0.0.1:59987/api/v1 (HTTPConnectionPool(host='127.0.0.1', port=59987): Max retries exceeded)";
+
+for (const locale of ['ar', 'en']) {
+    test(`model server down: one plain notice, no raw error on show (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+            await p.route(/\/api\/providers\/local\/(models|context)/, (route) =>
+                route.fulfill({ status: 503, json: { detail: RAW_SERVER_ERROR } }));
+            await p.route(/\/api\/providers(\?|$)/, (route) => route.fulfill({
+                json: { providers: [{ id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC.' }], lemonade_error: RAW_SERVER_ERROR },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="model"]').click();
+        await expect(page.locator('.settings-notice')).toHaveCount(1);
+        await expect(page.getByText('HTTPConnectionPool')).toBeHidden();
+        await expect(page.locator('.settings-notice .btn-secondary')).toBeVisible();
+        await shot(page, `model-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a stopped server's hint wraps inside its row and names no command (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/system/status', (route) => route.fulfill({
+                json: { ...SYSTEM_STATUS, lemonade_running: false, model_loaded: null, start_command: 'gaia init', start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.' },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const row = page.locator('.status-row--has-hint').first();
+        await expect(row).toBeVisible();
+        await expect(row).not.toContainText('gaia init');
+        const clipped = await page.locator('.status-hint').evaluateAll((els) => els.filter((el) => {
+            const box = el.getBoundingClientRect();
+            const card = (el.closest('.status-row') as Element).getBoundingClientRect();
+            return box.left < card.left || box.right > card.right;
+        }).length);
+        expect(clipped).toBe(0);
+        await shot(page, `advanced-${locale}-stopped`);
+
+        // No server installed is never a dead end: setup reopens, and can be left again.
+        await withSetup(page);
+        await page.getByRole('dialog').locator('.settings-card .btn-primary').first().click();
+        const back = page.locator('.setup-close');
+        await expect(back).toBeVisible();
+        await shot(page, `setup-${locale}-reopened`);
+        expect(await audit(page)).toEqual([]);
+        await back.click();
+        await expect(page.locator('.setup')).toHaveCount(0);
+        const banner = page.locator('.connection-banner');
+        await expect(banner.locator('button.connection-banner__retry')).toHaveCount(2);
+        await shot(page, `banner-${locale}-not-installed`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+test('a keyboard user can reach and open a section, and sees where focus is', async ({ page }) => {
+    await open(page, '', 'en', withSettingsPanes);
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+    const summary = page.locator('.settings-disclosure > summary').first();
+    await expect(summary).toBeVisible();
+    await summary.focus();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    expect(await page.evaluate(() => {
+        const el = document.activeElement as Element;
+        const style = getComputedStyle(el);
+        return `${el.tagName} ${el.matches(':focus-visible')} ${style.outlineStyle} ${style.outlineWidth}`;
+    })).toMatch(/^SUMMARY true solid [23]px$/);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.settings-disclosure').first()).toHaveAttribute('open', '');
+    await page.keyboard.press('Space');
+    await expect(page.locator('.settings-disclosure').first()).not.toHaveAttribute('open', '');
+});
+
+test('every disclosure is a comfortable target', async ({ page }) => {
+    await open(page, '', 'en', withSettingsPanes);
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    for (const section of ['general', 'permissions', 'skills', 'privacy', 'advanced']) {
+        await page.getByRole('dialog').locator(`[data-section="${section}"]`).click();
+        await expect(page.locator('.settings-pane-title')).toBeVisible();
+        const small = await page.locator('.settings-disclosure > summary, .settings-more > summary').evaluateAll((els) =>
+            els.filter((el) => el.checkVisibility() && el.getBoundingClientRect().height < 24).map((el) => el.textContent));
+        expect(small).toEqual([]);
+    }
+});
+
+test('a long data folder wraps at phone width instead of scrolling sideways', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, '', 'en', async (p) => {
+        await withSettingsPanes(p);
+        await p.route('**/api/system/status', (route) => route.fulfill({
+            json: { ...SYSTEM_STATUS, data_dir: `C:/Users/you/${'a-very-long-folder-name/'.repeat(5)}.gaia/chat` },
+        }));
+    });
+    await page.getByRole('button', { name: /Open sidebar/ }).click();
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+    await expect(page.locator('.setting-path').first()).toBeVisible();
+    const overflow = await page.locator('.settings-scroll').evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    expect(await audit(page)).toEqual([]);
+});
 
 /** A Strix Halo on first run: Qwen won't fit 16 GB, an FLM model is installed, the disk is tight. */
 const SETUP_ENTRY = (over: Record<string, unknown>) => ({

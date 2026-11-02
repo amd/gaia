@@ -19,41 +19,46 @@ import {
     ChevronUp,
 } from 'lucide-react';
 
-// Human-readable labels for well-known OAuth scope URIs.
-// Unrecognised scopes fall back to the last path segment of the URI.
-const SCOPE_LABELS: Record<string, string> = {
-    // Google / Gmail
-    'https://www.googleapis.com/auth/gmail.readonly':        'Read emails',
-    'https://www.googleapis.com/auth/gmail.modify':          'Organize emails (archive, label, trash)',
-    'https://www.googleapis.com/auth/gmail.send':            'Send emails on your behalf',
-    'https://www.googleapis.com/auth/gmail.compose':         'Compose emails',
-    'https://www.googleapis.com/auth/calendar.readonly':     'View calendar events',
-    'https://www.googleapis.com/auth/calendar.events':       'Create & respond to calendar events',
-    'https://www.googleapis.com/auth/drive.readonly':        'Read Google Drive files',
-    'https://www.googleapis.com/auth/drive.file':            'Manage Drive files created by this app',
-    'https://www.googleapis.com/auth/spreadsheets.readonly': 'Read Google Sheets',
-    'https://www.googleapis.com/auth/spreadsheets':          'Edit Google Sheets',
-    'openid':   'Identify you',
-    'https://www.googleapis.com/auth/userinfo.email': 'See your email address',
-    'email':    'See your email address',
-    'profile':  'See your basic profile info',
-    // Microsoft Graph — email agent scopes (#1770)
-    'https://graph.microsoft.com/Mail.ReadWrite':      'Read & organize Outlook mail (archive, label, trash)',
-    'https://graph.microsoft.com/Mail.Send':           'Send Outlook mail on your behalf',
-    'https://graph.microsoft.com/Calendars.ReadWrite': 'Create & respond to Outlook calendar events',
-    'https://graph.microsoft.com/Calendars.Read':      'View Outlook calendar events',
-    'https://graph.microsoft.com/User.Read':           'Read your basic Microsoft profile',
-};
-
-function scopeLabel(scope: string): string {
-    return SCOPE_LABELS[scope] ?? scope.split(/[/.:]/).pop() ?? scope;
-}
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
+import type { MessageKey } from '../i18n/registry';
+import { useT, type Translate } from '../i18n/useT';
 import type { AgentMcpServer, ConnectorRow } from '../types';
 import { ConnectorTileMenu } from './ConnectorTileMenu';
+import { SettingsDisclosure } from './settings/SettingsDisclosure';
 import './ConnectorsSection.css';
+
+// Human-readable labels for well-known OAuth scope URIs.
+// Unrecognised scopes fall back to the last path segment of the URI.
+const SCOPE_LABELS: Record<string, MessageKey> = {
+    'https://www.googleapis.com/auth/gmail.readonly': 'settings.connectors.scope.gmailRead',
+    'https://www.googleapis.com/auth/gmail.modify': 'settings.connectors.scope.gmailModify',
+    'https://www.googleapis.com/auth/gmail.send': 'settings.connectors.scope.gmailSend',
+    'https://www.googleapis.com/auth/gmail.compose': 'settings.connectors.scope.gmailCompose',
+    'https://www.googleapis.com/auth/calendar.readonly': 'settings.connectors.scope.calendarRead',
+    'https://www.googleapis.com/auth/calendar.events': 'settings.connectors.scope.calendarEvents',
+    'https://www.googleapis.com/auth/drive.readonly': 'settings.connectors.scope.driveRead',
+    'https://www.googleapis.com/auth/drive.file': 'settings.connectors.scope.driveFile',
+    'https://www.googleapis.com/auth/spreadsheets.readonly': 'settings.connectors.scope.sheetsRead',
+    'https://www.googleapis.com/auth/spreadsheets': 'settings.connectors.scope.sheets',
+    'openid': 'settings.connectors.scope.openid',
+    'https://www.googleapis.com/auth/userinfo.email': 'settings.connectors.scope.email',
+    'email': 'settings.connectors.scope.email',
+    'profile': 'settings.connectors.scope.profile',
+    'https://graph.microsoft.com/Mail.ReadWrite': 'settings.connectors.scope.outlookMail',
+    'https://graph.microsoft.com/Mail.Send': 'settings.connectors.scope.outlookSend',
+    'https://graph.microsoft.com/Calendars.ReadWrite': 'settings.connectors.scope.outlookCalendar',
+    'https://graph.microsoft.com/Calendars.Read': 'settings.connectors.scope.outlookCalendarRead',
+    'https://graph.microsoft.com/User.Read': 'settings.connectors.scope.microsoftProfile',
+};
+
+function scopeLabel(scope: string, t: Translate): string {
+    const key = SCOPE_LABELS[scope];
+    return key ? t(key) : scope.split(/[/.:]/).pop() ?? scope;
+}
+
+const SEARCH_ABOVE = 6;
 
 // Canonical scope for MCP-server grants. Agents that consume MCP servers
 // dynamically declare no scopes of their own, so one-click activation
@@ -69,7 +74,7 @@ const MCP_DEFAULT_GRANT_SCOPES = ['use'];
  * always implied a full revoke, even when only the local credential was
  * cleared). Mirrors the CLI wording in ``connectors/cli.py::_handle_disconnect``.
  */
-function describeDisconnectOutcome(payload: Record<string, unknown>): string | null {
+function describeDisconnectOutcome(payload: Record<string, unknown>, t: Translate): string | null {
     if (!('revoke_supported' in payload)) {
         // Handler type with no remote-revoke concept (e.g. MCP servers).
         return null;
@@ -78,29 +83,25 @@ function describeDisconnectOutcome(payload: Record<string, unknown>): string | n
         return null;
     }
     if (payload.revoke_supported && !payload.revoked_remotely) {
-        return `Disconnected locally, but the provider did not confirm the revoke (${String(
-            payload.revoke_error ?? 'unknown error',
-        )}). It may still show as connected in your account's app permissions.`;
+        return t('settings.connectors.notRevoked', { reason: String(payload.revoke_error ?? t.bare('settings.advanced.unknown')) });
     }
     if (payload.revoke_error) {
         // Not attempted for a reason other than "no endpoint" — e.g. a
         // forwarded connection, or the provider couldn't be resolved.
-        return `Disconnected locally. ${String(payload.revoke_error)}`;
+        return t('settings.connectors.localOnly', { reason: String(payload.revoke_error) });
     }
-    return (
-        'Disconnected locally. This provider has no API to revoke access ' +
-        "remotely — remove GAIA from your account's connected-apps page if " +
-        'you want to fully revoke it.'
-    );
+    return t('settings.connectors.noRevokeApi');
 }
 
 export function ConnectorsSection() {
+    const t = useT();
     const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
     const [agentMcps, setAgentMcps] = useState<AgentMcpServer[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [disconnectNotice, setDisconnectNotice] = useState<string | null>(null);
     const [expanded, setExpanded] = useState<string | null>(null);
+    const [query, setQuery] = useState('');
 
     const load = useCallback(async () => {
         try {
@@ -144,7 +145,7 @@ export function ConnectorsSection() {
                     // #2591 review: the disconnect button used to always
                     // read as a full revoke. Surface the honest outcome the
                     // backend now reports on this event.
-                    setDisconnectNotice(describeDisconnectOutcome(event.payload));
+                    setDisconnectNotice(describeDisconnectOutcome(event.payload, t));
                 }
                 if (event.connectorId) {
                     void onChanged(event.connectorId);
@@ -153,16 +154,36 @@ export function ConnectorsSection() {
                     void load();
                 }
             },
-            [onChanged, load],
+            [onChanged, load, t],
         ),
     );
 
+    const q = query.trim().toLowerCase();
+    const shown = connectors.filter(
+        (c) => !q || c.display_name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
+    );
+    const connected = shown.filter((c) => c.configured);
+    const accounts = shown.filter((c) => !c.configured && c.type === 'oauth_pkce');
+    const servers = shown.filter((c) => !c.configured && c.type !== 'oauth_pkce');
+    const nothingConnected = !connectors.some((c) => c.configured);
+
+    const tiles = (rows: ConnectorRow[]) => (
+        <div className="connectors-list">
+            {rows.map((c) => (
+                <ConnectorTile
+                    key={c.id}
+                    connector={c}
+                    expanded={expanded === c.id}
+                    onToggle={() => toggle(c.id)}
+                    onChanged={() => void onChanged(c.id)}
+                />
+            ))}
+        </div>
+    );
+
     return (
-        <section className="connectors-section" aria-label="Connectors">
-            <p className="settings-help">
-                Connect accounts and MCP servers so GAIA can use them on your behalf.
-                Choose what GAIA may do with each one.
-            </p>
+        <section className="connectors-section" aria-label={t('settings.section.connectors')}>
+            <p className="settings-pane-lede">{t('settings.connectors.lede')}</p>
 
             {error && (
                 <div className="error-banner">
@@ -188,23 +209,41 @@ export function ConnectorsSection() {
                 </div>
             ) : (
                 <>
-                    <div className="connectors-list">
-                        {connectors.map((c) => (
-                            <ConnectorTile
-                                key={c.id}
-                                connector={c}
-                                expanded={expanded === c.id}
-                                onToggle={() => toggle(c.id)}
-                                onChanged={() => void onChanged(c.id)}
-                            />
-                        ))}
-                    </div>
-                    {agentMcps.length > 0 && (
-                        <AgentMcpsSection
-                            servers={agentMcps}
-                            expanded={expanded}
-                            onToggle={toggle}
+                    {connectors.length > SEARCH_ABOVE && (
+                        <input
+                            className="settings-input"
+                            type="search"
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            placeholder={t('settings.connectors.search')}
+                            aria-label={t('settings.connectors.search')}
                         />
+                    )}
+                    {connectors.length === 0 && !error && <p className="settings-hint">{t('settings.connectors.none')}</p>}
+                    {q && shown.length === 0 && <p className="settings-hint">{t('settings.connectors.noMatch')}</p>}
+                    {connected.length > 0 && (
+                        <SettingsDisclosure title={t('settings.connectors.connected')} count={connected.length} defaultOpen forceOpen={!!q}>
+                            {tiles(connected)}
+                        </SettingsDisclosure>
+                    )}
+                    {accounts.length > 0 && (
+                        <SettingsDisclosure title={t('settings.connectors.accounts')} hint={t('settings.connectors.accountsHint')} count={accounts.length} defaultOpen={nothingConnected} forceOpen={!!q}>
+                            {tiles(accounts)}
+                        </SettingsDisclosure>
+                    )}
+                    {servers.length > 0 && (
+                        <SettingsDisclosure title={t('settings.connectors.servers')} hint={t('settings.connectors.serversHint')} count={servers.length} forceOpen={!!q}>
+                            {tiles(servers)}
+                        </SettingsDisclosure>
+                    )}
+                    {agentMcps.length > 0 && !q && (
+                        <SettingsDisclosure title={t('settings.connectors.agentServers')} count={agentMcps.length}>
+                            <AgentMcpsSection
+                                servers={agentMcps}
+                                expanded={expanded}
+                                onToggle={toggle}
+                            />
+                        </SettingsDisclosure>
                     )}
                 </>
             )}
@@ -225,40 +264,46 @@ function ConnectorTile({
     onToggle: () => void;
     onChanged: () => void;
 }) {
-    // Three exclusive status states for the tile header pill (#1004):
-    //   - configured + enabled   → "Configured" / account_id (green ok)
-    //   - configured + disabled  → "Disabled"               (warm muted)
-    //   - not configured         → "Not configured"         (cool muted)
+    const t = useT();
+    // Status for the tile header (#1004): an unconfigured connector's group already says so,
+    // so it only flags one that needs setup first.
     const renderStatus = () => {
         if (!connector.configured) {
-            return <span className="connector-status idle">Not configured</span>;
+            return connector.configurable === false
+                ? <span className="connector-status idle">{t('settings.connectors.setupRequired')}</span>
+                : null;
         }
         if (connector.type === 'mcp_server' && connector.enabled === false) {
-            return <span className="connector-status disabled">Disabled</span>;
+            return <span className="connector-status disabled">{t('settings.connectors.disabled')}</span>;
         }
         return (
             <span className="connector-status ok">
                 <CheckCircle2 size={12} />
-                {connector.account_id ?? 'Configured'}
+                {connector.account_id ? <bdi dir="ltr">{connector.account_id}</bdi> : t('settings.connectors.configured')}
             </span>
         );
     };
 
     return (
         <div className={`connector-tile${expanded ? ' connector-tile--open' : ''}`}>
-            <button
-                className="connector-tile-header"
-                onClick={onToggle}
-                aria-expanded={expanded}
-            >
-                <span className="connector-tile-name">{connector.display_name}</span>
-                <span className="connector-tile-type">{connector.type === 'oauth_pkce' ? 'OAuth' : 'MCP'}</span>
-                {renderStatus()}
+            <div className="connector-tile-row">
+                <button
+                    type="button"
+                    className="connector-tile-header"
+                    onClick={onToggle}
+                    aria-expanded={expanded}
+                >
+                    <bdi className="connector-tile-name">{connector.display_name}</bdi>
+                    {connector.configured && (
+                        <span className="connector-tile-type">{connector.type === 'oauth_pkce' ? 'OAuth' : 'MCP'}</span>
+                    )}
+                    {renderStatus()}
+                    <span className="connector-tile-chevron">
+                        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    </span>
+                </button>
                 <ConnectorTileMenu connector={connector} onChanged={onChanged} />
-                <span className="connector-tile-chevron">
-                    {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                </span>
-            </button>
+            </div>
 
             {expanded && (
                 <div className="connector-detail">
@@ -288,6 +333,7 @@ function OAuthConfigureBody({
     connector: ConnectorRow;
     onChanged: () => void;
 }) {
+    const t = useT();
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState<string | null>(null);
     const [setupValues, setSetupValues] = useState<Record<string, string>>({});
@@ -399,13 +445,13 @@ function OAuthConfigureBody({
             (event) => {
                 if (event.connectorId !== connector.id) return;
                 if (event.reason === 'oauth_error') {
-                    setErr(String(event.payload.error ?? 'Device sign-in failed.'));
+                    setErr(String(event.payload.error ?? t('settings.connectors.deviceFailed')));
                     setDeviceInfo(null);
                 } else if (event.reason === 'oauth_completed') {
                     setDeviceInfo(null);
                 }
             },
-            [connector.id],
+            [connector.id, t],
         ),
     );
 
@@ -431,7 +477,7 @@ function OAuthConfigureBody({
             .filter((f) => f.required !== false && !setupValues[f.key]?.trim())
             .map((f) => f.label);
         if (missing.length) {
-            setErr(`Required: ${missing.join(', ')}`);
+            setErr(t('settings.connectors.required', { fields: missing.join(', ') }));
             return;
         }
         setBusy(true);
@@ -474,15 +520,11 @@ function OAuthConfigureBody({
     return (
         <div className="configure-body">
             {connector.description && (
-                <p className="connector-desc">{connector.description}</p>
+                <p className="connector-desc"><bdi>{connector.description}</bdi></p>
             )}
             {showSetupForm && (
                 <div className="oauth-setup-form">
-                    <p className="connector-desc">
-                        First-time setup — provide your OAuth client credentials
-                        below. They&rsquo;re stored encrypted in your OS keyring
-                        and reused for future connections.
-                    </p>
+                    <p className="connector-desc">{t('settings.connectors.firstSetup')}</p>
                     {setupFields.map((field) => (
                         <label key={field.key} className="oauth-setup-field">
                             <span className="oauth-setup-label">{field.label}</span>
@@ -501,7 +543,7 @@ function OAuthConfigureBody({
                                 spellCheck={false}
                             />
                             {field.help_md && (
-                                <span className="oauth-setup-help">{field.help_md}</span>
+                                <span className="oauth-setup-help"><bdi>{field.help_md}</bdi></span>
                             )}
                         </label>
                     ))}
@@ -509,9 +551,7 @@ function OAuthConfigureBody({
             )}
             {!connector.configured && grantableAgents.length > 0 && (
                 <div className="oauth-grant-onconnect">
-                    <p className="oauth-grant-onconnect-label">
-                        Grant access to these agents when you connect:
-                    </p>
+                    <p className="oauth-grant-onconnect-label">{t('settings.connectors.grantOnConnect')}</p>
                     {grantableAgents.map((a) => (
                         <label
                             key={a.namespaced_agent_id}
@@ -525,9 +565,7 @@ function OAuthConfigureBody({
                             <span>{a.name}</span>
                         </label>
                     ))}
-                    <p className="oauth-grant-onconnect-help">
-                        You can change these any time under Per-agent grants below.
-                    </p>
+                    <p className="oauth-grant-onconnect-help">{t('settings.connectors.grantLater')}</p>
                 </div>
             )}
             {!showSetupForm && (
@@ -545,7 +583,7 @@ function OAuthConfigureBody({
                         disabled={busy}
                         onClick={() => void handleDisconnect()}
                     >
-                        {busy ? <Loader2 size={12} className="spin" /> : 'Disconnect'}
+                        {busy ? <Loader2 size={12} className="spin" /> : t('settings.connectors.disconnect')}
                     </button>
                 ) : showSetupForm ? (
                     <button
@@ -556,7 +594,7 @@ function OAuthConfigureBody({
                         {busy ? (
                             <Loader2 size={12} className="spin" />
                         ) : (
-                            <><ExternalLink size={12} /> Save &amp; Connect</>
+                            <><ExternalLink size={12} /> {t('settings.connectors.saveConnect')}</>
                         )}
                     </button>
                 ) : connector.configurable === false ? (
@@ -564,7 +602,7 @@ function OAuthConfigureBody({
                         className="connector-setup-required"
                         title={connector.config_error ?? undefined}
                     >
-                        Setup required
+                        {t('settings.connectors.setupRequired')}
                     </span>
                 ) : (
                     <>
@@ -576,7 +614,7 @@ function OAuthConfigureBody({
                             {busy ? (
                                 <Loader2 size={12} className="spin" />
                             ) : (
-                                <><ExternalLink size={12} /> Connect</>
+                                <><ExternalLink size={12} /> {t('settings.key.connect')}</>
                             )}
                         </button>
                         {connector.supports_device_code && (
@@ -584,9 +622,9 @@ function OAuthConfigureBody({
                                 className="btn-secondary"
                                 disabled={busy || deviceInfo !== null}
                                 onClick={() => void handleConnectDevice()}
-                                title="Enter a short code at a URL — no browser redirect or app registration needed"
+                                title={t('settings.connectors.codeTitle')}
                             >
-                                Sign in with a code
+                                {t('settings.connectors.code')}
                             </button>
                         )}
                     </>
@@ -598,14 +636,14 @@ function OAuthConfigureBody({
                         rel="noopener noreferrer"
                         className="connector-product-link"
                     >
-                        Learn more <ExternalLink size={11} />
+                        {t('settings.connectors.learnMore')} <ExternalLink size={11} />
                     </a>
                 )}
             </div>
             {deviceInfo && !connector.configured && (
                 <div className="device-code-block">
                     <p className="device-code-instructions">
-                        Go to{' '}
+                        {t('settings.connectors.goTo')}{' '}
                         <a
                             href={deviceInfo.verification_uri}
                             target="_blank"
@@ -616,8 +654,7 @@ function OAuthConfigureBody({
                             }}
                         >
                             {deviceInfo.verification_uri}
-                        </a>{' '}
-                        and enter this code:
+                        </a>
                     </p>
                     <div className="device-code-value">
                         <code>{deviceInfo.user_code}</code>
@@ -627,20 +664,20 @@ function OAuthConfigureBody({
                             onClick={() =>
                                 void navigator.clipboard?.writeText(deviceInfo.user_code)
                             }
-                            title="Copy code"
+                            title={t('settings.connectors.copyCode')}
                         >
-                            Copy
+                            {t('gpu.copy')}
                         </button>
                     </div>
                     <p className="device-code-waiting">
-                        <Loader2 size={12} className="spin" /> Waiting for sign-in…
+                        <Loader2 size={12} className="spin" /> {t('settings.connectors.waiting')}
                     </p>
                     <button
                         type="button"
                         className="btn-secondary"
                         onClick={() => setDeviceInfo(null)}
                     >
-                        Cancel
+                        {t('settings.key.cancel')}
                     </button>
                 </div>
             )}
@@ -670,6 +707,7 @@ function OAuthClientEditor({
     connector: ConnectorRow;
     onChanged: () => void;
 }) {
+    const t = useT();
     const [open, setOpen] = useState(false);
     const [values, setValues] = useState<Record<string, string>>({});
     const [busy, setBusy] = useState(false);
@@ -682,15 +720,15 @@ function OAuthClientEditor({
     const client = connector.oauth_client;
     const statusLine =
         client?.source === 'keyring'
-            ? `Saved client: ${client.client_id}`
+            ? t('settings.connectors.savedClient', { id: client.client_id ?? '' })
             : client?.source === 'env'
-              ? `From environment: ${client.client_id}`
-              : 'No OAuth client configured';
+              ? t('settings.connectors.envClient', { id: client.client_id ?? '' })
+              : t('settings.connectors.noClient');
 
     const handleSave = async () => {
         const clientId = values['client_id']?.trim();
         if (!clientId) {
-            setErr('Client ID is required.');
+            setErr(t('settings.connectors.clientRequired'));
             return;
         }
         setBusy(true);
@@ -723,18 +761,12 @@ function OAuthClientEditor({
                 aria-expanded={open}
             >
                 {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                <span>OAuth client</span>
+                <span>{t('settings.connectors.client')}</span>
                 <span className="oauth-client-editor__status">{statusLine}</span>
             </button>
             {open && (
                 <div className="oauth-setup-form">
-                    <p className="connector-desc">
-                        Bring your own OAuth client — saved encrypted in your OS
-                        keyring (same store as{' '}
-                        <code>gaia connectors configure</code>) and reused for
-                        future connections. Environment variables are only used
-                        when no saved client exists.
-                    </p>
+                    <p className="connector-desc">{t('settings.connectors.clientHelp')}</p>
                     {fields.map((field) => (
                         <label key={field.key} className="oauth-setup-field">
                             <span className="oauth-setup-label">{field.label}</span>
@@ -759,7 +791,7 @@ function OAuthClientEditor({
                                 spellCheck={false}
                             />
                             {field.help_md && (
-                                <span className="oauth-setup-help">{field.help_md}</span>
+                                <span className="oauth-setup-help"><bdi>{field.help_md}</bdi></span>
                             )}
                         </label>
                     ))}
@@ -777,9 +809,9 @@ function OAuthClientEditor({
                             {busy ? (
                                 <Loader2 size={12} className="spin" />
                             ) : saved ? (
-                                <><CheckCircle2 size={12} /> Saved</>
+                                <><CheckCircle2 size={12} /> {t('settings.advanced.saved')}</>
                             ) : (
-                                'Save client'
+                                t('settings.connectors.saveClient')
                             )}
                         </button>
                     </div>
@@ -798,6 +830,7 @@ function MCPServerConfigureBody({
     connector: ConnectorRow;
     onChanged: () => void;
 }) {
+    const t = useT();
     const [values, setValues] = useState<Record<string, string>>(() =>
         Object.fromEntries(connector.mcp_env_keys.map((k) => [k, ''])),
     );
@@ -874,7 +907,7 @@ function MCPServerConfigureBody({
     return (
         <div className="configure-body">
             {connector.description && (
-                <p className="connector-desc">{connector.description}</p>
+                <p className="connector-desc"><bdi>{connector.description}</bdi></p>
             )}
             {err && (
                 <div className="configure-error">
@@ -883,7 +916,7 @@ function MCPServerConfigureBody({
             )}
             {connector.configured && (
                 <div className="connector-toggle-row">
-                    <span className="connector-toggle-label">Active</span>
+                    <span className="connector-toggle-label">{t('settings.connectors.active')}</span>
                     <span className="toggle-switch">
                         <input
                             type="checkbox"
@@ -892,8 +925,8 @@ function MCPServerConfigureBody({
                             disabled={busy}
                             aria-label={
                                 connector.enabled
-                                    ? 'Disable this MCP server'
-                                    : 'Enable this MCP server'
+                                    ? t('settings.connectors.disableServer')
+                                    : t('settings.connectors.enableServer')
                             }
                         />
                         <span className="toggle-track" />
@@ -901,10 +934,7 @@ function MCPServerConfigureBody({
                 </div>
             )}
             {connector.configured && connector.enabled === false && (
-                <p className="connector-toggle-help">
-                    Credentials and per-agent grants are preserved.
-                    Re-enable to make this server's tools available again.
-                </p>
+                <p className="connector-toggle-help">{t('settings.connectors.disabledHelp')}</p>
             )}
             {connector.mcp_env_keys.map((key) => (
                 <div key={key} className="mcp-key-row">
@@ -912,7 +942,7 @@ function MCPServerConfigureBody({
                     <input
                         type="password"
                         className="mcp-key-input"
-                        placeholder={connector.configured ? '••••••••' : 'Enter value'}
+                        placeholder={connector.configured ? '••••••••' : t.bare('settings.connectors.enterValue')}
                         value={values[key] ?? ''}
                         onChange={(e) =>
                             setValues((prev) => ({ ...prev, [key]: e.target.value }))
@@ -932,11 +962,11 @@ function MCPServerConfigureBody({
                         {busy ? (
                             <Loader2 size={12} className="spin" />
                         ) : saved ? (
-                            <><CheckCircle2 size={12} /> Saved</>
+                            <><CheckCircle2 size={12} /> {t('settings.advanced.saved')}</>
                         ) : keyless ? (
-                            'Connect'
+                            t('settings.key.connect')
                         ) : (
-                            'Save'
+                            t('settings.advanced.save')
                         )}
                     </button>
                 )}
@@ -946,7 +976,7 @@ function MCPServerConfigureBody({
                         disabled={busy}
                         onClick={() => void handleDisconnect()}
                     >
-                        Disconnect
+                        {t('settings.connectors.disconnect')}
                     </button>
                 )}
                 {connector.product_url && (
@@ -956,7 +986,7 @@ function MCPServerConfigureBody({
                         rel="noopener noreferrer"
                         className="connector-product-link"
                     >
-                        Docs <ExternalLink size={11} />
+                        {t('settings.connectors.docs')} <ExternalLink size={11} />
                     </a>
                 )}
             </div>
@@ -982,6 +1012,7 @@ function AgentGrantCard({
     grantedScopes: string[];
     onChanged: () => void;
 }) {
+    const t = useT();
     const req = agent.required_connections?.find((rc) => rc.connector_id === connectorId);
     const agentId = agent.namespaced_agent_id;
     if (!req || !agentId) return null;
@@ -1019,11 +1050,11 @@ function AgentGrantCard({
 
     return (
         <div className="grant-agent-card">
-            <div className="grant-agent-card-name">{agent.name}</div>
+            <bdi className="grant-agent-card-name">{agent.name}</bdi>
             <div className="grant-scope-list">
                 {req.scopes.map((scope) => (
                     <label key={scope} className="grant-scope-item">
-                        <span className="grant-scope-label">{scopeLabel(scope)}</span>
+                        <span className="grant-scope-label">{scopeLabel(scope, t)}</span>
                         <span className="toggle-switch">
                             <input
                                 type="checkbox"
@@ -1063,7 +1094,6 @@ function AgentMcpsSection({
 }) {
     return (
         <div className="agent-mcps-section">
-            <div className="agent-mcps-section-header">Custom agent servers</div>
             <div className="connectors-list">
                 {servers.map((s) => {
                     const key = `${s.agent_id}::${s.server_name}`;
@@ -1090,6 +1120,7 @@ function AgentMcpTile({
     expanded: boolean;
     onToggle: () => void;
 }) {
+    const t = useT();
     const cmdDisplay = [server.command, ...server.args].join(' ');
 
     return (
@@ -1101,15 +1132,15 @@ function AgentMcpTile({
                 aria-expanded={expanded}
             >
                 <span className="agent-mcp-server-name">{server.server_name}</span>
-                <span className="agent-mcp-agent-label">via {server.agent_name}</span>
+                <span className="agent-mcp-agent-label">{t('settings.connectors.via', { name: server.agent_name })}</span>
                 {server.disabled ? (
-                    <span className="agent-mcp-status disabled">Disabled</span>
+                    <span className="agent-mcp-status disabled">{t('settings.connectors.disabled')}</span>
                 ) : (
                     <span className="agent-mcp-status enabled">
-                        <CheckCircle2 size={11} /> Active
+                        <CheckCircle2 size={11} /> {t('settings.connectors.active')}
                     </span>
                 )}
-                <span className="agent-mcp-readonly-badge">read-only</span>
+                <span className="agent-mcp-readonly-badge">{t('settings.connectors.readOnly')}</span>
                 <span className="agent-mcp-chevron">
                     {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </span>
@@ -1118,12 +1149,10 @@ function AgentMcpTile({
             {expanded && (
                 <div className="agent-mcp-detail">
                     {cmdDisplay && (
-                        <div className="agent-mcp-command-row">{cmdDisplay}</div>
+                        <bdi dir="ltr" className="agent-mcp-command-row">{cmdDisplay}</bdi>
                     )}
-                    <div className="agent-mcp-config-path">{server.config_path}</div>
-                    <div className="agent-mcp-config-hint">
-                        Edit the agent's <code>mcp_servers.json</code> to change this server.
-                    </div>
+                    <bdi dir="ltr" className="agent-mcp-config-path">{server.config_path}</bdi>
+                    <div className="agent-mcp-config-hint">{t('settings.connectors.editConfig')}</div>
                 </div>
             )}
         </div>
@@ -1139,6 +1168,7 @@ function ConnectorAgentGrants({
     connectorId: string;
     connectorType: string;
 }) {
+    const t = useT();
     const { agents } = useChatStore();
     const [grants, setGrants] = useState<Record<string, string[]>>({});
     const [activations, setActivations] = useState<Record<string, boolean>>({});
@@ -1205,9 +1235,9 @@ function ConnectorAgentGrants({
 
     return (
         <div className="connection-grants">
-            <div className="grants-header">Per-agent grants</div>
+            <div className="grants-header">{t('settings.connectors.grants')}</div>
             {relevantAgents.length === 0 ? (
-                <div className="grants-empty">No agents require access to this connector.</div>
+                <div className="grants-empty">{t('settings.connectors.noGrants')}</div>
             ) : (
                 relevantAgents.map((agent) => (
                     <AgentGrantCard
@@ -1227,12 +1257,9 @@ function ConnectorAgentGrants({
             {activatableAgents.length > 0 && (
                 <>
                     <div className="grants-header grants-header--activations">
-                        Active for
+                        {t('settings.connectors.activeFor')}
                     </div>
-                    <div className="grants-help">
-                        Activations gate which agents see this connector's tools.
-                        Activating without a prior grant auto-creates one.
-                    </div>
+                    <div className="grants-help">{t('settings.connectors.activationHelp')}</div>
                     {activatableAgents.map((agent) => (
                         <AgentActivationCard
                             key={`activation-${agent.namespaced_agent_id}`}
@@ -1282,6 +1309,7 @@ function AgentActivationCard({
     grantedScopes: string[];
     onChanged: () => void;
 }) {
+    const t = useT();
     const req = agent.required_connections?.find((rc) => rc.connector_id === connectorId);
     const agentId = agent.namespaced_agent_id;
     // A dynamic MCP consumer has no ``req`` for this connector but is still
@@ -1329,11 +1357,11 @@ function AgentActivationCard({
 
     return (
         <div className="grant-agent-card">
-            <div className="grant-agent-card-name">{agent.name}</div>
+            <bdi className="grant-agent-card-name">{agent.name}</bdi>
             <div className="grant-scope-list">
                 <label className="grant-scope-item">
                     <span className="grant-scope-label">
-                        {localActive ? 'Tools visible to this agent' : 'Tools hidden from this agent'}
+                        {localActive ? t('settings.connectors.toolsVisible') : t('settings.connectors.toolsHidden')}
                     </span>
                     <span className="toggle-switch">
                         <input

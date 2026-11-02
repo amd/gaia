@@ -4,6 +4,8 @@
 import { AlertTriangle, Download, Layers, Loader2, WifiOff, X } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { useChatStore } from '../stores/chatStore';
+import { useT } from '../i18n/useT';
+import { needsLocalSetup, SetUpLocalButton } from './settings/ErrorNotice';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
 import { modelServerHealth } from '../services/statusPoll';
@@ -35,6 +37,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     /** The backend answered the status request with this HTTP error. */
     backendError?: string | null;
 }) {
+    const t = useT();
     const { backendConnected, systemStatus, currentSessionId, messages } = useChatStore();
     const [dismissed, setDismissed] = useState(false);
 
@@ -289,6 +292,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     if (systemStatus && !systemStatus.lemonade_running) {
         // Listening but failing its health check is often just busy; the backend can't yet say which.
         const unresponsive = modelServerHealth(systemStatus) === 'unresponsive';
+        const setupNeeded = needsLocalSetup(systemStatus);
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
@@ -297,8 +301,10 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <div className="connection-banner__text" dir="auto">
                     {unresponsive
                         ? `The model server is not answering (${systemStatus.lemonade_error}). It may be busy with another app or loading a model.`
-                        : "The model server isn't running."}{' '}
-                    {systemStatus.start_command ? (
+                        : t('banner.serverStopped')}{' '}
+                    {setupNeeded ? (
+                        <span className="connection-banner__hint">{t('banner.finishSetup')}</span>
+                    ) : systemStatus.start_command ? (
                         <span className="connection-banner__hint">
                             {unresponsive ? 'If it stays this way, restart it: ' : 'To start it by hand, run '}
                             <code>{systemStatus.start_command}</code>
@@ -307,7 +313,8 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                         <span className="connection-banner__hint">{systemStatus.start_instruction}</span>
                     )}
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+                {setupNeeded && <SetUpLocalButton className="connection-banner__retry" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
                 <button
                     className="connection-banner__dismiss"
                     onClick={() => setDismissed(true)}

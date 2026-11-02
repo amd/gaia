@@ -38,16 +38,42 @@
     border-color: var(--border);
 }
 
-.connector-tile-header {
+@media (max-width: 768px) {
+    .connector-tile-header {
+        flex-wrap: wrap;
+    }
+    .connector-status.ok {
+        order: 3;
+        flex-basis: 100%;
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+}
+
+.connector-tile-row {
     display: flex;
     align-items: center;
+}
+.connector-tile-row .connector-tile-menu {
+    flex-shrink: 0;
+    margin-inline-end: 8px;
+}
+.connectors-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.connector-tile-header {
+    display: flex;
+    flex: 1;
+    align-items: center;
     gap: 10px;
-    width: 100%;
+    min-width: 0;
     padding: 12px 16px;
     background: none;
     border: none;
     cursor: pointer;
-    text-align: left;
+    text-align: start;
     font-family: var(--font-sans);
     color: var(--text-primary);
 }
@@ -102,7 +128,7 @@
 }
 
 .connector-tile-chevron {
-    margin-left: auto;
+    margin-inline-start: auto;
     color: var(--text-muted);
     flex-shrink: 0;
 }
@@ -273,7 +299,7 @@
     color: var(--text-secondary);
     text-decoration: none;
     font-family: var(--font-sans);
-    margin-left: auto;
+    margin-inline-start: auto;
 }
 .connector-product-link:hover { color: var(--accent); text-decoration: underline; }
 
@@ -491,7 +517,7 @@
     display: flex;
     flex-direction: column;
     /* Don't inherit the parent <button>'s cursor/text-align. */
-    text-align: left;
+    text-align: start;
 }
 
 .connector-tile-menu-item {
@@ -501,7 +527,7 @@
     font-size: 12px;
     font-family: var(--font-sans);
     color: var(--text-primary);
-    text-align: left;
+    text-align: start;
     border-radius: 3px;
     cursor: pointer;
     line-height: 1.4;
@@ -564,7 +590,7 @@
     background: none;
     border: none;
     cursor: pointer;
-    text-align: left;
+    text-align: start;
     font-family: var(--font-sans);
     color: var(--text-primary);
 }
@@ -677,11 +703,11 @@
     color: var(--text-primary);
     font-size: 12px;
     cursor: pointer;
-    text-align: left;
+    text-align: start;
 }
 
 .oauth-client-editor__status {
-    margin-left: auto;
+    margin-inline-start: auto;
     color: var(--text-muted);
     font-size: 11px;
     overflow: hidden;

@@ -419,12 +419,45 @@
     border-bottom: none;
 }
 
+.model-row {
+    align-items: flex-start;
+}
+
+.model-row.is-current {
+    padding-inline: 8px;
+    border-radius: var(--radius-md);
+    background: var(--accent-dim);
+}
+
 .model-row-text,
 .skill-row-text {
     display: flex;
     flex-direction: column;
     gap: 2px;
     min-width: 0;
+}
+
+/* Hug the text: a full-width Latin name would sit at the far edge of an Arabic row. */
+.model-row-text {
+    flex: 1;
+    align-items: flex-start;
+    gap: 5px;
+}
+
+.model-row-text progress {
+    width: 100%;
+    height: 6px;
+    accent-color: var(--accent-solid);
+}
+
+.model-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    flex-shrink: 0;
+    gap: 6px;
+    max-inline-size: 60%;
 }
 
 .model-row-name,
@@ -434,10 +467,229 @@
     overflow-wrap: anywhere;
 }
 
-.model-row-rank {
-    margin-inline-start: 8px;
-    color: var(--accent);
+.model-row-name {
+    max-inline-size: 100%;
+    font-weight: 500;
+}
+
+:root[dir='rtl'] .model-row-name {
+    text-align: right;
+}
+
+.model-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+.model-chips .settings-more {
+    margin-inline-start: 4px;
+}
+
+/* Sits beside the chips while closed; its facts need the row's full width. */
+.model-chips .settings-more[open] {
+    flex-basis: 100%;
+    margin-inline-start: 0;
+}
+
+/* The card that answers "what am I using?". */
+.model-in-use {
+    align-items: flex-start;
+    gap: 8px;
+    background: var(--bg-card);
+    border-color: var(--accent-light);
+}
+
+.model-in-use-label {
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+}
+
+.model-in-use-name {
+    max-inline-size: 100%;
+    color: var(--text-primary);
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.model-in-use-field {
+    display: grid;
+    grid-template-columns: 120px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    inline-size: 100%;
+}
+
+/* A disclosure: the row is the button, and the chevron turns the same way in either direction. */
+.settings-disclosure {
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--bg-primary);
+}
+
+.settings-disclosure > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    cursor: pointer;
+    list-style: none;
+}
+
+.settings-disclosure > summary::-webkit-details-marker,
+.settings-more > summary::-webkit-details-marker {
+    display: none;
+}
+
+.settings-disclosure > summary:hover {
+    background: var(--bg-hover);
+}
+
+.settings-disclosure-chevron {
+    flex-shrink: 0;
+    color: var(--text-secondary);
+    transform: rotate(-90deg);
+    transition: transform var(--duration-fast) var(--ease);
+}
+
+:root[dir='rtl'] .settings-disclosure-chevron {
+    transform: rotate(90deg);
+}
+
+:root .settings-disclosure[open] > summary > .settings-disclosure-chevron,
+:root .settings-more[open] > summary > .settings-disclosure-chevron {
+    transform: none;
+}
+
+.settings-disclosure-text {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.settings-disclosure-title {
+    font-size: 13.5px;
+    font-weight: 600;
+}
+
+.settings-disclosure-hint {
+    color: var(--text-secondary);
+    font-size: 12.5px;
+}
+
+.settings-disclosure-count {
+    flex-shrink: 0;
+    min-inline-size: 22px;
+    padding-inline: 7px;
+    border-radius: var(--radius-full);
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    font-size: 11.5px;
+    line-height: 20px;
+    text-align: center;
+}
+
+.settings-disclosure-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-block: 0 8px;
+    padding-inline: 12px;
+}
+
+.settings-card > .btn-secondary,
+.settings-card > .btn-danger {
+    align-self: flex-start;
+}
+
+.mcp-status-connected,
+.mcp-status-failed {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.settings-select-compact {
+    flex: none;
+    inline-size: auto;
+    min-inline-size: 96px;
+}
+
+/* A section's own box and heading repeat the disclosure around it. */
+.settings-disclosure-body .settings-section {
+    margin: 0;
+    padding: 0;
+    background: none;
+    border: none;
+}
+
+.settings-disclosure-body .settings-section > h4 {
+    display: none;
+}
+
+.settings-disclosure-body > .settings-field > .settings-label:first-child {
+    display: none;
+}
+
+.permission-chat + .permission-chat {
+    padding-block-start: 8px;
+    border-block-start: 1px solid var(--border-light);
+}
+
+/* A quiet "more about this" line: long explanations wait here. */
+.settings-notice {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 12px;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    background: var(--bg-card);
+    border: 1px solid var(--accent-yellow);
+    border-radius: var(--radius-md);
+}
+
+.settings-notice-raw {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
     font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.settings-more > summary {
+    display: inline-flex;
+    align-self: flex-start;
+    align-items: center;
+    gap: 4px;
+    min-height: 26px;
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.settings-more > summary:hover {
+    color: var(--text-primary);
+}
+
+.settings-more[open] {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.models-downloads-slot:empty {
+    display: none;
 }
 
 .model-row-meta,
@@ -545,6 +797,19 @@
 
     .settings-scroll {
         padding: 18px 16px 28px;
+    }
+
+    .model-in-use-field {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+    }
+
+    .model-row {
+        flex-wrap: wrap;
+    }
+
+    .model-row-actions {
+        max-inline-size: 100%;
     }
 }
 

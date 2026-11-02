@@ -81,7 +81,7 @@ describe('CloudPrices', () => {
 
     it('says the gateway price is unknown and why', async () => {
         render(<CloudPrices provider="amd" />);
-        expect(await screen.findByText(/Price unknown\. Prices are set by the organization/)).toBeInTheDocument();
+        expect(await screen.findByText(/Price unknown\./)).toHaveTextContent(/Price unknown\. Prices are set by the organization/);
         expect(screen.queryByText(/\$0/)).not.toBeInTheDocument();
     });
 });

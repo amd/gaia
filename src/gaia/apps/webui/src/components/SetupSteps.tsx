@@ -20,7 +20,7 @@ function CheckRow({ label, value, ok }: { label: string; value: string; ok: bool
         <li className={`setup-check-row${ok ? ' is-ok' : ''}`}>
             {ok ? <Check size={13} aria-hidden="true" /> : <Info size={13} aria-hidden="true" />}
             <span className="setup-check-label">{label}</span>
-            <span className="setup-check-value">{value}</span>
+            <span className="setup-check-value"><bdi dir="ltr">{value}</bdi></span>
         </li>
     );
 }

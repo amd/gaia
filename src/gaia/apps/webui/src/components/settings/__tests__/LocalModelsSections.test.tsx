@@ -117,6 +117,13 @@ describe('Settings > Models on this PC', () => {
         expect(within(section).getByRole('button', { name: 'Undo' })).toBeInTheDocument();
     });
 
+    it('opens the closed Manage section when its error needs reading', async () => {
+        mocked.getSetupPlan.mockRejectedValue(new Error('plan unreadable'));
+        render(<LocalModelsSections />);
+        const error = await screen.findByText('plan unreadable');
+        expect((error.closest('details') as HTMLDetailsElement).open).toBe(true);
+    });
+
     it('hides the GPU memory section on a discrete GPU', async () => {
         render(<LocalModelsSections />);
         await screen.findByRole('group', { name: 'Models on this PC' });
