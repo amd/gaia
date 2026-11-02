@@ -66,7 +66,7 @@ this turn's query matched it.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 from gaia.agents.base.model_features import FULL
 from gaia.agents.tools.search_scope import in_env_scope
@@ -112,6 +112,16 @@ def _failure(action: str, exc: Exception) -> Dict[str, Any]:
         "error_type": type(exc).__name__,
         "error": str(exc),
     }
+
+
+def _failed_verification(agent: Any) -> Set[str]:
+    """Skill names whose hub install failed verification in this agent session."""
+    session = getattr(getattr(agent, "current_session", None), "session_id", None)
+    state = getattr(agent, "_skills_failed_verification", None)
+    if state is None or state[0] != session:
+        state = (session, set())
+        agent._skills_failed_verification = state
+    return state[1]
 
 
 def _reject_bad_name(action: str, name: str) -> Dict[str, Any] | None:
@@ -368,8 +378,12 @@ class SkillLibraryToolsMixin:
             Returns:
                 Version, path, the tier it landed on, and its permissions.
             """
+            from gaia.skills.capture import failed_verification_message
             from gaia.skills.errors import SkillError
+            from gaia.skills.hub import SkillChecksumError
+            from gaia.skills.install import SkillBundleMismatchError
             from gaia.skills.install import install_skill as _hub_install
+            from gaia.skills.signing import SkillSignatureError
 
             rejection = _reject_bad_name("install_skill", name)
             if rejection is not None:
@@ -393,6 +407,17 @@ class SkillLibraryToolsMixin:
                     manager=agent.skill_manager,
                     confirm=_refuse_dangerous_grant,
                 )
+            except (
+                SkillSignatureError,
+                SkillChecksumError,
+                SkillBundleMismatchError,
+            ) as exc:
+                _failed_verification(agent).add(skill_name)
+                payload = _failure("install_skill", exc)
+                payload["error"] = (
+                    f"{payload['error']} {failed_verification_message(skill_name)}"
+                )
+                return payload
             except SkillError as exc:
                 return _failure("install_skill", exc)
 
@@ -464,6 +489,7 @@ class SkillLibraryToolsMixin:
                     source,
                     name=name.strip() or None,
                     manager=agent.skill_manager,
+                    failed_verification=_failed_verification(agent),
                 )
             except SkillError as exc:
                 return _failure("capture_skill", exc)

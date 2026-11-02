@@ -2953,15 +2953,16 @@ Skills are discovered from these roots, highest precedence first:
     | `--out` | Write migrated skills here instead of installing into `~/.gaia/skills/` |
     | `--name` | Migrate under this name (single-skill sources only) |
     | `--force` | Replace an existing skill of the same name (refused when the target resolves to the source's own directory — replacing it there would delete the source) |
+    | `--allow-experimental` | Required when the skill ships code (`tools.py` or `scripts/`) |
     | `--dry-run` | Report what would be migrated without writing anything |
     | `--json` | Emit the migration report as JSON |
 
     `<source>` is one skill directory, its `SKILL.md`, or a directory **of** skill directories — so a whole ClawHub checkout migrates in one command.
 
-    The foreign `metadata.<vendor>` namespace becomes a `metadata.gaia` block. Fields GAIA models fully are consumed; anything partially or un-modeled stays under `metadata.<vendor>` and is listed in the report, so nothing is dropped silently. **Every migrated skill lands at the `experimental` tier**, whatever the source claimed — the same trust reset `import` applies.
+    The foreign `metadata.<vendor>` namespace becomes a `metadata.gaia` block. Fields GAIA models fully are consumed; anything partially or un-modeled stays under `metadata.<vendor>` and is listed in the report, so nothing is dropped silently. **Every migrated skill lands at the `experimental` tier**, whatever the source claimed — the same trust reset `import` applies. It then goes through every `import` check (the `experimental` permission ceiling, the symlink refusal, the security audit, `--allow-experimental` for code) and is recorded in `skill-lock.json` as `source: migrated`, so it is held to that tier every time it loads.
 
     <Warning>
-    **A source needing a local capability is refused, not downgraded.** `requires.bins` maps to `shell:execute:<bin>` and `requires.config` to `filesystem:read:<path>`; both need the deferred permission sandbox ([#1019](https://github.com/amd/gaia/issues/1019)), so the skill is reported unmigratable with the reason rather than quietly stripped of the permission. Other skills in the same batch still migrate — exit code is `4` when any were refused.
+    **A source needing a local capability is refused, not downgraded.** `requires.bins` maps to `shell:execute:<bin>` and `requires.config` to `filesystem:read:<path>`. Neither fits the `experimental` ceiling (and `filesystem` needs the deferred permission sandbox, [#1019](https://github.com/amd/gaia/issues/1019)), so the skill is reported unmigratable with the same reason `import` gives rather than quietly stripped of the permission. To use a skill that runs a CLI, install a signed copy from the hub. Other skills in the same batch still migrate — exit code is `4` when any were refused.
     </Warning>
   </Tab>
 
@@ -3047,12 +3048,14 @@ Skills are discovered from these roots, highest precedence first:
           → Reinstall the attested copy with 'gaia skill install web-research --force'.
     my-notes
       ⚠ [untracked] 'my-notes' is installed but skill-lock.json does not track it.
-          → Expected if you created, imported, or migrated it.
+          → Expected if you created it.
     ```
 
-    Untracked skills are normal right after `create` / `migrate`;
-    `--relock` starts tracking them as `source: local`. An import is tracked
-    from the moment it lands, as `source: imported`.
+    Untracked skills are normal right after `create`; `--relock` starts
+    tracking them as `source: local`. Until then an untracked skill is held to
+    the `experimental` permission ceiling when it loads, so a skill you wrote
+    that needs a CLI grant loads only after `--relock`. An import or migration
+    is tracked from the moment it lands, as `source: imported` / `source: migrated`.
 
     <Note>
     **After upgrading from a build that predates content digests**, skills
@@ -3180,7 +3183,9 @@ The effective tier is `min(claimed, attested)`, so **no unsigned skill installs 
 `verified`** — the claim is collapsed rather than trusted. Imported and captured
 skills (`gaia skill import`, `capture_skill`) always land `experimental`. The ceiling
 is checked again whenever a skill loads or is promoted, against the tier it landed
-at, so editing `SKILL.md` afterwards cannot raise its tier or its grants.
+at, so editing `SKILL.md` afterwards cannot raise its tier or its grants. A skill in
+`~/.gaia/skills` with no `skill-lock.json` entry is held to `experimental` until
+`gaia skill lock --relock` records it as your own.
 
 <Warning>
 **v1 skills are instruction + connector-bridged only.** A skill declaring a

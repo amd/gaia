@@ -607,7 +607,7 @@ gaia skill export <name> [--output FILE.zip]
 gaia skill audit <dir> [--json] [--output FILE] [--sarif FILE] [--path-prefix DIR]
                        [--tier TIER] [--fail-on SEVERITY] [--show-snippets]
 gaia skill migrate <source> [--from openclaw|hermes|auto] [--out DIR] [--name NAME]
-                            [--force] [--dry-run] [--json]
+                            [--force] [--allow-experimental] [--dry-run] [--json]
 ```
 
 Exit codes are distinct so scripts can branch: `0` ok, `2` usage, `3` not found,
@@ -761,7 +761,9 @@ writes a `metadata.gaia` block. **Every migrated skill lands `experimental`**,
 re-earning trust via the same `reset_security_tier()` `gaia skill import` uses.
 Migration emits a report of fields needing manual review, and the output is
 round-tripped through `parse_skill()` before install, so a migration can never
-emit a `SKILL.md` the parser rejects.
+emit a `SKILL.md` the parser rejects. It then lands through `import`'s own path:
+the `experimental` ceiling, the audit, `--allow-experimental` for code, and a
+`skill-lock.json` entry (`source: migrated`) that holds it to that tier at load.
 
 #### Field-by-field: OpenClaw → GAIA
 
@@ -776,8 +778,8 @@ vendor-namespace pattern lossless in practice rather than in principle.
 | `primaryEnv: VAR` | `requirements.env_vars` | Consumed |
 | `envVars: [{name\|key, …}]` | `requirements.env_vars` (names) | Preserved — per-variable descriptions are not modeled |
 | `requires.tools: [t]` | `tools_required` | Consumed |
-| `requires.bins: [git]` | `permissions: [shell:execute:git]` | **Refused** unless the binary is in `BINARY_POLICIES` |
-| `requires.anyBins: [a, b]` | `permissions: [shell:execute:a, …]` | **Refused** unless policed — and GAIA has no any-of form, so each is declared |
+| `requires.bins: [git]` | `permissions: [shell:execute:git]` | **Refused** — no command policy, or above the `experimental` ceiling when there is one |
+| `requires.anyBins: [a, b]` | `permissions: [shell:execute:a, …]` | **Refused**, as `bins` — and GAIA has no any-of form, so each is declared |
 | `requires.config: [path]` | `permissions: [filesystem:read:path]` | **Refused** — local capability |
 | `install: [{node\|uv\|pip: pkg}]` | `requirements.{node_,}dependencies` | Preserved — GAIA never runs install steps |
 | `install: [{brew\|go\|shell: …}]` | — | Preserved + reported |
@@ -822,7 +824,8 @@ all of these:
 | `name` disagreeing with its directory | The migrated skill installs under its (coerced) `name`, satisfying GAIA's name-==-directory rule |
 
 Of the 26, **13 migrate cleanly and 13 are refused** — 10 for a local capability
-(they shell out) and 3 for having no frontmatter. That ratio is the honest shape
+(they shell out) and 3 for having no frontmatter. Of the 13, one is then refused
+at landing by the security audit, so 12 install. That ratio is the honest shape
 of the corpus, not a shortfall: a skill whose whole purpose is running `git` or
 `tmux` cannot be bridged until the sandbox lands.
 

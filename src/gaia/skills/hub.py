@@ -62,6 +62,10 @@ class SkillHubError(SkillError):
     """A hub request failed, or the hub rejected a publish."""
 
 
+class SkillChecksumError(SkillHubError):
+    """A downloaded bundle does not match the checksum the hub manifest lists."""
+
+
 # ---------------------------------------------------------------------------
 # URLs
 # ---------------------------------------------------------------------------
@@ -449,7 +453,7 @@ def download_artifact(
 
     actual = hashlib.sha256(payload).hexdigest()
     if actual != artifact.sha256:
-        raise SkillHubError(
+        raise SkillChecksumError(
             f"Checksum mismatch for '{name}' {version}: the hub manifest says "
             f"sha256={artifact.sha256} but the downloaded bundle hashes to "
             f"{actual}. Nothing was installed. Retry — if it persists, the artifact "
