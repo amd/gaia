@@ -164,7 +164,6 @@ def verification_check_label(
             or not isinstance(return_code, int)
             or isinstance(return_code, bool)
             or not isinstance(code, str)
-            or not invokes_test_runner(code)
         ):
             return None
         output = "\n".join(
@@ -172,8 +171,11 @@ def verification_check_label(
             for key in ("stdout", "stderr")
             if isinstance((value := result.get(key)), str)
         )
+        # The summary is a cheap scan; parsing a large snippet is not.
         found = runner_summary(output)
-        return found[0] if found else None
+        if found is None or not invokes_test_runner(code):
+            return None
+        return found[0]
     if name in _CHECK_TOOLS:
         return name
     if not isinstance(tool_args, dict):

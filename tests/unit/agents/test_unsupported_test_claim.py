@@ -1439,3 +1439,182 @@ def test_a_huge_quoted_command_is_not_read_and_says_so_at_debug():
     # Under the limit, quoting still reads.
     short = _LAUNCH_HEADER + "os.system(\"'a' pytest\")\nos.system(\"pytest 'a'\")\n"
     assert _detect_test_runner(short) is True
+
+
+# ---------------------------------------------------------------------------
+# The cheap summary scan gates the source parse
+# ---------------------------------------------------------------------------
+
+#: About 1 MB of Python that parses slowly and never runs a test runner.
+_BIG_SOURCE = "import os\n" + "".join(
+    f"x{i} = os.path.join('a', 'b{i}')\n" for i in range(30_000)
+)
+
+#: Sources the detector says yes, no, and cannot parse to.
+_ORDER_SOURCES = [
+    RUNS_PYTEST,
+    "import subprocess\nsubprocess.run(['pytest', '-q'])",
+    "print(open('pytest.log').read())",
+    "import subprocess\nsubprocess.run(['cat', 'pytest.log'])",
+    "def broken(:\n",
+    "",
+]
+
+_ORDER_OUTPUTS = [
+    "",
+    "42\n",
+    "ok done\n",
+    SAVED_SUMMARY,
+    "F...\n1 failed, 3 passed in 0.06s\n",
+    *(out for _, passing, failing in RUNNER_OUTPUTS for out in (passing, failing)),
+]
+
+
+def _old_check_from_python_run(target, return_code, stdout="", stderr="", *, source):
+    """check_from_python_run as it was: the detector first, then the summary."""
+    from gaia.agents.base.checks import (
+        _output,
+        runner_summary,
+        summary_reports_failure,
+    )
+
+    if not invokes_test_runner(source):
+        return None
+    found = runner_summary(_output(stdout, stderr))
+    if found is None:
+        return None
+    label, summary = found
+    return CheckResult(
+        label=label,
+        target=target,
+        kind="test",
+        passed=return_code == 0 and not summary_reports_failure(summary),
+        summary=summary,
+    )
+
+
+def _old_python_label(tool_args, result):
+    """verification_check_label's Python branch as it was."""
+    from gaia.agents.base.checks import runner_summary
+    from gaia.agents.base.verification import check_was_executed
+
+    return_code = result.get("return_code")
+    code = tool_args.get("code") if isinstance(tool_args, dict) else None
+    if (
+        not check_was_executed(result)
+        or not isinstance(return_code, int)
+        or isinstance(return_code, bool)
+        or not isinstance(code, str)
+        or not invokes_test_runner(code)
+    ):
+        return None
+    output = "\n".join(
+        value
+        for key in ("stdout", "stderr")
+        if isinstance((value := result.get(key)), str)
+    )
+    found = runner_summary(output)
+    return found[0] if found else None
+
+
+@pytest.mark.parametrize("source", _ORDER_SOURCES)
+def test_reading_the_summary_first_changes_no_python_run_result(source):
+    for output in _ORDER_OUTPUTS:
+        for return_code in (0, 1):
+            for stdout, stderr in ((output, ""), ("", output), (output, None)):
+                args = ("snippet:x", return_code, stdout, stderr)
+                assert check_from_python_run(
+                    *args, source=source
+                ) == _old_check_from_python_run(*args, source=source), (
+                    source,
+                    output,
+                )
+
+
+@pytest.mark.parametrize("source", _ORDER_SOURCES)
+def test_reading_the_summary_first_changes_no_check_label(source):
+    from gaia.agents.base.verification import NOT_EXECUTED
+
+    for output in _ORDER_OUTPUTS:
+        for result in (
+            {"status": "success", "stdout": output, "return_code": 0},
+            {"status": "error", "stderr": output, "return_code": 1},
+            {"status": "success", "stdout": output, "return_code": True},
+            {"status": "success", "stdout": output},
+            {**NOT_EXECUTED, "status": "denied", "stdout": output, "return_code": 0},
+        ):
+            for name, args in (
+                ("run_python", {"code": source}),
+                ("execute_python_file", {"file_path": "t.py"}),
+                ("run_python", None),
+            ):
+                assert verification_check_label(
+                    name, args, result
+                ) == _old_python_label(args, result), (source, output, result)
+
+
+def test_a_crashing_detector_still_reads_as_no_runner_in_either_order():
+    code = "import pytest\npytest.main()"
+    with patch(
+        "gaia.agents.base.checks._detect_test_runner",
+        side_effect=RecursionError("boom"),
+    ):
+        for output in _ORDER_OUTPUTS:
+            assert check_from_python_run(
+                "snippet:x", 0, output, source=code
+            ) == _old_check_from_python_run("snippet:x", 0, output, source=code)
+
+
+def test_a_python_run_without_a_summary_never_parses_its_source():
+    detector = MagicMock(return_value=True)
+    with patch("gaia.agents.base.checks.invokes_test_runner", detector):
+        assert check_from_python_run("snippet:x", 0, "42\n", source=RUNS_PYTEST) is None
+    detector.assert_not_called()
+    with patch("gaia.agents.base.verification.invokes_test_runner", detector):
+        result = {"status": "success", "stdout": "42\n", "return_code": 0}
+        assert (
+            verification_check_label("run_python", {"code": RUNS_PYTEST}, result)
+            is None
+        )
+    detector.assert_not_called()
+
+
+def test_a_python_run_with_a_summary_still_asks_the_detector():
+    detector = MagicMock(return_value=False)
+    with patch("gaia.agents.base.checks.invokes_test_runner", detector):
+        assert (
+            check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=RUNS_PYTEST)
+            is None
+        )
+    detector.assert_called_once_with(RUNS_PYTEST)
+    detector.reset_mock()
+    with patch("gaia.agents.base.verification.invokes_test_runner", detector):
+        result = {"status": "success", "stdout": SAVED_SUMMARY, "return_code": 0}
+        assert (
+            verification_check_label("run_python", {"code": RUNS_PYTEST}, result)
+            is None
+        )
+    detector.assert_called_once_with(RUNS_PYTEST)
+
+
+def _best_seconds(call) -> float:
+    best = float("inf")
+    for _ in range(3):
+        started = time.perf_counter()
+        call()
+        best = min(best, time.perf_counter() - started)
+    return best
+
+
+def test_a_large_script_without_a_summary_returns_without_parsing():
+    assert len(_BIG_SOURCE) > 1_000_000
+    result = {"status": "success", "stdout": "done\n", "return_code": 0}
+    for run in (
+        lambda src: check_from_python_run("snippet:x", 0, "done\n", source=src),
+        lambda src: verification_check_label("run_python", {"code": src}, result),
+    ):
+        trivial = _best_seconds(lambda: run(RUNS_PYTEST))
+        big = _best_seconds(lambda: run(_BIG_SOURCE))
+        # Parsing this source takes ~1 s+; the bound is far below that and far
+        # above any scheduling noise on a loaded runner.
+        assert big < 50 * trivial + 0.1, (big, trivial)
