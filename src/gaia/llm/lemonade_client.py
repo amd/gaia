@@ -5596,15 +5596,6 @@ class LemonadeClient:
             **kwargs,
         }
 
-        # An OpenAI-compatible stream sends usage only if asked. Without this
-        # a streamed turn reports no token counts at all, and the gap is
-        # invisible locally — llama.cpp answers the /stats poll, so the numbers
-        # appear to be there — while a cloud-routed model, whose /stats is all
-        # zeros, silently loses them. That is backwards: the counts matter most
-        # where the tokens are billed. Caller-supplied stream_options win.
-        if stream and "stream_options" not in data:
-            data["stream_options"] = {"include_usage": True}
-
         if stop:
             data["stop"] = stop
 
@@ -5703,10 +5694,7 @@ class LemonadeClient:
         # it and evict this model mid-generation. Re-entrant per thread, so the
         # load's own inner lease folds into this one.
         #
-        # The pre-flight ensure also guards the GAIA-expected ctx: pre-#1030 the
-        # non-streaming path skipped it, so an embedder warm-up that unloaded the
-        # LLM let Lemonade auto-load Gemma at its 32K default, silently capping
-        # doc-Q&A. (The streaming path does the same via _ensure_model_loaded.)
+        # The ensure below also re-checks ctx: an embedder warm-up can unload the LLM.
         with self._model_slot_lease(model, request_timeout=timeout):
             if auto_download:
                 self._ensure_model_loaded(model, auto_download=True)
@@ -9043,14 +9031,9 @@ class LemonadeClient:
                 # Fallback for older Lemonade versions
                 status.context_size = health.get("context_size", 0)
 
-            # Loaded models — source of truth is ``/health.all_models_loaded``,
-            # NOT ``/models`` (which returns the full catalog, not the subset
-            # currently in memory). The pre-#1030 code joined ``status.loaded_models
-            # = list_models().data`` which made downstream "what is loaded?"
-            # checks see every model on disk and pick the alphabetically-first
-            # one (``Gemma-3-4b-it-GGUF``) regardless of whether it was loaded
-            # — which is why ``_try_reload_with_ctx`` kept reloading the wrong
-            # model on every chat invocation.
+            # Loaded models: ``/health.all_models_loaded`` should be used,
+            # NOT ``/models`` (`/health.all_models_loaded`` gets what is in
+            # current memory, not the full catalog).
             #
             # We enrich each health entry with the matching catalog entry's
             # ``labels`` so the existing label-based filters (``"image" not in
@@ -9418,7 +9401,7 @@ class LemonadeClient:
         This method:
         1. Checks if lemonade-server is installed
         2. Checks if server is running (health endpoint)
-        3. Auto-starts with ctx-size=32768 if not running
+        3. Auto-starts the server if not running
         4. Validates context size and shows warning if too small
 
         With auto-download enabled, models are downloaded on-demand when needed,
@@ -9542,10 +9525,7 @@ class LemonadeClient:
 
         # Auto-start server
         if not quiet:
-            print(
-                f"{_emoji('🚀', '[START]')} Starting Lemonade Server "
-                f"with ctx-size={required_ctx}..."
-            )
+            print(f"{_emoji('🚀', '[START]')} Starting Lemonade Server...")
 
         try:
             self.launch_server(ctx_size=required_ctx, background="terminal")
