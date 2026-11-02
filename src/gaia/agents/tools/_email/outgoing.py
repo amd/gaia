@@ -11,10 +11,13 @@ from, read once from the mailbox.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+import unicodedata
+from dataclasses import dataclass, replace
 from email.utils import getaddresses
 from html.parser import HTMLParser
 from typing import List, NamedTuple, Optional, Tuple
+
+import idna
 
 _ADDRESS_RE = re.compile(r"[^@\s<>\",;]+@[^@\s<>\",;]+")
 
@@ -24,13 +27,20 @@ _BODY_TEXT = "text"
 _HTML_BREAKS = frozenset({"br", "p", "div", "tr", "li", "h1", "h2", "h3", "h4"})
 _HTML_HIDDEN = frozenset({"script", "style", "head", "title"})
 
+# Controls that can hide or reorder text on the approver's screen. Tab and newline
+# are layout, and the marks RTL writing needs (LRM, RLM, ZWJ, ZWNJ) can't reorder.
+_HIDDEN_RE = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]"
+)
+_HIDDEN_NOTE = "Hidden characters are shown as [U+XXXX]. They are sent as they are."
+
 
 class Recipient(NamedTuple):
     name: str
     address: str
 
     def __str__(self) -> str:
-        if not self.name:
+        if not self.name or self.name.lower() == self.address.lower():
             return self.address
         return f'"{self.name}" <{self.address}>'
 
@@ -53,6 +63,12 @@ class OutgoingMessage:
     reply_to_id: Optional[str] = None
     # Names of files a draft already carries. New messages have none.
     attachments: Tuple[str, ...] = ()
+    # A forward carries text only; these files on the original stay behind.
+    attachments_left_out: Tuple[str, ...] = ()
+    # The HTML half of a multipart draft, which most mail apps show first.
+    html_alternative: Optional[str] = None
+    # The saved draft an edit overwrites. Shown on its prompt, never sent.
+    replaces: Optional["OutgoingMessage"] = None
 
 
 @dataclass(frozen=True)
@@ -69,6 +85,82 @@ class SourceMessage:
     internet_message_id: Optional[str]
     references: Optional[str]
     received: str
+    attachments: Tuple[str, ...] = ()
+
+
+def _refuse_controls(text: str, field: str) -> None:
+    for char in text:
+        if char != "\t" and unicodedata.category(char) in ("Cc", "Zl", "Zp"):
+            raise ValueError(
+                f"`{field}` contains a line break or control character "
+                f"(U+{ord(char):04X}), which could disguise what is sent. Remove it "
+                "and try again."
+            )
+
+
+def _sendable_address(address: str, field: str) -> str:
+    """*address* as it goes on the wire: an international domain in its ASCII form."""
+    if not _ADDRESS_RE.fullmatch(address):
+        raise ValueError(
+            f"`{field}` has an address that can't be sent to: {address!r}. Use "
+            "name@example.com, separating several with commas."
+        )
+    local, _, domain = address.rpartition("@")
+    if not local.isascii():
+        raise ValueError(
+            f"`{field}` has non-ASCII characters before the @ in {address!r}, which "
+            "GAIA can't send. Check the address with the recipient."
+        )
+    if domain.isascii():
+        return address
+    try:
+        ascii_domain = idna.encode(domain, uts46=True).decode("ascii")
+    except idna.IDNAError as exc:
+        raise ValueError(
+            f"`{field}` has a domain that can't be sent to: {domain!r} ({exc}). Check "
+            "the spelling."
+        ) from exc
+    return f"{local}@{ascii_domain}"
+
+
+def _sendable_recipient(recipient: Recipient, field: str) -> Recipient:
+    name, address = recipient
+    _refuse_controls(name, field)
+    _refuse_controls(address, field)
+    if name.lower() == address.lower():
+        name = ""
+    if any(unicodedata.category(char) == "Cf" for char in name):
+        raise ValueError(
+            f"`{field}` has a display name with invisible or direction-changing "
+            f"characters, so it may not read as it looks: {address}. Give the bare "
+            "address instead."
+        )
+    if any(char in "@<>" for char in name):
+        raise ValueError(
+            f"`{field}` has a display name that looks like an address but isn't "
+            f"the one receiving the mail, {address}. Give the bare address instead."
+        )
+    return Recipient(name, _sendable_address(address, field))
+
+
+def checked(message: OutgoingMessage) -> OutgoingMessage:
+    """*message* made safe to show and send, or raise naming the field at fault.
+
+    Both providers pass through here, because Graph has no MIME library to refuse
+    a line break. Idempotent, so a saved draft can be re-read and compared.
+    """
+    _refuse_controls(message.subject, "subject")
+    for field, value in (
+        ("in_reply_to", message.in_reply_to),
+        ("references", message.references),
+    ):
+        _refuse_controls(value or "", field)
+    return replace(
+        message,
+        to=tuple(_sendable_recipient(r, "to") for r in message.to),
+        cc=tuple(_sendable_recipient(r, "cc") for r in message.cc),
+        bcc=tuple(_sendable_recipient(r, "bcc") for r in message.bcc),
+    )
 
 
 def parse_recipients(raw: Optional[str], field: str = "to") -> Recipients:
@@ -76,16 +168,10 @@ def parse_recipients(raw: Optional[str], field: str = "to") -> Recipients:
     text = (raw or "").strip()
     if not text:
         return ()
-    if "\r" in text or "\n" in text:
-        raise ValueError(f"`{field}` contains a line break. Give plain addresses.")
+    _refuse_controls(text, field)
     parsed = []
     for name, address in getaddresses([text]):
-        if not _ADDRESS_RE.fullmatch(address):
-            raise ValueError(
-                f"`{field}` has an address that can't be sent to: {text!r}. Use "
-                "name@example.com, separating several with commas."
-            )
-        parsed.append(Recipient(name.strip(), address))
+        parsed.append(_sendable_recipient(Recipient(name.strip(), address), field))
     if not parsed:
         raise ValueError(f"`{field}` has no usable address: {text!r}.")
     return tuple(parsed)
@@ -114,6 +200,11 @@ def _prefixed(prefix: str, subject: str) -> str:
     if subject.lower().startswith(prefix.lower()):
         return subject
     return f"{prefix} {subject}".strip()
+
+
+def _bare(recipients: Recipients) -> Recipients:
+    """Addresses only: a name on inbound mail is the sender's to choose, so it can lie."""
+    return tuple(Recipient("", r.address) for r in recipients)
 
 
 def _without(recipients: Recipients, *excluded: str) -> Recipients:
@@ -156,8 +247,8 @@ def reply_message(
         part for part in (source.references, source.internet_message_id) if part
     )
     return OutgoingMessage(
-        to=tuple(to),
-        cc=cc,
+        to=_bare(tuple(to)),
+        cc=_bare(cc),
         subject=_prefixed("Re:", source.subject),
         body=body,
         thread_id=source.thread_id,
@@ -205,7 +296,7 @@ def forward_message(
     cc: str = "",
     bcc: str = "",
 ) -> OutgoingMessage:
-    """*source*'s text under a forwarding header. Attachments do not come along."""
+    """*source*'s text under a forwarding header. Its attachments are named, not sent."""
     sender = str(source.sender) if source.sender else "(unknown sender)"
     quoted = (
         "----- Forwarded message -----\n"
@@ -215,28 +306,63 @@ def forward_message(
         f"To: {', '.join(str(r) for r in source.to)}\n\n"
         f"{_plain_text(source)}"
     )
-    return new_message(
-        to=to,
-        cc=cc,
-        bcc=bcc,
-        subject=_prefixed("Fwd:", source.subject),
-        body=f"{note}\n\n{quoted}" if note else quoted,
+    return replace(
+        new_message(
+            to=to,
+            cc=cc,
+            bcc=bcc,
+            subject=_prefixed("Fwd:", source.subject),
+            body=f"{note}\n\n{quoted}" if note else quoted,
+        ),
+        attachments_left_out=source.attachments,
     )
+
+
+def _visible(text: str) -> str:
+    return _HIDDEN_RE.sub(
+        lambda match: f"[U+{ord(match.group()):04X}]", text.replace("\r\n", "\n")
+    )
+
+
+def _visible_line(text: str) -> str:
+    return _visible(text).replace("\n", "[U+000A]")
+
+
+def _names(recipients: Recipients) -> str:
+    return _visible_line(", ".join(str(r) for r in recipients))
 
 
 def render_preview(message: OutgoingMessage) -> str:
     """The message as a person approves it: every recipient, then the whole body."""
-    lines = [f"To: {', '.join(str(r) for r in message.to)}"]
+    lines = [f"To: {_names(message.to)}"]
     if message.cc:
-        lines.append(f"Cc: {', '.join(str(r) for r in message.cc)}")
+        lines.append(f"Cc: {_names(message.cc)}")
     if message.bcc:
-        lines.append(f"Bcc: {', '.join(str(r) for r in message.bcc)}")
-    lines.append(f"Subject: {message.subject}")
+        lines.append(f"Bcc: {_names(message.bcc)}")
+    lines.append(f"Subject: {_visible_line(message.subject)}")
     if message.attachments:
-        lines.append(f"Attachments: {', '.join(message.attachments)}")
+        lines.append(f"Attachments: {_visible_line(', '.join(message.attachments))}")
+    if message.attachments_left_out:
+        left_out = _visible_line(", ".join(message.attachments_left_out))
+        lines.append(f"Attachments left out, not sent: {left_out}")
     if message.body_type == _BODY_HTML:
         lines.append("Format: HTML")
-    return "\n".join(lines) + f"\n\n{message.body}"
+    html = message.html_alternative
+    shown = "\n".join(lines) + f"\n\n{_visible(message.body)}"
+    if html:
+        shown += (
+            "\n\n----- HTML version, which most mail apps show instead of the text "
+            f"above -----\n{_visible(html)}"
+        )
+    written = (message.subject, message.body, html or "")
+    if any(_HIDDEN_RE.search(text.replace("\r\n", "\n")) for text in written):
+        shown = f"{_HIDDEN_NOTE}\n\n{shown}"
+    if message.replaces:
+        shown += (
+            "\n\n----- This replaces the saved draft -----\n"
+            f"{render_preview(message.replaces)}"
+        )
+    return shown
 
 
 def describe(message: OutgoingMessage) -> dict:
@@ -249,6 +375,7 @@ def describe(message: OutgoingMessage) -> dict:
         "body": message.body,
         "thread_id": message.thread_id,
         "attachments": list(message.attachments),
+        "attachments_left_out": list(message.attachments_left_out),
     }
 
 
@@ -257,6 +384,7 @@ __all__ = [
     "Recipient",
     "Recipients",
     "SourceMessage",
+    "checked",
     "describe",
     "forward_message",
     "new_message",

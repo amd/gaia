@@ -32,7 +32,11 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 import httpx
 
-from gaia.agents.tools._email.errors import MailboxAuthError, MailboxError
+from gaia.agents.tools._email.errors import (
+    MailboxAuthError,
+    MailboxError,
+    MailboxOutcomeUnknown,
+)
 from gaia.agents.tools._email.outgoing import (
     OutgoingMessage,
     Recipient,
@@ -284,6 +288,7 @@ def _draft_message(draft: Dict[str, Any]) -> OutgoingMessage:
     payload = message.get("payload") or {}
     headers = _header_map(payload)
     body, body_type = _select_body(payload)
+    html_part = _find_part(payload, "text/html") if body_type == "text" else None
     return OutgoingMessage(
         to=_recipients(headers.get("to")),
         cc=_recipients(headers.get("cc")),
@@ -295,6 +300,9 @@ def _draft_message(draft: Dict[str, Any]) -> OutgoingMessage:
         in_reply_to=headers.get("in-reply-to") or None,
         references=headers.get("references") or None,
         attachments=tuple(_attachment_names(payload)),
+        html_alternative=(
+            _normalized_body(_decode_part(html_part)) if html_part else None
+        ),
     )
 
 
@@ -321,6 +329,8 @@ def raw_mime(message: OutgoingMessage) -> str:
     mime.set_content(
         message.body, subtype="html" if message.body_type == "html" else "plain"
     )
+    if message.html_alternative:
+        mime.add_alternative(message.html_alternative, subtype="html")
     return base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii").rstrip("=")
 
 
@@ -639,19 +649,28 @@ class GmailReadBackend:
 class GmailWriteBackend(GmailReadBackend):
     """Drafting and sending. Each call is made once; a failure is reported, not retried."""
 
+    # Gmail replaces a whole draft, and this rewrite carries no files.
+    edit_keeps_attachments = False
+
     def _write(
         self, method: str, path: str, *, payload: Optional[dict] = None
     ) -> Dict[str, Any]:
         where = f"{method} {path}"
+        token = self._access_token_fn()
         try:
             resp = self._client.request(
                 method,
                 f"{GMAIL_API_BASE}{path}",
-                headers={"Authorization": f"Bearer {self._access_token_fn()}"},
+                headers={"Authorization": f"Bearer {token}"},
                 json=payload,
             )
-        except httpx.HTTPError as exc:
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
             raise MailboxError(
+                f"Could not reach Gmail for {where} ({type(exc).__name__}), so the "
+                "request never went out. Check network connectivity, then retry."
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise MailboxOutcomeUnknown(
                 f"The connection to Gmail failed during {where} "
                 f"({type(exc).__name__}), so GAIA can't tell whether it took "
                 "effect. Check Sent and Drafts in Gmail before trying again."
@@ -664,9 +683,22 @@ class GmailWriteBackend(GmailReadBackend):
                     "(403). Reconnect Google in Settings -> Connectors and approve "
                     f"reading, composing and sending. (request: {where})"
                 )
+        if resp.status_code >= 500:
+            raise MailboxOutcomeUnknown(
+                f"Gmail answered {resp.status_code} during {where}, so GAIA can't "
+                "tell whether it took effect. Check Sent and Drafts in Gmail before "
+                "trying again."
+            )
         if resp.status_code not in (200, 204):
             self._raise(resp, where)
-        return resp.json() if resp.content else {}
+        try:
+            return resp.json() if resp.content else {}
+        except ValueError as exc:
+            raise MailboxOutcomeUnknown(
+                f"Gmail accepted {where} but its answer was unreadable, so GAIA "
+                "can't confirm the result. Check Sent and Drafts in Gmail before "
+                "trying again."
+            ) from exc
 
     def get_source_message(self, message_id: str) -> SourceMessage:
         """What a reply or forward is built from, threading headers included."""
@@ -689,6 +721,7 @@ class GmailWriteBackend(GmailReadBackend):
             internet_message_id=headers.get("message-id") or None,
             references=headers.get("references") or None,
             received=_received(data.get("internalDate")),
+            attachments=tuple(_attachment_names(payload)),
         )
 
     def create_draft(self, message: OutgoingMessage) -> str:
@@ -699,13 +732,6 @@ class GmailWriteBackend(GmailReadBackend):
 
     def update_draft(self, draft_id: str, message: OutgoingMessage) -> None:
         _validated_id(draft_id, "draft_id", "create_draft or list_drafts")
-        if message.attachments:
-            # Gmail replaces the whole draft, and this rewrite carries no files.
-            raise ValueError(
-                f"Draft {draft_id!r} has attachments "
-                f"({', '.join(message.attachments)}), which editing here would "
-                "remove. Edit it in Gmail instead."
-            )
         self._write(
             "PUT",
             f"/users/me/drafts/{draft_id}",

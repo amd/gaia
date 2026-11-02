@@ -39,6 +39,12 @@ describe('PermissionPrompt', () => {
         expect(screen.queryByRole('button', { name: /always/i })).not.toBeInTheDocument();
     });
 
+    it('shows a relayed draft edit whole', () => {
+        useNotificationStore.getState().addNotification(request({ tool: 'update_draft', toolArgs: {}, summary: 'Save this draft as:\n\nNew words' }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByTestId('perm-exact-text').textContent).toBe('Save this draft as:\n\nNew words');
+    });
+
     it('shows short code whole, with no expand control', () => {
         useNotificationStore.getState().addNotification(request({
             tool: 'run_python', toolArgs: { code: 'print(1)\nprint(2)' },

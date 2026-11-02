@@ -28,7 +28,7 @@ function summarize(n: GaiaNotification): string {
 const COMMAND_SUMMARY_TOOLS = new Set(['run_shell_command', 'run_cli_command', 'wait_for_condition']);
 
 /** Tools whose relayed summary is the exact text being approved (`EXACT_TEXT_ARG` in call_risk.py). */
-const EXACT_SUMMARY_TOOLS = new Set(['send_now', 'send_draft', 'reply_to_message', 'forward_message', 'discard_draft']);
+const EXACT_SUMMARY_TOOLS = new Set(['send_now', 'send_draft', 'reply_to_message', 'forward_message', 'discard_draft', 'update_draft']);
 
 /**
  * A relayed command prompt with no args: `command[\n…]\nin <folder>[\n(extras)]\n<risk note>`

@@ -316,10 +316,17 @@ def test_console_prompt_shows_a_long_body_uncut():
 
 def test_relayed_prompt_summary_is_the_exact_text():
     text = render_preview(new_message(to="a@b.co", subject="s", body="y" * 5000))
-    summary = CanonicalTranslator()._render_args_summary(
-        "send_now", {EXACT_TEXT_ARG: text}
+    translator = CanonicalTranslator("run-1", agent_id=EMAIL_AGENT_ID)
+    relayed = translator.translate(
+        {
+            "type": "permission_request",
+            "tool": "send_now",
+            "args": {EXACT_TEXT_ARG: text},
+            "confirm_id": "c1",
+        }
     )
-    assert summary == text
+    prompt = next(e for e in relayed if e["type"] == "needs_confirmation")
+    assert prompt["summary"] == text
 
 
 # --- the gate -------------------------------------------------------------
@@ -392,7 +399,7 @@ def test_real_prompt_times_out_as_a_denial(mailbox, agent_for):
     assert gmail.calls == []
 
 
-@pytest.mark.parametrize("status", [401, 403, 500])
+@pytest.mark.parametrize("status", [401, 403, 429])
 def test_provider_failure_is_reported_once_and_not_retried(mailbox, agent_for, status):
     gmail = _Gmail()
     gmail.fail_with = status
@@ -414,7 +421,7 @@ def test_dropped_connection_says_the_outcome_is_unknown(mailbox, agent_for):
 
     result = agent_for(_Asked(), boom)._execute_tool("send_now", SEND_NOW)
     payload = json.loads(result)
-    assert payload["sent"] is False
+    assert payload["sent"] == "unknown"
     assert "Check Sent" in payload["error"]
     assert len(calls) == 1
 
@@ -461,7 +468,8 @@ def test_header_injection_from_a_subject_is_refused(mailbox, agent_for):
     result = agent_for(console, gmail)._execute_tool(
         "send_now", {**SEND_NOW, "subject": "Hi\r\nBcc: evil@example.com"}
     )
-    assert json.loads(result)["success"] is False
+    assert "`subject`" in result["error"]
+    assert console.shown == []
     assert gmail.writes("/users/me/messages/send") == []
 
 
@@ -538,10 +546,10 @@ def test_gmail_reply_threads_with_headers(mailbox, agent_for):
     assert mime["References"] == "<root@mail.example> <abc@mail.example>"
     assert mime["Subject"] == "Re: Q3 numbers"
     assert mime["To"].addresses[0].addr_spec == "dana@example.com"
-    assert mime["To"].addresses[0].display_name == "Ruiz, Dana"
+    assert mime["To"].addresses[0].display_name == ""
     assert mime["Cc"] is None
     shown = console.shown[0][1][EXACT_TEXT_ARG]
-    assert 'To: "Ruiz, Dana" <dana@example.com>' in shown
+    assert shown.startswith("To: dana@example.com\n")
     assert shown.endswith("\n\nConfirmed.")
 
 
@@ -582,6 +590,17 @@ def test_gmail_forward_carries_the_text_with_no_thread(mailbox, agent_for):
     assert text.startswith("FYI\n") and "Can you confirm?" in text
 
 
+def test_forward_with_no_recipients_is_refused_before_asking(mailbox, agent_for):
+    gmail = _Gmail()
+    console = _Asked()
+    result = agent_for(console, gmail)._execute_tool(
+        "forward_message", {"message_id": "msg1", "to": ""}
+    )
+    assert "no recipients" in str(result)
+    assert console.shown == []
+    assert gmail.writes("/users/me/messages/send") == []
+
+
 def test_gmail_draft_lifecycle(mailbox, agent_for):
     gmail = _Gmail()
     agent = agent_for(_Asked(), gmail)
@@ -606,11 +625,10 @@ def test_gmail_draft_lifecycle(mailbox, agent_for):
     assert gmail.calls[-1][:2] == ("DELETE", "/users/me/drafts/d1")
 
 
-def test_creating_and_editing_a_draft_never_asks(mailbox, agent_for):
+def test_creating_a_draft_never_asks(mailbox, agent_for):
     console = _Asked(answer=False)
     agent = agent_for(console, _Gmail())
     assert json.loads(agent._execute_tool("create_draft", SEND_NOW))["success"]
-    agent._execute_tool("update_draft", {"draft_id": "d1", "subject": "x"})
     assert console.shown == []
 
 
@@ -973,3 +991,345 @@ def test_detached_fixture_answers_like_a_new_user(fixture_agent):
 def test_outgoing_message_default_has_no_threading():
     message = OutgoingMessage()
     assert message.thread_id is None and message.reply_to_id is None
+
+
+# --- what the prompt can be made to hide ----------------------------------
+
+
+SPOOFED = '"‮moc.ssob@ssob" <evil@evil.com>'
+
+
+@pytest.mark.parametrize("provider", ["gmail", "graph"])
+@pytest.mark.parametrize(
+    "change,field",
+    [
+        ({"subject": "hi\nBcc: e@e.com"}, "subject"),
+        ({"subject": "hi\x1b[2Jthere"}, "subject"),
+        ({"subject": "hi Bcc: e@e.com"}, "subject"),
+        ({"to": SPOOFED}, "to"),
+        ({"cc": '"a​b" <x@y.co>', "to": "x@y.co"}, "cc"),
+        ({"bcc": '"boss@corp.com" <evil@evil.com>'}, "bcc"),
+    ],
+)
+def test_disguised_headers_are_refused_before_asking(
+    mailbox, agent_for, provider, change, field
+):
+    transport = _Gmail() if provider == "gmail" else _Graph()
+    backend = GmailWriteBackend if provider == "gmail" else OutlookWriteBackend
+    if provider == "graph":
+        mailbox["microsoft"] = mailbox.pop("google")
+        mailbox["microsoft"]["scopes"] = [SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND]
+        mailbox["microsoft"]["grants"] = [SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND]
+    console = _Asked()
+    agent = agent_for(console, transport, backend)
+    result = agent._execute_tool("send_now", {**SEND_NOW, **change})
+    assert f"`{field}`" in str(result)
+    assert console.shown == []
+    assert transport.calls == []
+    drafted = json.loads(agent._execute_tool("create_draft", {**SEND_NOW, **change}))
+    assert drafted["success"] is False and f"`{field}`" in drafted["error"]
+    assert transport.calls == []
+
+
+def test_hostile_reply_to_name_never_reaches_the_prompt(mailbox, agent_for):
+    gmail = _Gmail()
+    source = json.loads(json.dumps(GMAIL_SOURCE))
+    source["payload"]["headers"].append({"name": "Reply-To", "value": SPOOFED})
+    console = _Asked()
+
+    def transport(request):
+        if request.url.path.endswith("/messages/msg1"):
+            return httpx.Response(200, json=source)
+        return gmail(request)
+
+    agent_for(console, transport)._execute_tool(
+        "reply_to_message", {"message_id": "msg1", "body": "ok"}
+    )
+    shown = console.shown[0][1][EXACT_TEXT_ARG]
+    assert shown.startswith("To: evil@evil.com\n")
+    assert "‮" not in shown
+    mime = _sent_mime(gmail.writes("/users/me/messages/send")[0])
+    assert mime["To"].addresses[0].display_name == ""
+
+
+def test_body_bidi_is_sent_but_shown_plainly(mailbox, agent_for):
+    gmail = _Gmail()
+    console = _Asked()
+    body = "pay ‮0001‬ now\x1b[2J"
+    agent_for(console, gmail)._execute_tool("send_now", {**SEND_NOW, "body": body})
+    shown = console.shown[0][1][EXACT_TEXT_ARG]
+    assert "pay [U+202E]0001[U+202C] now[U+001B][2J" in shown
+    assert "Hidden characters" in shown
+    assert "‮" not in shown and "\x1b" not in shown
+    sent = _sent_mime(gmail.writes("/users/me/messages/send")[0])
+    assert "‮" in sent.get_content()
+
+
+def test_arabic_mail_shows_no_hidden_character_note():
+    text = "مرحبا‏"
+    assert "Hidden" not in render_preview(
+        new_message(to="a@b.co", subject=text, body=text)
+    )
+
+
+# --- international domains ------------------------------------------------
+
+
+def test_gmail_international_domain_is_sent_and_shown_in_ascii(mailbox, agent_for):
+    gmail = _Gmail()
+    console = _Asked()
+    agent_for(console, gmail)._execute_tool(
+        "send_now", {**SEND_NOW, "to": "Hans <hans@bücher.de>"}
+    )
+    assert console.shown[0][1][EXACT_TEXT_ARG].startswith(
+        """To: "Hans" <hans@xn--bcher-kva.de>\n"""
+    )
+    raw = _sent_mime(gmail.writes("/users/me/messages/send")[0])
+    assert raw["To"].addresses[0].addr_spec == "hans@xn--bcher-kva.de"
+
+
+def test_address_that_cannot_be_encoded_is_refused():
+    with pytest.raises(ValueError, match="`cc`"):
+        parse_recipients("a@exa☃mple..de", "cc")
+    with pytest.raises(ValueError, match="before the @"):
+        parse_recipients("häns@example.de")
+
+
+# --- a send nobody can confirm --------------------------------------------
+
+
+def test_lost_connection_after_the_request_is_unknown_not_unsent(mailbox, agent_for):
+    calls = []
+
+    def boom(request):
+        calls.append(request)
+        raise httpx.ReadTimeout("slow", request=request)
+
+    console = _Asked(answer=True)
+    agent = agent_for(console, boom)
+    payload = json.loads(agent._execute_tool("send_now", SEND_NOW))
+    assert payload["sent"] == "unknown"
+    assert "Check Sent" in payload["error"]
+    assert "Do not call" in payload["next_step"]
+    assert len(calls) == 1
+
+    console.answer = False
+    agent._execute_tool("send_now", SEND_NOW)
+    assert len(calls) == 1
+    assert "may already have gone out" in console.shown[1][1][EXACT_TEXT_ARG]
+
+
+def test_connection_never_made_is_definitely_unsent(mailbox, agent_for):
+    def refused(request):
+        raise httpx.ConnectError("no route", request=request)
+
+    payload = json.loads(
+        agent_for(_Asked(), refused)._execute_tool("send_now", SEND_NOW)
+    )
+    assert payload["sent"] is False
+
+
+def test_server_error_on_a_send_is_unknown(mailbox, agent_for):
+    gmail = _Gmail()
+    gmail.fail_with = 503
+    payload = json.loads(agent_for(_Asked(), gmail)._execute_tool("send_now", SEND_NOW))
+    assert payload["sent"] == "unknown"
+
+
+def test_unreadable_answer_after_a_send_is_unknown(mailbox, agent_for):
+    def garbled(request):
+        return httpx.Response(200, content=b"<html>")
+
+    payload = json.loads(
+        agent_for(_Asked(), garbled)._execute_tool("send_now", SEND_NOW)
+    )
+    assert payload["sent"] == "unknown"
+
+
+def test_graph_lost_connection_is_unknown(outlook, agent_for):
+    def boom(request):
+        raise httpx.ReadTimeout("slow", request=request)
+
+    payload = json.loads(
+        agent_for(_Asked(), boom, OutlookWriteBackend)._execute_tool(
+            "send_now", SEND_NOW
+        )
+    )
+    assert payload["sent"] == "unknown"
+    assert "Check Sent Items" in payload["error"]
+
+
+# --- changing a saved draft -----------------------------------------------
+
+
+def test_updating_a_draft_asks_and_shows_old_and_new(mailbox, agent_for):
+    gmail = _Gmail()
+    console = _Asked(answer=False)
+    agent = agent_for(console, gmail)
+    agent._execute_tool("update_draft", {"draft_id": "d1", "body": "New words"})
+    shown = console.shown[0][1][EXACT_TEXT_ARG]
+    assert "New words" in shown and "Draft text" in shown
+    assert (
+        shown.index("New words") < shown.index("replaces") < shown.index("Draft text")
+    )
+    assert gmail.writes("/users/me/drafts/d1") == []
+
+
+def test_draft_edited_while_asking_is_not_overwritten(mailbox, agent_for):
+    gmail = _Gmail()
+
+    class _EditedWhileAsking(_Asked):
+        def confirm_tool_execution(self, tool_name, tool_args):
+            gmail.draft_text = "The user kept typing"
+            return True
+
+    out = json.loads(
+        agent_for(_EditedWhileAsking(), gmail)._execute_tool(
+            "update_draft", {"draft_id": "d1", "body": "New"}
+        )
+    )
+    assert out["success"] is False and "changed" in out["error"]
+    assert gmail.writes("/users/me/drafts/d1") == []
+
+
+def test_gmail_edit_that_would_lose_attachments_is_refused_before_asking(
+    mailbox, agent_for
+):
+    gmail = _Gmail()
+    gmail.draft = lambda: {
+        "id": "m9",
+        "payload": {
+            "mimeType": "multipart/mixed",
+            "headers": [{"name": "To", "value": "dana@example.com"}],
+            "parts": [
+                {"mimeType": "text/plain", "body": {"data": _b64("x")}},
+                {"mimeType": "application/pdf", "filename": "a.pdf", "body": {}},
+            ],
+        },
+    }
+    console = _Asked()
+    result = agent_for(console, gmail)._execute_tool(
+        "update_draft", {"draft_id": "d1", "subject": "x"}
+    )
+    assert "a.pdf" in str(result)
+    assert console.shown == []
+
+
+# --- multipart drafts -----------------------------------------------------
+
+
+def _multipart_draft(text, html):
+    return {
+        "id": "m9",
+        "threadId": "thr9",
+        "payload": {
+            "mimeType": "multipart/alternative",
+            "headers": [
+                {"name": "To", "value": "dana@example.com"},
+                {"name": "Subject", "value": "Saved"},
+            ],
+            "parts": [
+                {"mimeType": "text/plain", "body": {"data": _b64(text)}},
+                {"mimeType": "text/html", "body": {"data": _b64(html)}},
+            ],
+        },
+    }
+
+
+def test_multipart_draft_prompt_shows_the_html_too(mailbox, agent_for):
+    gmail = _Gmail()
+    gmail.draft = lambda: _multipart_draft("Plain", "<b>Wire $5000</b>")
+    console = _Asked(answer=False)
+    agent_for(console, gmail)._execute_tool("send_draft", {"draft_id": "d1"})
+    shown = console.shown[0][1][EXACT_TEXT_ARG]
+    assert "Plain" in shown and "<b>Wire $5000</b>" in shown
+
+
+def test_html_changed_after_approval_is_not_sent(mailbox, agent_for):
+    gmail = _Gmail()
+    gmail.draft = lambda: _multipart_draft("Plain", "<b>Old</b>")
+
+    class _EditedWhileAsking(_Asked):
+        def confirm_tool_execution(self, tool_name, tool_args):
+            gmail.draft = lambda: _multipart_draft("Plain", "<b>New</b>")
+            return True
+
+    out = json.loads(
+        agent_for(_EditedWhileAsking(), gmail)._execute_tool(
+            "send_draft", {"draft_id": "d1"}
+        )
+    )
+    assert out["sent"] is False and "changed" in out["error"]
+    assert gmail.writes("/users/me/drafts/send") == []
+
+
+def test_subject_edit_keeps_a_multipart_drafts_html(mailbox, agent_for):
+    gmail = _Gmail()
+    gmail.draft = lambda: _multipart_draft("Plain", "<b>Kept</b>")
+    agent_for(_Asked(), gmail)._execute_tool(
+        "update_draft", {"draft_id": "d1", "subject": "New"}
+    )
+    mime = _sent_mime(gmail.writes("/users/me/drafts/d1")[0])
+    assert "<b>Kept</b>" in mime.get_body(("html",)).get_content()
+
+
+def test_body_edit_drops_the_stale_html(mailbox, agent_for):
+    gmail = _Gmail()
+    gmail.draft = lambda: _multipart_draft("Plain", "<b>Old</b>")
+    agent_for(_Asked(), gmail)._execute_tool(
+        "update_draft", {"draft_id": "d1", "body": "New"}
+    )
+    mime = _sent_mime(gmail.writes("/users/me/drafts/d1")[0])
+    assert mime.get_body(("html",)) is None
+
+
+# --- forwards and attachments ---------------------------------------------
+
+
+def test_gmail_forward_names_the_attachments_it_leaves_out(mailbox, agent_for):
+    gmail = _Gmail()
+    source = json.loads(json.dumps(GMAIL_SOURCE))
+    source["payload"]["parts"] = [
+        {"mimeType": "application/pdf", "filename": "q3.pdf", "body": {}}
+    ]
+    console = _Asked()
+
+    def transport(request):
+        if request.url.path.endswith("/messages/msg1"):
+            return httpx.Response(200, json=source)
+        return gmail(request)
+
+    out = json.loads(
+        agent_for(console, transport)._execute_tool(
+            "forward_message", {"message_id": "msg1", "to": "x@example.com"}
+        )
+    )
+    assert (
+        "Attachments left out, not sent: q3.pdf" in console.shown[0][1][EXACT_TEXT_ARG]
+    )
+    assert out["attachments_left_out"] == ["q3.pdf"]
+
+
+def test_graph_forward_names_the_attachments_it_leaves_out(outlook, agent_for):
+    graph = _Graph()
+    source = {**GRAPH_SOURCE, "attachments": [{"name": "plan.xlsx"}]}
+    console = _Asked()
+
+    def transport(request):
+        if request.method == "GET" and "AA%2F1%3D" in str(request.url.raw_path):
+            return httpx.Response(200, json=source)
+        return graph(request)
+
+    agent_for(console, transport, OutlookWriteBackend)._execute_tool(
+        "forward_message", {"message_id": "AA/1=", "to": "x@example.com"}
+    )
+    assert "left out, not sent: plan.xlsx" in console.shown[0][1][EXACT_TEXT_ARG]
+
+
+def test_graph_international_domain_goes_out_in_ascii(outlook, agent_for):
+    graph = _Graph()
+    agent_for(_Asked(), graph, OutlookWriteBackend)._execute_tool(
+        "send_now", {**SEND_NOW, "to": "hans@b\u00fccher.de"}
+    )
+    sent = graph.calls[0][2]["message"]["toRecipients"][0]["emailAddress"]
+    assert sent["address"] == "hans@xn--bcher-kva.de"

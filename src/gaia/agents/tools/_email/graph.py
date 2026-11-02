@@ -21,7 +21,11 @@ from urllib.parse import quote
 
 import httpx
 
-from gaia.agents.tools._email.errors import MailboxAuthError, MailboxError
+from gaia.agents.tools._email.errors import (
+    MailboxAuthError,
+    MailboxError,
+    MailboxOutcomeUnknown,
+)
 from gaia.agents.tools._email.outgoing import (
     OutgoingMessage,
     Recipient,
@@ -492,19 +496,29 @@ class OutlookReadBackend:
 class OutlookWriteBackend(OutlookReadBackend):
     """Drafting and sending. Each call is made once; a failure is reported, not retried."""
 
+    # A PATCH touches only the fields it names, so a draft's files stay.
+    edit_keeps_attachments = True
+
     def _write(
         self, method: str, path: str, *, payload: Optional[dict] = None
     ) -> Dict[str, Any]:
         where = f"{method} {path}"
+        headers = self._headers()
         try:
             resp = self._client.request(
                 method,
                 f"{GRAPH_API_BASE}{path}",
-                headers=self._headers(),
+                headers=headers,
                 json=payload,
             )
-        except httpx.HTTPError as exc:
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
             raise MailboxError(
+                f"Could not reach Microsoft Graph for {where} "
+                f"({type(exc).__name__}), so the request never went out. Check "
+                "network connectivity, then retry."
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise MailboxOutcomeUnknown(
                 f"The connection to Microsoft Graph failed during {where} "
                 f"({type(exc).__name__}), so GAIA can't tell whether it took "
                 "effect. Check Sent Items and Drafts before trying again."
@@ -516,14 +530,33 @@ class OutlookWriteBackend(OutlookReadBackend):
                 "approve reading and sending mail. (request: "
                 f"{where}; code: {_error_detail(resp) or 'forbidden'})"
             )
+        if resp.status_code >= 500:
+            raise MailboxOutcomeUnknown(
+                f"Microsoft Graph answered {resp.status_code} during {where}, so "
+                "GAIA can't tell whether it took effect. Check Sent Items and Drafts "
+                "before trying again."
+            )
         if resp.status_code not in (200, 201, 202, 204):
             self._raise(resp, where)
-        return resp.json() if resp.content else {}
+        try:
+            return resp.json() if resp.content else {}
+        except ValueError as exc:
+            raise MailboxOutcomeUnknown(
+                f"Microsoft Graph accepted {where} but its answer was unreadable, so "
+                "GAIA can't confirm the result. Check Sent Items and Drafts before "
+                "trying again."
+            ) from exc
 
     def get_source_message(self, message_id: str) -> SourceMessage:
         """What a reply or forward is built from."""
         path = _graph_id(message_id, "message_id", "list_inbox or search_email")
-        data = self._get(f"/me/messages/{path}", params={"$select": _SOURCE_SELECT})
+        data = self._get(
+            f"/me/messages/{path}",
+            params={
+                "$select": _SOURCE_SELECT,
+                "$expand": "attachments($select=name)",
+            },
+        )
         sender = _recipient(data["from"]) if data.get("from") else None
         body = data.get("body") or {}
         return SourceMessage(
@@ -539,6 +572,9 @@ class OutlookWriteBackend(OutlookReadBackend):
             internet_message_id=data.get("internetMessageId"),
             references=None,
             received=data.get("receivedDateTime") or "",
+            attachments=tuple(
+                a.get("name") or "" for a in data.get("attachments") or []
+            ),
         )
 
     def _new_reply_draft(self, message: OutgoingMessage) -> str:
