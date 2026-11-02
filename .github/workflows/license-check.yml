@@ -12,7 +12,7 @@ name: Licence Check
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - '.github/workflows/license-check.yml'
       - 'util/check_licenses.py'

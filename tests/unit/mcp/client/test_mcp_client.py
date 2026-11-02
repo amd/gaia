@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 from gaia.mcp.client.mcp_client import MCPClient, MCPTool
+from gaia.mcp.protocol import MCP_PROTOCOL_VERSION
 
 
 class TestMCPToolConversion:
@@ -264,7 +265,7 @@ class TestMCPClient:
             "jsonrpc": "2.0",
             "id": 0,
             "result": {
-                "protocolVersion": "1.0.0",
+                "protocolVersion": MCP_PROTOCOL_VERSION,
                 "serverInfo": {"name": "Test Server", "version": "1.0"},
                 "capabilities": {"tools": True},
             },
@@ -278,7 +279,7 @@ class TestMCPClient:
         # Verify initialize was called with proper MCP format
         call_args = mock_transport.send_request.call_args
         assert call_args[0][0] == "initialize"
-        assert call_args[0][1]["protocolVersion"] == "1.0.0"
+        assert call_args[0][1]["protocolVersion"] == MCP_PROTOCOL_VERSION
         assert "clientInfo" in call_args[0][1]
         assert "capabilities" in call_args[0][1]
         assert client.server_info["name"] == "Test Server"

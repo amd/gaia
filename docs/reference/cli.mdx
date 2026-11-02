@@ -111,6 +111,7 @@ echo "List the Python files here" | gaia -p --output-format json
 | `--output-format text\|json` | `text` (default) prints the answer alone; `json` prints one JSON object (below) |
 | `--verbose` | With `--output-format json`: add the turn's full `conversation` (every model message and tool call) |
 | `--max-steps <n>` | Cap on agent steps for this run, at least 1. Default: the agent's own limit ([Agent step limit](#agent-step-limit)) |
+| `--attempts <n>` | Run `n` (up to 4) independent attempts, then one turn that checks and combines them ([below](#independent-attempts)). Default: 1 |
 | `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking |
 | `--full-access` | Full access, as the TUI's `/full-access`: lifts the shell guardrails, so test runners, build tools and other commands outside the no-prompt list run, and grants paths outside the current folder without asking. Implies `--dangerously-skip-permissions` |
 | `--base-url <url>` | Use a remote Lemonade server instead of the local one |
@@ -143,6 +144,7 @@ subcommand instead.
 | `duration_s` | Wall-clock seconds for the turn, excluding server start-up |
 | `error_count` | Errors the agent recorded during the turn |
 | `error` | Only when `is_error`: why the turn failed |
+| `attempts` | Only with `--attempts` above 1: each attempt's `is_error`, `status`, `error` (why it failed), `duration_s`, steps, tool calls and tokens. The top-level counts include them |
 | `conversation` | Only with `--verbose`: the turn's messages and tool calls |
 
 **Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other
@@ -154,6 +156,45 @@ goes to stderr; in json mode stdout still carries one object, with `is_error: tr
 and an `error` field, so a script never has to parse a traceback. A failure
 before the turn starts (no prompt, server down) prints only `type`, `is_error`,
 `status` and `error`.
+
+#### Independent attempts
+
+`--attempts 2` makes the answer more thorough at about three times the tokens.
+Each attempt is its own `gaia -p` in a private workspace, and the final turn
+then works in your real folder with every attempt's answer and edits to hand:
+it keeps what it can confirm in the code, checks where the attempts disagree,
+and delivers one result within the task's own length and format rules. It pays
+off most on reviews, audits and questions, where a second independent look
+catches what the first missed.
+
+- **In a git repository** each workspace is a clone that borrows the
+  repository's history and copies its branches, tags, remotes and upstreams, so
+  `git diff main...HEAD` works as it does for you. It holds your current files,
+  uncommitted work and ignored files included, except build output,
+  dependency folders (`node_modules`, virtual environments) and caches. Its branches, stash and config are its own: nothing an
+  attempt commits, stashes or deletes reaches your repository, and no
+  repository hooks run. Submodule folders are empty, Git LFS files stay as
+  pointers, and untracked files over 2 GB in total are refused. Taking the
+  snapshot stores your current files, ignored ones included, as unreferenced
+  objects in the repository's `.git` folder; `git gc` prunes them later.
+- **Any other folder** is copied once per attempt, leaving out `node_modules`,
+  virtual environments, build output and linked folders. The home folder, a
+  drive root, and folders over 50,000 files or 2 GB are refused: make the
+  folder a git repository instead.
+- **What is isolated is the folder.** Attempts are told to act only inside it,
+  but with `--full-access` an attempt can still reach paths outside it, and
+  each one reads and writes your GAIA memory like any `gaia -p` run.
+- An attempt that fails, or runs past two hours, is left out and its reason
+  logged; if every attempt fails, the run fails. An attempt stopped at two
+  hours or by Ctrl+C is stopped together with every process it started, and
+  one that finishes takes down what it left running. The GAIA daemon and model
+  server an attempt starts are shared, so they keep running.
+  The attempts run in parallel; on a local model server that handles one
+  request at a time they queue instead.
+
+```bash
+gaia -p "Review the change on this branch against main" --attempts 2 --full-access
+```
 
 **Permissions and file access.** With nobody at the terminal to approve them,
 confirmation-gated tools are **denied** unless you pass
@@ -786,7 +827,7 @@ gaia agent test [--lint | --live] [--path DIR] [--timeout SECONDS]
 
 Use `--layout hub` when authoring a package for this repo's `hub/agents/` tree, which nests the implementation under a language directory (`hub/agents/<id>/python/`). Standalone packages outside the repo want the default `flat` layout.
 
-**`version`** bumps the SemVer in `gaia-agent.yaml` and keeps `pyproject.toml` / `__init__.py` in sync.
+**`version`** bumps the SemVer in `gaia-agent.yaml` and moves every other version declaration with it: `pyproject.toml`, the package's `__version__` / `version.py`, and — when the package ships a `packaging/stamp_version.py`, as the hub agents do — the npm `package.json`, `package-lock.json` and `binaries.lock.json` through that stamper, whose `--check` must then pass. If any declaration can't be moved (a computed `__version__`, a `pyproject.toml` without a version, an npm package with no stamper), the command names it and exits without changing any file.
 
 **`test`** runs quality gates in two modes:
 
@@ -1028,12 +1069,12 @@ The lemonade server must be running. If not available, the command will provide 
 Talk to the flagship GAIA agent (the same agent the TUI and Agent UI run): start an interactive conversation, or send a single message and exit.
 
 ```bash
-gaia chat [MESSAGE] [OPTIONS]
+gaia chat [OPTIONS]
 ```
 
 **Modes:**
-- **No message**: Starts interactive chat session
-- **Message provided**: Sends single message and exits
+- **Default**: starts an interactive chat session
+- **`--query`/`-q`**: sends a single message and exits
 
 **Output:** the answer goes to stdout; the device banner, model-load progress,
 warnings and errors go to stderr, so `gaia chat -q "…" > answer.txt` captures
@@ -1046,6 +1087,7 @@ on stderr.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--query, -q` | string | - | Single query to execute |
+| `--agent` | string | flagship | Run a registered agent instead, such as a custom agent in `~/.gaia/agents/<id>/`. Ids come from `gaia agent status`. The agent keeps its own default model; only an explicit `--model` overrides it, and `default_model` from config does not. An unknown id exits `2` and lists the registered ids. The flagship-only flags (`--index`, `--watch`, `--chunk-size`, `--max-chunks`, `--max-indexed-files`, `--max-total-chunks`, `--mcp-tool-limit`, `--allowed-paths`, `--no-learned-skills`, `--ui`) are rejected with it. See [Custom agents](/guides/custom-agent#running-it-from-the-cli) |
 | `--model` | string | auto-selected by agent | Override the model the GAIA agent uses (`None` means let the agent pick; see `GaiaAgentConfig.model_id`). Falls back to `default_model` from config — see [Configuration](#configuration) |
 | `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |
@@ -1302,7 +1344,7 @@ gaia slack stop
 ```bash
 gaia email -q "Which messages need a reply today?"   # one-shot query
 gaia email -i                                        # interactive loop
-gaia email autonomy status                           # autonomy level and trust summary
+gaia email autonomy status                           # autonomy level, trust summary, last cycle
 ```
 
 | Option | Description |
@@ -1310,10 +1352,12 @@ gaia email autonomy status                           # autonomy level and trust 
 | `-q, --query` | One-shot query; non-interactive |
 | `-i, --interactive` | Read queries from stdin in a loop |
 | `--model` | Model ID (default: chosen per device) |
-| `-v, --verbose` / `--debug` | Log every triage decision and tool call / add full prompt and response logging (sensitive payloads) |
+| `-v, --verbose` | Log every triage decision and tool call |
+| `--trace` | Save a JSON trace of each run |
+| `--logging-level` | Log level for this CLI process only; the agent runs in the daemon's email sidecar, whose logs are in `gaia daemon logs --agent email` |
 | `--spec` | Write the HTML endpoint spec to disk (`--output PATH`, default `~/.gaia/email/endpoint-spec.html`) and open it; needs no LLM |
 
-`gaia email autonomy` takes `status`, `trust`, `set-level`, `pause`, `resume`, `kill` and `run`.
+`gaia email autonomy` takes `status`, `trust`, `set-level`, `pause`, `resume`, `kill` and `run`. `status` also shows when the last cycle finished, how long it took and what it did (or that none has run, or that it failed and why), including cycles the agent ran on its own schedule. `run` waits as long as the daemon relay does (300 s, or longer with `GAIA_AGENT_TOOL_TIMEOUT`); if it gives up first, the cycle keeps going and `status` shows its result.
 
 [→ Email Guide](/guides/email)
 
@@ -1352,7 +1396,6 @@ curl http://localhost:8080/health
     - `--debug` - Enable debug logging
     - `--show-prompts` - Log the prompts sent to the LLM for every request (useful for debugging)
     - `--streaming` - Stream tokens to clients via SSE (OpenAI-style)
-    - `--step-through` - Pause between agent steps for manual inspection (development aid)
 
     **Examples:**
 
@@ -1470,14 +1513,13 @@ gaia mcp tools memory --config ./mcp_servers.json
 Test connection to a configured MCP server.
 
 ```bash
-gaia mcp test-client <server-name> [--config PATH]
+gaia mcp test-client <server-name>
 ```
 
 **Arguments:**
 - `<server-name>` - Name of the server to test
 
-**Options:**
-- `--config PATH` - Custom config file path (default: `~/.gaia/mcp_servers.json`)
+`test-client` takes no `--config`; it reads `~/.gaia/mcp_servers.json`, overlaid by `./mcp_servers.json` if present.
 
 **Example:**
 ```bash
@@ -1524,6 +1566,7 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `agent` | Invoke the MCP orchestrator agent (positional `request` arg + `--domain`, `--context`) |
 | `serve` | Start the Agent UI MCP server (wraps the Agent UI backend) |
 | `tui` | Start the TUI control MCP server (drives a running `gaia-tui --control`) |
+| `code-index` | Serve semantic search over a repository's code to Claude Code, Cursor, or any MCP client (stdio) |
 
 #### `gaia mcp start` options
 
@@ -1534,7 +1577,7 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `--auth-token` | `$GAIA_MCP_AUTH_TOKEN` | Require `Authorization: Bearer <token>` on every request except `/health` |
 | `--no-streaming` | off | Disable SSE streaming; reply synchronously |
 | `--background` | off | Detach; use `gaia mcp stop` to terminate |
-| `--log-file` | stdout | Write logs to this path (useful with `--background`) |
+| `--log-file` | `gaia.mcp.log` | Log file path for `--background` mode |
 | `--verbose` | off | Verbose logging |
 | `--ctx-size` | `32768` | Context window hint passed to Lemonade for loaded models |
 
@@ -1601,7 +1644,9 @@ on loopback, before sending a token across an untrusted network.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--query` | _required_ | Text to send to the server |
+| `--host` | `localhost` | Bridge host to connect to |
+| `--port` | `8765` | Bridge port to connect to |
+| `--query` | `Hello, GAIA!` | Text to send to the server |
 | `--tool` | `gaia.chat` | Which MCP tool to invoke when testing |
 | `--auth-token` | `$GAIA_MCP_AUTH_TOKEN` | Bearer token, if the bridge requires one |
 
@@ -1651,6 +1696,27 @@ running with `gaia-tui --control`; the server finds it through
 
 [→ Full TUI Control MCP Guide](/guides/mcp/tui)
 
+#### `gaia mcp code-index` options
+
+Serves GAIA's semantic code search for one repository over stdio, so an
+external code assistant can find code by meaning. Embeddings run on your local
+Lemonade Server, and the index is cached in `~/.gaia/code_index/`. It needs
+the `[mcp]` and `[rag]` extras.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--repo` | current directory | Repository to index and search. Your home directory is refused |
+
+```bash
+claude mcp add gaia-code-index -- gaia mcp code-index --repo /path/to/repo
+```
+
+The server offers `search_code(query, scope, top_k)`, `get_index_status()`,
+and `rebuild_index(max_files, model)`. Searching before an index exists returns
+an error telling the client to call `rebuild_index` first.
+
+[→ Code Index MCP Server](/sdk/infrastructure/mcp)
+
 [→ Full MCP Integration Guide](/integrations/mcp)
 
 ---
@@ -1672,8 +1738,8 @@ gaia connectors <subcommand> [OPTIONS]
 | Subcommand | Description |
 |-----------|-------------|
 | `list` (alias `status`) | List connectors in the catalog with their status (`--json` for machine-readable output) |
-| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes |
-| `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys, OAuth client creds) |
+| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes, `--grant-agent <agent-id>` to also grant the connector to that agent (e.g. `installed:email`) in the same flow, `--device` for the device-code flow. The browser sign-in link works for 15 minutes |
+| `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys), or `--client-id` / `--client-secret` to store an OAuth connector's client credentials (the secret is required for Google only; cannot be combined with `--set`/`--json`) |
 | `test <id>` | Run a health check for a configured connector |
 | `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. |
 | `grants {list\|grant\|revoke}` | Manage per-agent scope grants (credential access) |
@@ -2334,8 +2400,10 @@ gaia eval agent [OPTIONS]
 | `--budget` | string | `2.00` | Maximum USD spend per scenario |
 | `--timeout` | integer | `900` | Per-scenario timeout in seconds (auto-scaled for complex scenarios) |
 | `--audit-only` | flag | false | Run architecture audit without LLM calls (free) |
-| `--generate-corpus` | flag | false | Regenerate corpus documents and validate `manifest.json` |
-| `--fix` | flag | false | Auto-invoke Claude Code to diagnose and repair failures, then re-evaluate |
+| `--generate-corpus` | flag | false | Validate the committed corpus documents against `manifest.json`; fails if a listed file is missing |
+| `--fix` | flag | false | Auto-invoke Claude Code to diagnose and repair failures, then re-evaluate. Refuses to start with uncommitted tracked changes; stops if a fixer iteration times out or fails |
+| `--agent-model` | string | -- | Local model the agent must run (e.g. `Gemma-4-E4B-it-GGUF`). Each scenario's session is checked, and one that ran another model is discarded as `INFRA_ERROR`. It does not change the model; set `default_model` in the backend's GAIA home |
+| `--require-complete` | flag | false | With `--compare`, fail when baseline scenarios are missing or unmeasured |
 | `--max-fix-iterations` | integer | `3` | Maximum repair cycles in `--fix` mode |
 | `--target-pass-rate` | float | `0.90` | Stop fix iterations when judged pass rate reaches this threshold |
 | `--compare` | string(s) | -- | Compare two scorecard files, or one scorecard against saved baseline |
@@ -2415,6 +2483,24 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 [→ Full Agent Eval Guide](/guides/eval) · [→ Scenario Authoring](/guides/eval-scenarios) · [→ CI/CD Integration](/guides/eval-ci)
 
 ---
+
+### Session Replay
+
+Score the agent against real Claude Code sessions, driven through a running TUI (start it with `--control-port`).
+
+```bash
+gaia eval sessions [--control PATH] [--limit N] [--project DIR] [--out DIR] [--dataset-only]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--control` | `~/.gaia/tui/control.json` (or `$GAIA_TUI_HOME/control.json`) | The running TUI's control file |
+| `--limit` | `10` | Number of cases |
+| `--project` | all | Only sessions from one project directory under `~/.claude/projects` |
+| `--out` | `eval/results/sessions-<timestamp>` | Output directory |
+| `--dataset-only` | false | Build the dataset and stop; no agent run, no judge |
+
+Judging needs `ANTHROPIC_API_KEY`.
 
 ### Code Benchmark
 
@@ -2544,7 +2630,7 @@ gaia eval benchmark [OPTIONS]
 | `--output-dir` | str | — | Write `scorecard.json` / `summary.md` / `variance.json` |
 | `--compare` | path | — | Compare throughput against a saved baseline (non-gating for throughput; a ctx-window mismatch vs the baseline is a hard error) |
 | `--save-baseline` | flag | off | Save this run's scorecard as the throughput baseline |
-| `--ctx-size` | int | `16384` | Exact ctx window to pin the model load to (#1892 envelope: 16384 target / 32768 max). Verified by readback and stamped into `scorecard.json` / `quality.json`; values above the envelope max are allowed but warned loudly |
+| `--ctx-size` | int | `16384` | Exact ctx window to pin the model load to (#1892 envelope: 16384 target / 32768 max). Verified by readback and stamped into `scorecard.json` / `quality.json`; values above the envelope max are allowed but warned loudly. A run whose triage prompt outgrows the window exits 1 with the token counts instead of reporting 0% accuracy |
 
 <CodeGroup>
 ```bash Benchmark the primary model
@@ -2640,6 +2726,9 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
     | `--chat-only` | Conversational questions only (skip system scan) |
     | `--discover` | System discovery scan only (skip questions) |
     | `--reset` | Delete all discovery-sourced items (preserves user edits) |
+    | `--system` | Re-scan and refresh the silent system context (OS, hardware, apps, versions) |
+    | `--reset-system` | Clear the system context entries and optionally disable auto-collection |
+    | `--infer` | LLM-assisted profile inference from browser history and installed apps |
 
     **Examples:**
 
@@ -2663,6 +2752,13 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
     Reset discovered items:
     ```bash
     gaia memory bootstrap --reset
+    ```
+
+    Refresh or clear the system context, or infer a profile:
+    ```bash
+    gaia memory bootstrap --system
+    gaia memory bootstrap --reset-system
+    gaia memory bootstrap --infer
     ```
   </Tab>
 </Tabs>
@@ -3268,11 +3364,13 @@ skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 
 ## Schedule
 
-Run a prompt on a recurring cron schedule and route its output to a sink. Schedules are stored in `~/.gaia/schedules.toml` (hand-editable). The `daemon` action runs a long-lived scheduler that fires each enabled schedule when due.
+Run a prompt on a recurring cron schedule, or once at a set time, and route its output to a sink. Schedules are stored in `~/.gaia/schedules.toml` (hand-editable). The `daemon` action runs a long-lived scheduler that fires each enabled schedule when due.
 
 The running daemon reloads schedules every second, so adding, pausing, resuming, removing, or editing a schedule does not require a restart. Pausing or removing a schedule prevents future runs; it does not interrupt a run already in progress.
 
 A run that comes due while the daemon is running but the machine is asleep or busy still fires once the daemon catches up, as long as that is within an hour of the due time; several missed runs collapse into one. A run more than an hour late, or one that comes due while the same schedule's previous run is still going, is skipped and logged at WARNING with the schedule name. A run that came due while the daemon itself was not running is not replayed on restart.
+
+A one-time schedule (`add --at`) runs once at or after its time, then shows `completed` (or `failed`, with the error in the daemon log) and never runs again; it stays listed until you remove it. If the daemon was not running or the machine was asleep at that time, it runs once, late, as soon as the daemon is up again — however late that is. Pausing it holds it back; resuming it after its time runs it at once. A run cut off by a crash is left `running` and is not retried. One-time schedules are never counted as missed.
 
 Runs that never happened are not silent: the ones a sleep skipped or collapsed, and the ones due while the daemon was not running, are counted on the schedule. `gaia schedule show` prints the total, `missed: 3 runs in all while the PC was off or asleep, or the schedule daemon wasn't running (latest due …)`, and `gaia schedule list` adds `missed=3`. Runs due while a schedule was paused are not counted. The total is kept until the schedule is removed; past 100,000 in one stretch it reads "at least", and the latest due time is still exact. Times are shown in local time.
 
@@ -3286,13 +3384,13 @@ gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 
 | Action | Description |
 |--------|-------------|
-| `add` | Register a new schedule (requires `--name`, `--cron`, and exactly one of `--prompt`/`--skill`) |
-| `list` | List all schedules with their next fire time, and how many runs each missed |
-| `show <name>` | Show one schedule's full configuration, next fire time, and missed runs |
+| `add` | Register a new schedule (requires `--name`, exactly one of `--cron`/`--at`, and exactly one of `--prompt`/`--skill`) |
+| `list` | List all schedules with their next fire time, and how many runs each missed; a one-time schedule shows `once=<state>` (`pending`, `running`, `completed` or `failed`) |
+| `show <name>` | Show one schedule's full configuration, next fire time, and missed runs; for a one-time schedule, its time, state, and when it ran |
 | `remove <name>` | Delete a schedule |
 | `pause <name>` | Disable a schedule without deleting it |
 | `resume <name>` | Re-enable a paused schedule |
-| `run <name>` | Fire a schedule once now (for testing) |
+| `run <name>` | Fire a schedule once now (for testing). A pending one-time schedule is used up by this; one that already ran is refused |
 | `daemon` | Run the long-lived scheduler (blocks until interrupted) |
 
 ### `add` Options
@@ -3300,8 +3398,9 @@ gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--name` | string | _required_ | Unique schedule name |
-| `--cron` | string | _required_ | Cron expression, e.g. `"0 7 * * 1-5"` |
-| `--prompt` | string | - | One-shot prompt to run on each fire (mutually exclusive with `--skill`) |
+| `--cron` | string | - | Repeat on a cron expression, e.g. `"0 7 * * 1-5"` (one of `--cron`/`--at` is required) |
+| `--at` | string | - | Run once: an ISO datetime, local time unless it has an offset (`"2026-11-02T09:00"`, `"2026-11-02T09:00Z"`), or a delay from now (`+30m`, `+2h`, `+1d12h`). A time in the past or more than 100 years ahead, a date with no time, or anything else unreadable is rejected and nothing is stored |
+| `--prompt` | string | - | Prompt to run on each fire (mutually exclusive with `--skill`) |
 | `--skill` | string | - | Skill to run — not supported yet, rejected at add time; see note below |
 | `--sink` | string | stdout | Where output goes: `stdout` \| `file:<path>` \| `notification` \| `telegram` |
 | `--to` | string | - | Recipient for the `telegram` sink (Telegram user/chat id) |
@@ -3314,6 +3413,13 @@ gaia schedule add \
   --name morning-brief \
   --cron "0 7 * * 1-5" \
   --prompt "Give me a 3-bullet summary of today's priorities"
+```
+
+```bash Run Once in Two Hours
+gaia schedule add \
+  --name check-build \
+  --at +2h \
+  --prompt "Summarize the latest build log"
 ```
 
 ```bash List Schedules
@@ -3615,7 +3721,7 @@ gaia daemon start      # start the daemon, or attach if one is already running
 gaia daemon status     # pid, port, uptime + the supervised sidecar list
 gaia daemon stop       # graceful shutdown (tree-kills daemon + every sidecar, and GAIA's Lemonade Server)
 gaia daemon restart    # stop then start
-gaia daemon logs [--lines N] [--follow]   # tail the daemon log
+gaia daemon logs [--lines N] [--follow] [--agent AGENT_ID]   # tail the daemon log, or one sidecar agent's log (e.g. --agent email)
 gaia daemon agents                        # list supervised sidecar agents
 gaia daemon start-agent email [--mode user|dev] [--dev-src-dir <path>]  # start/attach one sidecar
 gaia daemon stop-agent email              # stop one sidecar, daemon stays up
@@ -3629,7 +3735,7 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 | `restart` | — | `stop` followed by `start`. |
 | `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
 | `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir; user-mode and stopped entries always report `dev_src_dir: null`. |
-| `start-agent <id>` | `--mode user\|dev`, `--dev-src-dir <path>` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. For `--mode dev`, this shell's own checkout is resolved (via `git rev-parse --show-toplevel`, or the explicit `--dev-src-dir` escape hatch) and compared — never executed — against the checkout the daemon is already anchored to; a mismatch is refused loudly, naming both checkouts and the fix (restart the daemon from a Python environment/editable install rooted at your checkout — a per-user daemon otherwise silently serves whichever checkout launched it, regardless of where you run the CLI from). `--dev-src-dir` must be an absolute path ending in `hub/agents/<id>/python` (e.g. `/path/to/gaia/hub/agents/email/python`), not the repo root — a mis-shaped path is rejected up front, naming the corrected path to pass instead. |
+| `start-agent <id>` | `--mode user\|dev`, `--dev-src-dir <path>` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. For `--mode dev`, this shell's own checkout is resolved (via `git rev-parse --show-toplevel`, or the explicit `--dev-src-dir` escape hatch) and compared — never executed — against the checkout the daemon is already anchored to; a mismatch is refused loudly, naming both checkouts and the fix (restart the daemon from a Python environment/editable install rooted at your checkout — a per-user daemon otherwise silently serves whichever checkout launched it, regardless of where you run the CLI from). `--dev-src-dir` must be an absolute path ending in `hub/agents/<id>/python` (e.g. `/path/to/gaia/hub/agents/email/python`), not the repo root — a mis-shaped path is rejected up front, naming the corrected path to pass instead. For `--mode user` run from inside a GAIA checkout, that checkout's `hub/agents/<id>/npm/binaries.lock.json` is compared by SHA-256 against the daemon's own lock; if they pin different binaries (or the daemon has no lock), the start is refused, naming both lock files and the repo root to restart the daemon from. Outside a checkout there is no pin to compare and nothing is sent. |
 | `stop-agent <id>` | — | Tree-kill one agent's sidecar; the daemon keeps running. Attach-only: no daemon running → clear error, exit 1. A sidecar surviving the kill is a loud failure, never silent. |
 
 A daemon also shuts down on its own, logging why, within a few seconds of its
@@ -4137,7 +4243,6 @@ despite the name they are **not** accepted by `gaia agent`, `gaia cache`,
 |--------|------|---------|-------------|
 | `--logging-level` | string | INFO | Logging verbosity [DEBUG, INFO, WARNING, ERROR, CRITICAL] |
 | `-v, --version` | flag | - | Show program's version and exit |
-| `--claude-model` | string | `claude-sonnet-5` | Claude model to use when `--use-claude` is set |
 | `--no-lemonade-check` | flag | - | Skip the Lemonade server reachability check (CI/testing without Lemonade) |
 
 <Note>

@@ -931,7 +931,13 @@ def render_endpoint_spec_html() -> str:
     thresholds, and the earned-trust ledger:
     <code>{ level, enabled, trust_min_samples, trust_threshold,
     trusted_scope_count, scopes:[{ action_type, scope, positive, negative,
-    total, score, trusted }] }</code>. This is the read-model
+    total, score, trusted }], last_cycle }</code>. <code>last_cycle</code> is
+    <code>null</code> until a cycle has run, then the most recent one (REST,
+    CLI or scheduler) as counts only — <code>{ outcome: "completed",
+    started_at, finished_at, level, executed, proposals, decisions, skipped,
+    already_proposed, errors, stopped }</code>, or <code>{ outcome: "failed",
+    started_at, finished_at, level, error }</code> with the error redacted.
+    This is the read-model
     <code>gaia email autonomy status</code> / <code>trust</code> render, so
     autonomy behavior is always explainable. 404 if the session is unknown.</p>
 </div>
@@ -962,6 +968,49 @@ def render_endpoint_spec_html() -> str:
     (missing/expired/under-scoped credential) — the response <code>detail</code>
     carries the actionable message and the exact <code>gaia connectors
     connect ...</code> command to fix it (#2617), never a bare status code.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/autonomy/undo</span>
+  <p class="desc">Reverse one auto-executed action and record the correction
+    against its trust scope (#2529). Body:
+    <code>{ "session_id": str, "action_id": str }</code> where
+    <code>action_id</code> comes from a prior <code>autonomy/run</code>
+    <code>executed[]</code> entry. Returns
+    <code>{ action_id, action_type, message_id, undone, correction_captured }</code>;
+    <code>correction_captured</code> is <code>false</code> (the mutation is still
+    reversed) when the id was not an autonomy-executed action. <b>409</b> for an
+    unknown, expired, or already-undone id; <b>400</b> for an action type with
+    no reversal implemented; 404 if the session is unknown. <b>501</b> if this
+    agent build does not expose autonomy undo.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/connections/{provider}</span>
+  <p class="desc">Daemon-to-sidecar OAuth forward-out (contract 2.5, #2154):
+    accept a short-lived access token for <code>provider</code>, held in memory
+    only; the sidecar never receives the refresh token. Returns
+    <code>{ provider, scopes, account_email, expires_at }</code>. <b>400</b> for
+    a malformed forward (empty token or non-positive expiry); <b>404</b> for an
+    unknown provider.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/connections</span>
+  <p class="desc">Metadata-only list of forwarded connections:
+    <code>{ connections:[{ provider, scopes, account_email, expires_at }] }</code>.
+    Never returns tokens.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">DELETE</span>
+  <span class="path">/v1/connections/{provider}</span>
+  <p class="desc">Withdraw a forwarded credential (revoke or uninstall).
+    Idempotent. Returns <code>{ provider, withdrawn }</code>. <b>404</b> for an
+    unknown provider.</p>
 </div>
 """
 

@@ -339,7 +339,11 @@ class RAGToolsMixin:
         """
         Index all supported files in a directory.
 
-        Supported: PDF, TXT, CSV, JSON, code files.
+        Indexes the same formats as index_document: PDF, Word (.docx),
+        PowerPoint (.pptx), Excel (.xlsx), CSV, JSON, EPUB, text, Markdown
+        and source-code files (gaia.rag.sdk.FOLDER_INDEX_EXTENSIONS).
+        Images and *.env files are indexed only one at a time; every skipped
+        file is listed with its reason.
 
         Args:
             directory_path: Path to directory
@@ -358,6 +362,9 @@ class RAGToolsMixin:
                 "indexed_files": List[str],
                 "failed_files": List[str],
                 "failure_reasons": Dict[str, str],  # file name -> error
+                "skipped_files": List[Dict[str, str]],  # {"file", "reason"},
+                                                        # first 50
+                "skipped_files_truncated": bool,  # only when over 50
                 "message": str
             }
         """
@@ -479,10 +486,10 @@ for search_key in search_keys:
 
 # 2. Keyword boost: the five best matches in any language, scored 0.6-0.9.
 # Rare words count for more, and query words side by side in a chunk count again.
-for chunk_idx, boost_score, _words in rank_keyword_chunks(
-    query, enumerate(self.rag.chunks)
-):
-    all_chunks.append(self.rag.chunks[chunk_idx])
+# Each chunk's words are read once and kept until the chunk list changes.
+keywords = keyword_index(self.rag)
+for chunk_idx, boost_score, _words in keywords.rank(query):
+    all_chunks.append(keywords.texts[chunk_idx])
     all_scores.append(boost_score)
 
 # 3. Hash-based deduplication (O(1))
