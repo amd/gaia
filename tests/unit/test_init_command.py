@@ -1612,7 +1612,9 @@ class TestInstallViaPpa(unittest.TestCase):
             'VERSION_ID="24.04"\nPRETTY_NAME="Pop!_OS 24.04 LTS"\n'
         ),
     )
-    def test_check_linux_version_accepts_ubuntu_family_derivative(self, mock_os_release):
+    def test_check_linux_version_accepts_ubuntu_family_derivative(
+        self, mock_os_release
+    ):
         """Ubuntu-family derivatives retain the PPA path via ID_LIKE."""
         assert LemonadeInstaller._check_linux_version() is None
 
