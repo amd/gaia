@@ -387,14 +387,19 @@ offered the scratchpad, email, image-generation or skill-hub tools, so
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
 a PowerShell child on Windows to draw the notification, and **`install_cli`** /
 **`sign_in_cli`**, which install software and sign a CLI in to the user's
-account — and the flagship adds eight of its own
+account — and the flagship adds nine of its own
 (`CONFIRMATION_REQUIRED_TOOLS`): **`install_skill`**, **`capture_skill`**, and
 **`remove_skill`**, because installing or capturing a skill writes third-party
 content under `~/.gaia/skills` and removing one deletes it; **`send_now`**,
 **`send_draft`**, **`reply_to_message`** and **`forward_message`**, because mail
-leaves the mailbox, and **`discard_draft`**, because a draft can't be recovered.
+leaves the mailbox, and **`discard_draft`** and **`update_draft`**, because a
+deleted or overwritten draft can't be recovered and may be one the user wrote.
 The four sending tools are refused, with nothing sent, wherever no person can
-answer the prompt, including a pre-approved run. A capture that does
+answer the prompt, including a pre-approved run. A failed send returns
+`sent: false` when it definitely didn't go, and `sent: "unknown"` when it may have
+(a dropped connection or a provider server error): tell the user to check Sent and
+don't call again unless they ask. `forward_message` carries text only, and reports
+the files it left out in `attachments_left_out`. A capture that does
 land is additionally **code-inert**: its instructions load, but any
 `tools.py`/scripts stay unregistered until a human runs
 `gaia skill promote <name>` in a terminal. Everything else — reading,

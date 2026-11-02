@@ -15,10 +15,15 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   `discard_draft`, `send_draft`, `send_now`, `reply_to_message` and
   `forward_message`, taking the agent from 101 tools to 109. Each send shows the
   recipients, subject and body exactly as they will go out, and needs a yes. A
-  decline or timeout sends nothing, and a failed send is reported, never retried.
+  decline or timeout sends nothing, and a failed send is reported, never retried:
+  `sent: false` means it didn't go, and `sent: "unknown"` means it may have, so
+  check Sent. A forward carries text only, and names the attachments it leaves out.
+  In the terminal, a long email must be scrolled to its end before `y` works.
+  Disguised subjects, addresses and display names are refused before the prompt.
   Full access doesn't skip this: the prompt still appears where a person can
-  answer, and the send is refused where nobody can. Saving a draft doesn't ask,
-  because nothing leaves the mailbox.
+  answer, and the send is refused where nobody can. Saving a new draft doesn't
+  ask, because nothing leaves the mailbox. Changing or deleting a saved draft
+  does, because it may be one the user wrote.
 
 ### Changed
 
