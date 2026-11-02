@@ -12,6 +12,7 @@ those folders and nothing else: no subfolders, no symlinks, no other paths.
 from __future__ import annotations
 
 import logging
+import ntpath
 import os
 import struct
 from pathlib import Path
@@ -139,6 +140,33 @@ def _result_path(event: Mapping[str, Any], key: str) -> Optional[str]:
     return None
 
 
+def _is_remote_or_device(raw: str) -> bool:
+    """True for a UNC, device or NT-namespace spelling, judged without touching disk."""
+    if "\x00" in raw:
+        return True
+    lead = raw[:4].replace("/", "\\")
+    if lead.startswith("\\\\") or lead == "\\??\\":
+        return True
+    drive = ntpath.splitdrive(raw)[0]
+    return bool(drive) and not (len(drive) == 2 and drive[1] == ":")
+
+
+def _lexical_key(path: str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
+
+def _lexically_in_media_dir(kind: str, raw: str) -> bool:
+    """True when *raw*'s folder is spelled as the media folder, before any resolve."""
+    parent = _lexical_key(os.path.dirname(os.path.expanduser(raw)))
+    root = media_dir(kind)
+    if parent == _lexical_key(str(root)):
+        return True
+    try:
+        return parent == _lexical_key(str(root.resolve()))
+    except (OSError, RuntimeError):
+        return False
+
+
 def media_card(
     event: Mapping[str, Any], args: Optional[Mapping[str, Any]] = None
 ) -> Optional[Dict[str, Any]]:
@@ -153,6 +181,10 @@ def media_card(
         raw = _result_path(event, key)
         if not raw:
             continue
+        # Decide on the string alone first: resolving a UNC path reaches out to the share.
+        if _is_remote_or_device(raw) or not _lexically_in_media_dir(kind, raw):
+            logger.info("No inline %s for %s: not in %s", kind, raw, media_dir(kind))
+            return None
         name = Path(raw).name
         try:
             real = resolve_generated_media(kind, name)

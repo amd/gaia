@@ -368,6 +368,97 @@ def test_no_card_for_a_deleted_file(gaia_dir):
     )
 
 
+_REMOTE_SPELLINGS = [
+    "\\\\host\\share\\a.png",
+    "//host/share/a.png",
+    "\\/host\\share\\a.png",
+    "/\\host\\share\\a.png",
+    "\\\\host\\share\\cache\\sd\\images\\a.png",
+    "\\\\?\\UNC\\host\\share\\a.png",
+    "//?/UNC/host/share/a.png",
+    "\\\\?\\C:\\Users\\me\\.gaia\\cache\\sd\\images\\a.png",
+    "\\\\.\\C:\\a.png",
+    "\\\\.\\pipe\\a.png",
+    "\\\\.\\GLOBALROOT\\Device\\Mup\\host\\share\\a.png",
+    "\\??\\UNC\\host\\share\\a.png",
+    "\\??\\C:\\a.png",
+    "C:\\a\x00.png",
+]
+
+
+@pytest.fixture
+def disk_calls(monkeypatch):
+    """Record every filesystem call; the test asserts which paths were touched."""
+    # A file log handler stats its own log file; keep that out of the record.
+    monkeypatch.setattr(generated_media.logger, "disabled", True)
+    touched = []
+
+    def guard(real):
+        def spy(*args, **kwargs):
+            touched.append(str(args[0]) if args else "")
+            return real(*args, **kwargs)
+
+        return spy
+
+    for name in ("stat", "lstat", "open", "listdir", "scandir"):
+        monkeypatch.setattr(os, name, guard(getattr(os, name)))
+    monkeypatch.setattr(os.path, "realpath", guard(os.path.realpath))
+    for name in (
+        "resolve",
+        "exists",
+        "is_file",
+        "is_dir",
+        "is_symlink",
+        "stat",
+        "lstat",
+        "open",
+    ):
+        monkeypatch.setattr(Path, name, guard(getattr(Path, name)))
+    return touched
+
+
+@pytest.mark.parametrize("raw", _REMOTE_SPELLINGS)
+@pytest.mark.parametrize("relayed", [False, True])
+def test_unc_and_device_paths_are_refused_without_touching_disk(
+    gaia_dir, disk_calls, raw, relayed
+):
+    # A generated file of the same name exists, so only the path check can refuse.
+    (media_dir("image") / "a.png").write_bytes(PNG)
+    disk_calls.clear()
+    event = {"type": "tool_result", "success": True}
+    if relayed:
+        event["data"] = {"image_path": raw}
+    else:
+        event["image_path"] = raw
+    assert media_card(event) is None
+    assert disk_calls == []
+
+
+@pytest.mark.parametrize(
+    "raw", [r"Z:\renders\a.png", "Z:/renders/a.png", "/mnt/share/renders/a.png"]
+)
+def test_a_path_on_another_drive_is_refused_without_touching_it(
+    gaia_dir, disk_calls, raw
+):
+    (media_dir("image") / "a.png").write_bytes(PNG)
+    disk_calls.clear()
+    assert (
+        media_card({"type": "tool_result", "success": True, "image_path": raw}) is None
+    )
+    assert not any("renders" in t for t in disk_calls)
+
+
+def test_a_generated_file_still_resolves_once_the_spelling_is_local(
+    gaia_dir, disk_calls
+):
+    img = media_dir("image") / "a.png"
+    img.write_bytes(PNG)
+    for raw in (str(img), str(img.resolve()), img.as_posix()):
+        card = media_card({"type": "tool_result", "success": True, "image_path": raw})
+        assert card and card["data"]["src"] == "/api/media/image/a.png", raw
+    assert disk_calls, "the local path is resolved, so the spy must have seen it"
+
+
 def test_the_tools_default_folders_are_the_served_folders(gaia_dir, monkeypatch):
     """A drift guard: the tools save where the endpoint serves from."""
     from gaia.agents.tools import audio_generation_tools
