@@ -424,19 +424,37 @@ jobs:
 
           echo "=== Testing Core GAIA CLI Commands with Lemonade ==="
 
-          # Test chat command with Qwen model (should now work with Lemonade)
-          echo "Testing chat command with Qwen3-0.6B-GGUF model:"
-          timeout 30s gaia chat --model "Qwen3-0.6B-GGUF" -q "Hello, this is a test message. Please respond briefly." || echo "Chat command completed"
+          # Keep running the remaining integration checks after a smoke failure,
+          # but remember the first failure and fail the step after cleanup.
+          CORE_TEST_EXIT=0
+          run_core_smoke() {
+            local name="$1"
+            shift
+            echo "Testing ${name}:"
+            if timeout 30s "$@"; then
+              echo "✅ ${name} completed"
+            else
+              local rc=$?
+              echo "::error::${name} failed with exit code ${rc}"
+              if [ "$CORE_TEST_EXIT" -eq 0 ]; then
+                CORE_TEST_EXIT=$rc
+              fi
+            fi
+          }
 
-          # Test prompt command with Qwen model
-          echo "Testing prompt command with Qwen3-0.6B-GGUF model:"
-          timeout 30s gaia prompt --model "Qwen3-0.6B-GGUF" "What is 2+2?" || echo "Prompt command completed"
+          run_core_smoke "chat command with Qwen3-0.6B-GGUF" \
+            gaia chat --model "Qwen3-0.6B-GGUF" \
+            -q "Hello, this is a test message. Please respond briefly."
+          run_core_smoke "prompt command with Qwen3-0.6B-GGUF" \
+            gaia prompt --model "Qwen3-0.6B-GGUF" "What is 2+2?"
+          run_core_smoke "llm command with Qwen3-0.6B-GGUF" \
+            gaia llm --model "Qwen3-0.6B-GGUF" "Say hello"
 
-          # Test llm command with Qwen model
-          echo "Testing llm command with Qwen3-0.6B-GGUF model:"
-          timeout 30s gaia llm --model "Qwen3-0.6B-GGUF" "Say hello" || echo "LLM command completed"
-
-          echo "✅ Core commands tested successfully!"
+          if [ "$CORE_TEST_EXIT" -eq 0 ]; then
+            echo "✅ Core commands tested successfully!"
+          else
+            echo "❌ One or more core commands failed with exit code: ${CORE_TEST_EXIT}"
+          fi
 
           echo ""
           echo "=== Testing RAG Functionality ==="
@@ -476,18 +494,19 @@ jobs:
           fi
           sleep 5
 
-          # Report failures — RAG tests may fail when the agent's default model
-          # isn't available (only Qwen3-0.6B-GGUF is pulled in CI).
-          # Surface as a GHA warning so failures are visible without blocking the job.
+          # Report failures after cleanup, while preserving the first non-zero
+          # status so the job cannot silently pass a broken integration lane.
           FIRST_FAILURE=0
-          for code in "${RAG_TEST_EXIT:-0}" "${LEMONADE_TEST_EXIT:-0}"; do
+          for code in "${CORE_TEST_EXIT:-0}" "${RAG_TEST_EXIT:-0}" "${LEMONADE_TEST_EXIT:-0}"; do
             if [ "$code" -ne 0 ] && [ "$FIRST_FAILURE" -eq 0 ]; then
               FIRST_FAILURE=$code
             fi
           done
           if [ "$FIRST_FAILURE" -ne 0 ]; then
-            echo "::warning::Integration tests had failures (exit code $FIRST_FAILURE) — see logs above"
+            echo "::error::Integration checks failed (exit code $FIRST_FAILURE) — see logs above"
+            exit "$FIRST_FAILURE"
           fi
+          echo "✅ Core, RAG, and Lemonade integration checks passed"
 
       - name: Test evaluation and utility commands
         run: |
