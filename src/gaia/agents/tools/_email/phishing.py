@@ -26,6 +26,10 @@ from typing import List, Tuple
 UNTRUSTED_BODY_OPEN = "<<<UNTRUSTED_EMAIL_BODY_START>>>"
 UNTRUSTED_BODY_CLOSE = "<<<UNTRUSTED_EMAIL_BODY_END>>>"
 
+# The same fence for a short field in a JSON result, such as an event title.
+UNTRUSTED_FIELD_OPEN = "<<<UNTRUSTED_TEXT>>>"
+UNTRUSTED_FIELD_CLOSE = "<<<END_UNTRUSTED_TEXT>>>"
+
 # What the model must do with a flagged message. Stated on the tool result,
 # not only in a skill, so it survives a skill the user never loaded.
 SUSPICIOUS_GUIDANCE = (
@@ -136,6 +140,15 @@ def wrap_untrusted_body(body: str) -> str:
     return f"{UNTRUSTED_BODY_OPEN}\n{body}\n{UNTRUSTED_BODY_CLOSE}"
 
 
+def strip_untrusted_field_markers(text: str) -> str:
+    return text.replace(UNTRUSTED_FIELD_OPEN, "").replace(UNTRUSTED_FIELD_CLOSE, "")
+
+
+def wrap_untrusted_field(text: str) -> str:
+    """Fence a short field, removing any marker in it so it can't close the fence."""
+    return f"{UNTRUSTED_FIELD_OPEN}{strip_untrusted_field_markers(text)}{UNTRUSTED_FIELD_CLOSE}"
+
+
 def _subject_reason(subject_lower: str) -> str:
     for required, also in _SUBJECT_PAIRS:
         if required in subject_lower and also in subject_lower:
@@ -243,7 +256,11 @@ __all__ = [
     "SUSPICIOUS_GUIDANCE",
     "UNTRUSTED_BODY_CLOSE",
     "UNTRUSTED_BODY_OPEN",
+    "UNTRUSTED_FIELD_CLOSE",
+    "UNTRUSTED_FIELD_OPEN",
     "annotate",
     "assess_message",
+    "strip_untrusted_field_markers",
     "wrap_untrusted_body",
+    "wrap_untrusted_field",
 ]
