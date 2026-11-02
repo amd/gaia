@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
@@ -375,6 +376,10 @@ def _spaced_paths(home, checkout):
         "${HOME}": "${HOME}/" + rel,
         "%USERPROFILE%": "%USERPROFILE%\\" + rel.replace("/", "\\"),
         "$env:USERPROFILE": "$env:USERPROFILE\\" + rel.replace("/", "\\"),
+        "$USERPROFILE": f"$USERPROFILE/{rel}",
+        "%HOMEDRIVE%%HOMEPATH%": "%HOMEDRIVE%%HOMEPATH%\\" + rel.replace("/", "\\"),
+        "$env:HOMEDRIVE$env:HOMEPATH": "$env:HOMEDRIVE$env:HOMEPATH\\"
+        + rel.replace("/", "\\"),
     }
 
 
@@ -447,6 +452,105 @@ def test_spaced_paths_that_are_not_the_key(monkeypatch, call):
     transcript = _gaia(_tool("run_shell_command", call, VALUES_ONLY))
     workdir = Path(SPACED_HOME, "AppData", "Local", "Temp", "gaia-bench", "t")
     assert ft.answer_key_contact(transcript, workdir) == ""
+
+
+#: A checkout under a folder with spaces and parentheses, and a workdir in TEMP.
+PAREN_CHECKOUT = "OneDrive - AMD (Work)/gaia"
+PAREN_WORKDIR = Path(SPACED_HOME, "AppData", "Local", "Temp", "gaia-bench", "t")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # Shell-escaped spaces and parentheses.
+        r"~/OneDrive\ -\ AMD\ \(Work\)/gaia/eval/tasks/tasks.json",
+        r"/c/Users/John\ Smith/OneDrive\ -\ AMD\ \(Work\)/gaia/eval/tasks/tasks.json",
+        # Quoted in pieces.
+        '"$HOME"/"OneDrive - AMD (Work)"/gaia/eval/tasks/tasks.json',
+        '~/"OneDrive - AMD (Work)"/gaia/eval/tasks/tasks.json',
+        # Relative, through a folder with parentheses.
+        f"../../../../../{PAREN_CHECKOUT}/eval/tasks/tasks.json",
+        f"./../../../../../{PAREN_CHECKOUT}/eval/tasks/tasks.json",
+        r"..\..\..\..\..\OneDrive - AMD (Work)\gaia\eval\tasks\tasks.json",
+        # More ``..`` than the workdir is deep: Windows stops at the drive root.
+        "../" * 12 + f"Users/John Smith/{PAREN_CHECKOUT}/eval/tasks/tasks.json",
+        "..\\" * 12 + r"Users\John Smith\OneDrive - AMD (Work)\gaia\eval\tasks",
+        # Relative to the current folder on drive C.
+        f"C:../../../../../{PAREN_CHECKOUT}/eval/tasks/tasks.json",
+    ],
+)
+def test_shell_spellings_of_a_spaced_checkout_are_caught(monkeypatch, path):
+    _spaced(monkeypatch, SPACED_HOME, PAREN_CHECKOUT)
+    call = {"command": f"jq -r '.tasks[].genuine_answer' {path}"}
+    transcript = _gaia(_tool("Bash", call, VALUES_ONLY))
+    assert ft.answer_key_contact(transcript, PAREN_WORKDIR).startswith("Bash named ")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"~/OneDrive\ -\ AMD\ \(Work\)/other/eval/tasks/tasks.json",
+        '"$HOME"/"OneDrive - AMD (Work)"/gaia2/eval/tasks/tasks.json',
+        "../../../../" + f"{PAREN_CHECKOUT}/eval/tasks/tasks.json",
+        "../" * 12 + f"Users/Jane/{PAREN_CHECKOUT}/eval/tasks/tasks.json",
+        f"D:../../../../../{PAREN_CHECKOUT}/eval/tasks/tasks.json",
+    ],
+)
+def test_shell_spellings_of_another_folder_are_not_the_key(monkeypatch, path):
+    _spaced(monkeypatch, SPACED_HOME, PAREN_CHECKOUT)
+    call = {"command": f"jq -r '.tasks[].genuine_answer' {path}"}
+    transcript = _gaia(_tool("Bash", call, VALUES_ONLY))
+    assert ft.answer_key_contact(transcript, PAREN_WORKDIR) == ""
+
+
+# --- large tool calls stay fast ----------------------------------------------
+
+#: Generous: each case takes a few hundredths of a second; a scan quadratic in
+#: the text's length took 40-60 s on the same inputs.
+FAST_ENOUGH = 0.5
+
+
+def _timed(transcript, workdir=NESTED_WORKDIR):
+    started = time.perf_counter()
+    why = ft.answer_key_contact(transcript, workdir)
+    return why, time.perf_counter() - started
+
+
+def _long_texts():
+    line = "- The suite lives in eval/tasks, and the runner reads it when set.\n"
+    checkout = ft.TASKS_DIR.parent.parent.name
+    return {
+        "one mention after 20k words": "word " * 20000 + "eval/tasks",
+        "1 MB of markdown, 12k mentions": (line * 16000)[:1_000_000],
+        "checkout-named mentions with dots": (
+            (". ../ ./ " * 40 + f"{checkout}/eval/tasks ") * 600
+        )[:200_000],
+    }
+
+
+@pytest.mark.parametrize("label", list(_long_texts()))
+def test_a_long_write_is_scanned_in_linear_time(label):
+    call = {"path": "notes.md", "content": _long_texts()[label]}
+    why, seconds = _timed(_gaia(_tool("write_file", call, "ok")))
+    assert why == ""
+    assert seconds < FAST_ENOUGH, f"{label}: {seconds:.2f}s"
+
+
+def test_a_large_native_call_with_escaped_arguments_is_fast():
+    line = "- The suite lives in eval/tasks and the runner reads it when set\n"
+    arguments = json.dumps({"content": (line * 1600)[:100_000]})
+    call = {"function": {"name": "write_file", "arguments": arguments}}
+    entry = {"role": "assistant", "content": "", "tool_calls": [call]}
+    why, seconds = _timed({"conversation": [entry]})
+    assert why == ""
+    assert seconds < FAST_ENOUGH, f"{seconds:.2f}s"
+
+
+def test_a_long_write_still_names_the_key_at_its_end():
+    content = "word " * 20000 + f"cat {KEY}"
+    why, seconds = _timed(_gaia(_tool("write_file", {"content": content}, "ok")))
+    assert why.startswith("write_file named ")
+    assert seconds < FAST_ENOUGH, f"{seconds:.2f}s"
 
 
 # --- the task fails, and the gate counts it -----------------------------------

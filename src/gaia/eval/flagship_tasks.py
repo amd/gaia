@@ -23,7 +23,6 @@ from __future__ import annotations
 import difflib
 import json
 import os
-import posixpath
 import re
 import shutil
 import statistics
@@ -33,7 +32,17 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.checks import check_kind, runner_summary, summary_reports_failure
@@ -624,16 +633,38 @@ def workspace_diff(workdir: Path, original: Path) -> str:
 
 # ---------------------------------------------------------------------------
 # Running the flagship
-#: ``eval/tasks`` as a whole path segment; ``_names_task_dir`` then decides
+#: ``eval/tasks`` as a whole path segment; ``_TaskDirMatcher`` then decides
 #: whether the path leading to it is this checkout's (``lm_eval/tasks`` and a
 #: project's own ``tests/eval/tasks`` are not).
 _ANSWER_KEY_PATH = re.compile(r"(?<![\w.-])eval[\\/]+tasks(?![\w.-])", re.IGNORECASE)
-#: Characters that end a path when walking back from ``eval/tasks``. A space
-#: does not: a checkout path may hold one (``OneDrive - AMD``).
-_PATH_STOP = frozenset("\t\r\n\"'`=;|&<>(){}[],")
+#: Characters that end a path when walking back from ``eval/tasks``. A space,
+#: quote or parenthesis does not: ``"$HOME"/"OneDrive - AMD (Work)"/gaia``.
+_PATH_STOP = re.compile(r"[\t\r\n=;|&<>\[\],`]")
+#: What a path may begin right after, inside the stretch walked back over.
+_PATH_BEGIN = re.compile(r"[ (\"']+")
 #: How a shell or script may spell the home folder.
-_HOME_SPELLINGS = ("~", "$HOME", "${HOME}", "%USERPROFILE%", "$env:USERPROFILE")
+_HOME_SPELLINGS = (
+    "~",
+    "$HOME",
+    "${HOME}",
+    "$USERPROFILE",
+    "${USERPROFILE}",
+    "%USERPROFILE%",
+    "$env:USERPROFILE",
+    "%HOMEDRIVE%%HOMEPATH%",
+    "$env:HOMEDRIVE$env:HOMEPATH",
+)
+#: Walk-back allowance beyond the spellings, for quotes, escapes and extra ``..``.
+_WALK_BACK_SLACK = 128
+#: Path starts tried per mention; a real path has one or two.
+_MAX_BEGINS = 16
 _SLASHES = re.compile(r"[\\/]+")
+_SHELL_ESCAPE = re.compile(r"\\([ ()])")
+_DOT_SEGMENT = re.compile(r"(?:^|[\\/])\.\.?(?:[\\/]|$)")
+_ROOT = re.compile(r"[a-z]:/|/")
+_ROOTED_START = re.compile(r"[\\/~$%]|[A-Za-z]:")
+#: ``C:..\x``: relative to the current folder on drive C.
+_DRIVE_RELATIVE = re.compile(r"[A-Za-z]:(?=\.)")
 #: Field names only the task file carries.
 ANSWER_KEY_FIELDS = ("genuine_answer", "must_establish", "wrong_answers")
 #: One of them as a mapping key: JSON, JSON inside a JSON string, or a Python repr.
@@ -646,7 +677,29 @@ def _text(value: Any) -> str:
     return value if isinstance(value, str) else json.dumps(value, default=str)
 
 
-def _raw_call_requests(transcript: Mapping[str, Any]) -> List[Tuple[str, str]]:
+def _strings(value: Any, depth: int = 0) -> Iterator[str]:
+    """Every string in a tool call, JSON-encoded ones decoded, so escapes are real."""
+    if isinstance(value, str):
+        if depth < 4 and value.lstrip()[:1] in ("{", "["):
+            try:
+                decoded = json.loads(value)
+            except ValueError:
+                decoded = None
+            if isinstance(decoded, (dict, list)):
+                yield from _strings(decoded, depth + 1)
+                return
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _strings(item, depth)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _strings(item, depth)
+    elif value is not None and not isinstance(value, (bool, int, float)):
+        yield str(value)
+
+
+def _raw_call_requests(transcript: Mapping[str, Any]) -> List[Tuple[str, Any]]:
     """GAIA's native tool calls as the model sent them, before any parsing.
 
     On the native tool-calling path a call's arguments live only on the
@@ -664,52 +717,113 @@ def _raw_call_requests(transcript: Mapping[str, Any]) -> List[Tuple[str, str]]:
             for call in calls if isinstance(calls, list) else ():
                 if isinstance(call, dict):
                     name = call.get("name") or (call.get("function") or {}).get("name")
-                    found.append((str(name or "tool"), _text(call)))
+                    found.append((str(name or "tool"), call))
     return found
 
 
-def _norm_path(path: str) -> str:
-    return posixpath.normpath(_SLASHES.sub("/", path)).casefold()
+def _clean_path(raw: str) -> str:
+    """*raw* without quotes or shell escapes, one ``/`` per separator, casefolded."""
+    if "\\ " in raw:
+        raw = _SHELL_ESCAPE.sub(r"\1", raw)
+    return _SLASHES.sub("/", raw.replace('"', "").replace("'", "")).casefold()
 
 
-def _task_dir_spellings() -> Tuple[str, ...]:
-    """``TASKS_DIR`` as a tool may write it: native, ``/c/...`` (MSYS, WSL) or from home."""
-    native = str(TASKS_DIR)
-    found = {_norm_path(native)}
-    drive, rest = os.path.splitdrive(native)
-    if len(drive) == 2 and drive[1] == ":":
-        found.add(_norm_path(f"/{drive[0]}{rest}"))
-    home = Path(os.path.expanduser("~"))
-    if TASKS_DIR.is_relative_to(home):
-        rel = TASKS_DIR.relative_to(home).as_posix()
-        found.update(_norm_path(f"{h}/{rel}") for h in _HOME_SPELLINGS)
-    return tuple(found)
+def _resolve(path: str, base: str = "") -> str:
+    """A cleaned *path* with ``.`` and ``..`` applied, joined to *base* if relative.
 
-
-def _names_task_dir(text: str, hit: "re.Match[str]", workdir: Optional[Path]) -> bool:
-    """Whether the path ending at *hit* is this checkout's ``eval/tasks``."""
-    spellings = _task_dir_spellings()
-    start = hit.start()
-    while start and text[start - 1] not in _PATH_STOP:
-        start -= 1
-    # The path may begin at the text's start, after a stop, or after any space.
-    begins = [0, start] + [
-        m.end() for m in re.finditer(r" +", text[: hit.start()]) if m.end() > start
-    ]
-    for begin in begins:
-        raw = _SLASHES.sub("/", text[begin : hit.end()])
-        # A command glued to a path (``cat ../x``): its ``..`` would eat the command.
-        glued = re.search(r"\s\.\.?(/|$)", raw)
-        # endswith, so a JSON escape glued to the front (``\nC:/...``) still matches.
-        if (raw.casefold() if glued else _norm_path(raw)).endswith(spellings):
-            return True
-        if glued or begin < start or workdir is None:
+    ``..`` stops at the root (``/`` or ``c:/``), as Windows and POSIX do.
+    """
+    if base and not _ROOT.match(path):
+        path = f"{base}/{path}"
+    root = _ROOT.match(path)
+    prefix = root.group(0) if root else ""
+    parts: List[str] = []
+    for seg in path[len(prefix) :].split("/"):
+        if seg in ("", "."):
             continue
-        if raw.startswith(("/", "~", "$", "%")) or re.match(r"[A-Za-z]:", raw):
-            continue
-        if _norm_path(os.path.join(str(workdir), raw)) in spellings:
+        if seg == ".." and parts and parts[-1] != "..":
+            parts.pop()
+        elif seg != ".." or not prefix:
+            parts.append(seg)
+    return prefix + "/".join(parts)
+
+
+class _TaskDirMatcher:
+    """Whether a path ending in ``eval/tasks`` is this checkout's.
+
+    A mention costs time bounded by the spellings' length, never by the
+    length of the text around it.
+    """
+
+    def __init__(self, workdir: Optional[Path]):
+        native = str(TASKS_DIR)
+        self.target = _resolve(_clean_path(native))
+        spellings = {self.target}
+        drive, rest = os.path.splitdrive(native)
+        if len(drive) == 2 and drive[1] == ":":
+            spellings.add(_resolve(_clean_path(f"/{drive[0]}{rest}")))
+        home = Path(os.path.expanduser("~"))
+        if TASKS_DIR.is_relative_to(home):
+            rel = TASKS_DIR.relative_to(home).as_posix()
+            spellings.update(
+                _resolve(_clean_path(f"{h}/{rel}")) for h in _HOME_SPELLINGS
+            )
+        self.spellings = tuple(spellings)
+        self.checkout = TASKS_DIR.parent.parent.name.casefold()
+        self.base = _resolve(_clean_path(str(workdir))) if workdir else ""
+        # From a workdir above the checkout, a relative path needs no ``..``.
+        above = self.base.rstrip("/") + "/"
+        self.below = (
+            self.target[len(above) :]
+            if self.base and self.target.startswith(above)
+            else ""
+        )
+        longest = max(len(s) for s in self.spellings)
+        self.window = 2 * longest + 2 * len(self.base) + _WALK_BACK_SLACK
+        # No other ``eval/tasks`` sits inside the path, so a mention bounds the next.
+        self.chained = not _ANSWER_KEY_PATH.search(str(TASKS_DIR.parent))
+
+    def names_task_dir(self, text: str, hit: "re.Match[str]", prev_end: int) -> bool:
+        start, end = hit.start(), hit.end()
+        if start and text[start - 1] in "\\/":
+            # Cheap first: the folder in front must be the checkout's, or a dot.
+            tail = text[max(0, start - 2 * len(self.checkout) - 8) : start]
+            if not _clean_path(tail).rstrip("/").endswith((self.checkout, ".")):
+                return False
+        elif self.below != "eval/tasks":
+            return False
+        lo = max(0, end - self.window)
+        bounded = lo == 0
+        if self.chained and prev_end > lo:
+            lo, bounded = prev_end, False
+        for stop in _PATH_STOP.finditer(text, lo, start):
+            lo, bounded = stop.end(), True
+        seg = text[lo:end]
+        path = _clean_path(seg)
+        # endswith: an absolute spelling may sit behind a prefix (``\\?\``, ``/mnt``).
+        if path.endswith(self.spellings):
             return True
-    return False
+        dotted = _DOT_SEGMENT.search(seg) is not None
+        if not dotted and not (self.below and path.endswith(self.below)):
+            return False
+        begins = [m.end() for m in _PATH_BEGIN.finditer(seg)]
+        if bounded:
+            begins.insert(0, 0)
+        for begin in reversed(begins[-_MAX_BEGINS:]):
+            raw = seg[begin:]
+            if self.below and _clean_path(raw) == self.below:
+                return True
+            if not dotted:
+                continue
+            if _DRIVE_RELATIVE.match(raw) and self.base.startswith(raw[:2].lower()):
+                raw = raw[2:]
+            if raw.startswith(".") and self.base:
+                if _resolve(_clean_path(raw), self.base) == self.target:
+                    return True
+            elif _ROOTED_START.match(raw):
+                if _resolve(_clean_path(raw)).endswith(self.spellings):
+                    return True
+        return False
 
 
 def answer_key_contact(
@@ -722,13 +836,16 @@ def answer_key_contact(
     *workdir*), or a tool result carrying the task file's own fields. Both
     harnesses' transcripts are read (``transcripts.tool_calls``).
     """
-    requests = [
-        (name, _text(args)) for name, args, _r in transcripts.tool_calls(transcript)
-    ]
-    for name, text in requests + _raw_call_requests(transcript):
-        for hit in _ANSWER_KEY_PATH.finditer(text):
-            if _names_task_dir(text, hit, workdir):
-                return f"{name} named {hit.group(0)!r}"
+    requests = [(name, args) for name, args, _r in transcripts.tool_calls(transcript)]
+    matcher: Optional[_TaskDirMatcher] = None
+    for name, args in requests + _raw_call_requests(transcript):
+        for text in _strings(args):
+            prev_end = 0
+            for hit in _ANSWER_KEY_PATH.finditer(text):
+                matcher = matcher or _TaskDirMatcher(workdir)
+                if matcher.names_task_dir(text, hit, prev_end):
+                    return f"{name} named {hit.group(0)!r}"
+                prev_end = hit.end()
     for name, _args, result in transcripts.tool_calls(transcript):
         if result is None:
             continue
