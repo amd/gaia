@@ -18,6 +18,7 @@ Three layers:
 from __future__ import annotations
 
 import json
+import random
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,10 +27,12 @@ from gaia.agents.base.agent import _MAX_TEST_CLAIM_CORRECTIONS, Agent
 from gaia.agents.base.checks import (
     CHECK_RESULT_KEY,
     CheckResult,
+    _detect_test_runner,
     argv_check_label,
     attach_check,
     check_from_command,
     check_from_python_run,
+    invokes_test_runner,
 )
 from gaia.agents.base.claims import (
     claims_success,
@@ -47,6 +50,9 @@ from gaia.agents.base.verification import (
     verification_record,
     verification_summary,
 )
+
+#: A snippet that really runs pytest, so its summary line is evidence.
+RUNS_PYTEST = "import pytest\npytest.main(['-q'])"
 
 #: Trimmed from the fabricating run.
 FABRICATED = (
@@ -110,6 +116,18 @@ def _check(passed=True, label="pytest", target="pytest tests/", kind="test"):
         (["cat", "pytest.ini"], None),
         (["grep", "-r", "pytest", "setup.cfg"], None),
         ([], None),
+        (["py", "-m", "pytest"], "pytest"),
+        (["py", "-3.12", "-m", "pytest"], "pytest"),
+        (["python", "-u", "-m", "pytest"], "pytest"),
+        (["python", "-X", "dev", "-W", "error", "-m", "pytest"], "pytest"),
+        (["python", "-mpytest"], "pytest"),
+        (["python", "-c", "import pytest"], None),
+        (["python", "-u", "pytest_log.py"], None),
+        (["uv", "run", "--with", "pytest", "pytest"], "pytest"),
+        (["uv", "run", "--with", "pytest", "python", "show_log.py"], None),
+        (["uv", "run", "-m", "pytest"], "pytest"),
+        (["npm.cmd", "test"], "npm test"),
+        (["npx", "-y", "jest"], "jest"),
     ],
 )
 def test_the_program_has_to_be_the_runner(argv, expected):
@@ -175,14 +193,16 @@ def test_the_shell_tool_declares_a_non_check_so_the_footer_does_not_guess():
     ],
 )
 def test_a_python_run_reports_its_test_outcome(stdout, return_code, passed):
-    check = check_from_python_run("snippet:abc", return_code, stdout)
+    check = check_from_python_run(
+        "snippet:abc", return_code, stdout, source=RUNS_PYTEST
+    )
     assert check is not None
     assert check.kind == "test"
     assert check.passed is passed
 
 
 def test_a_python_run_without_a_runner_summary_is_not_a_check():
-    assert check_from_python_run("snippet:abc", 0, "42\n") is None
+    assert check_from_python_run("snippet:abc", 0, "42\n", source=RUNS_PYTEST) is None
 
 
 #: One passing and one failing summary per runner, as each runner prints it.
@@ -234,8 +254,8 @@ RUNNER_OUTPUTS = [
 )
 def test_every_runner_is_read_from_a_python_run(label, passing, failing):
     """A snippet that shells out to any runner exits 0 either way."""
-    passed = check_from_python_run("snippet:abc", 0, passing)
-    failed = check_from_python_run("snippet:abc", 0, failing)
+    passed = check_from_python_run("snippet:abc", 0, passing, source=RUNS_PYTEST)
+    failed = check_from_python_run("snippet:abc", 0, failing, source=RUNS_PYTEST)
     assert passed is not None and failed is not None
     assert (passed.label, passed.kind, passed.passed) == (label, "test", True)
     assert (failed.label, failed.kind, failed.passed) == (label, "test", False)
@@ -259,14 +279,14 @@ def test_every_runner_is_read_from_a_piped_command(label, passing, failing):
 
 def test_a_failing_go_package_fails_the_run_whatever_came_after_it():
     _, _, failing = next(r for r in RUNNER_OUTPUTS if r[0] == "go test")
-    check = check_from_python_run("snippet:abc", 0, failing)
+    check = check_from_python_run("snippet:abc", 0, failing, source=RUNS_PYTEST)
     assert check is not None and check.passed is False
     assert check.summary.startswith("FAIL github.com/x/pkg")
 
 
 def test_a_coloured_vitest_summary_still_reads():
     stdout = "\x1b[1m\x1b[32m      Tests  3 passed (3)\x1b[0m\n"
-    check = check_from_python_run("snippet:abc", 0, stdout)
+    check = check_from_python_run("snippet:abc", 0, stdout, source=RUNS_PYTEST)
     assert check is not None and (check.label, check.passed) == ("vitest", True)
 
 
@@ -285,7 +305,7 @@ def test_a_coloured_vitest_summary_still_reads():
     ],
 )
 def test_a_runner_that_ran_nothing_is_not_a_check(stdout):
-    assert check_from_python_run("snippet:abc", 0, stdout) is None
+    assert check_from_python_run("snippet:abc", 0, stdout, source=RUNS_PYTEST) is None
 
 
 def test_the_footer_reads_the_fact_without_the_text_parser():
@@ -352,7 +372,10 @@ def test_a_legacy_run_python_result_still_goes_through_the_fallback():
         "return_code": 0,
         "stdout": "70 passed, 19 subtests passed in 1.32s",
     }
-    assert verification_check_label("run_python", {}, result) == "pytest"
+    assert (
+        verification_check_label("run_python", {"code": RUNS_PYTEST}, result)
+        == "pytest"
+    )
 
 
 def test_a_malformed_check_fails_loudly():
@@ -842,3 +865,405 @@ def test_the_correction_asks_for_the_whole_answer_and_is_on_the_record(agent):
         if m.get("role") == "user" and m.get("content") == correction
     ]
     assert len(recorded) == 1, "the correction must be in the transcript"
+
+
+# ---------------------------------------------------------------------------
+# A summary in the output counts only when the code ran a runner (#4013)
+# ---------------------------------------------------------------------------
+
+SAVED_SUMMARY = "....\n4 passed in 0.05s\n"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "print(open('ci.log').read())",
+        "import pathlib\nprint(pathlib.Path('ci.log').read_text())",
+        "print('4 passed in 0.05s')",
+        "print('pytest.main()')",
+        "x = 'pytest -q'\nprint(x)",
+        "import pytest\nprint(pytest.__version__)",
+        "import subprocess\nsubprocess.run(['cat', 'ci.log'])",
+        "import os\nos.system('type ci.log')",
+        "def pytest_main(): pass\npytest_main()",
+        "exec('import pytest; pytest.main()')",
+        "this is not python (",
+        "",
+        "import subprocess\nsubprocess.run(['cat', 'pytest.log'])",
+        "import subprocess\nsubprocess.run('cat pytest-report.txt', shell=True)",
+        "import subprocess\nsubprocess.run(['cat', 'ci.log'])\nprint('pytest results')",
+        "import subprocess\nsubprocess.run(['type', 'pytest.log'], shell=True)",
+        "import subprocess\nsubprocess.run(['echo', 'pytest'])",
+        "import subprocess\nsubprocess.run(['grep', 'passed', 'pytest.log'])",
+        "import os\nos.system('cat pytest.log | tail -5')",
+        "import os\nos.popen('more cargo-test.log').read()",
+        "import subprocess as sp\nsp.check_output('Get-Content pytest.log', shell=True)",
+        "import subprocess\nlog = ['cat', 'pytest.log']\nsubprocess.run(log)",
+        "import subprocess\nsubprocess.run('cat npm-test.log'.split())",
+        "import subprocess\nsubprocess.run(args=['cat', 'go-test.log'])",
+        "import subprocess, sys\nsubprocess.run([sys.executable, 'show_pytest_log.py'])",
+        "import runpy\nrunpy.run_module('pytest_log_viewer')",
+        "import runpy\nrunpy.run_path('print_pytest_log.py')",
+        "import subprocess\ncmd = ['pytest']\ncmd = ['cat', 'pytest.log']\nsubprocess.run(cmd)",
+        "import subprocess\nsubprocess.run(['sh', '-c', 'cat pytest.log'])",
+        "import subprocess\nsubprocess.run(['cmd', '/c', 'type', 'pytest.log'])",
+        "import subprocess\nprint(subprocess.getoutput('cat pytest.log'))",
+        "import subprocess\nsubprocess.getstatusoutput('type pytest.log')",
+        "import subprocess\nsubprocess.run(['uv', 'run', '--with', 'pytest', 'python', 'show.py'])",
+        "import subprocess, sys\nsubprocess.run([sys.executable, '-c', 'print(1)', 'pytest'])",
+        "import subprocess\nsubprocess.run(['python', '-u', 'print_pytest_log.py'])",
+        "import os, sys\nos.system(f'{sys.executable} show_pytest_log.py')",
+        "import subprocess\nsubprocess.run(['cat', 'ci.log'] + ['pytest.log'])",
+        "import os\nos.execvp('cat', ['cat', 'pytest.log'])",
+        "import os\nos.execlp('less', 'less', 'pytest.log')",
+        "__import__('json').dumps('pytest.main()')",
+        "print(__import__('pathlib').Path('pytest.log').read_text())",
+    ],
+    ids=lambda c: c[:60],
+)
+def test_printing_a_saved_summary_is_not_a_test_run(code):
+    assert invokes_test_runner(code) is False
+    assert check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code) is None
+    result = {"status": "success", "stdout": SAVED_SUMMARY, "return_code": 0}
+    assert verification_check_label("run_python", {"code": code}, result) is None
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import pytest\npytest.main(['-q'])",
+        "import sys, pytest\nsys.exit(pytest.main())",
+        "import pytest as pt\npt.main()",
+        "from pytest import main\nmain(['tests'])",
+        "from pytest import main as run_tests\nrun_tests()",
+        "import unittest\nunittest.main(module=None, argv=['x', 'discover'])",
+        "from unittest import main\nmain()",
+        "import unittest\nunittest.TextTestRunner(verbosity=2).run(suite)",
+        "import subprocess\nsubprocess.run(['python', '-m', 'pytest', '-q'])",
+        "import subprocess as sp\nr = sp.run('pytest -q', shell=True)",
+        "from subprocess import check_output\ncheck_output(['npx', 'jest'])",
+        "import os\nos.system('go test ./...')",
+        "import subprocess\ncmd = ['cargo', 'test']\nsubprocess.run(cmd)",
+        "import runpy\nrunpy.run_module('pytest', run_name='__main__')",
+        "import subprocess, sys\nsubprocess.run([sys.executable, '-m', 'pytest', '-q'])",
+        "import subprocess\nsubprocess.run(['pytest', '-q'])",
+        "import subprocess\nsubprocess.run(['C:/venv/Scripts/pytest.exe', '-q'])",
+        "import subprocess\nsubprocess.run(['/venv/bin/python3.12', '-m', 'pytest'])",
+        "import subprocess\nsubprocess.run(['uv', 'run', 'pytest'])",
+        "import subprocess\nsubprocess.run(('npm', 'test'), shell=True)",
+        "import subprocess\nsubprocess.run('npm test', shell=True, check=False)",
+        "import subprocess\nsubprocess.run('cd tests && pytest -q', shell=True)",
+        "import subprocess\nsubprocess.run('cargo test 2>&1 | tail -20', shell=True)",
+        "import subprocess\nsubprocess.run(args=['go', 'test', './...'])",
+        "import subprocess\nsubprocess.run('cargo test'.split())",
+        "import shlex, subprocess\nsubprocess.run(shlex.split('python -m pytest -x'))",
+        "import subprocess\np = subprocess.Popen(['pytest'], stdout=subprocess.PIPE)\np.communicate()",
+        "import subprocess\npy = 'python'\nsubprocess.run([py, '-m', 'pytest'])",
+        "import os, subprocess\nexe = os.path.join('venv', 'python')\nsubprocess.run([exe, '-m', 'pytest'])",
+        "import os\nos.system(f'pytest {target} -q')",
+        "import os\nos.popen('python -m unittest discover').read()",
+        "import shutil, subprocess\nsubprocess.run([shutil.which('pytest'), '-q'])",
+        "import asyncio\nasyncio.create_subprocess_exec('pytest', '-q')",
+        "import asyncio\nasyncio.create_subprocess_shell('npm test')",
+        "import subprocess\nsubprocess.run('set CI=1 && npm test', shell=True)",
+        "import subprocess\nsubprocess.run('CI=1 npm test', shell=True)",
+        "import os, sys\nos.system(f'{sys.executable} -m pytest -q')",
+        "import os, sys\nos.system(sys.executable + ' -m pytest -q')",
+        "import os\nvenv = find_python()\nos.system(f'{venv} -m pytest')",
+        "import subprocess, sys\nsubprocess.run([sys.executable, '-m', 'pytest'] + sys.argv[1:])",
+        "import subprocess\nsubprocess.run(['py', '-m', 'pytest'])",
+        "import subprocess\nsubprocess.run(['python', '-u', '-m', 'pytest'])",
+        "import subprocess, sys\nsubprocess.run([sys.executable, '-X', 'dev', '-m', 'pytest'])",
+        "import subprocess\nprint(subprocess.getoutput('pytest -q'))",
+        "import subprocess\nsubprocess.getstatusoutput('pytest -q')",
+        "import subprocess\nsubprocess.run(['uv', 'run', '--with', 'pytest', 'pytest'])",
+        "import os\nos.system('uv run --with pytest pytest -q')",
+        "import subprocess\nsubprocess.run(['sh', '-c', 'pytest -q'])",
+        "import os\nos.system(\"sh -c 'pytest -q'\")",
+        "import subprocess\nsubprocess.run(['bash', '-lc', 'cd tests && pytest'])",
+        "import subprocess\nsubprocess.run(['cmd', '/c', 'pytest', '-q'])",
+        "import subprocess\nsubprocess.run(['npm.cmd', 'test'])",
+        "import os\nos.execvp('pytest', ['pytest', '-q'])",
+        "import os, sys\nos.execl(sys.executable, 'python', '-m', 'pytest')",
+        "import os\nos.spawnlp(os.P_WAIT, 'pytest', 'pytest', '-q')",
+        "__import__('pytest').main()",
+        "pt = __import__('pytest')\npt.main(['-q'])",
+        "import importlib\nimportlib.import_module('pytest').main()",
+    ],
+    ids=lambda c: c[:60],
+)
+def test_code_that_runs_a_runner_is_a_test_run(code):
+    assert invokes_test_runner(code) is True
+    check = check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code)
+    assert check is not None and check.label == "pytest" and check.passed
+
+
+def test_execute_python_file_fallback_cannot_see_the_script():
+    """A result that declares nothing and carries no code is never a check."""
+    result = {"status": "success", "stdout": SAVED_SUMMARY, "return_code": 0}
+    assert (
+        verification_check_label(
+            "execute_python_file", {"file_path": "print_log.py"}, result
+        )
+        is None
+    )
+
+
+def test_a_runner_without_a_summary_is_still_not_a_check():
+    assert check_from_python_run("snippet:x", 0, "42\n", source=RUNS_PYTEST) is None
+
+
+def test_source_is_required():
+    with pytest.raises(TypeError):
+        check_from_python_run("snippet:x", 0, SAVED_SUMMARY)  # type: ignore[call-arg]
+
+
+# ---------------------------------------------------------------------------
+# A name reassigned from itself reads its earlier value, never recurses
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import subprocess\nargs = ['-q']\nargs = ['pytest'] + args\nsubprocess.run(args)",
+        "import subprocess, sys\ncmd = [sys.executable]\ncmd = cmd + ['-m', 'pytest']\n"
+        "subprocess.run(cmd)",
+        "import subprocess\ncmd = 'python'\ncmd = cmd + ' -m pytest'\n"
+        "subprocess.run(cmd, shell=True)",
+        "import os\ncmd = 'python'\ncmd = cmd + ' -m pytest'\nos.system(cmd)",
+        "import os\ncmd = 'pytest'\ncmd = f'{cmd} -q'\nos.system(cmd)",
+        "import subprocess\na = ['pytest'] + b\nb = a + ['-q']\nsubprocess.run(b)",
+        "import subprocess\ndef go():\n    subprocess.run(CMD)\nCMD = ['pytest']\ngo()",
+    ],
+    ids=lambda c: c[:60],
+)
+def test_a_name_built_from_its_earlier_value_is_read_in_order(code):
+    assert _detect_test_runner(code) is True
+    check = check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code)
+    assert check is not None and check.label == "pytest" and check.passed
+    result = {"status": "success", "stdout": SAVED_SUMMARY, "return_code": 0}
+    assert verification_check_label("run_python", {"code": code}, result) is not None
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import subprocess\na = b + ['x']\nb = a + ['y']\nsubprocess.run(b)",
+        "import subprocess\na = b + 'x'\nb = a + 'y'\nsubprocess.run(a, shell=True)",
+        "import os\na = f'{b}'\nb = f'{a}'\nos.system(b)",
+        "import subprocess\nx = x\nsubprocess.run(x)",
+        "import subprocess\nx = [x]\nsubprocess.run(x)",
+        "import subprocess\nx = x + x\nsubprocess.run(x)",
+        "import subprocess\nx = y\ny = z\nz = x\nsubprocess.run(z)",
+        "import subprocess\nargs = ['-q']\nargs = args + ['cat']\nsubprocess.run(args)",
+    ],
+    ids=lambda c: c[:60],
+)
+def test_names_that_only_refer_to_each_other_are_not_a_runner(code):
+    assert _detect_test_runner(code) is False
+    assert check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code) is None
+
+
+def _odd_snippets(count: int = 200) -> list:
+    """Deterministic syntax errors, deep nesting, self-references, huge literals."""
+    rng = random.Random(4013)
+    launches = [
+        "subprocess.run({})",
+        "subprocess.run({}, shell=True)",
+        "os.system({})",
+        "os.execvp('x', {})",
+        "runpy.run_module({})",
+        "asyncio.create_subprocess_exec({}, {})",
+        "__import__('subprocess').run({})",
+    ]
+    values = [
+        "x",
+        "[x]",
+        "x + x",
+        "f'{x}'",
+        "['pytest'] + x",
+        "x + ['-m', 'pytest']",
+        "sys.executable + x",
+        "x.split()",
+        "shlex.split(x)",
+        "shutil.which(x)",
+        "y",
+        "[y, x]",
+        "'python -m pytest'",
+        "('npm', 'test')",
+        "None",
+        "1 + 2",
+    ]
+    chain = "".join(f"v{i} = v{i + 1}\n" for i in range(2000))
+    fixed = [
+        "",
+        "(",
+        ")))",
+        "subprocess.run(",
+        "x = = 1",
+        "def f(:\n  pass",
+        "\x00",
+        "import subprocess\nsubprocess.run(['pytest'",
+        "lambda: (yield)",
+        "import subprocess\nsubprocess.run()",
+        "import subprocess\nsubprocess.run(*args, **kw)",
+        "import os\nos.execl()",
+        "import os\nos.spawnv(os.P_WAIT)",
+        "(" * 200 + "1" + ")" * 200,
+        "[" * 90 + "]" * 90,
+        "import subprocess\nsubprocess.run(" + "[" * 90 + "'pytest'" + "]" * 90 + ")",
+        "import os\nos.system(" + " + ".join(["'a'"] * 3000) + ")",
+        "import subprocess\nsubprocess.run(" + " + ".join(["['a']"] * 3000) + ")",
+        "import subprocess\nsubprocess.run(x" + ".y" * 3000 + ")",
+        "f" + "()" * 500,
+        "__import__('a')" + ".b('c')" * 500 + ".main()",
+        "importlib.import_module(importlib.import_module('x'))",
+        "import os\nos.system('" + "x" * 100_000 + "')",
+        "import subprocess\nsubprocess.run([" + ", ".join(["'a'"] * 20000) + "])",
+        "x = 1\n" * 5000 + "import subprocess\nsubprocess.run(x)",
+        "x = 'a'\n" + "x = x + x\n" * 3000 + "import os\nos.system(x)",
+        "x = 'a'\n" + "x += x\n" * 3000 + "import os\nos.system(x)",
+        "x = ['a']\n" + "x.extend(x)\n" * 3000 + "import subprocess\nsubprocess.run(x)",
+        "import subprocess\nx.append(x)\nx += x\nsubprocess.run(x)",
+        "import subprocess\n" + chain + "subprocess.run(v0)",
+        "import subprocess\n" + chain + "v2000 = v0\nsubprocess.run(v0)",
+        "import os\nx = f'{f\"{x}\"}'\nos.system(x)",
+        "import subprocess\nsubprocess.run(args=args)",
+        'import subprocess\nsubprocess.run("\'unterminated")',
+        "import subprocess\nsubprocess.run(['sh', '-c', \"pytest '\"])",
+        "import subprocess\nsubprocess.run(['sh', '-c'])",
+        "import subprocess\nsubprocess.run(['cmd', '/c'])",
+        "import subprocess\nsubprocess.run(['uv', 'run'])",
+        "import subprocess\nsubprocess.run(['uv', 'run', '-m'])",
+        "import subprocess\nsubprocess.run(['python', '-X'])",
+        "import subprocess\nsubprocess.run([" + "'sh', '-c', " * 50 + "'pytest'])",
+        'import os\nos.system("' + "sh -c '" * 40 + "pytest" + "'" * 40 + '")',
+        "x: int\nimport subprocess\nsubprocess.run(x)",
+        "(a, b) = c = d = ['pytest']\nimport subprocess\nsubprocess.run(d)",
+    ]
+    snippets = list(fixed)
+    alphabet = "()[]{}'\"+=:,.\n x_fpytesm-"
+    while len(snippets) < count:
+        kind = rng.randrange(3)
+        if kind == 0:
+            size = rng.randrange(80)
+            snippets.append("".join(rng.choice(alphabet) for _ in range(size)))
+            continue
+        lines = ["import os, sys, shlex, shutil, runpy, asyncio, subprocess"]
+        for _ in range(rng.randrange(1, 8)):
+            lines.append(f"{rng.choice(['x', 'y'])} = {rng.choice(values)}")
+        call = rng.choice(launches)
+        lines.append(call.format(*(rng.choice(["x", "y"]) for _ in range(2))))
+        source = "\n".join(lines)
+        if kind == 2:
+            source = source[: rng.randrange(len(source) + 1)]
+        snippets.append(source)
+    return snippets[:count]
+
+
+def test_the_detector_never_raises_on_odd_code():
+    """Unguarded, so a crash fails here instead of hiding behind the guard."""
+    corpus = _odd_snippets()
+    assert len(corpus) == 200
+    for code in corpus:
+        assert _detect_test_runner(code) in (True, False), code[:80]
+
+
+def test_a_detector_crash_reads_as_no_runner_and_is_logged():
+    code = "import pytest\npytest.main()"
+    result = {"status": "success", "stdout": SAVED_SUMMARY, "return_code": 0}
+    with (
+        patch(
+            "gaia.agents.base.checks._detect_test_runner",
+            side_effect=RecursionError("boom"),
+        ),
+        patch("gaia.agents.base.checks.log") as log,
+    ):
+        assert invokes_test_runner(code) is False
+        assert check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code) is None
+        assert verification_check_label("run_python", {"code": code}, result) is None
+    assert log.warning.called
+    assert log.warning.call_args.kwargs.get("exc_info") is True
+
+
+# ---------------------------------------------------------------------------
+# Repeated launchers are unwrapped in a loop, never by recursion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("prefix", [["uv", "run"], ["npx"]], ids=["uv run", "npx"])
+def test_thousands_of_launcher_prefixes_still_name_the_runner(prefix):
+    argv = prefix * 2000 + ["pytest", "-q"]
+    command = " ".join(argv)
+    assert argv_check_label(argv) == "pytest"
+    check = check_from_command(command, [argv], 0, SAVED_SUMMARY)
+    assert check is not None and check.label == "pytest" and check.passed
+    for code in (
+        f"import subprocess\nsubprocess.run({argv!r})",
+        f"import os\nos.system({command!r})",
+    ):
+        assert _detect_test_runner(code) is True
+        found = check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code)
+        assert found is not None and found.label == "pytest"
+
+
+def test_thousands_of_launcher_prefixes_around_a_non_runner_are_not_a_check():
+    argv = ["uv", "run"] * 2000 + ["cat", "pytest.log"]
+    assert argv_check_label(argv) is None
+    assert argv_check_label(["uv", "run"] * 2000) is None
+    assert check_from_command(" ".join(argv), [argv], 0, SAVED_SUMMARY) is None
+
+
+# ---------------------------------------------------------------------------
+# A command grown in place (``+=``, ``.extend``, ``.append``) is still read
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import subprocess, sys\ncmd = [sys.executable]\ncmd += ['-m', 'pytest']\n"
+        "subprocess.run(cmd)",
+        "import os\nc = 'python -m'\nc += ' pytest'\nos.system(c)",
+        "import subprocess\nc = 'python'\nc += ' -m'\nc += ' pytest'\n"
+        "subprocess.run(c, shell=True)",
+        "import subprocess, sys\ncmd = [sys.executable]\ncmd.extend(['-m', 'pytest'])\n"
+        "subprocess.run(cmd)",
+        "import subprocess\ncmd = []\ncmd.append('pytest')\ncmd.append('-q')\n"
+        "subprocess.run(cmd)",
+        "import subprocess\ncmd = ['pytest']\ncmd += extra_args\nsubprocess.run(cmd)",
+    ],
+    ids=lambda c: c[:60],
+)
+def test_a_command_grown_in_place_is_a_test_run(code):
+    assert _detect_test_runner(code) is True
+    check = check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code)
+    assert check is not None and check.label == "pytest" and check.passed
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import subprocess, sys\ncmd = [sys.executable, '-m', 'pip', 'install']\n"
+        "cmd += ['pytest']\nsubprocess.run(cmd)",
+        "import subprocess\ncmd = ['pip', 'install']\ncmd.extend(['pytest', 'ruff'])\n"
+        "subprocess.run(cmd)",
+        "import subprocess\ncmd = ['cat']\ncmd.append('pytest.log')\nsubprocess.run(cmd)",
+        "import os\nc = 'cat'\nc += ' pytest.log'\nos.system(c)",
+        "import subprocess\ncmd = ['python', 'setup.py']\ncmd += ['build']\n"
+        "subprocess.run(cmd)",
+        "import subprocess\ncmd = ['pytest']\ncmd = ['cat']\ncmd += ['pytest.log']\n"
+        "subprocess.run(cmd)",
+        "import subprocess\nx = 1\nx -= 1\nsubprocess.run(['cat', 'pytest.log'])",
+        "import subprocess\ncmd += ['pytest']\nsubprocess.run(cmd)",
+        "import subprocess\nlogs = []\nlogs.append('pytest')\nsubprocess.run(['echo', *logs])",
+        # Not followed: a command kept in a container. Errs safe, since a test
+        # claim built on it is challenged rather than accepted.
+        "import subprocess\ncfg = {'cmd': ['pytest']}\nsubprocess.run(cfg['cmd'])",
+    ],
+    ids=lambda c: c[:60],
+)
+def test_a_grown_command_that_is_not_a_runner_is_not_a_test_run(code):
+    assert _detect_test_runner(code) is False
+    assert check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code) is None
