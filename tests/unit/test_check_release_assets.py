@@ -228,6 +228,14 @@ def test_the_step_passes_the_skip_flag_only_for_an_rc_without_a_setup(
     bash = shutil.which("bash")
     if sys.platform == "win32" or not bash:
         pytest.skip("bash on Windows may resolve to WSL; the step runs on Linux")
+    version = subprocess.run(
+        [bash, "-c", 'echo "${BASH_VERSINFO[0]}${BASH_VERSINFO[1]}"'],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    if int(version) < 44:
+        pytest.skip("an empty array under set -u needs bash 4.4+, as on the runner")
     stub = tmp_path / "python3"
     stub.write_text(
         f'#!/bin/sh\nprintf "%s\\n" "$@" > "{tmp_path}/args"\n', encoding="utf-8"
