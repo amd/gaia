@@ -11,7 +11,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
-import type { Session } from '../../types';
+import type { Message, Session } from '../../types';
 import * as api from '../../services/api';
 
 vi.mock('../../services/api');
@@ -31,20 +31,41 @@ const SESSION: Session = {
 };
 
 let sends: { text: string; cbs: api.StreamCallbacks }[] = [];
+// What the backend holds; ids are its own, never the view's temporary ones.
+let server: Message[] = [];
+let nextId = 100;
+// Whether the backend saves the question (and its error reply) when a turn fails.
+let persists = true;
+
+const row = (role: 'user' | 'assistant', content: string): Message => ({
+    id: ++nextId, session_id: SESSION.id, role, content, created_at: '2026-06-10T00:00:00Z', rag_sources: null,
+});
 
 beforeEach(() => {
     vi.clearAllMocks();
     sends = [];
-    mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
+    server = [];
+    nextId = 100;
+    persists = true;
+    mockedApi.getMessages.mockImplementation(async () => ({ messages: [...server], total: server.length }));
+    mockedApi.getMessageCount.mockImplementation(async () => server.length);
     mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
     mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
     mockedApi.cancelStream.mockResolvedValue(undefined as never);
     mockedApi.updateSession.mockResolvedValue(undefined as never);
-    mockedApi.deleteMessagesFrom.mockResolvedValue(undefined as never);
+    // The real endpoint 404s on an id it never saved.
+    mockedApi.deleteMessagesFrom.mockImplementation(async (_sid, id) => {
+        const at = server.findIndex((m) => m.id === id);
+        if (at < 0) throw new Error('Message not found');
+        const count = server.length - at;
+        server = server.slice(0, at);
+        return { deleted: true, count };
+    });
     mockedApi.sendMessageStream.mockImplementation((_sid, text, cbs) => {
         sends.push({ text: text as string, cbs: cbs as api.StreamCallbacks });
+        if (persists) server.push(row('user', text as string));
         return new AbortController();
     });
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
@@ -72,6 +93,7 @@ async function sendAndFail(error: Error) {
     });
     expect(sends).toHaveLength(1);
     await act(async () => {
+        if (persists) server.push(row('assistant', 'Sorry, something went wrong on my end.'));
         sends[0].cbs.onError(error);
     });
     // The finished turn's bubble fades out before the stored reply shows.
@@ -151,5 +173,105 @@ describe('a failed turn (#599)', () => {
             sends[0].cbs.onDone({ type: 'done', content: 'Hello!', message_id: 2 } as never);
         });
         expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        // Let the end-of-turn reload land here, not in the next test.
+        await waitFor(() => expect(mockedApi.getMessages).toHaveBeenCalledTimes(2));
+    });
+});
+
+describe('Try again on a failed turn', () => {
+    const tryAgain = async () => {
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        });
+    };
+    const pollServer = async () => {
+        await act(async () => {
+            document.dispatchEvent(new Event('visibilitychange'));
+        });
+    };
+
+    it("deletes the server's saved question, not the temporary id, then resends", async () => {
+        const reply = await sendAndFail(new Error('Lemonade returned 500'));
+        const question = useChatStore.getState().messages.find((m) => m.role === 'user')!;
+        expect(question.id).not.toBe(server[0].id);
+
+        await tryAgain();
+
+        await waitFor(() => expect(sends).toHaveLength(2));
+        expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledTimes(1);
+        expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledWith(SESSION.id, 101);
+        expect(sends[1].text).toBe('summarize the report');
+        // The new attempt replaced the failed turn on both sides.
+        const messages = useChatStore.getState().messages;
+        expect(messages.some((m) => m.id === reply.id || m.failed)).toBe(false);
+        expect(messages.filter((m) => m.role === 'user')).toHaveLength(1);
+        expect(server.map((m) => m.content)).toEqual(['summarize the report']);
+    });
+
+    it('resends a question the server never saved without deleting anything', async () => {
+        persists = false;
+        await sendAndFail(new Error('Failed to fetch'));
+
+        await tryAgain();
+
+        await waitFor(() => expect(sends).toHaveLength(2));
+        expect(mockedApi.deleteMessagesFrom).not.toHaveBeenCalled();
+        expect(useChatStore.getState().messages.filter((m) => m.role === 'user')).toHaveLength(1);
+    });
+
+    it("keeps an earlier identical question that was answered", async () => {
+        server = [row('user', 'summarize the report'), row('assistant', 'Here it is.')];
+        useChatStore.setState({ messages: [...server] });
+        persists = false;
+        await sendAndFail(new Error('Failed to fetch'));
+
+        await tryAgain();
+
+        await waitFor(() => expect(sends).toHaveLength(2));
+        expect(mockedApi.deleteMessagesFrom).not.toHaveBeenCalled();
+        expect(server.map((m) => m.content)).toEqual(['summarize the report', 'Here it is.']);
+    });
+
+    it('still works after the list reloads from the server', async () => {
+        await sendAndFail(new Error('Lemonade returned 500'));
+        await pollServer();
+        // The reload swapped in the server's rows, ids included.
+        await waitFor(() => expect(useChatStore.getState().messages.map((m) => m.id)).toEqual([101, 102]));
+        expect(useChatStore.getState().messages[1].failed).toBe(true);
+
+        await tryAgain();
+
+        await waitFor(() => expect(sends).toHaveLength(2));
+        expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledWith(SESSION.id, 101);
+        expect(useChatStore.getState().messages.some((m) => m.failed)).toBe(false);
+    });
+
+    it('sends once when Try again is clicked twice', async () => {
+        await sendAndFail(new Error('Lemonade returned 500'));
+        const button = screen.getByRole('button', { name: 'Try again' });
+
+        await act(async () => {
+            fireEvent.click(button);
+            fireEvent.click(button);
+        });
+
+        await waitFor(() => expect(sends).toHaveLength(2));
+        expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledTimes(1);
+        expect(useChatStore.getState().messages.filter((m) => m.role === 'user')).toHaveLength(1);
+    });
+
+    it('keeps the failed turn and says so when the resend cannot reach GAIA', async () => {
+        const reply = await sendAndFail(new Error('Lemonade returned 500'));
+        mockedApi.getMessages.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+        const { useNotificationStore } = await import('../../stores/notificationStore');
+
+        await tryAgain();
+
+        await waitFor(() => expect(
+            useNotificationStore.getState().notifications.some((n) => n.title === 'Your message was not sent again' && n.message.startsWith('Lost the connection to GAIA')),
+        ).toBe(true));
+        expect(sends).toHaveLength(1);
+        expect(useChatStore.getState().messages.some((m) => m.id === reply.id)).toBe(true);
+        expect(screen.getByRole('button', { name: 'Try again' })).not.toBeNull();
     });
 });

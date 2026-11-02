@@ -6,7 +6,7 @@ import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle
 import { MessageBubble, isErrorContent } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
-import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
+import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -269,7 +269,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 } else if (msgs.length !== lastMsgCountRef.current && !useChatStore.getState().isStreaming) {
                     // New messages from external source (MCP, API) — refresh
                     log.chat.info(`Messages changed externally: ${lastMsgCountRef.current} -> ${msgs.length}`);
-                    setMessages(msgs);
+                    setMessages(keepFailedReply(useChatStore.getState().messages, msgs));
                     lastMsgCountRef.current = msgs.length;
                 }
             } catch (err) {
@@ -1343,31 +1343,45 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [sessionId, isStreaming, removeMessage, setMessages, isStale]);
 
     // Resend a user message: delete it and everything below, then re-send
+    const resendingRef = useRef(false);
     const handleResendMessage = useCallback(async (message: Message) => {
-        if (isStreaming || message.role !== 'user') return;
+        if (isStreaming || message.role !== 'user' || resendingRef.current) return;
+        resendingRef.current = true;
         const text = message.content;
         log.chat.info(`Resending message ${message.id} from session=${sessionId}`, { preview: text.slice(0, 80) });
 
-        // Optimistic removal of this message and all below
-        removeMessagesFrom(message.id);
-
         try {
-            await api.deleteMessagesFrom(sessionId, message.id);
+            // The shown id may still be the temporary one; delete the server's own row.
+            const data = await api.getMessages(sessionId);
+            if (isStale()) return;
+            const row = persistedQuestion(fromApiMessages(data.messages), useChatStore.getState().messages, message);
+            if (row) await api.deleteMessagesFrom(sessionId, row.id);
+            if (isStale()) return;
         } catch (err) {
-            log.chat.error(`Failed to delete messages from ${message.id}`, err);
-            // Reload messages on error
-            api.getMessages(sessionId)
-                .then((data) => {
-                    if (isStale()) return;
-                    setMessages(fromApiMessages(data.messages));
-                })
-                .catch((reloadErr) => log.chat.error(`Could not reload messages for session=${sessionId}`, reloadErr));
+            log.chat.error(`Could not resend message ${message.id} in session=${sessionId}`, err);
+            const cause = err instanceof Error ? classifyChatError(err) : null;
+            const lost = cause?.kind === 'connection' || cause?.kind === 'timeout';
+            addNotification({
+                id: `resend-failed-${sessionId}-${Date.now()}`,
+                type: 'error',
+                agentId: sessionId,
+                agentName: 'GAIA',
+                title: t('chatError.resendFailed'),
+                message: lost ? cause.text : t('chatError.resendStale'),
+                timestamp: Date.now(),
+                read: false,
+                dismissed: false,
+                priority: 'high',
+                sessionId,
+            });
             return;
+        } finally {
+            resendingRef.current = false;
         }
 
-        // Re-send the same message text
+        removeMessagesFrom(message.id);
         sendMessage(text);
-    }, [sessionId, isStreaming, removeMessagesFrom, setMessages, sendMessage, isStale]);
+    }, [sessionId, isStreaming, removeMessagesFrom, sendMessage, isStale, addNotification, t]);
 
     // This view sends its chat's queue while open; the background dispatcher does it otherwise.
     useEffect(() => claimView(sessionId), [sessionId]);

@@ -75,6 +75,32 @@ export function fromApiMessages(raw: unknown[] | undefined): Message[] {
     }));
 }
 
+/**
+ * The server's row for *target*, a question shown in *local*. A question sent
+ * from this view keeps its temporary id until the list reloads, so it is matched
+ * by its place among the questions. Null when the server never saved it.
+ */
+export function persistedQuestion(server: Message[], local: Message[], target: Message): Message | null {
+    const byId = server.find((m) => m.id === target.id && m.role === 'user');
+    if (byId) return byId;
+    const place = local.filter((m) => m.role === 'user').findIndex((m) => m.id === target.id);
+    if (place < 0) throw new Error(`Message ${target.id} is no longer in this chat.`);
+    const row = server.filter((m) => m.role === 'user')[place];
+    if (!row) return null;
+    if (row.content !== target.content) {
+        throw new Error(`The server holds a different question in place of message ${target.id}.`);
+    }
+    return row;
+}
+
+/** The server's rows, keeping Try again on a failed reply they stand in for. */
+export function keepFailedReply(local: Message[], server: Message[]): Message[] {
+    const last = local[local.length - 1];
+    const twin = server[server.length - 1];
+    if (!last?.failed || server.length !== local.length || twin?.role !== 'assistant') return server;
+    return [...server.slice(0, -1), { ...twin, failed: true }];
+}
+
 export function policyReceiptAnchor(receiptId: string): string {
     return `policy-receipt-${encodeURIComponent(receiptId)}`;
 }

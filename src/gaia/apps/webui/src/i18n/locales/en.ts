@@ -157,6 +157,8 @@ export const enMessages = {
     'chatError.modelServer': 'The model server did not answer. Open Settings → Model to check it, then try again.',
     'chatError.connection': 'Lost the connection to GAIA. Check that GAIA is still running, then try again.',
     'chatError.timeout': 'The request timed out. Try a shorter question, or a faster model in Settings → Model.',
+    'chatError.resendFailed': 'Your message was not sent again',
+    'chatError.resendStale': 'This chat changed since it was opened, so nothing was sent. Reopen the chat, then try again.',
     'chatError.unknown': 'Something went wrong while GAIA was answering. Try again; if it keeps happening, report it with the link below.',
     'msg.showAll': 'Show all',
     'msg.showLess': 'Show less',
