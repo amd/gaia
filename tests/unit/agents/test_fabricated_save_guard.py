@@ -188,9 +188,9 @@ def test_a_long_unbroken_token_does_not_stall_the_process():
 
     # 8x the input: linear scanning grows ~8x, the old quadratic scan ~64x.
     # Compared to the same machine's small run, so a busy runner can't fail it.
-    assert large_s < 24 * max(small_s, 1e-4), (
-        f"scan took {large_s:.3f}s for 32KB vs {small_s:.4f}s for 4KB"
-    )
+    assert large_s < 24 * max(
+        small_s, 1e-4
+    ), f"scan took {large_s:.3f}s for 32KB vs {small_s:.4f}s for 4KB"
     assert large_s < 1.0, f"scan took {large_s:.2f}s"
 
 
