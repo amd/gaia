@@ -848,6 +848,7 @@ const messages: Messages = {
     'modelNeeded.waits': 'تبقى رسالتك هنا حتى يصبح جاهزًا.',
     'modelNeeded.starting': 'جارٍ بدء التنزيل…',
     'modelNeeded.failed': 'توقف التنزيل.',
+    'modelNeeded.lowDisk': 'يحتاج إلى {need}، والمتاح {free} فقط. حرّر {freeUp} أولًا، أو نزّله على أي حال.',
     'modelNeeded.notNow': 'ليس الآن',
     'modelNeeded.download': 'تنزيل ومتابعة',
     'setup.server.useGaia': 'استخدام خادم GAIA بدلًا من ذلك',

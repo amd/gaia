@@ -15,7 +15,8 @@ interface ModelNeededState {
 
 const CHECK_LIMIT_MS = 8000;
 
-let answer: ((go: boolean) => void) | null = null;
+/** Everyone waiting on the prompt on screen: one answer releases them all. */
+let waiting: ((go: boolean) => void)[] = [];
 
 /** Jobs already seen to have their model, so a send doesn't ask again. */
 const ready = new Set<ModelNeedJob>();
@@ -25,35 +26,49 @@ export const modelKnownReady = (job: ModelNeedJob) => ready.has(job);
 /** After a model is removed or the chat model changes. */
 export const forgetModelChecks = () => ready.clear();
 
-export const useModelNeededStore = create<ModelNeededState>((set) => ({
+export const useModelNeededStore = create<ModelNeededState>((set, get) => ({
     need: null,
     ensure: async (job) => {
+        if (ready.has(job)) return true;
+        const open = get().need;
+        if (open) {
+            // One prompt at a time: the same job waits on its answer, another job doesn't run.
+            if (open.job !== job) return false;
+            return new Promise<boolean>((resolve) => { waiting.push(resolve); });
+        }
         let need: ModelNeed;
+        let limit: ReturnType<typeof setTimeout> | undefined;
         try {
             need = await Promise.race([
                 api.getModelNeed(job),
                 new Promise<never>((_, reject) => {
-                    setTimeout(() => reject(new Error('the check timed out')), CHECK_LIMIT_MS);
+                    limit = setTimeout(() => reject(new Error('the check timed out')), CHECK_LIMIT_MS);
                 }),
             ]);
         } catch (err) {
             // Unanswered isn't "missing": the job goes ahead and reports the real error.
             console.warn(`[modelNeeded] could not check the model for ${job}`, err);
             return true;
+        } finally {
+            clearTimeout(limit);
         }
         if (!need?.needed) {
             ready.add(job);
             return true;
         }
+        // Another check may have opened a prompt while this one was in flight.
+        const opened = get().need;
+        if (opened && opened.job !== job) return false;
         return new Promise<boolean>((resolve) => {
-            answer = resolve;
-            set({ need });
+            waiting.push(resolve);
+            if (!opened) set({ need });
         });
     },
     settle: (go) => {
-        answer?.(go);
-        answer = null;
+        const answered = waiting;
+        waiting = [];
         set({ need: null });
+        for (const resolve of answered) resolve(go);
     },
 }));
 

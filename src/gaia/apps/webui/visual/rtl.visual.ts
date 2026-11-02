@@ -512,6 +512,33 @@ test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
 });
 
+/** A first message whose chat model isn't downloaded, on a disk too small for it. */
+async function withMissingModel(page: Page): Promise<void> {
+    await page.route('**/api/setup/needs/chat', (route) =>
+        route.fulfill({
+            json: {
+                job: 'chat',
+                needed: true,
+                model: { id: 'Gemma-4-E4B-it-GGUF', name: 'Gemma 4 E4B (Multimodal)', size_gb: 5.97, source: 'huggingface.co/unsloth/gemma-4-E4B-it-GGUF' },
+                disk_free_gb: 2.4,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the missing-model prompt warns about disk space (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withMissingModel);
+        await page.locator('textarea').first().fill('hello');
+        await page.keyboard.press('Enter');
+        const dialog = page.locator('.model-needed');
+        await expect(dialog).toBeVisible();
+        await expect(dialog.getByRole('alert')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await expect(dialog.getByRole('alert')).toContainText(locale === 'ar' ? 'حرّر' : 'Free 3.6 GB first');
+    });
+}
+
 test('composer chips stay whole at phone width', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 780 });
     await open(page);

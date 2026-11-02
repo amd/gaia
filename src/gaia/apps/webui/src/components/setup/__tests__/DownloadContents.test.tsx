@@ -43,6 +43,14 @@ describe('Everything coming to this PC', () => {
         expect(row('GAIA agent')).toHaveTextContent('Already here');
     });
 
+    it('a run that ended mid-step leaves that step unfinished, not still working', () => {
+        const run = runStatus([], { state: 'failed', components: { server: 'done', agent: 'active' } });
+        render(<DownloadContents plan={P()} run={run} />);
+        expect(row("GAIA's model server")).toHaveTextContent('Ready');
+        expect(row('GAIA agent')).not.toHaveTextContent('In progress');
+        expect(row('GAIA agent').querySelector('.spin')).toBeNull();
+    });
+
     it('lists the models that will download, with size and source', () => {
         const model = { ...QWEN, purpose: 'Answers your chats', source: 'huggingface.co/amd/Qwen3.6' };
         render(<DownloadContents plan={P()} models={[model, { ...model, id: 'other', name: 'Other', size_gb: null, source: null }]} />);

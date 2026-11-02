@@ -218,7 +218,34 @@ def _model_source(entry: Optional[Dict[str, Any]]) -> Optional[str]:
     return f"huggingface.co/{checkpoint.split(':')[0]}"
 
 
-def _components(lemonade: Dict[str, Any], skip_models: bool) -> List[Dict[str, Any]]:
+#: The Vulkan llama.cpp build Lemonade picks on most PCs; other builds differ a lot.
+_VULKAN_BACKEND_GB = 0.141
+
+
+def _llamacpp_component(system_info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The llama.cpp build Lemonade will use here, as its /system-info reports it."""
+    llamacpp = ((system_info or {}).get("recipes") or {}).get("llamacpp") or {}
+    name = llamacpp.get("default_backend")
+    backend = (llamacpp.get("backends") or {}).get(name) or {}
+    release = backend.get("release_url")
+    source = "github.com/ggml-org/llama.cpp"
+    if isinstance(release, str) and "/releases/" in release:
+        source = release.split("/releases/")[0].removeprefix("https://")
+    state = backend.get("state")
+    return {
+        "id": "backend",
+        "version": backend.get("version"),
+        "size_gb": _VULKAN_BACKEND_GB if name == "vulkan" else None,
+        "source": source,
+        "installed": state == "installed" if state else None,
+    }
+
+
+def _components(
+    lemonade: Dict[str, Any],
+    skip_models: bool,
+    system_info: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     """Everything besides the models that setup fetches, so the screen can say
     what comes to this PC, how big it is and from where. ``size_gb`` is None
     when nothing here can know it before the download starts."""
@@ -246,15 +273,7 @@ def _components(lemonade: Dict[str, Any], skip_models: bool) -> List[Dict[str, A
             }
         )
     if not skip_models:
-        components.append(
-            {
-                "id": "backend",
-                "version": None,
-                "size_gb": 0.141,
-                "source": "github.com/ggml-org/llama.cpp",
-                "installed": None,
-            }
-        )
+        components.append(_llamacpp_component(system_info))
     components.append(
         {
             "id": "packages",
@@ -536,7 +555,7 @@ def build_plan(
         "options": _options(client, capacity),
         "models": models,
         "catalog": catalog,
-        "components": _components(lemonade, skip_models=False),
+        "components": _components(lemonade, skip_models=False, system_info=system_info),
         "backends": _backends(system_info),
         "vision_model": _saved_vision_model(),
     }

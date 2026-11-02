@@ -432,6 +432,48 @@ def test_backends_come_from_what_lemonade_reports():
     assert setup_plan._backends(None) == []
 
 
+def test_the_runtime_row_names_the_build_lemonade_will_fetch():
+    def info(name, backend):
+        return {
+            "recipes": {
+                "llamacpp": {"default_backend": name, "backends": {name: backend}}
+            }
+        }
+
+    vulkan = setup_plan._llamacpp_component(
+        info(
+            "vulkan",
+            {
+                "state": "installed",
+                "version": "b11393",
+                "release_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b11393",
+            },
+        )
+    )
+    assert vulkan == {
+        "id": "backend",
+        "version": "b11393",
+        "size_gb": setup_plan._VULKAN_BACKEND_GB,
+        "source": "github.com/ggml-org/llama.cpp",
+        "installed": True,
+    }
+    rocm = setup_plan._llamacpp_component(
+        info(
+            "rocm",
+            {
+                "state": "installable",
+                "version": "b11580",
+                "release_url": "https://github.com/lemonade-sdk/llama.cpp/releases/tag/b11580",
+            },
+        )
+    )
+    # A different build of a different size, from a different place.
+    assert rocm["size_gb"] is None
+    assert rocm["source"] == "github.com/lemonade-sdk/llama.cpp"
+    assert rocm["installed"] is False
+    assert setup_plan._llamacpp_component(None)["installed"] is None
+
+
 def test_the_checks_start_the_server_and_fetch_nothing_else():
     cmd = InitCommand(profile="gaia", yes=True, server_only=True)
     cmd.events = _Events()

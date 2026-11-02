@@ -848,6 +848,7 @@ export const enMessages = {
     'modelNeeded.waits': "Your message stays here until it's ready.",
     'modelNeeded.starting': 'Starting the download…',
     'modelNeeded.failed': 'The download stopped.',
+    'modelNeeded.lowDisk': 'Needs {need}; only {free} free. Free {freeUp} first, or download anyway.',
     'modelNeeded.notNow': 'Not now',
     'modelNeeded.download': 'Download and continue',
     'setup.server.useGaia': "Use GAIA's own instead",

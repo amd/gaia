@@ -44,6 +44,25 @@ describe('a job that needs a model', () => {
         await expect(answer).resolves.toBe(true);
     });
 
+    it('asks the server once, then trusts what it saw', async () => {
+        mocked.getModelNeed.mockResolvedValue({ job: 'embedding', needed: false, model: null, disk_free_gb: null });
+        await ensureModel('embedding');
+        await expect(ensureModel('embedding')).resolves.toBe(true);
+        expect(mocked.getModelNeed).toHaveBeenCalledTimes(1);
+    });
+
+    it('releases every job waiting on one prompt, and turns away another job meanwhile', async () => {
+        mocked.getModelNeed.mockResolvedValue(MISSING);
+        const first = ensureModel('vision');
+        await vi.waitFor(() => expect(useModelNeededStore.getState().need).not.toBeNull());
+        const second = ensureModel('vision');
+        await expect(ensureModel('embedding')).resolves.toBe(false);
+        useModelNeededStore.getState().settle(true);
+        await expect(first).resolves.toBe(true);
+        await expect(second).resolves.toBe(true);
+        expect(mocked.getModelNeed).toHaveBeenCalledTimes(1);
+    });
+
     it('never blocks a job when the check fails or hangs', async () => {
         mocked.getModelNeed.mockRejectedValue(new Error('server down'));
         await expect(ensureModel('chat')).resolves.toBe(true);

@@ -33,6 +33,11 @@
     font-size: 14px;
 }
 
+/* A size never splits from its unit. */
+.model-needed-line bdi[dir="ltr"] {
+    white-space: nowrap;
+}
+
 .model-needed-from {
     color: var(--text-secondary);
     font-size: 13px;

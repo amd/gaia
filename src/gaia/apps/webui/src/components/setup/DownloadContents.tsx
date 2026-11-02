@@ -40,7 +40,10 @@ export function DownloadContents({ plan, run, models = [] }: Props) {
     return (
         <ul className="setup-contents">
             {(plan.components ?? []).map((c) => {
-                const state = run?.components?.[c.id] as RunState;
+                const reported = run?.components?.[c.id] as RunState;
+                // A run that ended mid-step left that step unfinished, not still working.
+                const ended = run != null && run.state !== 'running' && run.state !== 'verifying';
+                const state = reported === 'active' && ended ? undefined : reported;
                 return (
                     <li key={c.id} className={`setup-content is-${state ?? (c.installed ? 'done' : 'waiting')}`}>
                         <span className="setup-content-icon"><Icon state={state ?? (c.installed ? 'done' : undefined)} /></span>

@@ -1602,7 +1602,7 @@ class InitCommand:
                 )
                 self._component("agent", "active")
                 self._ensure_hub_agent_installed()
-                self._component("agent", "done")
+                self._component("agent", "failed" if self._agent_problem else "done")
 
             # Build Agent UI frontend (dev/source installs only). No
             # try/except here: ensure_webui_built() never raises for an

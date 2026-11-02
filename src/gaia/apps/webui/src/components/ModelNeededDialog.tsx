@@ -13,6 +13,8 @@ import { formatSize } from './setup/format';
 import './ModelNeededDialog.css';
 
 const POLL_MS = 1000;
+/** Polls with no row for the model before the download counts as never started. */
+const NO_ROW_LIMIT = 15;
 
 /**
  * A job needs a model that isn't on this PC: say which, how big and from where,
@@ -24,9 +26,12 @@ export function ModelNeededDialog() {
     const settle = useModelNeededStore((s) => s.settle);
     const panel = useRef<HTMLDivElement>(null);
     const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+    const noRow = useRef(0);
     const [percent, setPercent] = useState<number | null>(null);
     const [downloading, setDownloading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // The server found less free space than the prompt was opened with.
+    const [serverShort, setServerShort] = useState(false);
 
     const stop = useCallback(() => {
         if (timer.current) clearInterval(timer.current);
@@ -37,6 +42,7 @@ export function ModelNeededDialog() {
         setPercent(null);
         setDownloading(false);
         setError(null);
+        setServerShort(false);
         return stop;
     }, [need, stop]);
 
@@ -51,22 +57,30 @@ export function ModelNeededDialog() {
     useEscapeToClose(!!need, close);
     useFocusTrap(panel, !!need);
 
-    const download = useCallback(async () => {
+    const download = useCallback(async (acknowledgeLowDisk: boolean) => {
         if (!need?.model) return;
         const id = need.model.id;
         setError(null);
         setDownloading(true);
+        noRow.current = 0;
         try {
-            await api.downloadSetupModel(id, { acknowledgeLowDisk: true });
+            await api.downloadSetupModel(id, { acknowledgeLowDisk });
         } catch (err) {
             setDownloading(false);
             setError(err instanceof Error ? err.message : String(err));
+            if (err instanceof api.ApiError && err.body?.code === 'low_disk') setServerShort(true);
             return;
         }
         timer.current = setInterval(() => {
             api.getSetupStatus().then((status) => {
                 const row = status.models?.find((m) => m.id === id);
-                if (!row) return;
+                if (!row) {
+                    if (++noRow.current < NO_ROW_LIMIT) return;
+                    stop();
+                    setDownloading(false);
+                    setError(t('modelNeeded.failed'));
+                    return;
+                }
                 if (row.bytes_total > 0) setPercent(Math.floor((row.bytes_done * 100) / row.bytes_total));
                 if (row.state === 'ready' || row.state === 'verifying') {
                     stop();
@@ -86,6 +100,9 @@ export function ModelNeededDialog() {
 
     if (!need?.model) return null;
     const { model, job, disk_free_gb: freeGb } = need;
+    // The same rule as setup's: more to download than is free.
+    const tooBig = model.size_gb != null && freeGb != null && model.size_gb > freeGb;
+    const short = tooBig || serverShort;
     return createPortal(
         <div className="model-needed-overlay">
             <div ref={panel} className="model-needed" role="dialog" aria-modal="true" aria-label={t('modelNeeded.dialog')}>
@@ -102,11 +119,16 @@ export function ModelNeededDialog() {
                         ? <progress className="setup-progress" max={100} value={percent} aria-label={t('modelNeeded.dialog')} />
                         : <p role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('modelNeeded.starting')}</p>
                 )}
+                {tooBig && !downloading && (
+                    <p className="setup-error" role="alert">
+                        {t('modelNeeded.lowDisk', { need: formatSize(model.size_gb ?? 0), free: formatSize(freeGb ?? 0), freeUp: formatSize((model.size_gb ?? 0) - (freeGb ?? 0)) })}
+                    </p>
+                )}
                 {error && <p className="setup-error" role="alert">{error}</p>}
                 <div className="model-needed-actions">
                     <button type="button" className="btn-secondary" onClick={close}>{t('modelNeeded.notNow')}</button>
-                    <button type="button" className="btn-primary" onClick={() => void download()} disabled={downloading}>
-                        {error ? t('setup.tryAgain') : t('modelNeeded.download')}
+                    <button type="button" className="btn-primary" onClick={() => void download(short)} disabled={downloading}>
+                        {short ? t('setup.confirm.downloadAnyway') : error ? t('setup.tryAgain') : t('modelNeeded.download')}
                     </button>
                 </div>
             </div>
