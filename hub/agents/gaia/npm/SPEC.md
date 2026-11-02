@@ -275,7 +275,7 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
-| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
+| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14), and on a run the caller can answer, grant out-of-scope paths unasked (still inside `GAIA_ALLOWED_PATHS`); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
 | `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.23) |
 | `GET`  | `/v1/gaia/sessions/{session_id}/grants` | The session's "always" answers, `{ key, label }` each (≥ 2.26) |
 | `DELETE` | `/v1/gaia/sessions/{session_id}/grants` | Revoke one (`?key=`) or all of them (≥ 2.26) |
@@ -317,8 +317,14 @@ caller computed it, so the agent works in the folders the caller's UI shows. A
 new session is built with exactly that scope; a retained session gains any
 entry it lacks and drops none until the session ends — neither what the user
 granted mid-chat nor an entry the caller has since stopped sending. `GAIA_ALLOWED_PATHS`
-still narrows it, and a path outside it is asked about, never silently
-granted. Omit it for the agent's default scope. Pre-2.18 binaries `422` the
+still narrows it. In the normal permission mode, a path outside the supplied
+scope is asked about before it is granted. If the session has full access
+(enabled through the session bypass route) and the caller can answer for the
+session, that path is granted without a separate path prompt; this is the same
+full-access behavior as in-process. Full access does not override
+`GAIA_ALLOWED_PATHS`, the secret-path denylist, the write denylist, or the
+refusal of grants that cover the home folder or a drive root. Omit
+`allowed_paths` for the agent's default scope. Pre-2.18 binaries `422` the
 field. Whatever the scope, its existing folders are named in the system prompt
 once, when the session is built, with GAIA's documents folder first; a folder
 added to a retained session later is usable but not named. A caller that omits
