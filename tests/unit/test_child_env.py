@@ -9,9 +9,14 @@ embedder can name more variables to withhold via ``GAIA_CHILD_ENV_DENY``.
 
 ``GAIA_NO_DOTENV`` turns ``.env`` loading off. It is read from the startup
 environment, so a ``.env`` file cannot decide whether ``.env`` files load.
+
+A ``.env`` is found from the working directory, so it may be any project's.
+What it sets is for GAIA: children get none of it bar a short allowlist.
 """
 
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -50,6 +55,16 @@ DUMP_ENV = (
     f"{Path(PYTHON or 'python').stem} -c "
     "\"import os; print(chr(10).join(k + '=' + v for k, v in os.environ.items()))\""
 )
+
+
+@pytest.fixture(autouse=True)
+def no_dotenv_names_from_this_session(monkeypatch):
+    """A developer's repo ``.env`` loaded at import must not skew these tests."""
+    monkeypatch.setattr(gaia_env, "_dotenv_names", set())
+    monkeypatch.delenv(gaia_env.DOTENV_KEYS_ENV_VAR, raising=False)
+    monkeypatch.delitem(
+        gaia._PRE_DOTENV_ENVIRON, gaia_env.DOTENV_KEYS_ENV_VAR, raising=False
+    )
 
 
 @pytest.fixture
@@ -295,6 +310,334 @@ def test_dotenv_disabled_reads_the_startup_snapshot(monkeypatch):
 
     monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, "GAIA_NO_DOTENV", "true")
     assert gaia_env.dotenv_disabled() is True
+
+
+# A console script or a wheel install runs a real file, so python-dotenv's
+# default lookup started from the installed package, not the user's directory.
+# ``python -c`` hid that: it counts as interactive and searches from the cwd.
+def _run_gaia_script_in(cwd, script_dir, extra_env):
+    script = Path(script_dir) / "probe_dotenv.py"
+    script.write_text(
+        "import os, gaia\n" "print(os.environ.get('FROM_DOTENV', '<unset>'))\n"
+    )
+    env = {k: v for k, v in os.environ.items() if k not in ("GAIA_NO_DOTENV",)}
+    env.pop("FROM_DOTENV", None)
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env.update(extra_env)
+    proc = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip().splitlines()[-1]
+
+
+def test_dotenv_is_found_from_the_cwd_when_run_from_a_file(tmp_path):
+    project = tmp_path / "project"
+    scripts = tmp_path / "elsewhere"
+    project.mkdir()
+    scripts.mkdir()
+    (project / ".env").write_text("FROM_DOTENV=loaded\n")
+
+    assert _run_gaia_script_in(project, scripts, {}) == "loaded"
+
+
+def test_dotenv_is_found_in_a_parent_of_the_cwd(tmp_path):
+    """Walks up like the TUI's readiness gate, which the child must agree with."""
+    deeper = tmp_path / "project" / "a" / "b"
+    deeper.mkdir(parents=True)
+    (tmp_path / "project" / ".env").write_text("FROM_DOTENV=loaded\n")
+
+    assert _run_gaia_script_in(deeper, tmp_path, {}) == "loaded"
+
+
+def test_dotenv_next_to_the_script_is_not_loaded(tmp_path):
+    """Only the cwd decides: a .env beside the running file is not the user's."""
+    project = tmp_path / "project"
+    scripts = tmp_path / "elsewhere"
+    project.mkdir()
+    scripts.mkdir()
+    (scripts / ".env").write_text("FROM_DOTENV=from-script-dir\n")
+
+    assert _run_gaia_script_in(project, scripts, {}) != "from-script-dir"
+
+
+def test_a_real_variable_beats_the_dotenv_value(tmp_path):
+    (tmp_path / ".env").write_text("FROM_DOTENV=from-file\n")
+
+    assert _run_gaia_script_in(tmp_path, tmp_path, {"FROM_DOTENV": "real"}) == "real"
+
+
+def test_gaia_no_dotenv_still_wins_over_a_cwd_dotenv(tmp_path):
+    (tmp_path / ".env").write_text("FROM_DOTENV=loaded\n")
+
+    assert _run_gaia_script_in(tmp_path, tmp_path, {"GAIA_NO_DOTENV": "1"}) == "<unset>"
+
+
+def test_load_env_asks_python_dotenv_for_the_cwd_lookup(monkeypatch, tmp_path):
+    monkeypatch.delitem(gaia._PRE_DOTENV_ENVIRON, "GAIA_NO_DOTENV", raising=False)
+    found = str(tmp_path / ".env")
+    find = Mock(return_value=found)
+    load = Mock(return_value=True)
+    monkeypatch.setattr(gaia_env.dotenv, "find_dotenv", find)
+    monkeypatch.setattr(gaia_env.dotenv, "load_dotenv", load)
+    monkeypatch.setattr(gaia_env.dotenv, "dotenv_values", Mock(return_value={}))
+
+    assert gaia_env.load_env() is True
+    find.assert_called_once_with(usecwd=True)
+    load.assert_called_once_with(found)
+
+
+def test_load_env_without_a_dotenv_loads_nothing(monkeypatch):
+    monkeypatch.delitem(gaia._PRE_DOTENV_ENVIRON, "GAIA_NO_DOTENV", raising=False)
+    load = Mock()
+    monkeypatch.setattr(gaia_env.dotenv, "find_dotenv", Mock(return_value=""))
+    monkeypatch.setattr(gaia_env.dotenv, "load_dotenv", load)
+
+    assert gaia_env.load_env() is False
+    load.assert_not_called()
+
+
+# --------------------------------------------------------------------------
+# .env values stay with GAIA
+# --------------------------------------------------------------------------
+
+DOTENV_SECRET = "s3cr3t-from-project-dotenv"
+ALLOWED_URL = "http://127.0.0.1:9/api/v1"
+
+# Runs as a GAIA process: reports its own environment and what a child_env()
+# child sees. With "sidecar" it also starts itself the way the daemon starts a
+# sidecar — the full environment, from a folder with no .env — and reports that.
+PROBE = """
+import json, os, subprocess, sys
+import gaia
+from gaia.env import child_env
+
+DUMP = "import json, os; print(json.dumps(dict(os.environ)))"
+
+def run(argv, env, cwd=None):
+    out = subprocess.run(argv, env=env, cwd=cwd, capture_output=True, text=True,
+                         check=True, timeout=120).stdout
+    return json.loads(out.strip().splitlines()[-1])
+
+result = {"self": dict(os.environ),
+          "child": run([sys.executable, "-c", DUMP], child_env())}
+if sys.argv[1:] == ["sidecar"]:
+    here = os.path.dirname(os.path.abspath(__file__))
+    result["sidecar"] = run([sys.executable, __file__], dict(os.environ), cwd=here)
+print(json.dumps(result))
+"""
+
+
+def _probe(cwd, tmp_path, extra_env=None, *args):
+    script = tmp_path / "scripts" / "probe_child_env.py"
+    script.parent.mkdir(exist_ok=True)
+    script.write_text(PROBE)
+    dropped = {"GAIA_NO_DOTENV", gaia_env.DOTENV_KEYS_ENV_VAR, "PROJECT_SECRET"}
+    dropped |= gaia_env.DOTENV_CHILD_ALLOWLIST
+    env = {k: v for k, v in os.environ.items() if k.upper() not in dropped}
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env.update(extra_env or {})
+    proc = subprocess.run(
+        [sys.executable, str(script), *args],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=240,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def _value(env, name):
+    """Read *name* the way this OS would: Windows names ignore case."""
+    if os.name == "nt":
+        return {k.upper(): v for k, v in env.items()}.get(name.upper())
+    return env.get(name)
+
+
+@pytest.fixture
+def project(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / ".env").write_text(
+        f"PROJECT_SECRET={DOTENV_SECRET}\nLEMONADE_BASE_URL={ALLOWED_URL}\n"
+    )
+    return root
+
+
+def test_a_dotenv_secret_reaches_gaia_but_not_its_children(project, tmp_path):
+    seen = _probe(project, tmp_path)
+
+    assert _value(seen["self"], "PROJECT_SECRET") == DOTENV_SECRET
+    assert DOTENV_SECRET not in json.dumps(seen["child"])
+    assert "PATH" in {k.upper() for k in seen["child"]}, "child did not run"
+
+
+def test_an_allowlisted_dotenv_setting_still_reaches_children(project, tmp_path):
+    seen = _probe(project, tmp_path)
+
+    assert _value(seen["self"], "LEMONADE_BASE_URL") == ALLOWED_URL
+    assert _value(seen["child"], "LEMONADE_BASE_URL") == ALLOWED_URL
+
+
+def test_a_dotenv_in_a_parent_folder_is_withheld_too(project, tmp_path):
+    deeper = project / "a" / "b"
+    deeper.mkdir(parents=True)
+
+    seen = _probe(deeper, tmp_path)
+
+    assert _value(seen["self"], "PROJECT_SECRET") == DOTENV_SECRET
+    assert DOTENV_SECRET not in json.dumps(seen["child"])
+
+
+def test_a_real_variable_of_the_same_name_is_passed_on(project, tmp_path):
+    """The operator exported it, so the .env value never loaded; nothing to hide."""
+    seen = _probe(project, tmp_path, {"PROJECT_SECRET": "exported"})
+
+    assert _value(seen["self"], "PROJECT_SECRET") == "exported"
+    assert _value(seen["child"], "PROJECT_SECRET") == "exported"
+
+
+def test_a_lower_case_dotenv_name_is_withheld(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / ".env").write_text(f"project_secret={DOTENV_SECRET}\n")
+
+    seen = _probe(root, tmp_path)
+
+    assert _value(seen["self"], "project_secret") == DOTENV_SECRET
+    assert DOTENV_SECRET not in json.dumps(seen["child"])
+
+
+def test_a_dotenv_name_in_another_case_than_a_real_variable(tmp_path):
+    """Windows: one variable and the real value wins. POSIX: two; only the file's hides."""
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / ".env").write_text(f"PROJECT_SECRET={DOTENV_SECRET}\n")
+
+    seen = _probe(root, tmp_path, {"Project_Secret": "exported"})
+
+    assert DOTENV_SECRET not in json.dumps(seen["child"])
+    assert "exported" in seen["child"].values()
+
+
+def test_a_dotenv_cannot_shorten_the_withheld_list(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / ".env").write_text(
+        f"PROJECT_SECRET={DOTENV_SECRET}\n{gaia_env.DOTENV_KEYS_ENV_VAR}=\n"
+    )
+
+    seen = _probe(root, tmp_path)
+
+    assert DOTENV_SECRET not in json.dumps(seen["child"])
+    keys = _value(seen["self"], gaia_env.DOTENV_KEYS_ENV_VAR) or ""
+    assert "PROJECT_SECRET" in keys.upper().split(",")
+
+
+def test_a_gaia_process_started_with_the_full_environment_still_withholds(
+    project, tmp_path
+):
+    """A sidecar inherits .env values as real variables; the marker names them."""
+    sidecar = _probe(project, tmp_path, None, "sidecar")["sidecar"]
+
+    assert _value(sidecar["self"], "PROJECT_SECRET") == DOTENV_SECRET
+    assert DOTENV_SECRET not in json.dumps(sidecar["child"])
+    assert _value(sidecar["child"], "LEMONADE_BASE_URL") == ALLOWED_URL
+
+
+def _from_dotenv(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    monkeypatch.setattr(gaia_env, "_dotenv_names", {gaia_env._env_name(name)})
+
+
+def test_shell_segment_env_withholds_a_dotenv_secret(monkeypatch):
+    _from_dotenv(monkeypatch, "PROJECT_SECRET", DOTENV_SECRET)
+
+    env = _segment_env({"FOO": "bar"})
+
+    assert DOTENV_SECRET not in env.values()
+    assert env["FOO"] == "bar"
+
+
+def test_a_name_passed_explicitly_is_still_delivered(monkeypatch):
+    _from_dotenv(monkeypatch, "PROJECT_SECRET", DOTENV_SECRET)
+
+    env = gaia_env.child_env({"PROJECT_SECRET": "chosen"})
+
+    assert env["PROJECT_SECRET"] == "chosen"
+
+
+@needs_python
+def test_shell_step_does_not_see_a_dotenv_secret(monkeypatch, tmp_path):
+    _from_dotenv(monkeypatch, "PROJECT_SECRET", DOTENV_SECRET)
+
+    result = _run(DUMP_ENV, tmp_path)
+
+    assert result["status"] == "success", result
+    assert "PATH=" in result["stdout"]
+    assert DOTENV_SECRET not in result["stdout"]
+
+
+def test_python_tool_child_does_not_see_a_dotenv_secret(monkeypatch, tmp_path):
+    """The environment run_python and execute_python_file give their subprocess."""
+    from gaia_agent.chat_agent import _python_script_run_context
+    from gaia_agent.python_jobs import run_python_job
+
+    _from_dotenv(monkeypatch, "PROJECT_SECRET", DOTENV_SECRET)
+    script = tmp_path / "dump.py"
+    script.write_text(
+        "import os\nprint('PATH' in os.environ, os.environ.get('PROJECT_SECRET'))\n"
+    )
+
+    run_dir, env = _python_script_run_context(script, None)
+    job = run_python_job(
+        [sys.executable, str(script)],
+        cwd=str(run_dir),
+        env=env,
+        timeout=60,
+        should_stop=lambda: False,
+    )
+
+    assert job.run.stdout.strip() == "True None", job.run
+
+
+def test_load_env_records_only_what_the_file_set(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text("PROJECT_SECRET=x\nALREADY_SET=file\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delitem(gaia._PRE_DOTENV_ENVIRON, "GAIA_NO_DOTENV", raising=False)
+    monkeypatch.delenv("PROJECT_SECRET", raising=False)
+    monkeypatch.setenv("ALREADY_SET", "real")
+    monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, "ALREADY_SET", "real")
+
+    try:
+        assert gaia_env.load_env() is True
+    finally:
+        os.environ.pop("PROJECT_SECRET", None)
+
+    names = gaia_env.dotenv_names()
+    assert gaia_env._env_name("PROJECT_SECRET") in names
+    assert gaia_env._env_name("ALREADY_SET") not in names
+
+
+def test_the_allowlist_names_settings_gaia_reads_and_no_credentials():
+    src = "\n".join(
+        p.read_text(encoding="utf-8", errors="replace")
+        for p in (REPO_ROOT / "src" / "gaia").rglob("*.py")
+        if p.name != "env.py"
+    )
+    for name in gaia_env.DOTENV_CHILD_ALLOWLIST:
+        assert f'"{name}"' in src, f"{name} is not read anywhere in GAIA"
+        assert not re.search(r"KEY|TOKEN|SECRET|PASSWORD", name), name
+        assert not gaia_env.is_internal_secret(name), name
 
 
 # --------------------------------------------------------------------------

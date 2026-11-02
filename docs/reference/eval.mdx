@@ -72,7 +72,9 @@ gaia eval sessions --dataset-only --out eval/results/sessions
 </Warning>
 
 Judging uses Claude: your Claude Code login (the `claude` CLI, or
-`CLAUDE_CODE_OAUTH_TOKEN`), or `ANTHROPIC_API_KEY` when it is set.
+`CLAUDE_CODE_OAUTH_TOKEN`), or `ANTHROPIC_API_KEY` when it is set. GAIA reads it
+from the nearest `.env` at or above the directory you run from (the repo's, when
+you run from the checkout).
 
 ### What gets scored
 
