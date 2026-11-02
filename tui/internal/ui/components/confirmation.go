@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -110,6 +111,7 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"schedule_send":               RiskWrite,
 	"forward_message":             RiskWrite,
 	"reply_to_message":            RiskWrite,
+	"update_draft":                RiskWrite,
 	"accept_invite":               RiskWrite,
 	"decline_invite":              RiskWrite,
 	"create_event_from_email":     RiskWrite,
@@ -163,6 +165,7 @@ var actionTitles = map[string]string{
 	"reply_to_message":    "Send this reply?",
 	"forward_message":     "Forward this email?",
 	"discard_draft":       "Delete this draft?",
+	"update_draft":        "Change this draft?",
 }
 
 // ActionTitle is the prompt's question for a gated action.
@@ -342,6 +345,18 @@ type ConfirmationDecidedMsg struct {
 	Deliverable bool
 }
 
+// wholeTextActions are the prompts whose text IS the decision: an email is
+// approved as it will go out, so it can never be approved partly unseen. Mirrors
+// EXACT_SUMMARY_TOOLS in PermissionPrompt.tsx.
+var wholeTextActions = map[string]bool{
+	"send_now":         true,
+	"send_draft":       true,
+	"reply_to_message": true,
+	"forward_message":  true,
+	"discard_draft":    true,
+	"update_draft":     true,
+}
+
 // ConfirmationModel renders a needs_confirmation pause: the gated action, its
 // summary, a risk-tier badge, and a y/n/Esc prompt that auto-denies after
 // ConfirmationTimeout.
@@ -380,6 +395,12 @@ type ConfirmationModel struct {
 	modeHint string
 	state    ConfirmState
 	width    int
+	// maxRows is the height the chat view can spend on this prompt; zero means
+	// unconstrained. scroll and seen only move on a wholeTextActions prompt that
+	// doesn't fit: the first text line on screen, and how many have been shown.
+	maxRows int
+	scroll  int
+	seen    int
 }
 
 // NewConfirmationModel builds the modal for one needs_confirmation event.
@@ -448,7 +469,90 @@ func (m *ConfirmationModel) SetWidth(w int) {
 	if w < 24 {
 		w = 24
 	}
+	if w == m.width {
+		return
+	}
 	m.width = w
+	// Rewrapping renumbers every line, so what was seen can't be carried over.
+	m.scroll, m.seen = 0, 0
+	m.markSeen()
+}
+
+// SetMaxRows tells the prompt how many rows it may use. A prompt that must be
+// read whole scrolls inside them; any other is left to the caller to clip.
+func (m *ConfirmationModel) SetMaxRows(rows int) {
+	if rows < 1 {
+		rows = 1
+	}
+	m.maxRows = rows
+	m.scrollBy(0)
+}
+
+func (m ConfirmationModel) textLines() []string {
+	return strings.Split(WrapText(strings.TrimSpace(m.summary), m.innerWidth()), "\n")
+}
+
+func (m ConfirmationModel) innerWidth() int {
+	if inner := m.width - 4; inner > 16 {
+		return inner
+	}
+	return 16
+}
+
+// scrolls reports whether this prompt is shown as a window over its text.
+func (m ConfirmationModel) scrolls() bool {
+	return m.state == ConfirmationPending && wholeTextActions[m.action] &&
+		m.maxRows > 0 && lipgloss.Height(m.fullView()) > m.maxRows
+}
+
+// unread reports whether part of the text has not been on screen yet, which is
+// what keeps y from approving.
+func (m ConfirmationModel) unread() bool {
+	return m.scrolls() && m.seen < len(m.textLines())
+}
+
+// windowLayout is the pieces of a scrolling prompt that fit in maxRows: the rows
+// left for text, and whether the title and position line still get one. They go
+// in that order, because the text and the keys are what the decision needs.
+func (m ConfirmationModel) windowLayout() (rows int, title, position bool) {
+	inner := m.innerWidth()
+	rows = m.maxRows - lipgloss.Height(WrapText(m.styledKeyHint(), inner))
+	title, position = true, true
+	titleRows := lipgloss.Height(WrapText(m.titleLine(), inner))
+	if rows-titleRows-1 >= 1 {
+		return rows - titleRows - 1, title, position
+	}
+	title = false
+	if rows-1 >= 1 {
+		return rows - 1, title, position
+	}
+	if rows < 0 {
+		rows = 0
+	}
+	return rows, false, false
+}
+
+func (m *ConfirmationModel) markSeen() {
+	if !m.scrolls() {
+		return
+	}
+	rows, _, _ := m.windowLayout()
+	if rows > 0 && m.scroll+rows > m.seen {
+		m.seen = m.scroll + rows
+	}
+}
+
+func (m *ConfirmationModel) scrollBy(delta int) {
+	rows, _, _ := m.windowLayout()
+	limit := len(m.textLines()) - rows
+	m.scroll += delta
+	if m.scroll > limit {
+		m.scroll = limit
+	}
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
+	m.markSeen()
 }
 
 // Update handles one key while the confirmation is pending. Only y/Y (approve
@@ -467,14 +571,34 @@ func (m ConfirmationModel) Update(msg tea.Msg) (ConfirmationModel, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	rows, _, _ := m.windowLayout()
 	switch key.String() {
 	case "y", "Y":
+		if m.unread() {
+			return m, nil
+		}
 		return m.decide(ConfirmationApproved, false)
 	case "a", "A":
-		if !m.allowAlways() {
+		if !m.allowAlways() || m.unread() {
 			return m, nil
 		}
 		return m.decide(ConfirmationAlways, false)
+	case "down", "j":
+		if m.scrolls() {
+			m.scrollBy(1)
+		}
+	case "up", "k":
+		if m.scrolls() {
+			m.scrollBy(-1)
+		}
+	case "pgdown", " ":
+		if m.scrolls() {
+			m.scrollBy(rows)
+		}
+	case "pgup":
+		if m.scrolls() {
+			m.scrollBy(-rows)
+		}
 	case "n", "N", "esc":
 		return m.decide(ConfirmationDenied, false)
 	}
@@ -546,13 +670,71 @@ var (
 // QuestionModel.View — handing the wrapped result to a width-constrained style
 // as well would re-wrap already-wrapped lines and shear the border.
 func (m ConfirmationModel) View() string {
-	inner := m.width - 4
-	if inner < 16 {
-		inner = 16
+	if m.scrolls() {
+		return m.windowView()
 	}
+	return m.fullView()
+}
+
+func (m ConfirmationModel) titleLine() string {
+	return m.tier.Badge() + " " + confirmationTitleStyle.Render(ActionTitle(m.action))
+}
+
+// windowView is a prompt too long for the screen: a window over its text, where
+// it stands, and the keys. It never exceeds maxRows, so nothing clips it. Its
+// height doesn't change once the text has been read, so the keys don't jump.
+func (m ConfirmationModel) windowView() string {
+	inner := m.innerWidth()
+	rows, title, position := m.windowLayout()
+	text := m.textLines()
 
 	var lines []string
-	lines = append(lines, m.tier.Badge()+" "+confirmationTitleStyle.Render(ActionTitle(m.action)))
+	if title {
+		lines = append(lines, WrapText(m.titleLine(), inner))
+	}
+	if rows > 0 {
+		end := m.scroll + rows
+		if end > len(text) {
+			end = len(text)
+		}
+		lines = append(lines, confirmationBodyStyle.Render(strings.Join(text[m.scroll:end], "\n")))
+	}
+	if position {
+		lines = append(lines, confirmationHintStyle.Render(ansi.Truncate(m.positionLine(rows, len(text)), inner, "…")))
+	}
+	lines = append(lines, lipgloss.PlaceVertical(
+		lipgloss.Height(WrapText(m.styledKeyHint(), inner)), lipgloss.Bottom,
+		WrapText(m.windowKeyHint(), inner)))
+	return confirmationPanelStyle.Width(m.width - confirmationBorderCols).Render(strings.Join(lines, "\n"))
+}
+
+func (m ConfirmationModel) positionLine(rows, total int) string {
+	end := m.scroll + rows
+	if end > total {
+		end = total
+	}
+	where := "lines " + strconv.Itoa(m.scroll+1) + "-" + strconv.Itoa(end) + " of " + strconv.Itoa(total)
+	if m.unread() {
+		return where + " · ↓ to read the rest"
+	}
+	return where + " · read to the end"
+}
+
+// windowKeyHint offers only the keys that work right now: y arrives once the
+// whole text has been on screen.
+func (m ConfirmationModel) windowKeyHint() string {
+	if !m.unread() {
+		return m.styledKeyHint()
+	}
+	return confirmationKeyStyle.Render("n/esc") + " " + confirmationBodyStyle.Render("deny")
+}
+
+// fullView is the whole prompt, however tall.
+func (m ConfirmationModel) fullView() string {
+	inner := m.innerWidth()
+
+	var lines []string
+	lines = append(lines, m.titleLine())
 
 	// The call itself, once. The title already says what kind of action it is.
 	if summary := strings.TrimSpace(m.summary); summary != "" {
