@@ -14,9 +14,12 @@ What these tests pin:
 
 - cost: only OWNER / MEMBER / COLLABORATOR comments pass, so an outsider
   (including whoever opened the thread) can't start Opus runs without @claude;
-- a per-thread hourly cap on bot replies, and a per-thread concurrency group
-  that collapses a burst of follow-ups;
-- the loop-breaker: bot comments never pass the gate, and edits don't either;
+- "follows Claude" means a reply carrying the marker the posting step appends,
+  not any github-actions[bot] comment;
+- a per-thread hourly cap on the gate's own passes, and one concurrency group
+  per thread that collapses a burst;
+- the loop-breaker: bot comments never pass the gate, and edits start no run on
+  either the gate or the @claude path;
 - the gate only reads (it holds no write scope and no Claude secret);
 - issue-handler still runs for new issues and mentions when the gate is skipped;
 - the gate's decision, by running its real ``run:`` script against a stubbed gh.
@@ -38,6 +41,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "claude.yml"
+RUNNER = REPO_ROOT / ".github" / "workflows" / "claude-run.yml"
 
 MAINTAINER_ROLES = ("OWNER", "MEMBER", "COLLABORATOR")
 OUTSIDER_ROLES = (
@@ -67,7 +71,7 @@ def handler(jobs) -> dict:
 
 @pytest.fixture(scope="module")
 def cap(gate) -> int:
-    return int(gate["steps"][0]["env"]["MAX_RECENT_REPLIES"])
+    return int(gate["steps"][0]["env"]["MAX_PASSES_PER_HOUR"])
 
 
 def _flat(expr: str) -> str:
@@ -130,20 +134,36 @@ def test_handler_needs_the_gate_but_survives_its_skip(handler):
 def test_handler_still_answers_new_issues_and_mentions(handler):
     cond = _flat(handler["if"])
     assert "(github.event_name == 'issues' && github.event.action == 'opened')" in cond
-    assert "contains(github.event.comment.body, '@claude')" in cond
     assert "github.repository == 'amd/gaia'" in cond
 
 
-def test_followups_share_a_per_thread_concurrency_group(handler):
+def test_editing_a_comment_never_starts_a_run(handler, gate):
+    """Each OR branch must be a creation event, or the gate (which needs `created`)."""
+    cond = _flat(handler["if"])
+    assert (
+        "(github.event_name == 'issue_comment' && "
+        "github.event.action == 'created' && "
+        "contains(github.event.comment.body, '@claude'))" in cond
+    ), "an @claude comment edited N times would start N+1 runs"
+    assert "github.event.action == 'created'" in _flat(gate["if"])
+    branches = cond.split("!cancelled() && github.repository == 'amd/gaia' && ", 1)[1]
+    assert branches.count(" || ") == 2, "a new trigger branch needs its own edit guard"
+
+
+def test_one_concurrency_group_per_thread(handler):
     conc = handler["concurrency"]
     assert conc["cancel-in-progress"] is False, "a running reply must not be killed"
-    group = _flat(conc["group"])
-    assert (
-        "needs.conversation-gate.outputs.engaged == 'true' && "
-        "format('claude-followup-{0}', github.event.issue.number)" in group
-    )
-    # Mentions and new issues get a per-run group, so none of them is cancelled.
-    assert "github.run_id" in group
+    assert conc["group"] == "claude-issue-handler-${{ github.event.issue.number }}"
+
+
+def test_handler_posts_through_the_workflow_with_the_marker(handler, gate):
+    with_ = handler["with"]
+    assert with_["comment_file"] == "/tmp/reply.md"
+    marker = gate["steps"][0]["env"]["CLAUDE_REPLY_MARKER"]
+    assert with_["comment_marker"] == marker
+    assert re.fullmatch(r"<!-- [a-z-]+ -->", marker), "the marker must stay invisible"
+    assert "/tmp/reply.md" in with_["prompt"]
+    assert "write NO file" in _flat(with_["prompt"])
 
 
 def test_handler_scope_is_unchanged(handler):
@@ -153,6 +173,7 @@ def test_handler_scope_is_unchanged(handler):
         "issues": "write",
         "pull-requests": "write",
     }
+    assert handler["with"]["allowed_non_write_users"] == "*"
 
 
 def test_prompt_carries_the_self_gate(handler):
@@ -168,9 +189,8 @@ def test_prompt_carries_the_self_gate(handler):
 
 # --- behaviour: run the gate's real script ----------------------------------
 
-BOT = "github-actions[bot]"
 TRIGGER_ID = 999
-# The stub plays gh's --jq output: one "<id> <login> <epoch>" line per comment.
+# The stub plays gh's --jq output: one "<id> <kind> <epoch>" line per comment.
 _GH_STUB = """#!/bin/sh
 echo "$*" >> "$STUB_LOG"
 if [ -n "$STUB_FAIL" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
@@ -179,15 +199,13 @@ cat "$STUB_COMMENTS"
 
 
 def _thread(*earlier, trigger=True, after=()):
-    """(login, minutes_ago) pairs, oldest first; the trigger comment is appended."""
+    """(kind, minutes_ago) pairs, oldest first; the trigger comment is appended."""
     now = int(time.time())
-    rows = [
-        (100 + i, login, now - mins * 60) for i, (login, mins) in enumerate(earlier)
-    ]
+    rows = [(100 + i, kind, now - mins * 60) for i, (kind, mins) in enumerate(earlier)]
     if trigger:
-        rows.append((TRIGGER_ID, "amd-pworfolk", now))
-    rows += [(2000 + i, login, now) for i, login in enumerate(after)]
-    return "".join(f"{i} {login} {ts}\n" for i, login, ts in rows)
+        rows.append((TRIGGER_ID, "member", now))
+    rows += [(2000 + i, kind, now) for i, kind in enumerate(after)]
+    return "".join(f"{i} {kind} {ts}\n" for i, kind, ts in rows)
 
 
 def _run_gate(
@@ -210,7 +228,7 @@ def _run_gate(
     stub.chmod(0o755)
     feed = tmp_path / "comments.txt"
     feed.write_text(
-        _thread((BOT, 10)) if comments is None else comments,
+        _thread(("claude", 10)) if comments is None else comments,
         encoding="utf-8",
         newline="\n",
     )
@@ -219,6 +237,7 @@ def _run_gate(
     (step,) = gate["steps"]
     env = {
         **os.environ,
+        **{k: str(v) for k, v in step["env"].items() if "${{" not in str(v)},
         "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
         "GITHUB_OUTPUT": str(out),
         "STUB_LOG": str(log),
@@ -230,7 +249,6 @@ def _run_gate(
         "ASSOCIATION": association,
         "LABELLED": labelled,
         "IS_PR": is_pr,
-        "MAX_RECENT_REPLIES": str(step["env"]["MAX_RECENT_REPLIES"]),
     }
     res = subprocess.run(
         [bash, "-c", step["run"]],
@@ -289,7 +307,7 @@ def test_labelled_thread_is_engaged_for_a_maintainer(gate, tmp_path):
     assert call.startswith("api --paginate repos/amd/gaia/issues/1394/comments")
 
 
-def test_unlabelled_pr_is_not_engaged_even_right_after_a_bot_comment(gate, tmp_path):
+def test_unlabelled_pr_is_not_engaged_even_right_after_claude(gate, tmp_path):
     res, out, calls = _run_gate(gate, tmp_path, is_pr="true")
     assert res.returncode == 0, res.stderr
     assert out.strip() == "engaged=false"
@@ -297,9 +315,8 @@ def test_unlabelled_pr_is_not_engaged_even_right_after_a_bot_comment(gate, tmp_p
 
 
 def test_issue_comment_right_after_claude_is_engaged(gate, tmp_path):
-    res, out, calls = _run_gate(
-        gate, tmp_path, comments=_thread(("alice", 90), (BOT, 60))
-    )
+    feed = _thread(("other", 90), ("claude", 60))
+    res, out, calls = _run_gate(gate, tmp_path, comments=feed)
     assert res.returncode == 0, res.stderr
     assert out.strip() == "engaged=true"
     assert sum(c.startswith("api ") for c in calls) == 1
@@ -309,11 +326,11 @@ def test_issue_comment_right_after_claude_is_engaged(gate, tmp_path):
     "earlier",
     [
         (),  # Claude never replied
-        ((BOT, 600), ("alice", 300)),  # someone else spoke after Claude
-        ((BOT, 600), ("amd-pworfolk", 5)),  # a second maintainer comment in a row
-        (("github-actions", 5),),  # a user named like the bot is not the bot
-        (("claude[bot]", 5),),  # another bot is not this one
+        (("claude", 600), ("other", 300)),  # someone else spoke after Claude
+        (("claude", 600), ("member", 300)),  # a second maintainer comment in a row
+        (("other", 5),),  # triage / audit / auto-fix: a bot comment without the marker
     ],
+    ids=["no-reply", "outsider-between", "member-between", "non-claude-bot"],
 )
 def test_issue_comment_not_answering_claude_is_not_engaged(gate, tmp_path, earlier):
     res, out, _ = _run_gate(gate, tmp_path, comments=_thread(*earlier))
@@ -323,12 +340,13 @@ def test_issue_comment_not_answering_claude_is_not_engaged(gate, tmp_path, earli
 
 
 def test_trigger_missing_from_the_listing_fails_closed(gate, tmp_path):
-    _, out, _ = _run_gate(gate, tmp_path, comments=_thread((BOT, 5), trigger=False))
+    feed = _thread(("claude", 5), trigger=False)
+    _, out, _ = _run_gate(gate, tmp_path, comments=feed)
     assert out.strip() == "engaged=false"
 
 
 def test_later_comments_do_not_change_what_the_trigger_follows(gate, tmp_path):
-    feed = _thread((BOT, 5), after=("alice", BOT))
+    feed = _thread(("claude", 5), after=("other", "claude"))
     _, out, _ = _run_gate(gate, tmp_path, comments=feed)
     assert out.strip() == "engaged=true"
 
@@ -340,51 +358,94 @@ def test_api_failure_fails_the_gate_loudly(gate, tmp_path):
     assert "::error::" in res.stdout and "#1394" in res.stdout
 
 
-# --- burst / loop guard ------------------------------------------------------
+# --- per-thread cap on the gate's own passes ---------------------------------
 
 
 def test_cap_is_small(cap):
     assert 1 <= cap <= 5
 
 
-def test_just_below_the_hourly_cap_is_engaged(gate, tmp_path, cap):
-    old = [(BOT, 600 + i) for i in range(9)]
-    recent = [(BOT, 30 - i) for i in range(cap - 1)]
-    _, out, _ = _run_gate(gate, tmp_path, comments=_thread(*old, *recent))
-    assert out.strip() == "engaged=true"
+def _labelled_passes(n, start=50):
+    return [("member", start - i) for i in range(n)]
 
 
-@pytest.mark.parametrize("labelled", ["true", "false"])
-def test_hourly_cap_stops_a_loop(gate, tmp_path, cap, labelled):
-    recent = [(BOT, 50 - i) for i in range(cap)]
-    res, out, _ = _run_gate(
-        gate, tmp_path, labelled=labelled, comments=_thread(*recent)
-    )
+def _issue_passes(n, start=50):
+    rows = []
+    for i in range(n):
+        rows += [("claude", start - 2 * i), ("member", start - 2 * i - 1)]
+    return rows
+
+
+def test_cap_counts_passes_even_when_claude_stays_silent(gate, tmp_path, cap):
+    """Labelled thread, no Claude replies at all: the (cap+1)th comment is declined."""
+    feed = _thread(*_labelled_passes(cap))
+    res, out, _ = _run_gate(gate, tmp_path, labelled="true", comments=feed)
     assert res.returncode == 0, res.stderr
     assert out.strip() == "engaged=false"
     assert "last hour" in res.stdout
 
 
-def test_replies_older_than_an_hour_do_not_count(gate, tmp_path, cap):
-    old = [(BOT, 61 + i) for i in range(cap * 3)]
-    _, out, _ = _run_gate(gate, tmp_path, comments=_thread(*old))
+def test_just_below_the_cap_is_engaged(gate, tmp_path, cap):
+    feed = _thread(*_labelled_passes(cap - 1))
+    _, out, _ = _run_gate(gate, tmp_path, labelled="true", comments=feed)
     assert out.strip() == "engaged=true"
 
 
-def test_jq_filter_emits_id_login_epoch(gate):
+def test_cap_on_an_issue_thread(gate, tmp_path, cap):
+    feed = _thread(*_issue_passes(cap), ("claude", 1))
+    res, out, _ = _run_gate(gate, tmp_path, comments=feed)
+    assert out.strip() == "engaged=false"
+    assert "last hour" in res.stdout
+
+
+def test_cap_ignores_comments_the_gate_would_have_declined(gate, tmp_path, cap):
+    """Unlabelled issue: maintainer comments that did not follow Claude never passed."""
+    declined = [("member", 40 - i) for i in range(cap * 3)]
+    feed = _thread(("other", 50), *declined, ("claude", 1))
+    _, out, _ = _run_gate(gate, tmp_path, comments=feed)
+    assert out.strip() == "engaged=true"
+
+
+def test_passes_older_than_an_hour_do_not_count(gate, tmp_path, cap):
+    feed = _thread(*_labelled_passes(cap * 3, start=200))
+    _, out, _ = _run_gate(gate, tmp_path, labelled="true", comments=feed)
+    assert out.strip() == "engaged=true"
+
+
+# --- the jq filter that classifies comments ---------------------------------
+
+
+def test_jq_filter_classifies_comments(gate):
     """Run the gate's real jq filter over a comments page."""
     jq = shutil.which("jq")
     if jq is None:
         pytest.skip("jq not available")
-    m = re.search(r"--jq '(.*?)'", gate["steps"][0]["run"], re.S)
+    step = gate["steps"][0]
+    m = re.search(r"--jq '(.*?)'", step["run"], re.S)
     assert m, "gate lost its --jq filter"
+    marker = step["env"]["CLAUDE_REPLY_MARKER"]
+    bot = {"login": "github-actions[bot]", "type": "Bot"}
+    human = {"login": "amd-pworfolk", "type": "User"}
+    ts = "2026-06-04T16:56:10Z"
+
+    def c(i, user, assoc, body):
+        return {
+            "id": i,
+            "user": user,
+            "author_association": assoc,
+            "body": body,
+            "created_at": ts,
+        }
+
     page = [
-        {"id": 7, "user": {"login": BOT}, "created_at": "2026-06-04T16:56:10Z"},
-        {
-            "id": 8,
-            "user": {"login": "amd-pworfolk"},
-            "created_at": "2026-06-04T16:53:38Z",
-        },
+        c(1, bot, "CONTRIBUTOR", f"Here is the answer.\n\n{marker}\n"),
+        c(2, bot, "CONTRIBUTOR", "## Skill audit"),  # another bot job
+        c(3, human, "MEMBER", "Thanks, that worked."),
+        c(4, human, "MEMBER", f"pasting {marker} does not make me Claude"),
+        c(5, human, "MEMBER", "@claude please look"),  # the mention path owns it
+        c(6, human, "NONE", "outsider"),
+        c(7, human, "COLLABORATOR", None),  # an empty body is not a mention
+        c(8, {"login": "renovate[bot]", "type": "Bot"}, "MEMBER", "bump"),
     ]
     res = subprocess.run(
         [jq, "-r", m.group(1)],
@@ -392,9 +453,104 @@ def test_jq_filter_emits_id_login_epoch(gate):
         capture_output=True,
         text=True,
         check=True,
+        env={**os.environ, "CLAUDE_REPLY_MARKER": marker},
     )
-    expected = [
-        f"7 {BOT} {int(datetime(2026, 6, 4, 16, 56, 10, tzinfo=timezone.utc).timestamp())}",
-        f"8 amd-pworfolk {int(datetime(2026, 6, 4, 16, 53, 38, tzinfo=timezone.utc).timestamp())}",
+    epoch = int(datetime(2026, 6, 4, 16, 56, 10, tzinfo=timezone.utc).timestamp())
+    kinds = ["claude", "other", "member", "member", "other", "other", "member", "other"]
+    assert res.stdout.splitlines() == [
+        f"{i} {k} {epoch}" for i, k in enumerate(kinds, start=1)
     ]
-    assert res.stdout.splitlines() == expected
+
+
+# --- claude-run.yml appends the marker, not the model ------------------------
+
+
+def test_post_step_appends_the_marker_and_targets_the_thread(tmp_path):
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash not available")
+    runner = yaml.safe_load(RUNNER.read_text(encoding="utf-8"))
+    inputs = runner[True]["workflow_call"]["inputs"]  # PyYAML reads `on:` as True
+    assert inputs["comment_marker"]["default"] == ""
+    post = next(
+        s
+        for s in runner["jobs"]["run"]["steps"]
+        if s.get("name") == "Post Claude's comment"
+    )
+    assert post["env"]["COMMENT_MARKER"] == "${{ inputs.comment_marker }}"
+    assert (
+        "github.event.issue.pull_request != null" in post["env"]["IS_PR"]
+    ), "an @claude reply in a PR conversation must post with `gh pr comment`"
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    stub = bindir / "gh"
+    stub.write_text(
+        '#!/bin/sh\necho "$*" >> "$STUB_LOG"\n', encoding="utf-8", newline="\n"
+    )
+    stub.chmod(0o755)
+    body = tmp_path / "reply.md"
+    body.write_text("Answer.", encoding="utf-8", newline="\n")
+    log = tmp_path / "gh.log"
+    marker = "<!-- gaia-claude-reply -->"
+    res = subprocess.run(
+        [bash, "-c", post["run"]],
+        env={
+            **os.environ,
+            "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+            "STUB_LOG": str(log),
+            "COMMENT_FILE": str(body),
+            "COMMENT_MARKER": marker,
+            "REQUIRE_COMMENT": "false",
+            "HARNESS_STATUS": "ok",
+            "IS_PR": "false",
+            "NUMBER": "1394",
+            "RUN_URL": "https://example.invalid/run",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 0, res.stderr
+    assert body.read_text(encoding="utf-8").rstrip().endswith(marker)
+    assert log.read_text(encoding="utf-8").startswith("issue comment 1394 --body-file")
+
+
+def test_silence_posts_nothing_and_adds_no_marker(tmp_path):
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash not available")
+    runner = yaml.safe_load(RUNNER.read_text(encoding="utf-8"))
+    post = next(
+        s
+        for s in runner["jobs"]["run"]["steps"]
+        if s.get("name") == "Post Claude's comment"
+    )
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    stub = bindir / "gh"
+    stub.write_text(
+        '#!/bin/sh\necho "$*" >> "$STUB_LOG"\n', encoding="utf-8", newline="\n"
+    )
+    stub.chmod(0o755)
+    log = tmp_path / "gh.log"
+    body = tmp_path / "reply.md"
+    res = subprocess.run(
+        [bash, "-c", post["run"]],
+        env={
+            **os.environ,
+            "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+            "STUB_LOG": str(log),
+            "COMMENT_FILE": str(body),
+            "COMMENT_MARKER": "<!-- gaia-claude-reply -->",
+            "REQUIRE_COMMENT": "false",
+            "HARNESS_STATUS": "ok",
+            "IS_PR": "false",
+            "NUMBER": "1394",
+            "RUN_URL": "https://example.invalid/run",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 0, res.stderr
+    assert not body.exists() and not log.exists()

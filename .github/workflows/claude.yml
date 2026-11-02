@@ -706,16 +706,16 @@ jobs:
   # Decides whether a comment WITHOUT @claude is a follow-up Claude should consider
   # (#1408). A cheap API read, so the Opus run below only starts when a maintainer is
   # talking to Claude: in a thread labelled `claude`, or on an issue where the comment
-  # directly follows a bot reply. "Any bot reply on the issue" is not enough: the bot
-  # answers nearly every new issue, so that would start an Opus run per comment.
-  # Unlabelled PRs always need @claude, since every PR carries the bot's review. The
-  # prompt below makes the final respond-or-stay-silent call.
+  # directly follows a Claude reply. Claude's replies carry CLAUDE_REPLY_MARKER, which
+  # the posting step appends; other github-actions[bot] comments (triage, audits,
+  # auto-fix) don't count. Unlabelled PRs always need @claude, since every PR carries
+  # the bot's review. The prompt below makes the final respond-or-stay-silent call.
   #
   # Cost guards, so no one outside the project can spend Opus runs without a mention:
   # - only OWNER / MEMBER / COLLABORATOR comments pass. Outsiders, including the person
   #   who opened the thread, still get answers through a new issue or @claude;
-  # - at most MAX_RECENT_REPLIES bot comments per thread per hour, so a back-and-forth
-  #   can't run unbounded (issue-handler's follow-up concurrency group collapses bursts);
+  # - at most MAX_PASSES_PER_HOUR passes per thread per hour, counted by replaying this
+  #   gate's own rule over the thread's comments, whether or not Claude replied;
   # - bots never pass: the loop-breaker that stops Claude answering its own replies;
   # - `created` only, so editing an old comment does not re-open the conversation.
   conversation-gate:
@@ -744,7 +744,8 @@ jobs:
           ASSOCIATION: ${{ github.event.comment.author_association }}
           LABELLED: ${{ contains(github.event.issue.labels.*.name, 'claude') }}
           IS_PR: ${{ github.event.issue.pull_request != null }}
-          MAX_RECENT_REPLIES: "3"
+          CLAUDE_REPLY_MARKER: "<!-- gaia-claude-reply -->"
+          MAX_PASSES_PER_HOUR: "3"
         run: |
           set -euo pipefail
           not_engaged() {
@@ -760,57 +761,63 @@ jobs:
           if [ "$LABELLED" != "true" ] && [ "$IS_PR" = "true" ]; then
             not_engaged "Unlabelled PR conversation."
           fi
-          # gh prints "<id> <login> <epoch>" per comment, oldest first, across pages.
-          # awk prints "<bot comments> <bot comments in the last hour> <1 if the
-          # comment right before this one is the bot's, else 0>".
+          # gh prints "<id> <kind> <epoch>" per comment, oldest first, across pages. kind
+          # is `claude` (a marked bot reply), `member` (a maintainer's comment without
+          # @claude, i.e. one the gate would consider) or `other`.
+          # awk prints "<other comments in the last hour this gate passed> <1 if this
+          # comment directly follows a Claude reply, else 0>".
           since=$(( $(date +%s) - 3600 ))
           if ! counts=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" \
-            --jq '.[] | "\(.id) \(.user.login) \(.created_at | fromdateiso8601)"' \
-            | awk -v bot='github-actions[bot]' -v id="$COMMENT_ID" -v since="$since" '
-                $1 == id { found = 1; prev_bot = (last == bot) }
+            --jq '.[] | "\(.id) \(
+                    if .user.login == "github-actions[bot]"
+                       and ((.body // "") | contains(env.CLAUDE_REPLY_MARKER)) then "claude"
+                    elif .user.type != "Bot"
+                       and (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))
+                       and ((.body // "") | contains("@claude") | not) then "member"
+                    else "other" end) \(.created_at | fromdateiso8601)"' \
+            | awk -v id="$COMMENT_ID" -v since="$since" -v labelled="$LABELLED" '
+                $1 == id { found = 1; follows = (last == "claude"); last = $2; next }
+                $2 == "member" && $3 > since && (labelled == "true" || last == "claude") { passes++ }
                 { last = $2 }
-                $2 == bot { t++; if ($3 > since) r++ }
-                END { print t + 0, r + 0, (found && prev_bot) ? 1 : 0 }'); then
+                END { print passes + 0, (found && follows) ? 1 : 0 }'); then
             echo "::error::Could not read the comments on #$NUMBER, so the follow-up gate cannot decide. See the gh error above."
             exit 1
           fi
-          read -r replies recent follows_bot <<< "$counts"
-          if [ "$LABELLED" != "true" ] && [ "$follows_bot" != "1" ]; then
+          read -r passes follows_claude <<< "$counts"
+          if [ "$LABELLED" != "true" ] && [ "$follows_claude" != "1" ]; then
             not_engaged "This comment does not directly follow a Claude reply."
           fi
-          if [ "$recent" -ge "$MAX_RECENT_REPLIES" ]; then
-            not_engaged "Claude already replied $recent times here in the last hour."
+          if [ "$passes" -ge "$MAX_PASSES_PER_HOUR" ]; then
+            not_engaged "The gate already passed $passes follow-ups here in the last hour."
           fi
           echo "engaged=true" >> "$GITHUB_OUTPUT"
-          echo "Claude is part of this thread ($replies bot comment(s)): it decides whether to reply."
+          echo "A maintainer is talking to Claude here: Claude decides whether to reply."
 
   # Respond to new issues, @claude mentions, and follow-ups in threads Claude is part of
   # (conversation-gate above), including fork PRs.
   #
-  # NOTE: each @claude mention runs its own independent job in parallel so that a burst of
-  # comments on different topics all get answered (see the concurrency block). Safe because
-  # this job only reads the PR diff and posts comments (no commits to the branch).
+  # Safe because this job only reads the PR diff and posts comments (no commits to the branch).
   issue-handler:
     needs: conversation-gate
     # !cancelled(): the gate is skipped for new issues and @claude mentions, and a skipped
-    # need would otherwise skip this job too.
+    # need would otherwise skip this job too. `created` only: editing an @claude comment
+    # must not start another run.
     if: |
       !cancelled() &&
       github.repository == 'amd/gaia' &&
       ((github.event_name == 'issues' && github.event.action == 'opened') ||
        (github.event_name == 'issue_comment' &&
+        github.event.action == 'created' &&
         contains(github.event.comment.body, '@claude')) ||
        needs.conversation-gate.outputs.engaged == 'true')
     permissions:
       contents: read
       issues: write          # comment on issues
       pull-requests: write   # comment on PR conversations
-    # Distinct @claude comments must each get answered, so they get a unique group
-    # (GitHub keeps one pending run per group and would cancel the middle of a burst).
-    # Gate-approved follow-ups share one group per thread: a burst collapses to one
-    # running + one pending run, and each sees the last reply for the hourly cap.
+    # One group per thread: a burst of comments collapses to one running + one pending
+    # run (GitHub keeps only the newest pending), and the prompt answers them together.
     concurrency:
-      group: ${{ needs.conversation-gate.outputs.engaged == 'true' && format('claude-followup-{0}', github.event.issue.number) || format('claude-issue-handler-{0}', github.run_id) }}
+      group: claude-issue-handler-${{ github.event.issue.number }}
       cancel-in-progress: false
     # Delegates to the reusable workflow, which does the fork-aware checkout + diff
     # for PR conversations, the Claude call with retry, and artifact verification.
@@ -821,6 +828,9 @@ jobs:
       # Allow non-write users (fork-PR authors, external issue reporters) to invoke
       # @claude. See file header for the security trade-off.
       allowed_non_write_users: "*"
+      comment_file: /tmp/reply.md
+      # conversation-gate reads this marker to tell Claude's replies from other bot comments.
+      comment_marker: "<!-- gaia-claude-reply -->"
       prompt: |
             REPO: ${{ github.repository }}
             ISSUE/PR NUMBER: ${{ github.event.issue.number }}
@@ -837,12 +847,12 @@ jobs:
               `gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}`
             If COMMENT ID is empty, skip the comment fetch.
 
-            After following the instructions below, post your reply (write body to
-            /tmp/reply.md first):
-            - If IS PR CONVERSATION is true:
-                `gh pr comment ${{ github.event.issue.number }} --body-file /tmp/reply.md`
-            - Otherwise:
-                `gh issue comment ${{ github.event.issue.number }} --body-file /tmp/reply.md`
+            HOW YOUR REPLY SHIPS — write it to `/tmp/reply.md`. A workflow step posts that
+            file after you exit; do NOT run `gh issue comment`, `gh pr comment`, or any other
+            `gh` posting command yourself (that would double-post). To stay silent, write NO
+            file. Several comments may have arrived since your last reply (runs on one thread
+            are queued and a burst collapses into the latest), so cover every one that still
+            needs an answer in this single reply.
 
             ---
 
