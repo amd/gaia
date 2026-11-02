@@ -60,6 +60,9 @@ class LLMClient(ABC):
     def transcribe_audio(self, audio_path: str, **kwargs) -> Any:
         raise NotSupportedError(self.provider_name, "transcribe_audio")
 
+    def create_image_variation(self, image_path: str, **kwargs) -> dict:
+        raise NotSupportedError(self.provider_name, "create_image_variation")
+
     def get_performance_stats(self) -> dict:
         raise NotSupportedError(self.provider_name, "get_performance_stats")
 

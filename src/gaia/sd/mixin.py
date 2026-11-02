@@ -33,7 +33,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.file_snapshots import SnapshotError, before_change
-from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+from gaia.llm.lemonade_client import (
+    LemonadeClient,
+    LemonadeClientError,
+    check_image_variation_request,
+)
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
 
@@ -87,6 +91,8 @@ class SDToolsMixin:
     - generate_image: Generate an image from a text prompt
     - list_sd_models: List downloaded image models
     - get_generation_history: Get recent generations from this session
+    - create_image_variation: Vary an existing PNG (opt-in,
+      ``init_sd(enable_variation_tools=True)``)
 
     Attributes:
         sd_client: LemonadeClient instance for API calls
@@ -127,6 +133,7 @@ class SDToolsMixin:
         default_steps: Optional[int] = None,
         default_cfg: Optional[float] = None,
         enable_3d_tools: bool = False,
+        enable_variation_tools: bool = False,
     ) -> None:
         """
         Initialize SD tools and register them with the agent.
@@ -143,6 +150,8 @@ class SDToolsMixin:
             default_steps: Default inference steps (None = auto: 4 for Turbo, 20 for Base)
             default_cfg: Default CFG scale (None = auto: 1.0 for Turbo, 7.5 for Base)
             enable_3d_tools: Register the opt-in image-to-3D tool.
+            enable_variation_tools: Register the opt-in
+                ``create_image_variation`` tool.
 
         Example:
             # Fast generation with defaults (SDXL-Turbo)
@@ -175,6 +184,7 @@ class SDToolsMixin:
         self.sd_default_cfg = default_cfg
         self.sd_generations = []  # Instance-level list for session history
         self.sd_enable_3d_tools = enable_3d_tools
+        self.sd_enable_variation_tools = enable_variation_tools
 
         logger.debug(
             f"SD tools initialized: endpoint={self.sd_client.base_url}/images/generations, output={self.sd_output_dir}"
@@ -343,7 +353,135 @@ class SDToolsMixin:
                         )
                 return result
 
+        if self.sd_enable_variation_tools:
+
+            @tool(atomic=True, timeout=1800)
+            def create_image_variation(
+                image_path: str,
+                model: Optional[str] = None,
+                size: Optional[str] = None,
+                n: int = 1,
+            ) -> Dict[str, Any]:
+                """Create variations of an existing PNG image, without a prompt.
+
+                Use when the user asks for variations, alternatives, or other
+                versions of an image they already have.
+
+                Args:
+                    image_path: Path to a local PNG inside the allowed folders.
+                    model: Image model; omit for Flux-2-Klein-4B.
+                    size: Output size as WIDTHxHEIGHT, e.g. 512x512.
+                    n: Number of variations, 1-10.
+
+                Returns:
+                    {"status": "success", "image_paths": [str, ...], ...} or
+                    {"status": "error", "error": str}.
+                """
+                return self._create_image_variation(image_path, model, size, n)
+
         # Tools are automatically registered by the @tool decorator above.
+
+    def _create_image_variation(
+        self,
+        image_path: str,
+        model: Optional[str] = None,
+        size: Optional[str] = None,
+        n: int = 1,
+    ) -> Dict[str, Any]:
+        """Vary *image_path* through Lemonade and save each result as a PNG."""
+        from gaia.agents.tools.path_access import read_access_error
+
+        refusal = read_access_error(self, image_path)
+        if refusal:
+            return refusal
+        try:
+            source = Path(image_path).expanduser().resolve(strict=True)
+        except OSError as exc:
+            return {"status": "error", "error": f"Cannot read image: {exc}"}
+        if not source.is_file():
+            return {"status": "error", "error": f"Image is not a file: {source}"}
+
+        model = model or LemonadeClient.IMAGE_VARIATION_DEFAULT_MODEL
+        # Validate before loading, and download only legacy SD on demand, as
+        # _generate_image does: a bad call must not start a multi-GB download.
+        legacy_sd = model in self.SD_MODELS
+        try:
+            check_image_variation_request(source, n, size)
+            if not legacy_sd and not any(
+                m.get("id") == model for m in self.sd_client.list_sd_models()
+            ):
+                return {
+                    "status": "error",
+                    "error": f"Invalid model '{model}' or model not downloaded. "
+                    "Call list_sd_models() to choose one.",
+                }
+        except LemonadeClientError as exc:
+            return {"status": "error", "error": str(exc)}
+        try:
+            self.sd_client.load_model(
+                model, auto_download=legacy_sd, prompt=False, timeout=600
+            )
+            response = self.sd_client.create_image_variation(
+                source, model=model, size=size, n=n
+            )
+        except LemonadeClientError as exc:
+            logger.error("Image variation failed for %s: %s", model, exc)
+            return {
+                "status": "error",
+                "error": self._describe_client_error(exc, model=model),
+            }
+
+        data = response.get("data") if isinstance(response, dict) else None
+        if not isinstance(data, list) or not data:
+            return {
+                "status": "error",
+                "error": f"{model} returned no variations ({str(response)[:200]})",
+            }
+        images: List[bytes] = []
+        for index, item in enumerate(data, start=1):
+            image_bytes, problem = decode_image_response({"data": [item]})
+            if problem is None:
+                problem = image_problem(image_bytes)
+            if problem is not None:
+                return {
+                    "status": "error",
+                    "error": f"{model} variation {index} is not usable: {problem}",
+                }
+            images.append(image_bytes)
+
+        stem = re.sub(r"[^\w-]", "", source.stem)[:40] or "image"
+        safe_model = re.sub(r"[^\w-]", "", model) or "model"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        paths: List[str] = []
+        try:
+            for index, image_bytes in enumerate(images, start=1):
+                digest = hashlib.sha256(image_bytes).hexdigest()[:8]
+                target = (
+                    self.sd_output_dir
+                    / f"variation_{stem}_{safe_model}_{timestamp}_{digest}_{index}.png"
+                ).resolve()
+                if self.sd_output_dir.resolve() not in target.parents:
+                    return {"status": "error", "error": "Unsafe variation output path."}
+                before_change(target, "create_image_variation")
+                target.write_bytes(image_bytes)
+                paths.append(str(target))
+        except (OSError, SnapshotError) as exc:
+            return {
+                "status": "error",
+                "error": f"Could not save variations: {exc}",
+                "image_paths": paths,
+            }
+
+        result = {
+            "status": "success",
+            "image_paths": paths,
+            "source_image": str(source),
+            "model": model,
+            "count": len(paths),
+            "display_message": "Saved " + ", ".join(paths),
+        }
+        self.sd_generations.append({**result, "created_at": datetime.now().isoformat()})
+        return result
 
     def _generate_image(
         self,
