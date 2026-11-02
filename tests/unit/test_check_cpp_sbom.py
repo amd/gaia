@@ -291,6 +291,44 @@ def test_examples_and_build_trees_are_ignored(cpp_tree):
     assert _errors(cpp_tree, _sbom(_good_packages())) == []
 
 
+def test_similarly_named_non_build_directory_is_checked(cpp_tree):
+    module = cpp_tree / "builder" / "deps.cmake"
+    module.parent.mkdir()
+    module.write_text(
+        "ExternalProject_Add(zlib URL https://example.invalid/zlib.tar.gz)",
+        encoding="utf-8",
+    )
+    errors = _errors(cpp_tree, _sbom(_good_packages()))
+    assert any("cpp/builder/deps.cmake" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("cmake", "command"),
+    [
+        ("ExternalProject_Add(zlib URL https://example.invalid/zlib.tar.gz)", "ExternalProject_Add"),
+        (
+            "FetchContent_Populate(zlib URL https://example.invalid/zlib.tar.gz)",
+            "FetchContent_Populate with direct arguments",
+        ),
+        ("CPMAddPackage(NAME zlib GITHUB_REPOSITORY zlib-ng/zlib-ng)", "CPMAddPackage"),
+        ("file(DOWNLOAD https://example.invalid/zlib.tar.gz zlib.tar.gz)", "file(DOWNLOAD)"),
+    ],
+)
+def test_untracked_cmake_dependency_forms_fail(cpp_tree, cmake, command):
+    module = cpp_tree / "cmake" / "untracked.cmake"
+    module.parent.mkdir()
+    module.write_text(cmake, encoding="utf-8")
+    errors = _errors(cpp_tree, _sbom(_good_packages()))
+    assert any("cpp/cmake/untracked.cmake" in error and command in error for error in errors), errors
+
+
+def test_declared_populate_and_generated_cmake_config_are_allowed(cpp_tree):
+    config = cpp_tree / "buildsys" / "gaiaConfig.cmake.in"
+    config.parent.mkdir()
+    config.write_text("FetchContent_Populate(json)\nfind_dependency(OpenSSL)\n", encoding="utf-8")
+    assert _errors(cpp_tree, _sbom(_good_packages())) == []
+
+
 @pytest.mark.parametrize(
     "declare",
     [
