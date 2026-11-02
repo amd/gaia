@@ -6,6 +6,10 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **You can see what autonomy last did.** `gaia email autonomy status` now
+  shows when the last cycle finished and what it did: how many messages it
+  acted on, proposed or skipped, or why it failed. That includes cycles the
+  agent ran on its own schedule, and a run whose terminal gave up waiting.
 - **The binary no longer bundles GPL code.** It used to include PyInstaller's
   own modules and Python's `readline` and `dbm` modules, which link GNU
   Readline (GPL-3.0) and GDBM (GPL-3.0). They are excluded now, and the release

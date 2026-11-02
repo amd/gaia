@@ -66,7 +66,7 @@ _DIFF_CARD_MAX_CHARS = 64_000
 
 #: Result keys naming a file the tool wrote; kept on the summary view a
 #: relayed result is reduced to.
-RESULT_PATH_KEYS = ("file_path", "image_path")
+RESULT_PATH_KEYS = ("file_path", "image_path", "audio_path")
 
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = FAILED_STATUSES

@@ -1113,10 +1113,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         .then((data) => {
                             // A queued message may already be streaming; its own end refetches.
                             if (isStale() || useChatStore.getState().isStreaming) return;
-                            // The backend doesn't persist cards, so this replace
-                            // would drop them — merge from the pre-refetch
-                            // in-memory messages by id, else role+content.
-                            // #2109 replaces this merge with steps-derived hydration.
+                            // Only cards a tool step persisted come back from the
+                            // backend; keep the live ones (e.g. confirmations) by
+                            // id, else role+content.
                             // stopState isn't persisted either; carry it by id.
                             const prevMsgs = useChatStore.getState().messages;
                             const prevWithCards = prevMsgs.filter((m) => m.cards && m.cards.length > 0);
@@ -1126,7 +1125,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 );
                                 return {
                                     ...m,
-                                    cards: prev?.cards,
+                                    cards: prev?.cards ?? m.cards,
                                     stopState: prevMsgs.find((p) => p.id === m.id)?.stopState,
                                 };
                             });
