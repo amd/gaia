@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { AlertCircle, Check, ChevronRight, Copy } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useT } from '../../i18n/useT';
 import type { PreflightReport, SetupDevice, SetupPlan } from '../../types';
 import { formatSize } from './format';
@@ -114,15 +114,22 @@ export function DetectedSummary({ plan, hardware }: { plan: SetupPlan; hardware:
     const unknown = <span className="found-muted">{t('setup.found.unknown')}</span>;
     const warnings = [...(hardware?.blockers ?? []), ...(hardware?.warnings ?? [])];
 
+    // The note shows for 2 s from when the copy finished; a new click starts it again.
+    const fade = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => () => { if (fade.current) clearTimeout(fade.current); }, []);
+    const settle = (outcome: 'done' | 'failed') => {
+        setCopied(outcome);
+        if (fade.current) clearTimeout(fade.current);
+        fade.current = setTimeout(() => setCopied(null), 2000);
+    };
     const copy = () => {
         navigator.clipboard.writeText(specText(plan, hardware)).then(
-            () => setCopied('done'),
+            () => settle('done'),
             (err) => {
                 console.warn('[DetectedSummary] could not copy the details', err);
-                setCopied('failed');
+                settle('failed');
             },
         );
-        setTimeout(() => setCopied(null), 2000);
     };
 
     return (

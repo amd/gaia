@@ -1816,3 +1816,36 @@ def test_the_row_shows_the_tail_and_the_report_keeps_the_rest():
         runner._consume(run, f"note {i}")
     assert len(runner.status()["models"][0]["log"]) == sr.MODEL_LOG_SHOWN
     assert len(runner.report()["models"][0]["log"]) == sr.MODEL_LOG_SHOWN + 21
+
+
+def test_an_error_with_a_percent_is_kept_beside_the_progress_bar():
+    m = sr.ModelProgress(id="a-GGUF")
+    m.add_log("[=====>    ] 45%")
+    m.add_log("Error: disk 95% full")
+    m.add_log("[======>   ] 46%")
+    assert m.log == ["[=====>    ] 45%", "Error: disk 95% full", "[======>   ] 46%"]
+    m.add_log("Disk check: 40% of drive free")
+    m.add_log("Lemonade: resuming at 12% done")
+    assert m.log[-2:] == [
+        "Disk check: 40% of drive free",
+        "Lemonade: resuming at 12% done",
+    ]
+
+
+def test_output_after_a_failed_download_is_not_put_on_its_row():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event({"event": "plan", "models": [{"id": "a-GGUF"}]})
+    runner._consume(run, "Downloading: a-GGUF")
+    runner._on_event({"event": "error", "model": "a-GGUF", "message": "boom"})
+    runner._consume(run, "Testing chat model inference...")
+    assert runner._models["a-GGUF"].log == ["Downloading: a-GGUF", "Failed: boom"]
+
+
+def test_a_new_run_forgets_which_model_the_last_one_was_downloading(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(b""), returncode=1))
+    runner = sr.SetupRunner()
+    runner._log_model = "a-GGUF"
+    runner.start(False)
+    assert runner._log_model is None

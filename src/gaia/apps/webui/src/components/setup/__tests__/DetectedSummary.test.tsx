@@ -89,6 +89,21 @@ describe('what setup found', () => {
         expect(text).toContain('GAIA data and logs: C:\\Users\\you\\.gaia');
     });
 
+    it('keeps Copied up for two seconds after each copy finishes', async () => {
+        vi.useFakeTimers();
+        Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+        render(<DetectedSummary plan={PLAN()} hardware={null} />);
+        const copy = screen.getByRole('button', { name: 'Copy these details' });
+        await act(async () => { fireEvent.click(copy); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+        // A second copy starts the two seconds again.
+        await act(async () => { fireEvent.click(copy); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+        expect(screen.getByRole('status')).toHaveTextContent('Copied');
+        await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+        expect(screen.queryByRole('status')).toBeNull();
+    });
+
     it('says when the copy did not work', async () => {
         Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')) } });
         render(<DetectedSummary plan={PLAN()} hardware={null} />);

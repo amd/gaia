@@ -534,7 +534,7 @@ _DOWNLOADING_RE = re.compile(
     r"^\s*(?:\S+\s+)?(?:Downloading|Pulling)\b[:\s]+(\S+)", re.I
 )
 #: A progress bar's redraw: only its latest state is worth keeping.
-_BAR_RE = re.compile(r"^\s*\[[=#>\-. ]*\]|\d{1,3}%")
+_BAR_RE = re.compile(r"^\s*\[[=#>\-. ]*\]")
 _MODEL_LOG_KEPT = 300
 #: Lines each row shows; the troubleshooting report keeps them all.
 MODEL_LOG_SHOWN = 80
@@ -891,6 +891,7 @@ class SetupRunner:
                 ) from e
             self._run = run
             self._models = {}
+            self._log_model = None
             run.note(f"$ {command}")
             proc = self._proc
             view = run.view()
@@ -1097,6 +1098,8 @@ class SetupRunner:
                 message = str(event.get("message") or "")
                 logger.warning("Download of %s failed: %s", model_id, message)
                 entry.add_log(f"Failed: {message}")
+                if self._log_model == model_id:
+                    self._log_model = None
                 if self._run is not None:
                     self._run.note(f"{model_id}: download failed: {message}")
                 entry.error_kind = error_kind(message)
