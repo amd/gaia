@@ -159,9 +159,12 @@ def _run(
     timeout: float,
     input: Optional[str] = None,  # pylint: disable=redefined-builtin
     stop: Optional[threading.Event] = None,
+    kill_leftovers: bool = False,
 ) -> _Done:
     """*argv* in its own process tree, all of which dies on the timeout or Ctrl+C.
 
+    With *kill_leftovers*, what it left running when it exited dies too. The
+    GAIA daemon it may have started serves every session, so it is spared.
     Raises ``subprocess.TimeoutExpired`` once the tree is dead.
     """
     io = Path(tempfile.mkdtemp(prefix="gaia-run-"))
@@ -179,6 +182,8 @@ def _run(
             stderr_path=io / "stderr",
             stdin_path=stdin_path,
             stop=stop,
+            kill_leftovers=kill_leftovers,
+            spare=_gaia_daemon,
         )
         if timed_out:
             raise subprocess.TimeoutExpired(list(argv), timeout)
@@ -186,6 +191,13 @@ def _run(
     finally:
         # A process the child left running may still hold its output open.
         try_remove(io)
+
+
+def _gaia_daemon() -> List[int]:
+    from gaia.daemon.instance import read_instance
+
+    inst = read_instance()
+    return [inst.pid] if inst is not None else []
 
 
 def _git(
@@ -612,9 +624,11 @@ def _run_attempt(
             _child_argv(flags),
             input=prompt + ATTEMPT_INSTRUCTIONS,
             cwd=workdir,
-            env=clean_env(),
+            # The prompt is written as UTF-8; Windows would read it as cp1252.
+            env=clean_env(PYTHONIOENCODING="utf-8"),
             timeout=ATTEMPT_TIMEOUT_S,
             stop=stop,
+            kill_leftovers=True,
         )
     except subprocess.TimeoutExpired:
         return {

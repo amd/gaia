@@ -288,6 +288,39 @@ def test_read_prompt_rejects_empty_stdin(monkeypatch, text):
         print_mode.read_prompt(print_mode.READ_STDIN)
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="the console code page is Windows-only"
+)
+def test_gaia_p_reads_a_prompt_redirected_from_a_file(tmp_path):
+    # `gaia -p < prompt.txt`: setting the console code page once shared this
+    # stdin, and cmd.exe moved the file to its end before the prompt was read.
+    import subprocess
+
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_bytes(b"fix the bug in a.py\n")
+    echo = (
+        "import sys\n"
+        "from gaia import print_mode\n"
+        "_read = print_mode.read_prompt\n"
+        "def _echo(p):\n"
+        "    print('PROMPT:' + _read(p)); sys.exit(0)\n"
+        "print_mode.read_prompt = _echo\n"
+        "from gaia.cli import main\n"
+        "sys.exit(main())\n"
+    )
+    with open(prompt, "rb") as stdin:
+        done = subprocess.run(
+            [sys.executable, "-c", echo, "-p"],
+            stdin=stdin,
+            capture_output=True,
+            cwd=tmp_path,
+            timeout=120,
+            check=False,
+        )
+    out = done.stdout.decode("utf-8", errors="replace")
+    assert "PROMPT:fix the bug in a.py" in out, done.stderr.decode(errors="replace")
+
+
 # ---------------------------------------------------------------------------
 # summarize
 # ---------------------------------------------------------------------------

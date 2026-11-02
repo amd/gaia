@@ -18,7 +18,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 import psutil
 
@@ -28,6 +28,8 @@ log = get_logger(__name__)
 
 #: How often a wait wakes, so Ctrl+C is handled while a child runs.
 _POLL_S = 0.5
+#: How often the child's descendants are listed; each listing walks every process.
+_SAMPLE_S = 2.0
 #: How long killed descendants get to exit before they are reported.
 _REAP_S = 5
 
@@ -52,45 +54,84 @@ def _sample(proc: subprocess.Popen, seen: Dict[int, psutil.Process]) -> None:
         pass  # exited since: what was seen before is still killed
 
 
+Spare = Callable[[], Iterable[int]]
+
+
+def _unspared(
+    seen: Dict[int, psutil.Process], spare: Optional[Spare]
+) -> Tuple[Dict[int, psutil.Process], bool]:
+    """*seen* less what *spare* names, its descendants and its launcher.
+
+    The flag says whether anything in *seen* was spared.
+    """
+    if spare is None:
+        return seen, False
+    spared = set()
+    for pid in spare():
+        try:
+            root = psutil.Process(pid)
+            spared.add(pid)
+            spared.update(p.pid for p in root.children(recursive=True))
+            parent = root.parent()
+            # A Windows venv's python.exe runs the real one with the same
+            # arguments, and killing it kills that child.
+            if parent is not None and parent.cmdline()[1:] == root.cmdline()[1:]:
+                spared.add(parent.pid)
+        except psutil.Error:
+            continue  # gone, or not ours to read: nothing more to spare
+    kept = {pid: p for pid, p in seen.items() if pid not in spared}
+    return kept, len(kept) < len(seen)
+
+
+def _kill_seen(owner: int, seen: Dict[int, psutil.Process]) -> None:
+    for child in seen.values():
+        with contextlib.suppress(psutil.Error):
+            child.kill()  # psutil checks the pid was not reused
+    _, alive = psutil.wait_procs(list(seen.values()), timeout=_REAP_S)
+    for child in alive:
+        log.error(
+            "process %s, started by pid %s, survived a kill; end it by hand",
+            child.pid,
+            owner,
+        )
+
+
 def kill_tree(
-    proc: subprocess.Popen, seen: Optional[Dict[int, psutil.Process]] = None
+    proc: subprocess.Popen,
+    seen: Optional[Dict[int, psutil.Process]] = None,
+    spare: Optional[Spare] = None,
 ) -> None:
     """Kill *proc* and every process it started, then reap *proc*.
 
     Descendants are listed while *proc* is alive, plus any in *seen* from
     earlier samples: on POSIX one that started its own session (as the shell
     tool's commands do) is outside *proc*'s group, and on Windows one whose
-    parent already exited is out of ``taskkill /T``'s reach.
+    parent already exited is out of ``taskkill /T``'s reach. A process *spare*
+    names lives on, with its descendants and its launcher.
     """
     seen = dict(seen or {})
-    if proc.poll() is None:
+    running = proc.poll() is None
+    if running:
         _sample(proc, seen)
-        if os.name == "nt":
-            try:
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                    capture_output=True,
-                    check=False,
-                    timeout=_REAP_S * 6,
-                )
-            except subprocess.TimeoutExpired:
-                log.error("taskkill of pid %s hung; killing what was seen", proc.pid)
+    seen, spared = _unspared(seen, spare)
+    # taskkill /T would reach a spared process too; then only psutil kills.
+    if running and os.name == "nt" and not spared:
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True,
+                check=False,
+                timeout=_REAP_S * 6,
+            )
+        except subprocess.TimeoutExpired:
+            log.error("taskkill of pid %s hung; killing what was seen", proc.pid)
     if os.name != "nt":
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(proc.pid, signal.SIGKILL)  # pylint: disable=no-member
-    for child in seen.values():
-        with contextlib.suppress(psutil.Error):
-            child.kill()  # psutil checks the pid was not reused
     with contextlib.suppress(OSError):
         proc.kill()
     proc.wait()
-    _, alive = psutil.wait_procs(list(seen.values()), timeout=_REAP_S)
-    for child in alive:
-        log.error(
-            "process %s, started by pid %s, survived a kill; end it by hand",
-            child.pid,
-            proc.pid,
-        )
+    _kill_seen(proc.pid, seen)
 
 
 def launch(
@@ -103,15 +144,19 @@ def launch(
     stderr_path: Path,
     stdin_path: Optional[Path] = None,
     stop: Optional[threading.Event] = None,
+    kill_leftovers: bool = False,
+    spare: Optional[Spare] = None,
 ) -> Tuple[Optional[int], bool]:
     """Run *cmd* to completion or the cap; return ``(exit code, timed out)``.
 
     Output goes to files, so a run killed at the cap keeps everything it wrote
     and a descendant holding the output can't stall the return. On the cap, or
     any exception here (Ctrl+C included), the whole tree is killed. A child
-    that exits on its own returns at once; what it left running is its own.
+    that exits on its own returns at once; what it left running is its own,
+    unless *kill_leftovers*, which kills the descendants seen while it ran.
     Setting *stop* from another thread kills the tree and raises
-    :class:`Stopped` here, since only the main thread sees Ctrl+C.
+    :class:`Stopped` here, since only the main thread sees Ctrl+C. Every kill
+    spares what *spare* names (see :func:`kill_tree`).
     """
     seen: Dict[int, psutil.Process] = {}
     with contextlib.ExitStack() as stack:
@@ -131,17 +176,24 @@ def launch(
         )
         try:
             deadline = time.monotonic() + timeout_s
+            next_sample = 0.0  # the first wake lists them, then every _SAMPLE_S
             while True:
                 if stop is not None and stop.is_set():
                     raise Stopped(f"stopped: {cmd[0]}")
                 left = deadline - time.monotonic()
                 if left <= 0:
-                    kill_tree(proc, seen)
+                    kill_tree(proc, seen, spare)
                     return None, True
                 try:
-                    return proc.wait(timeout=min(_POLL_S, left)), False
+                    code = proc.wait(timeout=min(_POLL_S, left))
                 except subprocess.TimeoutExpired:
-                    _sample(proc, seen)
+                    if time.monotonic() >= next_sample:
+                        _sample(proc, seen)
+                        next_sample = time.monotonic() + _SAMPLE_S
+                    continue
+                if kill_leftovers:
+                    _kill_seen(proc.pid, _unspared(seen, spare)[0])
+                return code, False
         except BaseException:
-            kill_tree(proc, seen)
+            kill_tree(proc, seen, spare)
             raise

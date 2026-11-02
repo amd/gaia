@@ -769,3 +769,101 @@ def test_ctrl_c_during_a_git_command_kills_its_tree(tmp_path, stub):
     pids = stub()
     assert len(pids) == 2
     assert not any(_alive(p) for p in pids)
+
+
+#: Put before ``_CHILD_MAIN``: the real child up to its prompt, which it prints
+#: as its result instead of running a turn.
+_ECHO_PROMPT = r"""
+import json, sys
+from gaia import print_mode
+_read = print_mode.read_prompt
+def _echo(prompt):
+    print(json.dumps({"result": _read(prompt)}))
+    sys.exit(0)
+print_mode.read_prompt = _echo
+"""
+
+_needs_windows = pytest.mark.skipif(
+    sys.platform != "win32", reason="the console code page is Windows-only"
+)
+
+
+@_needs_windows
+@pytest.mark.parametrize("prompt", ["fix the bug in a.py", "café – 日本"])
+def test_the_real_child_reads_the_exact_prompt(tmp_path, monkeypatch, prompt):
+    # Stdin is a file there: a console call that shared it once read it to EOF.
+    monkeypatch.setattr(attempts, "_CHILD_MAIN", _ECHO_PROMPT + attempts._CHILD_MAIN)
+    record = attempts._run_attempt(prompt, tmp_path, [])
+    assert record == {"result": (prompt + attempts.ATTEMPT_INSTRUCTIONS).strip()}
+
+
+_LINGER = r"""
+import json, os, subprocess, sys, time
+pids = sys.argv[1]
+held = "import time; f = open('held.txt', 'w'); time.sleep(60)"
+kw = {} if os.name == "nt" else {"start_new_session": True}
+grandchild = subprocess.Popen([sys.executable, "-c", held], **kw)
+with open(os.path.join(pids, f"{os.getpid()}.txt"), "w") as f:
+    f.write(f"{os.getpid()} {grandchild.pid}")
+time.sleep(2)  # long enough to be seen
+print(json.dumps({"result": "done"}))
+"""
+
+
+@pytest.fixture
+def linger(stub, monkeypatch):
+    """An attempt that leaves a grandchild holding a file in its workspace."""
+    stub.script.write_text(_LINGER, encoding="utf-8")
+    monkeypatch.setattr(
+        attempts,
+        "_child_argv",
+        lambda flags: [sys.executable, str(stub.script), str(stub.dir)],
+    )
+    return stub
+
+
+def test_what_a_finished_attempt_left_running_dies_with_it(tmp_path, linger):
+    work = tmp_path / "work"
+    work.mkdir()
+    record = attempts._run_attempt("t", work, [])
+    assert record == {"result": "done"}
+    child, grandchild = linger()
+    assert not _alive(grandchild)
+    attempts.remove_tree(work)  # nothing holds held.txt any more
+
+
+def test_a_finished_attempt_spares_the_gaia_daemon_it_started(
+    tmp_path, linger, monkeypatch
+):
+    monkeypatch.setattr(attempts, "_gaia_daemon", lambda: linger()[1:])
+    record = attempts._run_attempt("t", tmp_path, [])
+    assert record == {"result": "done"}
+    assert _alive(linger()[1])  # the fixture stops it
+
+
+def test_a_timed_out_attempt_spares_the_gaia_daemon(tmp_path, stub, monkeypatch):
+    monkeypatch.setattr(attempts, "ATTEMPT_TIMEOUT_S", 3)
+    monkeypatch.setattr(attempts, "_gaia_daemon", lambda: stub()[1:])
+    record = attempts._run_attempt("t", tmp_path, [])
+    assert "stopped after" in record["error"]
+    child, daemon = stub()
+    assert not _alive(child)
+    assert _alive(daemon)  # the fixture stops it
+
+
+def test_descendants_are_listed_every_few_seconds_not_every_wake(tmp_path, monkeypatch):
+    from gaia.utils import process_tree
+
+    calls = []
+    real = process_tree._sample
+    monkeypatch.setattr(process_tree, "_sample", lambda *a: (calls.append(1), real(*a)))
+    code, timed_out = process_tree.launch(
+        [sys.executable, "-c", "import time; time.sleep(3)"],
+        env=os.environ,
+        cwd=tmp_path,
+        timeout_s=30,
+        stdout_path=tmp_path / "out",
+        stderr_path=tmp_path / "err",
+    )
+    assert (code, timed_out) == (0, False)
+    assert 1 <= len(calls) <= 3  # waking every 0.5 s would list ~6 times
