@@ -209,7 +209,8 @@ schemas live in [`schemas/`](./schemas):
   version's SCORECARD.md body with the YAML front matter stripped, `""` if none
   was published), the optional `eval_scorecard_url` + `eval_score` (the raw
   scorecard's public URL and its parsed 0–100 aggregate, absent when no scorecard
-  was published), the optional `npm_package` /
+  was published; a scorecard whose aggregate falls outside 0–100 is refused at
+  publish with `400 invalid_eval_score`), the optional `npm_package` /
   `playground_url` (present only when the manifest declares them — they drive the
   hub page's npm install method and playground launcher), and the optional
   `package` (`{ filename, size_bytes, files: [{name, size_bytes}] }` — the
