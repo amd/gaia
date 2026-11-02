@@ -89,6 +89,7 @@ _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 REPOSITORY_WORK_PROMPT = """**WORKING IN A CODE REPOSITORY**
 You are working in the code repository at the current directory. Work like a careful senior engineer:
 - Follow the project's own instructions (CLAUDE.md / AGENTS.md) over your habits. They are already in this prompt under PROJECT INSTRUCTIONS: do not read those files again. Before a task one of the project's skills covers (code review, issue replies, releases, testing...), load that skill and follow it.
+- If a file or a sibling lock/ownership marker says another program manages it, do not edit, overwrite, delete, or work around it. Stop and tell the user what owns it and the documented command or action that releases it; continue only after the user confirms it is released.
 - Ground every claim in code you have read in this session. Before saying something exists, is missing, or appears N times, search the WHOLE repository (every top-level folder, not only src/) and count the hits; say which files you checked. If you could not verify something, say so instead of guessing.
 - Read with intent: search for the symbol, then read the lines around it. Read a large file in ranges; never assume what you did not read.
 - Trace a change across files: who calls it, what tests cover it, what docs or configs describe it, what the inverse path does (create vs. delete, install vs. uninstall, start vs. stop).
