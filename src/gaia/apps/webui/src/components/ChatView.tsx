@@ -1365,8 +1365,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
             }
             if (row) await api.deleteMessagesFrom(sessionId, row.id);
             if (isStale()) {
-                // The question is gone from the server; the background dispatcher asks it again.
-                setQueue((q) => messageQueue.enqueue(q, text, 'queued'));
+                // The question is gone from the server; the background dispatcher asks it again,
+                // unless the chat itself was deleted meanwhile.
+                const { sessions, pendingDeleteIds } = useChatStore.getState();
+                if (sessions.some((s) => s.id === sessionId) && !pendingDeleteIds.includes(sessionId)) {
+                    setQueue((q) => messageQueue.enqueue(q, text, 'queued'));
+                }
                 return;
             }
         } catch (err) {
