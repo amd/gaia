@@ -628,8 +628,11 @@ def workspace_diff(workdir: Path, original: Path) -> str:
 #: whether the path leading to it is this checkout's (``lm_eval/tasks`` and a
 #: project's own ``tests/eval/tasks`` are not).
 _ANSWER_KEY_PATH = re.compile(r"(?<![\w.-])eval[\\/]+tasks(?![\w.-])", re.IGNORECASE)
-#: Characters that end a path when walking back from ``eval/tasks``.
-_PATH_STOP = frozenset(" \t\r\n\"'`=;|&<>(){}[],")
+#: Characters that end a path when walking back from ``eval/tasks``. A space
+#: does not: a checkout path may hold one (``OneDrive - AMD``).
+_PATH_STOP = frozenset("\t\r\n\"'`=;|&<>(){}[],")
+#: How a shell or script may spell the home folder.
+_HOME_SPELLINGS = ("~", "$HOME", "${HOME}", "%USERPROFILE%", "$env:USERPROFILE")
 _SLASHES = re.compile(r"[\\/]+")
 #: Field names only the task file carries.
 ANSWER_KEY_FIELDS = ("genuine_answer", "must_establish", "wrong_answers")
@@ -670,7 +673,7 @@ def _norm_path(path: str) -> str:
 
 
 def _task_dir_spellings() -> Tuple[str, ...]:
-    """``TASKS_DIR`` as a tool may write it: native, ``/c/...`` (MSYS, WSL) or ``~/...``."""
+    """``TASKS_DIR`` as a tool may write it: native, ``/c/...`` (MSYS, WSL) or from home."""
     native = str(TASKS_DIR)
     found = {_norm_path(native)}
     drive, rest = os.path.splitdrive(native)
@@ -678,23 +681,35 @@ def _task_dir_spellings() -> Tuple[str, ...]:
         found.add(_norm_path(f"/{drive[0]}{rest}"))
     home = Path(os.path.expanduser("~"))
     if TASKS_DIR.is_relative_to(home):
-        found.add(_norm_path("~/" + TASKS_DIR.relative_to(home).as_posix()))
+        rel = TASKS_DIR.relative_to(home).as_posix()
+        found.update(_norm_path(f"{h}/{rel}") for h in _HOME_SPELLINGS)
     return tuple(found)
 
 
 def _names_task_dir(text: str, hit: "re.Match[str]", workdir: Optional[Path]) -> bool:
     """Whether the path ending at *hit* is this checkout's ``eval/tasks``."""
+    spellings = _task_dir_spellings()
     start = hit.start()
     while start and text[start - 1] not in _PATH_STOP:
         start -= 1
-    raw = _SLASHES.sub("/", text[start : hit.end()])
-    spellings = _task_dir_spellings()
-    # endswith, so a JSON escape glued to the front (``\nC:/...``) still matches.
-    if _norm_path(raw).endswith(spellings):
-        return True
-    if workdir is None or raw.startswith(("/", "~")) or re.match(r"[A-Za-z]:", raw):
-        return False
-    return _norm_path(os.path.join(str(workdir), raw)) in spellings
+    # The path may begin at the text's start, after a stop, or after any space.
+    begins = [0, start] + [
+        m.end() for m in re.finditer(r" +", text[: hit.start()]) if m.end() > start
+    ]
+    for begin in begins:
+        raw = _SLASHES.sub("/", text[begin : hit.end()])
+        # A command glued to a path (``cat ../x``): its ``..`` would eat the command.
+        glued = re.search(r"\s\.\.?(/|$)", raw)
+        # endswith, so a JSON escape glued to the front (``\nC:/...``) still matches.
+        if (raw.casefold() if glued else _norm_path(raw)).endswith(spellings):
+            return True
+        if glued or begin < start or workdir is None:
+            continue
+        if raw.startswith(("/", "~", "$", "%")) or re.match(r"[A-Za-z]:", raw):
+            continue
+        if _norm_path(os.path.join(str(workdir), raw)) in spellings:
+            return True
+    return False
 
 
 def answer_key_contact(

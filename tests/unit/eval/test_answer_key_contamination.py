@@ -351,6 +351,104 @@ def test_one_field_alone_passes_the_field_check():
     assert ft.answer_key_contact(entries) == ""
 
 
+# --- a checkout path with spaces, or spelled from the home folder ------------
+
+SPACED_HOME = "C:/Users/John Smith"
+SPACED_POSIX_HOME = "/home/j/my work"
+#: A read that shows values only, so the field check cannot see it.
+VALUES_ONLY = "the cache key ignores the locale\nthe cache key is stale"
+
+
+def _spaced(monkeypatch, home, checkout):
+    monkeypatch.setattr(ft, "TASKS_DIR", Path(home, checkout, "eval", "tasks"))
+    monkeypatch.setattr(os.path, "expanduser", lambda p: home if p == "~" else p)
+
+
+def _spaced_paths(home, checkout):
+    key = f"{home}/{checkout}/eval/tasks/tasks.json"
+    rel = f"{checkout}/eval/tasks/tasks.json"
+    return {
+        "forward": key,
+        "backslash": key.replace("/", "\\"),
+        "home ~": f"~/{rel}",
+        "$HOME": f"$HOME/{rel}",
+        "${HOME}": "${HOME}/" + rel,
+        "%USERPROFILE%": "%USERPROFILE%\\" + rel.replace("/", "\\"),
+        "$env:USERPROFILE": "$env:USERPROFILE\\" + rel.replace("/", "\\"),
+    }
+
+
+def _values_only_reads(path):
+    return {
+        "read_file": ("read_file", {"path": path}),
+        "jq quoted": (
+            "run_shell_command",
+            {"command": f"jq -r '.tasks[].genuine_answer' \"{path}\""},
+        ),
+        "jq single-quoted": (
+            "Bash",
+            {"command": f"jq -r '.tasks[].genuine_answer' '{path}'"},
+        ),
+        "cat unquoted": ("run_shell_command", {"command": f"cat {path} | head"}),
+        "python": ("run_python", {"code": f"print(open(r'{path}').read())"}),
+        "powershell": (
+            "run_shell_command",
+            {"command": f'(Get-Content "{path}" | ConvertFrom-Json).tasks'},
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "home,checkout",
+    [(SPACED_HOME, "OneDrive - AMD/gaia"), (SPACED_POSIX_HOME, "src (x)/gaia")],
+    ids=["windows", "posix"],
+)
+@pytest.mark.parametrize("spelling", list(_spaced_paths("h", "c")))
+def test_a_checkout_path_with_spaces_is_caught(monkeypatch, home, checkout, spelling):
+    _spaced(monkeypatch, home, checkout)
+    path = _spaced_paths(home, checkout)[spelling]
+    for label, (name, args) in _values_only_reads(path).items():
+        transcript = _gaia(_tool(name, args, VALUES_ONLY))
+        why = ft.answer_key_contact(transcript, Path("/tmp/gaia-bench/run/toybox"))
+        assert why.startswith(f"{name} named "), (label, path)
+
+
+def test_a_quoted_relative_path_with_spaces_is_resolved(monkeypatch):
+    _spaced(monkeypatch, SPACED_POSIX_HOME, "gaia")
+    workdir = Path(SPACED_POSIX_HOME, "runs", "t")
+    for path in ("../../gaia/eval/tasks", "../../../my work/gaia/eval/tasks"):
+        call = {"command": f"jq -r '.tasks[].genuine_answer' \"{path}/tasks.json\""}
+        transcript = _gaia(_tool("Bash", call, VALUES_ONLY))
+        assert ft.answer_key_contact(transcript, workdir).startswith("Bash named ")
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        # Another checkout under the same spaced home.
+        {"path": "C:/Users/John Smith/OneDrive - AMD/gaia2/eval/tasks/tasks.json"},
+        {"path": "C:\\Users\\John Smith\\OneDrive - AMD\\proj\\eval\\tasks"},
+        {"command": 'cat "$HOME/OneDrive - AMD/other/eval/tasks/a.json"'},
+        {"command": "type %USERPROFILE%\\gaia\\eval\\tasks\\tasks.json"},
+        {"command": "ls $env:USERPROFILE\\OneDrive - AMD\\gaia\\x\\eval\\tasks"},
+        # ``..`` from inside the checkout lands outside it.
+        {
+            "command": "cd 'C:/Users/John Smith/OneDrive - AMD/gaia/x' && cat ../../eval/tasks"
+        },
+        {"command": 'cd "C:/Users/John Smith/OneDrive - AMD/gaia" && ls x/eval/tasks'},
+        # The workdir's own folder, relative, with a space in front.
+        {"command": "pytest -q tests/eval/tasks"},
+        {"command": "ls  eval/tasks"},
+        {"path": "My Docs/eval/tasks/a.json"},
+    ],
+)
+def test_spaced_paths_that_are_not_the_key(monkeypatch, call):
+    _spaced(monkeypatch, SPACED_HOME, "OneDrive - AMD/gaia")
+    transcript = _gaia(_tool("run_shell_command", call, VALUES_ONLY))
+    workdir = Path(SPACED_HOME, "AppData", "Local", "Temp", "gaia-bench", "t")
+    assert ft.answer_key_contact(transcript, workdir) == ""
+
+
 # --- the task fails, and the gate counts it -----------------------------------
 
 
