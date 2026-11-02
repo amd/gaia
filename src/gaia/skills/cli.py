@@ -715,8 +715,9 @@ def _handle_create(args: argparse.Namespace) -> int:
 
 
 def _handle_import(args: argparse.Namespace) -> int:
-    from gaia.skills.capture import import_bundle
+    from gaia.skills.capture import import_bundle, refuse_hub_url
 
+    refuse_hub_url(args.source)
     with tempfile.TemporaryDirectory(prefix="gaia-skill-import-") as tmp:
         source_dir = _materialize_source(args.source, Path(tmp))
         result = import_bundle(
