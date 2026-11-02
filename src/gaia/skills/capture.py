@@ -51,6 +51,7 @@ from gaia.skills.format import (
 )
 from gaia.skills.lock import (
     SOURCE_CAPTURED,
+    UNVERSIONED,
     LockEntry,
     SkillLock,
     SkillLockBusyError,
@@ -67,12 +68,13 @@ _DOCS = "https://amd-gaia.ai/docs/spec/agent-skills"
 #: Leading bytes of every zip archive ("PK\x03\x04").
 _ZIP_MAGIC = b"PK\x03\x04"
 
-#: ``version`` recorded in the lock when the captured SKILL.md declares none.
-UNVERSIONED = "unversioned"
-
 #: Lock ``source`` for ``gaia skill import``. Recorded with ``captured=True`` so
 #: imported code shares the capture deferral and ``gaia skill promote``.
 SOURCE_IMPORTED = "imported"
+
+#: Lock ``source`` for ``gaia skill migrate``. Lands through :func:`import_bundle`,
+#: so it shares every import gate and the same deferral.
+SOURCE_MIGRATED = "migrated"
 
 
 class SkillCaptureError(SkillError):
@@ -660,6 +662,8 @@ def import_bundle(
     manager: Optional[SkillManager] = None,
     force: bool = False,
     allow_experimental: bool = False,
+    destination_root: Optional[Path] = None,
+    source: str = SOURCE_IMPORTED,
 ) -> ImportResult:
     """Import a materialized skill folder into the user root at ``experimental``.
 
@@ -668,6 +672,10 @@ def import_bundle(
     that ships code needs ``allow_experimental``. Code is trusted on the next
     load only with that opt-in and an audit ALLOW; a REVIEW verdict lands with
     its code deferred until ``gaia skill promote``.
+
+    ``destination_root`` overrides the user root (``gaia skill migrate --out``);
+    the lock entry is written beside the skill either way. ``source`` is the
+    lock ``source`` recorded for it.
 
     Raises:
         SkillInstallError: code shipped without ``allow_experimental``, or the
@@ -683,7 +691,8 @@ def import_bundle(
     skill = parse_skill_file(source_dir, check_directory_name=False)
     label = "--name" if name else str(source_dir / SKILL_FILENAME)
     final_name = validated_skill_name(name or skill.name, source=label)
-    destination_root = resolver.user_root
+    if destination_root is None:
+        destination_root = resolver.user_root
     target = skill_directory(destination_root, final_name, source=label)
 
     if skill.gaia.tools and not (source_dir / SKILL_TOOLS_FILENAME).is_file():
@@ -725,15 +734,17 @@ def import_bundle(
         previous_tier = reset_security_tier(landed)
         landed.write(target / SKILL_FILENAME)
 
-        digest = content_digest(target) if trusted else ""
+        landed_digest = content_digest(target)
+        digest = landed_digest if trusted else ""
         with SkillLock.locked(destination_root) as lock:
             lock.record(
                 LockEntry(
                     name=final_name,
                     version=landed.version or UNVERSIONED,
                     requested="*",
-                    source=SOURCE_IMPORTED,
+                    source=source,
                     origin=origin,
+                    content_digest=landed_digest,
                     claimed_tier=previous_tier,
                     installed_tier=LOWEST_TIER,
                     permissions=list(landed.gaia.permissions),
@@ -760,8 +771,9 @@ def import_bundle(
     ):
         review_findings = _render_findings(report)
     log.info(
-        "Imported skill '%s' from %s at tier '%s' — verdict %s, code %s",
+        "Landed skill '%s' (%s) from %s at tier '%s' — verdict %s, code %s",
         final_name,
+        source,
         origin,
         LOWEST_TIER,
         report.verdict,
@@ -978,6 +990,7 @@ __all__ = [
     "ImportResult",
     "PromoteResult",
     "SOURCE_IMPORTED",
+    "SOURCE_MIGRATED",
     "SkillCaptureError",
     "capture_entry",
     "capture_skill",

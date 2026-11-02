@@ -689,6 +689,10 @@ def test_agent_load_skill_puts_a_missing_commands_substitute_in_the_prompt(
         "version: 1.0.0\nmetadata:\n  gaia:\n    security_tier: community\n"
         "    permissions:\n      - shell:execute:pytest\n---\n\nRun the suite.\n",
     )
+    from gaia.skills.drift import relock
+
+    # The author's own skill: recorded as local, so no ceiling holds it.
+    relock(roots["user"])
     monkeypatch.setattr("gaia.skills.binaries.shutil.which", lambda _name: None)
     agent = _StubAgent()
 
