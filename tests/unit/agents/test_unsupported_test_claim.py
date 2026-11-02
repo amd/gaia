@@ -17,8 +17,10 @@ Three layers:
 
 from __future__ import annotations
 
+import ast
 import json
 import random
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1267,3 +1269,101 @@ def test_a_command_grown_in_place_is_a_test_run(code):
 def test_a_grown_command_that_is_not_a_runner_is_not_a_test_run(code):
     assert _detect_test_runner(code) is False
     assert check_from_python_run("snippet:x", 0, SAVED_SUMMARY, source=code) is None
+
+
+# ---------------------------------------------------------------------------
+# Detection stays linear in the snippet: adversarial shapes cannot stall a run
+# ---------------------------------------------------------------------------
+#
+# Bounds compare against parsing the same source, so a slow CI box scales both
+# sides. Before the fix each of these took from 25 s to several minutes.
+
+_LAUNCH_HEADER = "import os, subprocess, sys\n"
+
+
+def _parse_seconds(source: str) -> float:
+    started = time.perf_counter()
+    ast.parse(source)
+    return time.perf_counter() - started
+
+
+def _detect_seconds(source: str):
+    started = time.perf_counter()
+    found = _detect_test_runner(source)
+    return found, time.perf_counter() - started
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # ``x = x + x`` doubles: each launch used to re-read the whole tree.
+        _LAUNCH_HEADER + "x = 'echo'\n" + "x = x + x\n" * 30 + "os.system(x)\n" * 6000,
+        _LAUNCH_HEADER + "x = 'a'\n" + "x = x + ' a'\n" * 60 + "os.system(x)\n" * 6000,
+        _LAUNCH_HEADER + "x = x + x\n" * 30 + "os.system(x)\n" * 6000,
+        _LAUNCH_HEADER
+        + "x = 'echo'\n"
+        + "x = f'{x}{x}'\n" * 30
+        + "os.system(x)\n" * 6000,
+        _LAUNCH_HEADER
+        + "x = ['echo']\n"
+        + "x = x + x\n" * 30
+        + "subprocess.run(x)\n" * 6000,
+        _LAUNCH_HEADER
+        + "".join(f"a{i} = 'x'\n" for i in range(6000))
+        + "cmd = ["
+        + ", ".join(f"a{i}" for i in range(6000))
+        + "]\n"
+        + "subprocess.run(cmd)\n" * 6000,
+    ],
+    ids=["doubling", "chain-60", "cyclic", "f-string", "list-doubling", "wide-list"],
+)
+def test_many_launches_of_one_costly_name_read_it_once(source):
+    found, seconds = _detect_seconds(source)
+    assert found is False
+    assert seconds < 10 * _parse_seconds(source) + 0.5
+
+
+@pytest.mark.parametrize("prefixes", [10, 30])
+def test_a_command_grown_many_times_is_still_read(prefixes):
+    source = (
+        _LAUNCH_HEADER
+        + "s = 'python -m pytest'\n"
+        + "s += ' -k a'\n" * prefixes
+        + "os.system(s)\n"
+    )
+    assert _detect_test_runner(source) is True
+
+
+def test_a_long_launcher_chain_is_unwrapped_in_linear_time():
+    started = time.perf_counter()
+    assert argv_check_label(["uv", "run"] * 100_000 + ["pytest"]) == "pytest"
+    assert argv_check_label(["npx"] * 100_000 + ["cat", "pytest.log"]) is None
+    assert time.perf_counter() - started < 5
+
+    command = "uv run " * 40_000 + "pytest"
+    source = _LAUNCH_HEADER + f"os.system({command!r})\n"
+    found, seconds = _detect_seconds(source)
+    assert found is True
+    assert seconds < 10 * _parse_seconds(source) + 0.5
+
+
+def test_a_huge_unquoted_command_is_split_in_linear_time():
+    source = _LAUNCH_HEADER + "os.system('" + "a" * 4_000_000 + "')\n"
+    found, seconds = _detect_seconds(source)
+    assert found is False
+    assert seconds < 10 * _parse_seconds(source) + 0.5
+    spaced = _LAUNCH_HEADER + "os.system('" + "A=1 " * 100_000 + "pytest -q')\n"
+    assert _detect_test_runner(spaced) is True
+
+
+def test_a_huge_quoted_command_is_not_read_and_says_so_at_debug():
+    command = "'a' " * 250_000 + "pytest"
+    source = _LAUNCH_HEADER + f"os.system({command!r})\n"
+    with patch("gaia.agents.base.checks.log") as log:
+        found, seconds = _detect_seconds(source)
+    assert found is False
+    assert seconds < 10 * _parse_seconds(source) + 0.5
+    assert log.debug.called and not log.warning.called
+    # Under the limit, quoting still reads.
+    short = _LAUNCH_HEADER + "os.system(\"'a' pytest\")\nos.system(\"pytest 'a'\")\n"
+    assert _detect_test_runner(short) is True
