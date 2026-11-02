@@ -436,7 +436,7 @@ jobs:
       # not red-X a contributor's PR CI. Visibility comes from the verification step.
       - name: Run Claude (attempt 1)
         id: a1
-        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064  # v1.0.265
         continue-on-error: true
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
@@ -459,7 +459,7 @@ jobs:
       - name: Run Claude (attempt 2 — retry install-phase crash)
         id: a2
         if: "!cancelled() && steps.a1.outcome == 'failure' && steps.a1.outputs.execution_file == ''"
-        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064  # v1.0.265
         continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -520,7 +520,7 @@ jobs:
       - name: Run Claude on the secondary account (primary out of quota)
         id: b1
         if: "!cancelled() && steps.quota.outputs.retry == 'true'"
-        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064  # v1.0.265
         continue-on-error: true
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
