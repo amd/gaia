@@ -783,6 +783,115 @@ describe("an install that can't finish", () => {
     expect(m.getState().status).toBe("downloaded");
   });
 
+  function pickedVersionServes(version) {
+    jest.spyOn(mockUpdater, "setFeedURL");
+    mockUpdater.checkForUpdates = jest.fn(async () => {
+      mockUpdater.emit("update-available", { version });
+      return null;
+    });
+    mockUpdater.downloadUpdate = jest.fn(async () => {
+      mockUpdater.emit("update-downloaded", { version });
+      return [];
+    });
+  }
+
+  test("a picked version waits for its backend fetch, then restarts", async () => {
+    electronMock.net = { isOnline: () => true };
+    let finish;
+    const m = initUpdater({
+      confirmRestart: async () => true,
+      prefetchBackend: () => new Promise((resolve) => (finish = resolve)),
+      isBackendPrefetched: () => false,
+    });
+    pickedVersionServes("0.24.0");
+    let settled = false;
+    const picked = m.installVersion("v0.24.0").then(() => (settled = true));
+    await flush();
+    expect(settled).toBe(false);
+    expect(mockUpdater.quitAndInstall).not.toHaveBeenCalled();
+    finish();
+    await picked;
+    expect(mockUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+
+  test("a picked version's refusal after its backend fetch reaches the caller", async () => {
+    const m = initUpdater({
+      confirmRestart: async () => true,
+      prefetchBackend: async () => {
+        throw new Error("PyPI is down");
+      },
+      isBackendPrefetched: () => false,
+    });
+    pickedVersionServes("0.24.0");
+    await expect(m.installVersion("v0.24.0")).rejects.toThrow(/needs the internet/);
+    expect(mockUpdater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  test("a quit while the backend is fetched installs nothing", async () => {
+    saveConfig({ autoUpdate: true });
+    let finish;
+    const m = initUpdater({
+      confirmRestart: async () => true,
+      prefetchBackend: () => new Promise((resolve) => (finish = resolve)),
+      isBackendPrefetched: () => false,
+    });
+    mockUpdater.emit("update-downloaded", { version: "0.26.0" });
+    await flush();
+    expect(m.getState()).toMatchObject({ status: "downloading", preparing: true });
+    expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+    finish();
+    await flush();
+    expect(m.getState()).toMatchObject({ status: "downloaded", preparing: false });
+    expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
+  });
+
+  test("an update given up on during the backend fetch is not offered after it", async () => {
+    saveConfig({ includePrereleases: true });
+    let finish;
+    const m = initUpdater({
+      confirmRestart: async () => true,
+      prefetchBackend: () => new Promise((resolve) => (finish = resolve)),
+      isBackendPrefetched: () => false,
+    });
+    mockUpdater.emit("update-downloaded", { version: "0.26.0-rc.1" });
+    await flush();
+    mockUpdater.emit("update-not-available", { version: "0.25.0" });
+    finish();
+    await flush();
+    expect(m.getState().status).toBe("idle");
+  });
+
+  test("a second download of the same version waits on the first fetch", async () => {
+    const prefetchBackend = jest.fn(() => new Promise((resolve) => setTimeout(resolve, 5)));
+    initUpdater({ confirmRestart: async () => true, prefetchBackend, isBackendPrefetched: () => false });
+    mockUpdater.emit("update-downloaded", { version: "0.26.0" });
+    mockUpdater.emit("update-downloaded", { version: "0.26.0" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(prefetchBackend).toHaveBeenCalledTimes(1);
+  });
+
+  test("a download error with electron-updater's own code still reads once, then the pin note", async () => {
+    electronMock.net = { isOnline: () => true };
+    const m = initUpdater({ confirmRestart: async () => true });
+    pickedVersionServes("0.24.0");
+    mockUpdater.downloadUpdate = jest.fn(async () => {
+      throw Object.assign(new Error("HttpError: 404"), { code: "HTTP_ERROR_404" });
+    });
+    const err = await m.installVersion("v0.24.0").catch((e) => e);
+    expect(err).toMatchObject({
+      code: "failedWith",
+      params: { reason: "HttpError: 404" },
+      note: { code: "notPaused" },
+    });
+  });
+
+  test("a backend already fetched is not fetched again", async () => {
+    const prefetchBackend = jest.fn(async () => {});
+    initUpdater({ confirmRestart: async () => true, prefetchBackend, isBackendPrefetched: () => true });
+    await finishDownload();
+    expect(prefetchBackend).not.toHaveBeenCalled();
+  });
+
   test("a failed backend fetch still offers the update, which then needs the internet", async () => {
     const m = initUpdater({
       confirmRestart: async () => true,

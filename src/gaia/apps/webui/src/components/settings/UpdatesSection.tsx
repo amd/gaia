@@ -26,6 +26,7 @@ export function describeUpdateStatus(s: UpdateState, t: Translate): string {
         case 'available':
             return t('update.status.available', { version });
         case 'downloading':
+            if (s.preparing) return t('update.status.preparing', { version });
             return t('update.status.downloading', { version, pct: s.progress });
         case 'downloaded':
             return t('update.status.downloaded', { version });

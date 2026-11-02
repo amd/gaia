@@ -107,7 +107,7 @@ export function UpdateIndicator() {
             >
                 <Download size={13} className="update-chip__icon" />
                 <span className="update-chip__label">
-                    {t('update.chip.downloading', { pct })}
+                    {update.preparing ? t('update.chip.preparing') : t('update.chip.downloading', { pct })}
                 </span>
             </div>
         );

@@ -2032,7 +2032,7 @@ async function prefetchBackend(appVersion, { isPackaged } = {}) {
   const python = IS_WINDOWS ? path.join(venv, "Scripts", "python.exe") : path.join(venv, "bin", "python");
   log(`Prefetching ${pipPackage} for the update`);
   await ensureUv({ isPackaged });
-  fs.rmSync(workDir, { recursive: true, force: true });
+  _removeScratchVenvs();
   fs.mkdirSync(workDir, { recursive: true });
   try {
     const venvResult = await runCommand("uv", ["venv", venv, "--python", "3.12"], { stageLabel: "prefetch" });
@@ -2052,6 +2052,19 @@ async function prefetchBackend(appVersion, { isPackaged } = {}) {
   }
   fs.writeFileSync(_prefetchMarker(version), new Date().toISOString());
   log(`Prefetched ${pipPackage}: the next launch installs it offline`);
+}
+
+/** Scratch venvs a quit cut short; the .ready markers beside them stay. */
+function _removeScratchVenvs() {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(PREFETCH_DIR, { withFileTypes: true });
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) fs.rmSync(path.join(PREFETCH_DIR, entry.name), { recursive: true, force: true });
+  }
 }
 
 function _lastLines({ stdout, stderr }) {

@@ -148,7 +148,9 @@ async function _seedInstalledBlockmap() {
   const blockmap = path.join(cacheDir, "current.blockmap");
   const seededFor = path.join(cacheDir, "gaia-blockmap-version");
   if (!version || !fs.existsSync(installer)) return;
-  if (fs.existsSync(blockmap) && _readText(seededFor) === version) return;
+  const seeded = _readText(seededFor);
+  if (seeded === `${version}:not-this-release`) return;
+  if (fs.existsSync(blockmap) && seeded === version) return;
 
   const base = `${RELEASE_DOWNLOADS}/${_tagForVersion(version)}`;
   const manifest = await _githubFetch(`${base}/${_platformManifest()}`);
@@ -160,6 +162,7 @@ async function _seedInstalledBlockmap() {
   // The cached installer must be this release's, or the diff comes out wrong.
   if ((await _sha512File(installer)) !== sha512[1]) {
     log("info", `The cached installer isn't GAIA ${version}'s release file: the next update downloads in full`);
+    fs.writeFileSync(seededFor, `${version}:not-this-release`);
     return;
   }
   const resp = await _githubFetch(`${base}/${file[1]}.blockmap`);
@@ -325,6 +328,8 @@ const state = {
   installFailed: null,
   // Why the last unasked check or download failed; Settings shows it quietly.
   lastCheckError: null,
+  // The update has downloaded and its backend is being fetched before the restart.
+  preparing: false,
 };
 
 let mainWindowRef = null;
@@ -349,6 +354,13 @@ let restartWhenDownloaded = false;
 // Settles once the restart a picked version asked for has run or been refused.
 let pendingRestart = null;
 let restartRefusal = null;
+// Settles once the last update-downloaded is handled, prefetch and restart
+// included. electron-updater doesn't wait for its listeners, so callers do.
+let downloadHandled = null;
+// Bumped when a download is given up on, so a prefetch that outlives it can tell.
+let downloadEpoch = 0;
+// A prefetch per version, so a repeat download waits on it instead of racing it.
+const prefetching = new Map();
 // The user asked for this download, so it may install on quit with auto-update off.
 let installRequested = false;
 // The file was unreadable at launch, so a pin it holds was never loaded.
@@ -459,7 +471,7 @@ function _applyInstallPolicy() {
   if (!autoUpdaterRef) return;
   autoUpdaterRef.autoDownload = state.autoUpdate && !state.pinnedVersion;
   autoUpdaterRef.autoInstallOnAppQuit =
-    (state.autoUpdate || installRequested) && !abandonedDownload && !wizardNextInstall;
+    (state.autoUpdate || installRequested) && !abandonedDownload && !wizardNextInstall && !state.preparing;
   autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
 }
 
@@ -496,9 +508,22 @@ function _userError(code, params, message) {
 // Marks an error message as a coded one, for the renderer to translate.
 const USER_ERROR_MARK = "gaia-update-error:";
 
-/** Node codes (ENOENT, EPERM) name the cause, not a message the UI has. */
+// Codes the UI has an update.err.<code> message for; any other code is a cause.
+const USER_ERROR_CODES = new Set([
+  "checkBusy",
+  "configBusy",
+  "diskSpace",
+  "downloadFailed",
+  "failedWith",
+  "noEarlier",
+  "noInstaller",
+  "offline",
+  "pinFailed",
+  "saveFailed",
+]);
+
 function _isUserCode(code) {
-  return typeof code === "string" && !/^E[A-Z]/.test(code);
+  return USER_ERROR_CODES.has(code);
 }
 
 /** IPC keeps only an error's message, so the code travels inside it. */
@@ -927,6 +952,7 @@ async function installVersion(tag) {
       );
     }
     setState({ status: STATES.DOWNLOADING, progress: 0, error: null });
+    downloadHandled = null;
     await autoUpdaterRef.downloadUpdate();
   } catch (err) {
     restartWhenDownloaded = false;
@@ -944,7 +970,7 @@ async function installVersion(tag) {
   } finally {
     checkInProgress = false;
   }
-  await pendingRestart;
+  await downloadHandled;
   if (restartRefusal) {
     const refusal = restartRefusal;
     restartRefusal = null;
@@ -1074,6 +1100,7 @@ async function setIncludePrereleases(enabled) {
 function _abandonDownload() {
   log("info", `No longer offering GAIA ${state.version}`);
   abandonedDownload = true;
+  downloadEpoch += 1;
   installRequested = false;
   restartWhenDownloaded = false;
   setState({ status: STATES.IDLE, version: null, progress: 0, releaseNotes: null });
@@ -1301,10 +1328,59 @@ function _requireNetwork() {
  */
 async function _prefetchBackend(version) {
   if (!prefetchBackendRef || !version) return;
+  if (isBackendPrefetchedRef && isBackendPrefetchedRef(version)) return;
+  if (!prefetching.has(version)) {
+    prefetching.set(
+      version,
+      Promise.resolve()
+        .then(() => prefetchBackendRef(version))
+        .finally(() => prefetching.delete(version))
+    );
+  }
   try {
-    await prefetchBackendRef(version);
+    await prefetching.get(version);
   } catch (err) {
     log("warn", `Couldn't fetch the backend for ${version} ahead of the restart:`, err && err.message);
+  }
+}
+
+/** An update finished downloading: fetch its backend, then offer the restart. */
+async function _onDownloaded(info) {
+  abandonedDownload = false;
+  const version = (info && info.version) || state.version;
+  const epoch = downloadEpoch;
+  if (prefetchBackendRef) {
+    // electron-updater has armed install-on-quit; a quit now would skip the checks below.
+    setState({ status: STATES.DOWNLOADING, version, progress: 100, preparing: true });
+    _applyInstallPolicy();
+    await _prefetchBackend(version);
+    if (epoch !== downloadEpoch) {
+      setState({ preparing: false });
+      _applyInstallPolicy();
+      log("info", `GAIA ${version} was given up on while its backend was fetched`);
+      return;
+    }
+  }
+  setState({
+    status: STATES.DOWNLOADED,
+    version,
+    progress: 100,
+    preparing: false,
+    error: null,
+    lastCheckError: null,
+  });
+  _applyInstallPolicy();
+  log("info", `Update downloaded: ${version}`);
+
+  // The chip offers the restart. Picking a version already asked for one.
+  if (restartWhenDownloaded) {
+    restartWhenDownloaded = false;
+    // The download stays on offer: the chip can restart once this is cleared up.
+    pendingRestart = restartToInstall().catch((err) => {
+      log("warn", "Restart refused:", err && err.message);
+      restartRefusal = err;
+    });
+    await pendingRestart;
   }
 }
 
@@ -1424,7 +1500,7 @@ function _recordFailure(what, err) {
     return;
   }
   if (backgroundCheck || autoDownloading) {
-    setState({ status: STATES.IDLE, progress: 0, error: null, lastCheckError: message });
+    setState({ status: STATES.IDLE, progress: 0, error: null, lastCheckError: message, preparing: false });
     log("warn", `${what} ${message} — will try again at the next check`);
     return;
   }
@@ -1474,6 +1550,7 @@ function wireAutoUpdaterEvents() {
   autoUpdaterRef.on("update-not-available", (info) => {
     // A release withdrawn since it downloaded must not install on quit.
     if (heldDownloadVersion) _abandonDownload();
+    downloadEpoch += 1;
     // Reset to idle so the UI hides any stale "available" chip.
     setState({
       status: STATES.IDLE,
@@ -1497,30 +1574,10 @@ function wireAutoUpdaterEvents() {
     });
   });
 
-  autoUpdaterRef.on("update-downloaded", async (info) => {
-    abandonedDownload = false;
-    // Awaited only when there is one: the chip must not wait a tick for nothing.
-    if (prefetchBackendRef) await _prefetchBackend((info && info.version) || state.version);
-    _applyInstallPolicy();
-    setState({
-      status: STATES.DOWNLOADED,
-      version: (info && info.version) || state.version,
-      progress: 100,
-      error: null,
-      lastCheckError: null,
-    });
-    log("info", `Update downloaded: ${info && info.version}`);
-
-    // The chip offers the restart. Picking a version already asked for one.
-    if (restartWhenDownloaded) {
-      restartWhenDownloaded = false;
-      // The download stays on offer: the chip can restart once this is cleared up.
-      pendingRestart = restartToInstall().catch((err) => {
-        log("warn", "Restart refused:", err && err.message);
-        restartRefusal = err;
-      });
-      await pendingRestart;
-    }
+  autoUpdaterRef.on("update-downloaded", (info) => {
+    // Set before anything waits, so installVersion sees the restart it asked for.
+    downloadHandled = _onDownloaded(info);
+    return downloadHandled;
   });
 
   autoUpdaterRef.on("error", (err) => {

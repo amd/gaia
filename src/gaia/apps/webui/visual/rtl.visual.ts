@@ -522,6 +522,7 @@ function withUpdater(update: Record<string, unknown>) {
 const UPDATE_STATES: Record<string, Record<string, unknown>> = {
     available: { status: 'available', version: '0.25.5-rc.3' },
     downloading: { status: 'downloading', version: '0.25.5-rc.3', progress: 42 },
+    preparing: { status: 'downloading', version: '0.25.5-rc.3', progress: 100, preparing: true },
     ready: { status: 'downloaded', version: '0.25.5-rc.3' },
     'install failed': { installFailed: { target: '0.25.5-rc.3', from: '0.25.4' } },
     'did not start': { startFailed: true, previousVersion: '0.25.3' },
