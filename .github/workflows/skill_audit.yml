@@ -297,12 +297,15 @@ jobs:
             skill-audit-summary.md
           if-no-files-found: warn
 
-      # Same-repo PRs only: a fork PR's GITHUB_TOKEN is read-only.
+      # Same-repo PRs only: a fork PR's GITHUB_TOKEN is read-only. The comment
+      # is best-effort reporting, not the audit verdict: an installation API
+      # rate limit must not turn a passing deterministic audit into a red gate.
       - name: Post summary-only PR comment
         if: |
           always() && steps.detect.outputs.skills != '[]' &&
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
         uses: actions/github-script@v9
         with:
           script: |
@@ -314,11 +317,15 @@ jobs:
             const body = fs.readFileSync('skill-audit-summary.md', 'utf8');
             const marker = '<!-- gaia-skill-audit -->';
             const issue_number = context.payload.pull_request.number;
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number,
-            });
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number,
+                per_page: 100,
+              },
+            );
             // Update in place so a re-audit on each push doesn't stack comments.
             const existing = comments.find(c => c.body.includes(marker));
             if (existing) {
