@@ -9,10 +9,8 @@ from gaia_agent.agent import REPOSITORY_WORK_PROMPT
 from tests.unit.test_profilespec_characterization import chat_agent_build_context
 
 _MANAGED_FILE_RULE = (
-    "If a file or a sibling lock/ownership marker says another program manages it, "
-    "do not edit, overwrite, delete, or work around it. Stop and tell the user "
-    "what owns it and the documented command or action that releases it; continue "
-    "only after the user confirms it is released."
+    "If another program owns or locks a file, stop; explain how to release it and "
+    "wait."
 )
 
 
