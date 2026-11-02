@@ -5,8 +5,8 @@
 import json
 import logging
 import os
-from unittest.mock import MagicMock, patch
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -59,8 +59,9 @@ def _launch(tmp_path):
             stderr="",
         ),
     )
-    with patch.object(runner.shutil, "which", return_value="/test/claude"), patch.object(
-        runner, "_run_driver", run
+    with (
+        patch.object(runner.shutil, "which", return_value="/test/claude"),
+        patch.object(runner, "_run_driver", run),
     ):
         runner.run_scenario_subprocess(
             tmp_path / "s1.yaml",
@@ -165,3 +166,30 @@ def test_run_driver_passes_env_to_popen(tmp_path):
             ["claude"], input="x", timeout=5, cwd=str(tmp_path), env={"A": "1"}
         )
     assert popen.call_args.kwargs["env"] == {"A": "1"}
+
+
+def test_judge_cli_scrubs_dotenv_only_key(monkeypatch, key_env):
+    """The judge subprocess must not let a dotenv key override Claude OAuth."""
+    key_env(shell=None, current="sk-ant-stale-from-dotenv")
+    captured = {}
+    result = SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({"is_error": False, "result": "ok"}),
+        stderr="",
+    )
+
+    def run(*_args, **kwargs):
+        captured["kwargs"] = kwargs
+        return result
+
+    monkeypatch.setattr(
+        "gaia.eval.judge_client.shutil.which", lambda _name: "/test/claude"
+    )
+    monkeypatch.setattr("gaia.eval.judge_client.subprocess.run", run)
+
+    from gaia.eval.judge_client import ClaudeCliClient
+
+    client = ClaudeCliClient(timeout=1)
+    assert client.get_completion("reply with ok")[0].text == "ok"
+    assert KEY not in captured["kwargs"]["env"]
+    assert captured["kwargs"]["env"]["PATH"] == os.environ.get("PATH")

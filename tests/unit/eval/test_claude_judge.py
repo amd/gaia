@@ -12,6 +12,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import gaia
+
 # ---------------------------------------------------------------------------
 # Shared mocks — we need anthropic + bs4 importable before importing ClaudeClient
 # ---------------------------------------------------------------------------
@@ -434,6 +436,9 @@ class TestJudgeFactoryTemperature:
         credential from silently sending them down the CLI path instead.
         """
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        # Mark it as an explicitly exported key; the judge must not treat a
+        # dotenv-only value as permission to select the Messages API.
+        monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", "test-key")
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
 
     def test_action_item_quality_sends_no_temperature(self, monkeypatch):

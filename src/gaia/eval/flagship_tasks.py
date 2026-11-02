@@ -60,14 +60,10 @@ from gaia.agents.base.verification import (
 )
 from gaia.eval.bench import config as bench_config
 from gaia.eval.bench import ghstub, harness, metering, swebench, therock, transcripts
-from gaia.eval.claude_outage import (
-    API_KEY_VAR,
-    driver_api_key_for,
-    driver_environment,
-)
 from gaia.eval.bench.config import BenchConfig
 from gaia.eval.bench.gateway import Gateway
 from gaia.eval.bench.leaks import Scrubber
+from gaia.eval.claude_outage import driver_api_key_for, driver_environment
 from gaia.eval.task_setups import SETUPS, remove_leftovers
 from gaia.llm.lemonade_client import (
     resolve_lemonade_api_key,

@@ -19,6 +19,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import gaia
+
 # eval_drafting_report.py is a packaging script, not part of the
 # gaia_agent_email package — load it by path (do not insert into sys.modules).
 _PATH = Path(__file__).resolve().parents[1] / "packaging" / "eval_drafting_report.py"
@@ -37,6 +39,9 @@ def _sentinel_api_key(monkeypatch):
     # Both credentials, because either one satisfies the judge guard now.
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
+    monkeypatch.setitem(
+        gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", "sk-test-not-real"
+    )
 
 
 def _set_model_env(monkeypatch, model="test-model"):
