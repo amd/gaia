@@ -424,8 +424,9 @@ def test_every_tag_builds_the_windows_setup_for_its_own_release(publish):
 def test_the_windows_setup_attaches_only_after_its_smoke_test(publish):
     release = publish["github-release"]
     assert "windows-setup" in release["needs"]
-    # Waited for, never required: a failed setup must not hold the release.
-    assert "windows-setup" not in release["if"]
+    # A final requires it; an RC only waits, and its notes say when it failed.
+    assert f"({IS_RC} || needs.windows-setup.outputs.ok == 'true')" in release["if"]
+    assert "needs.windows-setup.result" not in release["if"]
     gated = [s for s in release["steps"] if "windows-setup" in s.get("if", "")]
     assert gated, "the setup is attached without checking its smoke test"
     for step in gated:

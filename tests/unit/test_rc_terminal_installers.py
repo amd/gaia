@@ -186,7 +186,11 @@ def test_a_final_attaches_every_installer_from_publish_without_approval(publish)
     ):
         job = publish[job_id]
         assert "environment" not in job, f"{job_id} waits on an environment"
-        assert IS_RC not in job.get("if", ""), f"{job_id} runs for an RC only"
+        # github-release excuses an RC its setup, which is not running only on one.
+        condition = job.get("if", "").replace(
+            f"({IS_RC} || needs.windows-setup.outputs.ok == 'true')", ""
+        )
+        assert IS_RC not in condition, f"{job_id} runs for an RC only"
     # approve-publish is the final's one approval; pypi and npm are the OIDC
     # trusted-publisher environments, which carry no reviewers.
     gated = sorted(j for j, job in publish.items() if "environment" in job)

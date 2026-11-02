@@ -137,12 +137,15 @@ def search_skills(
 ) -> SkillSearchResult:
     """Catalog skill entries matching *query* (empty query = every skill).
 
-    Matches case-insensitively against name, description, and declared tool
-    names — the three things a user would type. Ordering is catalog order (by id),
-    so results are stable between runs.
+    The query is split into words, and an entry matches when at least one word
+    appears (case-insensitive substring) in its id, name, description, or declared
+    tool names. Words of one or two letters are ignored when the query also has a
+    longer word. Results are ordered by how many distinct query words matched, most
+    first; ties keep catalog order (by id), so results are stable between runs.
 
     Args:
-        query: Substring to match; empty returns the whole skills lane.
+        query: Words to match; empty returns the whole skills lane in catalog
+            order.
         base_url: Hub origin override (defaults to ``GAIA_HUB_URL``).
         fetcher: Injected transport (see :data:`gaia.hub.catalog.Fetcher`).
         cache_path: Offline-cache location; pass a temp path in tests so the
@@ -171,7 +174,11 @@ def search_skills(
 
     entries = skill_entries(index.agents)
 
-    needle = query.strip().lower()
+    words = list(dict.fromkeys(query.lower().split()))
+    # "a"/"of" hit nearly every description; keep them only if they are all there is.
+    long_words = [word for word in words if len(word) > 2]
+    if long_words:
+        words = long_words
 
     def haystack(entry: dict[str, Any]) -> str:
         metadata = entry.get("skill_metadata") or {}
@@ -189,11 +196,18 @@ def search_skills(
             ]
         ).lower()
 
-    matched = (
-        entries
-        if not needle
-        else [entry for entry in entries if needle in haystack(entry)]
-    )
+    if words:
+        scored = []
+        for entry in entries:
+            text = haystack(entry)
+            hits = sum(1 for word in words if word in text)
+            if hits:
+                scored.append((hits, entry))
+        # sort() is stable, so equal scores keep catalog order.
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        matched = [entry for _, entry in scored]
+    else:
+        matched = entries
     if index.offline:
         log.warning(
             "Serving %d skill(s) from the offline catalog cache, last refreshed %s "

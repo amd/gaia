@@ -1195,6 +1195,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     closeStoppedTurnLocallyRef.current?.();
                     return;
                 }
+                // This view is gone; the next view of this chat re-attaches the run itself.
+                if (interrupted && !mountedRef.current) return;
                 // A dead connection is not a failed turn: re-attach, which replays the run so far.
                 if (interrupted && !doneHandled && !isStale() && reconnectsRef.current < MAX_STREAM_RECONNECTS) {
                     const attempt = ++reconnectsRef.current;
@@ -1203,7 +1205,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     useChatStore.getState().setLiveStatus(`${RECONNECTING_PREFIX} (attempt ${attempt} of ${MAX_STREAM_RECONNECTS})…`);
                     const reattach = () => {
                         reconnectTimerRef.current = null;
-                        if (isStale() || stopRequestedRef.current) return;
+                        if (!mountedRef.current || isStale() || stopRequestedRef.current) return;
                         sendMessageRef.current(undefined, { attach: true, reconnect: attempt });
                     };
                     if (delay > 0) reconnectTimerRef.current = setTimeout(reattach, delay);
