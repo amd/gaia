@@ -441,6 +441,10 @@ export interface Message {
     stopState?: 'stopped' | 'unconfirmed';
     /** Error the server reported while a stopped turn was closing. */
     stopError?: string;
+    /** Client-side: this reply stands in for a turn that failed before answering. */
+    failed?: boolean;
+    /** Client-side: the raw error, to recognize the server's saved copy of this failure. */
+    failureText?: string;
     /** Set when this turn pushed older turns out of the model's view. */
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */

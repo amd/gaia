@@ -6,6 +6,9 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Switching model mid-chat takes effect.** In a conversation that keeps its
+  session, a turn that asks for a different model now runs on that model
+  instead of the one the conversation started with.
 - **You can see what autonomy last did.** `gaia email autonomy status` now
   shows when the last cycle finished and what it did: how many messages it
   acted on, proposed or skipped, or why it failed. That includes cycles the
