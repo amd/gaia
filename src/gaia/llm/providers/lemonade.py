@@ -893,6 +893,10 @@ class LemonadeProvider(LLMClient):
         vlm = VLMClient(base_url=self._backend.base_url)
         return vlm.extract_from_image(images[0], prompt=prompt)
 
+    def create_image_variation(self, image_path: str, **kwargs) -> dict:
+        """Vary a PNG; see :meth:`LemonadeClient.create_image_variation`."""
+        return self._backend.create_image_variation(image_path, **kwargs)
+
     def get_performance_stats(self) -> dict:
         if self._backend.cloud_model_provider(self._last_model or DEFAULT_MODEL_NAME):
             # Server-global stats can belong to a concurrent local or cloud request.
