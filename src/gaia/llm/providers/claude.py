@@ -1245,11 +1245,11 @@ class GatewayClaudeProvider(ClaudeProvider):
                 "with a current token, or update LEMONADE_AMD_API_KEY / "
                 "GAIA_GATEWAY_TOKEN if you set one."
             )
-            try:
-                from gaia.llm import gateway
+            from gaia.llm import gateway  # pylint: disable=import-outside-toplevel
 
+            try:
                 gateway_status = gateway.GatewayManager().status(timeout=5)
-            except Exception as gateway_error:  # preserve the original 401
+            except gateway.GatewayError as gateway_error:  # keep the original 401
                 logger.debug(
                     "Could not inspect Lemonade gateway auth state: %s", gateway_error
                 )

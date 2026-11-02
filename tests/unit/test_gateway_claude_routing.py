@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gaia.llm.gateway import GatewayError
 from gaia.llm.gateway import read_stored_token as _real_read_stored_token
 
 GATEWAY_TOKEN = "gw-unit-test-token"
@@ -477,7 +478,7 @@ def test_gateway_errors_are_actionable(
     fake_sdk, status, message, expected, monkeypatch
 ):
     manager = MagicMock()
-    manager.status.side_effect = RuntimeError("status unavailable")
+    manager.status.side_effect = GatewayError("status unavailable")
     monkeypatch.setattr("gaia.llm.gateway.GatewayManager", lambda: manager)
     client = _gateway_client()
     error = (
