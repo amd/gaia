@@ -10,7 +10,10 @@ import pytest
 
 pypdf = pytest.importorskip("pypdf")
 
-from gaia.rag.arabic_text import normalize_arabic_pdf_text  # noqa: E402
+from gaia.rag.arabic_text import (  # noqa: E402
+    extract_pdf_page_text,
+    normalize_arabic_pdf_text,
+)
 
 # Bytes the content stream draws -> the text ToUnicode says they are.
 _GLYPHS = {
@@ -18,6 +21,7 @@ _GLYPHS = {
     "B": "ي",  # ي
     "C": "ع",  # ع
     "D": "ﻻ",  # ﻻ  lam-alef ligature (presentation form)
+    "E": "٦",  # ٦  Arabic-Indic six
 }
 
 
@@ -63,6 +67,89 @@ def _extract(content: bytes) -> str:
     return reader.pages[0].extract_text()
 
 
+def _line(*pieces, y=100) -> bytes:
+    """A content stream drawing each (x, text) piece, in the order given."""
+    return b" ".join(
+        b"BT /F1 12 Tf 1 0 0 1 %d %d Tm (%s) Tj ET" % (x, y, text) for x, text in pieces
+    )
+
+
+def _page_text(content: bytes) -> str:
+    return extract_pdf_page_text(pypdf.PdfReader(io.BytesIO(_pdf(content))).pages[0])
+
+
+def test_line_stored_in_screen_order_reads_right_to_left():
+    # Right to left on the page: "AB", 150, "BC", 275, "CA", the way Chrome
+    # stores them left to right. Before the fix "CA" led and 275 sat beside "AB".
+    text = _page_text(
+        _line((50, b"CA"), (100, b"275"), (150, b"BC"), (200, b"150"), (250, b"AB"))
+    )
+
+    assert text.split() == ["يب", "150", "عي", "275", "بع"]
+
+
+def test_full_stop_stays_at_the_end_of_a_reordered_line():
+    text = _page_text(_line((50, b"."), (60, b"4417"), (100, b"AB")))
+
+    assert text.strip() == "يب 4417."
+
+
+def test_percent_sign_stays_against_its_number():
+    text = _page_text(_line((50, b"%"), (60, b"34"), (100, b"AB")))
+
+    assert text.strip() == "يب 34%"
+
+
+def test_a_split_number_stays_in_one_piece():
+    text = _page_text(_line((50, b"20"), (62, b"24"), (100, b"AB")))
+
+    assert text.split() == ["يب", "2024"]
+
+
+def test_line_already_in_reading_order_is_not_touched():
+    # Word stores the rightmost run first, so the file already reads correctly.
+    content = _line((250, b"AB"), (200, b"150"), (150, b"BC"))
+
+    assert _page_text(content) == _extract(content)
+
+
+def test_quote_marks_alone_do_not_flip_a_line():
+    content = _line((50, b"AB"), (100, b"."), (150, b"BC"))
+
+    assert _page_text(content) == _extract(content)
+
+
+def test_english_line_quoting_an_arabic_word_is_not_touched():
+    content = _line((50, b"net total"), (120, b"AB"))
+
+    assert _page_text(content) == _extract(content)
+
+
+def test_arabic_digit_counts_as_a_number_when_reordering():
+    text = _page_text(_line((50, b"BC"), (100, b"E"), (150, b"AB")))
+
+    assert text.split() == ["يب", "٦", "عي"]
+
+
+def test_lines_are_repaired_on_their_own():
+    content = _line((50, b"BC"), (100, b"5"), (150, b"AB"), y=200) + _line(
+        (250, b"AB"), (200, b"7"), (150, b"BC"), y=100
+    )
+
+    lines = [line.split() for line in _page_text(content).splitlines() if line.strip()]
+
+    assert lines[0] == ["يب", "5", "عي"]
+    assert "7" in "".join(lines[1])
+
+
+def test_page_without_text_pieces_comes_back_as_is():
+    class Page:
+        def extract_text(self, visitor_operand_before=None, visitor_text=None):
+            return "plain"
+
+    assert extract_pdf_page_text(Page()) == "plain"
+
+
 def test_digits_inside_an_arabic_run_survive_extraction():
     text = _extract(b"BT /F1 12 Tf 10 100 Td (ABC 40% CBA) Tj ET")
 
@@ -102,3 +189,18 @@ def test_persian_page_keeps_its_letters():
 def test_normalization_leaves_other_compatibility_characters_alone():
     assert normalize_arabic_pdf_text("m² ﬁle") == "m² ﬁle"
     assert normalize_arabic_pdf_text("") == ""
+
+
+def test_a_repeated_line_is_repaired_where_it_stands():
+    from gaia.rag.arabic_text import _repair_visual_order_lines
+
+    # The first line is already in reading order; only the second was stored visually.
+    first = "مدة العقد 12 شهرا"
+    stored = "شهرا 12 مدة العقد"
+    text = f"{stored}\nفقرة أخرى\n{stored}\n"
+    pieces = [(50, 700, "شهرا"), (100, 700, "12"), (150, 700, "مدة العقد")]
+    repaired = _repair_visual_order_lines(
+        text,
+        [(10, 800, stored)] + [(10, 750, "فقرة أخرى")] + pieces,
+    )
+    assert repaired == f"{stored}\nفقرة أخرى\n{first}\n"

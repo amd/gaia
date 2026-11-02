@@ -59,6 +59,18 @@ const notReadyExitCode = 1
 // gaia (#the --check rollout).
 var ErrUnanswered = errors.New("setup readiness could not be determined")
 
+// ErrNoCLI distinguishes a missing `gaia` command from an installed CLI that
+// cannot answer a readiness probe. Verify still wraps both cases in
+// ErrUnanswered, but only the latter can be remedied by running `gaia init`.
+var ErrNoCLI = errors.New("the `gaia` CLI is not available")
+
+// InstallCommand and InstallPowerShellCommand are the supported bootstrap
+// commands when the CLI itself is unavailable.
+const (
+	InstallCommand           = "curl -fsSL https://amd-gaia.ai/install.sh | sh"
+	InstallPowerShellCommand = "irm https://amd-gaia.ai/install.ps1 | iex"
+)
+
 // Binary resolves the `gaia` CLI on PATH. A package var, not a bare
 // exec.LookPath call, so tests can substitute a stub without spawning the real
 // CLI (mirrors daemon.Options.StartCommand's injection point).
@@ -66,11 +78,12 @@ var Binary = func() (string, error) {
 	bin, err := exec.LookPath("gaia")
 	if err != nil {
 		return "", fmt.Errorf(
-			"the `gaia` CLI is not on PATH, so setup cannot run. " +
-				"Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
-				"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or " +
-				"`pip install amd-gaia` into the Python environment on your PATH, " +
-				"then retry. From a clone of the repo, `pip install -e .` works too")
+			"%w: the `gaia` CLI is not on PATH, so setup cannot run. "+
+				"Install GAIA with `"+InstallCommand+"` "+
+				"(on Windows: `"+InstallPowerShellCommand+"`), or "+
+				"`pip install amd-gaia` into the Python environment on your PATH, "+
+				"then retry. From a clone of the repo, `pip install -e .` works too",
+			ErrNoCLI)
 	}
 	return bin, nil
 }

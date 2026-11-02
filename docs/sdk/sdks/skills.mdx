@@ -28,7 +28,9 @@ print(skill.directory)                   # the skill's folder on disk
 ```
 
 With no arguments, `SkillManager` searches `~/.gaia/skills` (moved by
-`GAIA_CONFIG_DIR`) and the read-only `./.claude/skills` and `~/.claude/skills`.
+`GAIA_HOME` or `GAIA_CONFIG_DIR`) and the read-only `./.claude/skills` and
+`~/.claude/skills`. Pass `project_dir=` to read that project's `.claude/skills`
+instead of the working directory's, labelled `claude-project`.
 Pass `user_skills_root=` to search another folder instead of `~/.gaia/skills`,
 `agent_skill_dirs=` to add higher-precedence folders, and
 `include_claude_roots=False` to skip the Claude Code folders.
@@ -39,7 +41,7 @@ Pass `user_skills_root=` to search another folder instead of `~/.gaia/skills`,
 | `body` | The Markdown after the frontmatter — what the agent is told |
 | `directory` | The skill's folder (`None` only for a skill parsed from a string) |
 | `path` | The `SKILL.md` file itself |
-| `root` | Which search location it came from: `agent-bundled`, `user`, or `claude-import` |
+| `root` | Which search location it came from: `agent-bundled`, `user`, `claude-project`, or `claude-import` |
 
 ## Reference files and scripts
 

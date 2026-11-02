@@ -1502,7 +1502,7 @@ class LemonadeManager:
             raise LemonadeClientError(
                 f"Failed to preload Lemonade model {model!r} with "
                 f"ctx_size={requested_ctx} on idle server at "
-                f"{client.base_url}.\n"
+                f"{client.base_url}: {e}\n"
                 f"To recover manually: stop the running server, then restart it "
                 f"({describe_start_hint(requested_ctx).instruction}) and "
                 f"re-run your GAIA command.\n"

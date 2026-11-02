@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import gaia.config
+from gaia.llm.gpu_memory import GB_PER_GIB
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
@@ -148,7 +149,7 @@ def test_use_mine_on_a_big_pc_names_the_large_model_and_its_real_size(running):
     # The hardware's pick keeps Gemma beside it for images: what gaia init pulls.
     assert set(_plan_ids(plan)) >= {LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME}
     assert plan["download_gb"] == pytest.approx(23.3 + 5.6 + 0.3)
-    assert plan["memory_gb"] == 96
+    assert plan["memory_gb"] == round(96 * GB_PER_GIB)
 
 
 def test_an_already_downloaded_model_costs_nothing(running):
@@ -179,7 +180,7 @@ def test_a_model_this_lemonade_is_too_old_for_is_not_offered(running):
     assert options[LARGE_DEFAULT_MODEL_NAME]["fits"] is False
     assert "Lemonade" in options[LARGE_DEFAULT_MODEL_NAME]["reason"]
     assert options[DEFAULT_MODEL_NAME]["fits"] is True
-    with pytest.raises(sp.SetupPlanError, match="won't fit"):
+    with pytest.raises(sp.NeedsAcknowledgement, match="Lemonade v11"):
         sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
 
 
@@ -205,10 +206,16 @@ def test_picking_the_recommendation_again_hands_the_choice_back_to_setup(
     assert sp.build_plan()["chat_model"]["user_set"] is False
 
 
-def test_a_model_that_does_not_fit_is_refused(running):
+def test_a_model_that_does_not_fit_asks_before_it_is_saved(running, config_file):
     running(SMALL_GPU)
-    with pytest.raises(sp.SetupPlanError, match="won't fit"):
+    with pytest.raises(sp.NeedsAcknowledgement, match="may not run") as ask:
         sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
+    assert ask.value.detail["acknowledge"] == "acknowledge_no_fit"
+    assert not config_file.exists()
+    sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME, acknowledge_no_fit=True)
+    assert (
+        json.loads(config_file.read_text())["default_model"] == LARGE_DEFAULT_MODEL_NAME
+    )
 
 
 @pytest.fixture
@@ -234,7 +241,7 @@ def test_a_busy_big_pc_shows_why_the_large_model_does_not_fit_now(running, free_
     assert plan["recommended_model"] == DEFAULT_MODEL_NAME
     large = next(o for o in plan["options"] if o["id"] == LARGE_DEFAULT_MODEL_NAME)
     assert large["fits"] is False and "free memory" in large["reason"]
-    with pytest.raises(sp.SetupPlanError, match="free memory"):
+    with pytest.raises(sp.NeedsAcknowledgement, match="free memory"):
         sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
 
 
@@ -381,10 +388,520 @@ def test_chat_model_endpoint_returns_the_new_plan(client, running):
     assert r.json()["chat_model"]["id"] == DEFAULT_MODEL_NAME
 
 
-def test_chat_model_endpoint_explains_a_refusal(client, running):
+def test_chat_model_endpoint_asks_to_confirm_a_model_that_may_not_fit(client, running):
     running(SMALL_GPU)
+    body = {"model_id": LARGE_DEFAULT_MODEL_NAME}
+    r = client.post("/api/setup/chat-model", json=body, headers=UI)
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert detail["code"] == "no_fit"
+    assert detail["capacity_gb"] == round(12 * GB_PER_GIB, 1)
+    assert "may not run" in detail["message"]
     r = client.post(
-        "/api/setup/chat-model", json={"model_id": LARGE_DEFAULT_MODEL_NAME}, headers=UI
+        "/api/setup/chat-model",
+        json={**body, "acknowledge_no_fit": True},
+        headers=UI,
+    )
+    assert r.status_code == 200
+    assert r.json()["chat_model"]["id"] == LARGE_DEFAULT_MODEL_NAME
+
+
+def test_chat_model_endpoint_refuses_a_model_that_is_not_there(client, running):
+    running(BIG_GPU)
+    r = client.post("/api/setup/chat-model", json={"model_id": "nope-GGUF"}, headers=UI)
+    assert r.status_code == 422
+
+
+# ── the model catalog, skips, disk (#6226) ─────────────────────────────────
+
+FLM = "gemma4-it-e2b-FLM"
+
+
+class _LemonadeWithFlm(_FakeLemonade):
+    """A Lemonade holding an FLM chat model, a speech model, and a stray."""
+
+    def __init__(self, *args, free_gb=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.free_gb = free_gb
+        self.deleted = []
+
+    def get_system_info(self, timeout=None):
+        info = super().get_system_info(timeout)
+        if self.free_gb is not None:
+            info["model_storage"] = {"free_bytes": self.free_gb * 1e9, "path": "D:/hub"}
+        return info
+
+    def list_models(self, show_all=False):
+        data = super().list_models(show_all)["data"]
+        data += [
+            {
+                "id": FLM,
+                "downloaded": FLM in self.downloaded,
+                "size": 3.4,
+                "recipe": "flm",
+                "labels": ["chat"],
+            },
+            {
+                "id": "Whisper-Base",
+                "downloaded": True,
+                "size": 0.1,
+                "recipe": "whispercpp",
+                "labels": ["audio"],
+            },
+            {"id": "Never-Pulled-GGUF", "downloaded": False, "size": 1.0},
+        ]
+        return {"data": data}
+
+    def delete_model(self, model_name, timeout=None):
+        self.deleted.append(model_name)
+        self.downloaded.discard(model_name)
+
+
+@pytest.fixture
+def flm_box(monkeypatch):
+    def use(capacity=SMALL_GPU, downloaded=(FLM,), free_gb=None):
+        fake = _LemonadeWithFlm(capacity, downloaded, free_gb=free_gb)
+        monkeypatch.setattr(sp, "_client", lambda url: fake)
+        return fake
+
+    return use
+
+
+def _entry(plan, model_id):
+    return next(e for e in plan["catalog"] if e["id"] == model_id)
+
+
+def test_catalog_offers_the_users_flm_model_but_not_speech_or_strays(flm_box):
+    flm_box()
+    plan = sp.build_plan()
+    ids = [e["id"] for e in plan["catalog"]]
+    assert FLM in ids
+    assert "Whisper-Base" not in ids and "Never-Pulled-GGUF" not in ids
+    flm = _entry(plan, FLM)
+    assert flm["chat_choice"] and flm["downloaded"] and flm["size_gb"] == 0.0
+    assert flm["recipe"] == "flm" and not flm["planned"]
+    assert not _entry(plan, DEFAULT_EMBEDDING_MODEL)["chat_choice"]
+
+
+def test_catalog_says_what_each_planned_model_is_for_and_costs(flm_box):
+    flm_box()
+    plan = sp.build_plan()
+    gemma = _entry(plan, DEFAULT_MODEL_NAME)
+    assert gemma["roles"] == ["chat", "vision"] and gemma["recommended"]
+    assert gemma["selected"] and gemma["size_gb"] == pytest.approx(5.6)
+    assert "images" in gemma["if_skipped"]
+    qwen = _entry(plan, LARGE_DEFAULT_MODEL_NAME)
+    assert not qwen["recommended"] and not qwen["selected"]
+    assert qwen["fits"] is False and qwen["capacity_gb"] == round(12 * GB_PER_GIB, 1)
+    assert qwen["need_gb"] > 23
+    # The sentence and capacity_gb read the same number.
+    assert "this PC has 12.9 GB" in qwen["fit_reason"]
+
+
+def test_big_pc_recommends_the_large_model_and_keeps_gemma_for_vision(running):
+    running(BIG_GPU)
+    plan = sp.build_plan()
+    assert _entry(plan, LARGE_DEFAULT_MODEL_NAME)["recommended"]
+    gemma = _entry(plan, DEFAULT_MODEL_NAME)
+    assert gemma["roles"] == ["vision"] and gemma["recommended"]
+
+
+def test_cold_pc_marks_fit_unknown_rather_than_guessing(
+    no_server, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    plan = sp.build_plan()
+    qwen = _entry(plan, LARGE_DEFAULT_MODEL_NAME)
+    assert qwen["fits"] is None and qwen["need_gb"] is None
+    assert qwen["downloaded"] is None
+    assert plan["disk"]["source"] == "local"
+    assert plan["disk"]["path"] == str(tmp_path / "hub")
+
+
+def test_flm_user_picks_their_model_and_gemma_leaves_the_downloads(
+    flm_box, config_file
+):
+    flm_box()
+    sp.choose_chat_model(FLM)
+    assert json.loads(config_file.read_text())["default_model"] == FLM
+    plan = sp.build_plan()
+    assert plan["chat_model"] == {
+        "id": FLM,
+        "user_set": True,
+        "size_gb": 0.0,
+        "downloaded": True,
+    }
+    assert [m["id"] for m in plan["models"]] == [DEFAULT_EMBEDDING_MODEL, FLM]
+    assert plan["download_gb"] == pytest.approx(0.3)
+    gemma = _entry(plan, DEFAULT_MODEL_NAME)
+    assert not gemma["selected"] and "images" in gemma["if_skipped"]
+
+
+def test_a_skipped_model_leaves_the_download_and_says_what_stops(flm_box):
+    flm_box()
+    sp.set_model_skipped(DEFAULT_MODEL_NAME, True)
+    plan = sp.build_plan()
+    assert plan["skipped_models"] == [DEFAULT_MODEL_NAME]
+    assert DEFAULT_MODEL_NAME not in [m["id"] for m in plan["models"]]
+    assert _entry(plan, DEFAULT_MODEL_NAME)["skipped"]
+    assert plan["download_gb"] == pytest.approx(0.3)
+
+
+def test_picking_a_skipped_model_takes_it_off_the_skip_list(flm_box, config_file):
+    flm_box(capacity=BIG_GPU)
+    sp.set_model_skipped(DEFAULT_MODEL_NAME, True)
+    sp.choose_chat_model(DEFAULT_MODEL_NAME)
+    assert json.loads(config_file.read_text())["skipped_models"] == []
+
+
+def test_disk_short_for_the_selection_is_a_warning_to_confirm(flm_box):
+    flm_box(downloaded=(), free_gb=2.0)
+    plan = sp.build_plan()
+    assert plan["disk"] == {"path": "D:/hub", "free_gb": 2.0, "source": "lemonade"}
+    assert "Free 3.9 GB" in plan["disk_warning"]
+    warning = sp.run_disk_warning()
+    assert warning["drop"] == [DEFAULT_MODEL_NAME]
+    assert warning["need_gb"] == plan["download_gb"]
+    with pytest.raises(sp.NeedsAcknowledgement):
+        sp.prepare_download(DEFAULT_MODEL_NAME)
+
+
+def test_remove_deletes_only_on_request_and_keeps_it_from_coming_back(
+    flm_box, config_file
+):
+    fake = flm_box(downloaded=(FLM, DEFAULT_MODEL_NAME))
+    assert sp.remove_model(DEFAULT_MODEL_NAME) == 5.6
+    assert fake.deleted == [DEFAULT_MODEL_NAME]
+    assert json.loads(config_file.read_text())["skipped_models"] == [DEFAULT_MODEL_NAME]
+    with pytest.raises(sp.SetupPlanError, match="not downloaded"):
+        sp.remove_model(DEFAULT_MODEL_NAME)
+    assert fake.deleted == [DEFAULT_MODEL_NAME]
+
+
+def test_skip_and_remove_endpoints(client, flm_box):
+    flm_box(downloaded=(FLM, DEFAULT_MODEL_NAME))
+    r = client.post(
+        "/api/setup/models/skip",
+        json={"model_id": DEFAULT_EMBEDDING_MODEL},
+        headers=UI,
+    )
+    assert r.status_code == 200
+    assert r.json()["skipped_models"] == [DEFAULT_EMBEDDING_MODEL]
+    bad = client.post("/api/setup/models/skip", json={"model_id": FLM}, headers=UI)
+    assert bad.status_code == 422
+    r = client.post(
+        "/api/setup/models/remove", json={"model_id": DEFAULT_MODEL_NAME}, headers=UI
+    )
+    assert r.status_code == 200 and r.json()["freed_gb"] == 5.6
+
+
+def test_remove_endpoint_refuses_a_model_that_is_downloading(
+    client, flm_box, monkeypatch
+):
+    fake = flm_box(downloaded=(FLM, DEFAULT_MODEL_NAME))
+    monkeypatch.setattr(setup_router.runner, "busy_with", lambda m: True)
+    r = client.post(
+        "/api/setup/models/remove", json={"model_id": DEFAULT_MODEL_NAME}, headers=UI
+    )
+    assert r.status_code == 409 and fake.deleted == []
+
+
+def test_download_endpoint_confirms_low_disk_then_pulls_and_unskips(
+    client, flm_box, monkeypatch, config_file
+):
+    fake = flm_box(downloaded=(FLM,), free_gb=1.0)
+    sp.set_model_skipped(DEFAULT_MODEL_NAME, True)
+    started = []
+    monkeypatch.setattr(
+        setup_router.runner,
+        "download_model",
+        lambda c, m, keep: started.append((c, m, keep)) or {"state": "idle"},
+    )
+    body = {"model_id": DEFAULT_MODEL_NAME, "keep_trying": True}
+    r = client.post("/api/setup/models/download", json=body, headers=UI)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "low_disk"
+    assert started == []
+    r = client.post(
+        "/api/setup/models/download",
+        json={**body, "acknowledge_low_disk": True},
+        headers=UI,
+    )
+    assert r.status_code == 202
+    assert started == [(fake, DEFAULT_MODEL_NAME, True)]
+    assert json.loads(config_file.read_text())["skipped_models"] == []
+
+
+def test_download_endpoint_refuses_a_model_nobody_has(client, flm_box):
+    flm_box()
+    r = client.post(
+        "/api/setup/models/download", json={"model_id": "nope-GGUF"}, headers=UI
     )
     assert r.status_code == 422
-    assert "won't fit" in r.json()["detail"]
+
+
+def test_run_endpoint_asks_before_downloading_past_the_free_space(
+    client, flm_box, monkeypatch
+):
+    flm_box(downloaded=(), free_gb=1.0)
+    seen = []
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: seen.append(k) or {"state": "running"},
+    )
+    r = client.post("/api/setup/run", json={}, headers=UI)
+    assert r.status_code == 409
+    assert r.json()["detail"]["acknowledge"] == "acknowledge_low_disk"
+    assert seen == []
+    r = client.post("/api/setup/run", json={"acknowledge_low_disk": True}, headers=UI)
+    assert r.status_code == 200
+    assert seen == [
+        {
+            "allow_low_disk": True,
+            "keep_trying": False,
+            "extra_models": [],
+            "server_only": False,
+        }
+    ]
+
+
+def test_run_endpoint_pulls_ticked_extras_and_counts_them_against_the_disk(
+    client, flm_box, monkeypatch
+):
+    flm_box(capacity=BIG_GPU, downloaded=(FLM, DEFAULT_MODEL_NAME), free_gb=10.0)
+    seen = []
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: seen.append(k) or {"state": "running"},
+    )
+    body = {"extra_models": [LARGE_DEFAULT_MODEL_NAME.lower()]}
+    r = client.post("/api/setup/run", json=body, headers=UI)
+    # Gemma is on disk; the ticked 23 GB model alone overflows 10 GB free.
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "low_disk"
+    assert LARGE_DEFAULT_MODEL_NAME in r.json()["detail"]["drop"]
+    r = client.post(
+        "/api/setup/run", json={**body, "acknowledge_low_disk": True}, headers=UI
+    )
+    assert r.status_code == 200
+    # Sent as the catalog names it, so `gaia init` matches it exactly.
+    assert seen[0]["extra_models"] == [LARGE_DEFAULT_MODEL_NAME]
+
+
+def test_run_endpoint_refuses_an_extra_model_nobody_has(client, flm_box, monkeypatch):
+    flm_box()
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post("/api/setup/run", json={"extra_models": ["nope-GGUF"]}, headers=UI)
+    assert r.status_code == 422 and "nope-GGUF" in r.json()["detail"]
+
+
+def test_a_failed_extras_check_is_not_a_422_and_leaks_nothing(client, monkeypatch):
+    def broken(_ids):
+        raise sp.SetupPlanError("secret path C:/Users/x/.gaia/config.json is broken")
+
+    monkeypatch.setattr(sp, "check_extra_models", broken)
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post(
+        "/api/setup/run", json={"extra_models": [DEFAULT_MODEL_NAME]}, headers=UI
+    )
+    assert r.status_code == 503
+    assert "secret path" not in r.json()["detail"]
+    assert "couldn't work out the setup plan" in r.json()["detail"]
+
+
+def test_server_only_run_skips_the_disk_check_and_takes_no_extras(
+    client, flm_box, monkeypatch
+):
+    flm_box(downloaded=(), free_gb=0.1)
+    seen = []
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: seen.append(k) or {"state": "running"},
+    )
+    r = client.post("/api/setup/run", json={"server_only": True}, headers=UI)
+    assert r.status_code == 200 and seen[0]["server_only"] is True
+    r = client.post(
+        "/api/setup/run",
+        json={"server_only": True, "extra_models": [DEFAULT_MODEL_NAME]},
+        headers=UI,
+    )
+    assert r.status_code == 422 and len(seen) == 1
+
+
+def test_catalog_separates_gaias_models_from_ones_only_in_lemonade(flm_box):
+    flm_box()
+    plan = sp.build_plan()
+    assert _entry(plan, FLM)["gaia_model"] is False
+    assert _entry(plan, DEFAULT_MODEL_NAME)["gaia_model"] is True
+    assert _entry(plan, LARGE_DEFAULT_MODEL_NAME)["gaia_model"] is True
+    assert _entry(plan, DEFAULT_EMBEDDING_MODEL)["gaia_model"] is True
+
+
+def test_each_model_has_the_name_the_picker_and_sidebar_show(flm_box):
+    from gaia.ui.local_models import friendly_name
+
+    flm_box()
+    for entry in sp.build_plan()["catalog"]:
+        assert entry["name"] == friendly_name(entry["id"]), entry["id"]
+    assert _entry(sp.build_plan(), DEFAULT_MODEL_NAME)["name"] == "Gemma 4 E4B"
+
+
+def test_a_lemonade_only_chat_model_stays_in_the_lemonade_list(flm_box):
+    flm_box()
+    sp.choose_chat_model(FLM)
+    plan = sp.build_plan()
+    assert plan["chat_model"]["id"] == FLM
+    entry = _entry(plan, FLM)
+    # Now planned (it is the chat model), but still not one of GAIA's own.
+    assert entry["planned"] is True and entry["gaia_model"] is False
+    assert _entry(plan, DEFAULT_EMBEDDING_MODEL)["gaia_model"] is True
+    assert _entry(plan, DEFAULT_MODEL_NAME)["gaia_model"] is True
+
+
+def test_plan_counts_a_model_downloaded_beside_the_profile(flm_box):
+    flm_box(capacity=BIG_GPU, downloaded=(FLM,))
+    sp.choose_chat_model(FLM)
+    plan = sp.build_plan(extra_models=[DEFAULT_MODEL_NAME])
+    assert DEFAULT_MODEL_NAME in [m["id"] for m in plan["models"]]
+    assert plan["download_gb"] == pytest.approx(5.6 + 0.3)
+
+
+def test_without_a_server_each_action_says_what_it_could_not_do(no_server):
+    with pytest.raises(sp.SetupPlanError, match="can't remove Gemma"):
+        sp.remove_model(DEFAULT_MODEL_NAME)
+    with pytest.raises(sp.SetupPlanError, match="can't download"):
+        sp.prepare_download(DEFAULT_MODEL_NAME)
+
+
+def test_plan_routes_never_send_exception_text(client, monkeypatch):
+    def broken():
+        raise sp.SetupPlanError("Cannot read C:/Users/secret/.gaia/config.json: boom")
+
+    monkeypatch.setattr(sp, "_lemonade", broken)
+    for method, path, body in (
+        ("get", "/api/setup/plan", None),
+        ("post", "/api/setup/chat-model", {"model_id": "x"}),
+        ("post", "/api/setup/models/skip", {"model_id": "x"}),
+        ("post", "/api/setup/models/remove", {"model_id": "x"}),
+    ):
+        r = getattr(client, method)(
+            path, headers=UI, **({"json": body} if body else {})
+        )
+        assert r.status_code == 503, path
+        assert "secret" not in r.json()["detail"] and "server log" in r.json()["detail"]
+
+
+def test_a_server_that_is_not_running_gets_its_own_answer(client, no_server):
+    r = client.post(
+        "/api/setup/models/remove", json={"model_id": DEFAULT_MODEL_NAME}, headers=UI
+    )
+    assert r.status_code == 503 and "isn't running yet" in r.json()["detail"]
+
+
+def test_unreadable_free_memory_is_fit_unknown_not_the_error_text(running, monkeypatch):
+    from gaia.llm import lemonade_client
+
+    def unreadable(url):
+        raise lemonade_client.LemonadeClientError("socket error at C:/secret")
+
+    fake = running(BIG_GPU)
+    fake.base_url = "http://127.0.0.1:9/api/v1"
+    monkeypatch.setattr(lemonade_client, "_free_memory_snapshot", unreadable)
+    large = next(
+        o for o in sp.build_plan()["options"] if o["id"] == LARGE_DEFAULT_MODEL_NAME
+    )
+    assert large["fits"] is None
+    assert "secret" not in large["reason"] and "free memory" in large["reason"]
+
+
+# ── units: the plan's memory numbers are decimal GB, verdicts unchanged ───
+
+
+@pytest.mark.parametrize("memory_gib", [6, 8, 12, 16, 24, 27, 32, 48, 64, 96, 120])
+@pytest.mark.parametrize(
+    "model_id, size_gb",
+    [
+        (LARGE_DEFAULT_MODEL_NAME, 23.3),
+        (DEFAULT_MODEL_NAME, 5.6),
+        ("Qwen3-VL-4B-Instruct-GGUF", 3.3),
+    ],
+)
+def test_decimal_numbers_keep_every_fit_verdict(memory_gib, model_id, size_gb):
+    from gaia.installer import model_choice
+    from gaia.llm.lemonade_client import find_model_requirement, kv_cache_for
+    from gaia.llm.model_fit import check_fit
+
+    capacity = MachineCapacity(memory_gib, "AMD iGPU", None)
+    mr = find_model_requirement(model_id)
+    kv = kv_cache_for(mr, capacity) if mr else 0.0
+    before = check_fit(size_gb, capacity, kv).fits
+    fit = model_choice.memory_fit(model_id, size_gb, capacity)
+    assert fit["fits"] is before
+    assert fit["capacity_gb"] == round(memory_gib * GB_PER_GIB, 1)
+    # The numbers shown agree with the verdict shown (to the 0.1 they round to).
+    if before:
+        assert fit["need_gb"] <= fit["capacity_gb"] + 0.1
+    else:
+        assert fit["need_gb"] >= fit["capacity_gb"] - 0.1
+
+
+class _IgpuLemonade(_FakeLemonade):
+    """A Strix Halo-class iGPU reporting its carve-out and shared memory, in GiB."""
+
+    def __init__(self, carve_gib, shared_gib):
+        super().__init__(MachineCapacity(carve_gib + shared_gib, "AMD iGPU", 500))
+        self.carve_gib, self.shared_gib = carve_gib, shared_gib
+
+    def get_system_info(self, timeout=None):
+        return {
+            "Physical Memory": "128 GB",
+            "devices": {
+                "amd_igpu": {
+                    "available": True,
+                    "name": "AMD Radeon 8060S",
+                    "vram_gb": self.carve_gib,
+                    "virtual_mem_gb": self.shared_gib,
+                }
+            },
+            "model_storage": {"free_bytes": 500e9},
+        }
+
+
+@pytest.mark.parametrize(
+    "carve_gib, shared_gib", [(16, 0), (0.5, 15.5), (32, 31.5), (64, 0)]
+)
+def test_plan_memory_matches_the_gpu_memory_pane(
+    running, monkeypatch, tmp_path, carve_gib, shared_gib
+):
+    from gaia.llm import gpu_memory
+
+    fake = _IgpuLemonade(carve_gib, shared_gib)
+    monkeypatch.setattr(sp, "_client", lambda url: fake)
+    monkeypatch.setattr(gpu_memory, "_load_state", lambda: None)
+    # The pane exists only on Windows and Linux; run it as Linux on any CI host.
+    monkeypatch.setattr(gpu_memory, "_platform", lambda: "linux")
+    (tmp_path / "meminfo").write_text(
+        "MemTotal:       124500000 kB\n", encoding="ascii"
+    )
+    monkeypatch.setattr(gpu_memory, "PATHS", gpu_memory.SystemPaths(proc=tmp_path))
+    monkeypatch.setattr(
+        gpu_memory,
+        "_linux_setup",
+        lambda: gpu_memory._LinuxSetup(
+            gpu_memory.METHOD_GUIDED, "", "ttm", "modprobe", None
+        ),
+    )
+    plan = sp.build_plan()
+    pane = gpu_memory.describe(fake.get_system_info())
+    assert pane["applies"] is True
+    # Settings shows both: the same machine must read the same number.
+    assert plan["capacity_gb"] == pane["gpu_gb"]

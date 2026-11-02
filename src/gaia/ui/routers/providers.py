@@ -366,6 +366,9 @@ def _with_network(view: Dict[str, Any]) -> Dict[str, Any]:
 
 def _is_chat_model(model: Dict[str, Any]) -> bool:
     labels = {str(label).lower() for label in model.get("labels") or []}
+    if "single-turn" in labels:
+        # FLM builds that answer one message at a time cannot hold a conversation.
+        return False
     # ``chat`` wins: FLM omni models are labeled both ``chat`` and ``audio``.
     return "chat" in labels or not labels & _NON_CHAT_LABELS
 
@@ -1080,6 +1083,7 @@ def _preferred_backend() -> Optional[str]:
 
 
 def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, Any]:
+    from gaia.installer.model_choice import to_decimal_gb
     from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
 
     from ..local_models import annotate_local_models, measured_speeds
@@ -1105,7 +1109,10 @@ def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, A
         m["download_progress"] = _get_download_progress(m["id"])
     return {
         "models": annotated,
-        "memory_gb": round(capacity.memory_gb, 1) if capacity else None,
+        # Decimal GB, as the setup plan and the GPU memory pane report it.
+        "memory_gb": (
+            round(to_decimal_gb(capacity.memory_gb), 1) if capacity else None
+        ),
         "memory_source": capacity.memory_source if capacity else None,
         "capacity_error": capacity_error,
     }
@@ -1230,11 +1237,11 @@ def _context_view(model_id: str) -> Dict[str, Any]:
         _raise(e)
     except (ModelFitError, GaiaConfigError) as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    from gaia.llm.lemonade_client import GPU_CTX_SIZE, NPU_CTX_SIZE, runs_on_npu
+    from gaia.llm.lemonade_client import GPU_CTX_SIZE, npu_ctx_ceiling, runs_on_npu
 
     span = context_range(model_id, capacity, trained)
     # A model GAIA has no entry for loads at its device's flat window.
-    flat = NPU_CTX_SIZE if runs_on_npu(model_id) else GPU_CTX_SIZE
+    flat = npu_ctx_ceiling(model_id) if runs_on_npu(model_id) else GPU_CTX_SIZE
     name = display_name(model_id)
     return {
         "model": model_id,

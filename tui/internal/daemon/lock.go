@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/filelock"
 )
 
 // lockPoll is the retry interval while waiting for the start lock.
@@ -33,7 +35,7 @@ func acquireLock(path string, timeout time.Duration) (*fileLock, error) {
 	}
 	deadline := time.Now().Add(timeout)
 	for {
-		ok, lerr := tryLock(f)
+		ok, lerr := filelock.TryLock(f)
 		if lerr != nil {
 			f.Close()
 			return nil, &StartError{Reason: fmt.Sprintf("cannot lock %s: %v", path, lerr)}
@@ -55,7 +57,7 @@ func (l *fileLock) release() {
 	if l == nil || l.f == nil {
 		return
 	}
-	unlock(l.f)
+	filelock.Unlock(l.f)
 	l.f.Close()
 	l.f = nil
 }

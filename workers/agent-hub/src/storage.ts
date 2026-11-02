@@ -95,6 +95,25 @@ export function packageFilesKey(id: string, version: string): string {
 }
 
 /**
+ * Filenames the agent lane writes as per-version docs beside the artifact. An
+ * artifact with one of these names would be overwritten by the doc, so the
+ * publish lane rejects them. Derived from the key builders so the two can't drift.
+ */
+export const AGENT_RESERVED_FILENAMES: ReadonlySet<string> = new Set(
+  [
+    rawManifestKey,
+    readmeKey,
+    changelogKey,
+    specKey,
+    skillKey,
+    evaluationKey,
+    capabilityMatrixKey,
+    evalScorecardKey,
+    packageFilesKey,
+  ].map((key) => key("_", "_").slice(versionDir("_", "_").length))
+);
+
+/**
  * Read the README markdown for one published version. Returns "" when no
  * README was published for that version — the catalog's documented default,
  * not an error (the `readme` form part is optional on POST /publish).
@@ -265,6 +284,13 @@ export function skillChangelogKey(name: string, version: string): string {
 export function skillAuditKey(name: string, version: string): string {
   return `${skillVersionDir(name, version)}audit.json`;
 }
+
+/** The skills lane's per-version doc filenames — see AGENT_RESERVED_FILENAMES. */
+export const SKILL_RESERVED_FILENAMES: ReadonlySet<string> = new Set(
+  [skillDocKey, skillChangelogKey, skillAuditKey].map((key) =>
+    key("_", "_").slice(skillVersionDir("_", "_").length)
+  )
+);
 
 /** Read and parse the per-skill manifest, or null if the skill doesn't exist. */
 export async function readSkillManifest(
