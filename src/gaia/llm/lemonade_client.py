@@ -3646,6 +3646,34 @@ class OwnedServerProcess:
         self.kill_tree(get_logger(__name__))
 
 
+def check_image_variation_request(
+    image_path: Union[str, Path], n: int, size: Optional[str]
+) -> Path:
+    """Validate an ``/images/variations`` request; return the image path.
+
+    Raises:
+        LemonadeClientError: A missing or non-PNG file, *n* outside 1-10, or a
+            *size* that is not ``WIDTHxHEIGHT``.
+    """
+    path = Path(image_path).expanduser()
+    if not path.is_file():
+        raise LemonadeClientError(f"Image file does not exist: {path}")
+    if path.suffix.lower() != ".png":
+        raise LemonadeClientError(
+            f"Image variations need a PNG, got '{path.name}'. Lemonade's "
+            "variations endpoint accepts PNG only."
+        )
+    if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 10:
+        raise LemonadeClientError(
+            f"Image variations need n between 1 and 10, got {n!r}."
+        )
+    if size is not None and not re.fullmatch(r"[1-9]\d*x[1-9]\d*", size):
+        raise LemonadeClientError(
+            f"Image size must be WIDTHxHEIGHT, e.g. 512x512, got {size!r}."
+        )
+    return path
+
+
 class LemonadeClient:
     """Client for interacting with the Lemonade server REST API."""
 
@@ -6582,22 +6610,7 @@ class LemonadeClient:
             LemonadeClientError: Bad arguments, a missing or non-PNG file, or a
                 failed request.
         """
-        path = Path(image_path).expanduser()
-        if not path.is_file():
-            raise LemonadeClientError(f"Image file does not exist: {path}")
-        if path.suffix.lower() != ".png":
-            raise LemonadeClientError(
-                f"Image variations need a PNG, got '{path.name}'. Lemonade's "
-                "variations endpoint accepts PNG only."
-            )
-        if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 10:
-            raise LemonadeClientError(
-                f"Image variations need n between 1 and 10, got {n!r}."
-            )
-        if size is not None and not re.fullmatch(r"[1-9]\d*x[1-9]\d*", size):
-            raise LemonadeClientError(
-                f"Image size must be WIDTHxHEIGHT, e.g. 512x512, got {size!r}."
-            )
+        path = check_image_variation_request(image_path, n, size)
 
         fields: Dict[str, Any] = {
             "model": model,

@@ -33,7 +33,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.file_snapshots import SnapshotError, before_change
-from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+from gaia.llm.lemonade_client import (
+    LemonadeClient,
+    LemonadeClientError,
+    check_image_variation_request,
+)
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
 
@@ -398,9 +402,24 @@ class SDToolsMixin:
             return {"status": "error", "error": f"Image is not a file: {source}"}
 
         model = model or LemonadeClient.IMAGE_VARIATION_DEFAULT_MODEL
+        # Validate before loading, and download only legacy SD on demand, as
+        # _generate_image does: a bad call must not start a multi-GB download.
+        legacy_sd = model in self.SD_MODELS
+        try:
+            check_image_variation_request(source, n, size)
+            if not legacy_sd and not any(
+                m.get("id") == model for m in self.sd_client.list_sd_models()
+            ):
+                return {
+                    "status": "error",
+                    "error": f"Invalid model '{model}' or model not downloaded. "
+                    "Call list_sd_models() to choose one.",
+                }
+        except LemonadeClientError as exc:
+            return {"status": "error", "error": str(exc)}
         try:
             self.sd_client.load_model(
-                model, auto_download=True, prompt=False, timeout=600
+                model, auto_download=legacy_sd, prompt=False, timeout=600
             )
             response = self.sd_client.create_image_variation(
                 source, model=model, size=size, n=n

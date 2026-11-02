@@ -183,6 +183,7 @@ def variation_tool(monkeypatch, tmp_path):
     sd_client = SimpleNamespace(
         base_url=BASE,
         load_model=MagicMock(return_value={"status": "success"}),
+        list_sd_models=MagicMock(return_value=[{"id": "Flux-2-Klein-4B"}]),
         create_image_variation=MagicMock(),
     )
     monkeypatch.setattr("gaia.sd.mixin.LemonadeClient", _ClientFactory(sd_client))
@@ -244,7 +245,7 @@ def test_each_variation_is_saved_as_its_own_png(variation_tool, source):
     assert [p.name.startswith("variation_cat_") for p in paths] == [True, True]
     assert paths[0].name.endswith("_1.png") and paths[1].name.endswith("_2.png")
     host.sd_client.load_model.assert_called_once_with(
-        "Flux-2-Klein-4B", auto_download=True, prompt=False, timeout=600
+        "Flux-2-Klein-4B", auto_download=False, prompt=False, timeout=600
     )
     host.sd_client.create_image_variation.assert_called_once_with(
         source.resolve(), model="Flux-2-Klein-4B", size=None, n=2
@@ -326,6 +327,67 @@ def test_a_load_failure_is_reported_without_varying(variation_tool, source):
     host.sd_client.create_image_variation.assert_not_called()
 
 
+def test_a_model_that_is_not_downloaded_is_refused_without_a_download(
+    variation_tool, source
+):
+    host, create, _ = variation_tool
+    host.sd_client.list_sd_models.return_value = []
+
+    result = create(str(source))
+
+    assert result["status"] == "error"
+    assert "not downloaded" in result["error"]
+    host.sd_client.load_model.assert_not_called()
+    host.sd_client.create_image_variation.assert_not_called()
+
+
+def test_a_legacy_sd_model_still_downloads_on_demand(variation_tool, source):
+    host, create, _ = variation_tool
+    host.sd_client.create_image_variation.return_value = {
+        "data": [{"b64_json": _b64(_png_bytes())}]
+    }
+
+    result = create(str(source), model="SD-Turbo")
+
+    assert result["status"] == "success", result
+    host.sd_client.list_sd_models.assert_not_called()
+    host.sd_client.load_model.assert_called_once_with(
+        "SD-Turbo", auto_download=True, prompt=False, timeout=600
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({"n": 11}, "between 1 and 10"),
+        ({"n": 0}, "between 1 and 10"),
+        ({"size": "big"}, "WIDTHxHEIGHT"),
+    ],
+)
+def test_bad_arguments_are_refused_before_any_model_load(
+    variation_tool, source, kwargs, message
+):
+    host, create, _ = variation_tool
+
+    result = create(str(source), **kwargs)
+
+    assert result["status"] == "error"
+    assert message in result["error"]
+    host.sd_client.load_model.assert_not_called()
+
+
+def test_a_non_png_is_refused_before_any_model_load(variation_tool, tmp_path):
+    host, create, _ = variation_tool
+    jpeg = tmp_path / "photo.jpg"
+    jpeg.write_bytes(b"\xff\xd8\xff")
+
+    result = create(str(jpeg))
+
+    assert result["status"] == "error"
+    assert "PNG only" in result["error"]
+    host.sd_client.load_model.assert_not_called()
+
+
 def test_a_hostile_model_name_cannot_write_outside_the_output_dir(
     variation_tool, source
 ):
@@ -333,6 +395,8 @@ def test_a_hostile_model_name_cannot_write_outside_the_output_dir(
     host.sd_client.create_image_variation.return_value = {
         "data": [{"b64_json": _b64(_png_bytes())}]
     }
+
+    host.sd_client.list_sd_models.return_value = [{"id": "../../evil/x"}]
 
     result = create(str(source), model="../../evil/x")
 
