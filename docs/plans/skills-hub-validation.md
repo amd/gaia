@@ -28,7 +28,20 @@ Today's checks prove a skill is well-formed and safe to merge. They do not prove
 
 Ordered so each phase is useful on its own. Phases 1 and 3 need no eval hardware; Phase 2's scenarios can be written anywhere but only run on the pool.
 
-### Phase 1 — Static coverage guards (CI, every PR)
+### Run only when relevant
+
+Nothing in this plan adds work to a PR that doesn't touch skills. Every new check is scoped to the files it reads:
+
+| Check | Runs when | Mechanism |
+|---|---|---|
+| Phase 1 and 3 unit tests | A PR touches `hub/skills/**`, `src/gaia/skills/**`, `src/gaia/agents/tools/skill_library_tools.py`, `src/gaia/agents/base/model_features.py`, or `eval/scenarios/gaia_skills_*/**` | They live in `tests/unit/`, so `test_unit.yml`'s `paths:` filter and its per-change test selection already apply. Add `eval/scenarios/gaia_skills_*/**` to that filter, since the coverage test reads it. No new workflow. |
+| Phase 5 scenario list and dispatch link | A PR touches a skill directory | A step in `skill_audit.yml` after its existing changed-skill detection; it no-ops otherwise. Never dispatches an eval itself. |
+| Post-publish smoke | A skills release, or manual dispatch | A job in `release_skills.yml`. No schedule. |
+| Agent evals (Phases 2 and 4) | RC tags (smoke subset), the nominated RC (full), or manual dispatch | The existing `eval_flagship.yml` triggers. Never on PRs. |
+
+`skill_audit.yml` keeps its no-`paths:` design because it is a required check; the new step rides on its skill detection rather than adding a second always-on job.
+
+### Phase 1 — Static coverage guards (unit lane, path-scoped)
 
 - **Coverage manifest.** A unit test that fails when a `hub/skills/<name>` has no scenario under `gaia_skills_tasks` that names it in `setup` and exercises it, so a new skill can't ship without one. Mirror the parametrization in `test_starter_skills.py`.
 - **Tier matrix test.** For each tier in `model_features.TIERS`, compute which hub skills have all `tools_required` available after `withheld_tools()`. Pin the result in a small checked-in table and assert it, so a tier change or a new skill requirement is a visible diff. The skill catalogue shown to a compact model must omit, or mark unavailable, the skills it cannot run.
@@ -52,9 +65,9 @@ One scenario per uncovered skill, using fixtures that already exist where possib
 ### Phase 3 — Real-catalogue and publish verification
 
 - **Make search match words, not one substring.** Change `search_skills` to match on query tokens (every token, or a simple score over name/description/tool hits) and order by score. Keep it deterministic and dependency-free.
-- **Search findability on the real catalogue.** A deterministic test that builds a catalogue index from `hub/skills/` in the shape the hub serves, injects it through `search_skills(fetcher=..., cache_path=tmp)`, and runs ~3 short, plain queries per skill (what a user or the agent would type: "price drop", "meeting notes", "csv totals"). Assert the intended skill is returned, in the top 3 once ranking exists. No LLM; runs on every PR. Queries live next to the test, so a description edit that breaks findability fails CI. Written first, it documents gap 7 as failing cases.
+- **Search findability on the real catalogue.** A deterministic test that builds a catalogue index from `hub/skills/` in the shape the hub serves, injects it through `search_skills(fetcher=..., cache_path=tmp)`, and runs ~3 short, plain queries per skill (what a user or the agent would type: "price drop", "meeting notes", "csv totals"). Assert the intended skill is returned, in the top 3 once ranking exists. No LLM; runs only when a PR touches skills or search (see above). Queries live next to the test, so a description edit that breaks findability fails CI. Written first, it documents gap 7 as failing cases.
 - **Post-publish smoke** in `release_skills.yml`, after upload: list the production hub and diff names and versions against `hub/skills/`; install every skill into a clean `GAIA_CONFIG_DIR` from the production URL and verify its signature. Fails the release job loudly; never retries into success.
-- **Scheduled live check.** The same smoke weekly, so an expired key, a Worker regression or a stale cache is caught between releases.
+- **On-demand live check.** The same smoke is runnable by `workflow_dispatch` when a hub or Worker problem is suspected between releases. No schedule.
 
 ### Phase 4 — Selection and end-to-end agent evals
 
@@ -81,7 +94,7 @@ Add the category to a lane in `eval/ci_lanes.json` (the `gaia_skills_tasks` lane
 ## Success criteria
 
 - Every hub skill has a task scenario and a selection scenario; CI fails when one is missing.
-- The real catalogue's search relevance is checked on every PR; each release verifies the live hub matches the repo and every skill installs with a valid signature.
+- The real catalogue's search relevance is checked on every PR that touches skills or search, and on no other; each release verifies the live hub matches the repo and every skill installs with a valid signature.
 - The tier matrix is checked in, and on the compact tier the agent explains rather than fabricates when a skill is unavailable.
 - Fresh Gemma and Qwen baselines exist for every skill category, with a per-skill matrix.
 
