@@ -13,7 +13,7 @@
     "src/gaia/apps/*/webui"
   ],
   "devDependencies": {
-    "electron": "^45.0.0"
+    "electron": "^45.1.0"
   },
   "dependencies": {
     "@prisma/client": "^7.10.1",
