@@ -2818,7 +2818,7 @@ Skills are discovered from these roots, highest precedence first:
     | Option | Description |
     |--------|-------------|
     | `--json` | Emit JSON instead of a table (includes roots, shadowed copies, and parse errors) |
-    | `--root` | Only show skills from one root: `agent-bundled` \| `user` \| `claude-import` |
+    | `--root` | Only show skills from one root: `agent-bundled` \| `user` \| `claude-project` \| `claude-import` |
 
     ```
     NAME                         VERSION    TIER          ROOT           TOOLS
@@ -2902,7 +2902,7 @@ Skills are discovered from these roots, highest precedence first:
 
     - **https only.** A plain `http://` URL, or an https URL that redirects to one, is refused. Download the `.zip` yourself and pass the path if the publisher has no https link.
     - **Audited before anything is written.** A bundle containing symlinks, or one the security audit blocks, is refused. `.zip` bundles are checked for path traversal.
-    - **Held to the `experimental` ceiling.** Only `network:read` is allowed; a skill asking for `network:write`, `mcp:connect`, or `shell:execute:<binary>` is refused. Install it from the hub so its signature can earn a higher tier.
+    - **Held to the `experimental` ceiling.** Only `network:read` and `scratch:write` are allowed; a skill asking for `network:write`, `mcp:connect`, `program:run`, or `shell:execute:<binary>` is refused. Install it from the hub so its signature can earn a higher tier.
     - **Code needs consent.** A skill that ships code is refused without `--allow-experimental`, because that code runs in your agent's own process. If the audit returns REVIEW, the skill lands with its code inert until you run `gaia skill promote <name>`.
   </Tab>
 
@@ -2933,7 +2933,7 @@ Skills are discovered from these roots, highest precedence first:
     | `--fail-on SEVERITY` | Exit non-zero when any finding reaches this severity, even if the tier would allow it |
     | `--show-snippets` | Include the offending source text (withheld by default) |
 
-    Runs the pre-publish security audit ([#2468](https://github.com/amd/gaia/issues/2468)) over a skill's code *and* its instruction body, printing an `ALLOW` / `REVIEW` / `BLOCK` verdict with `file:line` findings and the fix for each. This is the same engine that gates both contribution paths — the **Skill Audit** PR check, and `gaia skill publish`, which runs it before upload — so a clean local audit is what either one requires: `BLOCK` fails, `REVIEW` holds for maintainer sign-off, `ALLOW` passes.
+    Runs the pre-publish security audit ([#2468](https://github.com/amd/gaia/issues/2468)) over a skill's code *and* its instruction body, printing an `ALLOW` / `REVIEW` / `BLOCK` verdict with `file:line` findings and the fix for each. This is the same engine that gates both contribution paths — the **Skill Audit** PR check, and `gaia skill publish`, which runs it before upload — so a clean local audit is what either one requires: only `ALLOW` publishes, and the PR check fails a `hub/skills/` skill on anything else.
 
     **Exit codes:** `0` allow · `5` review · `6` block · `4` the skill could not be parsed. `REVIEW` and `BLOCK` are distinct so CI can hold a skill without reporting it as rejected.
 
@@ -2962,7 +2962,7 @@ Skills are discovered from these roots, highest precedence first:
     The foreign `metadata.<vendor>` namespace becomes a `metadata.gaia` block. Fields GAIA models fully are consumed; anything partially or un-modeled stays under `metadata.<vendor>` and is listed in the report, so nothing is dropped silently. **Every migrated skill lands at the `experimental` tier**, whatever the source claimed — the same trust reset `import` applies. It then goes through every `import` check (the `experimental` permission ceiling, the symlink refusal, the security audit, `--allow-experimental` for code) and is recorded in `skill-lock.json` as `source: migrated`, so it is held to that tier every time it loads.
 
     <Warning>
-    **A source needing a local capability is refused, not downgraded.** `requires.bins` maps to `shell:execute:<bin>` and `requires.config` to `filesystem:read:<path>`. Neither fits the `experimental` ceiling (and `filesystem` needs the deferred permission sandbox, [#1019](https://github.com/amd/gaia/issues/1019)), so the skill is reported unmigratable with the same reason `import` gives rather than quietly stripped of the permission. To use a skill that runs a CLI, install a signed copy from the hub. Other skills in the same batch still migrate — exit code is `4` when any were refused.
+    **A source needing a local capability is refused, not downgraded.** `requires.bins` maps to `shell:execute:<bin>` and `requires.config` to `filesystem:read:<path>`. Neither fits the `experimental` ceiling (and `filesystem` needs the deferred permission sandbox, [#2863](https://github.com/amd/gaia/issues/2863)), so the skill is reported unmigratable with the same reason `import` gives rather than quietly stripped of the permission. To use a skill that runs a CLI, install a signed copy from the hub. Other skills in the same batch still migrate — exit code is `4` when any were refused.
     </Warning>
   </Tab>
 
@@ -3176,8 +3176,8 @@ the tier it *wants*; its signature decides the tier it *gets*.
 | Tier | Signature required | Ceiling | At install |
 |------|--------------------|---------|------------|
 | `verified` | AMD-role trust-store key | Every declared permission | Auto-grant, no prompt |
-| `community` | Any trusted publisher key | `network:read`, `network:write`, `mcp:connect` | Dangerous grants prompt |
-| `experimental` | None | `network:read` only | Needs `--allow-experimental` |
+| `community` | Any trusted publisher key | `network:read`, `network:write`, `mcp:connect`, `shell:execute:<binary>`, `program:run`, `scratch:write` | Dangerous grants prompt |
+| `experimental` | None | `network:read`, `scratch:write` | Needs `--allow-experimental` |
 
 The effective tier is `min(claimed, attested)`, so **no unsigned skill installs as
 `verified`** — the claim is collapsed rather than trusted. Imported and captured
@@ -3188,11 +3188,11 @@ at, so editing `SKILL.md` afterwards cannot raise its tier or its grants. A skil
 `gaia skill lock --relock` records it as your own.
 
 <Warning>
-**v1 skills are instruction + connector-bridged only.** A skill declaring a
-local-capability permission (`filesystem`, `shell`, `database`, `desktop`, `env`)
-is **refused at every tier**, including `verified` — the sandbox that would contain
-it is deferred ([#1019](https://github.com/amd/gaia/issues/1019)). A `verified`
-stamp is a provenance claim, not a runtime sandbox.
+**There is no runtime sandbox yet.** A skill declaring `filesystem`, `database`,
+`desktop`, `env`, or an unscoped `shell:execute` is **refused at every tier**,
+including `verified`. A scoped `shell:execute:<binary>` is allowed at `community`
+and above, limited to that program's allowed subcommands. A `verified` stamp is a
+provenance claim, not a runtime sandbox.
 </Warning>
 
 ### `skill-lock.json`
@@ -3357,7 +3357,7 @@ skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 `load_declared_skills()` yourself.
 
 <Warning>
-**A skill declaring a local-capability permission is refused, not sandboxed.** `network` and `mcp` permissions bridge to the connector grant model and load fine. `filesystem`, `shell`, `database`, `desktop`, and `env` need the permission sandbox, which is deferred ([#1019](https://github.com/amd/gaia/issues/1019)) — until then `load_skill` fails with an actionable error rather than loading the skill unenforced.
+**A skill declaring a local-capability permission is refused, not sandboxed.** `network` and `mcp` permissions bridge to the connector grant model and load fine. `filesystem`, `database`, `desktop`, `env`, and an unscoped `shell:execute` need a permission sandbox that has not shipped — until then `load_skill` fails with an actionable error rather than loading the skill unenforced.
 </Warning>
 
 <Note>
