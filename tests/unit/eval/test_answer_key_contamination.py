@@ -779,6 +779,48 @@ def test_the_rooted_checkout_path_after_punctuation_is_the_key(monkeypatch, comm
 
 
 @pytest.mark.parametrize(
+    "command",
+    [
+        "tar -C{co}/eval/tasks -cf - . | tar -xOf -",
+        "tar -cf - -C{co}/eval/tasks .",
+        "docker run -v{co}/eval/tasks:/t alpine cat /t/tasks.json",
+        "jq -r .tasks[].genuine_answer -f{co}/eval/tasks/tasks.json",
+        "gcc -I{co}/eval/tasks x.c",
+    ],
+)
+@pytest.mark.parametrize("root", ["linux", "macos"])
+def test_a_path_glued_to_a_short_option_is_the_key(monkeypatch, root, command):
+    co, _workdir = _ci_root(monkeypatch, root)
+    assert _ci_names(command.format(co=co), Path("/tmp/gaia-bench/run/toybox"))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "tar -C/d/a/gaia/gaia/eval/tasks -cf - .",
+        "tar -C/mnt/d/a/gaia/gaia/eval/tasks -cf - .",
+        "docker run -v/d/a/gaia/gaia/eval/tasks:/t a",
+        "jq -f/d/a/gaia/gaia/eval/tasks/tasks.json",
+    ],
+)
+def test_a_posix_drive_path_glued_to_a_short_option_is_the_key(monkeypatch, command):
+    _co, workdir = _ci_root(monkeypatch, "windows")
+    assert _ci_names(command, workdir)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "tar -C/backup/home/runner/work/gaia/gaia/eval/tasks -cf - .",
+        "gcc -I/srv/home/runner/work/gaia/gaia/eval/tasks x.c",
+    ],
+)
+def test_a_short_option_does_not_make_a_longer_path_the_key(monkeypatch, command):
+    _ci_root(monkeypatch, "linux")
+    assert _ci_names(command, Path("/tmp/gaia-bench/run/toybox")) == ""
+
+
+@pytest.mark.parametrize(
     "content,names_key",
     [
         ("[" * 5000 + "1" + "]" * 5000, False),

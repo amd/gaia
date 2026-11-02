@@ -651,7 +651,11 @@ _SLASHES = re.compile(r"\\[\\/]*|/[\\/]+")
 #: ``/./``, which names the folder it is in.
 _DOT_FOLDER = re.compile(r"/\.(?=/)")
 #: ``/c/`` (MSYS) and ``/mnt/c/`` (WSL) at a path start: drive C.
-_POSIX_DRIVE = re.compile(_AT_START + r"/(?:mnt/)?([a-z])/")
+# Also right after a short option: ``tar -C/c/...``, ``-v/mnt/c/...``.
+_POSIX_DRIVE = re.compile(
+    r"(^|[" + re.escape(_BEGIN) + r"]|(?<=\s)-[a-z]|^-[a-z])/(?:mnt/)?([a-z])/",
+    re.IGNORECASE,
+)
 #: How a shell or script may spell the home folder, casefolded.
 _HOME_TOKEN = re.compile(
     _AT_START + r"(?:~|\$home|\$\{home\}|\$userprofile|\$\{userprofile\}|%userprofile%"
@@ -715,7 +719,10 @@ def _raw_call_requests(transcript: Mapping[str, Any]) -> List[Tuple[str, Any]]:
         ):
             for call in calls if isinstance(calls, list) else ():
                 if isinstance(call, dict):
-                    name = call.get("name") or (call.get("function") or {}).get("name")
+                    function = call.get("function")
+                    if not isinstance(function, dict):
+                        function = {}
+                    name = call.get("name") or function.get("name")
                     found.append((str(name or "tool"), call))
     return found
 
@@ -747,8 +754,9 @@ class _TaskDirMatcher:
         target = _normalize(str(TASKS_DIR)).rstrip("/")
         self.drive = _DRIVE.match(target) is not None
         self.parts = [self._fold(p) for p in target.split("/")]
-        # A rooted POSIX path inside a longer one (``/backup/home/...``, a URL) is not it.
-        left = "" if self.drive else r"(?<![\w.-])"
+        # A rooted POSIX path inside a longer one (``/backup/home/...``, a URL) is not
+        # it, but one glued to a short option (``tar -C/home/...``) is.
+        left = "" if self.drive else r"(?:(?<![\w.-])|(?<=\s-[A-Za-z])|(?<=^-[A-Za-z]))"
         self.exact = re.compile(left + re.escape(target) + r"(?![\w.-])")
         base = _normalize(str(workdir)).rstrip("/") if workdir else ""
         self.base = [self._fold(p) for p in base.split("/")] if base else []
