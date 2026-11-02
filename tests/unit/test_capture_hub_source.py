@@ -476,6 +476,76 @@ class TestImport:
         assert "gaia skill install rss-digest" in capsys.readouterr().err
         assert _nothing_landed(manager)
 
+    @staticmethod
+    def _import_through_redirect(monkeypatch, manager, *, typed, final, name):
+        """Run ``gaia skill import <typed>`` with the download landing on *final*."""
+        import io
+
+        import requests
+
+        from gaia.skills import cli as skills_cli
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as bundle:
+            bundle.writestr(f"{name}/SKILL.md", _markdown(name))
+        payload = buffer.getvalue()
+        state = SimpleNamespace(calls=[], closed=False)
+
+        class _Response:
+            url = final
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                return iter([payload])
+
+            def close(self):
+                state.closed = True
+
+        def _get(url, **_kwargs):
+            state.calls.append(url)
+            return _Response()
+
+        monkeypatch.setattr(requests, "get", _get)
+        monkeypatch.setattr(skills_cli, "_manager", lambda: manager)
+        parser = argparse.ArgumentParser(prog="gaia")
+        skills_cli.add_subparser(parser.add_subparsers(dest="action"))
+        rc = skills_cli.handle(parser.parse_args(["skill", "import", typed]))
+        return rc, state
+
+    def test_cli_refuses_a_redirect_onto_the_hub(self, manager, monkeypatch, capsys):
+        from gaia.skills import cli as skills_cli
+
+        rc, state = self._import_through_redirect(
+            monkeypatch,
+            manager,
+            typed="https://short.example/r/abc",
+            final="https://hub.amd-gaia.ai/skills/rss-digest/1.0.0/rss-digest-1.0.0.zip",
+            name=PUBLISHED,
+        )
+
+        assert state.calls == ["https://short.example/r/abc"]
+        assert rc != skills_cli.EXIT_OK
+        assert "gaia skill install rss-digest" in capsys.readouterr().err
+        assert state.closed
+        assert _nothing_landed(manager)
+
+    def test_cli_imports_through_a_redirect_elsewhere(self, manager, monkeypatch):
+        from gaia.skills import cli as skills_cli
+
+        rc, state = self._import_through_redirect(
+            monkeypatch,
+            manager,
+            typed="https://short.example/r/abc",
+            final="https://cdn.example/bundles/meeting-notes.zip",
+            name="meeting-notes",
+        )
+
+        assert rc == skills_cli.EXIT_OK
+        assert not state.closed
+        assert (manager.user_root / "meeting-notes" / "SKILL.md").is_file()
+
 
 def test_the_unit_suite_stubs_the_catalog_by_default():
     """Guards the conftest stub: without it every capture test would need a hub."""

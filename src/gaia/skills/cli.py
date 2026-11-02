@@ -1400,6 +1400,17 @@ def _download(url: str, destination: Path) -> Path:
             "the .zip yourself and pass its local path."
         )
 
+    final_url = str(response.url)
+    if final_url != url:
+        from gaia.skills.capture import refuse_hub_url
+
+        # A redirect can land on the hub, same as capture's fetch.
+        try:
+            refuse_hub_url(final_url)
+        except SkillError:
+            response.close()
+            raise
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("wb") as handle:
         for chunk in response.iter_content(chunk_size=65536):
