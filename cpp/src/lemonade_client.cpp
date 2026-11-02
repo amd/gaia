@@ -56,9 +56,7 @@ std::string describeServerError(const json& body) {
                std::to_string(intField(*inner, "n_prompt_tokens")) +
                " tokens but server n_ctx=" + std::to_string(intField(*inner, "n_ctx")) +
                ".\n"
-               "  Restart Lemonade with a larger context:\n"
-               "    set LEMONADE_CTX_SIZE=32768 in the environment before starting the server\n"
-               "  or via the helper script:\n"
+               "  Reload the model with a larger context via the helper script:\n"
                "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
     }
     return msg.empty() ? "LLM server error" : msg;

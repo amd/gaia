@@ -721,7 +721,7 @@ any of them as a literal string in a message, doc, or start path is a bug:
 | Form | Command | When |
 |------|---------|------|
 | Legacy CLI | `lemonade-server serve` | **Pre-10.7 only — dropped.** Errors with "command not found" on every modern install |
-| Modern install | Win `LemonadeServer.exe --silent` (+ `LEMONADE_CTX_SIZE` in env) · Linux `systemctl --user start lemond` · macOS the `lemond` daemon | A user-installed Lemonade |
+| Modern install | Win `LemonadeServer.exe --silent` · Linux `systemctl --user start lemond` · macOS the `lemond` daemon | A user-installed Lemonade |
 | [Embeddable](https://lemonade-server.ai/docs/embeddable/runtime/) | `LEMONADE_API_KEY=KEY lemond ./ --port PORT` | A Lemonade GAIA bundles and owns |
 
 **Resolve against the machine; never switch on `runtime.GOOS` or the platform.**

@@ -76,45 +76,6 @@ func TestStartLemonadeRefusesWhatItMayNotStart(t *testing.T) {
 	}
 }
 
-// --- the context window reaches the child -----------------------------------
-
-func TestStartEnvCarriesTheContextWindow(t *testing.T) {
-	env := startEnv(launcher{CtxSize: 65536})
-	if !hasEnv(env, ctxSizeEnv+"=65536") {
-		t.Fatalf("%s missing from the child env; a server that comes up at the "+
-			"wrong window answers /health and 502s every query", ctxSizeEnv)
-	}
-}
-
-func TestServiceManagedLauncherGetsNoContextWindow(t *testing.T) {
-	// The unit file or plist owns it. Setting it on the systemctl CLIENT
-	// process changes nothing while looking like it did.
-	env := startEnv(launcher{CtxSize: 65536, ServiceManaged: true})
-	if hasEnv(env, ctxSizeEnv+"=65536") {
-		t.Fatalf("%s must not be set for a service-managed launcher", ctxSizeEnv)
-	}
-}
-
-func TestStartEnvLeavesVulkanCoopmatOn(t *testing.T) {
-	// Disabling it halves prompt speed for every model; GAIA loads only the
-	// embedder on the CPU backend instead (#1831).
-	const coopmatOff = "GGML_VK_DISABLE_COOPMAT=1"
-	for _, l := range []launcher{{CtxSize: 65536}, {}} {
-		if hasEnv(startEnv(l), coopmatOff) && !hasEnv(os.Environ(), coopmatOff) {
-			t.Fatalf("%s added to the child env for %+v", coopmatOff, l)
-		}
-	}
-}
-
-func hasEnv(env []string, want string) bool {
-	for _, e := range env {
-		if e == want {
-			return true
-		}
-	}
-	return false
-}
-
 // --- waiting --------------------------------------------------------------
 
 func TestWaitForLemonadeReturnsAsSoonAsItAnswers(t *testing.T) {

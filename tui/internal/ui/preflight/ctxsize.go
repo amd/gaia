@@ -4,36 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
-// Why a start command has to carry the context window.
+// The context window this machine's profile pins.
 //
-// A bare `lemond` comes up HEALTHY — /api/v1/health answers 200 — and small
-// requests even succeed, so nothing looks wrong until a real one arrives. On a
-// 10.10.0 machine, across repeated runs, the model loaded at 25037-37888 tokens
-// started bare and 32527-43227 with the profile's 65536 requested. A 40k-token
-// request came back `context_length_exceeded` against the low end of both.
-//
-// That is the worst shape this package exists to prevent: the Local AI row goes
-// green off the healthy server, hands the user into chat, and the first real
-// request fails. A remedy that produces it is a wrong remedy, not merely an
-// incomplete one.
-//
-// Two things those ranges say, and both are load-bearing:
-//
-//   - Asking for the window RAISES it. Every paired measurement put the
-//     requested run above the bare one, so the prefix earns its place.
-//   - It does not GUARANTEE it. The figure moved run to run and none of those
-//     runs reached 65536, because llama.cpp clamps to the memory actually free at
-//     load time. That is a load-moment effect, NOT a ceiling: other loads on the
-//     same machine the same day did reach 65536, five of them. So nothing here
-//     promises the target, and nothing here blames the hardware — the AI model
-//     row reports the window the server really loaded, and says so when it falls
-//     short (see markCtxShortfall).
+// Modern Lemonade takes no window at launch: it has no `--ctx-size` flag and
+// reads no environment variable for it (#3320), so a start command cannot carry
+// one. GAIA sends the window with every `/load` instead. The value here is used
+// for two things only: the legacy CLI's `--ctx-size` flag, and the AI model row,
+// which reports the window the server really loaded and says so when it falls
+// short of this target (see markCtxShortfall).
 //
 // The value is DERIVED, never hardcoded. GAIA pins one context window per device
 // profile (lemonade_client.GPU_CTX_SIZE / NPU_CTX_SIZE) and `gaia init` records
@@ -53,10 +36,6 @@ const (
 	npuCtxSize = 32768 // NPU — the FastFlowLM ceiling for unmeasured FLM builds
 )
 
-// ctxSizeEnv is the variable modern Lemonade reads its context window from.
-// Modern tooling has no `--ctx-size` flag; only the legacy CLI takes one.
-const ctxSizeEnv = "LEMONADE_CTX_SIZE"
-
 // Env overrides for where the config lives, mirroring gaia.config exactly
 // (GAIA_CONFIG_FILE wins over GAIA_CONFIG_DIR, which wins over ~/.gaia).
 const (
@@ -71,13 +50,6 @@ const (
 // resolves to the GPU window, which is also GaiaConfig's own default. Guessing
 // NPU instead would hand a GPU machine a window half what its model can use.
 func profileCtxSize(p hostProbe) int {
-	// An explicit override wins: a user who set the variable has already chosen,
-	// and telling them a different number would contradict their own environment.
-	if raw := strings.TrimSpace(p.getenv(ctxSizeEnv)); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			return n
-		}
-	}
 	cfg := readDeviceConfig(p)
 	for _, r := range lemonade.RecommendedFor("local") {
 		if r.Device == "npu" && r.Matches(cfg.DefaultModel) && r.MinCtxSize > npuCtxSize {
@@ -123,32 +95,8 @@ func configPath(p hostProbe) string {
 	return lemonade.ConfigPathFrom(p.getenv, p.homeDir)
 }
 
-// --- attaching it to a command ----------------------------------------------
-
-// ctxPrefix renders the assignment for a command this user runs THEMSELVES, in
-// the syntax of the shell they will run it in.
-//
-// It is only ever attached to a launch whose environment the command controls. A
-// service or app launch (systemd, launchd, the macOS app, the Windows tray) takes
-// its environment from its own unit or bundle, so prefixing one of those would
-// look like it did something and change nothing at all.
-func ctxPrefix(goos string, ctx int) string {
-	if goos == "windows" {
-		// cmd.exe, and the QUOTES matter: `set VAR=1 && cmd` assigns "1 " —
-		// everything up to the ampersand, trailing space included — which the
-		// server then fails to parse. `set "VAR=1"` bounds the value.
-		//
-		// PowerShell wants `$env:VAR=...;` instead; powerShellCommand renders
-		// that form alongside this one.
-		return fmt.Sprintf(`set "%s=%d" && `, ctxSizeEnv, ctx)
-	}
-	// POSIX: `env VAR=value command` runs in any shell, unlike `VAR=value command`
-	// which is a shell builtin form.
-	return fmt.Sprintf("env %s=%d ", ctxSizeEnv, ctx)
-}
-
-// legacyCtxFlag is how the PRE-10.7 CLI took the same setting: a flag, not an
-// environment variable (lemonade_launcher.build_start_command's legacy branch).
+// legacyCtxFlag is how the PRE-10.7 CLI took the window: a flag
+// (lemonade_launcher.build_start_command's legacy branch).
 func legacyCtxFlag(ctx int) string {
 	return fmt.Sprintf(" --ctx-size %d", ctx)
 }

@@ -418,8 +418,8 @@ def _owned_models() -> set:
 def _auto_load_windows() -> set:
     """Windows a model has when a request made Lemonade load it, unasked.
 
-    Lemonade's own default, and the window GAIA's supervisor starts the server
-    with (``LEMONADE_CTX_SIZE``, the machine's profile window).
+    Lemonade's own default, and the machine's profile window, which is what a
+    GAIA load asks for.
     """
     from gaia.llm.lemonade_client import active_profile_ctx_size
 
