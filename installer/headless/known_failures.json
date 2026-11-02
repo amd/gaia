@@ -7,14 +7,6 @@
       "phase": "install",
       "kind": "finding",
       "signature": "the desktop app's .deb is named 'gaia'"
-    },
-    {
-      "issue": 5531,
-      "rows": ["win-install-ps1"],
-      "phase": "uninstall",
-      "kind": "failure",
-      "signature": "permission denied removing",
-      "blocks": true
     }
   ]
 }

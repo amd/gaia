@@ -7,8 +7,8 @@ Replaces the previous "legacy ⊆ new" parity check. The MCP catalog has been
 intentionally reduced from 22 deployed entries down to 3 carried-over entries
 (#1021 removed mcp-filesystem and mcp-fetch because no built-in agent consumes
 them through the connectors framework; custom agents supply their own
-mcp_servers.json instead), plus mcp-tavily and mcp-slack (#1002) added
-net-new afterwards. This test asserts both ends of that ledger:
+mcp_servers.json instead), plus mcp-tavily, mcp-slack (#1002), and mcp-discord
+(#1003) added net-new afterwards. This test asserts both ends of that ledger:
 
   * KEPT_IDS — exactly these ids must remain in
     ``connectors.catalog.mcp_servers`` (the 3 carried over from the legacy
@@ -42,6 +42,9 @@ KEPT_IDS = frozenset(
         # Re-added in #1002 on the maintained slack-mcp-server, pinned and
         # covered by test_slack_mcp_connector.py.
         "mcp-slack",
+        # Added in #1003: pinned mcp-discord, covered by
+        # test_discord_mcp_connector.py.
+        "mcp-discord",
     }
 )
 

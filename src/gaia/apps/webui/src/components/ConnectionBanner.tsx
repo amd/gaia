@@ -168,7 +168,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                         ) : (
                             <>
                                 <Loader2 size={13} className="connection-banner__spinner" />
-                                {activeProgress?.state === 'starting' ? 'Starting download…' : 'Downloading…'}
+                                {activeProgress?.state === 'starting' ? activeProgress.message ?? 'Starting download…' : 'Downloading…'}
                             </>
                         )}
                     </span>

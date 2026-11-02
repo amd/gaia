@@ -25,6 +25,7 @@ yaml = pytest.importorskip("yaml")
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
 REVIEW_JOBS = ("pr-review", "pr-rereview")
+FILE_POSTING_JOBS = (*REVIEW_JOBS, "issue-handler")
 
 # Verbatim from the failing `pr-review / run` lanes of PRs #4119 and #4120: the CLI
 # returned in ~0.4s having billed nothing, so no model ever saw the diff.
@@ -58,7 +59,10 @@ def runner():
     return _load("claude-run.yml")
 
 
-@pytest.mark.parametrize("job,require", [("pr-review", True), ("pr-rereview", False)])
+@pytest.mark.parametrize(
+    "job,require",
+    [("pr-review", True), ("pr-rereview", False), ("issue-handler", False)],
+)
 def test_review_jobs_delegate_posting_to_the_workflow(claude, job, require):
     """Both review jobs hand a file to claude-run.yml instead of posting inline."""
     with_ = claude["jobs"][job]["with"]
@@ -68,7 +72,7 @@ def test_review_jobs_delegate_posting_to_the_workflow(claude, job, require):
     assert with_.get("require_comment", False) is require
 
 
-@pytest.mark.parametrize("job", REVIEW_JOBS)
+@pytest.mark.parametrize("job", FILE_POSTING_JOBS)
 def test_review_prompts_never_tell_the_model_to_post(claude, job):
     """The model must not be handed a posting command — that path fails silently."""
     prompt = claude["jobs"][job]["with"]["prompt"]
@@ -86,7 +90,7 @@ def test_runner_posts_and_is_gated_on_comment_file(runner):
     assert post is not None, "claude-run.yml lost its posting step"
     assert "inputs.comment_file != ''" in post["if"], (
         "posting must be gated on comment_file so callers that still post inline "
-        "(issue-handler, pr-comment) don't double-post"
+        "(pr-comment, issue-triage) don't double-post"
     )
     assert POSTING_CMD.search(post["run"]), "posting step no longer posts anything"
 
@@ -511,7 +515,7 @@ def test_a_refusal_with_no_secondary_says_so_and_does_not_retry(runner, tmp_path
 
 @needs_shell
 def test_quota_after_model_work_is_never_retried(runner, tmp_path):
-    """pr-comment / issue-handler / issue-triage post through `gh` mid-run."""
+    """pr-comment / issue-triage post through `gh` mid-run."""
     spent = {**QUOTA_REFUSAL, "total_cost_usd": 0.4, "modelUsage": {"m": {}}}
     values, stdout = _run_quota(runner, tmp_path, [spent])
     assert values == {"quota": "true", "retry": "false"}

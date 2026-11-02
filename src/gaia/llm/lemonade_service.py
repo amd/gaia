@@ -104,10 +104,10 @@ def ensure_lemonade_running(
     """Return once a Lemonade Server is answering, starting one if it is not.
 
     Args:
-        ctx_size: the context window a started server must come up with. A
-            server started without one answers ``/health`` and then fails every
-            long request, so pass the machine's profile window
-            (``lemonade_client.profile_ctx_size``).
+        ctx_size: the machine's profile window
+            (``lemonade_client.profile_ctx_size``). Only the legacy
+            Lemonade CLI takes it at start; modern Lemonade reads
+            no start-time window and gets it on each ``/load`` instead.
         timeout: how long a freshly started server gets to answer.
         base_url: which server to check; omit for the ``LEMONADE_BASE_URL``
             environment default.

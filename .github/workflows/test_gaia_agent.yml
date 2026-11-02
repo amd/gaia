@@ -40,6 +40,7 @@ on:
       - '!src/gaia/apps/webui/**'
       - '!src/gaia/apps/*/webui/**'
       - '!src/gaia/electron/**'
+      - 'docs/guides/building-skills.mdx'
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.
       - 'tests/unit/conftest.py'
@@ -102,6 +103,7 @@ on:
       - '!src/gaia/apps/webui/**'
       - '!src/gaia/apps/*/webui/**'
       - '!src/gaia/electron/**'
+      - 'docs/guides/building-skills.mdx'
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.
       - 'tests/unit/conftest.py'

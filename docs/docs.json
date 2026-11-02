@@ -116,6 +116,7 @@
                     "group": "Build & Extend",
                     "pages": [
                       "guides/starter-skills",
+                      "guides/building-skills",
                       "guides/custom-agent",
                       "guides/composing-skills"
                     ]
@@ -142,6 +143,7 @@
                   "connectors/git",
                   "connectors/memory",
                   "connectors/slack",
+                  "connectors/discord",
                   "security/connections",
                   "security/connectors"
                 ]

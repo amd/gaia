@@ -110,6 +110,11 @@ def agent(allowed, home):
 def _load(agent, tmp_path, name, permissions, body, *, bundled=True):
     root = tmp_path / ("bundled" if bundled else "user-skills")
     _write_skill(root, name, permissions, body)
+    if not bundled:
+        from gaia.skills.drift import relock
+
+        # The author's own skill: recorded as local, so no ceiling holds it.
+        relock(root)
     manager = SkillManager(
         agent_skill_dirs=[root] if bundled else [],
         user_skills_root=root if not bundled else tmp_path / "no-user-skills",
