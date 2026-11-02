@@ -1085,10 +1085,9 @@ def check_from_python_run(
     the file and its arguments, or :func:`snippet_target` — so reruns of the
     same code group together.
     """
-    if not invokes_test_runner(source):
-        return None
+    # The summary is a cheap scan; parsing a large source is not.
     found = runner_summary(_output(stdout, stderr))
-    if found is None:
+    if found is None or not invokes_test_runner(source):
         return None
     label, summary = found
     return CheckResult(
