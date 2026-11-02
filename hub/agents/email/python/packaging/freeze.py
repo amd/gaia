@@ -73,6 +73,9 @@ ADD_DATA = [
     # Staged INSIDE the package: at runtime the frozen agent has no package-root
     # directory above itself, so the source-checkout location does not exist.
     (PKG_ROOT / "gaia-agent.yaml", "gaia_agent_email"),
+    # Third-party licence notices for the libraries the binary bundles.
+    (REPO_ROOT / "THIRD_PARTY_NOTICES.md", "."),
+    (REPO_ROOT / "licenses", "licenses"),
 ]
 
 # Heavy ML stack reached only via the lazily-imported triage import graph. Real

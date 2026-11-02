@@ -13,7 +13,8 @@ Usage::
 
     python check_bundle_licenses.py dist/gaia-agent.exe
 
-Exit code 0 = clean, 1 = forbidden content found, 2 = not a PyInstaller binary.
+Exit code 0 = clean, 1 = forbidden content found or licence notices missing,
+2 = not a PyInstaller binary.
 Needs PyInstaller installed (run it from the freeze environment).
 """
 
@@ -77,6 +78,20 @@ REVIEWED_LGPL: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
+#: Licence notices every binary must carry (bundled by freeze.py from the repo root).
+REQUIRED_NOTICES = (
+    "THIRD_PARTY_NOTICES.md",
+    "licenses/LGPL-2.1.txt",
+    "licenses/GCC-exception-3.1.txt",
+)
+
+
+def missing_notices(names: Iterable[str]) -> list[str]:
+    """Every :data:`REQUIRED_NOTICES` file absent from *names*."""
+    present = {name.replace("\\", "/") for name in names}
+    return [notice for notice in REQUIRED_NOTICES if notice not in present]
+
+
 def reviewed_lgpl_entries(names: Iterable[str]) -> list[tuple[str, str]]:
     """``(entry name, what it is)`` for every reviewed LGPL library present."""
     found = []
@@ -86,6 +101,7 @@ def reviewed_lgpl_entries(names: Iterable[str]) -> list[tuple[str, str]]:
                 found.append((name, label))
                 break
     return sorted(found)
+
 
 def forbidden_entries(names: Iterable[str]) -> list[tuple[str, str]]:
     """``(entry name, what it is)`` for every name matching :data:`FORBIDDEN`."""
@@ -149,6 +165,15 @@ def main(argv=None) -> int:
         print(
             "Exclude it in packaging/freeze.py (EXCLUDES / STDLIB_EXCLUDED), or "
             "find the import that pulls it in from the build's xref-*.html.",
+            file=sys.stderr,
+        )
+        return 1
+    missing = missing_notices(names)
+    if missing:
+        print(
+            f"check_bundle_licenses: FAIL -- {args.binary} is missing licence "
+            f"notices: {', '.join(missing)}. Add them to the --add-data list in "
+            "packaging/freeze.py.",
             file=sys.stderr,
         )
         return 1

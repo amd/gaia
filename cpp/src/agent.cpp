@@ -5,6 +5,7 @@
 #include "gaia/security.h"
 
 #include <algorithm>
+#include <deque>
 #include <iostream>
 #include <set>
 #include <sstream>
@@ -945,9 +946,11 @@ std::string summarizeUserInput(const std::vector<Message>& userMessages) {
     return "";
 }
 
+using ToolCallWindow = std::deque<std::pair<std::string, json>>;
+
 // Loop detection: true when the previous (maxConsecutiveRepeats - 1) calls were
 // all this exact tool+args, making the pending one the Nth identical call.
-bool isRepeatedToolCall(const std::vector<std::pair<std::string, json>>& history,
+bool isRepeatedToolCall(const ToolCallWindow& history,
                         const std::string& toolName, const json& toolArgs,
                         int maxConsecutiveRepeats) {
     const int repeatThreshold = maxConsecutiveRepeats - 1;
@@ -962,6 +965,15 @@ bool isRepeatedToolCall(const std::vector<std::pair<std::string, json>>& history
         }
     }
     return true;
+}
+
+// Keeps only the calls isRepeatedToolCall() reads, so a long query's history
+// does not hold every tool's arguments for its whole lifetime.
+void recordToolCall(ToolCallWindow& history, const std::string& toolName,
+                    const json& toolArgs, int maxConsecutiveRepeats) {
+    history.emplace_back(toolName, toolArgs);
+    const size_t keep = static_cast<size_t>(std::max(maxConsecutiveRepeats - 1, 0));
+    while (history.size() > keep) history.pop_front();
 }
 
 // Serialize a tool result for the model, clipping the middle of oversized
@@ -1109,8 +1121,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     std::string finalAnswer;
     int errorCount = 0;
     std::string lastError;
-    std::vector<json> stepResults;
-    std::vector<std::pair<std::string, json>> toolCallHistory; // (name, args) for loop detection
+    ToolCallWindow toolCallHistory; // recent (name, args) for loop detection
     UsageStats totalUsage;
 
     while (stepsTaken < stepsLimit && finalAnswer.empty()) {
@@ -1144,7 +1155,6 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             messages.push_back(errorMsg);
 
             executionState_ = AgentState::PLANNING;
-            stepResults.clear();
         }
 
         // Recomposed each step so mid-loop tool changes are visible, but always
@@ -1247,8 +1257,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 console_->printToolComplete();
                 console_->prettyPrintJson(toolResult, "Tool Result");
 
-                toolCallHistory.emplace_back(tc.name, toolArgs);
-                stepResults.push_back(toolResult);
+                recordToolCall(toolCallHistory, tc.name, toolArgs, cfg.maxConsecutiveRepeats);
 
                 Message toolMsg;
                 toolMsg.role = MessageRole::TOOL;
@@ -1331,8 +1340,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             console_->printToolComplete();
             console_->prettyPrintJson(toolResult, "Tool Result");
 
-            toolCallHistory.emplace_back(toolName, toolArgs);
-            stepResults.push_back(toolResult);
+            recordToolCall(toolCallHistory, toolName, toolArgs, cfg.maxConsecutiveRepeats);
 
             // Add tool result to messages
             Message toolMsg;

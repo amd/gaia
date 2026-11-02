@@ -146,6 +146,21 @@ func TestGaiaBinaryNotOnPathIsActionable(t *testing.T) {
 
 var errNotOnPath = errTest("the `gaia` CLI is not on PATH")
 
+func TestMissingCLIReadinessDoesNotSuggestRunningSetup(t *testing.T) {
+	m := gaiaTestModel(t)
+	missing := fmt.Errorf("%w: %w", gaiainit.ErrUnanswered, gaiainit.ErrNoCLI)
+
+	updated, _ := m.handleSetupCheckResult(setupCheckResultMsg{err: missing})
+	after := updated.(ChatModel)
+	last := after.messages[len(after.messages)-1]
+	if last.Role != RoleError || !strings.Contains(last.Content, "Install the GAIA CLI") {
+		t.Fatalf("missing-CLI readiness message = %+v", last)
+	}
+	if strings.Contains(last.Content, "gaia init") || strings.Contains(last.Content, "/setup") {
+		t.Fatalf("missing-CLI readiness message still suggests unavailable setup: %q", last.Content)
+	}
+}
+
 // --- the composer holds Enter while the gate is up --------------------
 
 func TestEnterQueuesWhileSetupIsChecking(t *testing.T) {

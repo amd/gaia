@@ -78,10 +78,10 @@ class TestDefaultDeviceConfigs:
 
         npu = DEFAULT_DEVICE_CONFIGS[2]
         assert npu.device == "npu"
-        assert npu.model == "gemma4-it-e2b-FLM"
+        assert npu.model == "gemma4-it-e4b-FLM"
         assert npu.recipe == "flm"
         assert npu.backend == "flm:npu"
-        assert npu.ctx_size == 32768
+        assert npu.ctx_size == 65536
 
 
 class TestAgentRegistrationDeviceConfigs:
@@ -296,7 +296,7 @@ class TestCLIArgs:
         assert npu["recipe"] == "flm"
         assert npu["backend"] == "flm:npu"
         assert npu["required_device"] == "amd_npu"
-        assert "gemma4-it-e2b-FLM" in npu["models"]
+        assert "gemma4-it-e4b-FLM" in npu["models"]
         assert npu["min_context_size"] == 32768
 
 

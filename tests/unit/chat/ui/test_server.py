@@ -270,18 +270,18 @@ class TestSystemStatus:
 
         health_data = {
             "status": "ok",
-            "model_loaded": "Qwen3.5-35B-A3B-GGUF",
+            "model_loaded": "Gemma-4-E4B-it-GGUF",
             "version": "9.2.0",
             "all_models_loaded": [
                 {
-                    "model_name": "Qwen3.5-35B-A3B-GGUF",
+                    "model_name": "Gemma-4-E4B-it-GGUF",
                     "type": "llm",
                     "device": "amd_npu",
                     "recipe_options": {"ctx_size": 4096},  # Way too small
                 }
             ],
         }
-        models_data = {"data": [{"id": "Qwen3.5-35B-A3B-GGUF", "downloaded": True}]}
+        models_data = {"data": [{"id": "Gemma-4-E4B-it-GGUF", "downloaded": True}]}
 
         # Map URL suffix → response
         async def mock_get(url, **kwargs):
@@ -301,7 +301,7 @@ class TestSystemStatus:
         resp = client.get("/api/system/status")
         data = resp.json()
         assert data["lemonade_running"] is True
-        assert data["model_loaded"] == "Qwen3.5-35B-A3B-GGUF"
+        assert data["model_loaded"] == "Gemma-4-E4B-it-GGUF"
         assert data["model_context_size"] == 4096
         assert data["context_size_sufficient"] is False
 
@@ -820,9 +820,11 @@ class TestSystemStatus:
         assert data["expected_model_loaded"] is True
 
     @patch("httpx.AsyncClient")
-    def test_system_status_wrong_model_and_small_context(self, mock_httpx_cls, client):
-        """Both expected_model_loaded=False and context_size_sufficient=False when
-        the wrong model is loaded with an insufficient context window."""
+    def test_system_status_other_model_window_is_not_judged(
+        self, mock_httpx_cls, client
+    ):
+        """Indexing's small vision model is not chat's model, so its window can't
+        make chat's window "too small"; chat reloads its own model at full size."""
         mock_client = AsyncMock()
 
         def make_response(status_code, json_data):
@@ -859,7 +861,7 @@ class TestSystemStatus:
         data = resp.json()
         assert data["model_loaded"] == "TinyModel-0.5B-GGUF"
         assert data["expected_model_loaded"] is False
-        assert data["context_size_sufficient"] is False
+        assert data["context_size_sufficient"] is True
         assert data["model_context_size"] == 4096
 
     @patch("httpx.AsyncClient")

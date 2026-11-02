@@ -7,6 +7,7 @@ in tests/unit/rag/test_retrieval_bench_harness.py.
 """
 
 import hashlib
+import io
 import json
 import re
 
@@ -250,6 +251,81 @@ def test_fetch_refuses_a_file_whose_checksum_does_not_match(tmp_path, monkeypatc
     (tmp_path / "demo" / "a.txt").write_bytes(b"edited bytes")
     with pytest.raises(sources.SourceError, match="Checksum mismatch"):
         sources.fetch("demo", "a.txt", manifest)
+
+
+def test_drop_stale_removes_only_files_the_manifest_no_longer_pins(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(sources.CACHE_ENV, str(tmp_path))
+    current, old = b"current bytes", b"previous upstream revision"
+
+    def pin(data):
+        return {
+            "url": "https://example.invalid/x",
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+
+    manifest = {
+        "demo": {
+            "files": {
+                "kept.pdf": pin(current),
+                "repinned.pdf": pin(current),
+                "absent.pdf": pin(current),
+            }
+        }
+    }
+    (tmp_path / "demo").mkdir()
+    (tmp_path / "demo" / "kept.pdf").write_bytes(current)
+    (tmp_path / "demo" / "repinned.pdf").write_bytes(old)
+    (tmp_path / "demo" / "unlisted.pdf").write_bytes(old)
+
+    assert sources.drop_stale(manifest) == [tmp_path / "demo" / "repinned.pdf"]
+    assert (tmp_path / "demo" / "kept.pdf").read_bytes() == current
+    assert (tmp_path / "demo" / "unlisted.pdf").exists()
+    assert sources.drop_stale(manifest) == []
+
+
+@pytest.mark.parametrize(
+    "url, browser",
+    [
+        ("https://www.amd.com/content/dam/amd/en/x.pdf", True),
+        ("https://arxiv.org/pdf/1706.03762v7", False),
+        ("https://huggingface.co/datasets/x/resolve/abc/y.parquet", False),
+        ("https://raw.githubusercontent.com/x/y/z.json", False),
+    ],
+)
+def test_each_host_gets_the_user_agent_it_serves(url, browser):
+    agent = sources.user_agent_for(url)
+    assert ("Chrome/" in agent) is browser
+    assert ("gaia-eval-retrieval" in agent) is not browser
+
+
+def test_fetch_sends_the_host_specific_user_agent(tmp_path, monkeypatch):
+    monkeypatch.setenv(sources.CACHE_ENV, str(tmp_path))
+    data = b"pdf bytes"
+    url = "https://www.amd.com/content/dam/amd/en/x.pdf"
+    manifest = {
+        "amd": {
+            "files": {"x.pdf": {"url": url, "sha256": hashlib.sha256(data).hexdigest()}}
+        }
+    }
+    sent = []
+
+    class _Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def _urlopen(request, timeout):
+        sent.append((request.full_url, request.get_header("User-agent")))
+        return _Response(data)
+
+    monkeypatch.setattr(sources.urllib.request, "urlopen", _urlopen)
+    assert sources.fetch("amd", "x.pdf", manifest).read_bytes() == data
+    assert sent == [(url, sources.user_agent_for(url))]
+    assert "Chrome/" in sent[0][1]
 
 
 def test_offline_fetch_of_a_missing_file_names_how_to_download_it(

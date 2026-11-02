@@ -10,6 +10,7 @@ import { ThisAnswer } from '../SideRail';
 import { whenText } from '../session-panel/OutputsSection';
 import { totalText } from '../session-panel/ChangesSection';
 import { stripIsolates } from '../../i18n/registry';
+import { readsAs } from '../../test/readsAs';
 import { translator } from '../../i18n/useT';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
@@ -19,7 +20,6 @@ import type { Message as ChatMessage, TurnSummary } from '../../types';
 vi.mock('../../services/api');
 
 const ar = translator('ar');
-const plain = (text: string) => (content: string) => stripIsolates(content) === text;
 
 const SUMMARY: TurnSummary = {
     pages: [],
@@ -62,7 +62,7 @@ describe('This answer', () => {
             'جرى البحث على هذا الجهاز. وأُرسلت المقاطع المستخدمة إلى Fireworks AI. (Searched on this PC. The passages used were sent to Fireworks AI.)',
             "لا شيء من أدوات الويب في GAIA (None from GAIA's web tools)",
             'نحو $0.0023 بسعر القائمة (About $0.0023 at list price)',
-        ]) expect(screen.getByText(plain(text))).toBeInTheDocument();
+        ]) expect(screen.getByText(readsAs(text))).toBeInTheDocument();
     });
 
     it('isolates the provider name inside the Arabic sentence', () => {

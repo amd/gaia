@@ -183,7 +183,11 @@ var rootCmd = &cobra.Command{
 		// The saved preference is the default; an explicit --full-access
 		// overrides it in either direction, which is what makes
 		// --full-access=false a one-launch opt-out.
-		saved := preflight.ReadFullAccess().Enabled
+		savedConfig := preflight.ReadFullAccess()
+		if savedConfig.Err != nil {
+			return fmt.Errorf("could not read the saved full-access setting: %w", savedConfig.Err)
+		}
+		saved := savedConfig.Enabled
 		fullAccess, fromSaved := saved, saved
 		if cmd.Flags().Changed("full-access") {
 			fullAccess, fromSaved = fullAccessFlag, false
@@ -334,11 +338,11 @@ func init() {
 
 // Execute runs the CLI.
 //
-// A leading `tui` word is accepted and dropped. This binary is addressed as
-// `gaia tui …` everywhere it is documented, but its own root command is the
-// binary's own name, so without this `gaia tui run email` — the exact spelling
-// the docs use — would fail with "unknown command". Both spellings work; only
-// the first argument is considered, so an agent named "tui" is unaffected.
+// A leading `tui` word is accepted and dropped. The binary is `gaia-tui` (the
+// Python `gaia` CLI has no `tui` subcommand), but older docs and scripts spell
+// it `gaia tui …`, so `gaia-tui tui run email` would otherwise fail with
+// "unknown command". Both spellings work; only the first argument is
+// considered, so an agent named "tui" is unaffected.
 func Execute() error {
 	rootCmd.Use = binaryName(os.Args[0])
 	args := os.Args[1:]

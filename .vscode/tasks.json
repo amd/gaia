@@ -16,7 +16,6 @@
             },
             "problemMatcher": []
         },
-
         {
             "label": "Compile GAIA Code Extension",
             "type": "npm",

@@ -1,11 +1,11 @@
 # Third-Party Notices
 
 GAIA is licensed under the MIT License (see [LICENSE.md](LICENSE.md)). Some GAIA
-distributions include the shared libraries below, which stay under their own licence, the
-GNU Lesser General Public License, version 2.1 or later (LGPL-2.1-or-later). The full text
-is in [licenses/LGPL-2.1.txt](licenses/LGPL-2.1.txt). GAIA ships each library unmodified
-and dynamically linked; the source for each is the published upstream release linked
-below.
+distributions include the shared libraries below, which stay under their own licence. Unless
+an entry says otherwise, that is the GNU Lesser General Public License, version 2.1 or later
+(LGPL-2.1-or-later); the full text is in [licenses/LGPL-2.1.txt](licenses/LGPL-2.1.txt).
+GAIA ships each library unmodified and dynamically linked; the source for each is the
+published upstream release linked below.
 
 ## FFmpeg
 
@@ -20,6 +20,16 @@ below.
   wheels. The vendored copy is stripped, so its exact GCC version is not recorded.
 - **Copyright:** Copyright (C) Free Software Foundation, Inc.
 - **Source:** https://gcc.gnu.org/git/?p=gcc.git;a=tree;f=libquadmath
+
+## libgfortran (GCC)
+
+- **Ships in:** the Linux agent binaries, vendored by the numpy and faiss-cpu Linux
+  wheels. The vendored copy is stripped, so its exact GCC version is not recorded.
+- **Licence:** GPL-3.0-or-later WITH GCC-exception-3.1. The GCC Runtime Library Exception,
+  in [licenses/GCC-exception-3.1.txt](licenses/GCC-exception-3.1.txt), permits conveying
+  it with GAIA under GAIA's own terms.
+- **Copyright:** Copyright (C) Free Software Foundation, Inc.
+- **Source:** https://gcc.gnu.org/git/?p=gcc.git;a=tree;f=libgfortran
 
 ## libasound (alsa-lib)
 

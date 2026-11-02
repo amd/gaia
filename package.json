@@ -13,7 +13,6 @@
     "src/gaia/apps/*/webui"
   ],
   "devDependencies": {
-    "cross-env": "^10.1.0",
     "electron": "^45.0.0"
   },
   "dependencies": {

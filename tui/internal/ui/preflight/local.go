@@ -775,10 +775,19 @@ func (l localRunner) verifyModelsWith(ctx context.Context) (Row, string, string,
 		row.Disposition = status.DispositionNotify
 		row.Line = "could not be checked"
 		row.Detail = err.Error()
-		row.Remedy = Remedy{
-			Action:  "Run setup yourself if anything below behaves oddly.",
-			Command: gaiainit.RunCommand(l.skipChatModel()),
-			Where:   installDocs,
+		if errors.Is(err, gaiainit.ErrNoCLI) {
+			row.Remedy = Remedy{
+				Action:     "Install the GAIA CLI first; setup can run after it is on PATH.",
+				Command:    gaiainit.InstallCommand,
+				PowerShell: gaiainit.InstallPowerShellCommand,
+				Where:      installDocs,
+			}
+		} else {
+			row.Remedy = Remedy{
+				Action:  "Run setup yourself if anything below behaves oddly.",
+				Command: gaiainit.RunCommand(l.skipChatModel()),
+				Where:   installDocs,
+			}
 		}
 		row.Raw = err.Error()
 		return row, "", "", st

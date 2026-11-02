@@ -39,6 +39,34 @@ function ctxLabel(ctx: number | null | undefined): string {
     return ctx ? `${Math.round(ctx / 1024)}K tokens` : 'unknown';
 }
 
+const MODEL_KIND_LABELS: Record<string, string> = {
+    asr: 'Speech recognition',
+    embedding: 'Embedding',
+    image: 'Image',
+    llm: 'Language',
+    rerank: 'Reranker',
+    reranking: 'Reranker',
+    stt: 'Speech recognition',
+    transcription: 'Speech recognition',
+    tts: 'Speech',
+    vision: 'Vision',
+    '3d': '3D',
+};
+
+function modelKindLabel(model: LoadedModelInfo): string {
+    if (!model.model_type) return 'Loaded model';
+    const type = model.model_type.toLowerCase();
+    const label = MODEL_KIND_LABELS[type] ?? `${type.charAt(0).toUpperCase()}${type.slice(1)}`;
+    return `${label} model`;
+}
+
+function loadedModelDetail(model: LoadedModelInfo): string {
+    const name = model.name ? displayModelName(model.name) : 'Unknown model';
+    const detail = [name, runsOn(model)];
+    if (model.backend !== 'remote' && model.ctx_size) detail.push(ctxLabel(model.ctx_size));
+    return detail.join(' · ');
+}
+
 function Row({ label, value, title }: { label: string; value: string; title?: string }) {
     return (
         <div className="status-row">
@@ -154,6 +182,14 @@ export function ModelServerPanel() {
                         ? `${info.embedding_model.name} · ${runsOn(info.embedding_model)}`
                         : 'None loaded'}
                 />
+                {(info.loaded_models ?? []).map((model, index) => (
+                    <Row
+                        key={`${model.name ?? 'unknown'}-${index}`}
+                        label={modelKindLabel(model)}
+                        value={loadedModelDetail(model)}
+                        title={model.name ?? undefined}
+                    />
+                ))}
             </div>
             {info.embedding_note && <p className="settings-hint">{info.embedding_note}</p>}
             {info.system_info_error && <p className="settings-hint">{info.system_info_error}</p>}
