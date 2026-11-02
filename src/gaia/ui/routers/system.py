@@ -25,6 +25,7 @@ from gaia.llm.lemonade_client import (
     resolve_effective_ctx_size,
     resolve_lemonade_api_key,
     resolve_lemonade_base_url,
+    runs_on_npu,
 )
 from gaia.llm.lemonade_manager import gpu_display_info
 
@@ -237,6 +238,12 @@ async def _auto_load_after_download(model_name: str) -> None:
     )
 
 
+def _install_npu_backend(model_name: str) -> None:
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    LemonadeClient(verbose=False).ensure_npu_backend(model_name)
+
+
 async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     """Issue ``POST /v1/pull?stream=true`` and feed the SSE event stream
     into ``_download_progress[model_name]``.
@@ -260,20 +267,18 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     if force:
         payload["force"] = True
 
-    _set_download_progress(
-        model_name,
-        {
-            "state": "starting",
-            "model_name": model_name,
-            "percent": 0,
-            "file": None,
-            "file_index": 0,
-            "total_files": 0,
-            "downloaded_bytes": 0,
-            "total_bytes": 0,
-            "message": None,
-        },
-    )
+    starting = {
+        "state": "starting",
+        "model_name": model_name,
+        "percent": 0,
+        "file": None,
+        "file_index": 0,
+        "total_files": 0,
+        "downloaded_bytes": 0,
+        "total_bytes": 0,
+        "message": None,
+    }
+    _set_download_progress(model_name, starting)
     logger.info("Pull stream starting: %s (force=%s)", model_name, force)
 
     # Track files we've already finished so the running ``downloaded_bytes``
@@ -289,7 +294,16 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     # link, and we'd rather hold open than wrongly bail.
     client_timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
     headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    from gaia.llm.lemonade_client import LemonadeClientError
+
     try:
+        if runs_on_npu(model_name):
+            # A first install downloads a release and can take minutes.
+            _set_download_progress(
+                model_name,
+                {**starting, "message": "Getting the NPU backend ready…"},
+            )
+            await asyncio.to_thread(_install_npu_backend, model_name)
         async with httpx.AsyncClient(timeout=client_timeout) as client:
             async with client.stream(
                 "POST", f"{base_url}/pull", json=payload, headers=headers
@@ -450,6 +464,22 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
                             logger.error(
                                 "Pull stream error for %s: %s", model_name, err_msg
                             )
+    except LemonadeClientError as exc:
+        logger.error("NPU backend not ready for %s: %s", model_name, exc)
+        _set_download_progress(
+            model_name,
+            {
+                "state": "error",
+                "model_name": model_name,
+                "percent": 0,
+                "file": None,
+                "file_index": 0,
+                "total_files": 0,
+                "downloaded_bytes": 0,
+                "total_bytes": 0,
+                "message": str(exc),
+            },
+        )
     except Exception as exc:  # pylint: disable=broad-except
         logger.error("Pull stream blew up for %s: %s", model_name, exc, exc_info=True)
         _set_download_progress(
