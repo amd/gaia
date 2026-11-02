@@ -10,7 +10,7 @@ Dependabot automatically monitors GAIA's dependencies and opens pull requests fo
 
 ## How GAIA uses Dependabot
 
-Dependabot is configured in [`.github/dependabot.yml`](https://github.com/amd/gaia/blob/main/.github/dependabot.yml) and runs every Monday across four entries: one for Python (`pip`), one for GitHub Actions, and two for npm (the root workspace plus the standalone Agent UI workspace). Every entry has `open-pull-requests-limit: 5` — the prior `0` (soft-disabled) state was a "silent fallback" violation that's now retired by design ([#1157](https://github.com/amd/gaia/issues/1157)).
+Dependabot is configured in [`.github/dependabot.yml`](https://github.com/amd/gaia/blob/main/.github/dependabot.yml) and runs every Monday across six entries: one for Python (`pip`), one for GitHub Actions, one for the TUI's Go module (`gomod`), and three for npm (the root workspace, the Agent UI, and one multi-directory entry for every other standalone npm package). Every entry has `open-pull-requests-limit: 5` — the prior `0` (soft-disabled) state was a "silent fallback" violation that's now retired by design ([#1157](https://github.com/amd/gaia/issues/1157)).
 
 A companion workflow at [`.github/workflows/dependabot-automerge.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/dependabot-automerge.yml) auto-merges low-risk Dependabot PRs once required status checks pass.
 
@@ -21,6 +21,8 @@ A companion workflow at [`.github/workflows/dependabot-automerge.yml`](https://g
 | `/` | pip | 5 | `python-dependencies` | weekly / monday |
 | `/` | npm | 5 | `root-npm-dependencies` | weekly / monday |
 | `/src/gaia/apps/webui` | npm | 5 | `agent-ui-dependencies` | weekly / monday |
+| `/hub/agents/email/npm`, `/hub/agents/gaia/npm`, `/website`, `/docs`, `/workers/agent-hub`, `/workers/admin`, `/workers/website-router`, `/src/vscode/gaia` | npm | 5 | `standalone-npm-dependencies` (one PR per directory) | weekly / monday |
+| `/tui` | gomod | 5 | `go-dependencies` | weekly / monday |
 | `/` | github-actions | 5 | `github-actions` | weekly / monday |
 
 **Why grouping matters.** Each ecosystem uses a wildcard `groups:` stanza so that a week's worth of updates collapse into a single grouped PR per ecosystem. Without grouping, the `limit: 5` would be hit by five individual single-package PRs and the rest would queue — defeating the point of the cap.
@@ -40,7 +42,7 @@ The workflow at `.github/workflows/dependabot-automerge.yml` enrols a Dependabot
   - `update-type == version-update:semver-patch`, OR
   - `update-type == version-update:semver-minor` AND `dependency-type` includes `direct:development` AND does NOT include `direct:production`.
 
-GitHub then merges the PR only after required status checks pass — `Code Quality (Lint)` and `Unit Tests` (the merge-queue gates) plus any required ecosystem checks. If CI fails, GitHub cancels the merge and the PR stays open.
+GitHub then merges the PR only after the base branch's **required** status checks pass; if CI fails, GitHub cancels the merge and the PR stays open. Auto-merge waits for nothing else, so when the base branch requires no status checks (in branch protection or a ruleset) the workflow refuses to enable it and its run fails with an error naming the missing setting. Add required checks to `main` to turn auto-merge on ([#3260](https://github.com/amd/gaia/issues/3260)).
 
 **What requires human review:**
 
@@ -72,16 +74,17 @@ To track a new `package.json` root (e.g., a new app under `src/gaia/apps/`):
              - "*"
    ```
 
-2. Run `python util/check_dependabot.py` to validate. The script enforces two invariants (per [#1157](https://github.com/amd/gaia/issues/1157)):
+2. Run `python util/check_dependabot.py` to validate. The script enforces three invariants (per [#1157](https://github.com/amd/gaia/issues/1157)):
    - No entry has `open-pull-requests-limit: 0`.
    - Every npm entry has a `groups:` stanza.
+   - Every tracked `package-lock.json` and `go.mod` sits in a directory an entry of the matching ecosystem watches, or is listed in `EXCLUDED` in the script with a reason ([#3525](https://github.com/amd/gaia/issues/3525)). A standalone npm package only needs its directory added to the existing `directories:` list.
 
 3. Update this doc's "Current configuration" table.
 
 ## Configuration fields reference
 
-- `package-ecosystem`: package manager type (`npm`, `pip`, `github-actions`).
-- `directory`: path to the folder containing the manifest, relative to the repo root.
+- `package-ecosystem`: package manager type (`npm`, `pip`, `gomod`, `github-actions`).
+- `directory`: path to the folder containing the manifest, relative to the repo root. `directories:` takes a list instead; the standalone npm entry uses it.
 - `schedule.interval` + `schedule.day`: how often to check.
 - `labels`: tags added to PRs for filtering. The repo's `dependencies` and `electron` labels exist in [`.github/labeler.yml`](https://github.com/amd/gaia/blob/main/.github/labeler.yml).
 - `open-pull-requests-limit`: max concurrent open PRs. Use `5`. Setting `0` soft-disables the entry and is rejected by `util/check_dependabot.py`.
@@ -94,7 +97,7 @@ See the [official Dependabot docs](https://docs.github.com/en/code-security/depe
 - **First Monday after re-enablement may be busy.** The soft-disabled era accumulated months of skipped updates; the first batch will be larger than steady state (~6–8 grouped PRs across all ecosystems).
 - **Grouped PRs that mix prod + dev deps don't auto-merge.** This is by design — bundling a production patch with a dev minor is exactly the case a human should look at. Manually merge with `gh pr merge --auto --squash <PR>` after review if you want it enrolled in the queue.
 - **Pre-merge maintainer setting:** "Allow auto-merge" AND "Allow squash merging" must both be enabled in repo Settings → General → Pull Requests. Without either, `gh pr merge --auto --squash` queues successfully but GitHub cancels the merge. Verify: `gh api repos/amd/gaia --jq '{allow_auto_merge: .allow_auto_merge, allow_squash_merge: .allow_squash_merge}'`.
-- **Diagnosing "why didn't this PR auto-merge?":** the workflow logs `dependency-names`, `dependency-type`, and `update-type` for every run. Check the workflow run's "Log metadata for debugging" step.
+- **Diagnosing "why didn't this PR auto-merge?":** the workflow logs `dependency-names`, `dependency-type`, and `update-type` for every run. Check the workflow run's "Log metadata for debugging" step. A red run with "No required checks on main" means neither branch protection nor a ruleset requires status checks on `main`; verify with `gh api repos/amd/gaia/branches/main --jq .protection.required_status_checks` and `gh api repos/amd/gaia/rules/branches/main`.
 
 ## MCP connector catalog pins
 

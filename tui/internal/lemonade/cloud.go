@@ -284,14 +284,17 @@ func (c *Client) Models(ctx context.Context, provider string) ([]Model, error) {
 	}
 	var out []Model
 	for _, m := range reply.Data {
-		chat := true
+		labeledChat, other := false, false
 		for _, label := range m.Labels {
 			switch label {
 			case "embeddings", "image", "reranker", "audio", "tts", "stt":
-				chat = false
+				other = true
+			case "chat":
+				labeledChat = true
 			}
 		}
-		if !chat || m.ID == "" {
+		// `chat` wins, as in isChatModel: FLM omni models are labeled `chat` and `audio`.
+		if (other && !labeledChat) || m.ID == "" {
 			continue
 		}
 		if provider == "local" {

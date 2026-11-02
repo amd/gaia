@@ -59,6 +59,10 @@ logger = logging.getLogger(__name__)
 _SUMMARY_CHAR_CAP = 300
 #: How much of an MCP tool's text output a tool row carries.
 _MCP_OUTPUT_CHAR_CAP = 16_000
+#: Most diff lines an edit's ``diff`` card carries; the rest is counted, not sent.
+_DIFF_CARD_MAX_LINES = 400
+#: Most characters it carries, so one huge line (a minified file) stays bounded.
+_DIFF_CARD_MAX_CHARS = 64_000
 
 #: Result keys naming a file the tool wrote; kept on the summary view a
 #: relayed result is reduced to.
@@ -649,6 +653,8 @@ class SSEOutputHandler(OutputHandler):
         self.delivered_answer: str = ""
         # What this turn's tools used, wrote and contacted, for the side rail.
         self.turn_ledger = TurnLedger()
+        # The diff print_diff drew for the call in flight; its result carries it.
+        self._pending_diff_card: Optional[Dict[str, Any]] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -805,6 +811,7 @@ class SSEOutputHandler(OutputHandler):
 
     def print_tool_usage(self, tool_name: str):
         self.record_tool_started(tool_name)
+        self._pending_diff_card = None
         # Prefer an explicit display label from the tool registry; fall back
         # to the legacy description map in this module when none is provided.
         detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
@@ -990,8 +997,34 @@ class SSEOutputHandler(OutputHandler):
         # set last so it always wins over the generic result_data shapes above.
         if render_card is not None:
             event["result_data"] = render_card
+        elif self._pending_diff_card is not None:
+            # ChatView and step persistence read a card from ``data``.
+            event["result_data"] = self._pending_diff_card
+            event["data"] = self._pending_diff_card
+            event["render"] = "diff"
+        self._pending_diff_card = None
 
         self._emit(event)
+
+    def print_diff(self, diff: str, filename: str) -> None:
+        """Attach a ``diff`` card to the result of the call that made the change.
+
+        Called by the write tools after the bytes are on disk; the card rides
+        the call's own ``tool_result`` so it lands under that tool row.
+        """
+        lines = diff.splitlines()
+        card: Dict[str, Any] = {"title": filename, "unified": diff}
+        if len(lines) > _DIFF_CARD_MAX_LINES:
+            card["unified"] = "\n".join(lines[:_DIFF_CARD_MAX_LINES])
+            card["note"] = (
+                f"Showing the first {_DIFF_CARD_MAX_LINES} of {len(lines)} diff lines."
+            )
+        if len(card["unified"]) > _DIFF_CARD_MAX_CHARS:
+            card["unified"] = card["unified"][:_DIFF_CARD_MAX_CHARS]
+            card["note"] = (
+                f"Showing the first {_DIFF_CARD_MAX_CHARS:,} characters of the diff."
+            )
+        self._pending_diff_card = card
 
     # === Status Messages ===
 

@@ -128,7 +128,9 @@ def _registry_holding(m):
     from gaia.daemon.sidecars.registry import SidecarRegistry
 
     removed = []
-    reg = SidecarRegistry({"toy": _SPEC}, on_stop=removed.append)
+    reg = SidecarRegistry(
+        {"toy": _SPEC}, on_stop=lambda aid, pid: removed.append((aid, pid))
+    )
     reg._manager_factory = lambda *a, **kw: m
     reg._holder("toy", _SPEC)
     return reg, removed
@@ -136,10 +138,11 @@ def _registry_holding(m):
 
 def test_registry_stop_reaps_the_orphaned_child(orphan):
     m, child = orphan
+    leader = m._proc.pid
     reg, removed = _registry_holding(m)
     assert reg.stop("toy") == {"agent_id": "toy", "state": "stopped"}
     assert not _alive(child)
-    assert removed == ["toy"]
+    assert removed == [("toy", leader)], "the reap names the pid it reaped"
 
 
 def test_registry_stop_is_loud_when_the_group_survives(orphan, monkeypatch):

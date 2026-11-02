@@ -124,6 +124,18 @@ def __init__(self, **kwargs):
 
 Alternatively, create a companion `agent.yaml` next to `agent.py` with a `models:` list — the registry reads that list as an ordered preference. The sidecar only honours the `models:` key; any other top-level key is ignored.
 
+### Running it from the CLI
+
+`gaia agent status` lists every agent the registry discovered. Pass that id to `gaia chat --agent` to run the agent from the terminal:
+
+```bash
+gaia agent status                                    # my-python-agent should be listed
+gaia chat --agent my-python-agent -q "Greet Ada"     # one question, then exit
+gaia chat --agent my-python-agent                    # interactive; /quit to exit
+```
+
+An unknown id fails and lists the ids that are registered. An agent that is listed but fails to construct reports the error and points at `gaia agent health <id>`. The flagship's document and indexing flags (`--index`, `--watch`, `--allowed-paths`, …) are rejected with `--agent`, since your agent doesn't read them.
+
 ---
 
 ## Using GAIA connectors
@@ -198,6 +210,8 @@ my-agents.zip
 └── my-greeter/
     └── agent.py
 ```
+
+Every other file in the agent's directory is included, except `__pycache__/` directories, `.pyc`/`.pyo` bytecode and `.DS_Store`. Those tie a bundle to the exporter's Python version or OS.
 
 Bundles are validated on import. The receiving end enforces conservative limits (max 1000 entries, 500 MB uncompressed, 50 MB per file) and rejects symlinks, device or other special files, and path-traversal entries.
 
