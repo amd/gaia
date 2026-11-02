@@ -111,6 +111,27 @@ class _CalendarAgent(Agent, CalendarToolsMixin):
         return _RecordingConsole()
 
 
+ACCOUNT = "me@x.com"
+
+
+@pytest.fixture(autouse=True)
+def connected_accounts(monkeypatch):
+    """Google is connected as ACCOUNT; a test adds to this to connect others."""
+    connections = {
+        "google": {"account_email": ACCOUNT, "scopes": [SCOPE_GOOGLE_CALENDAR_EVENTS]}
+    }
+    monkeypatch.setattr(
+        "gaia.connectors.api.get_connection", lambda p: connections.get(p)
+    )
+    monkeypatch.setattr(
+        "gaia.connectors.grants.list_agent_grants",
+        lambda p: {
+            "installed:gaia": connections.get(p, {}).get("scopes", []),
+        },
+    )
+    return connections
+
+
 @pytest.fixture
 def make_agent():
     saved = dict(_TOOL_REGISTRY)
@@ -120,6 +141,7 @@ def make_agent():
             built = _CalendarAgent(silent_mode=True, skip_lemonade=True)
         built.console = _RecordingConsole()
         built._calendar_backend = fake.backend()
+        built._calendar_provider = "google"
         return built
 
     try:
@@ -394,6 +416,7 @@ class TestCreate:
             start="2026-11-03",
             end="2026-11-03",
             notify_attendees=[],
+            calendar_account=ACCOUNT,
         )
         assert _asked(agent) == ["create_calendar_event"]
         assert json.loads(fake.writes[0].content)["end"]["date"] == "2026-11-04"
@@ -409,9 +432,90 @@ class TestCreate:
             start="2026-11-03T09:00:00-05:00",
             end="2026-11-03T10:00:00-05:00",
             notify_attendees=["dana@x.com"],
+            calendar_account=ACCOUNT,
         )
         assert fake.writes[0].url.params["sendUpdates"] == "all"
         assert result["notified"] == ["dana@x.com"]
+
+    def _create(self, agent, **over):
+        return _run(
+            agent,
+            "create_calendar_event",
+            **{
+                "title": "Budget review",
+                "start": "2026-11-03T09:00:00-05:00",
+                "end": "2026-11-03T10:00:00-05:00",
+                "notify_attendees": [],
+                "calendar_account": ACCOUNT,
+                **over,
+            },
+        )
+
+    def test_the_prompt_shows_which_account_it_lands_on(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        self._create(agent)
+        assert agent.console.asked[0][1]["calendar_account"] == ACCOUNT
+
+    @pytest.mark.parametrize("stated", ["", "work@corp.com"])
+    def test_a_wrong_account_is_refused_before_the_prompt(self, make_agent, stated):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = self._create(agent, calendar_account=stated)
+        assert result["success"] is False and ACCOUNT in result["error"]
+        assert agent.console.asked == [] and fake.writes == []
+
+    def test_the_result_names_the_account(self, make_agent):
+        result = self._create(make_agent(_FakeGoogle()))
+        assert result["account"] == ACCOUNT
+
+
+class TestWhichCalendar:
+    WINDOW = {"start": "2026-11-03T09:00:00-05:00", "end": "2026-11-03T17:00:00-05:00"}
+
+    def _read(self, agent):
+        yield _run(agent, "list_calendar_events")
+        yield _run(agent, "check_calendar_availability", **self.WINDOW)
+
+    def test_reads_name_the_account_and_only_its_main_calendar(self, make_agent):
+        for result in self._read(make_agent(_FakeGoogle())):
+            assert result["account"] == ACCOUNT
+            assert "main calendar" in result["calendars_checked"]
+            assert ACCOUNT in result["calendars_checked"]
+            assert "other_calendars_not_checked" not in result
+
+    def test_another_usable_provider_is_named_as_not_checked(
+        self, make_agent, connected_accounts
+    ):
+        connected_accounts["microsoft"] = {
+            "account_email": "work@corp.com",
+            "scopes": [SCOPE_GRAPH_CALENDARS_READWRITE],
+        }
+        for result in self._read(make_agent(_FakeGoogle())):
+            assert result["other_calendars_not_checked"] == ["work@corp.com"]
+            assert "work@corp.com" in result["calendars_checked"]
+
+    def test_a_provider_without_calendar_access_is_not_named(
+        self, make_agent, connected_accounts
+    ):
+        connected_accounts["microsoft"] = {
+            "account_email": "work@corp.com",
+            "scopes": ["Mail.Read"],
+        }
+        for result in self._read(make_agent(_FakeGoogle())):
+            assert "other_calendars_not_checked" not in result
+
+    def test_the_availability_tool_forbids_claiming_free_overall(self, make_agent):
+        make_agent(_FakeGoogle())
+        described = " ".join(
+            _TOOL_REGISTRY["check_calendar_availability"]["description"].split()
+        )
+        assert "free overall" in described
+
+    def test_update_and_cancel_results_name_the_account(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        assert _run(agent, "cancel_calendar_event", **TARGET)["account"] == ACCOUNT
+        result = _run(agent, "update_calendar_event", **TARGET, new_title="Sync")
+        assert result["account"] == ACCOUNT
 
 
 class TestList:
