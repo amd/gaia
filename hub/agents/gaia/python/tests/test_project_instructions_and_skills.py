@@ -17,6 +17,7 @@ from test_prompt_prefix_stability import flagship  # noqa: F401 - fixture
 
 from gaia.agents.base import project_map
 from gaia.project_context import PROJECT_CONTEXT_ENV, ProjectContextError
+from gaia.project_trust import DECLINED, TRUSTED, remember_folder_trust
 
 RULE = "Run `make check` before every commit."
 CLAUDE = "amd.Claude-Opus-5-5"
@@ -229,6 +230,7 @@ def test_claude_gets_instructions_skills_and_the_repository_section(
 ):
     agent, _model, _doc = flagship
     agent.config.project_context = "auto"
+    remember_folder_trust(repo, TRUSTED)
     deepseek = _as_model(agent, DEEPSEEK)
     for model, use_claude in ((CLAUDE, False), ("claude-opus-5", True)):
         prompt = _as_model(agent, model, use_claude)
@@ -237,6 +239,19 @@ def test_claude_gets_instructions_skills_and_the_repository_section(
         assert "WORKING IN A CODE REPOSITORY" in prompt
     # Switching back restores the other model's prompt exactly.
     assert _as_model(agent, DEEPSEEK) == deepseek
+
+
+def test_claude_gets_nothing_from_a_folder_the_user_has_not_trusted(
+    repo, flagship, auto
+):
+    agent, _model, _doc = flagship
+    agent.config.project_context = "auto"
+    for decision in (None, DECLINED):
+        if decision:
+            remember_folder_trust(repo, decision)
+        prompt = _as_model(agent, CLAUDE)
+        assert RULE not in prompt and "release-steps" not in prompt
+        assert "WORKING IN A CODE REPOSITORY" not in prompt
 
 
 def test_the_user_setting_beats_the_model(repo, flagship, auto):

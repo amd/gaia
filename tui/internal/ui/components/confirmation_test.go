@@ -179,6 +179,16 @@ func TestPathAccessPromptAsksInWords(t *testing.T) {
 	}
 }
 
+// The trust question is asked in words and is not mistaken for a destructive action.
+func TestProjectTrustPromptAsksInWords(t *testing.T) {
+	if got := ActionTitle("trust_project_folder"); strings.Contains(got, "_") {
+		t.Errorf("ActionTitle(trust_project_folder) = %q, want a plain question", got)
+	}
+	if got := ClassifyActionRisk("trust_project_folder"); got != RiskWrite {
+		t.Errorf("ClassifyActionRisk(trust_project_folder) = %v, want %v", got, RiskWrite)
+	}
+}
+
 // An action this client has never heard of still gated the sidecar on
 // confirmation, so it gets the MORE cautious tier, not less.
 func TestClassifyActionRiskUnknownDefaultsToDestructive(t *testing.T) {

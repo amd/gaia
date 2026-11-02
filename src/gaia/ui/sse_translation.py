@@ -77,6 +77,7 @@ from gaia.agents.base.call_risk import RISK_NOTE_ARG, plain_risk_note
 from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
+    PROJECT_TRUST_PROMPT_TOOL,
     SCRATCH_ARG,
 )
 from gaia.ui.event_narration import (
@@ -663,6 +664,8 @@ class CanonicalTranslator:
             return render_command_summary(tool, args)
         if tool == PATH_ACCESS_PROMPT_TOOL and isinstance(args.get("path"), str):
             return _path_access_question(args)
+        if tool == PROJECT_TRUST_PROMPT_TOOL and isinstance(args.get("folder"), str):
+            return _project_trust_question(args)
         label = self._action_labels.get(tool, f"Run {tool!r}")
         detail = render_invocation(args)
         if not detail:
@@ -703,6 +706,17 @@ def _path_access_question(args: Dict[str, Any]) -> str:
     if kind == "file":
         return f"Allow GAIA to use the file {path} for this session?"
     return f"Allow GAIA to use {path} for this session?"
+
+
+def _project_trust_question(args: Dict[str, Any]) -> str:
+    """The question a ``trust_project_folder`` prompt asks, naming what it would read."""
+    files = args.get("files")
+    shown = ", ".join(str(f) for f in files) if isinstance(files, list) else "its files"
+    return (
+        f"Trust {args['folder']}? GAIA would put {shown} in the model's prompt "
+        "as that project's instructions, now and every time you work in this "
+        "folder. They come from the folder, not from you."
+    )
 
 
 def _normalize_options(event: Dict[str, Any]) -> List[Dict[str, str]]:

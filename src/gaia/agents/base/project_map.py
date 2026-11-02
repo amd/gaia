@@ -39,6 +39,7 @@ from gaia.agents.base.project_deps import declared_python_deps, missing_deps
 from gaia.agents.base.system_context import DEV_TOOL_PROBES, probe_binaries
 from gaia.agents.base.turn_metrics import count_tokens
 from gaia.logger import get_logger
+from gaia.project_context import AUTO
 
 logger = get_logger(__name__)
 
@@ -687,6 +688,27 @@ PROJECT_INSTRUCTIONS_CHAR_CAP = 60_000
 PROJECT_INSTRUCTIONS_HEADER = "==== PROJECT INSTRUCTIONS ===="
 
 
+def guidance_files(root: os.PathLike | str) -> List[str]:
+    """What *root* carries that the full project context would put in the prompt.
+
+    The instruction files by name, and ``.claude/skills`` with its skill count.
+    Empty when the folder has none, i.e. when there is nothing to ask about.
+    """
+    root_path = Path(root)
+    found = [n for n in PROJECT_INSTRUCTION_FILES if (root_path / n).is_file()]
+    try:
+        skills = sum(
+            1
+            for entry in (root_path / ".claude" / "skills").iterdir()
+            if (entry / "SKILL.md").is_file()
+        )
+    except OSError:
+        skills = 0
+    if skills:
+        found.append(f".claude/skills ({skills} skill{'' if skills == 1 else 's'})")
+    return found
+
+
 #: Characters read past a file's share of the cap: leading blank lines are
 #: stripped before the cap applies, and a symlinked copy is compared by content.
 _INSTRUCTIONS_READ_SLACK = 4_096
@@ -890,19 +912,140 @@ class ProjectMapMixin:
         """Whether the current model is shown the repository's own guidance.
 
         Re-decided on every render, so a mid-session model switch (which
-        rebuilds the prompt) takes the new model's level.
+        rebuilds the prompt) takes the new model's level. Under ``auto`` the
+        folder must also be one the user trusts; ``full`` is the user's own
+        say-so and ``off`` never loads.
         """
+        setting, wanted = self._project_context_choice()
+        return wanted and (setting != AUTO or self._project_folder_trusted())
+
+    def _project_context_choice(self) -> Tuple[str, bool]:
+        """The ``project_context`` setting, and whether it gives this model the context."""
         from gaia.project_context import (
             project_context_setting,
             wants_full_project_context,
         )
 
-        setting = getattr(getattr(self, "config", None), "project_context", None)
-        return wants_full_project_context(
-            project_context_setting(setting),
+        configured = getattr(getattr(self, "config", None), "project_context", None)
+        setting = project_context_setting(configured)
+        return setting, wants_full_project_context(
+            setting,
             getattr(self, "model_id", None),
             bool(getattr(self, "_use_claude", False)),
         )
+
+    # ── folder trust ──────────────────────────────────────────────────────
+
+    def _trust_check_folder(self) -> Optional[str]:
+        """The folder whose guidance needs the user's say-so, else ``None``.
+
+        ``None`` under Full access, which turns the prompts off, and when there
+        is no project folder.
+        """
+        grants = getattr(self, "_path_access_grants_unasked", None)
+        if callable(grants) and grants():
+            return None
+        return self._project_instructions_root()
+
+    def _project_trust(self, folder: str) -> Tuple[List[str], Optional[str]]:
+        """*folder*'s guidance files and the saved answer, read once per session."""
+        from gaia.project_trust import folder_trust
+
+        if not hasattr(self, "_project_trust_cache"):
+            self._project_trust_cache = {}
+        if folder not in self._project_trust_cache:
+            self._project_trust_cache[folder] = (
+                guidance_files(folder),
+                folder_trust(folder),
+            )
+        return self._project_trust_cache[folder]
+
+    def _project_folder_trusted(self) -> bool:
+        """False for a folder that carries guidance and is declined or not yet trusted."""
+        from gaia.project_trust import TRUSTED
+
+        folder = self._trust_check_folder()
+        if folder is None:
+            return True
+        files, decision = self._project_trust(folder)
+        return not files or decision == TRUSTED
+
+    def _can_ask_about_project(self) -> bool:
+        """Whether a person can answer a prompt on this console right now.
+
+        Not when tools are pre-approved: that would answer for them.
+        """
+        from gaia.agents.base.console import (
+            TerminalConfirmationMixin,
+            terminal_is_interactive,
+        )
+
+        console = getattr(self, "console", None)
+        pre_approved = getattr(console, "auto_approve_confirmations_enabled", None)
+        if callable(pre_approved) and pre_approved():
+            return False
+        if getattr(console, "background_mode", False) is True:
+            return False
+        if getattr(console, "nobody_answers", False) is True:
+            return False
+        if getattr(console, "blocking_confirmation", False):
+            return True
+        return isinstance(console, TerminalConfirmationMixin) and (
+            terminal_is_interactive()
+        )
+
+    def _ask_project_trust(self) -> None:
+        """Ask once per session and folder whether to read its guidance.
+
+        Runs before the prompt is composed. Unknown folders are left unloaded
+        where nobody can be asked. An answer is saved; a timeout or a cancelled
+        run is not, so the next session asks again.
+        """
+        from gaia.agents.base.tool_grants import PROJECT_TRUST_PROMPT_TOOL
+        from gaia.project_trust import (
+            DECLINED,
+            TRUSTED,
+            ProjectTrustError,
+            remember_folder_trust,
+        )
+
+        setting, wanted = self._project_context_choice()
+        folder = self._trust_check_folder()
+        if not wanted or setting != AUTO or folder is None:
+            return
+        files, decision = self._project_trust(folder)
+        if not files or decision is not None or not self._can_ask_about_project():
+            return
+
+        console = self.console
+        try:
+            trusted = (
+                console.confirm_tool_execution(
+                    PROJECT_TRUST_PROMPT_TOOL, {"folder": folder, "files": files}
+                )
+                is True
+            )
+        finally:
+            # Asked once a session, whatever the answer or how it ended.
+            self._project_trust_cache[folder] = (files, DECLINED)
+        if trusted:
+            self._project_trust_cache[folder] = (files, TRUSTED)
+        # The prompt was composed without the guidance; recompose it.
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
+        cancelled = getattr(console, "cancelled", None)
+        if console.confirmation_timed_out(PROJECT_TRUST_PROMPT_TOOL) or (
+            cancelled is not None and cancelled.is_set()
+        ):
+            return
+        try:
+            remember_folder_trust(folder, TRUSTED if trusted else DECLINED)
+        except ProjectTrustError as e:
+            logger.warning(
+                "[project-trust] %s. This session keeps your answer; GAIA will "
+                "ask again next time.",
+                e,
+            )
 
     def _lists_project_skills(self) -> bool:
         return self._full_project_context()
@@ -1068,6 +1211,7 @@ class ProjectMapMixin:
     def _on_task_start(self, user_input: str) -> None:
         """Materialize the map and, if warranted, kick off ``index_codebase``."""
         super()._on_task_start(user_input)
+        self._ask_project_trust()
         try:
             pm = self.materialize_project_map()
         except OSError as e:

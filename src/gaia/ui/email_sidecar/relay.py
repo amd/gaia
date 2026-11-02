@@ -47,7 +47,10 @@ import uuid
 from typing import Any, Callable, ContextManager, Dict, List, Optional
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
-from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
+from gaia.agents.base.tool_grants import (
+    PATH_ACCESS_PROMPT_TOOL,
+    PROJECT_TRUST_PROMPT_TOOL,
+)
 from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
@@ -192,6 +195,7 @@ _FRESH_CONSENT_TOOLS = frozenset(
         "approve_engineering_code",
         "capture_skill",
         PATH_ACCESS_PROMPT_TOOL,
+        PROJECT_TRUST_PROMPT_TOOL,
     }
 )
 

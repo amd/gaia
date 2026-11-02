@@ -9,6 +9,7 @@ import {
     requiresFreshConsent,
     repeatedAllowCount,
     PATH_ACCESS_TOOL,
+    PROJECT_TRUST_TOOL,
     permissionPromptText,
     type PermissionDecision,
 } from '../stores/notificationStore';
@@ -236,7 +237,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                 <div className="perm-card-actions">
                     <button type="button" className="perm-btn is-primary" onClick={() => answer('allow')} disabled={busy}>
                         {/* Granting a path lasts for the chat, as the question says. */}
-                        {t(isPath ? 'prompt.allowForChat' : 'prompt.allowOnce')}
+                        {t(notification.tool === PROJECT_TRUST_TOOL ? 'prompt.trust.allow' : isPath ? 'prompt.allowForChat' : 'prompt.allowOnce')}
                     </button>
                     {scope && (
                         <button
