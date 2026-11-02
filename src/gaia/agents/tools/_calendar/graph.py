@@ -18,6 +18,7 @@ from gaia.agents.tools._calendar.errors import (
     CalendarError,
     CalendarEventGone,
     CalendarEventNotFound,
+    CalendarWriteUnreadable,
 )
 from gaia.agents.tools._calendar.model import (
     CalendarEvent,
@@ -148,6 +149,16 @@ def _parse_event(raw: Dict[str, Any]) -> CalendarEvent:
         ),
         cancelled=cancelled,
     )
+
+
+def _written_event(response: httpx.Response) -> CalendarEvent:
+    """The event a 2xx write returned; the write stands whatever its reply holds."""
+    try:
+        return _parse_event(response.json())
+    except (ValueError, CalendarError, AttributeError, KeyError, TypeError) as exc:
+        raise CalendarWriteUnreadable(
+            f"Microsoft Graph accepted the change but its reply couldn't be read ({exc})."
+        ) from exc
 
 
 def _this_computers_zone() -> str:
@@ -307,7 +318,7 @@ class GraphCalendarBackend:
         if event.description:
             body["body"] = {"contentType": "text", "content": event.description}
         response = self._request("POST", f"{GRAPH_API_BASE}/me/events", body=body)
-        return _parse_event(response.json())
+        return _written_event(response)
 
     def update_event(self, event: CalendarEvent, patch: EventPatch) -> CalendarEvent:
         body: Dict[str, Any] = {}
@@ -320,7 +331,7 @@ class GraphCalendarBackend:
         if patch.description is not None:
             body["body"] = {"contentType": "text", "content": patch.description}
         response = self._request("PATCH", self._event_url(event.id), body=body)
-        return _parse_event(response.json())
+        return _written_event(response)
 
     def cancel_event(self, event: CalendarEvent) -> CancelOutcome:
         url = self._event_url(event.id)

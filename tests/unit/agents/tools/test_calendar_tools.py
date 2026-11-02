@@ -518,6 +518,43 @@ class TestWhichCalendar:
         assert result["account"] == ACCOUNT
 
 
+class TestAWriteThatWentThrough:
+    class _Unreadable(_FakeGoogle):
+        def __call__(self, request):
+            if request.method in ("POST", "PATCH"):
+                self.requests.append(request)
+                return httpx.Response(200, text="not json")
+            return super().__call__(request)
+
+    @pytest.mark.parametrize(
+        "tool, args",
+        [
+            (
+                "create_calendar_event",
+                {
+                    "title": "Budget review",
+                    "start": "2026-11-03T09:00:00-05:00",
+                    "end": "2026-11-03T10:00:00-05:00",
+                    "notify_attendees": ["dana@x.com"],
+                    "calendar_account": ACCOUNT,
+                },
+            ),
+            ("update_calendar_event", {**TARGET, "new_title": "Sync"}),
+        ],
+    )
+    def test_success_is_reported_and_a_retry_is_warned_off(
+        self, make_agent, tool, args
+    ):
+        fake = self._Unreadable()
+        result = _run(make_agent(fake), tool, **args)
+        assert result["success"] is True and result["read_back"] is False
+        assert "went through" in result["message"]
+        assert "Do not retry" in result["message"]
+        assert result["notified"] == ["dana@x.com"]
+        assert result["account"] == ACCOUNT
+        assert len(fake.writes) == 1
+
+
 class TestList:
     def test_defaults_to_a_forward_window(self, make_agent):
         fake = _FakeGoogle(items=[])

@@ -21,9 +21,14 @@ class CalendarEventNotFound(CalendarError):
     """404: the event is gone or the id is wrong, and the provider can't say which."""
 
 
+class CalendarWriteUnreadable(CalendarError):
+    """A write returned 2xx and its reply couldn't be read. The write did happen."""
+
+
 __all__ = [
     "CalendarAuthError",
     "CalendarError",
     "CalendarEventGone",
     "CalendarEventNotFound",
+    "CalendarWriteUnreadable",
 ]

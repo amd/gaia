@@ -18,6 +18,7 @@ from gaia.agents.tools._calendar import (
     CalendarEventGone,
     CalendarEventNotFound,
     CalendarWindow,
+    CalendarWriteUnreadable,
     CancelOutcome,
     EventPatch,
     GoogleCalendarBackend,
@@ -46,6 +47,39 @@ def _google(handler):
 def _graph(handler):
     client = httpx.Client(transport=httpx.MockTransport(handler))
     return GraphCalendarBackend(lambda: "tok", http_client=client)
+
+
+def _unreadable(request):
+    return httpx.Response(201, text="<html>not json</html>")
+
+
+@pytest.mark.parametrize("build", [lambda h: _google(h), lambda h: _graph(h)])
+class TestAWriteThatWentThrough:
+    @pytest.mark.parametrize(
+        "response",
+        [
+            _unreadable,
+            lambda r: httpx.Response(200, json=["not", "an", "event"]),
+            lambda r: httpx.Response(200, json={"id": ""}),
+        ],
+    )
+    def test_an_unreadable_reply_says_the_write_happened(self, build, response):
+        with pytest.raises(CalendarWriteUnreadable):
+            build(response).create_event(NewEvent("Sync", TIMED))
+        with pytest.raises(CalendarWriteUnreadable):
+            build(response).update_event(_event(), EventPatch(title="New"))
+
+    def test_a_failed_write_is_still_a_plain_error(self, build):
+        def refused(request):
+            return httpx.Response(400, json={})
+
+        with pytest.raises(CalendarError) as caught:
+            build(refused).create_event(NewEvent("Sync", TIMED))
+        assert not isinstance(caught.value, CalendarWriteUnreadable)
+
+    def test_an_unreadable_read_is_a_plain_error(self, build):
+        with pytest.raises(ValueError):
+            build(_unreadable).get_event("x")
 
 
 def _recording(payload, status=200):

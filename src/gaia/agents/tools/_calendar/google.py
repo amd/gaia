@@ -14,6 +14,7 @@ from gaia.agents.tools._calendar.errors import (
     CalendarError,
     CalendarEventGone,
     CalendarEventNotFound,
+    CalendarWriteUnreadable,
 )
 from gaia.agents.tools._calendar.model import (
     CalendarEvent,
@@ -84,6 +85,16 @@ def _parse_event(raw: Dict[str, Any]) -> CalendarEvent:
         ),
         cancelled=cancelled,
     )
+
+
+def _written_event(response: httpx.Response) -> CalendarEvent:
+    """The event a 2xx write returned; the write stands whatever its reply holds."""
+    try:
+        return _parse_event(response.json())
+    except (ValueError, CalendarError, AttributeError, KeyError, TypeError) as exc:
+        raise CalendarWriteUnreadable(
+            f"Google Calendar accepted the change but its reply couldn't be read ({exc})."
+        ) from exc
 
 
 def _slot_fields(slot: EventSlot) -> Dict[str, Any]:
@@ -224,7 +235,7 @@ class GoogleCalendarBackend:
         response = self._request(
             "POST", _EVENTS_PATH, params=_notify_params(event.attendees), body=body
         )
-        return _parse_event(response.json())
+        return _written_event(response)
 
     def update_event(self, event: CalendarEvent, patch: EventPatch) -> CalendarEvent:
         body: Dict[str, Any] = {}
@@ -242,7 +253,7 @@ class GoogleCalendarBackend:
             params=_notify_params(event.attendees),
             body=body,
         )
-        return _parse_event(response.json())
+        return _written_event(response)
 
     def cancel_event(self, event: CalendarEvent) -> CancelOutcome:
         notifies = event.attendees if event.organizer_is_self else ()

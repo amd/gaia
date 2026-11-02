@@ -7,6 +7,7 @@ from gaia.agents.tools._calendar.errors import (
     CalendarError,
     CalendarEventGone,
     CalendarEventNotFound,
+    CalendarWriteUnreadable,
 )
 from gaia.agents.tools._calendar.google import GoogleCalendarBackend
 from gaia.agents.tools._calendar.graph import GraphCalendarBackend
@@ -30,6 +31,7 @@ __all__ = [
     "CalendarEventNotFound",
     "CalendarPage",
     "CalendarWindow",
+    "CalendarWriteUnreadable",
     "CancelOutcome",
     "EventPatch",
     "EventSlot",
