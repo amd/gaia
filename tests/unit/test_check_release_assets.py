@@ -79,12 +79,6 @@ def every_platform_has_an_agent(monkeypatch):
     monkeypatch.setattr(cra.artifacts, "platform_has_sidecar", lambda p: True)
 
 
-@pytest.fixture(autouse=True)
-def _lock_covers_every_platform(monkeypatch):
-    # The real lock may drop the best-effort Intel agent; these lists assume it.
-    monkeypatch.setattr(cra.artifacts, "platform_has_sidecar", lambda p: True)
-
-
 def _assets(names: list[str]) -> list[dict]:
     return [{"name": n, "size": 1024, "state": "uploaded"} for n in names]
 
