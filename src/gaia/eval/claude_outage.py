@@ -21,11 +21,12 @@ not quota: only wording or a 402 makes this a quota outage.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Dict, Mapping, Optional
 
 from gaia.eval.claude_refusal import (
     CREDENTIAL_CODES,
@@ -104,6 +105,33 @@ def driver_api_key() -> str:
 def dotenv_only_api_key() -> bool:
     """True when ``ANTHROPIC_API_KEY`` is set only because a ``.env`` set it."""
     return bool((os.environ.get(API_KEY_VAR) or "").strip()) and not driver_api_key()
+
+
+_warned_dotenv_api_key = False
+
+
+def without_dotenv_api_key(env: Mapping[str, str]) -> Dict[str, str]:
+    """A copy of *env* for a ``claude`` child, minus a ``.env``-only API key.
+
+    The CLI prefers ``ANTHROPIC_API_KEY`` over its login, so a key the operator
+    never exported must not reach it (#3367). Warns once, never naming the key.
+    """
+    global _warned_dotenv_api_key  # pylint: disable=global-statement
+    import gaia  # pylint: disable=import-outside-toplevel
+
+    if (
+        not (env.get(API_KEY_VAR) or "").strip()
+        or (gaia.pre_dotenv_env(API_KEY_VAR) or "").strip()
+    ):
+        return dict(env)
+    if not _warned_dotenv_api_key:
+        _warned_dotenv_api_key = True
+        logging.getLogger(__name__).warning(
+            "Ignoring ANTHROPIC_API_KEY from a .env file for the Claude judge "
+            "— it would disable your Claude Code login. Export it in the shell "
+            "to judge with that key instead."
+        )
+    return {k: v for k, v in env.items() if k != API_KEY_VAR}
 
 
 def claude_account() -> str:

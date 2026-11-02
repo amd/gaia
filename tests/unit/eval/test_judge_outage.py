@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import gaia
 from gaia.eval.judge_outage import (
     JudgeOutageError,
     classify_judge_exception,
@@ -197,6 +198,7 @@ def _patch_failing_client(monkeypatch, error):
     """Make ``ClaudeClient(...)`` hand back a client whose judge call fails."""
     # Pin the transport: make_judge_client picks ClaudeClient only when the API
     # key is set, so without this the test asserts nothing on a keyless runner.
+    monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     client = MagicMock()

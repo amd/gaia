@@ -12,6 +12,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import gaia
+
 # ---------------------------------------------------------------------------
 # Shared mocks — we need anthropic + bs4 importable before importing ClaudeClient
 # ---------------------------------------------------------------------------
@@ -433,6 +435,7 @@ class TestJudgeFactoryTemperature:
         these tests spy on; clearing the token stops a developer's subscription
         credential from silently sending them down the CLI path instead.
         """
+        monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", "test-key")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
 

@@ -52,6 +52,7 @@ from gaia.eval.bench import ghstub, harness, metering, swebench, therock, transc
 from gaia.eval.bench.config import BenchConfig
 from gaia.eval.bench.gateway import Gateway
 from gaia.eval.bench.leaks import Scrubber
+from gaia.eval.claude_outage import without_dotenv_api_key
 from gaia.eval.task_setups import SETUPS, remove_leftovers
 from gaia.llm.lemonade_client import (
     resolve_lemonade_api_key,
@@ -1472,6 +1473,7 @@ def judge_batch(
     else:
         head = [RUBRIC, f"=== THE ORIGINAL PROJECT ===\n{project_snapshot()}"]
     payload = "\n\n".join([*head, *(_attempt_section(a) for a in attempts)])
+    env = without_dotenv_api_key(env)
     assert_provider_permitted("the Claude Code CLI")
     # An empty working directory: the repo's CLAUDE.md is not the judge's brief.
     with tempfile.TemporaryDirectory(prefix="gaia-judge-") as cwd:
@@ -1484,7 +1486,7 @@ def judge_batch(
             errors="replace",
             timeout=JUDGE_TIMEOUT_S,
             cwd=cwd,
-            env=dict(env),
+            env=env,
             check=False,
         )
     if proc.returncode != 0 and not proc.stdout.strip():
