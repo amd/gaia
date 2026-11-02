@@ -139,10 +139,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
    ## Full Changelog
 
-   **N commits** since v<previous>:
-
-   - `<sha>` — <subject>
-   - ...
+   **N commits** since v<previous>. The PR links above are the changelog; do not paste a raw `<sha> — <subject>` dump.
 
    Full Changelog: [v<previous>...v<version>](https://github.com/amd/gaia/compare/v<previous>...v<version>)
    ```
@@ -544,6 +541,39 @@ Show the user the smoke-test output, the artifact list, and the drafted Discord 
 
 ---
 
+## Phase 7 — Watch the release, and recover if it is broken
+
+**Goal:** catch a bad release while few users have it, and stop it spreading.
+
+### Watch (first 24 hours)
+
+1. Check new issues: `gh issue list --repo amd/gaia --search "v<version>" --state open --limit 30` (also search `v<version>-rc`, since an RC-channel user reports against the RC tag), and the Discord support channel if the user relays it. Two reports of the same install or startup failure is a bad release.
+2. Re-run the Phase 6 smoke test on a clean machine (or a clean `uv venv`) and the one-line installer, not only on the machine that built the release.
+
+### Shipped but broken — contain first, then fix forward
+
+Never delete the tag, the GitHub release, or a PyPI/npm version: other machines already hold them. Contain in this order, and ask the user before each step (all are visible to every user):
+
+1. **Stop the Electron auto-updater from offering it.** With no R2 feed configured, the updater takes the highest-versioned non-draft GitHub release that carries this platform's `latest*.yml`. It skips pre-releases only for installs that have not opted into release candidates, and it ignores GitHub's `Latest` badge. Demote the release, then remove its update manifests so prerelease-channel installs stop seeing it too:
+   ```bash
+   gh release edit v<bad> --repo amd/gaia --prerelease --latest=false
+   gh release edit v<previous-good> --repo amd/gaia --latest   # for the releases page, not the updater
+   gh release delete-asset v<bad> latest.yml --repo amd/gaia --yes   # repeat for latest-mac.yml, latest-linux*.yml
+   ```
+   The installers stay downloadable, so this still follows "never delete the release or tag". Machines that already updated need the in-app rollback to a previous release, or the fixed version.
+2. **Stop `pip install amd-gaia` resolving to it.** Yank the version on PyPI (project page, Manage, Releases, Yank, with a reason). A yanked version still installs when pinned exactly; it stops being the default.
+3. **Stop `npm install @amd-gaia/agent-ui` resolving to it.** Point `latest` back and deprecate the bad version:
+   ```bash
+   npm dist-tag add @amd-gaia/agent-ui@<previous-good> latest
+   npm deprecate @amd-gaia/agent-ui@<bad> "Broken release, use <fixed-or-previous-good>"
+   ```
+4. **Say so.** Add a `## Known Issues` entry to `docs/releases/v<bad>.mdx` linking the tracking issue, and post a short notice wherever the original announcement went.
+5. **Fix forward** as the next patch through Phases 1 to 6, with an RC (Phase 3.5) for anything that reached users through the installer path.
+
+Npm versions cannot be re-published with different bytes (see Notes), so a fix is always a new version.
+
+---
+
 ## Output between phases
 
 After every phase, output:
@@ -560,5 +590,6 @@ Do not bundle two phases into one user prompt. The gates exist for review.
 - The argument-passing convention is the *target tag*, not the previous tag. If the user says "release v0.17.5", that is what gets created — the previous tag is the newest final tag (Phase 1 step 1's `PREV`) — never an `-rcN` tag, or the notes would cover only the changes since the candidate.
 - Hotfix releases (`v0.15.4.1`) follow the same flow; the `validate_release_notes.py` check accepts the four-part form.
 - Release candidates are `v<version>-rcN` only (Phase 3.5). There is no RC form of a four-part hotfix tag.
-- Minor/major releases (`v0.18.0`, `v1.0.0`) need a richer notes structure — a "Highlights" block, the `pip install` instructions, and migration notes if breaking. The skeleton above is patch-shaped; expand for non-patch releases by mirroring the prior minor/major release notes.
+- Minor/major releases (`v0.18.0`, `v1.0.0`) need a richer notes structure — a "Highlights" block, the `pip install` instructions, and — when anything is breaking — a mandatory migration section under `## Breaking Changes` saying what to change, old form to new, per item. The skeleton above is patch-shaped; expand for non-patch releases by mirroring the prior minor/major release notes.
+- Supply chain: PyPI artifacts are Sigstore-signed and `@amd-gaia/agent-ui` is published with npm `--provenance` (`publish.yml`). No SBOM or SLSA provenance is produced for the PyPI or Electron artifacts, so do not claim one in release notes.
 - If the publish run fails partway through (e.g. PyPI publishes but npm doesn't), do **not** delete the tag and start over. Resolve the failing job, rerun only that job (`gh run rerun <run-id> --failed`), and let the rest of the pipeline complete idempotently. The tag is the source of truth — preserve it. Every npm publish (`publish.yml` and the `release_agent_*.yml` agent releases) goes through `util/npm_publish_once.py`, so a re-run skips a version npm already holds with the same bytes and fails loudly if npm holds different bytes under it — that version can never be corrected; ship a new one.

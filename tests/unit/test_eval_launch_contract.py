@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import gaia
 from gaia.eval import runner
 
 
@@ -25,8 +26,11 @@ def test_eval_launch_preserves_auth_and_mcp_contract(
     ):
         if value is None:
             monkeypatch.delenv(name, raising=False)
+            monkeypatch.delitem(gaia._PRE_DOTENV_ENVIRON, name, raising=False)
         else:
+            # Exported in the shell — a .env-only key is covered elsewhere.
             monkeypatch.setenv(name, value)
+            monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, name, value)
     mocker.patch.object(runner.shutil, "which", return_value="/test/claude")
     run = mocker.patch.object(
         runner,
@@ -72,7 +76,7 @@ def test_eval_launch_preserves_auth_and_mcp_contract(
     assert runner.MCP_CONFIG.is_file()
     assert run.call_args.kwargs["cwd"] == str(runner.REPO_ROOT)
     assert run.call_args.kwargs["timeout"] == 30
-    assert "env" not in run.call_args.kwargs  # Inherit the selected credentials.
+    assert run.call_args.kwargs["env"] is None  # Inherit the selected credentials.
 
 
 def test_configured_mcp_launcher_imports_real_server(tmp_path, monkeypatch):
