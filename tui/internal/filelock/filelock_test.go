@@ -5,6 +5,8 @@ package filelock
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -77,43 +79,134 @@ func TestReadFileWaitsForTheWriter(t *testing.T) {
 	}
 }
 
-func TestReadFileFallsBackWhenTheLockCannotBeCreated(t *testing.T) {
-	const target = "C:/provisioned/config.json"
-	readCalled := false
-	got, err := readFile(
-		target,
-		func(string, time.Duration) (*Lock, error) { return nil, os.ErrPermission },
-		func(path string) ([]byte, error) {
-			readCalled = true
-			if path != target {
-				t.Fatalf("read path = %q, want %q", path, target)
-			}
-			return []byte(`{"full_access":true}`), nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("ReadFile fallback: %v", err)
+// existingTarget is config.json in a folder that exists, so readFile reaches
+// the lock step.
+func existingTarget(t *testing.T, body string) string {
+	t.Helper()
+	target := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(target, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if !readCalled || string(got) != `{"full_access":true}` {
-		t.Fatalf("fallback = %q, called=%v", got, readCalled)
+	return target
+}
+
+func failingAcquire(err error) acquireFunc {
+	return func(target string, _ time.Duration) (*Lock, error) {
+		return nil, fmt.Errorf("cannot open the lock file %s: %w", LockPath(target),
+			&fs.PathError{Op: "open", Path: LockPath(target), Err: err})
+	}
+}
+
+func probeMustNotRun(t *testing.T) probeFunc {
+	return func(string) error {
+		t.Fatal("the write probe must not run")
+		return nil
+	}
+}
+
+func TestReadFileFallsBackOnReadOnlyMedia(t *testing.T) {
+	target := existingTarget(t, `{"full_access":true}`)
+	got, err := readFile(target, failingAcquire(errReadOnlyFS), os.ReadFile, probeMustNotRun(t))
+	if err != nil {
+		t.Fatalf("read-only media must fall back to an unlocked read: %v", err)
+	}
+	if string(got) != `{"full_access":true}` {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestReadFileFallsBackWhenTheFolderRefusesWrites(t *testing.T) {
+	target := existingTarget(t, `{"full_access":true}`)
+	for _, probeErr := range []error{os.ErrPermission, errReadOnlyFS} {
+		got, err := readFile(target, failingAcquire(os.ErrPermission), os.ReadFile,
+			func(string) error { return &fs.PathError{Op: "open", Path: "probe", Err: probeErr} })
+		if err != nil {
+			t.Fatalf("probe %v: want unlocked read, got %v", probeErr, err)
+		}
+		if string(got) != `{"full_access":true}` {
+			t.Fatalf("probe %v: got %q", probeErr, got)
+		}
+	}
+}
+
+func TestReadFileKeepsAPermissionErrorWhenTheFolderIsWritable(t *testing.T) {
+	target := existingTarget(t, "{}")
+	readCalled := false
+	_, err := readFile(target, failingAcquire(os.ErrPermission),
+		func(string) ([]byte, error) { readCalled = true; return nil, nil },
+		probeWritable)
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("error = %v, want the lock's permission error", err)
+	}
+	if readCalled {
+		t.Fatal("a writable folder must not bypass the lock")
+	}
+	entries, _ := os.ReadDir(filepath.Dir(target))
+	if len(entries) != 1 {
+		t.Fatalf("the probe left files behind: %v", entries)
+	}
+}
+
+func TestReadFileDoesNotHideOtherLockFailures(t *testing.T) {
+	target := existingTarget(t, "{}")
+	_, err := readFile(target, failingAcquire(errors.New("disk on fire")),
+		func(string) ([]byte, error) { t.Fatal("must not read"); return nil, nil },
+		probeMustNotRun(t))
+	if err == nil {
+		t.Fatal("an unexpected lock failure must stay loud")
 	}
 }
 
 func TestReadFileDoesNotHideALockTimeout(t *testing.T) {
+	target := existingTarget(t, "{}")
 	readCalled := false
 	_, err := readFile(
-		"config.json",
+		target,
 		func(string, time.Duration) (*Lock, error) { return nil, ErrTimeout },
 		func(string) ([]byte, error) {
 			readCalled = true
 			return nil, nil
 		},
+		func(string) error { return os.ErrPermission },
 	)
 	if !errors.Is(err, ErrTimeout) {
 		t.Fatalf("error = %v, want ErrTimeout", err)
 	}
 	if readCalled {
 		t.Fatal("ReadFile must not bypass a held lock")
+	}
+}
+
+func TestReadFileLeavesAMissingFolderAlone(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".gaia")
+	_, err := ReadFile(filepath.Join(dir, "config.json"))
+	if !os.IsNotExist(err) {
+		t.Fatalf("error = %v, want not-exist", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("a read must not create %s (stat err %v)", dir, err)
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 0 {
+		t.Fatalf("a read left files behind: %v", entries)
+	}
+}
+
+func TestReadFileTreatsAFileInPlaceOfTheFolderAsMissing(t *testing.T) {
+	home := t.TempDir()
+	notADir := filepath.Join(home, ".gaia")
+	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadFile(filepath.Join(notADir, "config.json"))
+	if !os.IsNotExist(err) || !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("error = %v, want not-exist", err)
+	}
+	if body, _ := os.ReadFile(notADir); string(body) != "x" {
+		t.Fatalf("the file at %s was changed: %q", notADir, body)
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 1 {
+		t.Fatalf("a read left files behind: %v", entries)
 	}
 }
 

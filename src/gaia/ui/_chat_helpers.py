@@ -67,6 +67,7 @@ from gaia.ui.email_sidecar.profiles import (
     profile_for,
     reasoning_supported,
     scope_supported,
+    session_id_supported,
     surface_supported,
     turns_supported,
     working_directory_supported,
@@ -80,6 +81,7 @@ from . import followups
 from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
+from .generated_media import media_card
 from .models import ChatRequest
 from .session_environment import apply_environment, folders_refusal, held_internet_off
 from .session_environment import load as load_environment
@@ -2276,6 +2278,20 @@ def cached_session_agent(session_id: str):
         return entry["agent"] if entry is not None else None
 
 
+def cached_session_agent_of(session_id: str, agent_type: str):
+    """The session's cached agent if it is still a *agent_type* agent, else None.
+
+    A chat switched to another agent keeps the old one cached until its next
+    turn; that one no longer speaks for the chat.
+    """
+    canonical = _canonical_agent_type(agent_type)
+    with _agent_cache_lock:
+        entry = _agent_cache.get(session_id)
+        if entry is None or entry.get("agent_type") != canonical:
+            return None
+        return entry["agent"]
+
+
 def _restore_model_history(
     agent, db, session_id: str, query: str, sse_handler=None
 ) -> None:
@@ -2781,7 +2797,11 @@ def _dispatch_sidecar_query(
                 else None
             ),
             profile=profile,
-            session_id=session_id,
+            session_id=(
+                session_id
+                if session_id_supported(profile, handle.api_version)
+                else None
+            ),
             answers_confirmations=answers_confirmations,
             offers_always=offers_always,
             documents=relayed_documents,
@@ -4508,6 +4528,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         idle_cycles = 0
         stopped_at = None
         last_event_at = _turn_clock()
+        # The prompt a generated image or track is captioned with.
+        last_tool_args: dict = {}
 
         def _blocked_policy_steps():
             return [
@@ -4576,6 +4598,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 event_type = event.get("type", "")
                 if event_type in ("answer", "agent_error") and event.get("content"):
                     event = {**event, "content": _agent_ui_wording(event["content"])}
+                if event_type == "tool_start":
+                    last_tool_args = {}
+                elif event_type == "tool_args" and isinstance(event.get("args"), dict):
+                    last_tool_args = event["args"]
+                elif event_type == "tool_result" and not event.get("render"):
+                    card = media_card(event, last_tool_args)
+                    if card is not None:
+                        # A relayed result's summary-view ``data`` gives way to
+                        # the card; its summary and success are already set.
+                        event = {**event, **card}
 
                 # Capture answer content for DB storage
                 if event_type == "answer":

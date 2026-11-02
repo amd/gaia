@@ -94,6 +94,10 @@ def agent():
         return a
 
 
+#: A snippet that really runs pytest, so its summary line is evidence.
+RUNS_PYTEST = "import pytest\npytest.main(['-q'])"
+
+
 def _stub_chat(agent_, *responses):
     """Replace ``agent.chat`` with a stub yielding *responses* in order."""
     queue = list(responses)
@@ -1558,10 +1562,7 @@ def test_an_exotic_separator_is_not_treated_as_a_line_break():
 def test_python_runner_results_identify_checks(stdout, stderr, code, label):
     result = {"stdout": stdout, "stderr": stderr, "return_code": code}
     assert (
-        verification_check_label(
-            "execute_python_file", {"file_path": "runner.py"}, result
-        )
-        == label
+        verification_check_label("run_python", {"code": RUNS_PYTEST}, result) == label
     )
     assert (
         verification_check_label("read_file", {"file_path": "output.txt"}, result)
@@ -1571,7 +1572,10 @@ def test_python_runner_results_identify_checks(stdout, stderr, code, label):
 
 def test_a_run_python_pytest_summary_is_a_check():
     result = {"stdout": "3 passed in 0.01s", "return_code": 0}
-    assert verification_check_label("run_python", {"code": "..."}, result) == ("pytest")
+    assert (
+        verification_check_label("run_python", {"code": RUNS_PYTEST}, result)
+        == "pytest"
+    )
 
 
 def test_refused_python_runner_is_not_a_check():
@@ -1587,8 +1591,8 @@ def test_python_check_after_shell_refusal_is_reported_as_executed(agent, code, c
         "run_shell_command", {"command": command}, {"status": "error", **NOT_EXECUTED}
     )
     agent._note_verification_signal(
-        "execute_python_file",
-        {"file_path": "runner.py"},
+        "run_python",
+        {"code": RUNS_PYTEST},
         {
             "status": "success",
             "stdout": (
@@ -1635,13 +1639,15 @@ def test_real_python_test_runner_output_is_recognized(tmp_path, runner):
     }
     assert (
         verification_check_label(
-            "execute_python_file", {"file_path": "runner.py"}, result
+            "run_python",
+            {"code": f"import subprocess\nsubprocess.run({command!r})"},
+            result,
         )
         == runner
     )
 
 
-@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
+@pytest.mark.parametrize("tool", ["run_python"])
 @pytest.mark.parametrize(
     "summary",
     [
@@ -1674,7 +1680,7 @@ def test_a_passing_summary_from_a_snippet_stays_passed(agent):
     agent._turn_tool_executions = []
     agent._note_verification_signal(
         "run_python",
-        {"code": "..."},
+        {"code": RUNS_PYTEST},
         {"status": "success", "stdout": "4 passed in 0.02s", "return_code": 0},
     )
     assert agent._turn_tool_executions[-1]["failed"] is False
@@ -1704,7 +1710,8 @@ class TestSubtestSummariesAreRecognised:
         result = {"status": "success", "stdout": f"....\n{summary}\n", "return_code": 0}
 
         assert (
-            verification_check_label("run_python", {"code": "pytest"}, result) == label
+            verification_check_label("run_python", {"code": RUNS_PYTEST}, result)
+            == label
         )
 
     def test_a_subtest_failure_is_reported_as_a_failure(self):

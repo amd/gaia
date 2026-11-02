@@ -652,8 +652,8 @@ describe("catalog backward compatibility", () => {
 describe("published index.json matches schemas/index.schema.json", () => {
   // The schema declares additionalProperties: false, so a field the Worker emits
   // but the schema never declared would make the published catalog invalid
-  // against its own contract. Checked structurally rather than with a full
-  // validator so the Worker keeps its zero-runtime-dependency footprint.
+  // against its own contract. These top-level checks complement the full
+  // validator run in schema-conformance.test.ts.
   const schema = JSON.parse(
     readFileSync(new URL("../schemas/index.schema.json", import.meta.url), "utf8")
   ) as {
@@ -700,8 +700,7 @@ describe("published index.json matches schemas/index.schema.json", () => {
     expect(missing).toEqual([]);
   });
 
-  // The Worker ships no JSON-Schema validator (zero runtime deps), so the
-  // schema's own discriminating constraints are asserted directly. Without
+  // The schema's own discriminating constraints are asserted directly. Without
   // these the schema could silently drift from the publish validator and
   // legitimately-published entries would be invalid against their own contract.
   describe("the schema's constraints agree with what publish enforces", () => {

@@ -176,12 +176,19 @@ lang = detect_language("agent.py")  # "python"
 # Parse a Python file with the AST
 chunks = parse_python_file("agent.py", source_code)
 
-# Parse JS/TS/Go/Rust/Java/C/C++ via regex
+# Parse JS/TS/Go/Rust/Java/C/C++ and Verilog/SystemVerilog/VHDL via regex
 chunks = parse_generic_file("agent.ts", source_code, "typescript")
 
 # High-level dispatcher
 chunks = chunk_code_file("agent.go", source_code, max_size_mb=1.0)
 ```
+
+Hardware-description files (`.v`, `.vh`, `.sv`, `.svh`, `.vhd`, `.vhdl`) are chunked at
+design units: Verilog/SystemVerilog `module`, `interface`, `package`, `program`, `class`,
+`function`/`task` and `always*` blocks, including escaped names (`\foo-bar`) and a
+same-line `(* ... *)` attribute prefix; VHDL `entity`, `architecture`, `package`,
+`configuration`, `context`, `process` and `function`/`procedure`. VHDL keywords match
+case-insensitively.
 
 ## Agent integration: CodeIndexToolsMixin
 
@@ -226,4 +233,3 @@ State is initialised lazily — calling `_init_code_index_state` is optional but
 
 - [#869](https://github.com/amd/gaia/issues/869) — MCP server wrapper exposing the index to external code assistants.
 - [#870](https://github.com/amd/gaia/issues/870) — Multi-repo indexing in a single namespace.
-- [#871](https://github.com/amd/gaia/issues/871) — Verilog / VHDL parsers.
