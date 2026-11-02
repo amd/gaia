@@ -90,7 +90,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **102 tools** — the 66 of the Chat agent's `full` profile, `search_tools`, plus 8 skill-library tools, 8 live-browser tools, 8 read-only email tools, 4 code-search tools, 3 image-generation tools, 3 audio-generation tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
+On a larger model the default construction registers **102 tools** — the 66 of the Chat agent's `full` profile, `search_tools`, plus 8 skill-library tools, 8 live-browser tools, 8 read-only email tools, 4 code-search tools, 3 image-generation tools, 3 audio-generation tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -118,6 +118,12 @@ How long a command may run depends on what it is — a test run gets 15 minutes,
 **Mail is treated as data, never as instructions.** Every message body the email tools return arrives fenced between `<<<UNTRUSTED_EMAIL_BODY_START>>>` and `<<<UNTRUSTED_EMAIL_BODY_END>>>`, and a message showing phishing signals comes back flagged with the reason it was flagged. A flagged message is never reported as something that needs action, however urgent it sounds, and the agent will not repeat its call to action as advice — it says what the message claims, that it looks like a lure, and to leave it alone.
 
 **Image *generation* costs you a model reload.** Drawing a picture pulls Stable Diffusion into Lemonade and evicts the resident chat model, so the first reply after an image waits for the chat model to load again. The trade is worth it on the flagship, which is general-purpose; the Chat agent's doc and file profiles leave the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) off for exactly that reason.
+
+### Smaller models
+
+On Gemma 4 E4B, on the GPU or the NPU, the agent leaves out four features that failed GAIA's agent evals on that model: the SQL scratchpad (`create_table` through `drop_table`), email, image generation, and finding, installing or removing skills (`search_skill_hub`, `install_skill`, `remove_skill`). That is 16 fewer tool descriptions for the model to read on every step. The skills built on them (`data-explore`, `image-gen`, `inbox-triage`) are left out of the skill list too. Asked for one of these features, Gemma says it can't do it; if it tries to load one of those skills anyway, the load is refused with a message that it needs a larger model.
+
+`analyze_data_file` still answers questions about CSV and Excel files, and installed skills still load. For the full set, pick a larger model in the model list; switching mid-chat gives the tools back, and switching to Gemma takes them away again. `GAIA_FEATURE_TIER=full` gives Gemma every tool anyway, and `GAIA_FEATURE_TIER=compact` gives any model the smaller set.
 
 ### Setting up a CLI a skill needs
 
@@ -270,6 +276,7 @@ The agent runs as a **sidecar** — a self-contained HTTP service the GAIA daemo
 | `POST /v1/gaia/sessions/{session_id}/internet` | Turn a session's internet on or off from its next tool call, mid-turn included (contract >= 2.23). |
 | `GET /v1/gaia/sessions/{session_id}/grants` | List the calls the user answered "always" to in a session (contract >= 2.26). |
 | `DELETE /v1/gaia/sessions/{session_id}/grants` | Revoke one "always" answer (`?key=`) or all of them, from the next gated call; an unknown key is a 404 (contract >= 2.26). |
+| `GET /v1/gaia/sessions/{session_id}/tools` | The tools a session's agent can call now: name, description and category each; an unknown session is a 404 (contract >= 2.27). |
 
 The full, **machine-readable** contract — every field, its type, and which are required — is the committed [`openapi.gaia.json`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/openapi.gaia.json), regenerated from the live routes by `python -m gaia_agent.export_openapi` and checked for drift in CI. What follows is the summary a client author needs; the artifact is the source of truth.
 
@@ -300,7 +307,7 @@ Only **`query`**, **`run_id`**, and **`context`** are required; everything else 
 - **A user who says something mid-turn doesn't have to wait for it.** `POST /v1/gaia/query/{run_id}/followup` with `{"text": "…"}` hands the running turn their words; the agent folds them in at its next step and answers them alongside the work in progress. Nothing is interrupted and no second turn starts. Because context is pushed rather than pulled, record a delivered follow-up in the `context` you send next turn — between that turn's question and its answer.
 - **Confirmation-gated tools are answered over `POST /v1/gaia/query/{run_id}/tool_decision`** (contract >= 2.14) when there's a session to hold the grant and the caller declared it can answer — see [Tools that need your approval](#tools-that-need-your-approval).
 
-`/query` implements the shared canonical SSE contract (API version **2.26**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically.
+`/query` implements the shared canonical SSE contract (API version **2.27**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically.
 
 ### Authenticating your requests
 

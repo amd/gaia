@@ -24,8 +24,6 @@ import importlib.util
 import json
 import os
 import shutil
-import signal
-import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -37,6 +35,7 @@ from gaia.eval.bench import sandbox, transcripts
 from gaia.eval.bench.leaks import agent_env
 from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
+from gaia.utils.process_tree import launch
 
 log = get_logger(__name__)
 
@@ -171,59 +170,6 @@ def _fenced(cmd: Sequence[str], conditions: Conditions) -> List[str]:
         return list(cmd)
     fenced, read_write, read_only = conditions.fence
     return sandbox.wrap(cmd, fenced, read_write, read_only)
-
-
-def _kill_tree(proc: subprocess.Popen) -> None:
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-            capture_output=True,
-            check=False,
-        )
-    else:
-        try:
-            # POSIX-only branch; SIGKILL does not exist on Windows.
-            os.killpg(proc.pid, signal.SIGKILL)  # pylint: disable=no-member
-        except ProcessLookupError:
-            pass
-
-
-def launch(
-    cmd: Sequence[str],
-    *,
-    env: Mapping[str, str],
-    cwd: Path,
-    timeout_s: int,
-    stdout_path: Path,
-    stderr_path: Path,
-) -> Tuple[Optional[int], bool]:
-    """Run *cmd* to completion or the cap; return ``(exit code, timed out)``.
-
-    Output goes to files, so a run killed at the cap keeps everything it wrote.
-    The whole process tree is killed: a shell the agent started must not
-    outlive the task.
-    """
-    kwargs: Dict[str, Any] = {}
-    if os.name == "nt":
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
-    with open(stdout_path, "wb") as out, open(stderr_path, "wb") as err:
-        proc = subprocess.Popen(  # pylint: disable=consider-using-with
-            list(cmd),
-            cwd=str(cwd),
-            env=dict(env),
-            stdin=subprocess.DEVNULL,
-            stdout=out,
-            stderr=err,
-            **kwargs,
-        )
-        try:
-            return proc.wait(timeout=timeout_s), False
-        except subprocess.TimeoutExpired:
-            _kill_tree(proc)
-            proc.wait()
-            return None, True
 
 
 def _tail(path: Path, limit: int = 400) -> str:

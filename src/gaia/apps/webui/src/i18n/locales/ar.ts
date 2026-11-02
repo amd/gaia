@@ -36,6 +36,9 @@ const messages: Messages = {
     'sidebar.notificationsUnread': 'الإشعارات، غير المقروءة: {n}',
     'sidebar.mobileAccess': 'الوصول من الهاتف',
     'sidebar.mobileAccessOn': 'الوصول من الهاتف مفعّل',
+    'mobileAccess.installTitle': 'أبقِ GAIA على هاتفك',
+    'mobileAccess.installSteps': 'بعد فتح GAIA، أضِفه إلى الشاشة الرئيسية: في Safari، أو Chrome على iPhone، اضغط على مشاركة ثم إضافة إلى الشاشة الرئيسية. في Chrome على Android، افتح القائمة ⋮ واضغط على إضافة إلى الشاشة الرئيسية.',
+    'mobileAccess.linkLifetime': 'يتوقف هذا الرابط عن العمل عند إيقاف الوصول من الهاتف. في كل مرة تشغّله، امسح الرمز الجديد. إذا لم يعد GAIA على شاشتك الرئيسية يتصل، فافتح الرابط الجديد وأضِفه مرة أخرى.',
     'sidebar.settings': 'الإعدادات',
 
     // A chat's row in the sidebar
@@ -152,6 +155,14 @@ const messages: Messages = {
     'msg.confirmDelete': 'انقر مرة أخرى للتأكيد',
     'msg.confirmDeleteAria': 'تأكيد حذف الرسالة',
     'msg.error': 'حدث خطأ ما',
+    'msg.tryAgain': 'حاول مجددًا',
+    'chatError.context': 'هذه المحادثة أطول مما يستطيع النموذج قراءته دفعة واحدة. ابدأ محادثة جديدة، أو اسأل عن مستندات أقل، ثم اسأل مجددًا.',
+    'chatError.modelServer': 'لم يستجب خادم النماذج. افتح الإعدادات ← النموذج للتحقق منه، ثم حاول مجددًا.',
+    'chatError.connection': 'انقطع الاتصال بـ GAIA. تحقّق من أن GAIA ما زال يعمل، ثم حاول مجددًا.',
+    'chatError.timeout': 'انتهت مهلة الطلب. جرّب سؤالًا أقصر، أو نموذجًا أسرع من الإعدادات ← النموذج.',
+    'chatError.resendFailed': 'لم تُرسَل رسالتك مجددًا',
+    'chatError.resendStale': 'تغيّرت هذه المحادثة منذ فتحها، لذا لم يُرسَل شيء. أعد فتح المحادثة، ثم حاول مجددًا.',
+    'chatError.unknown': 'حدث خطأ ما أثناء إجابة GAIA. حاول مجددًا؛ وإن تكرر ذلك، أبلغ عنه عبر الرابط أدناه.',
     'msg.showAll': 'عرض الكل',
     'msg.showLess': 'عرض أقل',
     'msg.stopped': 'تم الإيقاف',
@@ -166,6 +177,8 @@ const messages: Messages = {
     'code.copyAria': 'نسخ الشيفرة',
     'retry.button': 'إعادة المحاولة بنموذج آخر',
     'retry.head': 'إعادة المحاولة باستخدام…',
+    'media.showFull': 'عرض بالحجم الكامل',
+    'media.showSmaller': 'عرض بحجم أصغر',
 
     // Agent activity while GAIA works
     'activity.thinking': 'جارٍ التفكير',
@@ -508,6 +521,14 @@ const messages: Messages = {
     'out.goToAria': 'الانتقال إلى الدور الذي أنشأ {name}',
     'out.fewer': 'إظهار أقل',
     'out.more': 'إظهار المزيد ({n})',
+    'tools.title': 'معلومات الوكيل',
+    'tools.listLabel': 'الأدوات التي يمكن لوكيل هذه المحادثة استخدامها',
+    'tools.listError': 'تعذّر سرد أدوات هذا الوكيل: {error}',
+    'tools.empty': 'لا يملك هذا الوكيل أدوات: يجيب من النموذج وحده.',
+    'tools.notRunning': 'وكيل هذه المحادثة لا يعمل بعد. يبدأ مع رسالتك التالية، وتظهر أدواته هنا بعد ذلك.',
+    'tools.cat.mcp': 'الموصلات',
+    'tools.cat.skill': 'المهارات',
+    'tools.cat.agent': 'مدمجة',
     'chg.title': 'التغييرات',
     'chg.files.one': 'الملفات: {n}',
     'chg.files.other': 'الملفات: {n}',
@@ -910,6 +931,19 @@ const messages: Messages = {
     'download.chip': 'جارٍ التنزيل {done} من {count} · {pct}%',
     'download.chipFailed': 'فشل أحد التنزيلات',
     'download.chipAria': 'تنزيلات النماذج. افتح الإعدادات لعرضها.',
+
+    // Mobile access: ngrok not installed
+    'mobile.ngrokRequired': 'ngrok مطلوب',
+    'mobile.setupTitle': 'إعداد ngrok (مرة واحدة)',
+    'mobile.setupIntro': 'يستخدم الوصول من الهاتف ngrok للوصول إلى هذا الجهاز من هاتفك.',
+    'mobile.setupInstall': 'ثبّته بالأمر أدناه، ثم اضغط «إعادة المحاولة».',
+    'mobile.setupDownload': 'نزّله لنظامك، ثم اضغط «إعادة المحاولة».',
+    'mobile.installCommand': 'أمر تثبيت ngrok',
+    'mobile.copyCommand': 'نسخ الأمر',
+    'mobile.copy': 'نسخ',
+    'mobile.copied': 'تم النسخ',
+    'mobile.downloadPage': 'صفحة تنزيل ngrok',
+    'mobile.retry': 'إعادة المحاولة',
 };
 
 export const ar: Locale = {

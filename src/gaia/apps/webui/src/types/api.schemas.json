@@ -2478,6 +2478,17 @@
         ],
         "title": "Device"
       },
+      "model_type": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Type"
+      },
       "name": {
         "anyOf": [
           {
@@ -2745,6 +2756,13 @@
           }
         ],
         "title": "Error"
+      },
+      "loaded_models": {
+        "items": {
+          "$ref": "#/components/schemas/LoadedModelInfo"
+        },
+        "title": "Loaded Models",
+        "type": "array"
       },
       "owner": {
         "title": "Owner",

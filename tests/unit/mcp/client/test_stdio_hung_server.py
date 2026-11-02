@@ -406,7 +406,8 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "method": echo})
         send({"jsonrpc": "2.0", "id": echo, "result": {}})
         send({"jsonrpc": "2.0", "id": req["id"],
-              "result": {"serverInfo": {"name": echo}, "note": echo}})
+              "result": {"protocolVersion": "2025-11-25",
+                         "serverInfo": {"name": echo}, "note": echo}})
     elif mode == "result":  # a successful result, echoing as value and key
         send({"jsonrpc": "2.0", "id": req["id"],
               "result": {"content": [{"type": "text", "text": echo}], echo: echo}})
@@ -492,7 +493,8 @@ def test_ordinary_words_in_a_server_error_stay_readable(tmp_path):
         + textwrap.indent(
             textwrap.dedent("""
         if req["method"] == "initialize":
-            send({"jsonrpc": "2.0", "id": req["id"], "result": {}})
+            send({"jsonrpc": "2.0", "id": req["id"],
+                  "result": {"protocolVersion": "2025-11-25"}})
         else:
             send({"jsonrpc": "2.0", "id": req["id"], "error": {
                 "code": -32000,
@@ -1263,9 +1265,11 @@ def test_known_secrets_are_cleaned_in_every_form_they_arrive_in(
         upper = os.environ.get("STUB_UPPER_HEX") == "1"
         for line in sys.stdin:
             req = json.loads(line)
+            if "id" not in req:
+                continue
             if req["method"] == "initialize":
                 sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req["id"],
-                                             "result": {}}) + "\\n")
+                    "result": {"protocolVersion": "2025-11-25"}}) + "\\n")
             elif req["method"] == "tools/list":  # a non-object JSON line
                 # UTF-8 bytes, as Node writes them whatever the console code page.
                 line = json.dumps("leaked " + secret, ensure_ascii=ascii_only)
@@ -1332,7 +1336,8 @@ def test_a_validation_error_never_echoes_a_secret_from_the_tool_schema(
             textwrap.dedent("""
         conf = " ".join(sys.argv)
         if req["method"] == "initialize":
-            send({"jsonrpc": "2.0", "id": req["id"], "result": {}})
+            send({"jsonrpc": "2.0", "id": req["id"],
+                  "result": {"protocolVersion": "2025-11-25"}})
         elif req["method"] == "tools/list":
             send({"jsonrpc": "2.0", "id": req["id"], "result": {"tools": [
                 {"name": "x", "inputSchema": {"description": conf,

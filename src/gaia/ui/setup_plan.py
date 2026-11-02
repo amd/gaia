@@ -342,7 +342,9 @@ def build_plan(
     from gaia.llm.lemonade_client import (
         LemonadeClientError,
         recommend_default_chat_model,
+        recommend_npu_chat_model,
     )
+    from gaia.llm.model_fit import ModelFitError
 
     if profile not in INIT_PROFILES:
         raise SetupPlanError(
@@ -357,6 +359,7 @@ def build_plan(
             client or _NoServer(),
             reset_corrupt=False,
             enforce_fit=False,
+            profile=profile,
         )
         chat = {"id": choice.model_id, "user_set": choice.user_set}
         planned = with_chat_model(
@@ -373,7 +376,12 @@ def build_plan(
         if client is None:
             recommended, capacity = None, None
         else:
-            recommended, _, capacity = recommend_default_chat_model(client)
+            recommend = (
+                recommend_npu_chat_model
+                if profile == "npu"
+                else recommend_default_chat_model
+            )
+            recommended, _, capacity = recommend(client)
             try:
                 system_info = client.get_system_info(timeout=15)
             except LemonadeClientError as e:
@@ -390,7 +398,7 @@ def build_plan(
             skipped,
             selected,
         )
-    except GaiaConfigError as e:
+    except (GaiaConfigError, ModelFitError) as e:
         raise SetupPlanError(str(e)) from e
     except LemonadeClientError as e:
         raise SetupPlanError(

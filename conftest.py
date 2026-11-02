@@ -307,6 +307,52 @@ def _allow_embedded_start(request, monkeypatch):
     )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_embedded_lemonade_paths():
+    """Keep ordinary tests off the caller's embedded Lemonade state.
+
+    The real SD integration lane opts in with ``GAIA_REQUIRE_SD=1`` after
+    ``gaia init --profile sd`` has started a server in the test process's
+    normal GAIA home. Its subprocess-created state must remain visible to the
+    client; all ordinary unit/integration runs still use the throwaway root.
+    """
+    if os.environ.get("GAIA_REQUIRE_SD") == "1":
+        yield
+        return
+
+    # The remaining body is the ordinary test isolation path. The import-time
+    # state path and the Path.home fallback both need the same sandbox.
+    from gaia.llm import lemonade_client, lemonade_embedded
+
+    original_gaia_home = lemonade_embedded.gaia_home
+    real_user_home = Path.home().resolve()
+    state_path = _STATE_ROOT / "lemonade" / "state.json"
+
+    def isolated_gaia_home() -> Path:
+        """Preserve explicit env and tests that temporarily fake Path.home."""
+        if os.environ.get("GAIA_HOME", "").strip():
+            return original_gaia_home()
+        if Path.home().resolve() != real_user_home:
+            return original_gaia_home()
+        return _STATE_ROOT
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(lemonade_client, "EMBEDDED_LEMONADE_STATE", state_path)
+        mp.setattr(lemonade_embedded, "gaia_home", isolated_gaia_home)
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_isolated_embedded_lemonade_state():
+    """Give tests without ``GAIA_HOME`` a fresh fallback state directory."""
+    real_rmtree = shutil.rmtree
+    if not os.environ.get("GAIA_HOME", "").strip():
+        real_rmtree(_STATE_ROOT / "lemonade", ignore_errors=True)
+    yield
+    if not os.environ.get("GAIA_HOME", "").strip():
+        real_rmtree(_STATE_ROOT / "lemonade", ignore_errors=True)
+
+
 #: EmbeddedLemonade methods that act on a server; none may reach the real home.
 _EMBEDDED_ACTIONS = (
     "install",

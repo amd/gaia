@@ -261,9 +261,9 @@ current gate will not survive contact with a one-click UI:
    imports `subprocess` gets everything, because permissions describe the bridge, not the
    code. A skill can be maximally dangerous while displaying `Needs: nothing`.
 2. **Every skill is `experimental`, so the strongest warning becomes wallpaper.** There is
-   deliberately no bundled AMD root key (`signing.py:25`, `:518`), so the trust store is
-   empty on a fresh machine, nothing attests, and `effective_tier` floors everything at
-   `experimental`. That tier is refused outright unless `--allow-experimental`. A TUI that
+   bundled key only for the AMD-signed first-party skills (`BUILTIN_TRUSTED_KEYS` in
+   `signing.py`), so on a fresh machine every other skill has nothing attesting it, and
+   `effective_tier` floors it at `experimental`. That tier is refused outright unless `--allow-experimental`. A TUI that
    shows a red unverified warning on 100% of skills has taught the user to dismiss it by
    the third one.
 3. **The consent gate is a CLI flag and a `Confirmer` bound to `input()`**

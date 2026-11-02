@@ -116,13 +116,14 @@ def _reset_model_select_cache_between_tests():
 
 
 @pytest.fixture(autouse=True)
-def _stop_test_owned_email_schedulers(monkeypatch):
+def _stop_test_owned_email_schedulers(monkeypatch, _join_threads_started_by_the_test):
     """Join real scheduler threads before pytest tears down capture and temp DBs.
 
     Agent construction starts a polling scheduler by default. Tests which only
     exercise preferences or memory still own that worker; letting it outlive
     the test races interpreter shutdown while it logs a fresh DB connection.
     Keep the real scheduler behavior and explicitly release every instance.
+    Requests the thread-join fixture so schedulers stop before that check runs.
     """
     from gaia_agent_email.scheduler import EmailJobScheduler
 
@@ -138,3 +139,20 @@ def _stop_test_owned_email_schedulers(monkeypatch):
     yield
     for scheduler in reversed(schedulers):
         original_stop(scheduler)
+
+
+@pytest.fixture(autouse=True)
+def _join_threads_started_by_the_test():
+    """Fail a test that leaves a thread running (#2786)."""
+    import threading
+
+    from email_thread_guard import THREAD_JOIN_SECONDS, threads_left_running
+
+    before = threading.enumerate()
+    yield
+    alive = threads_left_running(before)
+    if alive:
+        pytest.fail(
+            f"test left thread(s) running after {THREAD_JOIN_SECONDS:.0f}s: "
+            f"{alive}. Stop or join them before the test returns."
+        )
