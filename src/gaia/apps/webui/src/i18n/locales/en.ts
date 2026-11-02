@@ -998,7 +998,7 @@ export const enMessages = {
     'update.picker.starting': 'Starting download…',
     'update.picker.noBridge': 'Bridge unavailable — please restart the app.',
     'update.picker.failed': 'Failed to install that version: {reason}',
-    'update.err.diskSpace': 'GAIA needs about 1 GB free to install this update, and this disk has {mb} MB. Free some space, then restart from the update chip.',
+    'update.err.diskSpace': 'GAIA needs about {need} free to install this update, and this disk has {free}. Free some space, then restart from the update chip.',
     'update.err.offline': 'GAIA needs the internet to finish this update. Connect, then restart from the update chip.',
     'update.err.checkBusy': 'An update check is already running. Try again in a moment.',
     'update.err.configBusy': 'Another GAIA app is saving update settings. Try again in a moment.',

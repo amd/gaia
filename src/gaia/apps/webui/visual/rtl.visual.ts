@@ -502,10 +502,17 @@ function withUpdater(update: Record<string, unknown>) {
                 ...patch,
             };
             const resolved = async () => state;
+            // A refusal as Electron's IPC delivers it: the code inside the message.
+            const refuse = async () => {
+                throw new Error(
+                    "Error invoking remote method 'gaia:update:restart': Error: gaia-update-error:" +
+                        JSON.stringify({ code: 'diskSpace', params: { need: '1 GB', free: '412 MB' }, message: 'GAIA needs about 1 GB free' }),
+                );
+            };
             Object.defineProperty(window, 'gaiaUpdater', {
                 value: {
                     getStatus: resolved, check: resolved, listReleases: async () => [],
-                    onStatusChange: () => () => undefined,
+                    restart: refuse, onStatusChange: () => () => undefined,
                 },
             });
         }, update);
@@ -543,6 +550,21 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('#updates-back-hint')).toBeVisible();
             expect(await audit(page)).toEqual([]);
             await page.screenshot({ path: info.outputPath('settings.png') });
+        });
+
+        test('settings, after a restart refused for disk space', async ({ page }, info) => {
+            await open(page, '', locale, withUpdater({ status: 'downloaded', version: '0.25.5-rc.3' }));
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.locator('#updates-label').scrollIntoViewIfNeeded();
+            await page.getByRole('button', { name: /Restart to install/ }).click();
+            const error = page.locator('.settings-error').filter({ hasText: '412' });
+            await expect(error).toBeVisible();
+            await expect(error).toContainText(locale === 'ar' ? 'يحتاج GAIA إلى نحو' : 'needs about');
+            // Isolated, a size reads "412 MB" in a right-to-left line, not "MB 412".
+            if (locale === 'ar') await expect(error).toContainText('⁨412 MB⁩');
+            await expect(error).not.toContainText('gaia-update-error');
+            expect(await audit(page)).toEqual([]);
+            await page.screenshot({ path: info.outputPath('settings-refused.png') });
         });
     });
 }

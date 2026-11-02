@@ -548,7 +548,7 @@ describe("setAutoUpdate / downloadUpdate / restart", () => {
 
     const err = await electronMock.ipcMain.simulateInvoke("gaia:update:restart").catch((e) => e);
     const coded = JSON.parse(err.message.slice(err.message.indexOf("{")));
-    expect(coded).toMatchObject({ code: "diskSpace", params: { mb: 100 } });
+    expect(coded).toMatchObject({ code: "diskSpace", params: { need: "1 GB", free: "100 MB" } });
     expect(coded.message).toMatch(/needs about 1 GB free/);
     statfs.mockRestore();
   });

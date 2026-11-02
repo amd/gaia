@@ -1263,7 +1263,7 @@ async function _requireInstallSpace() {
     const mb = Math.round(free / (1024 * 1024));
     throw _userError(
       "diskSpace",
-      { mb },
+      { need: "1 GB", free: `${mb} MB` },
       `GAIA needs about 1 GB free to install this update, and this disk has ` +
         `${mb} MB. Free some space, then restart from the update chip.`
     );

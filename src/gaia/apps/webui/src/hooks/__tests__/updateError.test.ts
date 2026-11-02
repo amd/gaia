@@ -18,7 +18,7 @@ function fromMain(coded: object): Error {
 
 describe('updateErrorText', () => {
     it('shows a coded refusal in the chosen language', () => {
-        const err = fromMain({ code: 'diskSpace', params: { mb: 412 }, message: 'English' });
+        const err = fromMain({ code: 'diskSpace', params: { need: '1 GB', free: '412 MB' }, message: 'English' });
         expect(en.locale).toBe('en');
         expect(updateErrorText(err, en)).toBe(
             'GAIA needs about 1 GB free to install this update, and this disk has 412 MB. Free some space, then restart from the update chip.',
