@@ -4,11 +4,9 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from gaia_agent.agent import REPOSITORY_WORK_PROMPT
-from gaia_agent.chat_agent import ChatAgent
 
+from tests.unit.test_profilespec_characterization import chat_agent_build_context
 
 _MANAGED_FILE_RULE = (
     "If a file or a sibling lock/ownership marker says another program manages it, "
@@ -18,22 +16,13 @@ _MANAGED_FILE_RULE = (
 )
 
 
-def test_always_on_prompt_stops_for_managed_files_outside_a_repository():
-    agent = object.__new__(ChatAgent)
-    agent.config = SimpleNamespace(
-        prompt_profile="chat",
-        enable_filesystem=False,
-        enable_scratchpad=False,
-        enable_browser=False,
-        surface=None,
-    )
-    agent.model_features = SimpleNamespace(scratchpad=False, image_generation=False)
-    agent._inference_location = lambda: SimpleNamespace(
-        remote=False,
-        display="local",
-        describe=lambda: "local",
-    )
-    prompt = agent._get_system_prompt()
+def test_always_on_rule_reaches_local_gemma_outside_a_repository(tmp_path):
+    outside_repo = tmp_path / "not-a-repository"
+    outside_repo.mkdir()
+    with chat_agent_build_context(
+        "chat", model_id="Gemma-4-E4B-it-GGUF", cwd=outside_repo
+    ) as agent:
+        prompt = agent._get_system_prompt()
     assert _MANAGED_FILE_RULE in prompt
 
 
