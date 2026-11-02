@@ -357,3 +357,25 @@ class TestNoSilentNoOpFlags:
             with pytest.raises(SystemExit):
                 cli.handle_email_command(ns)
         assert run_query.call_args.kwargs["verbose"] is False
+
+    def test_email_autonomy_checks_daemon_deps_before_relay(self, capsys, monkeypatch):
+        """Autonomy routes must fail early on a base install too (#3423)."""
+        import argparse
+
+        from gaia import cli
+
+        ns = argparse.Namespace(
+            action="email",
+            email_action="autonomy",
+            autonomy_action="status",
+        )
+        monkeypatch.setattr(
+            "gaia.daemon.client.missing_daemon_deps", lambda: ["fastapi"]
+        )
+        with pytest.raises(SystemExit) as exc:
+            cli.handle_email_command(ns)
+
+        assert exc.value.code == 1
+        output = capsys.readouterr().out
+        assert "This command needs the GAIA daemon" in output
+        assert 'pip install "amd-gaia[api]"' in output
