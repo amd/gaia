@@ -783,6 +783,33 @@ def context_overflow_detail(
     return detail
 
 
+# A trimmed overflow was retried; only one that still failed ended the run.
+_RECOVERED_OVERFLOW_TYPES = frozenset({"llm_context_overflow_trimmed"})
+
+
+def context_overflow_error_from_result(agent_result: Any) -> str | None:
+    """The backend overflow text a run ended on, or ``None``.
+
+    The agent loop does not raise on an overflow it cannot trim away: it
+    records the backend error in ``error_history`` and returns a polite answer,
+    so the exception path alone never sees it.
+    """
+    from gaia.llm.lemonade_client import is_context_overflow_error
+
+    if not isinstance(agent_result, dict):
+        return None
+    for entry in agent_result.get("error_history") or ():
+        if isinstance(entry, dict):
+            if entry.get("type") in _RECOVERED_OVERFLOW_TYPES:
+                continue
+            text = entry.get("error")
+        else:
+            text = entry
+        if isinstance(text, str) and is_context_overflow_error(text):
+            return text
+    return None
+
+
 def _close_agent_db(agent: Any) -> None:
     """Release ``agent``'s SQLite state.db, tolerating agents with none.
 
@@ -930,6 +957,10 @@ def run_benchmark(
                 # per-experiment failure (e.g. the base agent's wrong-ctx
                 # re-raise on a 4K sweep leg) becomes an honest ERRORED row
                 # and the remaining experiments still run.
+                failure = f"{type(exc).__name__}: {exc}"
+            else:
+                failure = context_overflow_error_from_result(agent_result)
+            if failure is not None:
                 total_duration_ms = int((time.monotonic() - start) * 1000)
                 row = build_result(
                     {},
@@ -942,7 +973,7 @@ def run_benchmark(
                     ctx_size=stamp_ctx,
                 )
                 row["status"] = "ERRORED"
-                row["error"] = f"{type(exc).__name__}: {exc}"
+                row["error"] = failure
                 overflow = context_overflow_detail(row["error"], stamp_ctx, limit)
                 if overflow:
                     row.update(overflow)

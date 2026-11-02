@@ -106,3 +106,121 @@ def test_cli_exits_nonzero_without_summarizing(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "1 of 1 experiment(s) hit the context window" in err
     assert "needed 19337 tokens but the window is 16384" in err
+
+
+def _answering_agent(error_history, answer="Sorry."):
+    class _Agent:
+        def process_query(self, prompt):
+            return {
+                "status": "success",
+                "result": answer,
+                "error_count": len(error_history),
+                "error_history": list(error_history),
+            }
+
+    return _Agent
+
+
+def test_overflow_returned_as_answer_is_still_reported():
+    """The real loop returns an untrimmable overflow as its answer, never raises."""
+    from gaia.agents.base.agent import _CONTEXT_STILL_OVERFLOWING_MESSAGE
+
+    history = [
+        {"step": 1, "error": LLAMA_OVERFLOW, "type": "llm_context_overflow_trimmed"},
+        {"step": 1, "error": LLAMA_OVERFLOW, "type": "llm_error"},
+    ]
+    results = run_benchmark(
+        "m",
+        mbox_path="ignored",
+        limit=100,
+        ctx_size=16384,
+        experiments=1,
+        agent_factory=_answering_agent(history, _CONTEXT_STILL_OVERFLOWING_MESSAGE),
+    )
+    row = results[0]
+    assert row["status"] == "ERRORED"
+    assert row["error"] == LLAMA_OVERFLOW
+    assert row["error_kind"] == "context_overflow"
+    assert (row["requested_tokens"], row["available_tokens"]) == (19337, 16384)
+    assert "--ctx-size" in row["remedy"]
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        [
+            {
+                "step": 1,
+                "error": LLAMA_OVERFLOW,
+                "type": "llm_context_overflow_unrecoverable",
+            }
+        ],
+        [{"step": 2, "error": "exceed_context_size", "type": "llm_streaming_error"}],
+        [LLAMA_OVERFLOW],
+    ],
+)
+def test_overflow_found_in_any_unrecovered_history_entry(history):
+    assert (
+        run_benchmark(
+            "m",
+            mbox_path="ignored",
+            experiments=1,
+            agent_factory=_answering_agent(history),
+        )[0]["error_kind"]
+        == "context_overflow"
+    )
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        [],
+        [{"step": 1, "error": "connection reset by peer", "type": "llm_error"}],
+        ["Empty LLM response"],
+        # Trimmed and retried successfully: the run measured something.
+        [{"step": 1, "error": LLAMA_OVERFLOW, "type": "llm_context_overflow_trimmed"}],
+        [{"step": 1, "type": "llm_error"}, {"error": None}, 42],
+    ],
+)
+def test_answer_path_non_overflow_is_not_reported_as_overflow(history):
+    row = run_benchmark(
+        "m",
+        mbox_path="ignored",
+        experiments=1,
+        agent_factory=_answering_agent(history),
+    )[0]
+    assert row.get("status") != "ERRORED"
+    assert "error_kind" not in row
+
+
+@pytest.mark.parametrize("result", [None, "text", [], {"error_history": None}])
+def test_malformed_results_are_not_overflow(result):
+    assert benchmark.context_overflow_error_from_result(result) is None
+
+
+def test_cli_exits_nonzero_for_answer_path_overflow(monkeypatch, capsys):
+    from gaia import cli
+
+    rows = run_benchmark(
+        "m",
+        mbox_path="ignored",
+        limit=100,
+        ctx_size=16384,
+        experiments=2,
+        agent_factory=_answering_agent(
+            [{"step": 1, "error": LLAMA_OVERFLOW, "type": "llm_error"}]
+        ),
+    )
+    monkeypatch.setattr(benchmark, "run_benchmark", lambda *a, **k: rows)
+
+    def no_summary(*_a, **_k):
+        raise AssertionError("an overflowed run must not be summarized")
+
+    monkeypatch.setattr(benchmark, "summarize_benchmark", no_summary)
+    monkeypatch.setattr(sys, "argv", ["gaia", "eval", "benchmark", "--limit", "100"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "2 of 2 experiment(s) hit the context window" in err
+    assert "needed 19337 tokens but the window is 16384" in err
