@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from gaia.engineering import store as store_module
 from gaia.engineering.service import EngineeringService
 from gaia.engineering.store import JobStore, clean_context, private_directory
 
@@ -237,11 +238,27 @@ def _install_fake_pywin32(monkeypatch, *, readback_sids=(USER_SID,), null_dacl=F
     return calls
 
 
+class _OsNamed:
+    """``os`` as seen by the store module only, with ``name`` overridden."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
+def _pretend_platform(monkeypatch, name):
+    # Never patch the real os.name: pathlib, pytest and coverage would build
+    # WindowsPath objects on Linux and crash the worker.
+    monkeypatch.setattr(store_module, "os", _OsNamed(name))
+
+
 def test_private_directory_locks_down_windows_acl(tmp_path, monkeypatch):
     """The regression this fixes: chmod(0o700) alone is a no-op on NTFS, so a
     shared engineering snapshot was readable by any other local account.
     """
-    monkeypatch.setattr(os, "name", "nt")
+    _pretend_platform(monkeypatch, "nt")
     calls = _install_fake_pywin32(monkeypatch)
 
     target = tmp_path / "engineering-root"
@@ -258,7 +275,7 @@ def test_private_directory_locks_down_windows_acl(tmp_path, monkeypatch):
 
 
 def test_private_directory_skips_acl_lockdown_off_windows(tmp_path, monkeypatch):
-    monkeypatch.setattr(os, "name", "posix")
+    _pretend_platform(monkeypatch, "posix")
     calls = _install_fake_pywin32(monkeypatch)
 
     private_directory(tmp_path / "engineering-root")
@@ -269,7 +286,7 @@ def test_private_directory_skips_acl_lockdown_off_windows(tmp_path, monkeypatch)
 def test_private_directory_refuses_a_directory_a_foreign_sid_can_still_read(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(os, "name", "nt")
+    _pretend_platform(monkeypatch, "nt")
     _install_fake_pywin32(monkeypatch, readback_sids=(USER_SID, FOREIGN_SID))
 
     with pytest.raises(RuntimeError, match="other local users"):
@@ -277,7 +294,7 @@ def test_private_directory_refuses_a_directory_a_foreign_sid_can_still_read(
 
 
 def test_private_directory_refuses_a_null_dacl(tmp_path, monkeypatch):
-    monkeypatch.setattr(os, "name", "nt")
+    _pretend_platform(monkeypatch, "nt")
     _install_fake_pywin32(monkeypatch, null_dacl=True)
 
     with pytest.raises(RuntimeError, match="no DACL"):
@@ -285,7 +302,7 @@ def test_private_directory_refuses_a_null_dacl(tmp_path, monkeypatch):
 
 
 def test_private_directory_requires_pywin32_on_windows(tmp_path, monkeypatch):
-    monkeypatch.setattr(os, "name", "nt")
+    _pretend_platform(monkeypatch, "nt")
     monkeypatch.delitem(sys.modules, "win32security", raising=False)
     monkeypatch.delitem(sys.modules, "win32api", raising=False)
     monkeypatch.delitem(sys.modules, "ntsecuritycon", raising=False)
