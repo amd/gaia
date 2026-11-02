@@ -744,3 +744,81 @@ describe("GitHub releases as the default feed", () => {
     });
   });
 });
+
+describe("the installed version's blockmap, for a delta on the next update", () => {
+  const zlib = require("zlib");
+  const crypto = require("crypto");
+  const realPlatform = process.platform;
+  let cacheDir;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    cacheDir = path.join(tmpHome, "updater-cache");
+    fs.mkdirSync(cacheDir, { recursive: true });
+    mockAutoUpdaterInstance.getOrCreateDownloadHelper = async () => ({ cacheDir });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: realPlatform });
+    delete mockAutoUpdaterInstance.getOrCreateDownloadHelper;
+  });
+
+  const installerBytes = Buffer.from("the v0.25.4-rc2 installer");
+  const blockmap = zlib.gzipSync(JSON.stringify({ version: "2", files: [] }));
+
+  function serveRc2({ installerSha = crypto.createHash("sha512").update(installerBytes).digest("base64") } = {}) {
+    const file = installerName("0.25.4-rc.2");
+    serveReleases([
+      release("v0.25.4-rc2", {
+        assets: {
+          [manifestName()]: `version: 0.25.4-rc.2\npath: ${file}\nsha512: ${installerSha}\n`,
+          [file]: "",
+          [`${file}.blockmap`]: blockmap,
+        },
+      }),
+    ]);
+  }
+
+  function started() {
+    jest.spyOn(electronMock.app, "getVersion").mockReturnValue("0.25.4-rc.2");
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    return mod;
+  }
+
+  test("a release candidate's blockmap comes from its own tag", async () => {
+    fs.writeFileSync(path.join(cacheDir, "installer.exe"), installerBytes);
+    serveRc2();
+    await started()._seedInstalledBlockmap();
+    expect(fetchedUrls()).toContain(
+      `https://github.com/amd/gaia/releases/download/v0.25.4-rc2/${installerName("0.25.4-rc.2")}.blockmap`
+    );
+    expect(fs.readFileSync(path.join(cacheDir, "current.blockmap"))).toEqual(blockmap);
+  });
+
+  test("a cached installer from another build gets no blockmap, which would corrupt the diff", async () => {
+    fs.writeFileSync(path.join(cacheDir, "installer.exe"), "a local test build");
+    serveRc2();
+    await started()._seedInstalledBlockmap();
+    expect(fs.existsSync(path.join(cacheDir, "current.blockmap"))).toBe(false);
+  });
+
+  test("a blockmap already cached for this version is left alone", async () => {
+    fs.writeFileSync(path.join(cacheDir, "installer.exe"), installerBytes);
+    serveRc2();
+    const mod = started();
+    await mod._seedInstalledBlockmap();
+    global.fetch.mockClear();
+    await mod._seedInstalledBlockmap();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  test("a stale blockmap from the version before is replaced", async () => {
+    fs.writeFileSync(path.join(cacheDir, "installer.exe"), installerBytes);
+    fs.writeFileSync(path.join(cacheDir, "current.blockmap"), "from 0.25.4-rc.1");
+    fs.writeFileSync(path.join(cacheDir, "gaia-blockmap-version"), "0.25.4-rc.1");
+    serveRc2();
+    await started()._seedInstalledBlockmap();
+    expect(fs.readFileSync(path.join(cacheDir, "current.blockmap"))).toEqual(blockmap);
+  });
+});

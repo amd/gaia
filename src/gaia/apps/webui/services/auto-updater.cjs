@@ -57,6 +57,8 @@
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const crypto = require("crypto");
+const zlib = require("zlib");
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -126,6 +128,65 @@ async function _githubFetch(url, options = {}) {
       kind: timedOut ? "timeout" : "network",
     });
   }
+}
+
+/**
+ * A delta update diffs the installer electron-updater cached at install time
+ * against the new one, using the running version's blockmap. It guesses that
+ * blockmap's URL by swapping version strings inside the new one, which misses
+ * every release candidate's tag ("v0.25.4-rc3" holds no "0.25.4-rc.3"), and a
+ * fresh install has no blockmap cached. Without one the update downloads in
+ * full, so fetch it from the running version's own release ahead of time.
+ */
+async function _seedInstalledBlockmap() {
+  if (process.platform !== "win32" || typeof autoUpdaterRef.getOrCreateDownloadHelper !== "function") {
+    return;
+  }
+  const version = state.currentVersion;
+  const { cacheDir } = await autoUpdaterRef.getOrCreateDownloadHelper();
+  const installer = path.join(cacheDir, "installer.exe");
+  const blockmap = path.join(cacheDir, "current.blockmap");
+  const seededFor = path.join(cacheDir, "gaia-blockmap-version");
+  if (!version || !fs.existsSync(installer)) return;
+  if (fs.existsSync(blockmap) && _readText(seededFor) === version) return;
+
+  const base = `${RELEASE_DOWNLOADS}/${_tagForVersion(version)}`;
+  const manifest = await _githubFetch(`${base}/${_platformManifest()}`);
+  if (!manifest.ok) throw _httpError(manifest.status);
+  const yml = await manifest.text();
+  const file = /^path:\s*(\S+)/m.exec(yml);
+  const sha512 = /^sha512:\s*(\S+)/m.exec(yml);
+  if (!file || !sha512) throw new Error(`${_platformManifest()} for ${version} names no installer`);
+  // The cached installer must be this release's, or the diff comes out wrong.
+  if ((await _sha512File(installer)) !== sha512[1]) {
+    log("info", `The cached installer isn't GAIA ${version}'s release file: the next update downloads in full`);
+    return;
+  }
+  const resp = await _githubFetch(`${base}/${file[1]}.blockmap`);
+  if (!resp.ok) throw _httpError(resp.status);
+  const data = Buffer.from(await resp.arrayBuffer());
+  JSON.parse(zlib.gunzipSync(data).toString());
+  fs.writeFileSync(blockmap, data);
+  fs.writeFileSync(seededFor, version);
+  log("info", `Cached GAIA ${version}'s blockmap, so the next update downloads only what changed`);
+}
+
+function _readText(file) {
+  try {
+    return fs.readFileSync(file, "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
+function _sha512File(file) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha512");
+    fs.createReadStream(file)
+      .on("error", reject)
+      .on("data", (chunk) => hash.update(chunk))
+      .on("end", () => resolve(hash.digest("base64")));
+  });
 }
 
 function _httpError(status) {
@@ -1700,6 +1761,11 @@ function init(mainWindow, options = {}) {
   // First check after CHECK_DELAY_MS, then every CHECK_INTERVAL_MS.
   initialCheckTimeout = setTimeout(async () => {
     try {
+      await _seedInstalledBlockmap();
+    } catch (err) {
+      log("warn", "Couldn't cache the installed version's blockmap; the next update downloads in full:", err && err.message);
+    }
+    try {
       await checkForUpdates({ background: true });
     } catch (err) {
       log("error", "Initial check threw:", err && err.message);
@@ -1764,4 +1830,6 @@ module.exports = {
   downloadUpdate,
   restartToInstall,
   STATES,
+  // For tests: init() runs it on a timer.
+  _seedInstalledBlockmap,
 };

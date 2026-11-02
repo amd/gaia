@@ -83,7 +83,12 @@ function atomFeed(releases) {
 }
 
 function httpResponse(status, body = "") {
-  return { ok: status >= 200 && status < 300, status, text: async () => body };
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => String(body),
+    arrayBuffer: async () => Buffer.from(body),
+  };
 }
 
 function assetResponse(owner, file, method) {
