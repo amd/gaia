@@ -714,17 +714,17 @@ func TestTheConfigPathMirrorsGaiaConfig(t *testing.T) {
 	}
 }
 
-// The runnable check must step over the window prefix. Checking that `env`
+// The runnable check must step over an env-var prefix. Checking that `env`
 // exists is always true and would stop checking the binary that has to be there.
-func TestTheRunnableCheckLooksPastTheWindowPrefix(t *testing.T) {
+func TestTheRunnableCheckLooksPastTheEnvPrefix(t *testing.T) {
 	for cmd, want := range map[string]string{
-		"env LEMONADE_CTX_SIZE=65536 /usr/local/bin/lemond":               "/usr/local/bin/lemond",
-		`env LEMONADE_CTX_SIZE=65536 "/Users/j/My Tools/lemond"`:          "/Users/j/My Tools/lemond",
-		`set "LEMONADE_CTX_SIZE=65536" && "C:\a b\Lemonade.exe" --silent`: `C:\a b\Lemonade.exe`,
-		"env LEMONADE_CTX_SIZE=65536 /usr/bin/lemond":                     "/usr/bin/lemond",
-		"lemonade-server serve --ctx-size 65536":                          "lemonade-server",
-		"systemctl --user start lemond":                                   "systemctl",
-		"/usr/local/bin/lemond":                                           "/usr/local/bin/lemond",
+		"env LEMONADE_API_KEY=k /usr/local/bin/lemond":               "/usr/local/bin/lemond",
+		`env LEMONADE_API_KEY=k "/Users/j/My Tools/lemond"`:          "/Users/j/My Tools/lemond",
+		`set "LEMONADE_API_KEY=k" && "C:\a b\Lemonade.exe" --silent`: `C:\a b\Lemonade.exe`,
+		"env LEMONADE_API_KEY=k /usr/bin/lemond":                     "/usr/bin/lemond",
+		"lemonade-server serve --ctx-size 65536":                     "lemonade-server",
+		"systemctl --user start lemond":                              "systemctl",
+		"/usr/local/bin/lemond":                                      "/usr/local/bin/lemond",
 	} {
 		if got := firstWord(cmd); got != want {
 			t.Errorf("firstWord(%q) = %q, want %q", cmd, got, want)
