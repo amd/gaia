@@ -15,6 +15,10 @@ import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
 import type { AgentInfo, Session, StreamEvent } from '../../types';
 import * as api from '../../services/api';
+import { RenderCard } from '../render/RenderCard';
+// The real tool_result an in-process agent streams for an approved edit;
+// test_edit_diff_card.py pins it to what /chat/send actually sends.
+import inProcessEditDiff from './fixtures/inprocess-edit-diff-tool-result.json';
 
 vi.mock('../../services/api');
 
@@ -293,5 +297,39 @@ describe('ChatView streaming cards (#2108)', () => {
         });
 
         expect(useChatStore.getState().cards).toEqual([]);
+    });
+});
+
+describe('approved edit diff card from an in-process agent (#3710)', () => {
+    const diffEvent = inProcessEditDiff as unknown as StreamEvent;
+
+    it('RenderCard draws the event payload as a diff', () => {
+        const { container } = render(
+            <RenderCard render={inProcessEditDiff.render} data={inProcessEditDiff.data} />
+        );
+
+        expect(screen.queryByText('Card failed to render')).toBeNull();
+        expect(screen.queryByText(/Invalid diff payload/)).toBeNull();
+        const lines = Array.from(container.querySelectorAll('.render-diff__line')).map((l) => l.textContent);
+        expect(lines).toContain('-alpha');
+        expect(lines).toContain('+beta');
+    });
+
+    it('ChatView mounts the diff card from the streamed tool_result', async () => {
+        await driveSend();
+
+        act(() => {
+            capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'edit_file' } as unknown as StreamEvent);
+        });
+        act(() => {
+            capturedCallbacks!.onAgentEvent(diffEvent);
+        });
+
+        const cards = useChatStore.getState().cards;
+        expect(cards).toHaveLength(1);
+        expect(cards[0]).toEqual({ render: 'diff', data: inProcessEditDiff.data });
+        expect(screen.queryByText('Card failed to render')).toBeNull();
+        const lines = Array.from(document.querySelectorAll('.render-diff__line')).map((l) => l.textContent);
+        expect(lines).toContain('+beta');
     });
 });
