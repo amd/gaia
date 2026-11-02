@@ -29,7 +29,11 @@ from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_defaul
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
 from gaia.rag.keyword_search import rank_keyword_chunks
-from gaia.rag.sdk import EmbeddingUnavailableError, text_scripts
+from gaia.rag.sdk import (
+    EmbeddingUnavailableError,
+    folder_index_skip_reason,
+    text_scripts,
+)
 from gaia.tool_cancellation import raise_if_cancelled
 
 logger = get_logger(__name__)
@@ -45,6 +49,9 @@ _SESSION_SAVE_WARNING = (
 #: meeting summary off mid-sentence; a model that always reasons (Gemma 4)
 #: spends part of this before it writes anything.
 SUMMARY_MAX_TOKENS = 8192
+
+# Cap on skipped files listed in an index_directory result, to bound the reply.
+_MAX_SKIPPED_REPORTED = 50
 
 
 def _summary_text(chat: Any, prompt: str) -> str:
@@ -2239,7 +2246,11 @@ references from the section summaries.
             """
             Index all supported files in a directory.
 
-            Returns statistics about indexed files.
+            Indexes PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx),
+            CSV, JSON, EPUB, text, Markdown and source-code files. Images and
+            other types are skipped; skipped_files lists each with a reason.
+
+            Returns statistics about indexed, failed and skipped files.
             """
             try:
                 if not self.rag:
@@ -2274,25 +2285,10 @@ references from the section summaries.
 
                 logger.info(f"Indexing directory: {dir_path} (recursive={recursive})")
 
-                # Supported file extensions
-                supported_extensions = {
-                    ".pdf",
-                    ".txt",
-                    ".csv",
-                    ".json",
-                    ".py",
-                    ".js",
-                    ".java",
-                    ".cpp",
-                    ".c",
-                    ".h",
-                    ".md",
-                }
-
                 indexed_files = []
                 failed_files = []
                 failure_reasons: Dict[str, str] = {}
-                skipped_files = []
+                skipped_files: List[Dict[str, str]] = []
                 embedding_failure: Optional[Dict[str, Any]] = None
 
                 # Get files to index
@@ -2302,11 +2298,19 @@ references from the section summaries.
                     files_to_index = [f for f in dir_path.iterdir() if f.is_file()]
 
                 for file_path in files_to_index:
+                    rel_name = file_path.relative_to(dir_path).as_posix()
                     # A link out of the folder, or a secret in it, is not indexed.
                     if not readable_entry(self, file_path):
-                        skipped_files.append(str(file_path))
+                        skipped_files.append(
+                            {
+                                "file": rel_name,
+                                "reason": "outside the allowed folders or a "
+                                "protected file",
+                            }
+                        )
                         continue
-                    if file_path.suffix.lower() in supported_extensions:
+                    skip_reason = folder_index_skip_reason(file_path)
+                    if skip_reason is None:
                         try:
                             # Use the RAG SDK to index the file
                             result = self.rag.index_document(str(file_path))
@@ -2327,7 +2331,7 @@ references from the section summaries.
                             failed_files.append(str(file_path))
                             failure_reasons[file_path.name] = f"{type(e).__name__}: {e}"
                     else:
-                        skipped_files.append(str(file_path))
+                        skipped_files.append({"file": rel_name, "reason": skip_reason})
 
                 # Update system prompt after indexing directory
                 if indexed_files:
@@ -2343,8 +2347,11 @@ references from the section summaries.
                         [Path(f).name for f in failed_files] if failed_files else []
                     ),
                     "failure_reasons": failure_reasons,
+                    "skipped_files": skipped_files[:_MAX_SKIPPED_REPORTED],
                     "message": f"Indexed {len(indexed_files)} files from {dir_path.name}",
                 }
+                if len(skipped_files) > _MAX_SKIPPED_REPORTED:
+                    result["skipped_files_truncated"] = True
                 if embedding_failure is not None:
                     return {**result, **embedding_failure}
                 if failed_files and not indexed_files:

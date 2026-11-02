@@ -84,6 +84,106 @@ _TEXT_TRIED_ENCODINGS = ", ".join(
 )
 
 
+#: Plain-text documents, read as text.
+TEXT_DOCUMENT_EXTENSIONS = frozenset(
+    {".txt", ".md", ".mdx", ".markdown", ".rst", ".log"}
+)
+
+#: Source, markup and config files, read as text for Q&A.
+CODE_EXTENSIONS = frozenset(
+    {
+        ".py",
+        ".pyw",
+        ".java",
+        ".cpp",
+        ".cc",
+        ".cxx",
+        ".hpp",
+        ".h",
+        ".c",
+        ".cs",
+        ".go",
+        ".rs",
+        ".rb",
+        ".php",
+        ".swift",
+        ".kt",
+        ".kts",
+        ".scala",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".mjs",
+        ".cjs",
+        ".vue",
+        ".svelte",
+        ".astro",
+        ".css",
+        ".scss",
+        ".sass",
+        ".less",
+        ".styl",
+        ".stylus",
+        ".html",
+        ".htm",
+        ".svg",
+        ".sh",
+        ".bash",
+        ".ps1",
+        ".r",
+        ".sql",
+        ".yaml",
+        ".yml",
+        ".xml",
+        ".toml",
+        ".ini",
+        ".cfg",
+        ".conf",
+        ".env",
+        ".properties",
+        ".gradle",
+        ".cmake",
+        ".mk",
+        ".make",
+    }
+)
+
+#: Formats with a dedicated extractor (PDF, Office, CSV, JSON, EPUB).
+STRUCTURED_DOCUMENT_EXTENSIONS = frozenset(
+    {".pdf", ".pptx", ".docx", ".xlsx", ".csv", ".json", ".epub"}
+)
+
+#: What a folder walk indexes. Images need the vision model, and *.env files
+#: hold secrets, so both are indexed only when picked one at a time.
+FOLDER_INDEX_EXTENSIONS = (
+    STRUCTURED_DOCUMENT_EXTENSIONS | TEXT_DOCUMENT_EXTENSIONS | CODE_EXTENSIONS
+) - {".env"}
+
+
+def folder_index_skip_reason(file_path) -> Optional[str]:
+    """Why a folder walk should skip *file_path*, or None when it is indexable."""
+    path = Path(file_path)
+    ext = path.suffix.lower()
+    if ext in FOLDER_INDEX_EXTENSIONS:
+        return None
+    if ext in UNSUPPORTED_DOCUMENTS:
+        return unsupported_document_message(path.name, ext)
+    if ext == ".env":
+        return (
+            ".env files usually hold secrets and are not indexed from a folder; "
+            "index the file on its own if it is safe to."
+        )
+    if ext in IMAGE_EXTENSIONS:
+        return (
+            f"{ext} images are read by the vision model and are not indexed "
+            "from a folder; index the image file on its own."
+        )
+    if not ext:
+        return "no file extension, so the document type is unknown"
+    return f"{ext} files are not a supported document type"
+
+
 def _decode_text_bytes(data: bytes) -> str:
     """Decode text bytes without letting latin-1 hide Windows encodings."""
     for bom, encoding in _TEXT_BOM_ENCODINGS:
@@ -2659,7 +2759,7 @@ These positions indicate where to split the text."""
             return self._extract_text_from_image(file_path)
 
         # Text-based files
-        elif file_type in [".txt", ".md", ".mdx", ".markdown", ".rst", ".log"]:
+        elif file_type in TEXT_DOCUMENT_EXTENSIONS:
             return self._extract_text_from_text_file(file_path), metadata
 
         # CSV files
@@ -2688,76 +2788,7 @@ These positions indicate where to split the text."""
             raise ValueError(unsupported_document_message(file_path, file_type))
 
         # Code files (treat as text for Q&A purposes)
-        elif file_type in [
-            # Backend languages
-            ".py",
-            ".pyw",  # Python
-            ".java",  # Java
-            ".cpp",
-            ".cc",
-            ".cxx",
-            ".hpp",
-            ".h",  # C++
-            ".c",  # C
-            ".cs",  # C#
-            ".go",  # Go
-            ".rs",  # Rust
-            ".rb",  # Ruby
-            ".php",  # PHP
-            ".swift",  # Swift
-            ".kt",
-            ".kts",  # Kotlin
-            ".scala",  # Scala
-            # Web - JavaScript/TypeScript
-            ".js",
-            ".jsx",  # JavaScript
-            ".ts",
-            ".tsx",  # TypeScript
-            ".mjs",
-            ".cjs",  # JavaScript modules
-            # Web - Frameworks
-            ".vue",  # Vue.js
-            ".svelte",  # Svelte
-            ".astro",  # Astro
-            # Web - Styling
-            ".css",  # CSS
-            ".scss",
-            ".sass",  # Sass
-            ".less",  # Less
-            ".styl",
-            ".stylus",  # Stylus
-            # Web - Markup
-            ".html",
-            ".htm",  # HTML
-            ".svg",  # SVG
-            ".jsx",
-            ".tsx",  # JSX/TSX (already listed but emphasizing)
-            # Scripting
-            ".sh",
-            ".bash",  # Shell
-            ".ps1",  # PowerShell
-            ".r",
-            ".R",  # R
-            # Database
-            ".sql",  # SQL
-            # Configuration
-            ".yaml",
-            ".yml",  # YAML
-            ".xml",  # XML
-            ".toml",  # TOML
-            ".ini",
-            ".cfg",
-            ".conf",  # Config files
-            ".env",  # Environment files
-            ".properties",  # Properties files
-            # Build & Package
-            ".gradle",  # Gradle
-            ".cmake",  # CMake
-            ".mk",
-            ".make",  # Makefiles
-            # Documentation
-            ".rst",  # ReStructuredText
-        ]:
+        elif file_type in CODE_EXTENSIONS:
             self.log.info(f"Indexing code/web file: {file_type}")
             return self._extract_text_from_text_file(file_path), metadata
 

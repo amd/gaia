@@ -1,0 +1,18 @@
+{
+  "type": "tool_result",
+  "title": "Result",
+  "summary": "success",
+  "success": true,
+  "status": "success",
+  "file_path": "/home/user/note.txt",
+  "latency_ms": 28.3,
+  "result_data": {
+    "title": "note.txt",
+    "unified": "--- a/note.txt\n+++ b/note.txt\n@@ -1 +1 @@\n-alpha\n+beta"
+  },
+  "data": {
+    "title": "note.txt",
+    "unified": "--- a/note.txt\n+++ b/note.txt\n@@ -1 +1 @@\n-alpha\n+beta"
+  },
+  "render": "diff"
+}

@@ -547,13 +547,24 @@ class TestFailLoudly:
 
         _check_dependencies()
 
-    def test_load_embedder_raises_with_actionable_message(self, tmp_path):
-        """_load_embedder must surface Lemonade-down with a hint, not swallow."""
+    @pytest.mark.parametrize("error_type", ["ConnectionError", "LemonadeClientError"])
+    def test_load_embedder_raises_with_actionable_message(self, tmp_path, error_type):
+        """_load_embedder must surface Lemonade-down with a hint, not swallow.
+
+        LemonadeClient raises LemonadeClientError (not a ConnectionError) when
+        the server refuses the connection.
+        """
         skip_if_unavailable()
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        error = {
+            "ConnectionError": ConnectionError,
+            "LemonadeClientError": LemonadeClientError,
+        }[error_type]("connection refused")
         sdk = make_sdk(tmp_path)
 
         fake_client = MagicMock()
-        fake_client.health_check.side_effect = ConnectionError("connection refused")
+        fake_client.health_check.side_effect = error
         sdk._llm_client = fake_client
 
         with pytest.raises(RuntimeError, match=r"Lemonade Server"):
