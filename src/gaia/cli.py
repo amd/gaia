@@ -2353,6 +2353,12 @@ Examples:
         help="With --compare, fail when baseline scenarios are missing or unmeasured",
     )
     agent_eval_parser.add_argument(
+        "--require-same-fixtures",
+        action="store_true",
+        help="With --compare, refuse (exit 3) when the two runs used different "
+        "fixtures, scenarios or Lemonade builds instead of only warning",
+    )
+    agent_eval_parser.add_argument(
         "--save-baseline",
         action="store_true",
         help="After eval, save this run's scorecard as eval/results/baseline.json for future --compare",
@@ -5785,6 +5791,7 @@ Let me know your answer!
                     compare_scorecards,
                 )
 
+                same_setup = getattr(args, "require_same_fixtures", False)
                 try:
                     if len(compare_paths) == 1:
                         # Single path: compare against saved baseline
@@ -5797,12 +5804,16 @@ Let me know your answer!
                             sys.exit(1)
                         current_path = Path(compare_paths[0])
                         result = compare_scorecards(
-                            str(baseline_path), str(current_path)
+                            str(baseline_path),
+                            str(current_path),
+                            require_same_setup=same_setup,
                         )
                     elif len(compare_paths) == 2:
                         baseline_path, current_path = map(Path, compare_paths)
                         result = compare_scorecards(
-                            str(baseline_path), str(current_path)
+                            str(baseline_path),
+                            str(current_path),
+                            require_same_setup=same_setup,
                         )
                     else:
                         print("[ERROR] --compare accepts 1 or 2 paths")

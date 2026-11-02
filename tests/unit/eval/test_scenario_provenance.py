@@ -37,6 +37,8 @@ def dirs(tmp_path, monkeypatch):
     builtin = repo / "eval" / "scenarios"
     _write(builtin, "alpha")
     _write(builtin, "bravo")
+    # The run fingerprints the checkout's fixtures beside its scenarios.
+    (repo / "tests" / "fixtures" / "gaia").mkdir(parents=True)
     user = tmp_path / "home" / ".gaia" / "eval" / "scenarios"
     monkeypatch.setattr(runner, "REPO_ROOT", repo)
     monkeypatch.setattr(runner, "SCENARIOS_DIR", builtin)

@@ -21,7 +21,12 @@ be sandbox refusals there. The eval setup therefore **stages
 - `tests/fixtures/gaia/mini_repo/` → `~/gaia-eval/mini_repo/`
 
 Scenario user messages/objectives reference only the staged `~/gaia-eval/...`
-locations. Exception: `gaia_rag` (and other `setup.index_documents` entries)
+locations. CI stages there literally. `util/run_eval_lane.py` stages under its
+`--out/eval-root/gaia-eval` instead and the runner rewrites every scenario
+string from `~/gaia-eval` to that folder, and `127.0.0.1:8765` (and `port 8765`)
+to the port its fixture server bound, before the driver and judge see it
+(`src/gaia/eval/fixture_env.py`). Write scenarios against the literal
+`~/gaia-eval` and `8765`; never hard-code another spelling of either. Exception: `gaia_rag` (and other `setup.index_documents` entries)
 keep corpus-relative paths like `eval/corpus/documents/...` — the runner
 resolves those itself via `--corpus-dir` pointed at the staged copy, so they
 never pass through the agent's sandbox as user-message paths.
@@ -66,8 +71,9 @@ turn 3 accept an honest empty/unreadable result.
 `tests/fixtures/gaia/serve_fixtures.py` serves `tests/fixtures/gaia/web/`,
 `tests/fixtures/gaia/rss/`, `tests/fixtures/gaia/fixture_hub/`, and
 `tests/fixtures/gaia/capture/` on
-**http://127.0.0.1:8765** (never port 4001). All scenario URLs below assume
-that base URL; if the server picks a different default port, update the
+**http://127.0.0.1:8765** (never port 4001) in CI; a local
+`util/run_eval_lane.py` run binds a free port and the runner rewrites the
+scenarios to it. All scenario URLs below assume that base URL; if the server picks a different default port, update the
 `gaia_web`, `gaia_skills_lifecycle`, `gaia_skills_tasks`, and
 `gaia_skills_capture` scenarios together.
 

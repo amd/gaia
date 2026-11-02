@@ -49,6 +49,9 @@ from gaia.eval.claude_outage import (
 from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
 from gaia.eval.config import DEFAULT_AGENT_TYPE
 from gaia.eval.eval_lock import exclusive_eval
+from gaia.eval.fixture_env import fixture_fingerprint
+from gaia.eval.fixture_env import from_env as fixture_env_from_env
+from gaia.eval.fixture_env import localize
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
 from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
@@ -2082,6 +2085,8 @@ def run_scripted_scenario(
     and answers no questions, then is cleared so it never leaks into the next
     scenario.
     """
+    # A local run stages fixtures under its own folder and port (fixture_env).
+    scenario_data = localize(scenario_data, *fixture_env_from_env())
     kwargs.setdefault("scenario_backend", ScenarioBackend(backend_url, scenario_data))
     declined = _decline_commands(scenario_data)
     if not declined:
@@ -2913,6 +2918,63 @@ def _write_fix_history(run_dir, fix_history) -> None:
 BASELINE_META = "meta.json"
 
 
+def fixture_provenance() -> dict:
+    """Which fixtures a run measured and where it served them from.
+
+    Raises:
+        ValueError: ``GAIA_EVAL_ROOT`` or ``GAIA_EVAL_FIXTURE_PORT`` is malformed.
+    """
+    root, port = fixture_env_from_env()
+    return {
+        "fingerprint": fixture_fingerprint(REPO_ROOT),
+        "root": str(root) if root is not None else "~/gaia-eval",
+        "port": port if port is not None else 8765,
+    }
+
+
+def lemonade_provenance() -> dict:
+    """The Lemonade build the agent ran on, as its ``/health`` reports it."""
+    from gaia.llm.lemonade_client import LemonadeClient, lemonade_server_version
+
+    client = LemonadeClient(verbose=False, keep_alive=True)
+    return {
+        "base_url": client.base_url,
+        # None when /health does not answer or names no version; compare says so.
+        "version": lemonade_server_version(client),
+    }
+
+
+def measurement_warnings(baseline: dict, current: dict) -> list:
+    """Why two scorecards with the same scenarios may not have measured alike.
+
+    Different fixtures or a different Lemonade build can move a score with no
+    change to the agent, so ``--compare`` prints these before and after its
+    verdict. A side that predates the field contributes nothing.
+    """
+    warnings = []
+    configs = [(c.get("config") or {}) for c in (baseline, current)]
+    prints = [(c.get("fixtures") or {}).get("fingerprint") or {} for c in configs]
+    if prints[0].get("combined") and prints[1].get("combined"):
+        for part, label in (
+            ("fixtures", "tests/fixtures/gaia"),
+            ("scenarios", "eval/scenarios"),
+        ):
+            if prints[0].get(part) != prints[1].get(part):
+                warnings.append(
+                    f"{label} differs between the runs (fingerprint "
+                    f"{str(prints[0].get(part))[:12]} vs "
+                    f"{str(prints[1].get(part))[:12]}), so a flip may come from "
+                    "the fixtures, not the agent"
+                )
+    builds = [(c.get("lemonade") or {}).get("version") for c in configs]
+    if all(c.get("lemonade") for c in configs) and builds[0] != builds[1]:
+        warnings.append(
+            f"the runs used different Lemonade builds ({builds[0] or 'unknown'} "
+            f"vs {builds[1] or 'unknown'})"
+        )
+    return warnings
+
+
 class ScorecardMismatchError(ValueError):
     """Two scorecards measured different things, so diffing them means nothing."""
 
@@ -3004,19 +3066,22 @@ def _summary_over(results):
     return build_scorecard("subset", results, {})["summary"]
 
 
-def compare_scorecards(baseline_path, current_path):
+def compare_scorecards(baseline_path, current_path, require_same_setup=False):
     """Compare two scorecard.json files and print a regression/improvement report.
 
     Args:
         baseline_path: Path to the baseline scorecard.json (str or Path)
         current_path:  Path to the current/new scorecard.json (str or Path)
+        require_same_setup: Refuse, instead of warn, when the fixtures or the
+            Lemonade build differ (:func:`measurement_warnings`).
 
     Returns:
         dict with keys: improved, regressed, unchanged, only_in_baseline, only_in_current
 
     Raises:
         ScorecardMismatchError: the two were measured with a different agent
-            model or eval model (see :func:`check_comparable`).
+            model or eval model (see :func:`check_comparable`), or with
+            *require_same_setup*, on different fixtures or Lemonade builds.
     """
     baseline_path = Path(baseline_path)
     current_path = Path(current_path)
@@ -3031,6 +3096,16 @@ def compare_scorecards(baseline_path, current_path):
 
     check_comparable(baseline_path, baseline, current)
     set_warnings = scenario_set_warnings(baseline, current)
+    setup_warnings = measurement_warnings(baseline, current)
+    if require_same_setup and setup_warnings:
+        raise ScorecardMismatchError(
+            f"Not comparable with the baseline ({baseline_path}): "
+            + "; ".join(setup_warnings)
+            + ". Re-run on the baseline's fixtures and Lemonade build, or drop "
+            "--require-same-fixtures to diff anyway with these flagged."
+        )
+    for warning in setup_warnings:
+        print(f"[WARN] Different setup: {warning}.", file=sys.stderr)
 
     # Build per-scenario maps
     def scenario_map(sc):
@@ -3292,6 +3367,8 @@ def compare_scorecards(baseline_path, current_path):
     print(f"\n{'='*70}")
     for warning in set_warnings:
         print(f"[WARN] Different questions: {warning}.")
+    for warning in setup_warnings:
+        print(f"[WARN] Different setup: {warning}.")
     if partial:
         # The run stopped part-way; its NOT_RUN scenarios are excluded above,
         # so whatever follows describes only the part that ran.
@@ -3338,6 +3415,7 @@ def compare_scorecards(baseline_path, current_path):
         "not_run": not_run,
         "incomplete": partial or None,
         "scenario_set_warnings": set_warnings,
+        "measurement_warnings": setup_warnings,
     }
 
 
@@ -3943,6 +4021,8 @@ class AgentEvalRunner:
             config["scenario_filter"] = list(requested_ids)
         provenance = scenario_provenance(scenarios)
         config["scenario_provenance"] = provenance
+        config["fixtures"] = fixture_provenance()
+        config["lemonade"] = lemonade_provenance()
         if provenance["overridden_builtins"]:
             print(
                 f"[WARN] {len(provenance['overridden_builtins'])} built-in "
