@@ -131,6 +131,45 @@ class TestPathGrants:
         scope = grant_scope("write_file", {"file_path": "notes.md"})
         assert scope.key == "write_file:notes.md"
 
+    def test_a_home_folder_resolution_stays_exact(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        scope = grant_scope(
+            "write_file",
+            {
+                "file_path": "notes.md",
+                "_resolved_file_path": str(home / "notes.md"),
+            },
+        )
+        assert scope.key == f"write_file:{home.as_posix()}/notes.md"
+
+    def test_a_hidden_folder_resolution_stays_exact(self, tmp_path):
+        hidden = tmp_path / ".config"
+        hidden.mkdir()
+        scope = grant_scope(
+            "write_file",
+            {
+                "file_path": "notes.md",
+                "_resolved_file_path": str(hidden / "notes.md"),
+            },
+        )
+        assert scope.key == f"write_file:{hidden.as_posix()}/notes.md"
+
+    def test_a_path_folder_resolution_stays_exact(self, tmp_path, monkeypatch):
+        path_dir = tmp_path / "bin"
+        path_dir.mkdir()
+        monkeypatch.setenv("PATH", str(path_dir))
+        scope = grant_scope(
+            "write_file",
+            {
+                "file_path": "notes.md",
+                "_resolved_file_path": str(path_dir / "notes.md"),
+            },
+        )
+        assert scope.key == f"write_file:{path_dir.as_posix()}/notes.md"
+
     def test_a_relative_path_uses_the_resolved_parent_for_the_same_folder_grant(self):
         one = grant_scope(
             "write_file",

@@ -14,6 +14,8 @@ So a grant is keyed on the *invocation*, not the tool name:
     run_shell_command  command="cd p && python -m pytest -q 2>&1"
                                                  ->  run_shell_command:pytest
     write_file         file_path="notes.md"      ->  write_file:notes.md
+    (safe host-resolved folder)                  ->  write_file:/project/*
+    (home/PATH/hidden safety path)               ->  write_file:/home/u/notes.md
 
 A shell grant covers a command *family*: the program and its subcommand,
 wherever it sits in a line. A ``cd``, a harmless redirection (``2>&1``) and a
@@ -41,6 +43,7 @@ import ntpath
 import os
 import posixpath
 import re
+import shutil
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -648,29 +651,57 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     normalised = posixpath.normpath(raw.replace("\\", "/"))
     display = posixpath.basename(normalised) or normalised
     # A resolved path has no working-directory ambiguity, so its parent can
-    # describe a folder grant. Relative/bare names remain exact because their
-    # meaning can change with the process working directory. Callers attach
-    # ``_resolved_file_path`` only after the host's target preflight has run.
+    # describe a folder grant only when the existing edit safety rules also
+    # allow silent edits in that folder. Home/drive roots, hidden paths, PATH
+    # directories, and Windows program shadows must keep prompting.
+    resolved_target = ""
     resolved = args.get(RESOLVED_PATH_ARG)
     if isinstance(resolved, str):
-        # The prompt can carry a Windows absolute path even when this helper
-        # runs under a POSIX test host; use the matching path semantics rather
-        # than letting backslashes become ordinary filename characters.
         resolved_for_match = resolved.replace("\\", "/")
         if ntpath.isabs(resolved) or posixpath.isabs(resolved_for_match):
-            target = posixpath.normpath(resolved_for_match)
-            parent = posixpath.dirname(target)
-            if parent not in ("", ".", "/"):
+            resolved_target = posixpath.normpath(resolved_for_match)
+            parent = posixpath.dirname(resolved_target)
+            if parent not in ("", ".", "/") and _folder_grant_is_safe(
+                resolved_target, parent
+            ):
                 return GrantScope(
                     keys=(f"{tool_name}:{parent}/*",),
-                    label=f"{tool_name} in {parent}",
-                    subject=parent,
+                    label=f"{tool_name} on files in {parent}",
+                    subject=f"files in {parent}",
                 )
+    exact = resolved_target or normalised
+    exact_display = posixpath.basename(exact) or exact
     return GrantScope(
-        keys=(f"{tool_name}:{normalised}",),
-        label=f"{tool_name} on {display}",
-        subject=display,
+        keys=(f"{tool_name}:{exact}",),
+        label=f"{tool_name} on {exact_display}",
+        subject=exact_display,
     )
+
+
+def _folder_grant_is_safe(target: str, parent: str) -> bool:
+    """Keep folder grants aligned with the edit auto-accept exclusions."""
+    try:
+        real_parent = os.path.normcase(os.path.realpath(parent))
+        real_target = os.path.normcase(os.path.realpath(target))
+    except (OSError, ValueError):
+        return False
+    home = os.path.normcase(os.path.realpath(os.path.expanduser("~")))
+    if real_parent == home or os.path.dirname(real_parent) == real_parent:
+        return False
+    parts = {part.lower() for part in real_target.replace("\\", "/").split("/")}
+    if ".git" in parts or any(part.startswith(".") and part not in (".", "..") for part in parts):
+        return False
+    if any(
+        entry and os.path.normcase(os.path.realpath(entry)) == real_parent
+        for entry in os.environ.get("PATH", "").split(os.pathsep)
+    ):
+        return False
+    if os.name == "nt":
+        stem, ext = os.path.splitext(os.path.basename(real_target))
+        pathext = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").lower().split(";")
+        if ext.lower() in pathext and shutil.which(stem) is not None:
+            return False
+    return True
 
 
 def _named_scope(
