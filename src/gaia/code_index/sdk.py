@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
+from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, LemonadeClientError
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
 from gaia.security import PathValidator
@@ -533,7 +533,7 @@ class CodeIndexSDK:
         self._load_embedder()
         try:
             query_emb = self._encode_texts([query])
-        except (RuntimeError, ConnectionError, TimeoutError) as e:
+        except (RuntimeError, ConnectionError, TimeoutError, LemonadeClientError) as e:
             raise RuntimeError(
                 f"Query encoding failed against "
                 f"{self.config.embedding_model!r}: {e}. "
@@ -886,7 +886,7 @@ class CodeIndexSDK:
                     self.config.embedding_model,
                     llamacpp_args="--ubatch-size 2048 --split-mode none",
                 )
-        except (ConnectionError, TimeoutError, RuntimeError) as e:
+        except (ConnectionError, TimeoutError, RuntimeError, LemonadeClientError) as e:
             # Re-raise with an actionable hint. Swallowing this caused
             # opaque downstream encode failures — surface the root cause
             # so the caller knows whether Lemonade is down vs. the model
