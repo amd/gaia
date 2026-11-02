@@ -46,6 +46,9 @@ pytest.importorskip("gaia_agent")
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
 from gaia_agent.skill_tools import SKILL_LIBRARY_TOOL_NAMES  # noqa: E402
 
+from gaia.skills.capture import (  # noqa: E402
+    published_skill_names as _REAL_PUBLISHED_SKILL_NAMES,
+)
 from gaia.skills.manager import SkillManager  # noqa: E402
 from gaia.skills.signing import TrustStore  # noqa: E402
 from tests.unit.skills_helpers import fake_hub, write_audit_report  # noqa: E402
@@ -798,6 +801,194 @@ def test_installing_a_skill_the_agent_bundles_says_the_bundled_copy_loads(
         assert PUBLISHED_MARKER not in session.agent.system_prompt
     finally:
         call(session, "remove_skill", name="note-taker")
+
+
+# ---------------------------------------------------------------------------
+# A hub skill that fails verification is not obtained another way
+# ---------------------------------------------------------------------------
+
+FINAL_SENTENCE = "must not be obtained any other way"
+
+
+def _publish_signed(hub, tmp_path: Path, name: str) -> None:
+    key = hub.keygen()
+    hub.trust(key)
+    hub.publish(
+        _publishable(
+            tmp_path,
+            name,
+            description="Signed community skill for verification tests.",
+            marker=PUBLISHED_MARKER,
+            version="1.0.0",
+            tier="community",
+        )
+    )
+
+
+def _repack_with_extra_file(hub, tmp_path: Path, name: str) -> None:
+    """Add a file to the signed bundle and fix the checksum: only the signature fails."""
+    import hashlib
+    import zipfile
+
+    from gaia.utils.archive import safe_extract
+
+    filename = f"{name}-1.0.0.zip"
+    artifact_url = f"{hub.store.BASE_URL}/skills/{name}/1.0.0/{filename}"
+    original = hub.store.objects[artifact_url]
+    staged = tmp_path / "repack"
+    staged.mkdir()
+    (staged / "in.zip").write_bytes(original)
+    safe_extract(staged / "in.zip", staged / "out")
+    (staged / "out" / name / "extra.md").write_text("added\n", encoding="utf-8")
+    repacked = staged / filename
+    with zipfile.ZipFile(repacked, "w") as bundle:
+        for path in sorted((staged / "out").rglob("*")):
+            if path.is_file():
+                bundle.write(path, arcname=str(path.relative_to(staged / "out")))
+    payload = repacked.read_bytes()
+    hub.store.put_artifact(name, "1.0.0", filename, payload)
+    hub.store.put_manifest(
+        name,
+        "1.0.0",
+        filename=filename,
+        sha256=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+        security_tier="community",
+    )
+
+
+def _pasted(name: str) -> str:
+    return "\n".join(
+        ["---", f"name: {name}", "description: Pasted copy.", "---", "", "Body.", ""]
+    )
+
+
+def test_a_signature_failure_is_final_and_blocks_capture_this_session(
+    session, hub, tmp_path, monkeypatch
+):
+    from gaia.skills.capture import failed_verification_message
+
+    _publish_signed(hub, tmp_path, "sealed-notes")
+    _repack_with_extra_file(hub, tmp_path, "sealed-notes")
+
+    installed = call(session, "install_skill", name="sealed-notes")
+
+    assert installed["status"] == "error"
+    assert installed["error_type"] == "SkillSignatureError"
+    assert "modified after signing" in installed["error"]
+    assert installed["error"].endswith(failed_verification_message("sealed-notes"))
+
+    for kwargs in (
+        {"source": _pasted("sealed-notes")},
+        {"source": _pasted("other-name"), "name": "sealed-notes"},
+        {"source": _pasted("sealed-notes"), "name": "fresh-name"},
+    ):
+        captured = call(session, "capture_skill", **kwargs)
+        assert captured["status"] == "error", kwargs
+        assert captured["error"] == failed_verification_message("sealed-notes")
+    assert not (session.library.user / "sealed-notes").exists()
+    assert not (session.library.user / "fresh-name").exists()
+
+    # A new session starts clean; the name is no longer remembered.
+    monkeypatch.setattr(
+        session.agent,
+        "current_session",
+        SimpleNamespace(session_id="a-later-session"),
+        raising=False,
+    )
+    captured = call(session, "capture_skill", source=_pasted("sealed-notes"))
+    assert captured["status"] == "success", captured
+    call(session, "remove_skill", name="sealed-notes")
+
+
+def test_a_checksum_mismatch_is_final_too(session, hub, tmp_path):
+    from gaia.skills.capture import failed_verification_message
+
+    _publish_signed(hub, tmp_path, "crc-notes")
+    hub.store.put_artifact("crc-notes", "1.0.0", "crc-notes-1.0.0.zip", b"not a zip")
+
+    installed = call(session, "install_skill", name="crc-notes")
+
+    assert installed["error_type"] == "SkillChecksumError"
+    assert installed["error"].endswith(failed_verification_message("crc-notes"))
+    captured = call(session, "capture_skill", source=_pasted("crc-notes"))
+    assert captured["error"] == failed_verification_message("crc-notes")
+
+
+def test_a_hub_document_that_disagrees_with_its_bundle_is_final_too(
+    session, hub, tmp_path
+):
+    from gaia.skills.capture import failed_verification_message
+
+    _publish_signed(hub, tmp_path, "split-notes")
+    doctored = _skill_markdown(
+        "split-notes",
+        description="Signed community skill for verification tests.",
+        marker=PUBLISHED_MARKER,
+        version="1.0.0",
+        tier="community",
+        permissions=("network:read:*.example.com",),
+    )
+    hub.store.put_skill_doc("split-notes", "1.0.0", doctored)
+
+    installed = call(session, "install_skill", name="split-notes")
+
+    assert installed["error_type"] == "SkillBundleMismatchError"
+    assert installed["error"].endswith(failed_verification_message("split-notes"))
+
+
+def test_other_install_failures_keep_their_message_and_do_not_block_capture(
+    session, hub, tmp_path
+):
+    hub.publish(
+        _publishable(
+            tmp_path,
+            "plain-refusal",
+            description="Unsigned skill published straight to experimental.",
+            marker=PUBLISHED_MARKER,
+            version="1.0.0",
+            tier="experimental",
+        ),
+        unsigned=True,
+    )
+
+    installed = call(session, "install_skill", name="plain-refusal")
+    missing = call(session, "install_skill", name="never-published")
+
+    for result in (installed, missing):
+        assert result["status"] == "error"
+        assert FINAL_SENTENCE not in result["error"]
+    assert installed["error_type"] == "SkillInstallError"
+    captured = call(session, "capture_skill", source=_pasted("plain-refusal"))
+    assert captured["status"] == "success", captured
+    call(session, "remove_skill", name="plain-refusal")
+
+
+def test_capture_refuses_what_the_configured_hub_publishes(
+    session, hub, tmp_path, monkeypatch
+):
+    """The real catalog read, against the stand-in hub GAIA_HUB_URL points at."""
+    from gaia.skills import capture as capture_mod
+    from gaia.skills.capture import published_on_hub_message
+
+    monkeypatch.setattr(
+        capture_mod, "published_skill_names", _REAL_PUBLISHED_SKILL_NAMES
+    )
+    _publish_signed(hub, tmp_path, "hub-notes")
+
+    pasted = call(session, "capture_skill", source=_pasted("hub-notes"))
+    url = call(
+        session,
+        "capture_skill",
+        source=f"{hub.store.BASE_URL}/skills/hub-notes/1.0.0/SKILL.md",
+    )
+    unrelated = call(session, "capture_skill", source=_pasted("my-own-notes"))
+
+    assert pasted["error"] == published_on_hub_message("hub-notes")
+    assert url["error"] == published_on_hub_message("hub-notes")
+    assert unrelated["status"] == "success", unrelated
+    assert not (session.library.user / "hub-notes").exists()
+    call(session, "remove_skill", name="my-own-notes")
 
 
 def test_remove_refuses_an_agent_bundled_skill(session):
