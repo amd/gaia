@@ -18,6 +18,9 @@ const NO_ROW_LIMIT = 15;
 /** Status reads in a row that may fail before the download counts as lost. */
 const MISS_LIMIT = 5;
 
+/** The newest download request per model: an older one's late answer must not cancel it. */
+const latestRequest = new Map<string, number>();
+
 /**
  * A job needs a model that isn't on this PC: say which, how big and from where,
  * and ask. The message that needed it waits here until the model is ready.
@@ -67,6 +70,8 @@ export function ModelNeededDialog() {
         if (!need?.model) return;
         const asked = need;
         const id = need.model.id;
+        const request = (latestRequest.get(id) ?? 0) + 1;
+        latestRequest.set(id, request);
         setError(null);
         setDownloading(true);
         noRow.current = 0;
@@ -82,7 +87,9 @@ export function ModelNeededDialog() {
         }
         if (shown.current !== asked) {
             // Closed before the download had begun, so its cancel found nothing to stop.
-            api.cancelSetup(id).catch((err) => console.warn('[ModelNeededDialog] could not cancel the download', err));
+            if (latestRequest.get(id) === request) {
+                api.cancelSetup(id).catch((err) => console.warn('[ModelNeededDialog] could not cancel the download', err));
+            }
             return;
         }
         stop();
