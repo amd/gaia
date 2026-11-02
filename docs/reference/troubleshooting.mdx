@@ -700,7 +700,7 @@ error. To run the chat model in the cloud instead, see
     Symptoms like `request exceeds the available context size`, spurious `INFRA_ERROR`, or `llama-server failed to start` usually mean two evals raced the same Lemonade server.
     - **Rule**: run at most one `gaia eval agent` process at a time — never in parallel (`&`). Chain runs serially instead.
     - **Backend**: the Agent UI backend must be running (`python -m gaia.ui.server --port 4200`).
-    - **Judge access**: if the run errors with `ANTHROPIC_API_KEY not found`, export the key for the judge/simulator.
+    - **Judge access**: the judge uses your Claude Code login (`claude`, then `/login`) or `ANTHROPIC_API_KEY` when it is set. If it errors with `No Claude judge available`, install and log in to the `claude` CLI or export the key.
   </Accordion>
 
   <Accordion title="Dependency compatibility issues" icon="cubes">

@@ -2352,8 +2352,8 @@ Examples:
   gaia eval sessions --dataset-only --out eval/results/sessions
 
 A TUI must already be running with --control-port; this drives THAT session so
-the run is visible on screen. Judging needs ANTHROPIC_API_KEY (the repo .env is
-read automatically).
+the run is visible on screen. The judge uses your Claude Code login (the
+`claude` CLI), or ANTHROPIC_API_KEY when it is set.
 """,
     )
     sessions_eval_parser.add_argument(
@@ -5838,10 +5838,10 @@ Let me know your answer!
                     "--control <path to its control.json>."
                 )
 
-            from gaia.eval.claude import ClaudeClient
+            from gaia.eval.judge_client import make_judge_client
 
             driver = TUIDriver(Path(control))
-            client = ClaudeClient()
+            client = make_judge_client()
 
             def _progress(index, total, result):
                 mark = "OK " if result.passed else ("ERR" if result.error else "LOW")
