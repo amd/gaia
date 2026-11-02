@@ -178,6 +178,19 @@ class TestVerilog:
         ]
         assert {c.language for c in chunks} == {"systemverilog"}
 
+    @pytest.mark.parametrize(
+        "content, expected",
+        [
+            ("program automatic test;\nendprogram\n", ("program", "test")),
+            ("program static test;\nendprogram\n", ("program", "test")),
+            ("package automatic pkg;\nendpackage\n", ("package", "pkg")),
+            ("interface automatic bus_if;\nendinterface\n", ("interface", "bus_if")),
+            ("module static m;\nendmodule\n", ("module", "m")),
+        ],
+    )
+    def test_lifetime_keyword_is_not_the_name(self, content, expected):
+        assert _symbols("t.sv", content) == [expected]
+
     def test_module_without_ports(self):
         assert _symbols("t.v", "module tb;\n  initial $finish;\nendmodule\n") == [
             ("module", "tb")

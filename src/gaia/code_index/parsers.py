@@ -234,20 +234,30 @@ _LANG_PATTERNS: dict = {
 }
 
 # Line-anchored so `endmodule`, `end process` and `// module x` never match.
+_SV_LIFETIME = r"(?:(?:automatic|static)\s+)?"
 _VERILOG_PATTERNS = [
     (
         "module",
         re.compile(
-            r"^[ \t]*(?:macro)?module\s+(?:(?:automatic|static)\s+)?(?P<name>\w+)",
+            rf"^[ \t]*(?:macro)?module\s+{_SV_LIFETIME}(?P<name>\w+)",
             re.MULTILINE,
         ),
     ),
     (
         "interface",
-        re.compile(r"^[ \t]*interface\s+(?:class\s+)?(?P<name>\w+)", re.MULTILINE),
+        re.compile(
+            rf"^[ \t]*interface\s+(?:class\s+)?{_SV_LIFETIME}(?P<name>\w+)",
+            re.MULTILINE,
+        ),
     ),
-    ("package", re.compile(r"^[ \t]*package\s+(?P<name>\w+)", re.MULTILINE)),
-    ("program", re.compile(r"^[ \t]*program\s+(?P<name>\w+)", re.MULTILINE)),
+    (
+        "package",
+        re.compile(rf"^[ \t]*package\s+{_SV_LIFETIME}(?P<name>\w+)", re.MULTILINE),
+    ),
+    (
+        "program",
+        re.compile(rf"^[ \t]*program\s+{_SV_LIFETIME}(?P<name>\w+)", re.MULTILINE),
+    ),
     (
         "class",
         re.compile(r"^[ \t]*(?:virtual\s+)?class\s+(?P<name>\w+)", re.MULTILINE),
