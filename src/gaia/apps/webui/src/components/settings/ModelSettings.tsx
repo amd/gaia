@@ -446,11 +446,8 @@ export function ModelSettings() {
                         </form>
                     )}
 
-                    {notice && (
-                        <p className={notice.ok ? 'settings-ok' : 'settings-error'} role={notice.ok ? 'status' : 'alert'}>
-                            {notice.text}
-                        </p>
-                    )}
+                    {notice?.ok && <p className="settings-ok" role="status">{notice.text}</p>}
+                    {notice && !notice.ok && <ErrorNotice message={notice.text} />}
 
                     {provider.known_models && (
                         <p className="settings-hint" role="status">

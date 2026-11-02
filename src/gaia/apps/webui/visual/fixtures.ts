@@ -157,6 +157,7 @@ const ROUTES: Record<string, unknown> = {
     'GET /documents': DOCUMENTS,
     'GET /agents': { agents: [] },
     'GET /connectors': { connectors: [] },
+    'GET /memory/settings': { memory_enabled: true },
     'GET /skills': { skills: [] },
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
     'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: 'http://127.0.0.1:13305', saved_base_url: null, api_key_stored: false, env_override: null },
@@ -346,6 +347,28 @@ export async function withConnectors(page: Page, connectors: unknown[] = CONNECT
         else if (/\/activations$/.test(url.pathname)) await route.fulfill({ json: { activations: {} } });
         else await route.fallback();
     });
+}
+
+/** The Electron bridges the browser lacks, so desktop-only settings render. */
+export async function withDesktopBridges(page: Page, update: Record<string, unknown> = {}): Promise<void> {
+    await page.addInitScript((state) => {
+        const tray = { minimizeToTray: true, startOnLogin: false, startMinimized: false };
+        const status = {
+            status: 'idle', version: null, progress: 0, releaseNotes: null, error: null, currentVersion: '0.25.4',
+            pinnedVersion: null, autoUpdate: false, includePrereleases: false, configError: null, ...state,
+        };
+        const same = async () => status;
+        // The app also subscribes to tray and window events; those stay silent here.
+        const stub: unknown = new Proxy(function stub() {}, { get: (_, key) => (key === 'then' ? undefined : stub), apply: () => stub });
+        const withStubs = (real: object) => new Proxy(real, { get: (t, key) => (key in t ? t[key as keyof typeof t] : stub) });
+        Object.assign(window, {
+            gaiaAPI: withStubs({ tray: withStubs({ getConfig: async () => ({ tray }), setConfig: async () => ({ tray }) }) }),
+            gaiaUpdater: {
+                getStatus: same, check: same, onStatusChange: () => () => {}, listReleases: async () => [], installVersion: same,
+                resumeUpdates: same, setAutoUpdate: same, setIncludePrereleases: same, downloadUpdate: same, restart: same,
+            },
+        });
+    }, update);
 }
 
 /** Pick the theme before the app's first paint, the way a returning user would. */

@@ -5,6 +5,7 @@ import { useCallback, useRef, useState } from 'react';
 import { AlertTriangle, Check, Loader2, X } from 'lucide-react';
 import * as api from '../../services/api';
 import { useT } from '../../i18n/useT';
+import { ErrorNotice } from './ErrorNotice';
 import type { CustomModelReport } from '../../types';
 
 /** Paste a Hugging Face link, see what GAIA checked, and add the model to the list. */
@@ -135,7 +136,7 @@ export function AddCustomModel({ onAdded }: { onAdded: (displayName: string) => 
                     <span className="settings-hint">{t('settings.model.sizeDownload', { size: `${report.size_gb} GB` })}</span>
                 </div>
             )}
-            {error && <p className="settings-error" role="alert">{error}</p>}
+            {error && <ErrorNotice message={error} />}
         </form>
     );
 }

@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, mockApi, useLocale, useTheme, withConnectors, withModelPage, withSettingsPanes } from './fixtures';
+import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, mockApi, useLocale, useTheme, withConnectors, withDesktopBridges, withModelPage, withSettingsPanes } from './fixtures';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -521,6 +521,40 @@ for (const locale of ['ar', 'en']) {
             await shot(page, `connectors-${locale}-phone`);
             expect(await audit(page)).toEqual([]);
         });
+    });
+}
+
+const UPDATE_STATES: Array<[string, Record<string, unknown>]> = [
+    ['idle', {}],
+    ['available', { status: 'available', version: '0.26.0' }],
+    ['downloading', { status: 'downloading', version: '0.26.0', progress: 42 }],
+    ['ready', { status: 'downloaded', version: '0.26.0' }],
+    ['failed', { status: 'error', error: 'net::ERR_INTERNET_DISCONNECTED' }],
+    ['pinned', { pinnedVersion: 'v0.25.3', currentVersion: '0.25.3-rc.2' }],
+];
+
+for (const locale of ['ar', 'en']) {
+    for (const [state, update] of UPDATE_STATES) {
+        test(`desktop app and updates: ${state} (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p, update); });
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            const updates = page.getByRole('group', { name: /Updates/ });
+            await expect(updates).toBeVisible();
+            await updates.scrollIntoViewIfNeeded();
+            await shot(page, `updates-${locale}-${state}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+        });
+    }
+
+    test(`notifications on the desktop app (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p); });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="notifications"]').click();
+        await expect(page.locator('#battery-floor')).toBeVisible();
+        await shot(page, `notifications-${locale}-desktop`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
     });
 }
 

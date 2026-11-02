@@ -18,7 +18,7 @@ import {
     catalogOf, chooseChat, initialSelection, isVision, pendingDownloads, shortfall, skipChanges, toggle, tooBig,
     type Selection,
 } from '../setup/selection';
-import { isServerDown } from './ErrorNotice';
+import { ErrorNotice, isServerDown } from './ErrorNotice';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../setup/setup.css';
 
@@ -216,7 +216,7 @@ export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLEle
                 <section className="settings-field models-pane-section" aria-labelledby="settings-models-title">
                     <span className="visually-hidden" id="settings-models-title">{t('settings.models.title')}</span>
                     <p className="settings-hint">{t('settings.models.lede')}</p>
-                    {planError && <p className="settings-error" role="alert">{planError}</p>}
+                    {planError && <ErrorNotice message={planError} />}
                     {plan && !plan.lemonade.reachable && (
                         <p className="settings-hint">{t('settings.models.unavailable')}</p>
                     )}
@@ -255,7 +255,8 @@ export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLEle
                             </div>
                         </>
                     )}
-                    {notice && <p className={notice.ok ? 'settings-ok' : 'settings-error'} role={notice.ok ? 'status' : 'alert'}>{notice.text}</p>}
+                    {notice?.ok && <p className="settings-ok" role="status">{notice.text}</p>}
+                    {notice && !notice.ok && <ErrorNotice message={notice.text} />}
                 </section>
             </SettingsDisclosure>
 

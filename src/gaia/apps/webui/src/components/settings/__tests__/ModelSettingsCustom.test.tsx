@@ -152,6 +152,14 @@ describe('ModelSettings custom models', () => {
         expect(screen.queryByRole('button', { name: /^Add / })).not.toBeInTheDocument();
     });
 
+    it('says the server is down in plain words when a link check cannot run', async () => {
+        mockedApi.checkCustomModel.mockRejectedValue(new Error("not reachable (HTTPConnectionPool(host='127.0.0.1'): Max retries exceeded)"));
+        await paste(URL);
+        expect(await screen.findByText("GAIA can't reach its model server")).toBeInTheDocument();
+        const raw = screen.getByText(/HTTPConnectionPool/);
+        expect((raw.closest('details') as HTMLDetailsElement).open).toBe(false);
+    });
+
     it('removes an added model only after confirming', async () => {
         models = [...models, local(ADDED, { display_name: 'Qwen3-4B Q4_K_M', custom: true, source_url: URL })];
         mockedApi.removeCustomModel.mockImplementation(async () => {

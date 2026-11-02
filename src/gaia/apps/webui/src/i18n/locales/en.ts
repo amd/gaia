@@ -1105,6 +1105,20 @@ export const enMessages = {
     'settings.connectors.disable': 'Disable',
     'settings.connectors.enable': 'Enable',
 
+    // The update chip
+    'update.now': 'Update now',
+    'update.downloadingTitle': 'Downloading update {version}…',
+    'update.downloading': 'Downloading update… {percent}%',
+    'update.newVersion': 'A new version is available.',
+    'update.failed': 'Update failed — try again',
+    'update.available': 'GAIA {version} is available',
+    'update.restartTitle': 'Click to restart and apply the update',
+    'update.restartFailed': 'Restart failed — try again',
+    'update.ready': 'Update ready — restart to apply',
+    'update.checkFailed': 'Update check failed',
+    'update.dismiss': 'Dismiss update notification',
+    'update.dismissError': 'Dismiss update error',
+
     // Settings: sub-panels and errors
     'settings.errors.serverDownTitle': "GAIA can't reach its model server",
     'settings.errors.serverDown': 'Models on this PC are unavailable until it is back. It normally starts on its own, so this can clear in a moment. Cloud providers still work.',

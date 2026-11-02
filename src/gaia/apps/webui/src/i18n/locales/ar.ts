@@ -1105,6 +1105,20 @@ const messages: Messages = {
     'settings.connectors.disable': 'تعطيل',
     'settings.connectors.enable': 'تفعيل',
 
+    // The update chip
+    'update.now': 'تحديث الآن',
+    'update.downloadingTitle': 'جارٍ تنزيل التحديث {version}…',
+    'update.downloading': 'جارٍ تنزيل التحديث… {percent}%',
+    'update.newVersion': 'يتوفر إصدار جديد.',
+    'update.failed': 'فشل التحديث — حاول مرة أخرى',
+    'update.available': 'يتوفر GAIA {version}',
+    'update.restartTitle': 'انقر لإعادة التشغيل وتطبيق التحديث',
+    'update.restartFailed': 'فشلت إعادة التشغيل — حاول مرة أخرى',
+    'update.ready': 'التحديث جاهز — أعد التشغيل لتطبيقه',
+    'update.checkFailed': 'فشل البحث عن تحديثات',
+    'update.dismiss': 'إغلاق إشعار التحديث',
+    'update.dismissError': 'إغلاق خطأ التحديث',
+
     // Settings: sub-panels and errors
     'settings.errors.serverDownTitle': 'لا يستطيع GAIA الوصول إلى خادم النماذج',
     'settings.errors.serverDown': 'لن تتوفر النماذج على هذا الجهاز حتى يعود. يبدأ عادة من تلقاء نفسه، لذا قد يزول هذا بعد لحظة. ما زالت مزوّدات السحابة تعمل.',
