@@ -6,7 +6,8 @@
 import math
 import re
 from collections import Counter
-from typing import Dict, Iterable, List, Tuple
+from functools import lru_cache
+from typing import Dict, FrozenSet, Iterable, List, Tuple
 
 _WORD = re.compile(r"[^\W_]+")
 _ARABIC_MARKS = re.compile("[\u064b-\u065f\u0670\u0640]")
@@ -29,6 +30,18 @@ def _words(text: str) -> List[str]:
     return [_ARABIC_PREFIX.sub("", word) for word in _WORD.findall(text)]
 
 
+@lru_cache(maxsize=4096)
+def _chunk_features(text: str) -> Tuple[FrozenSet[str], FrozenSet[Tuple[str, str]]]:
+    """Return the reusable word and adjacent-pair features for one chunk.
+
+    The cache key is the chunk text rather than its current list position. RAG
+    replaces and compacts ``chunks`` while indexing and removing files, so an
+    index-aligned cache could return features for a different document.
+    """
+    words = _words(text)
+    return frozenset(words), frozenset(zip(words, words[1:]))
+
+
 def rank_keyword_chunks(
     query: str, chunks: Iterable[Tuple[int, str]], limit: int = 5
 ) -> List[Tuple[int, float, List[str]]]:
@@ -44,13 +57,13 @@ def rank_keyword_chunks(
     if not query_words:
         return []
 
-    indexed: Dict[int, Tuple[set, set]] = {}
+    indexed: Dict[int, Tuple[FrozenSet[str], FrozenSet[Tuple[str, str]]]] = {}
     held_by: Counter = Counter()
+    query_word_set = set(query_words)
     for index, text in chunks:
-        words = _words(text)
-        unique = set(words)
-        indexed[index] = (unique, set(zip(words, words[1:])))
-        held_by.update(unique & set(query_words))
+        unique, pairs = _chunk_features(text)
+        indexed[index] = (unique, pairs)
+        held_by.update(unique & query_word_set)
 
     # Plus one, so a word in every chunk of a small document still counts a little.
     total = len(indexed)
