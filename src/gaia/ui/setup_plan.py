@@ -622,8 +622,10 @@ def choose_chat_model(
 
     Any of GAIA's chat models, or any chat model this Lemonade has downloaded
     (FLM included). The hardware's own recommendation clears ``default_model``
-    instead, which keeps setup's own behaviour for it. One that may not fit
-    this PC raises :class:`NeedsAcknowledgement` until *acknowledge_no_fit*.
+    instead, which keeps setup's own behaviour for it — but only while the
+    memory free now picks it too, since that is the pick `gaia init` makes.
+    One that may not fit this PC raises :class:`NeedsAcknowledgement` until
+    *acknowledge_no_fit*.
     Choosing a model also takes it off ``skipped_models``. ``save=False``
     only checks.
     """
@@ -677,9 +679,17 @@ def choose_chat_model(
     if not save:
         return
     try:
-        GaiaConfig.save_key(
-            "default_model", None if model_id == recommended else model_id
+        # gaia init re-picks by free memory; clear only when it would pick this.
+        hand_back = (
+            model_id == recommended
+            and recommend_default_chat_model(client)[0] == model_id
         )
+    except LemonadeClientError as e:
+        raise SetupPlanError(
+            f"Could not read this PC's free memory from Lemonade: {e}"
+        ) from e
+    try:
+        GaiaConfig.save_key("default_model", None if hand_back else model_id)
         if entry["skipped"]:
             model_choice.set_skipped(model_id, False)
     except GaiaConfigError as e:
