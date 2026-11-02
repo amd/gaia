@@ -1,17 +1,17 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Read-only Gmail mailbox client for the flagship agent's email tools.
+"""Gmail mailbox clients for the flagship agent's email tools.
 
-Same reads as the Graph backend next door, emitting the same
-provider-neutral summary shape, so neither the skill nor the model learns
-which mailbox is connected.
+Same reads and writes as the Graph backend next door, emitting the same
+provider-neutral shapes, so neither the skill nor the model learns which mailbox
+is connected. Reads run under the narrowest scope the connection carries, so
+writes live in their own subclass, built only when a write is asked for.
 
-This is a reimplementation of the read half of
-``gaia_agent_email.gmail_backend``, not a relocation of it: the flagship must
-not depend on the standalone email package it is meant to replace, and that
-backend returns raw Gmail resources — its flattening lives in the sidecar's
-tool layer, which does not come along. The wire contract (Gmail API v1) is the
-shared truth, not the Python.
+This is a reimplementation of ``gaia_agent_email.gmail_backend``, not a
+relocation of it: the flagship must not depend on the standalone email package
+it is meant to replace, and that backend returns raw Gmail resources — its
+flattening lives in the sidecar's tool layer, which does not come along. The
+wire contract (Gmail API v1) is the shared truth, not the Python.
 """
 
 from __future__ import annotations
@@ -24,12 +24,21 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from email.header import decode_header, make_header
+from email.headerregistry import Address
+from email.message import EmailMessage
+from email.policy import SMTP
 from email.utils import getaddresses
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 import httpx
 
 from gaia.agents.tools._email.errors import MailboxAuthError, MailboxError
+from gaia.agents.tools._email.outgoing import (
+    OutgoingMessage,
+    Recipient,
+    Recipients,
+    SourceMessage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +249,86 @@ def message_summary(
     if include_body:
         summary["body"], summary["body_content_type"] = _select_body(payload)
     return summary
+
+
+def _recipients(raw: Optional[str]) -> Recipients:
+    """One address header as recipients; names are decoded after the split."""
+    return tuple(
+        Recipient(_decode(name).strip(), addr.strip())
+        for name, addr in getaddresses([raw or ""])
+        if addr.strip()
+    )
+
+
+def _attachment_names(part: Dict[str, Any]) -> List[str]:
+    names = [part["filename"]] if part.get("filename") else []
+    for child in part.get("parts") or []:
+        names.extend(_attachment_names(child))
+    return names
+
+
+def _normalized_body(text: str) -> str:
+    """A body as written: MIME's CRLFs and closing newline are not content."""
+    return text.replace("\r\n", "\n").removesuffix("\n")
+
+
+def _validated_id(value: str, kind: str, source: str) -> str:
+    # Ids arrive from the model; accept only the shape Gmail issues.
+    if not value or not _MESSAGE_ID_RE.fullmatch(value):
+        raise ValueError(f"{kind} {value!r} is not a Gmail id. Use one from {source}.")
+    return value
+
+
+def _draft_message(draft: Dict[str, Any]) -> OutgoingMessage:
+    message = draft.get("message") or {}
+    payload = message.get("payload") or {}
+    headers = _header_map(payload)
+    body, body_type = _select_body(payload)
+    return OutgoingMessage(
+        to=_recipients(headers.get("to")),
+        cc=_recipients(headers.get("cc")),
+        bcc=_recipients(headers.get("bcc")),
+        subject=_decode(headers.get("subject")),
+        body=_normalized_body(body),
+        body_type=body_type,
+        thread_id=message.get("threadId"),
+        in_reply_to=headers.get("in-reply-to") or None,
+        references=headers.get("references") or None,
+        attachments=tuple(_attachment_names(payload)),
+    )
+
+
+def raw_mime(message: OutgoingMessage) -> str:
+    """*message* as the base64url RFC 5322 text Gmail's ``raw`` field takes.
+
+    ``EmailMessage`` encodes non-ASCII headers and refuses a line break in any
+    of them, which is what stops a subject lifted from inbound mail from
+    injecting a ``Bcc:``.
+    """
+    mime = EmailMessage(policy=SMTP)
+    for header, recipients in (
+        ("To", message.to),
+        ("Cc", message.cc),
+        ("Bcc", message.bcc),
+    ):
+        if recipients:
+            mime[header] = [Address(r.name, addr_spec=r.address) for r in recipients]
+    mime["Subject"] = message.subject
+    if message.in_reply_to:
+        mime["In-Reply-To"] = message.in_reply_to
+    if message.references:
+        mime["References"] = message.references
+    mime.set_content(
+        message.body, subtype="html" if message.body_type == "html" else "plain"
+    )
+    return base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii").rstrip("=")
+
+
+def _message_resource(message: OutgoingMessage) -> Dict[str, Any]:
+    resource: Dict[str, Any] = {"raw": raw_mime(message)}
+    if message.thread_id:
+        resource["threadId"] = message.thread_id
+    return resource
 
 
 class GmailReadBackend:
@@ -516,9 +605,133 @@ class GmailReadBackend:
             for detail in self._fan_out([f"/users/me/labels/{lid}" for lid in ids])
         ]
 
+    def get_draft(self, draft_id: str) -> OutgoingMessage:
+        """One draft, exactly as Gmail would send it now."""
+        _validated_id(draft_id, "draft_id", "create_draft or list_drafts")
+        return _draft_message(
+            self._get(f"/users/me/drafts/{draft_id}", params={"format": "full"})
+        )
+
+    def list_drafts(self, *, limit: int = 25) -> List[Dict[str, Any]]:
+        """Saved drafts with their recipients and subject, not their bodies."""
+        data = self._get("/users/me/drafts", params={"maxResults": self._clamp(limit)})
+        ids = [d["id"] for d in data.get("drafts") or [] if d.get("id")]
+        if not ids:
+            return []
+        rows = []
+        for draft in self._fan_out(
+            [f"/users/me/drafts/{did}" for did in ids], {"format": "metadata"}
+        ):
+            message = draft.get("message") or {}
+            headers = _header_map(message.get("payload") or {})
+            rows.append(
+                {
+                    "draft_id": draft.get("id"),
+                    "thread_id": message.get("threadId"),
+                    "to": _address_list(headers.get("to")),
+                    "subject": _decode(headers.get("subject")) or "(no subject)",
+                    "preview": html.unescape(message.get("snippet") or "").strip(),
+                }
+            )
+        return rows
+
+
+class GmailWriteBackend(GmailReadBackend):
+    """Drafting and sending. Each call is made once; a failure is reported, not retried."""
+
+    def _write(
+        self, method: str, path: str, *, payload: Optional[dict] = None
+    ) -> Dict[str, Any]:
+        where = f"{method} {path}"
+        try:
+            resp = self._client.request(
+                method,
+                f"{GMAIL_API_BASE}{path}",
+                headers={"Authorization": f"Bearer {self._access_token_fn()}"},
+                json=payload,
+            )
+        except httpx.HTTPError as exc:
+            raise MailboxError(
+                f"The connection to Gmail failed during {where} "
+                f"({type(exc).__name__}), so GAIA can't tell whether it took "
+                "effect. Check Sent and Drafts in Gmail before trying again."
+            ) from exc
+        if resp.status_code == 403:
+            reason, _ = _error_detail(resp)
+            if reason in ("insufficientPermissions", "PERMISSION_DENIED"):
+                raise MailboxAuthError(
+                    "Gmail refused this because the connection can't write mail "
+                    "(403). Reconnect Google in Settings -> Connectors and approve "
+                    f"reading, composing and sending. (request: {where})"
+                )
+        if resp.status_code not in (200, 204):
+            self._raise(resp, where)
+        return resp.json() if resp.content else {}
+
+    def get_source_message(self, message_id: str) -> SourceMessage:
+        """What a reply or forward is built from, threading headers included."""
+        _validated_id(message_id, "message_id", "list_inbox or search_email")
+        data = self._get(f"/users/me/messages/{message_id}", params={"format": "full"})
+        payload = data.get("payload") or {}
+        headers = _header_map(payload)
+        senders = _recipients(headers.get("from"))
+        body, body_type = _select_body(payload)
+        return SourceMessage(
+            id=message_id,
+            sender=senders[0] if senders else None,
+            reply_to=_recipients(headers.get("reply-to")),
+            to=_recipients(headers.get("to")),
+            cc=_recipients(headers.get("cc")),
+            subject=_decode(headers.get("subject")),
+            body=_normalized_body(body),
+            body_type=body_type,
+            thread_id=data.get("threadId"),
+            internet_message_id=headers.get("message-id") or None,
+            references=headers.get("references") or None,
+            received=_received(data.get("internalDate")),
+        )
+
+    def create_draft(self, message: OutgoingMessage) -> str:
+        created = self._write(
+            "POST", "/users/me/drafts", payload={"message": _message_resource(message)}
+        )
+        return created["id"]
+
+    def update_draft(self, draft_id: str, message: OutgoingMessage) -> None:
+        _validated_id(draft_id, "draft_id", "create_draft or list_drafts")
+        if message.attachments:
+            # Gmail replaces the whole draft, and this rewrite carries no files.
+            raise ValueError(
+                f"Draft {draft_id!r} has attachments "
+                f"({', '.join(message.attachments)}), which editing here would "
+                "remove. Edit it in Gmail instead."
+            )
+        self._write(
+            "PUT",
+            f"/users/me/drafts/{draft_id}",
+            payload={"message": _message_resource(message)},
+        )
+
+    def discard_draft(self, draft_id: str) -> None:
+        _validated_id(draft_id, "draft_id", "create_draft or list_drafts")
+        self._write("DELETE", f"/users/me/drafts/{draft_id}")
+
+    def send_draft(self, draft_id: str) -> Dict[str, Any]:
+        _validated_id(draft_id, "draft_id", "create_draft or list_drafts")
+        sent = self._write("POST", "/users/me/drafts/send", payload={"id": draft_id})
+        return {"message_id": sent.get("id"), "thread_id": sent.get("threadId")}
+
+    def send(self, message: OutgoingMessage) -> Dict[str, Any]:
+        sent = self._write(
+            "POST", "/users/me/messages/send", payload=_message_resource(message)
+        )
+        return {"message_id": sent.get("id"), "thread_id": sent.get("threadId")}
+
 
 __all__ = [
     "GMAIL_API_BASE",
     "GmailReadBackend",
+    "GmailWriteBackend",
+    "raw_mime",
     "message_summary",
 ]
