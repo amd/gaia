@@ -174,6 +174,34 @@ describe("index.json validates against schemas/index.schema.json", () => {
     expectValid(validateIndex, index);
   });
 
+  it("with an agent that published an eval scorecard", async () => {
+    const env = makeEnv();
+    await publishAgent(env, {
+      evalScorecard: [
+        "---",
+        "schema_version: 1",
+        "agent:",
+        "  name: Chat",
+        "  version: 0.1.0",
+        "aggregate:",
+        "  name: weighted_accuracy",
+        "  value: 87.5",
+        "---",
+        "# Chat — Eval Scorecard v0.1.0",
+      ].join("\n"),
+    });
+    const index = (await storedJson(env, "index.json")) as {
+      agents: Array<Record<string, unknown>>;
+    };
+    // Pin that every scorecard-derived field is really emitted and checked.
+    expect(index.agents[0]).toMatchObject({
+      eval_score: 87.5,
+      eval_score_version: "0.1.0",
+      eval_scorecard_url: expect.stringMatching(/SCORECARD\.md$/),
+    });
+    expectValid(validateIndex, index);
+  });
+
   it("rejects an undeclared field nested in skill_metadata.audit", async () => {
     const env = makeEnv();
     await publishSkill(env, {});

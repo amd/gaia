@@ -197,6 +197,11 @@
           "maximum": 100,
           "description": "Aggregate eval score (0-100) parsed from the latest version's scorecard front matter; absent when none was published or parseable."
         },
+        "eval_score_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Agent version the scorecard was measured at: the front matter's inherited_from for a carried-forward card, else agent.version. Often behind latest_version. Absent when no scorecard was published or it's unparseable."
+        },
         "npm_package": {
           "type": "string",
           "description": "npm package name when the agent is distributed via npm (e.g. \"@amd-gaia/agent-email\"); absent otherwise."
