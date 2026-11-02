@@ -108,7 +108,7 @@ class TestPathGrants:
             },
         )
         assert scope.key == "write_file:/tmp/a/*"
-        assert scope.subject == "/tmp/a"
+        assert scope.subject == "files in /tmp/a"
 
     def test_a_folder_grant_covers_sibling_files(self):
         one = grant_scope(
