@@ -274,7 +274,7 @@ def test_local_capability_permission_is_refused_with_an_actionable_error():
     message = str(excinfo.value)
     assert "deferred to a later phase" in message
     assert "filesystem" in message
-    assert "1019" in message  # where to look next
+    assert "issues/2863" in message  # the open sandbox issue, where to look next
 
 
 @pytest.mark.parametrize(

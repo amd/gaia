@@ -274,9 +274,8 @@ class RemoteSkill:
             wanted = spec or "*"
             raise SkillNotFoundError(
                 f"No published version of skill '{self.name}' satisfies {wanted!r}. "
-                f"Published: {', '.join(available) or '(none)'}. Loosen the pin, or "
-                f"run 'gaia skill info {self.name} --remote' to see the versions. "
-                f"See {_DOCS}"
+                f"Published: {', '.join(available) or '(none)'}. Loosen the pin, "
+                f"e.g. 'gaia skill install {self.name}' for the latest. See {_DOCS}"
             )
         return chosen
 
@@ -397,8 +396,8 @@ def fetch_skill_doc(
         raise SkillHubError(
             f"Could not fetch SKILL.md for '{name}' {version} from {url}: {exc}. The "
             "version's manifest is missing from the hub, or the hub is unreachable. "
-            "Retry, or pick another version with "
-            f"'gaia skill info {name} --remote'."
+            f"Retry, or pin another version with 'gaia skill install {name}@<version>' "
+            f"('gaia skill search {name}' shows the latest)."
         ) from exc
     text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
     if not text.strip():
