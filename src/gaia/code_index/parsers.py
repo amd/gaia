@@ -235,44 +235,50 @@ _LANG_PATTERNS: dict = {
 
 # Line-anchored so `endmodule`, `end process` and `// module x` never match.
 _SV_LIFETIME = r"(?:(?:automatic|static)\s+)?"
+# Line start plus any same-line `(* keep_hierarchy = "yes" *)` attributes.
+_SV_START = r"^[ \t]*(?:\(\*.*?\*\)[ \t]*)*"
+# A plain identifier, or an escaped one (`\foo-bar`) that runs to whitespace.
+_SV_NAME = r"(?P<name>\w+|\\\S+)"
 _VERILOG_PATTERNS = [
     (
         "module",
         re.compile(
-            rf"^[ \t]*(?:macro)?module\s+{_SV_LIFETIME}(?P<name>\w+)",
+            rf"{_SV_START}(?:macro)?module\s+{_SV_LIFETIME}{_SV_NAME}",
             re.MULTILINE,
         ),
     ),
     (
         "interface",
         re.compile(
-            rf"^[ \t]*interface\s+(?:class\s+)?{_SV_LIFETIME}(?P<name>\w+)",
+            rf"{_SV_START}interface\s+(?:class\s+)?{_SV_LIFETIME}{_SV_NAME}",
             re.MULTILINE,
         ),
     ),
     (
         "package",
-        re.compile(rf"^[ \t]*package\s+{_SV_LIFETIME}(?P<name>\w+)", re.MULTILINE),
+        re.compile(rf"{_SV_START}package\s+{_SV_LIFETIME}{_SV_NAME}", re.MULTILINE),
     ),
     (
         "program",
-        re.compile(rf"^[ \t]*program\s+{_SV_LIFETIME}(?P<name>\w+)", re.MULTILINE),
+        re.compile(rf"{_SV_START}program\s+{_SV_LIFETIME}{_SV_NAME}", re.MULTILINE),
     ),
     (
         "class",
-        re.compile(r"^[ \t]*(?:virtual\s+)?class\s+(?P<name>\w+)", re.MULTILINE),
+        re.compile(rf"{_SV_START}(?:virtual\s+)?class\s+{_SV_NAME}", re.MULTILINE),
     ),
     (
         "function",
         re.compile(
-            r"^[ \t]*(?:(?:virtual|static|protected|local|extern|pure)\s+)*"
+            rf"{_SV_START}(?:(?:virtual|static|protected|local|extern|pure)\s+)*"
             r"(?:task|function)\b[^;(\n]*?(?P<name>\w+)\s*[(;]",
             re.MULTILINE,
         ),
     ),
     (
         "always",
-        re.compile(r"^[ \t]*(?P<name>always(?:_ff|_comb|_latch)?)\b", re.MULTILINE),
+        re.compile(
+            rf"{_SV_START}(?P<name>always(?:_ff|_comb|_latch)?)\b", re.MULTILINE
+        ),
     ),
 ]
 
@@ -295,6 +301,19 @@ _VHDL_PATTERNS = [
         re.compile(
             r"^[ \t]*package\s+(?:body\s+)?(?P<name>\w+)\s+is\b",
             re.MULTILINE | re.IGNORECASE,
+        ),
+    ),
+    (
+        "configuration",
+        re.compile(
+            r"^[ \t]*configuration\s+(?P<name>\w+)\s+of\s+\w+\s+is\b",
+            re.MULTILINE | re.IGNORECASE,
+        ),
+    ),
+    (
+        "context",
+        re.compile(
+            r"^[ \t]*context\s+(?P<name>\w+)\s+is\b", re.MULTILINE | re.IGNORECASE
         ),
     ),
     (

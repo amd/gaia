@@ -178,9 +178,11 @@ chunks = chunk_code_file("agent.go", source_code, max_size_mb=1.0)
 ```
 
 Hardware-description files (`.v`, `.vh`, `.sv`, `.svh`, `.vhd`, `.vhdl`) are chunked at
-design units: Verilog/SystemVerilog `module`, `interface`, `package`, `class`, `function`/`task`
-and `always*` blocks; VHDL `entity`, `architecture`, `package`, `process` and
-`function`/`procedure`. VHDL keywords match case-insensitively.
+design units: Verilog/SystemVerilog `module`, `interface`, `package`, `program`, `class`,
+`function`/`task` and `always*` blocks, including escaped names (`\foo-bar`) and a
+same-line `(* ... *)` attribute prefix; VHDL `entity`, `architecture`, `package`,
+`configuration`, `context`, `process` and `function`/`procedure`. VHDL keywords match
+case-insensitively.
 
 ## Agent integration: CodeIndexToolsMixin
 

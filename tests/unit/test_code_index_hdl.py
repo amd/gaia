@@ -191,6 +191,94 @@ class TestVerilog:
     def test_lifetime_keyword_is_not_the_name(self, content, expected):
         assert _symbols("t.sv", content) == [expected]
 
+    @pytest.mark.parametrize(
+        "content, expected",
+        [
+            (
+                "module \\esc ;\n  wire y;\nendmodule\nmodule real_one;\nendmodule\n",
+                [("module", "\\esc"), ("module", "real_one")],
+            ),
+            (
+                "module \\foo-bar (input a);\n  assign b = a;\nendmodule\n",
+                [("module", "\\foo-bar")],
+            ),
+            ("macromodule \\m.x ;\nendmodule\n", [("module", "\\m.x")]),
+            ("interface \\if$1 ;\nendinterface\n", [("interface", "\\if$1")]),
+            ("program \\p+q ;\nendprogram\n", [("program", "\\p+q")]),
+            ("package automatic \\pkg* ;\nendpackage\n", [("package", "\\pkg*")]),
+            ("virtual class \\c! ;\nendclass\n", [("class", "\\c!")]),
+        ],
+    )
+    def test_escaped_identifier_names_a_unit(self, content, expected):
+        assert _symbols("e.sv", content) == expected
+
+    def test_escaped_module_keeps_its_ports_and_body(self):
+        content = (
+            "module \\foo-bar (input a, output b);\n"
+            "  assign b = a;\n"
+            "endmodule\n"
+            "module real_one;\n"
+            "endmodule\n"
+        )
+        chunks = chunk_code_file("e.v", content)
+        esc = _chunk(chunks, "module", "\\foo-bar")
+        assert (esc.start_line, esc.end_line) == (1, 3)
+        assert "input a, output b" in esc.content
+        assert "assign b = a;" in esc.content
+        assert "real_one" not in esc.content
+
+    @pytest.mark.parametrize(
+        "header, expected",
+        [
+            (
+                '(* keep_hierarchy = "yes" *) module attr_m(input a, output b);',
+                ("module", "attr_m"),
+            ),
+            ("(* a *) (* b = 1 *) module m2 (input a, output b);", ("module", "m2")),
+            (
+                "  (*dont_touch*)interface bus_if (input a, output b);",
+                ("interface", "bus_if"),
+            ),
+            ("(* x *) package p; // input a, output b", ("package", "p")),
+            ("(* x *) program automatic t(input a, output b);", ("program", "t")),
+            ("(* x *) virtual class c; // input a, output b", ("class", "c")),
+            ("(* keep *) module \\esc-m (input a, output b);", ("module", "\\esc-m")),
+        ],
+    )
+    def test_same_line_attribute_before_unit(self, header, expected):
+        content = f"{header}\n  assign b = a;\nend\nmodule after;\nendmodule\n"
+        chunks = chunk_code_file("a.sv", content)
+        assert [(c.symbol_type, c.symbol_name) for c in chunks] == [
+            expected,
+            ("module", "after"),
+        ]
+        unit = chunks[0]
+        assert unit.start_line == 1
+        assert unit.content.startswith(header)
+        assert "input a, output b" in unit.content
+        assert "assign b = a;" in unit.content
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "  reg [3:0] module_cnt;",
+            "  wire interface_ok, package_id, program_en, class_sel;",
+            "  (* full_case, parallel_case *) case (sel)",
+            "  (* keep *) wire k;",
+            '  (* mark_debug = "true" *) reg [7:0] module_q;',
+            '  initial $display("module \\\\x and \\\\ module y");',
+            '  initial $display("\\n module fake;");',
+            "  wire \\bus[0] ;",
+            "  assign \\bus[0] = module_cnt[0];",
+            "  // (* keep *) module commented_attr;",
+        ],
+    )
+    def test_body_lines_open_no_chunk(self, line):
+        content = f"module top;\n{line}\nendmodule\n"
+        chunks = chunk_code_file("fp.sv", content)
+        assert [(c.symbol_type, c.symbol_name) for c in chunks] == [("module", "top")]
+        assert line in chunks[0].content
+
     def test_module_without_ports(self):
         assert _symbols("t.v", "module tb;\n  initial $finish;\nendmodule\n") == [
             ("module", "tb")
@@ -247,6 +335,43 @@ class TestVhdl:
             "-- entity commented is\n"
         )
         assert _symbols("i.vhd", content) == [("architecture", "a")]
+
+    @pytest.mark.parametrize(
+        "content, expected, body",
+        [
+            (
+                "configuration cfg of top is\n  for rtl\n  end for;\n"
+                "end configuration cfg;\n",
+                ("configuration", "cfg"),
+                "for rtl",
+            ),
+            (
+                "CONFIGURATION Cfg OF Top IS\n  FOR rtl\n  END FOR;\nEND;\n",
+                ("configuration", "Cfg"),
+                "FOR rtl",
+            ),
+            (
+                "context ctx is\n  library ieee;\n  use ieee.std_logic_1164.all;\n"
+                "end context ctx;\n",
+                ("context", "ctx"),
+                "library ieee;",
+            ),
+        ],
+    )
+    def test_configuration_and_context_units(self, content, expected, body):
+        chunks = chunk_code_file("c.vhd", content)
+        assert [(c.symbol_type, c.symbol_name) for c in chunks] == [expected]
+        assert body in chunks[0].content
+
+    def test_configuration_and_context_references_open_no_chunk(self):
+        content = (
+            "context work.ctx;\n"
+            "architecture a of b is\n"
+            "  for u1 : comp use configuration work.cfg;\n"
+            "begin\n"
+            "end architecture a;\n"
+        )
+        assert _symbols("r.vhd", content) == [("architecture", "a")]
 
 
 class TestIndexing:
