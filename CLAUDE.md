@@ -524,6 +524,7 @@ gaia llm "Hello"                   # Test LLM (starts the backend on its own)
 gaia chat                          # Interactive chat
 gaia chat --ui                     # Agent UI (browser-based)
 gaia -p "Hello" --model <id>       # One-shot headless run (like claude -p)
+gaia -p "Review this" --attempts 2  # Two independent attempts, then a combining turn
 ```
 
 **Never tell anyone to run `lemonade-server serve`** — Lemonade 10.7/10.8 removed that

@@ -6,7 +6,7 @@
 import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
-import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
+import type { AgentCapabilities, SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
@@ -1240,6 +1240,11 @@ export async function setInternet(sessionId: string, on: boolean): Promise<Sessi
 
 export async function getOutputs(sessionId: string): Promise<SessionOutputs> {
     return apiFetch('GET', `${sessionPath(sessionId)}/outputs`);
+}
+
+/** The tools the chat's agent has; a 409 when it isn't running yet. */
+export async function getCapabilities(sessionId: string): Promise<AgentCapabilities> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/capabilities`);
 }
 
 export async function getSessionChanges(sessionId: string): Promise<SessionChanges> {

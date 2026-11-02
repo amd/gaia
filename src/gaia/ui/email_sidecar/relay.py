@@ -639,10 +639,11 @@ def relay_query(
         body["model"] = model_id
     if max_steps is not None:
         body["max_steps"] = max_steps
-    if profile.sends_session_id and session_id:
-        # Contract >= 2.12. Without it the sidecar builds a fresh agent per
-        # turn, so a document indexed on turn 1 is gone by turn 2. Gated by
-        # profile because both request models are extra="forbid".
+    if profile.min_session_id_api_version is not None and session_id:
+        # Without it the sidecar builds a fresh agent per turn, so what turn 1
+        # surfaced is gone by turn 2. The caller passes it only to a contract
+        # that takes it (profiles.session_id_supported); the request models
+        # are extra="forbid".
         body["session_id"] = session_id
     if documents:
         body["documents"] = list(documents)
