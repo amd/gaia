@@ -633,38 +633,35 @@ def workspace_diff(workdir: Path, original: Path) -> str:
 
 # ---------------------------------------------------------------------------
 # Running the flagship
-#: ``eval/tasks`` as a whole path segment; ``_TaskDirMatcher`` then decides
-#: whether the path leading to it is this checkout's (``lm_eval/tasks`` and a
-#: project's own ``tests/eval/tasks`` are not).
-_ANSWER_KEY_PATH = re.compile(r"(?<![\w.-])eval[\\/]+tasks(?![\w.-])", re.IGNORECASE)
-#: Characters that end a path when walking back from ``eval/tasks``. A space,
-#: quote or parenthesis does not: ``"$HOME"/"OneDrive - AMD (Work)"/gaia``.
-_PATH_STOP = re.compile(r"[\t\r\n=;|&<>\[\],`]")
-#: What a path may begin right after, inside the stretch walked back over.
-_PATH_BEGIN = re.compile(r"[ (\"']+")
-#: How a shell or script may spell the home folder.
-_HOME_SPELLINGS = (
-    "~",
-    "$HOME",
-    "${HOME}",
-    "$USERPROFILE",
-    "${USERPROFILE}",
-    "%USERPROFILE%",
-    "$env:USERPROFILE",
-    "%HOMEDRIVE%%HOMEPATH%",
-    "$env:HOMEDRIVE$env:HOMEPATH",
+#: ``eval/tasks`` named anywhere, possibly split by quotes: worth a closer look.
+_ANSWER_KEY_MENTION = re.compile(r"eval[\\/\"'.]+tasks", re.IGNORECASE)
+#: Characters a path may begin right after. None ends a path, since each can
+#: sit inside a folder name too (``OneDrive - Acme, Inc``, ``R&D``, ``a [b]``).
+_BEGIN = " \t\r\n(=;|&<>[,`"
+_BEGIN_RUN = re.compile("[" + re.escape(_BEGIN) + "]+")
+_AT_START = "(^|[" + re.escape(_BEGIN) + "])"
+_SHELL_ESCAPE = re.compile(r"\\([ ()\[\]&;,=`])")
+_QUOTE = re.compile(r"[\"']")
+#: A quote that opens a string, with any Python prefix: ``open(r'/c/x')``.
+_OPENING_QUOTE = re.compile(_AT_START + r"(?:[rbfu]{1,2})?[\"']", re.IGNORECASE)
+#: Quotes that join pieces of one path: ``"C:/x/gaia"/"eval/tasks"``, ``'a/''b'``.
+_JOINING_QUOTES = re.compile(r"[\"']+(?=[\\/])|(?<=[\\/])[\"']+|[\"']{2,}")
+#: Every separator but a lone ``/``, which needs no rewriting.
+_SLASHES = re.compile(r"\\[\\/]*|/[\\/]+")
+#: ``/./``, which names the folder it is in.
+_DOT_FOLDER = re.compile(r"/\.(?=/)")
+#: ``/c/`` (MSYS) and ``/mnt/c/`` (WSL) at a path start: drive C.
+_POSIX_DRIVE = re.compile(_AT_START + r"/(?:mnt/)?([a-z])/")
+#: How a shell or script may spell the home folder, casefolded.
+_HOME_TOKEN = re.compile(
+    _AT_START + r"(?:~|\$home|\$\{home\}|\$userprofile|\$\{userprofile\}|%userprofile%"
+    r"|\$env:userprofile|%homedrive%%homepath%|\$env:homedrive\$env:homepath)(?=/)"
 )
-#: Walk-back allowance beyond the spellings, for quotes, escapes and extra ``..``.
+#: ``eval/tasks`` as whole segments of normalized text (literal first, for speed).
+_TASK_DIR = re.compile(r"eval/tasks(?<![\w.-]eval/tasks)(?![\w.-])")
+_DRIVE = re.compile(r"[a-z]:")
+#: Walk-back allowance beyond the path lengths, for quotes, escapes and extra ``..``.
 _WALK_BACK_SLACK = 128
-#: Path starts tried per mention; a real path has one or two.
-_MAX_BEGINS = 16
-_SLASHES = re.compile(r"[\\/]+")
-_SHELL_ESCAPE = re.compile(r"\\([ ()])")
-_DOT_SEGMENT = re.compile(r"(?:^|[\\/])\.\.?(?:[\\/]|$)")
-_ROOT = re.compile(r"[a-z]:/|/")
-_ROOTED_START = re.compile(r"[\\/~$%]|[A-Za-z]:")
-#: ``C:..\x``: relative to the current folder on drive C.
-_DRIVE_RELATIVE = re.compile(r"[A-Za-z]:(?=\.)")
 #: Field names only the task file carries.
 ANSWER_KEY_FIELDS = ("genuine_answer", "must_establish", "wrong_answers")
 #: One of them as a mapping key: JSON, JSON inside a JSON string, or a Python repr.
@@ -721,109 +718,165 @@ def _raw_call_requests(transcript: Mapping[str, Any]) -> List[Tuple[str, Any]]:
     return found
 
 
-def _clean_path(raw: str) -> str:
-    """*raw* without quotes or shell escapes, one ``/`` per separator, casefolded."""
-    if "\\ " in raw:
-        raw = _SHELL_ESCAPE.sub(r"\1", raw)
-    return _SLASHES.sub("/", raw.replace('"', "").replace("'", "")).casefold()
+def _normalize(text: str) -> str:
+    """*text* casefolded with one ``/`` per separator.
 
-
-def _resolve(path: str, base: str = "") -> str:
-    """A cleaned *path* with ``.`` and ``..`` applied, joined to *base* if relative.
-
-    ``..`` stops at the root (``/`` or ``c:/``), as Windows and POSIX do.
+    A quote that opens a string, or stands alone, becomes a space, where a
+    path may begin; one against a separator is dropped, so
+    ``"C:/x/gaia"/"eval/tasks"`` reads as one path.
     """
-    if base and not _ROOT.match(path):
-        path = f"{base}/{path}"
-    root = _ROOT.match(path)
-    prefix = root.group(0) if root else ""
-    parts: List[str] = []
-    for seg in path[len(prefix) :].split("/"):
-        if seg in ("", "."):
-            continue
-        if seg == ".." and parts and parts[-1] != "..":
-            parts.pop()
-        elif seg != ".." or not prefix:
-            parts.append(seg)
-    return prefix + "/".join(parts)
+    if '"' in text or "'" in text:
+        text = _OPENING_QUOTE.sub(lambda m: m[1] + " ", text)
+        text = _QUOTE.sub(" ", _JOINING_QUOTES.sub("", text))
+    text = _SLASHES.sub("/", text).casefold()
+    return _DOT_FOLDER.sub("", text) if "/./" in text else text
 
 
 class _TaskDirMatcher:
-    """Whether a path ending in ``eval/tasks`` is this checkout's.
+    """Whether a string names this checkout's ``eval/tasks``.
 
-    A mention costs time bounded by the spellings' length, never by the
-    length of the text around it.
+    Linear in the string's length: a substring search for the absolute
+    path, then a walk back from each ``eval/tasks`` that ends at the window
+    or a set number of mentions back, so no text is walked more than that
+    many times.
     """
 
     def __init__(self, workdir: Optional[Path]):
-        native = str(TASKS_DIR)
-        self.target = _resolve(_clean_path(native))
-        spellings = {self.target}
-        drive, rest = os.path.splitdrive(native)
-        if len(drive) == 2 and drive[1] == ":":
-            spellings.add(_resolve(_clean_path(f"/{drive[0]}{rest}")))
-        home = Path(os.path.expanduser("~"))
-        if TASKS_DIR.is_relative_to(home):
-            rel = TASKS_DIR.relative_to(home).as_posix()
-            spellings.update(
-                _resolve(_clean_path(f"{h}/{rel}")) for h in _HOME_SPELLINGS
-            )
-        self.spellings = tuple(spellings)
-        self.checkout = TASKS_DIR.parent.parent.name.casefold()
-        self.base = _resolve(_clean_path(str(workdir))) if workdir else ""
-        # From a workdir above the checkout, a relative path needs no ``..``.
-        above = self.base.rstrip("/") + "/"
-        self.below = (
-            self.target[len(above) :]
-            if self.base and self.target.startswith(above)
-            else ""
-        )
-        longest = max(len(s) for s in self.spellings)
-        self.window = 2 * longest + 2 * len(self.base) + _WALK_BACK_SLACK
-        # No other ``eval/tasks`` sits inside the path, so a mention bounds the next.
-        self.chained = not _ANSWER_KEY_PATH.search(str(TASKS_DIR.parent))
+        self.home = _normalize(os.path.expanduser("~")).rstrip("/")
+        target = _normalize(str(TASKS_DIR)).rstrip("/")
+        self.drive = _DRIVE.match(target) is not None
+        self.parts = [self._fold(p) for p in target.split("/")]
+        self.exact = re.compile(re.escape(target) + r"(?![\w.-])")
+        base = _normalize(str(workdir)).rstrip("/") if workdir else ""
+        self.base = [self._fold(p) for p in base.split("/")] if base else []
+        self.common = 0
+        for mine, theirs in zip(self.base, self.parts):
+            if mine != theirs:
+                break
+            self.common += 1
+        self.longest = max(len(p) for p in self.parts) + 3
+        self.window = 2 * len(target) + 2 * len(base) + _WALK_BACK_SLACK
+        # A walk may pass back through one other ``eval/tasks`` (``x/eval/tasks/../..``).
+        self.chain = len(_TASK_DIR.findall(target)) + 1
+        # From a workdir outside the checkout, every path to it names its folder.
+        outside = self.common < len(self.parts) - 2
+        self.anchor = self.parts[-3] if outside and len(self.parts) > 2 else ""
 
-    def names_task_dir(self, text: str, hit: "re.Match[str]", prev_end: int) -> bool:
-        start, end = hit.start(), hit.end()
-        if start and text[start - 1] in "\\/":
-            # Cheap first: the folder in front must be the checkout's, or a dot.
-            tail = text[max(0, start - 2 * len(self.checkout) - 8) : start]
-            if not _clean_path(tail).rstrip("/").endswith((self.checkout, ".")):
-                return False
-        elif self.below != "eval/tasks":
-            return False
-        lo = max(0, end - self.window)
-        bounded = lo == 0
-        if self.chained and prev_end > lo:
-            lo, bounded = prev_end, False
-        for stop in _PATH_STOP.finditer(text, lo, start):
-            lo, bounded = stop.end(), True
-        seg = text[lo:end]
-        path = _clean_path(seg)
-        # endswith: an absolute spelling may sit behind a prefix (``\\?\``, ``/mnt``).
-        if path.endswith(self.spellings):
-            return True
-        dotted = _DOT_SEGMENT.search(seg) is not None
-        if not dotted and not (self.below and path.endswith(self.below)):
-            return False
-        begins = [m.end() for m in _PATH_BEGIN.finditer(seg)]
-        if bounded:
-            begins.insert(0, 0)
-        for begin in reversed(begins[-_MAX_BEGINS:]):
-            raw = seg[begin:]
-            if self.below and _clean_path(raw) == self.below:
+    def _fold(self, segment: str) -> str:
+        # Windows drops a folder name's trailing dots and spaces.
+        if self.drive and segment not in (".", ".."):
+            return segment.rstrip(". ")
+        return segment
+
+    def names_task_dir(self, text: str) -> bool:
+        # ``a\ b`` is a shell escape or a Windows separator; read it both ways
+        # only when the string also holds a backslash that is not an escape.
+        variants = [text]
+        if _SHELL_ESCAPE.search(text):
+            unescaped = _SHELL_ESCAPE.sub(r"\1", text)
+            variants = [unescaped, text] if "\\" in unescaped else [unescaped]
+        for variant in variants:
+            norm = _normalize(variant)
+            if self.drive:
+                norm = _POSIX_DRIVE.sub(lambda m: f"{m[1]}{m[2]}:/", norm)
+            if "~" in norm or "$" in norm or "%" in norm:
+                norm = _HOME_TOKEN.sub(lambda m: m[1] + self.home, norm)
+            if self.exact.search(norm) or self._walks_to_target(norm):
                 return True
-            if not dotted:
-                continue
-            if _DRIVE_RELATIVE.match(raw) and self.base.startswith(raw[:2].lower()):
-                raw = raw[2:]
-            if raw.startswith(".") and self.base:
-                if _resolve(_clean_path(raw), self.base) == self.target:
-                    return True
-            elif _ROOTED_START.match(raw):
-                if _resolve(_clean_path(raw)).endswith(self.spellings):
-                    return True
         return False
+
+    def _walks_to_target(self, text: str) -> bool:
+        ends: List[int] = []
+        for hit in _TASK_DIR.finditer(text):
+            lo = max(0, hit.start() - self.window)
+            if len(ends) >= self.chain:
+                lo = max(lo, ends[-self.chain])
+            if not self.anchor or text.rfind(self.anchor, lo, hit.start()) >= 0:
+                if self._walk(text, hit.start(), lo):
+                    return True
+            ends.append(hit.end())
+        return False
+
+    def _walk(self, text: str, pos: int, lo: int) -> bool:
+        """Resolve right to left from ``eval/tasks`` at *pos*, trying each start.
+
+        ``..`` only removes folders to its left, so a start is checked in
+        constant time from the pops still owed and the target folders matched.
+        """
+        owed, kept = 0, 2  # pops still owed, target folders matched
+        if pos == 0 or text[pos - 1] != "/":
+            return self._relative(owed, kept)
+        parts, find_run = self.parts, _BEGIN_RUN.search
+        while True:  # ``_step``, inlined: this loop is the hot path
+            end = pos - 1
+            slash = text.rfind("/", lo, end)
+            start = slash + 1 if slash >= 0 else lo
+            # Starts inside this folder; any longer than a target folder is
+            # a name the next ``..`` removes, so one check covers them all.
+            tail = max(start, end - self.longest)
+            run = find_run(text, tail, end)
+            inside = run is not None or (
+                owed and tail > start and find_run(text, start, tail)
+            )
+            while run is not None:
+                first = text[run.end() : end]
+                if self._starts(first, owed, kept):
+                    return True
+                run = find_run(text, run.end(), end)
+                # A path starts inside this name (``x && cat ..``): not a folder.
+                if run is None and (first in ("", ".", "..") or first[1:2] == ":"):
+                    return False
+            if inside and owed and self._relative(owed - 1, kept):
+                return True
+            if slash < 0:
+                return start == 0 and self._starts(text[:end], owed, kept)
+            seg = text[start:end]
+            if seg == "..":
+                owed += 1
+            elif seg == ".":
+                pass
+            elif len(seg) == 2 and seg[1] == ":":
+                return self._rooted(seg, kept)
+            elif owed:
+                owed -= 1
+            elif kept < len(parts) and self._fold(seg) == parts[-kept - 1]:
+                kept += 1
+            else:
+                return False
+            pos = start
+
+    def _step(self, segment: str, owed: int, kept: int) -> Optional[Tuple[int, int]]:
+        """The walk's state with *segment* added on the left, or None if off target."""
+        if segment == "..":
+            return owed + 1, kept
+        if segment == ".":
+            return owed, kept
+        if owed:
+            return owed - 1, kept
+        if kept < len(self.parts) and self._fold(segment) == self.parts[-kept - 1]:
+            return owed, kept + 1
+        return None
+
+    def _starts(self, first: str, owed: int, kept: int) -> bool:
+        """Whether a path whose first folder is *first* resolves to the target."""
+        if first == "":
+            return not self.drive and kept == len(self.parts) - 1
+        if _DRIVE.fullmatch(first):
+            return self._rooted(first, kept)
+        if first[2:] in (".", "..") and self.base and first[:2] == self.base[0]:
+            first = first[2:]  # ``C:..``: relative to the current folder on C
+        state = self._step(first, owed, kept)
+        return state is not None and self._relative(*state)
+
+    def _rooted(self, drive: str, kept: int) -> bool:
+        return drive == self.parts[0] and kept == len(self.parts) - 1
+
+    def _relative(self, owed: int, kept: int) -> bool:
+        """Whether the workdir, *owed* folders up, then *kept* is the target."""
+        if not self.base:
+            return False
+        left = max(len(self.base) - owed, 1)
+        return left == len(self.parts) - kept and left <= self.common
 
 
 def answer_key_contact(
@@ -840,12 +893,12 @@ def answer_key_contact(
     matcher: Optional[_TaskDirMatcher] = None
     for name, args in requests + _raw_call_requests(transcript):
         for text in _strings(args):
-            prev_end = 0
-            for hit in _ANSWER_KEY_PATH.finditer(text):
-                matcher = matcher or _TaskDirMatcher(workdir)
-                if matcher.names_task_dir(text, hit, prev_end):
-                    return f"{name} named {hit.group(0)!r}"
-                prev_end = hit.end()
+            mention = _ANSWER_KEY_MENTION.search(text)
+            if mention is None:
+                continue
+            matcher = matcher or _TaskDirMatcher(workdir)
+            if matcher.names_task_dir(text):
+                return f"{name} named {mention.group(0)!r}"
     for name, _args, result in transcripts.tool_calls(transcript):
         if result is None:
             continue

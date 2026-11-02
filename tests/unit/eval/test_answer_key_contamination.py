@@ -503,6 +503,187 @@ def test_shell_spellings_of_another_folder_are_not_the_key(monkeypatch, path):
     assert ft.answer_key_contact(transcript, PAREN_WORKDIR) == ""
 
 
+# --- a checkout path holding shell punctuation --------------------------------
+
+PUNCT_HOME = "C:/Users/kovtchar"
+PUNCT_WORKDIR = Path(PUNCT_HOME, "AppData", "Local", "Temp", "gaia-bench", "t")
+
+
+def _punct_reads(folder):
+    key = f"{PUNCT_HOME}/{folder}/gaia/eval/tasks/tasks.json"
+    rel = os.path.relpath(key, PUNCT_WORKDIR).replace("\\", "/")
+    return {
+        "read_file": ("read_file", {"path": key}),
+        "backslashes": ("read_file", {"path": key.replace("/", "\\")}),
+        "quoted": ("Bash", {"command": f'cat "{key}"'}),
+        "python": ("run_python", {"code": f"print(open(r'{key}').read())"}),
+        "home": ("Bash", {"command": f'cat "~/{folder}/gaia/eval/tasks/tasks.json"'}),
+        "relative": ("read_file", {"path": rel}),
+        "relative quoted": ("Bash", {"command": f"jq . '{rel}'"}),
+        "dotted": ("read_file", {"path": key.replace("/gaia/", "/gaia/src/../")}),
+    }
+
+
+#: Folder names holding each character that once ended a path.
+PUNCT_FOLDERS = [
+    "OneDrive - Acme, Inc",
+    "R&D",
+    "gaia [old]",
+    "a=b",
+    "x;y",
+    "back`tick",
+    "(x)",
+]
+
+
+@pytest.mark.parametrize("folder", PUNCT_FOLDERS)
+@pytest.mark.parametrize("spelling", list(_punct_reads("f")))
+def test_a_checkout_path_with_shell_punctuation_is_caught(
+    monkeypatch, folder, spelling
+):
+    _spaced(monkeypatch, PUNCT_HOME, f"{folder}/gaia")
+    name, args = _punct_reads(folder)[spelling]
+    why = ft.answer_key_contact(_gaia(_tool(name, args, VALUES_ONLY)), PUNCT_WORKDIR)
+    assert why.startswith(f"{name} named "), (folder, args)
+
+
+def test_a_folder_name_with_a_trailing_dot_matches_without_it(monkeypatch):
+    # Windows drops it: ``Inc.`` and ``Inc`` are the same folder.
+    _spaced(monkeypatch, PUNCT_HOME, "OneDrive - Acme, Inc./gaia")
+    rel = "../../../../../OneDrive - Acme, Inc/gaia/eval/tasks/tasks.json"
+    why = ft.answer_key_contact(
+        _gaia(_tool("read_file", {"path": rel}, "")), PUNCT_WORKDIR
+    )
+    assert why.startswith("read_file named ")
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        {"path": f"{PUNCT_HOME}/R&D/gaia2/eval/tasks/tasks.json"},
+        {"path": f"{PUNCT_HOME}/R/gaia/eval/tasks/tasks.json"},
+        {"path": "D:/R&D/gaia/eval/tasks/tasks.json"},
+        {"command": f'cat "{PUNCT_HOME}/R&D/gaia/x/eval/tasks/tasks.json"'},
+        {"command": "cat ~/D/gaia/eval/tasks/tasks.json"},
+        # A command after ``&&`` is not a folder ``..`` can step out of.
+        {"command": f"cd '{PUNCT_HOME}/R&D/gaia/x' && cat ../../eval/tasks"},
+        {"command": f"cd {PUNCT_HOME}/R&D/gaia/x&&cat ../eval/tasks"},
+        {"command": "ls eval/tasks; ls ../eval/tasks, ./eval/tasks"},
+    ],
+)
+def test_punctuated_paths_that_are_not_the_key(monkeypatch, call):
+    _spaced(monkeypatch, PUNCT_HOME, "R&D/gaia")
+    transcript = _gaia(_tool("Bash", call, VALUES_ONLY))
+    assert ft.answer_key_contact(transcript, PUNCT_WORKDIR) == ""
+
+
+# --- many spaces, quotes split at a separator, escaped parentheses ------------
+
+
+@pytest.mark.parametrize("folders", [15, 16, 17, 30])
+def test_any_number_of_spaces_before_the_key(monkeypatch, folders):
+    spaced = "/".join(f"s{i} x" for i in range(folders))
+    _spaced(monkeypatch, "C:/r", f"{spaced}/gaia")
+    key = f"C:/r/{spaced}/gaia/eval/tasks/tasks.json"
+    workdir = Path("C:/r/tmp/run")
+    rel = os.path.relpath(key, workdir).replace("\\", "/")
+    for name, args in (
+        ("read_file", {"path": rel}),
+        ("Bash", {"command": f'cat "{rel}"'}),
+        ("Bash", {"command": "cat " + rel.replace(" ", "\\ ")}),
+        ("read_file", {"path": key.replace("/gaia/", "/gaia/src/../")}),
+        ("read_file", {"path": "../" * 25 + key[3:]}),
+        ("read_file", {"path": "C:" + "../" * 25 + key[3:]}),
+    ):
+        why = ft.answer_key_contact(_gaia(_tool(name, args, "")), workdir)
+        assert why.startswith(f"{name} named "), args
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'cat "{co}"/"eval/tasks/tasks.json"',
+        "cat '{co}/''eval/tasks/tasks.json'",
+        'cat "{co}/"eval/tasks/tasks.json',
+        'cat "$HOME/src/gaia"/eval/tasks/tasks.json',
+        'cat "$HOME/src/gaia"/"eval/tasks/tasks.json"',
+        "cat '{co}'/'eval'/'tasks'/'tasks.json'",
+    ],
+)
+def test_quoted_pieces_split_at_a_separator(monkeypatch, command):
+    _spaced(monkeypatch, PUNCT_HOME, "src/gaia")
+    call = {"command": command.format(co=f"{PUNCT_HOME}/src/gaia")}
+    why = ft.answer_key_contact(_gaia(_tool("Bash", call, "")), PUNCT_WORKDIR)
+    assert why.startswith("Bash named ")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"C:/Users/kovtchar/src/gaia\(copy\)/eval/tasks/tasks.json",
+        r"~/src/gaia\(copy\)/eval/tasks/tasks.json",
+        r"/c/Users/kovtchar/src/gaia\(copy\)/eval/tasks/tasks.json",
+    ],
+)
+def test_shell_escaped_parentheses_without_a_space(monkeypatch, path):
+    _spaced(monkeypatch, PUNCT_HOME, "src/gaia(copy)")
+    call = {"command": f"jq . {path}"}
+    why = ft.answer_key_contact(_gaia(_tool("Bash", call, "")), PUNCT_WORKDIR)
+    assert why.startswith("Bash named ")
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "open(r'/c/Users/kovtchar/src/gaia/eval/tasks/tasks.json')",
+        "open(r'/mnt/c/Users/kovtchar/src/gaia/eval/tasks/tasks.json')",
+        "open(b'C:\\\\Users\\\\kovtchar\\\\src\\\\gaia\\\\eval\\\\tasks')",
+        "for p in ['eval/tasks', r'C:/Users/kovtchar/src/gaia/eval/tasks']: ...",
+    ],
+)
+def test_a_python_string_prefix_does_not_hide_the_path(monkeypatch, code):
+    _spaced(monkeypatch, PUNCT_HOME, "src/gaia")
+    why = ft.answer_key_contact(
+        _gaia(_tool("run_python", {"code": code}, "")), PUNCT_WORKDIR
+    )
+    assert why.startswith("run_python named ")
+
+
+def test_a_path_through_another_eval_tasks_and_back_out(monkeypatch):
+    _spaced(monkeypatch, PUNCT_HOME, "src/gaia")
+    rel = os.path.relpath(f"{PUNCT_HOME}/src/gaia/eval/tasks", PUNCT_WORKDIR)
+    for path in (
+        "$HOME/eval/tasks/../../src/gaia/eval/tasks/tasks.json",
+        f"./eval/tasks/../../{rel}/tasks.json".replace("\\", "/"),
+    ):
+        call = {"command": f"cat {path}"}
+        why = ft.answer_key_contact(_gaia(_tool("Bash", call, "")), PUNCT_WORKDIR)
+        assert why.startswith("Bash named "), path
+    # One ``..`` short of stepping back out.
+    call = {"command": "cat $HOME/eval/tasks/../src/gaia/eval/tasks/tasks.json"}
+    assert ft.answer_key_contact(_gaia(_tool("Bash", call, "")), PUNCT_WORKDIR) == ""
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["{co}/eval/./tasks/tasks.json", "{co}/./eval/././tasks", "{co}/eval/.//tasks"],
+)
+def test_a_dot_folder_inside_the_key_path(monkeypatch, path):
+    _spaced(monkeypatch, PUNCT_HOME, "src/gaia")
+    call = {"command": "cat " + path.format(co=f"{PUNCT_HOME}/src/gaia")}
+    why = ft.answer_key_contact(_gaia(_tool("Bash", call, "")), PUNCT_WORKDIR)
+    assert why.startswith("Bash named ")
+
+
+def test_a_long_folder_name_that_dot_dot_removes():
+    long_name = "x" * 300
+    call = {"command": f"cd a/b && cat {long_name}/../../eval/tasks/tasks.json"}
+    workdir = ft.REPO_ROOT / "work"
+    assert ft.answer_key_contact(_gaia(_tool("Bash", call, "")), workdir)
+    call = {"command": f"cd a/b && cat {long_name}/../eval/tasks/tasks.json"}
+    assert ft.answer_key_contact(_gaia(_tool("Bash", call, "")), workdir) == ""
+
+
 # --- large tool calls stay fast ----------------------------------------------
 
 #: Generous: each case takes a few hundredths of a second; a scan quadratic in
@@ -551,6 +732,78 @@ def test_a_long_write_still_names_the_key_at_its_end():
     why, seconds = _timed(_gaia(_tool("write_file", {"content": content}, "ok")))
     assert why.startswith("write_file named ")
     assert seconds < FAST_ENOUGH, f"{seconds:.2f}s"
+
+
+def _adversarial_units(checkout):
+    """Repeated units that make every ``eval/tasks`` worth a closer look."""
+    sp16 = " a" * 16 + " "
+    return {
+        "16 spaces, checkout": f"{sp16}{checkout}/eval/tasks ",
+        "16 spaces, dot": f"{sp16}../eval/tasks ",
+        "16 spaces, many ..": sp16 + "../" * 30 + f"{checkout}/eval/tasks ",
+        "quotes and parens": f" '\"( ./{checkout}/./eval/tasks",
+        "quotes at separators": f' "./{checkout}"/"eval/tasks" ',
+        "escaped spaces": "cd\\ a\\ b\\ c\\ d\\ e\\ f\\ g\\ h\\ i\\ j\\ k\\ l\\ m\\ n\\ o\\ p"
+        f"/{checkout}/../eval/tasks ",
+        "commas": f", ./{checkout}/./eval/tasks",
+        "home and msys tokens": " ~/eval/tasks /c/eval/tasks /mnt/c/x/../eval/tasks",
+        "long folder full of spaces": " a" * 2000 + f"/{checkout}/eval/tasks ",
+        "escapes, no checkout": "a\\ b/../a b/../a b/../eval/tasks ",
+        "slashes after eval": "eval" + "/" * 5000,
+    }
+
+
+def _scan_seconds(text, workdir):
+    started = time.perf_counter()
+    why = ft.answer_key_contact(
+        _gaia(_tool("write_file", {"content": text}, "ok")), workdir
+    )
+    return why, time.perf_counter() - started
+
+
+def _assert_linear(unit, workdir):
+    """1 MB scans in well under a second and ~4x the time of 256 KB, not 16x."""
+    small, big = ((unit * (n // len(unit) + 1))[:n] for n in (256_000, 1_000_000))
+    _scan_seconds(small, workdir)  # warm caches
+    why_small, t_small = _scan_seconds(small, workdir)
+    why_big, t_big = _scan_seconds(big, workdir)
+    assert why_small == why_big == ""
+    assert t_big < 2.0, f"{t_big:.2f}s for 1 MB"
+    assert t_big < 8 * t_small + 0.2, f"{t_small:.3f}s -> {t_big:.3f}s"
+
+
+@pytest.mark.parametrize("label", list(_adversarial_units("c")))
+def test_adversarial_mentions_scan_in_linear_time(label):
+    checkout = ft.TASKS_DIR.parent.parent
+    unit = _adversarial_units(checkout.name)[label]
+    _assert_linear(unit, checkout.parent / "tmp-run" / "toybox")
+
+
+@pytest.mark.parametrize(
+    "unit",
+    [
+        " a" * 6 + " ./gaia/eval/tasks",
+        " '\"( ./gaia/./eval/tasks",
+        "../../../../../gaia/eval/tasks",
+    ],
+)
+def test_a_checkout_under_another_eval_tasks_still_scans_in_linear_time(
+    monkeypatch, unit
+):
+    # A path holding ``eval/tasks`` twice, so a walk must cross a mention.
+    deep = "/".join(f"deep_folder_name_{i:02d}" for i in range(10))
+    monkeypatch.setattr(
+        ft, "TASKS_DIR", Path(f"C:/Users/x/{deep}/eval/tasks/gaia/eval/tasks")
+    )
+    monkeypatch.setattr(
+        os.path, "expanduser", lambda p: "C:/Users/x" if p == "~" else p
+    )
+    _assert_linear(
+        unit, Path("C:/Users/x/" + "/".join(f"wd_{i:02d}" for i in range(10)))
+    )
+    key = f"C:/Users/x/{deep}/eval/tasks/gaia/eval/tasks/tasks.json"
+    why, _s = _scan_seconds(f"cat {key.replace('/gaia/', '/gaia/x/../')}", None)
+    assert why.startswith("write_file named ")
 
 
 # --- the task fails, and the gate counts it -----------------------------------
