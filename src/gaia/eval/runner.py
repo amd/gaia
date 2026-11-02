@@ -17,6 +17,7 @@ Usage:
 
 import contextlib
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -35,11 +36,14 @@ import requests
 import yaml
 
 from gaia.eval.claude_outage import (
+    API_KEY_VAR,
     CREDENTIAL,
     HEADLINES,
     QUOTA,
     UNREACHABLE,
     classify_driver_failure,
+    dotenv_only_api_key,
+    driver_api_key,
     switch_to_backup_account,
 )
 from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
@@ -854,8 +858,8 @@ def find_scenarios(
             sid = data.get("id")
             if sid in scenarios_by_id:
                 prev_path = scenarios_by_id[sid][0]
-                logger.info(
-                    "Scenario '%s' from %s overrides built-in at %s",
+                logger.warning(
+                    "Scenario '%s' from %s overrides %s",
                     sid,
                     path,
                     prev_path,
@@ -880,6 +884,133 @@ def find_scenarios(
             continue
         scenarios.append((path, data))
     return scenarios
+
+
+def _is_builtin_scenario(path) -> bool:
+    try:
+        Path(path).resolve().relative_to(SCENARIOS_DIR.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _builtin_scenario_ids() -> set:
+    ids = set()
+    for path in sorted(SCENARIOS_DIR.rglob("*.yaml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as e:
+            raise RuntimeError(f"Failed to parse scenario YAML {path}: {e}") from e
+        if isinstance(data, dict):
+            ids.add(data.get("id"))
+    return ids
+
+
+def _scenario_digest(data) -> str:
+    """SHA-256 of the scenario as parsed — what ran, independent of formatting."""
+    canonical = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def scenario_provenance(scenarios) -> dict:
+    """Where each scenario came from, and a digest of what was run.
+
+    Recorded in the scorecard so a run on locally substituted questions — a
+    ``~/.gaia/eval/scenarios`` or ``--scenario-dir`` copy of a built-in id — is
+    distinguishable from a clean one after the fact.
+    """
+    builtin_ids = None
+    entries = []
+    overridden = []
+    for path, data in scenarios:
+        path = Path(path)
+        sid = data.get("id")
+        builtin = _is_builtin_scenario(path)
+        entry = {
+            "id": sid,
+            "source": "builtin" if builtin else "local",
+            "path": (
+                "eval/scenarios/"
+                + path.resolve().relative_to(SCENARIOS_DIR.resolve()).as_posix()
+                if builtin
+                else str(path)
+            ),
+            "sha256": _scenario_digest(data),
+        }
+        if not builtin:
+            if builtin_ids is None:
+                builtin_ids = _builtin_scenario_ids()
+            if sid in builtin_ids:
+                entry["overrides_builtin"] = True
+                overridden.append(sid)
+        entries.append(entry)
+    return {
+        "scenarios": entries,
+        "overridden_builtins": sorted(overridden),
+        "builtin_only": all(e["source"] == "builtin" for e in entries),
+    }
+
+
+def merge_resumed_provenance(recorded: dict, fresh: dict) -> dict:
+    """*recorded* with the scenarios a resume re-ran replaced by *fresh*.
+
+    A resume reloads its scenarios, so a local override added or edited since
+    the first session would otherwise run under the first session's record.
+    """
+    recorded_by_id = {e.get("id"): e for e in recorded.get("scenarios") or []}
+    fresh_by_id = {e["id"]: e for e in fresh["scenarios"]}
+    changed = sorted(
+        sid
+        for sid, entry in fresh_by_id.items()
+        if sid in recorded_by_id
+        and recorded_by_id[sid].get("sha256") != entry["sha256"]
+    )
+    if changed:
+        print(
+            f"[WARN] {len(changed)} scenario(s) changed since this run started "
+            f"(recorded in the scorecard): {', '.join(changed)}",
+            file=sys.stderr,
+        )
+    entries = [fresh_by_id.get(sid, e) for sid, e in recorded_by_id.items()]
+    entries += [e for sid, e in fresh_by_id.items() if sid not in recorded_by_id]
+    return {
+        "scenarios": entries,
+        "overridden_builtins": sorted(
+            e["id"] for e in entries if e.get("overrides_builtin")
+        ),
+        "builtin_only": all(e.get("source") == "builtin" for e in entries),
+    }
+
+
+def scenario_set_warnings(baseline: dict, current: dict) -> list:
+    """Why two scorecards may not have asked the same questions.
+
+    A scorecard written before provenance was recorded contributes nothing.
+    """
+    warnings = []
+    digests = {}
+    for name, card in (("baseline", baseline), ("current", current)):
+        prov = (card.get("config") or {}).get("scenario_provenance") or {}
+        overridden = prov.get("overridden_builtins") or []
+        if overridden:
+            warnings.append(
+                f"the {name} run replaced {len(overridden)} built-in scenario(s) "
+                f"with local copies: {', '.join(overridden)}"
+            )
+        digests[name] = {
+            e.get("id"): e.get("sha256") for e in prov.get("scenarios") or []
+        }
+    changed = sorted(
+        sid
+        for sid, digest in digests["current"].items()
+        if sid in digests["baseline"] and digests["baseline"][sid] != digest
+    )
+    if changed:
+        warnings.append(
+            f"{len(changed)} scenario file(s) differ between the runs: "
+            + ", ".join(changed)
+        )
+    return warnings
 
 
 def unmatched_scenario_errors(
@@ -2011,7 +2142,37 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
-def _run_driver(cmd, *, input, timeout, cwd):  # pylint: disable=redefined-builtin
+_warned_dotenv_api_key = False
+
+
+def _driver_auth():
+    """Return ``(flags, env)`` for the ``claude -p`` driver's authentication.
+
+    ``--bare`` gives a clean subprocess (no hooks, no CLAUDE.md auto-load) but
+    also restricts auth to ``ANTHROPIC_API_KEY`` / ``apiKeyHelper`` — OAuth and
+    the keychain are never read. So it is used only with a key the operator
+    exported. A key that only a ``.env`` supplied is ignored *and* removed from
+    the child's environment, since the CLI prefers it over OAuth. ``env`` is
+    ``None`` when the child should inherit this process's environment as is.
+    """
+    global _warned_dotenv_api_key  # pylint: disable=global-statement
+    if driver_api_key():
+        return ["--bare"], None
+    if dotenv_only_api_key():
+        if not _warned_dotenv_api_key:
+            _warned_dotenv_api_key = True
+            logger.warning(
+                "Ignoring ANTHROPIC_API_KEY from a .env file for the eval driver "
+                "— it would disable your Claude Code login. Export it in the "
+                "shell to drive the eval with that key instead."
+            )
+        return [], {k: v for k, v in os.environ.items() if k != API_KEY_VAR}
+    return [], None
+
+
+def _run_driver(
+    cmd, *, input, timeout, cwd, env=None
+):  # pylint: disable=redefined-builtin
     """Run the eval driver; on timeout kill its whole process tree, then raise.
 
     Returns a ``CompletedProcess`` with text output, or raises
@@ -2031,6 +2192,7 @@ def _run_driver(cmd, *, input, timeout, cwd):  # pylint: disable=redefined-built
         encoding="utf-8",
         errors="replace",
         cwd=cwd,
+        env=env,
         **popen_kwargs,
     )
     try:
@@ -2119,18 +2281,8 @@ def run_scenario_subprocess(
 
     claude_bin = shutil.which("claude") or "claude"
 
-    # ``--bare`` gives a clean subprocess (skips hooks, CLAUDE.md auto-load,
-    # plugin sync, etc.) but per the Claude Code CLI docs it ALSO restricts
-    # Anthropic auth to ``ANTHROPIC_API_KEY`` / ``apiKeyHelper`` only —
-    # OAuth and keychain are never read. So on a subscription-only setup
-    # (the common case for Claude Code Max users), ``--bare`` makes the
-    # eval fail-fast with ``Not logged in · Please run /login`` because
-    # the SDK can't see the user's existing OAuth session. We opt in to
-    # ``--bare`` only when an explicit API key is available; otherwise we
-    # let the subprocess inherit the parent's OAuth credentials.
-    cmd = [claude_bin, "-p"]
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        cmd.append("--bare")
+    bare_flags, driver_env = _driver_auth()
+    cmd = [claude_bin, "-p", *bare_flags]
     cmd.extend(
         [
             "--no-session-persistence",  # don't save eval sessions to disk
@@ -2180,7 +2332,9 @@ def run_scenario_subprocess(
 
     assert_provider_permitted("the Claude Code CLI")
     try:
-        proc = _run_driver(cmd, input=prompt, timeout=timeout, cwd=str(REPO_ROOT))
+        proc = _run_driver(
+            cmd, input=prompt, timeout=timeout, cwd=str(REPO_ROOT), env=driver_env
+        )
         driver_proc = proc
         elapsed = time.time() - start
 
@@ -2602,6 +2756,65 @@ Fix failures in this order:
 """
 
 
+def require_clean_tree_for_fix() -> None:
+    """Refuse ``--fix`` unless the checkout has no uncommitted tracked changes.
+
+    The fixer edits this checkout with permissions disabled; only a clean
+    starting tree leaves ``git diff`` as an exact record of what it changed.
+    """
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(REPO_ROOT),
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(
+            f"--fix could not check the git state of {REPO_ROOT}: {e}. "
+            "It edits the checkout, so it needs git on PATH to confirm the tree "
+            "is clean."
+        ) from e
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"--fix needs a git checkout of GAIA, but {REPO_ROOT} is not one "
+            f"(git: {(proc.stderr or proc.stdout).strip()[:300]}). Run it from a "
+            "source checkout (`git clone https://github.com/amd/gaia`)."
+        )
+    dirty = [line for line in proc.stdout.splitlines() if line.strip()]
+    if dirty:
+        shown = "\n  ".join(dirty[:10])
+        more = f"\n  ... and {len(dirty) - 10} more" if len(dirty) > 10 else ""
+        raise RuntimeError(
+            f"--fix refuses to start: {REPO_ROOT} has {len(dirty)} uncommitted "
+            f"change(s), and the fixer edits this tree with permissions "
+            f"disabled:\n  {shown}{more}\n"
+            "Commit them or move them to a branch first, or run --fix from a "
+            "separate worktree (`git worktree add <path>`), so `git diff` shows "
+            "exactly what the fixer changed."
+        )
+
+
+def _fix_iteration_failure(fix_result: dict) -> Optional[str]:
+    """Why a fixer iteration did not complete, or ``None`` when it did."""
+    if fix_result.get("error"):
+        return str(fix_result["error"])
+    code = fix_result.get("fixer_exit_code")
+    if code not in (0, None):
+        return f"the fixer exited {code}"
+    return None
+
+
 def run_fix_iteration(scorecard, run_dir, iteration):
     """Invoke Claude Code to fix failing scenarios. Returns fix log entry."""
     # Load fixer prompt from file if available, fall back to inline FIXER_PROMPT
@@ -2688,6 +2901,12 @@ def run_fix_iteration(scorecard, run_dir, iteration):
     except Exception as e:
         print(f"[FIX] Fixer error: {e}", file=sys.stderr)
         return {"iteration": iteration, "error": str(e), "fixes": []}
+
+
+def _write_fix_history(run_dir, fix_history) -> None:
+    (run_dir / "fix_history.json").write_text(
+        json.dumps(fix_history, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 #: Committed next to a baseline's scorecards; names what produced them.
@@ -2811,6 +3030,7 @@ def compare_scorecards(baseline_path, current_path):
     current = json.loads(current_path.read_text(encoding="utf-8"))
 
     check_comparable(baseline_path, baseline, current)
+    set_warnings = scenario_set_warnings(baseline, current)
 
     # Build per-scenario maps
     def scenario_map(sc):
@@ -2915,14 +3135,17 @@ def compare_scorecards(baseline_path, current_path):
         # Corpus availability change — not a quality signal
         if b_skipped or c_skipped:
             corpus_changed.append(entry)
+            continue
         # This run produced no measurement — nothing to compare, including the
-        # wall clock, so this is checked ahead of the time-regression branch.
-        elif c_unmeasured:
+        # wall clock.
+        if c_unmeasured:
             unmeasured.append(entry)
-        elif entry.get("time_regressed"):
-            # Time regressions reported separately from score regressions
+            continue
+        # Slowness is a label on top of the status verdict, never a substitute
+        # for it — a PASS→FAIL that also ran long must still count as regressed.
+        if entry.get("time_regressed"):
             time_regressed.append(entry)
-        elif not b_pass and c_pass:
+        if not b_pass and c_pass:
             improved.append(entry)
         elif b_pass and not c_pass:
             regressed.append(entry)
@@ -3067,6 +3290,8 @@ def compare_scorecards(baseline_path, current_path):
 
     partial = current.get("partial") or {}
     print(f"\n{'='*70}")
+    for warning in set_warnings:
+        print(f"[WARN] Different questions: {warning}.")
     if partial:
         # The run stopped part-way; its NOT_RUN scenarios are excluded above,
         # so whatever follows describes only the part that ran.
@@ -3112,6 +3337,7 @@ def compare_scorecards(baseline_path, current_path):
         "unmeasured": unmeasured,
         "not_run": not_run,
         "incomplete": partial or None,
+        "scenario_set_warnings": set_warnings,
     }
 
 
@@ -3214,6 +3440,9 @@ class AgentEvalRunner:
             result = run_audit()
             print(json.dumps(result, indent=2))
             return result
+
+        if fix_mode and resume_dir is None:
+            require_clean_tree_for_fix()
 
         with exclusive_eval("gaia eval agent"):
             if resume_dir is not None:
@@ -3574,6 +3803,10 @@ class AgentEvalRunner:
             for line in problems:
                 print(f"  - {line}", file=sys.stderr)
             sys.exit(1)
+        if isinstance(config.get("scenario_provenance"), dict):
+            config["scenario_provenance"] = merge_resumed_provenance(
+                config["scenario_provenance"], scenario_provenance(found)
+            )
         by_id = {data["id"]: (path, data) for path, data in found}
         # Original order, so the merged scorecard lists scenarios as the run did.
         planned = [
@@ -3708,6 +3941,18 @@ class AgentEvalRunner:
             # Marks a targeted run, so compare and the integrity gate judge it
             # against only these baseline scenarios and name the rest as not run.
             config["scenario_filter"] = list(requested_ids)
+        provenance = scenario_provenance(scenarios)
+        config["scenario_provenance"] = provenance
+        if provenance["overridden_builtins"]:
+            print(
+                f"[WARN] {len(provenance['overridden_builtins'])} built-in "
+                "scenario(s) replaced by local copies (recorded in the "
+                "scorecard; not comparable to a baseline):",
+                file=sys.stderr,
+            )
+            for entry in provenance["scenarios"]:
+                if entry.get("overrides_builtin"):
+                    print(f"  - {entry['id']}: {entry['path']}", file=sys.stderr)
 
         # ---- Phase A: Run initial eval ----
         results, aborted, outage = self._execute(
@@ -3752,6 +3997,17 @@ class AgentEvalRunner:
             # Phase B: Run fixer
             fix_result = run_fix_iteration(current_scorecard, run_dir, iteration)
             fix_history.append(fix_result)
+            failure = _fix_iteration_failure(fix_result)
+            if failure:
+                _write_fix_history(run_dir, fix_history)
+                # Re-scoring a half-edited tree, then fixing it again, compounds
+                # whatever the interrupted fixer left behind.
+                raise RuntimeError(
+                    f"Fix mode stopped: iteration {iteration} did not complete "
+                    f"({failure}). The fixer may have left partial edits in "
+                    f"{REPO_ROOT} — review them with `git diff` before re-running. "
+                    f"Fix history: {run_dir / 'fix_history.json'}"
+                )
 
             # Phase C: Re-run only previously-failed scenarios
             failed_ids = {s.get("scenario_id") for s in failed}
@@ -3846,11 +4102,7 @@ class AgentEvalRunner:
             self._print_summary(new_scorecard, fix_run_id, run_dir)
             current_scorecard = new_scorecard
 
-        # Write fix_log.json with full history
-        fix_log_path = run_dir / "fix_history.json"
-        fix_log_path.write_text(
-            json.dumps(fix_history, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        _write_fix_history(run_dir, fix_history)
 
         # Final comparison: baseline vs current
         baseline_pass = baseline_scorecard.get("summary", {}).get("judged_pass_rate", 0)
@@ -3860,7 +4112,7 @@ class AgentEvalRunner:
         print(f"  Baseline judged pass rate: {baseline_pass:.0%}")
         print(f"  Final judged pass rate:    {final_pass:.0%}")
         print(f"  Delta:                     {(final_pass - baseline_pass):+.0%}")
-        print(f"  Fix history:        {fix_log_path}")
+        print(f"  Fix history:        {run_dir / 'fix_history.json'}")
         print("  Changes are NOT committed -- review before merging.")
         print(f"{'='*60}")
 
@@ -3868,57 +4120,20 @@ class AgentEvalRunner:
 
 
 # ---------------------------------------------------------------------------
-# --generate-corpus: regenerate corpus documents and validate manifest
+# --generate-corpus: validate the committed corpus against manifest.json
 # ---------------------------------------------------------------------------
 
 
 def generate_corpus():
-    """Regenerate corpus documents and validate manifest.json.
+    """Validate the committed corpus documents against ``manifest.json``.
 
-    Steps:
-    1. Re-run CSV generator (gen_sales_csv_v2.py) with deterministic seed
-    2. Scan corpus/documents/ and corpus/adversarial/ for all files
-    3. Validate manifest.json facts are still reachable
-    4. Print a summary report
+    The corpus is committed ground truth — the manifest's facts were written
+    from these exact files — so nothing here rewrites it. Lists the documents,
+    then raises ``RuntimeError`` when the manifest is absent or names a file
+    that is not on disk.
     """
-    print("[CORPUS] Starting corpus regeneration...")
+    print("[CORPUS] Validating corpus against manifest.json...")
 
-    # Step 1: Regenerate CSV via gen_sales_csv_v2.py
-    gen_scripts = [
-        CORPUS_DIR / "gen_sales_csv_v2.py",
-        CORPUS_DIR / "gen_sales_csv.py",
-    ]
-    ran_generator = False
-    for script in gen_scripts:
-        if script.exists():
-            print(f"[CORPUS] Running CSV generator: {script.name}")
-            result = subprocess.run(
-                [sys.executable, str(script)],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                cwd=str(CORPUS_DIR),
-                check=False,
-            )
-            if result.returncode == 0:
-                print("[CORPUS] CSV generator OK")
-                ran_generator = True
-            else:
-                print(
-                    f"[CORPUS] CSV generator failed (exit {result.returncode}):",
-                    file=sys.stderr,
-                )
-                print(result.stderr[:300], file=sys.stderr)
-            break
-
-    if not ran_generator:
-        print(
-            "[CORPUS] No CSV generator found — skipping CSV regeneration",
-            file=sys.stderr,
-        )
-
-    # Step 2: Scan corpus directories
     docs_dir = CORPUS_DIR / "documents"
     adv_dir = CORPUS_DIR / "adversarial"
     all_files = []
@@ -3933,13 +4148,11 @@ def generate_corpus():
     for rel, size in all_files:
         print(f"  {str(rel):<45} {size:>8,} bytes")
 
-    # Step 3: Validate manifest
     if not MANIFEST.exists():
-        print(
-            f"\n[CORPUS] WARNING: manifest.json not found at {MANIFEST}",
-            file=sys.stderr,
+        raise RuntimeError(
+            f"Corpus manifest not found at {MANIFEST}. It is committed with the "
+            "repo; restore it with `git checkout -- eval/corpus/manifest.json`."
         )
-        return
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     doc_list = manifest.get("documents", [])
@@ -3952,22 +4165,19 @@ def generate_corpus():
 
     # Check every manifest file exists on disk
     missing = []
-    for doc in doc_list:
-        fn = doc.get("filename", "")
-        if not (docs_dir / fn).exists():
-            missing.append(fn)
-    for doc in adv_list:
-        fn = doc.get("filename", "")
-        if not (adv_dir / fn).exists():
-            missing.append(fn)
+    for base, entries in ((docs_dir, doc_list), (adv_dir, adv_list)):
+        for doc in entries:
+            fn = doc.get("filename") or ""
+            if not fn or not (base / fn).is_file():
+                missing.append(fn or f"<entry '{doc.get('id', '?')}' has no filename>")
 
     if missing:
-        print(f"[CORPUS] WARNING: {len(missing)} manifest file(s) missing from disk:")
-        for fn in missing:
-            print(f"  MISSING: {fn}")
-    else:
-        print("[CORPUS] All manifest files present on disk [OK]")
-
+        raise RuntimeError(
+            f"{len(missing)} file(s) named in {MANIFEST} are missing from "
+            f"{CORPUS_DIR}: {', '.join(missing)}. Restore them from git, or fix "
+            "the manifest entry if the document was renamed."
+        )
+    print("[CORPUS] All manifest files present on disk [OK]")
     print(f"\n[CORPUS] Done. Corpus at: {CORPUS_DIR}")
 
 

@@ -656,7 +656,11 @@ reads nothing.
     example `python fetch.py`) can still reach it. The message box says the
     chat is offline, with a button to turn it back on.
   - **Phone access:** turns mobile access on or off, shows the QR code, and
-    names the phone that connected.
+    names the phone that connected. On the phone, **Add to Home Screen**
+    (Safari's Share menu, or Chrome's menu) installs GAIA as an app that
+    opens full screen. The app does not keep access between sessions: each
+    time you turn mobile access on, scan the new QR code, and if the
+    home-screen app no longer connects, open the new link and add it again.
   - **Permission mode:** Ask or Full access, the same setting as the shield in
     the message box. It covers this chat only; new chats follow **Settings →
     Permissions**.
@@ -1001,6 +1005,16 @@ The agent supports the **Model Context Protocol** in both directions — connect
     ```
 
     The usual cause is that GAIA isn't set up yet. The app shows its setup steps in that case; `gaia init` from a terminal does the same.
+  </Accordion>
+
+  <Accordion title="Mobile access says ngrok is required">
+    Mobile access reaches this PC from your phone through [ngrok](https://ngrok.com/download), which you install once. The dialog shows the install command for your system with a **Copy** button; run it, then press **Retry**. ngrok also needs a free account's authtoken:
+
+    ```bash
+    ngrok config add-authtoken <YOUR_TOKEN>
+    ```
+
+    Copy the token from [your ngrok dashboard](https://dashboard.ngrok.com/get-started/your-authtoken).
   </Accordion>
 
   <Accordion title="No model loaded">

@@ -111,12 +111,11 @@ inside GAIA.
 
 You only need to declare the scopes the agents you actually use will
 request — the flagship [`gaia` agent](/guides/email) needs only
-`gmail.readonly`; `openid` / `email` / `profile` are requested on every
-connection regardless of
-agent. `email` is listed twice, once as the short OIDC name and once as
-its `userinfo.email` URL equivalent — Google treats them as the same
-permission, and GAIA asks for whichever the connecting surface uses, so
-declare both.
+`gmail.readonly`; `openid` and `userinfo.email` are requested on every
+connection regardless of agent. GAIA no longer requests the short `email`
+and `profile` names (`email` is the same permission as `userinfo.email`). It
+still accepts them so connections made by older GAIA versions keep working,
+and declaring them does no harm.
 
 {/* google-scopes:start */}
 | Scope | Tier | What it buys |

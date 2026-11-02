@@ -111,6 +111,12 @@ status = sdk.get_status()
 # }
 ```
 
+`get_status()` loads and checks the cache, so `indexed: True` means `search()` can use
+it. When the index and its metadata don't match (an interrupted write, or a file
+copied in from another index), it returns `indexed: False` with an `error` naming the
+cache path and the re-index step, and `search()` raises `CodeIndexCacheError` with the
+same message.
+
 ### `clear_index()`
 
 Removes the FAISS index and metadata for this repo from the cache.
