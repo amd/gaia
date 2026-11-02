@@ -223,16 +223,17 @@ export async function toPlan(page: Page): Promise<void> {
     await expect(hero(page)).toBeVisible();
 }
 
-export async function toPc(page: Page): Promise<void> {
+export async function toModels(page: Page): Promise<void> {
     await toPlan(page);
     await hero(page).locator('.link-btn').nth(0).click();
-    await expect(page.locator('.setup-nav .btn-primary')).toBeVisible();
+    await expect(page.locator('.mc-list').first()).toBeVisible();
 }
 
-export async function toModels(page: Page): Promise<void> {
-    await toPc(page);
-    await page.locator('.setup-nav .btn-primary').click();
-    await expect(page.locator('.mc-list').first()).toBeVisible();
+/** GPU memory, opened from Customize. */
+async function toGpu(page: Page): Promise<void> {
+    await toModels(page);
+    await page.locator('.setup-gpu-option .link-btn').click();
+    await expect(page.locator('.gpu-presets')).toBeVisible();
 }
 
 async function toKey(page: Page): Promise<void> {
@@ -301,37 +302,31 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
-        name: 'pc',
+        // Every check opened, and All details: the long form of Check this PC.
+        name: 'check-details',
         reach: async (page) => {
-            await toPc(page);
-            await expect(page.locator('.setup-check')).toBeVisible();
-            await expect(page.locator('.setup-rows')).toBeVisible();
+            await page.locator('.setup-checks-toggle').click();
+            await page.locator('.found-more').click();
+            await expect(page.locator('.setup-checks-done .setup-rows')).toBeVisible();
+            await expect(page.locator('.found-table')).toBeVisible();
         },
     },
     {
-        name: 'pc-blocked',
+        name: 'check-blocked',
         answers: { hardware: HARDWARE_BLOCKED },
-        reach: async (page) => {
-            await toPc(page);
-            await expect(page.locator('.setup-error')).toBeVisible();
-        },
+        reach: (page) => expect(page.locator('.found-warnings')).toBeVisible(),
     },
     {
         name: 'gpu',
         answers: { gpu: GPU },
-        reach: async (page) => {
-            await toPc(page);
-            await page.locator('.setup-nav .btn-primary').click();
-            await expect(page.locator('.gpu-presets')).toBeVisible();
-        },
+        reach: toGpu,
     },
     {
         // Max picked, with its warning; the split already runs the default model, so keeping it is the advice.
         name: 'gpu-max',
         answers: { gpu: { ...GPU, recommended_setting_gb: null, models: [{ id: QWEN_ID, size_gb: 23.3, need_gb: 26.8, default: true, fits_now: true, fits_at_setting_gb: null }] } },
         reach: async (page) => {
-            await toPc(page);
-            await page.locator('.setup-nav .btn-primary').click();
+            await toGpu(page);
             await page.locator('.gpu-preset').last().click();
             await expect(page.locator('.gpu-unlock.is-warn')).toBeVisible();
         },
@@ -433,7 +428,7 @@ export const SETUP_SCENES: SetupScene[] = [
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['plan', 'pc', 'models', 'models-long', 'key', 'download-running', 'download-failed', 'test-long', 'ready'];
+export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-long', 'key', 'download-running', 'download-failed', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

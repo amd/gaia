@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { PreflightReport, SetupPlan, SetupRunStatus } from '../../../types';
 import { SetupChecks } from '../SetupChecks';
@@ -39,17 +39,32 @@ describe('Checking this PC', () => {
     it('fills in what it found and counts the finished checks', () => {
         show({ hardware: HARDWARE, plan: DOWN });
         expect(row('Processor, GPU and NPU')).toHaveTextContent('AMD Radeon 8060S · Ryzen AI NPU');
-        expect(row('Memory')).toHaveTextContent('96 GB');
+        // The OS's figure until the model server reports what is installed.
+        expect(row('Memory')).toHaveTextContent('96.0 GB');
         expect(row('Disk space')).toHaveTextContent('400 GB free');
         expect(row("GAIA's model server")).toHaveClass('is-active');
         expect(screen.getByText('Checks done: 3 of 5')).toBeInTheDocument();
         expect(screen.getByRole('progressbar', { name: 'Check this PC' })).toHaveAttribute('value', '60');
     });
 
-    it('folds into one line once every check passed', () => {
+    it('folds into one line once every check passed, which opens to each check', () => {
         show({ hardware: HARDWARE, plan: COLD_BIG() });
         expect(screen.getByRole('status')).toHaveTextContent('All 5 checks passed');
         expect(screen.queryByText('Memory')).toBeNull();
+        const toggle = screen.getByRole('button', { name: 'All 5 checks passed' });
+        expect(toggle).toHaveAttribute('aria-expanded', 'false');
+        fireEvent.click(toggle);
+        expect(toggle).toHaveAttribute('aria-expanded', 'true');
+        expect(row('Disk space')).toHaveTextContent('400 GB free');
+        expect(row("GAIA's model server")).toHaveTextContent('Running');
+        expect(row('Supported backends and models')).toHaveTextContent(/Models available: \d+/);
+    });
+
+    it('shows installed memory, not what the OS has left after the GPU takes its share', () => {
+        // 128 GB installed with 64 GB set aside for the GPU: Windows reports 63.6 GB.
+        const plan = { ...DOWN, system: { physical_memory: '128.00 GB' } } as unknown as SetupPlan;
+        show({ hardware: { ...HARDWARE, ram_gb: 63.6 }, plan });
+        expect(row('Memory')).toHaveTextContent('128.0 GB');
     });
 
     it('marks the hardware rows failed when they could not be read, inventing no value', () => {

@@ -14,6 +14,17 @@ export function formatSize(gb: number): string {
 }
 
 /**
+ * Installed memory, as Lemonade reports it ("128.00 GB"). The OS figure is the fallback:
+ * on a PC that sets memory aside for its GPU, it is the smaller amount the OS can use.
+ */
+export function totalMemory(reported: string | null | undefined, ramGb: number | null | undefined): string | null {
+    const gb = reported ? Number.parseFloat(reported) : Number.NaN;
+    if (Number.isFinite(gb) && reported?.trim().toUpperCase().endsWith('GB')) return formatSize(gb);
+    if (reported) return reported;
+    return ramGb != null ? formatSize(ramGb) : null;
+}
+
+/**
  * A memory-fit number from the plan: a model's need or this PC's memory for
  * models. The plan reports both in decimal GB, like the GPU memory pane, so
  * every memory number on a screen carries this one label.

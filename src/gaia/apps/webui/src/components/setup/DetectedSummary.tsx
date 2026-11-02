@@ -6,12 +6,12 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useT } from '../../i18n/useT';
 import * as api from '../../services/api';
 import type { PreflightReport, SetupDevice, SetupGaiaBuild, SetupPlan } from '../../types';
-import { formatSize } from './format';
+import { formatSize, totalMemory } from './format';
 
 /** A technical value: names, versions and paths read the same in every language. */
 const Tech = ({ children }: { children: ReactNode }) => <bdi dir="ltr">{children}</bdi>;
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+function Row({ label, children }: { label: ReactNode; children: ReactNode }) {
     return (
         <div className="found-row">
             <dt>{label}</dt>
@@ -43,14 +43,6 @@ function runtimesOf(plan: SetupPlan): Array<{ name: string; b: Backend }> {
         if (b && b.state !== 'unsupported') out.push({ name, b });
     }
     return out;
-}
-
-/** This PC's memory in the same form as every other size here; Lemonade writes "128.00 GB". */
-function totalMemory(reported: string | null | undefined, ramGb: number | null | undefined): string | null {
-    const gb = reported ? Number.parseFloat(reported) : Number.NaN;
-    if (Number.isFinite(gb) && reported?.trim().toUpperCase().endsWith('GB')) return formatSize(gb);
-    if (reported) return reported;
-    return ramGb != null ? formatSize(ramGb) : null;
 }
 
 /** GAIA's version as people say it: "0.25.5 RC 2", or the commit of a source build. */
@@ -140,7 +132,8 @@ export function DetectedSummary({ plan, hardware, onChangeMemory }: { plan: Setu
         }
     };
     const unknown = <span className="found-muted">{t('setup.found.unknown')}</span>;
-    const warnings = [...(hardware?.blockers ?? []), ...(hardware?.warnings ?? [])];
+    // Before a model server runs, the NPU can't be asked about yet, so that warning would be noise.
+    const warnings = [...(hardware?.blockers ?? []), ...(hardware?.warnings ?? []).filter((w) => hardware?.lemonade_running || !/\bNPU\b/.test(w))];
 
     // The note shows for 2 s from when the copy finished; a new click starts it again.
     const fade = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -212,43 +205,64 @@ export function DetectedSummary({ plan, hardware, onChangeMemory }: { plan: Setu
                 <ChevronRight size={13} className={open ? 'is-open' : ''} aria-hidden="true" /> {t('setup.found.details')}
             </button>
             {open && (
-                <dl className="found-details">
-                    <Row label={t('setup.found.server')}>
-                        <span className="found-line">{plan.lemonade.mode === 'external' ? t('setup.found.serverYours') : t('setup.found.serverOwn')}</span>
-                        {plan.lemonade.url && <span className="found-line"><Tech>{plan.lemonade.url}</Tech></span>}
-                    </Row>
-                    <Row label={t('setup.found.runtime')}>
-                        {f.runtimes.length
-                            ? f.runtimes.map(({ name, b }) => (
-                                <span key={b.recipe} className="found-line">
-                                    <Tech>{name} {b.backend}{b.version ? ` ${b.version}` : ''}</Tech>
-                                    {' · '}
-                                    {t(b.state === 'installed' ? 'setup.pc.backend.installed' : b.state === 'update_required' ? 'setup.found.update' : 'setup.pc.backend.available')}
-                                </span>
-                            ))
-                            : unknown}
-                    </Row>
-                    <Row label={t('setup.found.agent')}>
-                        {f.sys?.agent_version ? <Tech>{f.sys.agent_version}</Tech> : <span className="found-muted">{t('setup.found.agentLater')}</span>}
-                    </Row>
-                    <Row label={t('setup.found.os')}>{f.sys?.os ?? hardware?.os ? <Tech>{f.sys?.os ?? hardware?.os}</Tech> : unknown}</Row>
-                    <Row label={t('setup.found.cpu')}>
-                        {f.cpu || f.sys?.processor ? (
-                            <>
-                                <span className="found-line"><Tech>{f.cpu?.name ?? f.sys?.processor}</Tech></span>
-                                {f.cpu?.cores ? <span className="found-line found-muted">{t('setup.found.cores', { cores: String(f.cpu.cores), threads: String(f.cpu.threads ?? f.cpu.cores) })}</span> : null}
-                            </>
-                        ) : unknown}
-                    </Row>
-                    <Row label={t('setup.found.gpu')}>
-                        {f.gpus.length ? f.gpus.map((d) => <span key={d.name} className="found-line"><Tech>{deviceText(d)}</Tech></span>)
-                            : <span className="found-muted">{t('setup.found.none')}</span>}
-                    </Row>
-                    <Row label={t('setup.found.npu')}>
-                        {f.npus.length ? f.npus.map((d) => <span key={d.name} className="found-line"><Tech>{deviceText(d)}</Tech></span>)
-                            : <span className="found-muted">{t('setup.found.none')}</span>}
-                    </Row>
-                </dl>
+                <div className="found-details">
+                    <h4 className="found-group">{t('setup.found.software')}</h4>
+                    <dl className="found-list">
+                        <Row label={<Tech>GAIA</Tech>}>
+                            {f.gaia ? <Tech>{f.gaia}</Tech> : unknown}
+                            {f.build && f.build !== 'release' && <span className="found-chip">{t(`setup.found.build.${f.build}`)}</span>}
+                        </Row>
+                        <Row label={t('setup.found.agent')}>
+                            {f.sys?.agent_version ? <Tech>{f.sys.agent_version}</Tech> : <span className="found-muted">{t('setup.found.agentLater')}</span>}
+                        </Row>
+                        <Row label={t('setup.found.server')}>
+                            {plan.lemonade.mode === 'external' ? t('setup.found.serverYours') : t('setup.found.serverOwn')}
+                            {f.sys?.lemonade_version && <> <Tech>{f.sys.lemonade_version}</Tech></>}
+                            {plan.lemonade.url && <span className="found-sub"><Tech>{plan.lemonade.url}</Tech></span>}
+                        </Row>
+                    </dl>
+
+                    <h4 className="found-group">{t('setup.found.runtime')}</h4>
+                    {f.runtimes.length ? (
+                        <table className="found-table">
+                            <thead className="visually-hidden">
+                                <tr>
+                                    <th scope="col">{t('setup.found.col.runtime')}</th>
+                                    <th scope="col">{t('setup.found.col.device')}</th>
+                                    <th scope="col">{t('setup.found.col.version')}</th>
+                                    <th scope="col">{t('setup.found.col.state')}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {f.runtimes.map(({ name, b }) => (
+                                    <tr key={b.recipe}>
+                                        <th scope="row"><Tech>{name}</Tech></th>
+                                        <td><Tech>{b.backend}</Tech></td>
+                                        <td><Tech>{b.version ?? ''}</Tech></td>
+                                        <td className={b.state === 'installed' ? 'is-installed' : undefined}>
+                                            {t(b.state === 'installed' ? 'setup.pc.backend.installed' : b.state === 'update_required' ? 'setup.found.update' : 'setup.pc.backend.available')}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    ) : <p className="found-muted">{t('setup.found.unknown')}</p>}
+
+                    <h4 className="found-group">{t('setup.found.hardware')}</h4>
+                    <dl className="found-list">
+                        <Row label={t('setup.found.os')}>{f.sys?.os ?? hardware?.os ? <Tech>{f.sys?.os ?? hardware?.os}</Tech> : unknown}</Row>
+                        <Row label={t('setup.found.cpu')}>
+                            {f.cpu || f.sys?.processor ? <Tech>{f.cpu?.name ?? f.sys?.processor}</Tech> : unknown}
+                            {f.cpu?.cores ? <span className="found-sub">{t('setup.found.cores', { cores: String(f.cpu.cores), threads: String(f.cpu.threads ?? f.cpu.cores) })}</span> : null}
+                        </Row>
+                        <Row label={t('setup.found.gpu')}>
+                            {f.gpus.length ? <Tech>{f.gpus.map(deviceText).join('; ')}</Tech> : <span className="found-muted">{t('setup.found.none')}</span>}
+                        </Row>
+                        <Row label={t('setup.found.npu')}>
+                            {f.npus.length ? <Tech>{f.npus.map(deviceText).join('; ')}</Tech> : <span className="found-muted">{t('setup.found.none')}</span>}
+                        </Row>
+                    </dl>
+                </div>
             )}
         </section>
     );

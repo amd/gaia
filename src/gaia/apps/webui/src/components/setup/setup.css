@@ -647,3 +647,14 @@
     .dl-name { flex: 1 1 calc(100% - 40px); overflow-wrap: break-word; }
     .dl-state { margin-inline-start: 22px; }
 }
+
+.setup-checks-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: inherit;
+}
+.setup-checks-toggle svg:last-child { color: var(--text-secondary); transition: transform var(--duration-fast) var(--ease); }
+.setup-checks-toggle svg.is-open { transform: rotate(90deg); }
+[dir="rtl"] .setup-checks-toggle svg:last-child:not(.is-open) { transform: scaleX(-1); }
+.setup-checks-done .setup-rows { margin-block-start: 8px; }

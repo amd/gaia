@@ -68,9 +68,6 @@ test('Customize picks another chat model, vision follows it, and the labels say 
     await open();
     await pastChecks(page, say);
     await page.getByRole('button', { name: say('setup.plan.customize') }).click();
-    await expect(stepTitle(page)).toHaveText(say('setup.pc.title'));
-    await shot('this-pc');
-    await page.getByRole('button', { name: say('setup.continue') }).click();
     await expect(stepTitle(page)).toHaveText(say('setup.models.title'));
 
     const chat = page.locator('.mc-job').first();
@@ -174,9 +171,10 @@ test('finishing setup without choosing a GPU size changes nothing', async ({ pag
     await open();
     await pastChecks(page, say);
     await page.getByRole('button', { name: say('setup.plan.customize') }).click();
-    await page.getByRole('button', { name: say('setup.continue') }).click();
-    // GAIA offers this step on Windows and Linux only.
+    await expect(stepTitle(page)).toHaveText(say('setup.models.title'));
+    // GAIA offers GPU memory on Windows and Linux only, as an option on Customize.
     if (process.platform !== 'darwin') {
+        await page.getByRole('button', { name: say('setup.found.changeMemory') }).click();
         await expect(stepTitle(page)).toHaveText(say('setup.gpu.title'));
         await shot('gpu-step');
         await page.getByRole('button', { name: say('gpu.skip') }).click();

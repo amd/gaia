@@ -8,7 +8,7 @@ import { shortModelName, useModelStore } from '../stores/modelStore';
 import { lemonadeKeyRejected } from '../utils/lemonade';
 import { CloudPrices } from './settings/CloudPrices';
 import './settings/CloudSpending.css';
-import { ModelsStep, ReadySummary, SystemCheck } from './SetupSteps';
+import { ModelsStep, ReadySummary } from './SetupSteps';
 import { StartCards } from './StartCards';
 import { useGatewayNetwork } from '../hooks/useGatewayNetwork';
 import { useT, type Translate } from '../i18n/useT';
@@ -251,7 +251,8 @@ interface SetupScreenProps {
 }
 
 /** Where the user is. Download and Test are one run; the run's rows say which. */
-type Phase = 'check' | 'plan' | 'pc' | 'gpu' | 'models' | 'key' | 'download';
+type Phase = 'check' | 'plan' | 'gpu' | 'models' | 'key' | 'download';
+const SCREEN_ORDER: Stage[] = ['check', 'plan', 'key', 'models', 'gpu', 'download', 'test', 'ready'];
 type Stage = Phase | 'test' | 'ready';
 
 /** What a confirmation sheet is asking. */
@@ -278,6 +279,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const [choice, setChoice] = useState<ProviderId>('local');
     const [phase, setPhase] = useState<Phase>('check');
     const [customizing, setCustomizing] = useState(false);
+    // GPU memory isn't a step: it opens from Check this PC or Customize, and goes back there.
+    const [gpuFrom, setGpuFrom] = useState<'check' | 'models'>('models');
     /** A step opened from the rail or Back/Next while setup is further on; null shows where setup is. */
     const [viewing, setViewing] = useState<Stage | null>(null);
     /** Steps already shown, so Next and the rail can return to them. */
@@ -563,7 +566,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         setPhase(id === 'test' || id === 'ready' ? 'download' : id);
     }, [phase]);
 
-    // Customize's steps stay on the rail, so Next can return to them.
+    // Back to the recommendation; a run already going keeps its choice.
     const backToPlan = useCallback(() => {
         if (viewing == null) setChoice('local');
         stepTo('plan');
@@ -573,7 +576,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         if (running && viewing != null) return;
         setChoice('local');
         setCustomizing(true);
-        stepTo('pc');
+        stepTo('models');
     }, [stepTo, running, viewing]);
 
     const useCloud = useCallback(() => {
@@ -585,9 +588,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
 
     const showGpu = !!gpu?.applies;
     const backOne = useCallback(() => {
-        const at = viewing ?? phase;
-        stepTo(at === 'models' ? (showGpu ? 'gpu' : 'pc') : at === 'gpu' ? 'pc' : 'plan');
-    }, [showGpu, stepTo, viewing, phase]);
+        stepTo((viewing ?? phase) === 'gpu' ? gpuFrom : 'plan');
+    }, [gpuFrom, stepTo, viewing, phase]);
+    const openGpu = useCallback((from: 'check' | 'models') => {
+        setGpuFrom(from);
+        stepTo('gpu');
+    }, [stepTo]);
 
     // Alt+Left and Alt+Right go back and on a step, like Back and Next.
     const navRef = useRef<{ prev: Stage | null; next: Stage | null }>({ prev: null, next: null });
@@ -752,27 +758,25 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         if (inner) inner.scrollTop = 0;
         document.getElementById('setup-title')?.focus({ preventScroll: true });
     }, [stage]);
-    const trail: Array<{ id: Stage; label: string; key: MessageKey; sub?: boolean }> = [
+    // One flat line of steps; Customize, the cloud key and GPU memory are screens of the step they open from.
+    const trail: Array<{ id: Stage; label: string; key: MessageKey }> = [
         { id: 'check', label: t('setup.check.title'), key: 'setup.check.title' },
         { id: 'plan', label: t('setup.plan.step'), key: 'setup.plan.step' },
-        ...(customizing ? [
-            { id: 'pc' as const, label: t('setup.pc.step'), key: 'setup.pc.step' as MessageKey, sub: true },
-            ...(showGpu ? [{ id: 'gpu' as const, label: t('setup.gpu.step'), key: 'setup.gpu.step' as MessageKey, sub: true }] : []),
-            { id: 'models' as const, label: t('setup.models.step'), key: 'setup.models.step' as MessageKey, sub: true },
-        ] : []),
-        ...(cloud ? [{ id: 'key' as const, label: t('setup.key.step'), key: 'setup.key.step' as MessageKey, sub: true }] : []),
         { id: 'download', label: t('setup.download.step'), key: 'setup.download.step' },
         { id: 'test', label: t('setup.test.step'), key: 'setup.test.step' },
         { id: 'ready', label: t('setup.ready.step'), key: 'setup.ready.step' },
     ];
-    const at = trail.findIndex((s) => s.id === liveStage);
+    const railOf = (s: Stage): Stage => (s === 'models' || s === 'key' ? 'plan' : s === 'gpu' ? (gpuFrom === 'check' ? 'check' : 'plan') : s);
+    // Your setup reopens on the screen the user chose there.
+    const setupScreen: Stage = cloud ? 'key' : customizing ? 'models' : 'plan';
+    const at = trail.findIndex((s) => s.id === railOf(liveStage));
     // A step can be opened once setup has reached it.
     const runStep = (id: Stage) => id === 'download' || id === 'test' || id === 'ready';
     // What the checks did before any run printed a line, so the Checks log is never empty.
     const checkNotes: string[] = [];
     if (hardware) {
         checkNotes.push(`This PC: ${[hardware.gpu_name, hardware.npu_detected ? 'NPU' : null].filter(Boolean).join(', ') || 'no GPU reported'}; `
-            + `${hardware.ram_gb ?? '?'} GB memory; ${hardware.disk_free_gb != null ? Math.round(hardware.disk_free_gb) : '?'} GB free on disk`);
+            + `${plan?.system?.physical_memory ?? '?'} installed, ${hardware.ram_gb ?? '?'} GB the OS can use; ${hardware.disk_free_gb != null ? Math.round(hardware.disk_free_gb) : '?'} GB free on disk`);
     } else if (hardwareError) {
         checkNotes.push(`Couldn't read this PC: ${hardwareError}`);
     }
@@ -793,33 +797,34 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const railSteps: RailStep[] = trail.map((s, i) => ({
         id: s.id,
         label: s.label,
-        sub: s.sub,
         status: i < at ? 'done'
             : i > at ? 'pending'
                 : liveStage === 'ready' ? 'done'
                     : runFailed && (liveStage === 'download' || liveStage === 'test' || liveStage === 'check') ? 'failed'
                         : running && (liveStage === 'download' || liveStage === 'test') ? 'active' : 'current',
-        shown: s.id === stage,
-        onOpen: s.id !== stage && reachable(s.id, i) ? () => stepTo(s.id) : undefined,
+        shown: s.id === railOf(stage),
+        onOpen: s.id !== railOf(stage) && reachable(s.id, i) ? () => stepTo(s.id === 'plan' ? setupScreen : s.id) : undefined,
     }));
-    const shownAt = trail.findIndex((s) => s.id === stage);
-    // Which way the step moved, so the new one slides in from that side.
-    const lastShownAt = useRef(shownAt);
+    const shownAt = trail.findIndex((s) => s.id === railOf(stage));
+    // Which way the screen moved, so the new one slides in from that side.
+    const shownPos = stage === 'gpu' && gpuFrom === 'check' ? 0.5 : SCREEN_ORDER.indexOf(stage);
+    const lastShownPos = useRef(shownPos);
     const stepDir = useRef<'forward' | 'back'>('forward');
-    if (lastShownAt.current !== shownAt) {
-        stepDir.current = shownAt > lastShownAt.current ? 'forward' : 'back';
-        lastShownAt.current = shownAt;
+    if (lastShownPos.current !== shownPos) {
+        stepDir.current = shownPos > lastShownPos.current ? 'forward' : 'back';
+        lastShownPos.current = shownPos;
     }
-    const prevStep = shownAt > 0 ? trail[shownAt - 1].id : null;
-    const reachedNext = shownAt >= 0 && shownAt < trail.length - 1 && reachable(trail[shownAt + 1].id, shownAt + 1) ? trail[shownAt + 1].id : null;
-    // Where the step's own Continue goes when it only moves on (never one that starts a download).
+    const prevStep: Stage | null = stage === 'gpu' ? gpuFrom
+        : stage === 'models' || stage === 'key' ? 'plan'
+            : shownAt > 0 ? (trail[shownAt - 1].id === 'plan' ? setupScreen : trail[shownAt - 1].id) : null;
+    const reachedNext = stage !== 'gpu' && shownAt >= 0 && shownAt < trail.length - 1 && reachable(trail[shownAt + 1].id, shownAt + 1) ? trail[shownAt + 1].id : null;
+    // Where the screen's own Continue goes when it only moves on (never one that starts a download).
     const plainNext: Stage | null = viewing != null ? null
         : stage === 'check' && checksDone ? 'plan'
-            : stage === 'pc' ? (showGpu ? 'gpu' : 'models')
-                : stage === 'gpu' ? 'models' : null;
+            : stage === 'gpu' ? gpuFrom : null;
     const nextStep = reachedNext ?? plainNext;
     navRef.current = { prev: prevStep, next: nextStep };
-    const choiceStep = stage === 'pc' || stage === 'gpu' || stage === 'models' || stage === 'key';
+    const choiceStep = stage === 'gpu' || stage === 'models' || stage === 'key';
     // Opened from further on while a run is going: the choices there wait for it.
     const runGoing = viewing != null && running;
 
@@ -873,13 +878,14 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.check.heading')}</h1>
                             <p className="setup-lede">{t(checksDone ? 'setup.check.ledeDone' : 'setup.check.lede')}</p>
                             <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} awaitingChoice={!!lemonadeFound && !lemonadeSettled} />
-                            {checksDone && plan && <DetectedSummary plan={plan} hardware={hardware} onChangeMemory={showGpu && viewing == null ? () => { setCustomizing(true); stepTo('gpu'); } : undefined} />}
+                            {checksDone && plan && <DetectedSummary plan={plan} hardware={hardware} onChangeMemory={showGpu && viewing == null ? () => openGpu('check') : undefined} />}
                             {checksDone && viewing == null && (
                                 <div className="setup-row setup-found-next">
                                     <button type="button" className="btn-primary" onClick={() => stepTo('plan')}>{t('setup.continue')}</button>
                                 </div>
                             )}
-                            {statusRead && plan && !plan.lemonade.reachable && !serverRun && (
+                            {/* Before GAIA starts its own server, and after, so the user can still switch to theirs. */}
+                            {statusRead && plan && ((!plan.lemonade.reachable && !serverRun) || (checksDone && viewing == null && plan.lemonade.mode !== 'external')) && (
                                 <ExistingLemonadeOffer
                                     onNothingToOffer={lemonadeNothing}
                                     onFound={setLemonadeFound}
@@ -947,32 +953,6 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         </>
                     )}
 
-                    {stage === 'pc' && (
-                        <>
-                            <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.pc.title')}</h1>
-                            <p className="setup-lede">{t('setup.pc.lede')}</p>
-                            <section className="setup-card"><SystemCheck hardware={hardware} error={hardwareError} /></section>
-                            {(plan?.backends?.length ?? 0) > 0 && (
-                                <section className="setup-card" aria-label={t('setup.pc.backends')}>
-                                    <h3 className="mc-job-title">{t('setup.pc.backends')}</h3>
-                                    <ul className="setup-rows">
-                                        {plan?.backends?.map((b) => (
-                                            <li key={`${b.recipe}:${b.backend}`} className={`setup-result is-${b.state === 'unsupported' ? 'waiting' : 'done'}`}>
-                                                <span className="setup-result-label"><bdi dir="ltr">{b.recipe}</bdi> <bdi dir="ltr">{b.backend}</bdi>{b.default && <span className="mc-pill">{t('setup.models.recommended')}</span>}</span>
-                                                <span className="setup-result-value">{t(`setup.pc.backend.${b.state === 'installed' ? 'installed' : b.state === 'unsupported' ? 'unsupported' : 'available'}`)}</span>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </section>
-                            )}
-                            <ExistingLemonadeOffer onChosen={(mode) => { setUsersServer(mode === 'external'); loadHardware(); void loadPlan(); }} />
-                            <div className="setup-row setup-nav">
-                                <button type="button" className="btn-secondary" onClick={backToPlan}>{t('setup.back')}</button>
-                                <button type="button" className="btn-primary" onClick={() => stepTo(showGpu ? 'gpu' : 'models')}>{t('setup.continue')}</button>
-                            </div>
-                        </>
-                    )}
-
                     {stage === 'gpu' && gpu && (
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.gpu.title')}</h1>
@@ -984,8 +964,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 headingId="setup-title"
                                 names={names}
                                 onBack={backOne}
-                                onSkip={() => stepTo('models')}
-                                onContinue={() => stepTo('models')}
+                                onSkip={() => stepTo(gpuFrom)}
+                                onContinue={() => stepTo(gpuFrom)}
                             />
                         </>
                     )}
@@ -993,6 +973,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     {stage === 'models' && (
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.models.title')}</h1>
+                            {showGpu && gpu?.total_gb != null && gpu.gpu_gb != null && (
+                                <p className="setup-hint setup-gpu-option">
+                                    {t('setup.models.gpu', { gpu: formatSize(gpu.gpu_gb), total: formatSize(gpu.total_gb) })}{' '}
+                                    <button type="button" className="link-btn" onClick={() => openGpu('models')} disabled={busy || runGoing}>{t('setup.found.changeMemory')}</button>
+                                </p>
+                            )}
                             <ModelsStep
                                 plan={plan}
                                 planError={planError}

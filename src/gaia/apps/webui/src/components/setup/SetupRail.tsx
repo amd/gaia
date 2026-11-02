@@ -8,8 +8,6 @@ export interface RailStep {
     id: string;
     label: string;
     status: 'done' | 'current' | 'active' | 'failed' | 'pending';
-    /** A Customize step, shown under the step it belongs to. */
-    sub?: boolean;
     /** The step on screen, which may be behind where setup is. */
     shown?: boolean;
     /** Open it. Only steps setup has reached can be opened. */
@@ -29,7 +27,7 @@ export function SetupRail({ steps }: { steps: RailStep[] }) {
                             : s.status === 'failed' ? <AlertCircle size={13} aria-hidden="true" />
                                 : i + 1;
                     const body = <><span className="setup-rail-num">{icon}</span><span>{s.label}</span></>;
-                    const cls = `setup-rail-step is-${s.status}${s.sub ? ' is-sub' : ''}${s.shown ? ' is-shown' : ''}`;
+                    const cls = `setup-rail-step is-${s.status}${s.shown ? ' is-shown' : ''}`;
                     const current = s.shown ? 'step' : undefined;
                     return (
                         <li key={s.id}>

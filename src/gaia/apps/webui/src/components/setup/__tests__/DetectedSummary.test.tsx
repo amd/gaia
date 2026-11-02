@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
 import type { SetupPlan } from '../../../types';
@@ -64,11 +64,15 @@ describe('what setup found', () => {
         expect(more).toHaveAttribute('aria-expanded', 'false');
         fireEvent.click(more);
         const found = screen.getByRole('region', { name: 'What setup found' });
-        expect(found).toHaveTextContent('Kokoro cpu b17 · Update needed');
+        // Runtimes are a table: one row each, its device, version and state in their own cells.
+        const kokoro = within(found).getByRole('rowheader', { name: 'Kokoro' }).closest('tr') as HTMLElement;
+        expect([...kokoro.querySelectorAll('td')].map((c) => c.textContent)).toEqual(['cpu', 'b17', 'Update needed']);
+        expect(within(found).getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
         expect(found).toHaveTextContent('http://127.0.0.1:13305/api/v1');
         expect(found).toHaveTextContent('0.3.3');
         expect(found).toHaveTextContent('AMD Radeon(TM) 8060S Graphics (gfx1151)');
         expect(found).toHaveTextContent('16 cores, 32 threads');
+        expect(within(found).getAllByRole('heading').map((h) => h.textContent)).toEqual(['What setup found', 'Software', 'Runs models with', 'Hardware']);
         expect(found).not.toHaveTextContent('Not here');
         expect(found).not.toHaveTextContent('ds4');
     });

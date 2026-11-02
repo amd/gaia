@@ -119,14 +119,8 @@ async function startLocal() {
     return onReady;
 }
 
-async function toPc() {
-    fireEvent.click(screen.getByRole('button', { name: 'Customize' }));
-    await screen.findByRole('heading', { name: 'What we found on this PC' });
-}
-
 async function toModels() {
-    await toPc();
-    clickContinue();
+    fireEvent.click(screen.getByRole('button', { name: 'Customize' }));
     await screen.findByRole('heading', { name: 'Choose your models' });
 }
 
@@ -182,58 +176,21 @@ describe('SetupScreen: checking this PC', () => {
         expect(screen.getByRole('region', { name: 'What setup found' })).toBeInTheDocument();
     });
 
-    it('keeps going when the hardware could not be read, and says so on the PC screen', async () => {
+    it('keeps going when the hardware could not be read, and says why on Check this PC', async () => {
         mockedApi.getOnboardingPreflight.mockRejectedValue(new Error('timed out'));
-        await open();
-        await toPc();
-        expect(screen.getByText(/couldn.t be read/)).toHaveTextContent('timed out');
+        renderSetup();
+        const device = (await screen.findByText('Processor, GPU and NPU')).closest('li') as HTMLElement;
+        await waitFor(() => expect(device).toHaveTextContent("couldn't be read. Setup still checks it as it goes. timed out"));
+        await planScreen();
     });
 
-    it('lists the device, memory and disk on the PC screen, with the backends', async () => {
-        mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
-        mockedApi.getSetupPlan.mockResolvedValue({
-            ...COLD_BIG(),
-            backends: [
-                { recipe: 'llamacpp', backend: 'vulkan', state: 'installed', default: true },
-                { recipe: 'llamacpp', backend: 'cpu', state: 'installable', default: false },
-                { recipe: 'flm', backend: 'npu', state: 'unsupported', default: false },
-            ],
-        });
-        await open();
-        await toPc();
-        const list = screen.getByRole('list', { name: 'This PC' });
-        expect(list).toHaveTextContent('AMD Radeon 8060S · Ryzen AI NPU');
-        expect(list).toHaveTextContent('96 GB');
-        expect(list).toHaveTextContent('400 GB free');
-        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-        const backends = screen.getByRole('region', { name: 'Backends on this PC' });
-        expect(within(backends).getByText('vulkan').closest('li')).toHaveTextContent('Installed');
-        expect(within(backends).getByText('cpu').closest('li')).toHaveTextContent('Downloads when needed');
-        expect(within(backends).getByText('npu').closest('li')).toHaveTextContent('Not supported here');
-    });
-
-    it('says the device is checked later when no model server runs yet, not that it is missing', async () => {
-        mockedApi.getOnboardingPreflight.mockResolvedValue({ ...HARDWARE, gpu_name: null, npu_detected: null, lemonade_running: false });
-        await open();
-        await toPc();
-        expect(screen.getByText('Checked once the model server is running')).toBeInTheDocument();
-        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    });
-
-    it("doesn't warn about the NPU before a model server can be asked", async () => {
+    it("lists the PC's warnings on Check this PC, but not the NPU one before a model server can be asked", async () => {
         const npu = 'GAIA could not query Lemonade for NPU availability; the NPU result for the recommended model is unknown.';
         mockedApi.getOnboardingPreflight.mockResolvedValue({ ...HARDWARE, lemonade_running: false, warnings: [npu, 'Low memory.'] });
-        await open();
-        await toPc();
-        expect(screen.getByText('Low memory.')).toBeInTheDocument();
-        expect(screen.queryByText(npu)).not.toBeInTheDocument();
-    });
-
-    it('shows a real blocker as an error on the PC screen', async () => {
-        mockedApi.getOnboardingPreflight.mockResolvedValue({ ...HARDWARE, compatible: false, blockers: ['Needs 30 GB of disk; 4 GB free.'] });
-        await open();
-        await toPc();
-        expect(screen.getByRole('alert')).toHaveTextContent('Needs 30 GB of disk');
+        renderSetup();
+        const found = await screen.findByRole('region', { name: 'What setup found' });
+        expect(found).toHaveTextContent('Low memory.');
+        expect(found).not.toHaveTextContent('NPU availability');
     });
 
     // Product bug: blockers and warnings only render behind Customize, so "Download and start" never shows them.
@@ -453,11 +410,9 @@ describe('SetupScreen: first run, local', () => {
         await toModels();
         fireEvent.click(screen.getByRole('checkbox', { name: /embeddinggemma/ }));
         fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-        expect(await screen.findByRole('heading', { name: 'What we found on this PC' })).toBeInTheDocument();
-        clickContinue();
+        expect(await planScreen()).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Customize' }));
         expect(await screen.findByRole('checkbox', { name: /embeddinggemma/ })).not.toBeChecked();
-        fireEvent.keyDown(document, { key: 'ArrowLeft', altKey: true });
-        expect(screen.getByRole('heading', { name: 'What we found on this PC' })).toBeInTheDocument();
         fireEvent.keyDown(document, { key: 'ArrowLeft', altKey: true });
         expect(await planScreen()).toBeInTheDocument();
     });
@@ -497,18 +452,20 @@ describe('SetupScreen: the rail', () => {
         expect(railStep('Your setup')).toHaveAttribute('aria-current', 'step');
     });
 
-    it('adds the Customize steps, with no GPU step on a discrete GPU', async () => {
+    it('keeps the steps flat: Customize is a screen of Your setup, not a step', async () => {
         await open();
         await toModels();
-        expect(railLabels()).toEqual(['Check this PC', 'Your setup', 'This PC', 'Models', 'Download', 'Test', 'Ready']);
+        expect(railLabels()).toEqual(['Check this PC', 'Your setup', 'Download', 'Test', 'Ready']);
+        expect(railStep('Your setup')).toHaveAttribute('aria-current', 'step');
+        expect(screen.queryByRole('button', { name: 'Change how memory is split' })).toBeNull();
     });
 
     it('reopens a step already passed, and not one ahead', async () => {
         await open();
         await toModels();
         expect(rail().queryByRole('button', { name: /Download/ })).not.toBeInTheDocument();
-        fireEvent.click(rail().getByRole('button', { name: /This PC/ }));
-        expect(await screen.findByRole('heading', { name: 'What we found on this PC' })).toBeInTheDocument();
+        fireEvent.click(rail().getByRole('button', { name: /Check this PC/ }));
+        expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
     });
 
     it('marks the step that failed', async () => {
@@ -555,14 +512,13 @@ describe('SetupScreen: the rail', () => {
         expect(await startChatting()).toBeInTheDocument();
     });
 
-    it('before any download, Next returns to a Customize step already seen', async () => {
+    it('Your setup on the rail reopens the Customize screen once it was chosen', async () => {
         await open();
-        await toPc();
-        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-        await screen.findByRole('heading', { name: 'Your setup' });
-        const steps = within(screen.getByRole('navigation', { name: 'Move between setup steps' }));
-        fireEvent.click(steps.getByRole('button', { name: 'Next step' }));
-        expect(await screen.findByRole('heading', { name: 'What we found on this PC' })).toBeInTheDocument();
+        await toModels();
+        fireEvent.click(rail().getByRole('button', { name: /Check this PC/ }));
+        await screen.findByRole('heading', { name: 'Checking this PC' });
+        fireEvent.click(rail().getByRole('button', { name: /Your setup/ }));
+        expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
     });
 
     it('Back and Next walk the steps setup has reached', async () => {
@@ -683,7 +639,7 @@ describe('SetupScreen: warnings and confirmations', () => {
         await startLocal();
         const sheet = await screen.findByRole('alertdialog', { name: 'Not enough free disk space' });
         fireEvent.click(within(sheet).getByRole('button', { name: 'Change models' }));
-        expect(await screen.findByRole('heading', { name: 'What we found on this PC' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
         expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
     });
 
@@ -707,8 +663,7 @@ describe('SetupScreen: warnings and confirmations', () => {
         const on = (e: typeof QWEN) => ({ ...e, downloaded: true, size_gb: 0 });
         mockedApi.getSetupPlan.mockResolvedValue(plan([on(QWEN), on(GEMMA), on(EMBED)]));
         await open();
-        await toPc();
-        clickContinue();
+        await toModels();
         expect(await screen.findByText('Everything is already on this PC.')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: /Finish setup/ }));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalled());
@@ -716,18 +671,30 @@ describe('SetupScreen: warnings and confirmations', () => {
     });
 });
 
-describe('SetupScreen: the GPU memory step', () => {
-    it('appears on an integrated GPU, and Skip moves on to the models with nothing downloading', async () => {
+describe('SetupScreen: GPU memory', () => {
+    it('is an option on Customize, not a step, and goes back to the models', async () => {
         mockedApi.getGpuMemory.mockResolvedValue(gpuStatus());
         await open();
-        await toPc();
-        expect(railLabels()).toEqual(['Check this PC', 'Your setup', 'This PC', 'GPU memory (optional)', 'Models', 'Download', 'Test', 'Ready']);
-        clickContinue();
+        await toModels();
+        expect(railLabels()).toEqual(['Check this PC', 'Your setup', 'Download', 'Test', 'Ready']);
+        expect(screen.getByText(/The GPU has 32\.0 GB of this PC's 128\.0 GB/)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Change how memory is split' }));
         expect(await screen.findByText('With 64.0 GB for the GPU, Qwen3.6-35B-A3B fits.')).toBeInTheDocument();
-        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+        expect(railStep('Your setup')).toHaveAttribute('aria-current', 'step');
         fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
         expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
+    });
+
+    it('opens from Check this PC and goes back there', async () => {
+        mockedApi.getGpuMemory.mockResolvedValue(gpuStatus());
+        renderSetup();
+        await screen.findByRole('region', { name: 'What setup found' });
+        fireEvent.click(await screen.findByRole('button', { name: 'Change how memory is split' }));
+        expect(await screen.findByRole('heading', { name: 'GPU memory' })).toBeInTheDocument();
+        expect(railStep('Check this PC')).toHaveAttribute('aria-current', 'step');
+        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+        expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
     });
 
     it('stays out of the plain path, which goes straight to the download', async () => {
@@ -920,7 +887,7 @@ describe('SetupScreen: downloading', () => {
         mockedApi.getSetupPlan.mockResolvedValue(HALF());
         await open();
         fireEvent.click(screen.getByRole('button', { name: 'Change models' }));
-        expect(await screen.findByRole('heading', { name: 'What we found on this PC' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
         expect(screen.queryByText('Last time’s download didn’t finish. Resume?')).not.toBeInTheDocument();
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
     });
@@ -1051,7 +1018,7 @@ describe('SetupScreen: testing', () => {
         mockedApi.startSetup.mockResolvedValue(failedRun('memory'));
         await startLocal();
         fireEvent.click(await screen.findByRole('button', { name: 'Choose another model' }));
-        expect(await screen.findByRole('heading', { name: 'What we found on this PC' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
     });
 
     it('deletes a broken model and downloads it again', async () => {
@@ -1120,7 +1087,7 @@ describe('SetupScreen: cloud', () => {
         connects('fireworks');
         await open();
         await toKey();
-        expect(railLabels()).toEqual(['Check this PC', 'Your setup', 'Cloud key', 'Download', 'Test', 'Ready']);
+        expect(railLabels()).toEqual(['Check this PC', 'Your setup', 'Download', 'Test', 'Ready']);
         fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'fw-key' } });
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
@@ -1222,8 +1189,8 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
         mockedApi.detectLemonade.mockResolvedValue({ found });
         mockedApi.setLemonadeTarget.mockResolvedValue({ ...TARGET, daemon: null });
-        await open();
-        await toPc();
+        renderSetup();
+        await screen.findByRole('region', { name: 'What setup found' });
     }
 
     it('offers it with what GAIA does there, and saves the URL on Use mine', async () => {
@@ -1307,8 +1274,8 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         mockedApi.detectLemonade
             .mockResolvedValueOnce({ found: null, unchecked: [FOUND.url] })
             .mockResolvedValueOnce({ found: FOUND, unchecked: [] });
-        await open();
-        await toPc();
+        renderSetup();
+        await screen.findByRole('region', { name: 'What setup found' });
         expect(await screen.findByText(/Couldn.t check whether your Lemonade Server at http:\/\/localhost:13305\/api\/v1 is running/)).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: /Check again/ }));
         expect(await screen.findByRole('button', { name: 'Use mine' })).toBeInTheDocument();
@@ -1322,8 +1289,8 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
     });
 
     it('does not look for one once a choice is saved', async () => {
-        await open();
-        await toPc();
+        renderSetup();
+        await screen.findByRole('region', { name: 'What setup found' });
         await waitFor(() => expect(mockedApi.getLemonadeTarget).toHaveBeenCalled());
         expect(mockedApi.detectLemonade).not.toHaveBeenCalled();
     });

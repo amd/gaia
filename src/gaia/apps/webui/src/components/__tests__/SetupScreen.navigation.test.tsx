@@ -50,7 +50,6 @@ beforeEach(() => {
 
 const rail = () => within(screen.getByRole('navigation', { name: 'Setup steps' }));
 const stepNav = () => within(screen.getByRole('navigation', { name: 'Move between setup steps' }));
-const railLabels = () => [...document.querySelectorAll('.setup-rail-step > span:last-child')].map((l) => l.textContent);
 /** The checks stop on what they found; Continue goes on to the plan. */
 async function toPlan() {
     fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
@@ -74,7 +73,8 @@ async function cloudRunGoing() {
 describe('moving between steps during a run', () => {
     it('a reopened key step cannot start a second run while one is going', async () => {
         await cloudRunGoing();
-        fireEvent.click(rail().getByRole('button', { name: /Cloud key/ }));
+        // Your setup reopens on the screen chosen there: the cloud key.
+        fireEvent.click(rail().getByRole('button', { name: /Your setup/ }));
         await screen.findByRole('heading', { name: 'Connect a cloud provider' });
         expect(screen.getByRole('button', { name: /Test and connect/ })).toBeDisabled();
         expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
@@ -82,21 +82,24 @@ describe('moving between steps during a run', () => {
 
     it('Back on a reopened key step keeps the running cloud run cloud', async () => {
         await cloudRunGoing();
-        expect(railLabels()).toContain('Cloud key');
-        fireEvent.click(rail().getByRole('button', { name: /Cloud key/ }));
+        fireEvent.click(rail().getByRole('button', { name: /Your setup/ }));
         await screen.findByRole('heading', { name: 'Connect a cloud provider' });
         fireEvent.click(screen.getByRole('button', { name: 'Back' }));
         await screen.findByRole('heading', { name: 'Your setup' });
-        expect(railLabels()).toContain('Cloud key');
+        fireEvent.click(rail().getByRole('button', { name: /Download/ }));
+        await screen.findByRole('button', { name: 'Cancel' });
+        fireEvent.click(rail().getByRole('button', { name: /Your setup/ }));
+        expect(await screen.findByRole('heading', { name: 'Connect a cloud provider' })).toBeInTheDocument();
     });
 
     it('Customize and the cloud choice wait while a run is going', async () => {
         await cloudRunGoing();
         fireEvent.click(rail().getByRole('button', { name: /Your setup/ }));
+        await screen.findByRole('heading', { name: 'Connect a cloud provider' });
+        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
         await screen.findByRole('heading', { name: 'Your setup' });
         expect(screen.getByRole('button', { name: 'Customize' })).toBeDisabled();
         expect(screen.getByRole('button', { name: 'Use a cloud model' })).toBeDisabled();
-        expect(railLabels()).toContain('Cloud key');
     });
 
     it('going back from the plan before any download stays on the checks', async () => {

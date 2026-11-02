@@ -48,11 +48,6 @@ button.setup-rail-step:hover {
     background: var(--bg-hover);
 }
 
-.setup-rail-step.is-sub {
-    padding-inline-start: 24px;
-    font-size: 13px;
-}
-
 .setup-rail-step.is-current,
 .setup-rail-step.is-active {
     color: var(--text-primary);
@@ -367,10 +362,6 @@ button.setup-rail-step:hover {
 
     .setup-rail-step {
         white-space: nowrap;
-    }
-
-    .setup-rail-step.is-sub {
-        padding-inline-start: 8px;
     }
 }
 
@@ -694,15 +685,11 @@ button.setup-rail-step:hover {
     gap: 14px;
 }
 
-.found-glance,
-.found-details {
+.found-glance {
     display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 10px 24px;
     margin: 0;
-}
-
-.found-glance {
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .found-paths {
@@ -720,9 +707,85 @@ button.setup-rail-step:hover {
     font-size: 13px;
 }
 
+/* All details: three short groups, one item per row, label beside value. */
 .found-details {
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    padding-block-start: 4px;
+    display: grid;
+    gap: 6px;
+}
+
+.found-group {
+    margin: 8px 0 0;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.found-group:first-child {
+    margin-block-start: 0;
+}
+
+.found-list {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+}
+
+.found-list .found-row {
+    grid-template-columns: 9.5rem minmax(0, 1fr);
+    gap: 12px;
+    align-items: baseline;
+}
+
+.found-list .found-row dt {
+    font-size: 13px;
+}
+
+.found-sub {
+    display: block;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.found-table {
+    inline-size: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.found-table th,
+.found-table td {
+    padding: 3px 12px 3px 0;
+    text-align: start;
+    font-weight: 400;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.found-table tbody th {
+    inline-size: 9.5rem;
+}
+
+.found-table td:last-child {
+    inline-size: 100%;
+    color: var(--text-secondary);
+}
+
+.found-table td.is-installed {
+    color: var(--accent-green);
+}
+
+@media (max-width: 520px) {
+    .found-list .found-row {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+    }
+
+    .found-table th,
+    .found-table td {
+        white-space: normal;
+    }
 }
 
 .found-row {
@@ -747,10 +810,6 @@ button.setup-rail-step:hover {
 .found-glance dd {
     font-size: 14px;
     font-weight: 500;
-}
-
-.found-line {
-    display: block;
 }
 
 .found-muted {

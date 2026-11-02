@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Check, Info, Loader2 } from 'lucide-react';
-import { useT, type Translate } from '../i18n/useT';
-import type { GpuMemoryStatus, PreflightReport, SetupPlan } from '../types';
+import { AlertTriangle, Check, Loader2 } from 'lucide-react';
+import { useT } from '../i18n/useT';
+import type { GpuMemoryStatus, SetupPlan } from '../types';
 import { JobModels } from './setup/JobModels';
 import { ChecklistLoading, SelectionSummary, tooBigText } from './setup/ModelChecklist';
 import { formatSize } from './setup/format';
@@ -14,68 +14,6 @@ import {
     catalogOf, isEmbedding, isVision, pendingDownloads, resolveVision, shortfall, recommendedSelection,
     type Selection,
 } from './setup/selection';
-
-/** One line of the system check: what was found, or that it is checked later. */
-function CheckRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
-    return (
-        <li className={`setup-check-row${ok ? ' is-ok' : ''}`}>
-            {ok ? <Check size={13} aria-hidden="true" /> : <Info size={13} aria-hidden="true" />}
-            <span className="setup-check-label">{label}</span>
-            <span className="setup-check-value"><bdi>{value}</bdi></span>
-        </li>
-    );
-}
-
-/** Lemonade reports the devices, so before it runs they are not known yet. */
-export function deviceKnown(hw: PreflightReport): boolean {
-    return !!hw.gpu_name || !!hw.npu_detected || hw.lemonade_running;
-}
-
-function deviceText(hw: PreflightReport, t: Translate): { value: string; ok: boolean } {
-    const parts = [hw.gpu_name, hw.npu_detected ? t('setup.checks.npu') : null].filter(Boolean);
-    if (parts.length) return { value: parts.join(' · '), ok: true };
-    if (!deviceKnown(hw)) return { value: t('setup.system.deviceLater'), ok: false };
-    return { value: t('setup.system.noDevice'), ok: false };
-}
-
-/** Device, memory and disk, read the moment setup opens. */
-export function SystemCheck({ hardware, error }: { hardware: PreflightReport | null; error: string | null }) {
-    const t = useT();
-    if (error) return <p className="setup-hint">{t('setup.system.unread')} <bdi dir="ltr">{error}</bdi></p>;
-    if (!hardware) {
-        return (
-            <p className="setup-hint" role="status">
-                <Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.check.heading')}
-            </p>
-        );
-    }
-    const device = deviceText(hardware, t);
-    // Before a model server runs, the NPU can't be asked about yet; the Device row says so.
-    const warnings = hardware.lemonade_running
-        ? hardware.warnings
-        : hardware.warnings.filter((w) => !/\bNPU\b/.test(w));
-    return (
-        <>
-            <ul className="setup-check" aria-label={t('setup.pc.step')}>
-                <CheckRow label={t('setup.system.device')} value={device.value} ok={device.ok} />
-                <CheckRow
-                    label={t('setup.checks.memory')}
-                    value={hardware.ram_gb != null ? `${hardware.ram_gb} GB` : t('setup.system.notReported')}
-                    ok={hardware.ram_gb != null}
-                />
-                <CheckRow
-                    label={t('setup.system.disk')}
-                    value={hardware.disk_free_gb != null ? t('setup.checks.diskValue', { gb: String(Math.round(hardware.disk_free_gb)) }) : t('setup.system.notReported')}
-                    ok={hardware.disk_free_gb != null && hardware.compatible}
-                />
-            </ul>
-            {!hardware.compatible && hardware.blockers.length > 0 && (
-                <p className="setup-error" role="alert"><bdi dir="ltr">{hardware.blockers.join(' ')}</bdi></p>
-            )}
-            {warnings.length > 0 && <p className="setup-hint"><bdi dir="ltr">{warnings.join(' ')}</bdi></p>}
-        </>
-    );
-}
 
 interface ModelsStepProps {
     plan: SetupPlan | null;
