@@ -34,7 +34,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 
-from gaia.env import load_env
+from gaia.env import credential, load_env, working_dir_credential_file
 from gaia.eval.claude_usage import TOKEN_FIELDS, usage_from_cli
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
 from gaia.llm.local_only import assert_provider_permitted
@@ -91,7 +91,7 @@ def judge_credential_present() -> bool:
     *accepted* — for that, probe it (see :func:`probe_judge_credential`).
     """
     return (
-        any((os.getenv(var) or "").strip() for var in JUDGE_CREDENTIAL_VARS)
+        any((credential(var) or "").strip() for var in JUDGE_CREDENTIAL_VARS)
         or shutil.which("claude") is not None
     )
 
@@ -278,21 +278,33 @@ def make_judge_client(model: str | None = None, max_tokens: int | None = None):
     The runner's rule: ``ANTHROPIC_API_KEY`` means the Messages API (the
     workflow blanks it when it wants the subscription path). Otherwise the
     subscription through ``claude -p`` — a ``CLAUDE_CODE_OAUTH_TOKEN`` or the
-    CLI's own login. Raises when neither is available; never returns a
-    degraded scorer. ``max_tokens`` applies to the API transport only.
+    CLI's own login. A key that only a working-directory ``.env`` supplied
+    comes last, so a project's file cannot override the user's login. Raises
+    when none is available; never returns a degraded scorer. ``max_tokens``
+    applies to the API transport only.
     """
-    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    env_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     oauth_token = (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
 
-    if api_key:
-        from gaia.eval.claude import ClaudeClient
-
-        if max_tokens is None:
-            return ClaudeClient(model=model)
-        return ClaudeClient(model=model, max_tokens=max_tokens)
+    if env_key:
+        return _api_judge(model, max_tokens)
     if oauth_token or shutil.which("claude"):
         return ClaudeCliClient(model=model)
+    if (credential("ANTHROPIC_API_KEY") or "").strip():
+        log.warning(
+            "Using ANTHROPIC_API_KEY from %r for the judge.",
+            working_dir_credential_file("ANTHROPIC_API_KEY"),
+        )
+        return _api_judge(model, max_tokens)
     raise ValueError(MISSING_CREDENTIAL_ERROR)
+
+
+def _api_judge(model: str | None, max_tokens: int | None):
+    from gaia.eval.claude import ClaudeClient  # pylint: disable=import-outside-toplevel
+
+    if max_tokens is None:
+        return ClaudeClient(model=model)
+    return ClaudeClient(model=model, max_tokens=max_tokens)
 
 
 def probe_judge_credential(model: str | None = None) -> str:

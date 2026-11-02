@@ -240,7 +240,11 @@ await shutdown(proc);   // tree-kill; auto-cleanup also reaps on exit
   sign-ins, native hub agents, media tools) never inherit this token
   or GAIA's other internal credentials. To withhold your own variables from
   them too, list the names in `GAIA_CHILD_ENV_DENY` (comma or space separated);
-  `GAIA_NO_DOTENV=1` stops the sidecar loading `.env` files.
+  `GAIA_NO_DOTENV=1` stops the sidecar loading `.env` files. From a `.env` in
+  its working directory the sidecar reads only `ANTHROPIC_API_KEY`; pass any
+  other setting through `env` instead. A sidecar run from a source checkout
+  still loads the `.env` at or above GAIA's install (the repo's `.env`) in
+  full, as before; the packaged binary has no install `.env`.
 
 Or skip the code entirely and let the CLI own it:
 
