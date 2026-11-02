@@ -51,8 +51,12 @@ def _mock_token_endpoint():
 def _record_wait_for(monkeypatch):
     seen = []
     real_wait_for = asyncio.wait_for
+    flow_futures = {id(f.future) for f in flow._pending.values()}
 
-    async def _wait_for(aw, timeout):
+    # flow.asyncio is the global module, so only the flow's own wait is touched.
+    async def _wait_for(aw, timeout=None, **kwargs):
+        if id(aw) not in flow_futures:
+            return await real_wait_for(aw, timeout, **kwargs)
         seen.append(timeout)
         return await real_wait_for(aw, timeout=5.0)
 
@@ -65,8 +69,8 @@ async def test_a_callback_after_the_old_two_minutes_still_completes(
     google_provider, monkeypatch
 ):
     _mock_token_endpoint()
-    seen = _record_wait_for(monkeypatch)
     info = await flow.start_authorization("google", scopes=["openid"])
+    seen = _record_wait_for(monkeypatch)
     params = parse_qs(urlparse(info["authorization_url"]).query)
     callback = f"{params['redirect_uri'][0]}?code=c&state={params['state'][0]}"
 
