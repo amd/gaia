@@ -79,7 +79,7 @@ aggregate:
 generated_at: '2026-08-24T11:25:31.271112+00:00'
 inherited_from: null
 ---
-# GAIA (flagship agent) — Eval Scorecard v0.1.0
+# GAIA (flagship agent) — Eval Scorecard v0.1.1
 
 **Aggregate score: 72.73** (out of 100)
 
