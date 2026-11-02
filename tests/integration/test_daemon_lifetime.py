@@ -146,10 +146,11 @@ def test_a_test_session_fails_and_stops_a_daemon_left_running():
 def test_tests_cannot_act_on_the_real_gaia_home():
     result = _child_pytest("probe_real_home.py", "-v")
     out = result.stdout + result.stderr
-    assert "2 failed, 2 passed" in out, out
+    assert "3 failed, 3 passed" in out, out
     for name in (
         "test_embedded_stop_on_the_real_home_is_refused",
         "test_daemon_spawn_without_gaia_home_is_refused",
+        "test_lemonade_start_via_the_real_daemon_is_refused",
     ):
         assert re.search(rf"{name} FAILED", out), out
     assert out.count("your real home") >= 2, out
