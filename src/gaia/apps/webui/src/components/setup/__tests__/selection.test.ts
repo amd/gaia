@@ -4,9 +4,12 @@
 import { describe, expect, it } from 'vitest';
 import {
     chatCandidates, extraModels, initialSelection, installedOnlyRows, mainRows, moreRows, overallFromPlan, recommendedSelection,
-    chooseChat, shortfall, showGpuStep, skipChanges, toggle, tooBig, totals, visionSkipped,
+    chooseChat, pendingDownloads, pickChat, pickVision, resolveVision, savedVision, shortfall, skipChanges,
+    toggle, tooBig, totals, visionSkipped, VISION_NONE,
 } from '../selection';
-import { COLD_BIG, EMBED, FLM, GEMMA, GPT_OSS, QWEN, entry, gpuStatus, plan, progress, runStatus } from './fixtures';
+import {
+    COLD_BIG, EMBED, FLM, GEMMA, GEMMA_CHAT, GPT_OSS, QWEN, QWEN_READS, SDXL, entry, gpuStatus, plan, progress, runStatus,
+} from './fixtures';
 import coldStrixHalo from './coldStrixHalo.json';
 import type { GpuMemoryStatus, SetupPlan } from '../../../types';
 
@@ -141,44 +144,7 @@ describe('turning the selection into choices', () => {
     });
 });
 
-describe('the GPU memory step', () => {
-    it('shows on an integrated GPU where a bigger share makes a model fit', () => {
-        const p = COLD_BIG();
-        expect(showGpuStep(gpuStatus(), initialSelection(p))).toBe(true);
-    });
 
-    it('hides on a discrete or unknown GPU, or when nothing new would fit', () => {
-        const sel = initialSelection(COLD_BIG());
-        expect(showGpuStep(gpuStatus({ applies: false }), sel)).toBe(false);
-        expect(showGpuStep(gpuStatus({ show_in_setup: false }), sel)).toBe(false);
-        expect(showGpuStep(null, sel)).toBe(false);
-    });
-
-    it('hides once the user unticked every model it would help', () => {
-        const p = COLD_BIG();
-        const only = gpuStatus({ presets: [{ setting_gb: 64, gpu_gb: 64, unlocks: [QWEN.id] }] });
-        expect(showGpuStep(only, toggle(initialSelection(p), p.catalog!, QWEN.id, false))).toBe(false);
-    });
-});
-
-describe('the GPU step only for a model the user picked', () => {
-    it('stays hidden when the model a bigger share would help was never ticked', () => {
-        // An NPU-only user: the 23 GB model is not theirs, so no step promotes it.
-        const p = plan([{ ...QWEN, recommended: false, planned: false, selected: false }, GEMMA, EMBED, FLM], {
-            chat_model: { id: FLM.id, user_set: true, size_gb: 0, downloaded: true },
-        });
-        const sel = initialSelection(p);
-        expect(sel.defaultChat).toBe(FLM.id);
-        expect(sel.ticked.has(QWEN.id)).toBe(false);
-        expect(showGpuStep(gpuStatus({ presets: [{ setting_gb: 64, gpu_gb: 64, unlocks: [QWEN.id] }] }), sel)).toBe(false);
-    });
-
-    it('shows once the user ticks that model', () => {
-        const p = plan([{ ...QWEN, recommended: false, planned: false, selected: false }, GEMMA, EMBED]);
-        const sel = toggle(initialSelection(p), p.catalog!, QWEN.id, true);
-        expect(showGpuStep(gpuStatus({ presets: [{ setting_gb: 64, gpu_gb: 64, unlocks: [QWEN.id] }] }), sel)).toBe(true);
-    });
-});
 
 describe('download totals from one source', () => {
     it('counts only what was left to download, as the models step did', () => {
@@ -208,39 +174,120 @@ describe('download totals from one source', () => {
     });
 });
 
-describe('the GPU step on a real cold start', () => {
-    // Read from the real /api/setup/plan and /api/gpu-memory: a Strix Halo with a
-    // 16 GB GPU share and nothing downloaded. Setup plans Gemma; Qwen doesn't fit yet.
-    const cold = coldStrixHalo as unknown as { plan: SetupPlan; gpu: GpuMemoryStatus };
 
-    it('offers a bigger share for the default model, though setup left it unticked', () => {
-        const sel = initialSelection(cold.plan);
-        expect(sel.ticked.has(QWEN.id)).toBe(false);
-        expect(sel.defaultChat).toBe(GEMMA.id);
-        expect(showGpuStep(cold.gpu, sel)).toBe(true);
+describe('picking the chat model, and the vision model that follows it', () => {
+    const OTHER_VISION = entry({ id: 'Qwen3-VL-4B-Instruct-GGUF', name: 'Qwen3 VL 4B', roles: ['vision'], chat_choice: false, gaia_model: false, size_gb: 3 });
+    const P = () => plan([QWEN_READS, GEMMA_CHAT, EMBED, GPT_OSS, SDXL, OTHER_VISION]);
+    const pending = (sel: ReturnType<typeof initialSelection>, p = P()) => pendingDownloads(p.catalog!, sel).map((e) => e.id);
+
+    it("doesn't download Gemma when the chat model reads images itself", () => {
+        const p = P();
+        const sel = initialSelection(p);
+        expect(resolveVision(p.catalog!, sel)).toBe(QWEN.id);
+        expect(pending(sel)).not.toContain(GEMMA.id);
+        expect(sel.unticked.has(GEMMA.id)).toBe(true);
     });
 
-    it('hides it once the user unticks that model', () => {
-        const catalog = cold.plan.catalog!;
-        const sel = toggle(toggle(initialSelection(cold.plan), catalog, QWEN.id, true), catalog, QWEN.id, false);
-        expect(showGpuStep(cold.gpu, sel)).toBe(false);
+    it('preselects Gemma when the new chat model has no vision', () => {
+        const p = P();
+        const sel = pickChat(initialSelection(p), p.catalog!, GPT_OSS.id);
+        expect(sel.defaultChat).toBe(GPT_OSS.id);
+        expect(sel.chatChosen).toBe(true);
+        expect(resolveVision(p.catalog!, sel)).toBe(GEMMA.id);
+        expect(pending(sel)).toEqual(expect.arrayContaining([GPT_OSS.id, GEMMA.id]));
     });
 
-    it('hides it once the user picks their own chat model, unless a bigger share helps that one', () => {
-        const catalog = cold.plan.catalog!;
-        expect(showGpuStep(cold.gpu, chooseChat(initialSelection(cold.plan), catalog, GEMMA.id))).toBe(false);
-        expect(showGpuStep(cold.gpu, chooseChat(initialSelection(cold.plan), catalog, QWEN.id))).toBe(true);
+    it('stops downloading the chat model it replaces, but keeps one on disk ticked', () => {
+        const p = P();
+        expect(pending(pickChat(initialSelection(p), p.catalog!, GPT_OSS.id))).not.toContain(QWEN.id);
+        const onDisk = plan([{ ...QWEN_READS, downloaded: true, size_gb: 0 }, GEMMA_CHAT, EMBED, GPT_OSS]);
+        expect(pickChat(initialSelection(onDisk), onDisk.catalog!, GPT_OSS.id).ticked.has(QWEN.id)).toBe(true);
     });
 
-    it('never offers it for a non-default model the user did not tick', () => {
-        const gpu = { ...cold.gpu, models: cold.gpu.models!.filter((m) => !m.default) };
-        expect(gpu.models.some((m) => !m.fits_now && m.fits_at_setting_gb != null)).toBe(true);
-        expect(showGpuStep(gpu, initialSelection(cold.plan))).toBe(false);
+    it('drops Gemma again when the user comes back to a chat model that reads images', () => {
+        const p = P();
+        const away = pickChat(initialSelection(p), p.catalog!, GPT_OSS.id);
+        const back = pickChat(away, p.catalog!, QWEN.id);
+        expect(pending(back)).not.toContain(GEMMA.id);
+        expect(pending(back)).not.toContain(GPT_OSS.id);
     });
 
-    it('ignores a model that already fits or that no share would fit', () => {
-        const sel = toggle(initialSelection(cold.plan), cold.plan.catalog!, GPT_OSS.id, true);
-        const gpu = { ...cold.gpu, models: cold.gpu.models!.filter((m) => m.fits_now || m.fits_at_setting_gb == null) };
-        expect(showGpuStep(gpu, sel)).toBe(false);
+    it('needs no second vision model when Gemma is the chat model', () => {
+        const p = P();
+        const sel = pickChat(initialSelection(p), p.catalog!, GEMMA.id);
+        expect(resolveVision(p.catalog!, sel)).toBe(GEMMA.id);
+        expect(pending(sel).filter((id) => id === GEMMA.id)).toHaveLength(1);
+    });
+
+    it("unticks image creation for a compact chat model, and doesn't put it back for a full one", () => {
+        const p = P();
+        const compact = pickChat(toggle(initialSelection(p), p.catalog!, SDXL.id, true), p.catalog!, GEMMA.id);
+        expect(compact.ticked.has(SDXL.id)).toBe(false);
+        expect(pickChat(compact, p.catalog!, QWEN.id).ticked.has(SDXL.id)).toBe(false);
+    });
+
+    it('keeps image creation ticked for a full chat model', () => {
+        const p = P();
+        const sel = pickChat(toggle(initialSelection(p), p.catalog!, SDXL.id, true), p.catalog!, GPT_OSS.id);
+        expect(sel.ticked.has(SDXL.id)).toBe(true);
+    });
+
+    it('Skip for now drops the vision model from the download', () => {
+        const p = P();
+        const chat = pickChat(initialSelection(p), p.catalog!, GPT_OSS.id);
+        const sel = pickVision(chat, p.catalog!, VISION_NONE);
+        expect(resolveVision(p.catalog!, sel)).toBeNull();
+        expect(pending(sel)).not.toContain(GEMMA.id);
+        expect(sel.unticked.has(GEMMA.id)).toBe(true);
+    });
+
+    it('keeps a vision model on disk when it stops being the pick', () => {
+        const p = plan([QWEN_READS, { ...GEMMA_CHAT, downloaded: true, size_gb: 0 }, EMBED, OTHER_VISION]);
+        expect(pickVision(initialSelection(p), p.catalog!, OTHER_VISION.id).ticked.has(GEMMA.id)).toBe(true);
+    });
+
+    it("swaps the download when the user picks another vision model, and back on GAIA's choice", () => {
+        const p = plan([GPT_OSS, GEMMA, EMBED, OTHER_VISION], { chat_model: { id: GPT_OSS.id, user_set: true, size_gb: 12.1, downloaded: false } });
+        const other = pickVision(initialSelection(p), p.catalog!, OTHER_VISION.id);
+        expect(pending(other, p)).toContain(OTHER_VISION.id);
+        expect(pending(other, p)).not.toContain(GEMMA.id);
+        const back = pickVision(other, p.catalog!, null);
+        expect(pending(back, p)).toContain(GEMMA.id);
+        expect(pending(back, p)).not.toContain(OTHER_VISION.id);
+    });
+
+    it('starts from the saved vision model, and treats a skipped one as Skip for now', () => {
+        const chat = { id: GPT_OSS.id, user_set: true, size_gb: 12.1, downloaded: false };
+        const chosen = plan([GPT_OSS, GEMMA, OTHER_VISION], { vision_model: OTHER_VISION.id, chat_model: chat });
+        expect(resolveVision(chosen.catalog!, initialSelection(chosen))).toBe(OTHER_VISION.id);
+        const skipped = plan([GPT_OSS, { ...GEMMA, skipped: true, selected: false }], { chat_model: chat });
+        expect(initialSelection(skipped).vision).toBe(VISION_NONE);
+    });
+});
+
+describe('what is saved as vision_model', () => {
+    const OTHER_VISION = entry({ id: 'Qwen3-VL-4B-Instruct-GGUF', roles: ['vision'], chat_choice: false, gaia_model: false });
+    const P = () => plan([QWEN_READS, GEMMA_CHAT, EMBED, GPT_OSS, OTHER_VISION]);
+
+    it('saves nothing when the chat model does the job', () => {
+        const p = P();
+        expect(savedVision(p.catalog!, initialSelection(p))).toBeNull();
+    });
+
+    it("saves nothing for GAIA's own vision model beside a chat model without vision", () => {
+        const p = P();
+        expect(savedVision(p.catalog!, pickChat(initialSelection(p), p.catalog!, GPT_OSS.id))).toBeNull();
+    });
+
+    it("saves the user's pick when it differs from GAIA's", () => {
+        const p = P();
+        expect(savedVision(p.catalog!, pickVision(initialSelection(p), p.catalog!, GEMMA.id))).toBe(GEMMA.id);
+        expect(savedVision(p.catalog!, pickVision(initialSelection(p), p.catalog!, OTHER_VISION.id))).toBe(OTHER_VISION.id);
+    });
+
+    it('saves nothing for Skip for now', () => {
+        const p = P();
+        const sel = pickVision(pickChat(initialSelection(p), p.catalog!, GPT_OSS.id), p.catalog!, VISION_NONE);
+        expect(savedVision(p.catalog!, sel)).toBeNull();
     });
 });

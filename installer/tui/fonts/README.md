@@ -4,8 +4,7 @@ The Windows setup installs IBM Plex Mono per-user so the **GAIA** Windows
 Terminal profile it writes has the face it names. Nothing here is committed as a
 binary: [`fetch_fonts.py`](../fetch_fonts.py) downloads the official release at
 build time and verifies it against [`fonts.lock.json`](fonts.lock.json), the
-same fetch-and-verify contract the installer already uses for `gaia-agent` and
-the Lemonade MSI.
+same fetch-and-verify contract the installer already uses for `gaia-agent`.
 
 | | |
 | --- | --- |

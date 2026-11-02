@@ -111,6 +111,7 @@ function installSafetyNet({
   homedirFn,
   beforeQuit,
   exitGraceMs = FATAL_EXIT_GRACE_MS,
+  holdCrashCount = () => false,
 }) {
   const homedir = homedirFn || (() => os.homedir());
 
@@ -193,7 +194,9 @@ function installSafetyNet({
 
   // Reset counter on the first successful user interaction. Resetting at
   // loadApp() is too early — the user may crash before their first focus.
-  appModule.on("browser-window-focus", () => writeCount(0, homedir));
+  appModule.on("browser-window-focus", () => {
+    if (!holdCrashCount()) writeCount(0, homedir);
+  });
 
   // Renderer and GPU-process crashes don't fire uncaughtException — route
   // them through fatal() so they get the same dialog + counter treatment.

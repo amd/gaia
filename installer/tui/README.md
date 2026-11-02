@@ -14,7 +14,7 @@ why the sidecar is bundled rather than fetched on first run.
 desktop app (Agent UI), the terminal, or both — at least one — and installs the
 desktop app by running the unmodified electron-builder
 `gaia-agent-ui-<version>-x64-setup.exe` it embeds. That setup stays the app's
-owner (files, Installed-apps entry, shortcuts, autostart, uninstaller) because
+owner (files, Installed-apps entry, shortcuts, uninstaller) because
 electron-updater re-runs exactly that file. The terminal shows as
 `GAIA Terminal UI` but keeps the folder and registry ids of the terminal-only
 setup (`GAIA Terminal Hub`, `GAIATerminalHub`), so either earlier installer is

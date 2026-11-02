@@ -14,6 +14,7 @@ import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQu
 /** Settings sections, in the order the settings nav shows them. */
 export type SettingsSection =
     | 'general'
+    | 'setup'
     | 'model'
     | 'permissions'
     | 'skills'
@@ -225,6 +226,9 @@ interface ChatState {
     showFileBrowser: boolean;
     /** Open settings section, or null when settings is closed. */
     settingsSection: SettingsSection | null;
+    /** Setup was asked to run again from Settings. */
+    setupAgain: boolean;
+    runSetupAgain: (on: boolean) => void;
     /** Provider tab Settings > Model opens on; null follows the active model. */
     settingsProvider: ProviderId | null;
     showMemoryDashboard: boolean;
@@ -505,6 +509,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showDocLibrary: false,
     showFileBrowser: false,
     settingsSection: null,
+    setupAgain: false,
+    runSetupAgain: (on) => set({ setupAgain: on }),
     settingsProvider: null,
     showMemoryDashboard: false,
     showSchedules: false,

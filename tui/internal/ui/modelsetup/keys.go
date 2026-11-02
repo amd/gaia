@@ -64,6 +64,16 @@ func (m Model) key(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m.guideKey(k)
 	case scrDownload:
 		return m.downloadKey(k)
+	case scrContents:
+		switch k {
+		case "enter":
+			m.scr = scrModels
+			return m.proceed()
+		case "esc", "v":
+			m.scr = scrModels
+		}
+	case scrTest:
+		return m.testKey(k)
 	case scrReady:
 		switch k {
 		case "enter":
@@ -190,16 +200,11 @@ func (m Model) modelsKey(k string) (Model, tea.Cmd) {
 		}
 	case " ", "space":
 		if m.focus < len(items) {
-			if items[m.focus].group {
-				m.showAll = !m.showAll
-			} else {
-				m.note = ""
-				if r := items[m.focus].row; !m.sel.toggle(r.id) {
-					m.note = r.name + " is on this PC and setup no longer downloads it, so there is nothing to untick. /models can remove it (x)."
-				}
-				// A changed selection is a new question about the disk.
-				m.ackedDisk = false
-			}
+			return m.chooseItem(items[m.focus]), nil
+		}
+	case "v":
+		if m.plan != nil {
+			m.scr = scrContents
 		}
 	case "l":
 		m.showAll = !m.showAll
@@ -213,6 +218,7 @@ func (m Model) modelsKey(k string) (Model, tea.Cmd) {
 			chat = *m.plan.RecommendedModel
 		}
 		m.sel.resetToRecommended(chat)
+		m.showVision = false
 		m.ackedDisk = false
 	case "c":
 		if cands := m.sel.chatCandidates(); len(cands) > 0 && !m.sel.cloud {
@@ -231,15 +237,55 @@ func (m Model) modelsKey(k string) (Model, tea.Cmd) {
 			m.ask, m.askRow = askRemove, r
 		}
 	case "enter":
-		if m.focus < len(items) && items[m.focus].group {
-			m.showAll = !m.showAll
-			return m, nil
+		if m.focus < len(items) && (items[m.focus].group || items[m.focus].action != "") {
+			return m.chooseItem(items[m.focus]), nil
 		}
 		return m.proceed()
 	case "esc":
 		return m.leave()
 	}
 	return m, nil
+}
+
+// chooseItem is space on a line: it opens a group, picks the one model for a
+// job in setup, or ticks a model. A changed selection is a new question about
+// the disk.
+func (m Model) chooseItem(it item) Model {
+	m.note = ""
+	switch {
+	case it.group:
+		m.showAll = !m.showAll
+		return m
+	case it.action == actionOtherVision:
+		m.showVision = !m.showVision
+		m.clampFocus()
+		return m
+	case it.action == actionNoVision:
+		if m.builtInVision() {
+			m.sel.pickVision("")
+		} else {
+			m.sel.pickVision(visionNone)
+		}
+	case it.row.optional == setupapi.RoleImageCreation && m.imagesOff():
+		name, _ := m.sel.imagesBlocked()
+		m.note = imagesBlockedLine(name)
+		return m
+	case m.radio() && it.job == jobChat:
+		m.sel.pickChat(it.row.id)
+	case m.radio() && it.job == jobVision:
+		m.sel.pickVision(it.row.id)
+	case !m.sel.toggle(it.row.id):
+		m.note = it.row.name + " is on this PC and setup no longer downloads it, so there is nothing to untick. /models can remove it (x)."
+	}
+	m.ackedDisk = false
+	m.clampFocus()
+	return m
+}
+
+// imagesOff reports whether the chat model can't take image creation.
+func (m Model) imagesOff() bool {
+	_, off := m.sel.imagesBlocked()
+	return off
 }
 
 func (m Model) pickKey(k string) (Model, tea.Cmd) {
@@ -255,8 +301,12 @@ func (m Model) pickKey(k string) (Model, tea.Cmd) {
 		}
 	case "enter", " ", "space":
 		if m.pick < len(cands) {
-			m.sel.chat = cands[m.pick].id
-			m.sel.chatChosen = true
+			if m.radio() {
+				m.sel.pickChat(cands[m.pick].id)
+			} else {
+				m.sel.chat = cands[m.pick].id
+				m.sel.chatChosen = true
+			}
 		}
 		m.scr = m.back
 	case "esc":
@@ -404,7 +454,7 @@ func (m Model) downloadKey(k string) (Model, tea.Cmd) {
 	case "t":
 		m.keepTry = !m.keepTry
 	case "enter":
-		if !m.dl.active && m.allReady() {
+		if !m.dl.active && m.canFinish() {
 			if m.opts.Mode == ModeFirstRun {
 				m.scr = scrReady
 				return m, nil
@@ -422,6 +472,56 @@ func (m Model) downloadKey(k string) (Model, tea.Cmd) {
 		return m.leave()
 	}
 	return m, nil
+}
+
+// testKey is the Test step: running, it can be stopped; stopped on a failure,
+// the keys are the ways on. Ready is out of reach until the tests pass.
+func (m Model) testKey(k string) (Model, tea.Cmd) {
+	switch k {
+	case "c":
+		if m.dl.active {
+			return m.askToCancel()
+		}
+	case "r":
+		if m.lost != nil {
+			m.lost = nil
+			m.polling = m.dl.active
+			return m, tea.Batch(m.pollNow(), m.tickCmd())
+		}
+		if !m.dl.active {
+			return m.retest()
+		}
+	case "m":
+		if !m.dl.active {
+			m = m.toModels()
+		}
+	case "x":
+		if row, ok := m.brokenModel(); ok && !m.dl.active {
+			// Only a fresh copy helps, and that deletes this one: ask first.
+			m.ask, m.askRow = askRedownload, rowEntry{id: *row.Subject, name: m.nameOf(*row.Subject)}
+		}
+	case "enter":
+		if !m.dl.active && m.proven() {
+			m.scr = scrReady
+		}
+	case "esc":
+		if m.dl.active {
+			return m.askToCancel()
+		}
+		m = m.toModels()
+	}
+	return m, nil
+}
+
+// brokenModel is the first required model whose test says it is broken, as
+// opposed to short of memory or out of time, which a new copy wouldn't help.
+func (m Model) brokenModel() (setupapi.TestRow, bool) {
+	for _, r := range m.requiredFailures() {
+		if r.Kind != nil && *r.Kind == setupapi.KindBroken && r.Subject != nil {
+			return r, true
+		}
+	}
+	return setupapi.TestRow{}, false
 }
 
 func (m Model) focusRetryable(rows []setupapi.ModelProgress) bool {
@@ -486,6 +586,7 @@ func (m Model) restartOne(id string) (Model, tea.Cmd) {
 		m.dl.queue = append(m.dl.queue, id)
 		return m, nil
 	}
+	m.scr = scrDownload
 	m.dl.active, m.dl.cancelled = true, false
 	m.polling = true
 	if !m.counts(id) {
@@ -532,6 +633,13 @@ func (m Model) skipFailed(id string) (Model, tea.Cmd) {
 		}
 	}
 	m.dl.ids = kept
+	extras := m.runExtras[:0:0]
+	for _, e := range m.runExtras {
+		if !sameID(e, id) {
+			extras = append(extras, e)
+		}
+	}
+	m.runExtras = extras
 	if m.status != nil {
 		st := *m.status
 		st.Models = nil

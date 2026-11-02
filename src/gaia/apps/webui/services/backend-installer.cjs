@@ -16,10 +16,12 @@
  *   - ensureUv()                     → Promise<void>
  *   - installBackend(opts)           → Promise<void>
  *   - ensureBackend(opts)            → Promise<string>  (returns gaia bin path)
+ *   - isBackendCurrent()             → boolean  (nothing to install or refresh)
  *   - getInstalledVersion(gaiaBin)   → string | null
  *   - findGaiaBin()                  → string | null
  *   - getState() / setState()        → state machine helpers
  *   - getLogPath() / getStatePath()  → path helpers
+ *   - readLogTail(maxLines)          → string[]
  *   - runPreChecks(opts)             → Promise<PreCheckResult>
  *   - STATES                         → state name constants
  *
@@ -54,10 +56,14 @@ const GAIA_PYTHON_BIN = IS_WINDOWS
 
 const STATE_FILE = path.join(GAIA_HOME, "electron-install-state.json");
 const LOG_FILE = path.join(GAIA_HOME, "electron-install.log");
+// hub/installer.py writes this once the flagship is installed; first-run setup installs it.
+const FLAGSHIP_SENTINEL = path.join(GAIA_HOME, "agents", "gaia", ".installed");
 
-// Floor for uv, Python and the GAIA package only. The models, often 30 GB,
-// are checked by `gaia init` against Lemonade's model store, which it sizes.
-const MIN_DISK_SPACE_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
+// Room for what this installer writes: Python 3.12, uv's wheel cache and the
+// `amd-gaia[ui]` venv (0.3 GB on macOS arm64 for 0.25.1rc5, under 1 GB in
+// all). Models are not installed here; first-run setup checks the disk for
+// the download the user picks.
+const MIN_DISK_SPACE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
 const NETWORK_CHECK_HOSTS = Object.freeze([
   "https://pypi.org/simple/",
   "https://astral.sh",
@@ -131,24 +137,30 @@ const STAGES = Object.freeze({
   ENSURE_UV: "ensure-uv",
   CREATE_VENV: "create-venv",
   INSTALL_PACKAGE: "install-package",
-  GAIA_INIT: "gaia-init",
   VERIFY: "verify",
+  // After the package, and outside the weighted bar: it has no percent to report.
+  AGENT_REFRESH: "agent-refresh",
 });
 
-const GAIA_INIT_MESSAGE =
-  "Setting up Lemonade Server and downloading models (this can take several minutes)";
-const WAITING_FOR_LEMONADE_CHOICE_MESSAGE =
-  "Waiting for your answer: GAIA found a Lemonade Server already running " +
-  "and is asking whether to use it. Setup continues once you choose.";
+// Why an install failed, for what the app tells the user to do about it.
+const FAILURE_REASONS = Object.freeze({
+  DISK: "disk",
+  NETWORK: "network",
+  TLS: "tls",
+  LOCKED: "locked",
+});
+
+// Stage an older installer recorded while it ran `gaia init`; the package was
+// already in place by then.
+const LEGACY_SETUP_STAGE = "gaia-init";
 
 // Weight each stage contributes to the overall 0-100 progress.
 // Sum must equal 100.
 const STAGE_WEIGHTS = {
   [STAGES.PRE_CHECKS]: 2,
   [STAGES.ENSURE_UV]: 8,
-  [STAGES.CREATE_VENV]: 10,
-  [STAGES.INSTALL_PACKAGE]: 50,
-  [STAGES.GAIA_INIT]: 28,
+  [STAGES.CREATE_VENV]: 15,
+  [STAGES.INSTALL_PACKAGE]: 73,
   [STAGES.VERIFY]: 2,
 };
 
@@ -157,7 +169,6 @@ const STAGE_ORDER = [
   STAGES.ENSURE_UV,
   STAGES.CREATE_VENV,
   STAGES.INSTALL_PACKAGE,
-  STAGES.GAIA_INIT,
   STAGES.VERIFY,
 ];
 
@@ -174,10 +185,6 @@ let logStream = null;
  * calls turn into plain appends.
  */
 let logRotatedThisSession = false;
-
-function isTruthyEnv(value) {
-  return /^(1|true|yes|on)$/i.test(String(value || ""));
-}
 
 function ensureGaiaHome() {
   try {
@@ -321,6 +328,16 @@ function getStatePath() {
   return STATE_FILE;
 }
 
+/** The end of the install log, or nothing when no install has written one. */
+function readLogTail(maxLines = 40) {
+  try {
+    return fs.readFileSync(LOG_FILE, "utf8").split(/\r?\n/).filter(Boolean).slice(-maxLines);
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+}
+
 // ── State machine ────────────────────────────────────────────────────────────
 
 /**
@@ -396,155 +413,14 @@ function computeOverallPercent(stage, withinStagePercent) {
 function makeProgressReporter(onProgress) {
   const safe = typeof onProgress === "function" ? onProgress : () => {};
   return function report(stage, withinStagePercent, message) {
-    const percent = computeOverallPercent(stage, withinStagePercent);
+    const percent =
+      withinStagePercent === null ? null : computeOverallPercent(stage, withinStagePercent);
     try {
       safe(stage, percent, message || "");
     } catch (err) {
       logError(`onProgress callback threw: ${err.message}`);
     }
   };
-}
-
-// ── gaia init progress (`gaia init --progress-json`) ─────────────────────────
-
-// Where the plan and the end of the downloads land in the GAIA_INIT slice; the
-// rest of the slice is Lemonade setup before and verification after.
-const INIT_PLAN_PERCENT = 5;
-const INIT_DOWNLOADED_PERCENT = 95;
-
-/**
- * Read one line of `gaia init --progress-json` output. Returns `{ event }` for
- * a progress event, `{ error }` for a line that looks like one but is not, and
- * null for human output.
- */
-function parseInitEventLine(line) {
-  const text = String(line || "").trim();
-  if (!text.startsWith("{")) return null;
-  let value;
-  try {
-    value = JSON.parse(text);
-  } catch (err) {
-    return { error: err.message };
-  }
-  if (!value || typeof value !== "object" || typeof value.event !== "string") {
-    return { error: 'no "event" field' };
-  }
-  return { event: value };
-}
-
-function formatGB(bytes) {
-  return `${(Math.max(0, bytes || 0) / 1e9).toFixed(1)} GB`;
-}
-
-function formatSpeed(bytesPerSecond) {
-  return `${(bytesPerSecond / 1e6).toFixed(1)} MB/s`;
-}
-
-function formatTimeLeft(seconds) {
-  if (seconds < 60) return "less than a minute left";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `about ${minutes} min left`;
-  return `about ${Math.floor(minutes / 60)} h ${minutes % 60} min left`;
-}
-
-/**
- * Map `gaia init --progress-json` events onto the GAIA_INIT slice of the bar.
- * `report(withinStagePercent, message)` receives a percent that never goes
- * back. `onLine` returns true for the lines too frequent to log.
- */
-function createInitProgress(report, logFn = log) {
-  const models = new Map();
-  let percent = 0;
-
-  const advance = (within, message) => {
-    percent = Math.max(percent, Math.round(within));
-    report(percent, message);
-  };
-  const totals = () => {
-    let done = 0;
-    let total = 0;
-    for (const m of models.values()) {
-      total += m.total;
-      done += Math.min(m.done, m.total);
-    }
-    return { done, total };
-  };
-  const downloadPercent = () => {
-    const { done, total } = totals();
-    const share = total > 0 ? done / total : 0;
-    return INIT_PLAN_PERCENT + (INIT_DOWNLOADED_PERCENT - INIT_PLAN_PERCENT) * share;
-  };
-  const model = (id) => {
-    if (!models.has(id)) models.set(id, { done: 0, total: 0 });
-    return models.get(id);
-  };
-
-  function handle(event) {
-    switch (event.event) {
-      case "step":
-        advance(percent, `Step ${event.step} of ${event.total}: ${event.message}`);
-        return true;
-      case "plan":
-        for (const m of event.models || []) {
-          if (!m.downloaded) model(m.id).total = m.bytes_total || 0;
-        }
-        advance(
-          INIT_PLAN_PERCENT,
-          event.bytes_total > 0
-            ? `Downloading ${formatGB(event.bytes_total)} of models`
-            : "Models already downloaded"
-        );
-        return true;
-      case "progress": {
-        const m = model(event.model);
-        m.done = event.bytes_done || 0;
-        m.total = Math.max(event.bytes_total || 0, m.done);
-        const parts = [
-          `Downloading ${event.model} (${event.index} of ${event.count}): ` +
-            `${formatGB(m.done)} of ${formatGB(m.total)}`,
-        ];
-        if (event.speed_bps > 0) {
-          const { done, total } = totals();
-          parts.push(
-            `at ${formatSpeed(event.speed_bps)}, ` +
-              formatTimeLeft((total - done) / event.speed_bps)
-          );
-        }
-        advance(downloadPercent(), parts.join(" "));
-        return true;
-      }
-      case "model_done": {
-        const m = model(event.model);
-        m.done = m.total;
-        advance(downloadPercent(), `${event.model} ready`);
-        return true;
-      }
-      case "done":
-        advance(
-          event.ok ? INIT_DOWNLOADED_PERCENT : percent,
-          event.ok ? "Models downloaded, finishing setup" : "Model download did not finish"
-        );
-        return true;
-      case "error":
-        advance(percent, String(event.message || "gaia init reported an error").trim());
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  function onLine(line) {
-    const parsed = parseInitEventLine(line);
-    if (!parsed) return false;
-    if (parsed.error) {
-      logFn(`Malformed gaia init progress line (${parsed.error}): ${line}`);
-      return false;
-    }
-    handle(parsed.event);
-    return parsed.event.event === "progress";
-  }
-
-  return { onLine, handle };
 }
 
 // ── Command helpers ──────────────────────────────────────────────────────────
@@ -1078,13 +954,22 @@ async function runPreChecks(opts = {}) {
 // ── uv install ───────────────────────────────────────────────────────────────
 
 class InstallError extends Error {
-  constructor(message, { stage, code, suggestion } = {}) {
+  constructor(message, { stage, code, suggestion, reason } = {}) {
     super(message);
     this.name = "InstallError";
     this.stage = stage || null;
     this.code = code || null;
     this.suggestion = suggestion || null;
+    this.reason = reason || null;
   }
+}
+
+/** Which FAILURE_REASONS a uv failure's output shows, or null. */
+function failureReason(output) {
+  if (isFileLockedError(output)) return FAILURE_REASONS.LOCKED;
+  if (isTlsCertError(output)) return FAILURE_REASONS.TLS;
+  if (isTransientNetworkError(output)) return FAILURE_REASONS.NETWORK;
+  return null;
 }
 
 /**
@@ -1545,6 +1430,11 @@ function resolveBackendVersion(opts = {}) {
   }
 }
 
+/** The version the app ships with, whatever backend this run was asked to install. */
+function appVersion() {
+  return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version;
+}
+
 /**
  * The PEP 440 spelling of the app's npm version: `0.25.0-rc.1` -> `0.25.0rc1`.
  * pip pins and `gaia --version` use this form; a final version is unchanged.
@@ -1554,142 +1444,16 @@ function toPep440(version) {
   return version.replace(/^(\d+\.\d+\.\d+)-rc\.(\d+)$/, "$1rc$2");
 }
 
-function shouldSkipGaiaInit(opts) {
-  return Boolean(opts.skipGaiaInit) || isTruthyEnv(process.env.GAIA_SKIP_GAIA_INIT);
-}
-
-/**
- * Run `gaia init` for the profile the app's own setup check asks about
- * (setup_runner.PROFILE), so the first launch finds setup done instead of
- * running it a second time.
- *
- * `chooseLemonade` is asked about a Lemonade Server already running here; see
- * lemonadeInitArgs.
- *
- * Returns `{ init }`, "done", "failed" or "skipped", plus `initError` when it
- * failed. The state file records both: a backend whose setup never finished is
- * not installed, so the next launch runs it, and the app shows the error.
- */
-async function runGaiaInit(gaiaBin, report, version, skipGaiaInit, chooseLemonade) {
-  if (skipGaiaInit) {
-    log("Skipping gaia init (skipGaiaInit=true or GAIA_SKIP_GAIA_INIT set)");
-    return { init: "skipped" };
-  }
-  setState(STATES.INSTALLING, { stage: STAGES.GAIA_INIT, version });
-  report(STAGES.GAIA_INIT, 0, GAIA_INIT_MESSAGE);
-  const lemonadeArgs = await lemonadeInitArgs(gaiaBin, chooseLemonade, runCommand, report);
-  const progress = createInitProgress((within, message) =>
-    report(STAGES.GAIA_INIT, within, message)
-  );
-  const initResult = await runCommand(
-    gaiaBin,
-    ["init", "--profile", "gaia", "--yes", "--skip-webui-build", "--progress-json", ...lemonadeArgs],
-    // Unwrapped, so an error line reaches initFailureReason whole.
-    { stageLabel: "gaia-init", env: { ...process.env, COLUMNS: "1000" }, onLine: progress.onLine }
-  );
-  if (initResult.code !== 0) {
-    // Non-fatal: the app opens and its start screen shows initError, and the
-    // next launch runs setup again, because the state file records the failure.
-    log(
-      `Warning: gaia init exited with code ${initResult.code}. Continuing; setup runs again next launch.`
-    );
-    report(STAGES.GAIA_INIT, 100, "Lemonade Server setup did not finish");
-    return { init: "failed", initError: initFailureReason(initResult) };
-  }
-  report(STAGES.GAIA_INIT, 100, "Lemonade Server setup complete");
-  return { init: "done" };
-}
-
-/** Why `gaia init` failed, in its own words: its last ❌ line, else its last line. */
-function initFailureReason({ code, stdout, stderr }) {
-  const lines = `${stdout || ""}\n${stderr || ""}`
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    // --progress-json event lines are for the progress bar, not the user.
-    .filter((line) => line && !line.startsWith('{"event"'));
-  const marked = lines.filter((line) => line.startsWith("❌"));
-  const reason = marked.length
-    ? marked[marked.length - 1].replace(/^❌\s*/, "")
-    : lines[lines.length - 1];
-  return reason || `gaia init exited with code ${code} and printed nothing.`;
-}
-
-/**
- * Run a `gaia ... --json` command and parse what it printed.
- * Returns undefined after logging a warning that names the failure.
- */
-async function readGaiaJson(run, gaiaBin, args) {
-  const shown = `gaia ${args.join(" ")}`;
-  const result = await run(gaiaBin, args, { stageLabel: "lemonade" });
-  if (result.code !== 0) {
-    log(`Warning: ${shown} exited with code ${result.code}: ${(result.stderr || result.stdout || "").trim().slice(-400)}`);
-    return undefined;
-  }
-  const lines = (result.stdout || "").trim().split(/\r?\n/);
-  try {
-    return JSON.parse(lines[lines.length - 1]);
-  } catch (err) {
-    log(`Warning: ${shown} printed no JSON (${err.message}): ${(result.stdout || "").trim().slice(-400)}`);
-    return undefined;
-  }
-}
-
-/**
- * Extra `gaia init` args for a Lemonade Server the user already runs.
- *
- * Asks `chooseLemonade(found)` only on a first setup (nothing saved, no
- * LEMONADE_BASE_URL) when a usable server answers. "external" adds
- * `--lemonade-url <url>`, "gaia" adds `--gaia-lemonade`, null adds nothing:
- * init then sets up GAIA's own and prints how to switch, as it always has.
- * A server that needs a key or is too old is left to the app's setup screen.
- *
- * `report` is the progress reporter: while the question is open the progress
- * window says setup is waiting on the user, then goes back to GAIA_INIT_MESSAGE.
- */
-async function lemonadeInitArgs(gaiaBin, chooseLemonade, run = runCommand, report = () => {}) {
-  if (typeof chooseLemonade !== "function") return [];
-  const unchanged = "gaia init will set up GAIA's own Lemonade Server; to use yours later run `gaia lemonade connect <url>`.";
-  const status = await readGaiaJson(run, gaiaBin, ["lemonade", "status", "--json"]);
-  if (status === undefined || status === null) {
-    log(`Warning: could not read which Lemonade Server GAIA uses; ${unchanged}`);
-    return [];
-  }
-  if (status.saved_mode != null || status.source === "env") return [];
-  const found = await readGaiaJson(run, gaiaBin, ["lemonade", "detect", "--json"]);
-  if (found === undefined) {
-    log(`Warning: could not look for a Lemonade Server already running; ${unchanged}`);
-    return [];
-  }
-  if (!found) return [];
-  if (found.status !== "ok") {
-    log(`Found a Lemonade Server at ${found.url} (${found.status}); the app's setup screen offers it.`);
-    return [];
-  }
-  let answer;
-  report(STAGES.GAIA_INIT, 0, WAITING_FOR_LEMONADE_CHOICE_MESSAGE);
-  try {
-    answer = await chooseLemonade(found);
-  } catch (err) {
-    log(`Warning: could not ask whether to use the Lemonade Server at ${found.url}: ${err.message}; ${unchanged}`);
-    return [];
-  } finally {
-    report(STAGES.GAIA_INIT, 0, GAIA_INIT_MESSAGE);
-  }
-  log(`Lemonade Server at ${found.url}: user chose ${answer || "not to answer"}`);
-  if (answer === "external") return ["--lemonade-url", found.url];
-  if (answer === "gaia") return ["--gaia-lemonade"];
-  return [];
-}
-
 /**
  * Install the GAIA Python backend from scratch.
+ *
+ * Installs no model and runs no `gaia init`: the Lemonade Server and the models
+ * are set up by the app's first-run setup, where the user chooses cloud or
+ * local and sees what downloads.
  *
  * opts:
  *   - onProgress(stage, percent, message)
  *   - version: string — override the pinned version
- *   - skipGaiaInit: boolean — skip `gaia init` (for testing)
- *   - chooseLemonade(found): Promise<"external"|"gaia"|null> — asked when a
- *     Lemonade Server already runs here; see lemonadeInitArgs
  *
  * Throws InstallError on failure. The state file is updated to reflect
  * the current stage so a subsequent launch can recover.
@@ -1707,7 +1471,6 @@ async function installBackend(opts = {}) {
   const pipPackage = localWheel
     ? `${localWheel}[ui]`
     : `amd-gaia[ui]==${toPep440(version)}`;
-  const skipGaiaInit = shouldSkipGaiaInit(opts);
 
   log("================================================");
   log("  Installing GAIA backend");
@@ -1775,6 +1538,7 @@ async function installBackend(opts = {}) {
         {
           stage: STAGES.CREATE_VENV,
           code: venvResult.code,
+          reason: failureReason(`${venvResult.stdout || ""}\n${venvResult.stderr || ""}`),
           suggestion: `Try creating it manually:\n  ${manual}\nThen restart GAIA.`,
         }
       );
@@ -1891,6 +1655,7 @@ async function installBackend(opts = {}) {
       {
         stage: STAGES.INSTALL_PACKAGE,
         code: installResult.code,
+        reason: failureReason(output),
         suggestion,
       }
     );
@@ -1907,16 +1672,7 @@ async function installBackend(opts = {}) {
   }
   report(STAGES.INSTALL_PACKAGE, 100, "GAIA package installed");
 
-  // Stage 4: gaia init
-  const setup = await runGaiaInit(
-    GAIA_BIN,
-    report,
-    version,
-    skipGaiaInit,
-    opts.chooseLemonade
-  );
-
-  // Stage 5: verify
+  // Stage 4: verify
   setState(STATES.INSTALLING, { stage: STAGES.VERIFY, version });
   report(STAGES.VERIFY, 0, "Verifying installation");
 
@@ -1974,11 +1730,55 @@ async function installBackend(opts = {}) {
     log(`Shim creation check failed: ${err.message}`);
   }
 
-  setState(STATES.READY, { stage: null, version, installedVersion, ...setup });
+  setState(STATES.READY, { stage: null, version, installedVersion });
   log("Backend install complete");
 }
 
+// ── Agent refresh ────────────────────────────────────────────────────────────
+
+/**
+ * Update the flagship to this release, without Lemonade or models. A PC with
+ * no flagship is skipped: first-run setup installs it.
+ *
+ * The stage stays recorded until this succeeds, so an update that failed or was
+ * quit part way through refreshes again on the next launch.
+ */
+async function refreshAgent(gaiaBin, opts = {}) {
+  if (!fs.existsSync(FLAGSHIP_SENTINEL)) {
+    log("No GAIA agent installed yet — first-run setup installs it");
+    return;
+  }
+  const version = resolveBackendVersion(opts);
+  setState(STATES.INSTALLING, { stage: STAGES.AGENT_REFRESH, version });
+  makeProgressReporter(opts.onProgress)(STAGES.AGENT_REFRESH, null, "Updating the GAIA agent");
+
+  const result = await runCommand(gaiaBin, ["init", "--agent-only"], {
+    stageLabel: "agent",
+    env: { ...process.env, COLUMNS: "1000" },
+  });
+  if (result.code !== 0) {
+    const lastLine = `${result.stderr || ""}`.trim().split(/\r?\n/).pop();
+    throw new InstallError(
+      lastLine ? lastLine.replace(/^Error:\s*/, "") : `The GAIA agent update exited ${result.code}.`,
+      { stage: STAGES.AGENT_REFRESH, code: result.code }
+    );
+  }
+  setState(STATES.READY, { version, installedVersion: getInstalledVersion(gaiaBin) });
+}
+
 // ── Version-aware ensure ─────────────────────────────────────────────────────
+
+/**
+ * Whether the backend is finished at the app's version. A recorded failure or
+ * unfinished stage says no, so it reaches ensureBackend and the user.
+ */
+function isBackendCurrent() {
+  const bin = findGaiaBin();
+  if (!bin) return false;
+  const prev = getState();
+  if (prev && prev.state !== STATES.READY) return false;
+  return getInstalledVersion(bin) === toPep440(appVersion());
+}
 
 /**
  * The installed backend version, or null when it is not installed.
@@ -2049,8 +1849,6 @@ function venvPackageVersion() {
  * opts:
  *   - onProgress(stage, percent, message)
  *   - version: override the pinned version
- *   - skipGaiaInit: bool
- *   - chooseLemonade: see installBackend
  *   - allowPartialRestart: bool (default true) — restart from scratch if
  *     the state file indicates a `partial` install.
  *
@@ -2097,6 +1895,7 @@ async function ensureBackend(opts = {}) {
         }.`,
         {
           stage: STAGES.PRE_CHECKS,
+          reason: FAILURE_REASONS.DISK,
           suggestion: `Free at least ${requiredMb} MB at ${path.dirname(
             GAIA_HOME
           )} and try again.`,
@@ -2132,47 +1931,28 @@ async function ensureBackend(opts = {}) {
     // reinstall from the local wheel so CI gets a fresh install each run.
     const expectedVersion = resolveBackendVersion(opts);
     const existingBin = findGaiaBin();
-    // Installed means setup finished too, not just that the package is there.
-    // No state file at all is an install from before it existed.
+    // Installed means the package finished installing. No state file at all
+    // is an install from before it existed.
     const prev = preChecks.previousState;
-    const setupFinished =
-      !prev || (prev.state === STATES.READY && prev.init !== "failed");
     const packageFinished =
-      setupFinished ||
-      (prev &&
-        (prev.state === STATES.READY ||
-          prev.stage === STAGES.GAIA_INIT ||
-          prev.stage === STAGES.VERIFY));
+      !prev ||
+      prev.state === STATES.READY ||
+      prev.stage === LEGACY_SETUP_STAGE ||
+      prev.stage === STAGES.VERIFY ||
+      prev.stage === STAGES.AGENT_REFRESH;
     if (existingBin) {
       const installedVersion = getInstalledVersion(existingBin);
       const versionMatches =
         expectedVersion !== null && installedVersion === toPep440(expectedVersion);
-      if (versionMatches && !setupFinished && packageFinished) {
-        log(
-          `GAIA ${installedVersion} is installed but its setup did not finish ` +
-            `(state=${prev.state}, stage=${prev.stage || "-"}) — running gaia init`
-        );
-        const report = makeProgressReporter(opts.onProgress);
-        const setup = await runGaiaInit(
-          existingBin,
-          report,
-          expectedVersion,
-          shouldSkipGaiaInit(opts),
-          opts.chooseLemonade
-        );
-        setState(STATES.READY, { version: expectedVersion, installedVersion, ...setup });
-        report(STAGES.VERIFY, 100, `GAIA ${installedVersion} ready`);
+      if (versionMatches && packageFinished && prev && prev.stage === STAGES.AGENT_REFRESH) {
+        await refreshAgent(existingBin, opts);
         return existingBin;
       }
-      if (versionMatches && setupFinished) {
+      if (versionMatches && packageFinished) {
         log(
           `GAIA backend already installed at version ${installedVersion} — nothing to do`
         );
-        setState(STATES.READY, {
-          version: expectedVersion,
-          installedVersion,
-          init: prev ? prev.init : undefined,
-        });
+        setState(STATES.READY, { version: expectedVersion, installedVersion });
         // Tell the UI we are instantly ready.
         const report = makeProgressReporter(opts.onProgress);
         report(STAGES.VERIFY, 100, `GAIA ${installedVersion} ready`);
@@ -2205,6 +1985,7 @@ async function ensureBackend(opts = {}) {
       throw err;
     }
 
+    await refreshAgent(verified, opts);
     return verified;
   } catch (err) {
     if (err instanceof InstallError) {
@@ -2232,11 +2013,10 @@ module.exports = {
   ensureUv,
   installBackend,
   ensureBackend,
+  isBackendCurrent,
   getInstalledVersion,
   findGaiaBin,
   toPep440,
-  lemonadeInitArgs,
-  initFailureReason,
 
   // Pre-checks
   runPreChecks,
@@ -2255,9 +2035,6 @@ module.exports = {
   setState,
   clearState,
 
-  // gaia init progress
-  parseInitEventLine,
-  createInitProgress,
   computeOverallPercent,
 
   // Logging
@@ -2267,12 +2044,12 @@ module.exports = {
   logError,
   getLogPath,
   getStatePath,
+  readLogTail,
 
   // Constants
   STATES,
   STAGES,
-  GAIA_INIT_MESSAGE,
-  WAITING_FOR_LEMONADE_CHOICE_MESSAGE,
+  FAILURE_REASONS,
   GAIA_HOME,
   GAIA_VENV,
   GAIA_BIN,

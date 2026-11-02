@@ -6,7 +6,9 @@ import { Menu, X } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import { NewChat } from './components/NewChat';
+import { ModelNeededDialog } from './components/ModelNeededDialog';
 import { SetupScreen } from './components/SetupScreen';
+import { ensureModel } from './stores/modelNeededStore';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
@@ -105,6 +107,8 @@ function App() {
     }, [restoreNotice, dismissRestoreNotice]);
 
     const [setup, setSetup] = useState<SetupGate>({ state: 'checking' });
+    const setupAgain = useChatStore((s) => s.setupAgain);
+    const runSetupAgain = useChatStore((s) => s.runSetupAgain);
     const setupRef = useRef(setup);
     setupRef.current = setup;
     // The agent list has loaded at least once; until then "no flagship" is unknown, not missing.
@@ -437,6 +441,10 @@ function App() {
     // A new chat's first message: make the chat, then hand ChatView the text.
     const startChat = useCallback(async (text: string) => {
         setCreateError(null);
+        if (!(await ensureModel('chat'))) {
+            setDraftText(text);
+            return false;
+        }
         let store = useChatStore.getState();
         let session;
         try {
@@ -637,10 +645,14 @@ function App() {
         );
     }
 
-    if (setup.state === 'needed') {
+    if (setup.state === 'needed' || setupAgain) {
         return (
             <div className="app">
-                <SetupScreen onReady={finishSetup} />
+                <SetupScreen
+                    onReady={(first) => { runSetupAgain(false); finishSetup(first); }}
+                    onClose={setupAgain ? () => runSetupAgain(false) : undefined}
+                />
+                <ModelNeededDialog />
             </div>
         );
     }
@@ -720,6 +732,7 @@ function App() {
                 </Suspense>
             )}
             {settingsSection && <SettingsDialog onUseSkill={useSkill} />}
+            <ModelNeededDialog />
             <UpdateIndicator />
             {createError && <div className="toast" role="alert">{createError}</div>}
         </div>

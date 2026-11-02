@@ -1,6 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { forgetModelChecks } from '../../stores/modelNeededStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
@@ -167,6 +168,7 @@ export function LocalModelsSections() {
         setNotice(null);
         try {
             const r = await api.removeSetupModel(entry.id);
+            forgetModelChecks();
             setPlan(r);
             setSelection(initialSelection(r));
             setNotice({ ok: true, text: t('settings.models.removed', { name: entry.name, size: formatSize(r.freed_gb) }) });

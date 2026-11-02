@@ -419,9 +419,15 @@ VISION_CHAT_MODELS = frozenset(
 def resolve_default_vision_model() -> str:
     """The model that reads text in scans and images when nobody passed one.
 
-    The PC's chat model when it reads images, because that one is already
-    downloaded and resident; else :data:`DEFAULT_MODEL_NAME`.
+    ``vision_model`` from setup when the user chose one; else the PC's chat
+    model when it reads images, because that one is already downloaded and
+    resident; else :data:`DEFAULT_MODEL_NAME`.
     """
+    from gaia.config import GaiaConfig
+
+    chosen = GaiaConfig.load().vision_model
+    if chosen:
+        return chosen
     model = resolve_default_chat_model()
     return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
@@ -2271,6 +2277,11 @@ DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
 #: NPU belong here.
 NPU_MODEL_LADDER = (NPU_DEFAULT_MODEL_NAME,)
 
+#: Models GAIA's evals cover; setup labels every other chat or vision model Untested.
+VERIFIED_MODELS = frozenset(
+    {*DEFAULT_MODEL_LADDER, *NPU_MODEL_LADDER, DEFAULT_EMBEDDING_MODEL}
+)
+
 #: A GPU default's NPU twin: the same model, built for FastFlowLM.
 NPU_TWINS = {DEFAULT_MODEL_NAME: NPU_DEFAULT_MODEL_NAME}
 
@@ -2377,7 +2388,7 @@ def free_memory_shortfall(client, requirement, capacity) -> Optional[str]:
     )
     return (
         f"not enough free memory to load it now: {verdict.reason}. {holder}, "
-        "then re-run `gaia init` to use it"
+        "then choose it in the model settings"
     )
 
 

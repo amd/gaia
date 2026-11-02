@@ -24,6 +24,8 @@ type API interface {
 	// ChooseChat saves the chat model. A model that may not fit answers with
 	// an Ack until it is called again with ack set.
 	ChooseChat(ctx context.Context, id string, ack bool) (Plan, *Ack, error)
+	// ChooseVision saves the model that reads images; nil is GAIA's choice.
+	ChooseVision(ctx context.Context, id *string) (Plan, error)
 	Skip(ctx context.Context, id string, skipped bool) (Plan, error)
 	// Download pulls one model now. A disk shortfall answers with an Ack.
 	Download(ctx context.Context, id string, ackLowDisk, keepTrying bool) (*Ack, error)
@@ -169,6 +171,13 @@ func (d *Daemon) ChooseChat(ctx context.Context, id string, ack bool) (Plan, *Ac
 	a, err := d.call(ctx, http.MethodPost, setupPath+"/chat-model", "choose the chat model",
 		map[string]any{"model_id": id, "acknowledge_no_fit": ack}, &p)
 	return p, a, err
+}
+
+func (d *Daemon) ChooseVision(ctx context.Context, id *string) (Plan, error) {
+	var p Plan
+	_, err := d.call(ctx, http.MethodPost, setupPath+"/vision-model", "choose the model that reads images",
+		map[string]any{"model_id": id}, &p)
+	return p, err
 }
 
 func (d *Daemon) Skip(ctx context.Context, id string, skipped bool) (Plan, error) {

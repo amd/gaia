@@ -3,14 +3,15 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Check, Info, Loader2 } from 'lucide-react';
-import { useT } from '../i18n/useT';
+import { useT, type Translate } from '../i18n/useT';
 import type { GpuMemoryStatus, PreflightReport, SetupPlan } from '../types';
-import { ChecklistLoading, ModelChecklist, SelectionSummary, tooBigText } from './setup/ModelChecklist';
+import { JobModels } from './setup/JobModels';
+import { ChecklistLoading, SelectionSummary, tooBigText } from './setup/ModelChecklist';
 import { formatSize } from './setup/format';
 import { Reveal } from './setup/Reveal';
 import { gpuGbAtSetting, restartLine } from './setup/GpuMemoryPanel';
 import {
-    catalogOf, chooseChat, isEmbedding, isVision, pendingDownloads, shortfall, toggle, recommendedSelection,
+    catalogOf, isEmbedding, isVision, pendingDownloads, resolveVision, shortfall, recommendedSelection,
     type Selection,
 } from './setup/selection';
 
@@ -20,7 +21,7 @@ function CheckRow({ label, value, ok }: { label: string; value: string; ok: bool
         <li className={`setup-check-row${ok ? ' is-ok' : ''}`}>
             {ok ? <Check size={13} aria-hidden="true" /> : <Info size={13} aria-hidden="true" />}
             <span className="setup-check-label">{label}</span>
-            <span className="setup-check-value">{value}</span>
+            <span className="setup-check-value"><bdi>{value}</bdi></span>
         </li>
     );
 }
@@ -30,47 +31,48 @@ export function deviceKnown(hw: PreflightReport): boolean {
     return !!hw.gpu_name || !!hw.npu_detected || hw.lemonade_running;
 }
 
-function deviceText(hw: PreflightReport): { value: string; ok: boolean } {
-    const parts = [hw.gpu_name, hw.npu_detected ? 'Ryzen AI NPU' : null].filter(Boolean);
+function deviceText(hw: PreflightReport, t: Translate): { value: string; ok: boolean } {
+    const parts = [hw.gpu_name, hw.npu_detected ? t('setup.checks.npu') : null].filter(Boolean);
     if (parts.length) return { value: parts.join(' · '), ok: true };
-    if (!deviceKnown(hw)) return { value: 'Checked once the model server is running', ok: false };
-    return { value: 'No GPU or NPU reported; models run on the CPU', ok: false };
+    if (!deviceKnown(hw)) return { value: t('setup.system.deviceLater'), ok: false };
+    return { value: t('setup.system.noDevice'), ok: false };
 }
 
 /** Device, memory and disk, read the moment setup opens. */
 export function SystemCheck({ hardware, error }: { hardware: PreflightReport | null; error: string | null }) {
-    if (error) return <p className="setup-hint">This PC&rsquo;s hardware couldn&rsquo;t be read ({error}). Setup still checks it as it goes.</p>;
+    const t = useT();
+    if (error) return <p className="setup-hint">{t('setup.system.unread')} <bdi dir="ltr">{error}</bdi></p>;
     if (!hardware) {
         return (
             <p className="setup-hint" role="status">
-                <Loader2 size={13} className="spin" aria-hidden="true" /> Checking this PC…
+                <Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.check.heading')}
             </p>
         );
     }
-    const device = deviceText(hardware);
+    const device = deviceText(hardware, t);
     // Before a model server runs, the NPU can't be asked about yet; the Device row says so.
     const warnings = hardware.lemonade_running
         ? hardware.warnings
         : hardware.warnings.filter((w) => !/\bNPU\b/.test(w));
     return (
         <>
-            <ul className="setup-check" aria-label="This PC">
-                <CheckRow label="Device" value={device.value} ok={device.ok} />
+            <ul className="setup-check" aria-label={t('setup.pc.step')}>
+                <CheckRow label={t('setup.system.device')} value={device.value} ok={device.ok} />
                 <CheckRow
-                    label="Memory"
-                    value={hardware.ram_gb != null ? `${hardware.ram_gb} GB` : 'Not reported'}
+                    label={t('setup.checks.memory')}
+                    value={hardware.ram_gb != null ? `${hardware.ram_gb} GB` : t('setup.system.notReported')}
                     ok={hardware.ram_gb != null}
                 />
                 <CheckRow
-                    label="Disk"
-                    value={hardware.disk_free_gb != null ? `${Math.round(hardware.disk_free_gb)} GB free` : 'Not reported'}
+                    label={t('setup.system.disk')}
+                    value={hardware.disk_free_gb != null ? t('setup.checks.diskValue', { gb: String(Math.round(hardware.disk_free_gb)) }) : t('setup.system.notReported')}
                     ok={hardware.disk_free_gb != null && hardware.compatible}
                 />
             </ul>
             {!hardware.compatible && hardware.blockers.length > 0 && (
-                <p className="setup-error" role="alert">{hardware.blockers.join(' ')}</p>
+                <p className="setup-error" role="alert"><bdi dir="ltr">{hardware.blockers.join(' ')}</bdi></p>
             )}
-            {warnings.length > 0 && <p className="setup-hint">{warnings.join(' ')}</p>}
+            {warnings.length > 0 && <p className="setup-hint"><bdi dir="ltr">{warnings.join(' ')}</bdi></p>}
         </>
     );
 }
@@ -86,7 +88,6 @@ interface ModelsStepProps {
     cloud: boolean;
     keepTrying: boolean;
     onKeepTrying: (on: boolean) => void;
-    labelledBy: string;
     onBack: () => void;
     /** `acknowledgeLowDisk`: the user pressed Continue anyway past a disk shortfall. */
     onContinue: (acknowledgeLowDisk: boolean) => void;
@@ -100,7 +101,7 @@ interface ModelsStepProps {
  */
 export function ModelsStep({
     plan, planError, onRetryPlan, onUseRecommended, selection, onSelection, cloud, keepTrying, onKeepTrying,
-    labelledBy, onBack, onContinue, busy, error,
+    onBack, onContinue, busy, error,
 }: ModelsStepProps) {
     const t = useT();
     const listRef = useRef<HTMLDivElement>(null);
@@ -159,16 +160,8 @@ export function ModelsStep({
 
     return (
         <div className="setup-models" ref={listRef}>
-            <p className="setup-hint">{cloud ? t('setup.models.cloudLede') : t('setup.models.lede')}</p>
-            <ModelChecklist
-                plan={plan}
-                selection={selection}
-                onToggle={(id, on) => onSelection(toggle(selection, catalog, id, on))}
-                onDefaultChat={(id) => onSelection(chooseChat(selection, catalog, id))}
-                labelledBy={labelledBy}
-                cloud={cloud}
-                disabled={busy}
-            />
+            <p className="setup-hint">{t('setup.job.lede')}</p>
+            <JobModels plan={plan} selection={selection} onSelection={onSelection} disabled={busy} />
             {!cloud && (
                 <button type="button" className="link-btn setup-reset" onClick={() => onSelection(recommendedSelection(plan))} disabled={busy}>
                     {t('setup.models.resetRecommended')}
@@ -214,7 +207,8 @@ export function ReadySummary({ plan, chatModel, gpu }: ReadyProps) {
     if (!plan?.catalog) return null;
     const catalog = plan.catalog;
     const name = (id: string | null) => (id ? catalog.find((e) => e.id === id)?.name ?? id : null);
-    const vision = catalog.find((e) => isVision(e) && e.gaia_model);
+    const visionId = resolveVision(catalog, { ticked: new Set(), unticked: new Set(), chatChosen: false, defaultChat: chatModel, vision: plan.vision_model ?? null });
+    const vision = catalog.find((e) => e.id === visionId) ?? catalog.find((e) => isVision(e) && e.gaia_model);
     const docs = catalog.find((e) => isEmbedding(e) && e.downloaded);
     const skipped = catalog.filter((e) => e.gaia_model && e.planned && e.skipped);
     const pending = gpu?.pending;

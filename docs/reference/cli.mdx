@@ -319,6 +319,7 @@ gaia init [OPTIONS]
 | `--profile, -p` | string | gaia | Profile to initialize (gaia, minimal, sd, chat, rag, mcp, vlm, email, npu, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only set up Lemonade Server) |
+| `--agent-only` | flag | false | Only install or update the GAIA agent, with no Lemonade or model steps. The desktop app runs this after an update |
 | `--skip-webui-build` | flag | false | Skip building the Agent UI frontend (dev/source installs only; same effect as setting `GAIA_SKIP_WEBUI_BUILD`) |
 | `--force-reinstall` | flag | false | Reinstall GAIA's own Lemonade Server |
 | `--force-models` | flag | false | Force re-download models (deletes then re-downloads each model) |
@@ -336,6 +337,7 @@ gaia init [OPTIONS]
 | `--plan` | flag | false | Print the models setup would download — size left to download, what each is for, whether it fits this PC, and the free space on the model drive — then exit. Downloads nothing |
 | `--use-model` | string | — | Use this chat model and save it as `default_model`: one GAIA knows, or any chat model already downloaded in Lemonade, FLM included. One that may not fit this PC exits `4` until you add `--acknowledge-no-fit` |
 | `--acknowledge-no-fit` | flag | false | With `--use-model`: save it even though it may not fit this PC |
+| `--server-only` | flag | false | Start the model server and stop. Fetches no models, packages or agent |
 | `--skip-model` | string | — | Don't download this model, now or in later runs; saved in `skipped_models`. Repeatable |
 | `--download-model` | string | — | Download this model too, and take it off the skip list — e.g. the vision model after `--use-model` replaced it. Repeatable |
 | `--allow-low-disk` | flag | false | Download even when the models need more disk than the model drive has free, instead of stopping |
@@ -437,6 +439,8 @@ not such an object, and any `event` you don't know.
 | `retrying` | `model`, `until` (Unix time the wait ends) | With `--keep-trying`, a dropped connection is being waited out |
 | `model_done` | `model`, `downloaded` (`false` when it was already on disk) | A model is ready |
 | `done` | `ok` | The downloads finished, or one failed |
+| `component` | `component` (`server`, `backend`, `packages`, `agent`), `state` (`active`, `done`, `failed`) | A piece besides the models starts or ends |
+| `test` | `job` (`server`, `chat`, `vision`, `embedding`, `speech`, `voice`, `image_creation`), `subject`, `state` (`running`, `passed`, `failed`, `skipped`), `error`, `kind` (`memory`, `stuck`, `broken`), `seconds` | A verification test starts or ends |
 | `error` | `message`, and `model` when one model failed | Something stopped setup |
 
 ```json
@@ -1824,6 +1828,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `context_sizes` | _(empty)_ | Context window per local model, set in the Agent UI under **Settings → Model** (`gaia config set` refuses it). A model not listed gets GAIA's automatic size; `GAIA_CTX_SIZE` overrides it |
 | `custom_models` | _(empty)_ | Local models you added from a Hugging Face link, managed with [`gaia model`](#model-command), the Agent UI or the TUI (`gaia config set` refuses it) |
 | `profile` | `chat` | Last `gaia init` profile |
+| `vision_model` | _(unset)_ | Model that reads scans and images, when you chose one in setup. Unset uses the chat model if it reads images, otherwise Gemma 4 E4B |
 | `skipped_models` | _(empty)_ | Models you chose not to download; `gaia init` and first-run setup leave them out. Comma-separated with `gaia config set`; also set by `gaia init --skip-model` and the setup screens. See [Choosing models](#choosing-models) |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, `rocm`, `metal`, `cpu`, or `auto` to let Lemonade choose. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |

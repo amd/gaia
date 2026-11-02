@@ -3,6 +3,7 @@
 
 /** The model new turns run on, and where it runs (this PC or a cloud provider). */
 
+import { forgetModelChecks } from './modelNeededStore';
 import { create } from 'zustand';
 import * as api from '../services/api';
 import { useChatStore } from './chatStore';
@@ -109,6 +110,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         void get().refresh();
     },
     select: async (model) => {
+        forgetModelChecks();
         const active = await api.selectModel(model);
         // Sessions name the model they run; refetch so the chip doesn't lag a poll behind.
         let sessions: Session[] | null = null;

@@ -26,6 +26,35 @@ type Plan struct {
 	SkippedModels      []string       `json:"skipped_models"`
 	Catalog            []CatalogEntry `json:"catalog"`
 	Models             []CatalogEntry `json:"models"`
+	// Components is everything besides the models that setup fetches.
+	Components []Component `json:"components"`
+	// Backends is what Lemonade reports for this PC.
+	Backends []Backend `json:"backends"`
+	// VisionModel is the model the user chose to read images; nil is GAIA's
+	// choice.
+	VisionModel *string `json:"vision_model"`
+}
+
+// Component is something setup fetches that isn't a model. SizeGB is nil when
+// it can't be known before the download starts, Installed when the plan can't
+// tell yet.
+type Component struct {
+	ID        string   `json:"id"`
+	Version   *string  `json:"version"`
+	SizeGB    *float64 `json:"size_gb"`
+	Source    string   `json:"source"`
+	Installed *bool    `json:"installed"`
+}
+
+// IsInstalled is false for a component not here yet and for an unknown answer.
+func (c Component) IsInstalled() bool { return c.Installed != nil && *c.Installed }
+
+// Backend is one way Lemonade can run a recipe on this PC.
+type Backend struct {
+	Recipe  string  `json:"recipe"`
+	Backend string  `json:"backend"`
+	State   *string `json:"state"`
+	Default bool    `json:"default"`
 }
 
 // LemonadeInfo is which model server setup uses, and whether it answered.
@@ -55,6 +84,17 @@ const (
 	RoleChat      = "chat"
 	RoleVision    = "vision"
 	RoleEmbedding = "embedding"
+	// The optional extras.
+	RoleSpeech        = "speech"
+	RoleVoice         = "voice"
+	RoleImageCreation = "image_creation"
+)
+
+// Support labels, and the feature tier that withholds image creation.
+const (
+	SupportVerified = "verified"
+	SupportUntested = "untested"
+	TierCompact     = "compact"
 )
 
 // CatalogEntry is one model setup can pull or use.
@@ -76,10 +116,20 @@ type CatalogEntry struct {
 	Selected    bool     `json:"selected"`
 	Skipped     bool     `json:"skipped"`
 	ChatChoice  bool     `json:"chat_choice"`
-	Fits        *bool    `json:"fits"`
-	NeedGB      *float64 `json:"need_gb"`
-	CapacityGB  *float64 `json:"capacity_gb"`
-	FitReason   *string  `json:"fit_reason"`
+	// GaiaModel is GAIA's own model, not one only this Lemonade has.
+	GaiaModel bool `json:"gaia_model"`
+	// Support is SupportVerified or SupportUntested; nil for an optional model.
+	Support *string `json:"support"`
+	// ReadsImages: GAIA reads images with this model itself, so no second
+	// model loads.
+	ReadsImages bool   `json:"reads_images"`
+	FeatureTier string `json:"feature_tier"`
+	// Source is where it downloads from; nil when the server doesn't say.
+	Source     *string  `json:"source"`
+	Fits       *bool    `json:"fits"`
+	NeedGB     *float64 `json:"need_gb"`
+	CapacityGB *float64 `json:"capacity_gb"`
+	FitReason  *string  `json:"fit_reason"`
 	// Role is set on Plan.Models only: "chat" or "embedding".
 	Role string `json:"role,omitempty"`
 }
@@ -136,6 +186,55 @@ type Status struct {
 	// ModelFailed: a model's download failed in this run, and its row
 	// already says why, so the run needs no note of its own.
 	ModelFailed bool `json:"model_failed"`
+	// Components is each piece besides the models, by id: ComponentActive,
+	// ComponentDone or ComponentFailed. One not started yet is absent.
+	Components map[string]string `json:"components"`
+	// Tests are the Test step's rows, in the order they ran.
+	Tests []TestRow `json:"tests"`
+}
+
+// Component run states.
+const (
+	ComponentActive = "active"
+	ComponentDone   = "done"
+	ComponentFailed = "failed"
+)
+
+// TestRow is one real test of one job.
+type TestRow struct {
+	// Job is a role, JobServer or JobAgent.
+	Job     string   `json:"job"`
+	Subject *string  `json:"subject"`
+	State   string   `json:"state"`
+	Error   *string  `json:"error"`
+	Kind    *string  `json:"kind"`
+	Seconds *float64 `json:"seconds"`
+}
+
+// Test jobs that aren't a model's role.
+const (
+	JobServer = "server"
+	JobAgent  = "agent"
+)
+
+// Test states.
+const (
+	TestRunning = "running"
+	TestPassed  = "passed"
+	TestFailed  = "failed"
+	TestSkipped = "skipped"
+)
+
+// Why a test failed.
+const (
+	KindMemory = "memory"
+	KindStuck  = "stuck"
+	KindBroken = "broken"
+)
+
+// Optional is true for a job setup can be ready without.
+func (r TestRow) Optional() bool {
+	return r.Job == RoleSpeech || r.Job == RoleVoice || r.Job == RoleImageCreation
 }
 
 // Run states.
@@ -204,6 +303,9 @@ type RunRequest struct {
 	SkipChatModel      bool `json:"skip_chat_model"`
 	AcknowledgeLowDisk bool `json:"acknowledge_low_disk"`
 	KeepTrying         bool `json:"keep_trying"`
+	// ExtraModels are pulled and tested beside the plan's. Omitted when empty:
+	// the backend's list refuses a JSON null.
+	ExtraModels []string `json:"extra_models,omitempty"`
 }
 
 // GPU is GET /daemon/v1/gpu-memory.

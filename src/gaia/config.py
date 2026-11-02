@@ -156,6 +156,9 @@ class GaiaConfig:
             oldest turns go first. The size limit never removes the newest turn.
         skipped_models: Models the user chose not to download. ``gaia init``
             and first-run setup leave them out until the user asks for one.
+        vision_model: Model that reads scans and images, when the user chose
+            one in setup. ``None`` uses the chat model if it reads images,
+            else Gemma.
         project_context: How much of a repository's CLAUDE.md, AGENTS.md and
             ``.claude/skills`` the agent puts in its prompt: ``full``, ``off``,
             or ``None`` (set it to ``auto``) to decide per model. See
@@ -165,6 +168,7 @@ class GaiaConfig:
     profile: str = "chat"
     default_device: str = "gpu"
     default_model: Optional[str] = None
+    vision_model: Optional[str] = None
     full_access: bool = False
     last_provider: Optional[str] = None
     last_model: Optional[str] = None

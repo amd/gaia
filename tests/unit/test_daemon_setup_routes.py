@@ -72,6 +72,7 @@ def plan(monkeypatch):
     [
         ("get", "/plan"),
         ("post", "/chat-model"),
+        ("post", "/vision-model"),
         ("post", "/models/skip"),
         ("post", "/models/download"),
         ("post", "/models/remove"),

@@ -38,7 +38,9 @@ on first launch if the user skipped that step.
   by running `gaia init --profile gaia --yes`. Its setup screen also starts a stopped
   Lemonade by itself (`tryAutoStartLemonade`), but only through system launchers.
 - **The installers already leave Lemonade to `gaia init`**: `install.sh`, `install.ps1` and
-  the Windows desktop installer (`gaia.nsi`) install GAIA only.
+  the Windows setup install GAIA only. No installer runs a system Lemonade MSI. The desktop
+  app ships the pinned embeddable archive as a resource (`GAIA_BUNDLED_LEMONADE_DIR`), and
+  `gaia init` unpacks that copy when its version matches, downloading it otherwise.
 - **What still assumes a system Lemonade:**
   - `gaia init` finds or installs it (`LemonadeInstaller`: the Windows MSI, Linux packages,
     macOS pkg) and starts it through `lemonade_launcher` (tray app, `systemctl`, macOS app).

@@ -6,6 +6,8 @@ package modelsetup
 import (
 	"fmt"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/setupapi"
 )
 
 // Every sentence the setup screens show, in one file, so first-run setup,
@@ -21,10 +23,12 @@ const (
 	titleGPU        = "Give the GPU more memory"
 	titleGuide      = "Change the GPU memory yourself"
 	titleDownload   = "Downloading models"
+	titleContents   = "Everything being set up"
+	titleTest       = "Testing everything"
 	titleReady      = "GAIA is ready."
 	titleLoading    = "Reading the models"
 	titleNoServer   = "The local model server isn't running"
-	introModels     = "These are the models GAIA will use on this PC. Untick any you don't want; you can add them later in Settings."
+	introModels     = "These are the models GAIA will use on this PC, by job. Change any you like; you can add more later in Settings."
 	introSettings   = "Tick a model to download it, untick it to stop using it. Unticking never deletes a model."
 	cloudNoDownload = "Cloud models need no download."
 
@@ -71,6 +75,45 @@ const (
 	setupStoppedNote   = "Setup stopped before it finished. Press r to try again, or d for what went wrong."
 	checkingModels     = "Everything is downloaded. Checking that the models load…"
 
+	// The Agent UI's setup.label, setup.job and setup.get.
+	labelVerified    = "Verified"
+	labelUntested    = "Untested"
+	jobChatTitle     = "Chat"
+	jobVisionTitle   = "Reading images"
+	jobDocsTitle     = "Documents and memory"
+	jobExtrasTitle   = "Optional extras"
+	extrasOff        = "off by default"
+	extrasNote       = "Off by default. GAIA asks before downloading these the first time you need them."
+	untestedNote     = "Untested models are used at your own risk. They may run, but tools, documents or images might not work well."
+	untestedPicked   = "GAIA will use this model, but we haven't tested it. You can switch in Settings at any time."
+	nothingMore      = "Nothing more to download"
+	otherVision      = "Choose a different vision model"
+	hideVision       = "Hide other vision models"
+	useChatForVision = "Use the chat model"
+	skipVision       = "Skip for now"
+	skipVisionNote   = "Reading images needs a vision model. GAIA will ask before downloading one."
+	notWithThisChat  = "Not available with this chat model"
+
+	// The Agent UI's setup.contents, with the size kept in a sentence that fits a row.
+	contentsLede      = "Here's everything coming to this PC."
+	contentsSizeLater = "Size shown when it starts"
+	contentsWorking   = "In progress"
+	contentsReady     = "Ready"
+	contentsFailed    = "Failed"
+	contentsHere      = "Already here"
+	contentsWaiting   = "Waiting"
+	contentsFrom      = "From "
+
+	// The Agent UI's setup.test.
+	testLede       = "A download isn't proof it works, so GAIA runs each part for real."
+	testRunning    = "Running"
+	testWaiting    = "Waiting"
+	testPassed     = "Passed"
+	testFailed     = "Failed"
+	testSkipped    = "Not on this PC"
+	testFailedHelp = "Something didn't work, so GAIA isn't ready yet. Your downloads are safe."
+	testFailedMem  = "This PC doesn't have enough free memory right now. Close memory-heavy apps and try again, or choose a smaller model."
+
 	gpuKeepsFmt    = "GAIA keeps at least %s for %s and your apps."
 	gpuConsentKey  = "Changing it needs administrator permission and a restart."
 	gpuWaitingText = "Waiting for permission…"
@@ -83,6 +126,115 @@ const (
 	gpuNothingToGive = "This PC can't give the GPU more memory and still keep enough for the system."
 	gpuRestartHow    = "GAIA never restarts it for you; save your work first."
 )
+
+// visionBuiltIn says the chat model reads images itself.
+func visionBuiltIn(name string) string { return "Handled by " + name + " · " + nothingMore }
+
+// visionNeeded says why a second model is ticked.
+func visionNeeded(name string) string {
+	return name + " can't read images, so we picked a model for that job."
+}
+
+// imagesBlockedLine says why image creation can't be ticked.
+func imagesBlockedLine(name string) string {
+	return name + " doesn't have this feature yet. Choose a larger chat model to use it."
+}
+
+// extraLabel is an optional extra by the job it does.
+func extraLabel(role string) string {
+	switch role {
+	case setupapi.RoleSpeech:
+		return "Speech to text"
+	case setupapi.RoleVoice:
+		return "Text to speech"
+	case setupapi.RoleImageCreation:
+		return "Creating images"
+	}
+	return role
+}
+
+func extraNote(role string) string {
+	switch role {
+	case setupapi.RoleSpeech:
+		return "For talking to GAIA and transcribing audio."
+	case setupapi.RoleVoice:
+		return "So GAIA can read answers aloud."
+	case setupapi.RoleImageCreation:
+		return "Makes pictures from a description."
+	}
+	return ""
+}
+
+// componentName is a setup component in the Agent UI's words; an id the TUI
+// doesn't know yet still shows, under its own name.
+func componentName(id string) string {
+	switch id {
+	case "server":
+		return "GAIA's model server"
+	case "backend":
+		return "Model runtime"
+	case "packages":
+		return "Python packages"
+	case "agent":
+		return "GAIA agent"
+	}
+	return id
+}
+
+// testJobLabel says what a test proves.
+func testJobLabel(job string) string {
+	switch job {
+	case setupapi.JobServer:
+		return "Model server answers"
+	case setupapi.RoleChat:
+		return "Chat: loads and answers"
+	case setupapi.RoleVision:
+		return "Reading images: names a test image's colour"
+	case setupapi.RoleEmbedding:
+		return "Documents and memory: makes an embedding"
+	case setupapi.RoleSpeech:
+		return "Speech to text: transcribes a test sound"
+	case setupapi.RoleVoice:
+		return "Text to speech: speaks a sentence"
+	case setupapi.RoleImageCreation:
+		return "Creating images: makes a test picture"
+	case setupapi.JobAgent:
+		return "A real chat with GAIA"
+	}
+	return job
+}
+
+// testResult is a row's outcome.
+func testResult(r setupapi.TestRow) string {
+	switch r.State {
+	case setupapi.TestRunning:
+		return testRunning
+	case setupapi.TestFailed:
+		return testFailed
+	case setupapi.TestSkipped:
+		return testSkipped
+	}
+	if r.Seconds != nil {
+		return fmt.Sprintf("%s, %.0f s", testPassed, *r.Seconds)
+	}
+	return testPassed
+}
+
+func testCount(done, total int) string {
+	return fmt.Sprintf("Tests done: %d of %d", done, total)
+}
+
+func downloadAgain(name string) string { return "Press x to download " + name + " again." }
+
+// extraFailed is an optional extra that failed its test: GAIA is ready without it.
+func extraFailed(label, why string) string {
+	return strings.TrimSuffix(label, ".") + " didn't pass its test: " + why
+}
+
+// alsoSetUp is the models screen's line for everything that isn't a model.
+func alsoSetUp(names []string) string {
+	return "Also downloads " + strings.Join(names, ", ") + ". Press v to see everything."
+}
 
 func introFor(settings bool) string {
 	if settings {
@@ -119,15 +271,19 @@ func noFitAsk(need, have float64) string {
 	return fmt.Sprintf("Needs about %s; this PC has %s.", formatGBShort(need), formatGBShort(have))
 }
 
-// purposeLine says what a model is for, in a few words.
-func purposeLine(e rowEntry) string {
+// purposeLine says what a model is for in the job it is listed under.
+func purposeLine(e rowEntry, job string) string {
 	switch {
+	case e.optional != "":
+		return extraNote(e.optional)
 	case e.embedding:
 		return "Lets GAIA search your files and remember things."
-	case e.vision:
+	case job == jobVision:
 		return "Reads images and screenshots."
 	case e.npu:
 		return "Answers your chats. Runs on the NPU."
+	case e.readsImages:
+		return "Answers your chats and reads images."
 	}
 	return "Answers your chats."
 }

@@ -7,6 +7,14 @@ an entry says otherwise, that is the GNU Lesser General Public License, version 
 GAIA ships each library unmodified and dynamically linked; the source for each is the
 published upstream release linked below.
 
+## Lemonade
+
+- **Ships in:** the GAIA desktop app, which carries Lemonade's unmodified embeddable release
+  archive. This entry is under the Apache License 2.0, not the LGPL.
+- **Copyright:** Copyright the Lemonade contributors.
+- **Licence:** https://github.com/lemonade-sdk/lemonade/blob/main/LICENSE
+- **Source:** https://github.com/lemonade-sdk/lemonade/releases
+
 ## FFmpeg
 
 - **Ships in:** the GAIA desktop installers, inside Electron 45.0.0 (Chromium 156.0.8078.48).

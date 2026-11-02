@@ -7,7 +7,7 @@
  * plan, so the numbers shown are the backend's numbers added up, never guesses.
  */
 
-import type { GpuMemoryStatus, SetupCatalogEntry, SetupOverall, SetupPlan, SetupRunStatus } from '../../types';
+import type { SetupCatalogEntry, SetupOverall, SetupPlan, SetupRunStatus } from '../../types';
 
 export interface Selection {
     /** Models the user wants on this PC. */
@@ -18,13 +18,75 @@ export interface Selection {
     unticked: ReadonlySet<string>;
     /** The user picked the chat model themselves, now or in an earlier setup. */
     chatChosen: boolean;
+    /** The model that reads images; null is GAIA's choice, `VISION_NONE` none for now. */
+    vision: string | null;
 }
+
+export const VISION_NONE = 'none';
 
 export const catalogOf = (plan: SetupPlan | null): SetupCatalogEntry[] => plan?.catalog ?? [];
 
 export const isVision = (e: SetupCatalogEntry) => e.roles.includes('vision');
 export const isEmbedding = (e: SetupCatalogEntry) => e.roles.includes('embedding');
 export const isNpu = (e: SetupCatalogEntry) => e.recipe === 'flm';
+export const isOptional = (e: SetupCatalogEntry) => e.support === null;
+export const canCreateImages = (chat: SetupCatalogEntry | undefined) => chat?.feature_tier !== 'compact';
+
+/** The model that reads images for this selection: the user's, else the chat model
+ *  when it can, else GAIA's vision model. Null when the user skipped it. */
+export function resolveVision(catalog: SetupCatalogEntry[], sel: Selection): string | null {
+    if (sel.vision === VISION_NONE) return null;
+    if (sel.vision) return sel.vision;
+    const chat = catalog.find((e) => e.id === sel.defaultChat);
+    if (chat?.reads_images) return chat.id;
+    return catalog.find((e) => isVision(e) && e.gaia_model)?.id ?? null;
+}
+
+/** Ticks follow the vision pick, so a model nothing uses is never downloaded. */
+function applyVision(sel: Selection, catalog: SetupCatalogEntry[]): Selection {
+    const pick = resolveVision(catalog, sel);
+    const ticked = new Set(sel.ticked);
+    const unticked = new Set(sel.unticked);
+    for (const e of catalog) {
+        if (!isVision(e) || e.id === sel.defaultChat) continue;
+        if (e.id === pick) {
+            ticked.add(e.id);
+            unticked.delete(e.id);
+        } else if (!e.downloaded) {
+            ticked.delete(e.id);
+            unticked.add(e.id);
+        }
+    }
+    return { ...sel, ticked, unticked };
+}
+
+/** Pick the chat model: the one it replaces stops downloading, and the jobs that
+ *  depend on it follow. */
+export function pickChat(sel: Selection, catalog: SetupCatalogEntry[], id: string): Selection {
+    const ticked = new Set(sel.ticked);
+    const previous = catalog.find((e) => e.id === sel.defaultChat);
+    if (previous && !previous.downloaded) ticked.delete(previous.id);
+    const entry = catalog.find((e) => e.id === id);
+    if (!entry?.downloaded) ticked.add(id);
+    if (!canCreateImages(entry)) {
+        for (const e of catalog) if (e.roles.includes('image_creation')) ticked.delete(e.id);
+    }
+    return applyVision({ ...sel, ticked, defaultChat: id, chatChosen: true, vision: null }, catalog);
+}
+
+/** Pick the model that reads images; null goes back to GAIA's choice. */
+export function pickVision(sel: Selection, catalog: SetupCatalogEntry[], id: string | null): Selection {
+    return applyVision({ ...sel, vision: id }, catalog);
+}
+
+/** What to save as `vision_model`: nothing when the chat model does the job. */
+export function savedVision(catalog: SetupCatalogEntry[], sel: Selection): string | null {
+    if (sel.vision === VISION_NONE) return null;
+    const pick = resolveVision(catalog, sel);
+    const chat = catalog.find((e) => e.id === sel.defaultChat);
+    const gaiaChoice = chat?.reads_images ? chat.id : catalog.find((e) => isVision(e) && e.gaia_model)?.id;
+    return pick === gaiaChoice ? null : pick;
+}
 
 /** GAIA's models: what setup plans, what fits this PC, what is on disk. Shown first. */
 export function mainRows(catalog: SetupCatalogEntry[]): SetupCatalogEntry[] {
@@ -48,7 +110,12 @@ export function initialSelection(plan: SetupPlan): Selection {
     const ticked = new Set(
         catalog.filter((e) => e.selected || (e.gaia_model && e.downloaded && !e.skipped)).map((e) => e.id),
     );
-    return { ticked, defaultChat: plan.chat_model.id, unticked: new Set(), chatChosen: plan.chat_model.user_set };
+    const chat = catalog.find((e) => e.id === plan.chat_model.id);
+    const visionSkipped = !chat?.reads_images && catalog.some((e) => isVision(e) && e.gaia_model && e.skipped);
+    return applyVision(
+        { ticked, defaultChat: plan.chat_model.id, unticked: new Set(), chatChosen: plan.chat_model.user_set, vision: plan.vision_model ?? (visionSkipped ? VISION_NONE : null) },
+        catalog,
+    );
 }
 
 /** The chat models the user can make the default: ticked, or already on this PC. */
@@ -74,7 +141,7 @@ export function toggle(sel: Selection, catalog: SetupCatalogEntry[], id: string,
         defaultChat = on && entry?.chat_choice ? id
             : (candidates.find((e) => e.recommended) ?? candidates[0])?.id ?? null;
     }
-    return { ticked, defaultChat, unticked, chatChosen: sel.chatChosen };
+    return { ...sel, ticked, defaultChat, unticked };
 }
 
 /** Make *id* the default chat model by the user's choice, ticking it if it isn't on disk. */
@@ -91,7 +158,7 @@ export function recommendedSelection(plan: SetupPlan): Selection {
     const pick = plan.recommended_model && candidates.some((e) => e.id === plan.recommended_model)
         ? plan.recommended_model
         : (candidates.find((e) => e.recommended) ?? candidates[0])?.id ?? null;
-    return { ticked, defaultChat: pick, unticked: new Set(), chatChosen: false };
+    return applyVision({ ticked, defaultChat: pick, unticked: new Set(), chatChosen: false, vision: null }, catalog);
 }
 
 /** Models the selection still has to download, largest first. */
@@ -170,20 +237,6 @@ export function skipChanges(plan: SetupPlan, sel: Selection): Array<{ id: string
 /** Ticked models setup doesn't plan and that aren't on disk: pulled beside the plan's. */
 export function extraModels(plan: SetupPlan, sel: Selection): string[] {
     return catalogOf(plan).filter((e) => sel.ticked.has(e.id) && !e.planned && !e.downloaded).map((e) => e.id);
-}
-
-/**
- * The GPU step shows on an integrated GPU when a bigger share makes a model
- * fit that the user ticked or chats with, or GAIA's default chat model for
- * this PC (unticked on a cold start because it doesn't fit yet) unless the
- * user unticked it or picked their own chat model.
- */
-export function showGpuStep(gpu: GpuMemoryStatus | null, sel: Selection): boolean {
-    if (!gpu?.applies || !gpu.show_in_setup) return false;
-    return (gpu.models ?? []).some((m) => !m.fits_now && m.fits_at_setting_gb != null && (
-        sel.ticked.has(m.id) || m.id === sel.defaultChat
-        || (m.default && !sel.unticked.has(m.id) && !sel.chatChosen)
-    ));
 }
 
 /**

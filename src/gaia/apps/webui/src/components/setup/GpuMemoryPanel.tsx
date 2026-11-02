@@ -327,7 +327,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                     <p className="setup-hint">
                         {t.compose((say) => `${say('gpu.reserve', { gb: formatSize(status.reserve_gb ?? 16), os: osName(status.os) })} ${say('gpu.needs')}`)}
                     </p>
-                    {!canApply && status.method_reason && <p className="setup-hint">{status.method_reason}</p>}
+                    {!canApply && status.method_reason && <p className="setup-hint"><bdi dir="ltr">{status.method_reason}</bdi></p>}
                 </>
             )}
             {!restartPending && !guided && presets.length === 0 && (

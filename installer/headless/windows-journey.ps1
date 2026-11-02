@@ -3,7 +3,7 @@
 #
 # One phase of one Windows installer journey:
 #
-#   pwsh installer/headless/windows-journey.ps1 -Step <download|install|upgrade|launch|health|preflight|quit|uninstall|leftovers>
+#   pwsh installer/headless/windows-journey.ps1 -Step <download|install|upgrade|launch|health|setup|preflight|quit|uninstall|leftovers>
 #
 # It installs and uninstalls GAIA for the current user: HKCU, the user PATH,
 # fonts, shortcuts and %LOCALAPPDATA%\Programs. It refuses to run anywhere but a
@@ -15,12 +15,14 @@
 #   COMPONENTS    (win-setup) ui | tui | ui,tui
 #   WORK          a fresh directory under $env:RUNNER_TEMP
 #   RELEASE_JSON  resolve_release.py's output for the release under test
+#   SETUP_JOURNEY 1 when the row runs the setup phase: the app starts against
+#                 a fake Lemonade with nothing downloaded
 #
 # Paths and registry ids are the ones installer/tui/nsis/smoke-test.ps1 asserts.
 
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('download', 'install', 'upgrade', 'launch', 'health', 'preflight', 'quit', 'uninstall', 'leftovers')]
+    [ValidateSet('download', 'install', 'upgrade', 'launch', 'health', 'setup', 'preflight', 'quit', 'uninstall', 'leftovers')]
     [string]$Step
 )
 
@@ -153,9 +155,10 @@ function Check-TuiVersion([string[]]$Expected) {
 function Start-AgentUi {
     $dir = Ui-Dir
     if (-not $dir -or -not (Test-Path "$dir\gaia-desktop.exe")) { Fail "no installed gaia-desktop.exe to launch (InstallLocation: '$dir')" }
-    # gaia init downloads Lemonade and several GB of models; that needs hardware
-    # and is covered elsewhere. Everything up to a serving backend is under test.
+    # These rows install a published release; one before #5629 runs gaia init
+    # (several GB of models) on first launch. Later apps ignore the variable.
     $env:GAIA_SKIP_GAIA_INIT = '1'
+    if ($env:SETUP_JOURNEY -eq '1') { $env:LEMONADE_BASE_URL = Start-Fake -Catalog }
     $p = Start-Process -FilePath "$dir\gaia-desktop.exe" -WindowStyle Hidden -PassThru
     Set-Content -Path "$work\app.pid" -Value $p.Id
     Start-Sleep -Seconds 10
@@ -195,6 +198,28 @@ function Wait-AgentUiHealth {
     if ($got -notmatch [regex]::Escape($pep440)) { Fail "the backend the app installed is '$got', expected $pep440" }
 }
 
+# First-run setup through the installed app's own UI, which has been talking to
+# the fake since it launched.
+function Setup-Journey {
+    $m = Select-String -Path "$gaiaHome\electron-main.log" -Pattern 'ui-port[ =]+(\d+)' -ErrorAction SilentlyContinue | Select-Object -Last 1
+    if (-not $m) { Fail "no backend port in $gaiaHome\electron-main.log" }
+    $env:GAIA_E2E_BASE_URL = "http://127.0.0.1:$($m.Matches[0].Groups[1].Value)"
+    $env:GAIA_E2E_SCREENS = "$logs\setup-screens"
+    $env:PLAYWRIGHT_BROWSERS_PATH = "$work\playwright-browsers"
+    Push-Location "$repo\src\gaia\apps\webui"
+    try {
+        & npm ci --ignore-scripts
+        if ($LASTEXITCODE -ne 0) { Fail 'npm ci failed in the web UI' }
+        & npx playwright install chromium
+        if ($LASTEXITCODE -ne 0) { Fail 'Playwright could not install Chromium' }
+        & npx playwright test -c e2e/playwright.config.ts --project=en
+        if ($LASTEXITCODE -ne 0) { Fail 'setup did not finish through the installed app; its Playwright report is above' }
+    } finally {
+        Pop-Location
+        Stop-Process -Id ([int](Get-Content "$work\fake.pid")) -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Stop-AgentUi {
     $backendPid = Get-Content "$gaiaHome\backend.pid" -ErrorAction SilentlyContinue
     if ($backendPid) { & taskkill.exe /T /F /PID $backendPid 2>&1 | Out-Null }
@@ -204,12 +229,14 @@ function Stop-AgentUi {
 }
 
 # ── The TUI checks ────────────────────────────────────────────────────────────
-function Start-Fake {
+function Start-Fake([switch]$Catalog) {
     Remove-Item "$work\fake.port" -ErrorAction SilentlyContinue
-    # The flagship profile's models (INIT_PROFILES in src/gaia/installer/
-    # init_command.py) and the larger default a big machine picks, as downloaded.
-    $fakeArgs = @("$here\fake_model_server.py", '--port-file', "$work\fake.port", '--log', "$logs\fake-requests.jsonl",
-        '--model', 'Gemma-4-E4B-it-GGUF', '--model', 'user.embeddinggemma-300m-GGUF', '--model', 'Qwen3.6-35B-A3B-GGUF')
+    $fakeArgs = @("$here\fake_model_server.py", '--port-file', "$work\fake.port", '--log', "$logs\fake-requests.jsonl")
+    # --catalog: nothing downloaded. Otherwise the flagship profile's models
+    # (INIT_PROFILES in src/gaia/installer/init_command.py) and the larger
+    # default a big machine picks, as downloaded.
+    if ($Catalog) { $fakeArgs += '--catalog' }
+    else { $fakeArgs += @('--model', 'Gemma-4-E4B-it-GGUF', '--model', 'user.embeddinggemma-300m-GGUF', '--model', 'Qwen3.6-35B-A3B-GGUF') }
     $p = Start-Process -FilePath $python -ArgumentList $fakeArgs `
         -PassThru -RedirectStandardOutput "$logs\fake-server.out" -RedirectStandardError "$logs\fake-server.err"
     Set-Content -Path "$work\fake.pid" -Value $p.Id
@@ -241,8 +268,8 @@ function One-Shot {
     if (-not (Select-String -Path "$logs\oneshot.out" -Pattern 'fake model server' -Quiet)) { Fail 'the one-shot exited 0 but did not print the model''s answer' }
 }
 
-# The Windows setup always installs Lemonade (by design), so "no Lemonade" here
-# is a Lemonade that does not answer: LEMONADE_BASE_URL on a closed port. The
+# First-run setup would install GAIA's own Lemonade, so "no Lemonade" here is
+# one that does not answer: LEMONADE_BASE_URL on a closed port. The
 # one-shot must refuse quickly and say how to fix it -- not hang, not exit 0.
 function Preflight-NoLemonade {
     Use-NewTerminalPath
@@ -416,6 +443,8 @@ switch ($Step) {
         }
     }
 
+    'setup' { Setup-Journey }
+
     'preflight' {
         if ($env:KIND -eq 'install-ps1') { $env:USERPROFILE = $userHome; $env:HOME = $userHome }
         Preflight-NoLemonade
@@ -446,6 +475,13 @@ switch ($Step) {
                 Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$gaiaHome\*" } | ForEach-Object { "  $($_.ProcessId) $($_.CommandLine)" }
                 Fail "gaia uninstall --purge exited $rc"
             }
+            # The running venv is removed by a helper after gaia.exe exits.
+            $deadline = (Get-Date).AddSeconds(120)
+            while ((Test-Path "$gaiaHome\venv") -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+            if (Test-Path "$gaiaHome\venv") {
+                Get-ChildItem $env:TEMP -Filter 'gaia-uninstall-venv-*.log' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "--- $($_.FullName) ---"; Get-Content $_.FullName }
+                Fail "$gaiaHome\venv was still there 120 s after the uninstaller ran"
+            }
         } else {
             Uninstall-Tui
             Uninstall-Ui
@@ -472,8 +508,8 @@ switch ($Step) {
             $_.ProcessName -in @('gaia-desktop', 'gaia-tui', 'gaia-agent') -or ($_.Path -and $_.Path -like "$gaiaHome\venv\*")
         }
         foreach ($r in $running) { $problems += "still running: $($r.ProcessName) ($($r.Path))" }
-        # Kept on purpose: user data in ~\.gaia and Lemonade Server (the setup
-        # never uninstalls it; `gaia uninstall --purge-lemonade` does).
+        # Kept on purpose: user data in ~\.gaia, and any system Lemonade Server
+        # (only `gaia uninstall --purge-lemonade` removes that).
         Write-Host '--- kept by design ---'
         if (Test-Path $gaiaHome) { Get-ChildItem $gaiaHome -Force | Select-Object -First 30 | ForEach-Object { "  ~\.gaia\$($_.Name)" } }
         Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |

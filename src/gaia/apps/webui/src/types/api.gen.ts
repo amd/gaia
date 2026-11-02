@@ -131,6 +131,7 @@ export interface ApiSchemas {
   UpdateSessionRequest: UpdateSessionRequest;
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
+  VisionModelRequest: VisionModelRequest;
   WarmUpStatus: WarmUpStatus;
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
@@ -1310,6 +1311,12 @@ export interface UserInputRequest {
   request_id: string;
   session_id: string;
   value: string;
+}
+/**
+ * A model that reads images, or null to go back to GAIA's choice.
+ */
+export interface VisionModelRequest {
+  model_id?: string | null;
 }
 /**
  * Work that quitting or unloading the model would cut short.
