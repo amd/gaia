@@ -288,6 +288,7 @@ class CalendarToolsMixin:
                 "tools cannot run."
             )
         import gaia.connectors.api as connectors_api
+        from gaia.connectors.errors import ConnectorsError
 
         states = {p: _classify_calendar(p) for p in CALENDAR_PROVIDERS}
         provider = None
@@ -302,11 +303,14 @@ class CalendarToolsMixin:
             raise CalendarError(_no_calendar_error(states))
 
         def _token() -> str:
-            return connectors_api.get_access_token_sync(
-                provider=provider,
-                scopes=[CALENDAR_SCOPES[provider]],
-                agent_id=EMAIL_AGENT_ID,
-            )
+            try:
+                return connectors_api.get_access_token_sync(
+                    provider=provider,
+                    scopes=[CALENDAR_SCOPES[provider]],
+                    agent_id=EMAIL_AGENT_ID,
+                )
+            except ConnectorsError as exc:
+                raise CalendarAuthError(str(exc)) from exc
 
         from gaia.agents.tools._calendar import (
             GoogleCalendarBackend,
@@ -318,8 +322,14 @@ class CalendarToolsMixin:
             return GoogleCalendarBackend(_token)
         return GraphCalendarBackend(_token)
 
-    def _calendar_run(self, fn: Callable[[CalendarBackend], Any]) -> Any:
-        """``fn(backend)``, re-resolving once if a connection changed mid-session."""
+    def _calendar_run(
+        self, fn: Callable[[CalendarBackend], Any], *, provider_bound: bool = True
+    ) -> Any:
+        """``fn(backend)``, re-resolving once if a connection changed mid-session.
+
+        A write was approved for one account and an event id belongs to one provider,
+        so unless the call is ``provider_bound=False`` a new provider refuses it.
+        """
         if self._calendar_backend is None:
             self._calendar_backend = self._build_calendar_backend()
             self._calendar_backend_is_owned = True
@@ -329,7 +339,14 @@ class CalendarToolsMixin:
             if not self._calendar_backend_is_owned:
                 raise
             logger.info("calendar: re-resolving the backend after an auth failure")
+            was = self._calendar_provider
             self._calendar_backend = self._build_calendar_backend()
+            if provider_bound and self._calendar_provider != was:
+                raise CalendarError(
+                    f"The {was} calendar connection stopped working and "
+                    f"{self._calendar_provider} is now in use, so nothing was changed. "
+                    "List the calendar again and ask the person before retrying."
+                ) from None
             return fn(self._calendar_backend)
 
     def _calendar_account(self) -> str:
@@ -546,7 +563,8 @@ class CalendarToolsMixin:
                 window = CalendarWindow(begins, ends)
                 bounded = max(1, min(int(limit), _MAX_LIST_LIMIT))
                 page = mixin._calendar_run(
-                    lambda backend: backend.list_events(window, limit=bounded)
+                    lambda backend: backend.list_events(window, limit=bounded),
+                    provider_bound=False,
                 )
                 payload = {
                     "success": True,
@@ -592,7 +610,8 @@ class CalendarToolsMixin:
                 page = mixin._calendar_run(
                     lambda backend: backend.list_events(
                         window, limit=_AVAILABILITY_MAX_EVENTS
-                    )
+                    ),
+                    provider_bound=False,
                 )
                 busy, spans, ignored = [], [], 0
                 for event in page.events:

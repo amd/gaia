@@ -87,6 +87,15 @@ class _FakeGoogle:
         )
 
 
+class _FakeGraphCalendar:
+    def __init__(self):
+        self.requests = []
+
+    def __call__(self, request):
+        self.requests.append(request)
+        return httpx.Response(200, json={"value": []})
+
+
 class _RecordingConsole(AgentConsole):
     def __init__(self):
         super().__init__()
@@ -553,6 +562,112 @@ class TestAWriteThatWentThrough:
         assert result["notified"] == ["dana@x.com"]
         assert result["account"] == ACCOUNT
         assert len(fake.writes) == 1
+
+
+class TestAConnectionThatChanged:
+    """A real resolve: only the two backends and the token call are faked."""
+
+    @pytest.fixture
+    def agent(self, make_agent, monkeypatch, connected_accounts):
+        from gaia.connectors.errors import ConnectionRevokedError
+
+        self.tokens = {"google": ConnectionRevokedError("google")}
+        self.graph = _FakeGraphCalendar()
+
+        def token(*, provider, scopes, agent_id):
+            result = self.tokens.get(provider, "tok")
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        monkeypatch.setattr("gaia.connectors.api.get_access_token_sync", token)
+
+        real_google = GoogleCalendarBackend
+        real_graph = GraphCalendarBackend
+        self.google_requests = []
+
+        def google_handler(request):
+            self.google_requests.append(request)
+            return httpx.Response(200, json=EVENT)
+
+        monkeypatch.setattr(
+            "gaia.agents.tools._calendar.GoogleCalendarBackend",
+            lambda fn: real_google(
+                fn, http_client=httpx.Client(transport=httpx.MockTransport(google_handler))
+            ),
+        )
+        monkeypatch.setattr(
+            "gaia.agents.tools._calendar.GraphCalendarBackend",
+            lambda fn: real_graph(
+                fn, http_client=httpx.Client(transport=httpx.MockTransport(self.graph))
+            ),
+        )
+        built = make_agent(_FakeGoogle())
+        built._calendar_backend = None
+        built._calendar_provider = None
+        self.connections = connected_accounts
+        return built
+
+    def _switch_to_microsoft(self):
+        del self.connections["google"]
+        self.connections["microsoft"] = {
+            "account_email": "work@corp.com",
+            "scopes": [SCOPE_GRAPH_CALENDARS_READWRITE],
+        }
+
+    def test_a_revoked_connection_with_nothing_left_names_the_remedy(self, agent):
+        del self.connections["google"]
+        result = _run(agent, "list_calendar_events")
+        assert result["success"] is False
+        assert "gaia connectors connect" in result["error"]
+
+    def test_an_unrelated_token_failure_is_not_translated(self, agent):
+        self.tokens["google"] = "tok"
+        agent._calendar_run(lambda backend: backend)
+        self.tokens["google"] = RuntimeError("not a connector error")
+        with pytest.raises(RuntimeError):
+            agent._calendar_backend.get_event("x")
+
+    def test_a_read_after_a_switch_answers_from_the_new_account(self, agent):
+        self.tokens["google"] = "tok"
+        agent._calendar_run(lambda backend: backend)
+        from gaia.connectors.errors import ConnectionRevokedError
+
+        self.tokens["google"] = ConnectionRevokedError("google")
+        self._switch_to_microsoft()
+        result = _run(agent, "list_calendar_events")
+        assert result["success"] is True
+        assert result["provider"] == "microsoft"
+        assert result["account"] == "work@corp.com"
+
+    def test_a_write_after_a_switch_is_refused_and_sends_nothing(self, agent):
+        self.tokens["google"] = "tok"
+        agent._calendar_run(lambda backend: backend)
+        from gaia.connectors.errors import ConnectionRevokedError
+
+        self.tokens["google"] = ConnectionRevokedError("google")
+        self._switch_to_microsoft()
+        result = _run(agent, "cancel_calendar_event", **TARGET)
+        assert result["success"] is False
+        assert "google" in result["error"] and "microsoft" in result["error"]
+        assert "nothing was changed" in result["error"].lower()
+        assert self.graph.requests == []
+
+    def test_a_write_retries_when_the_provider_stays_the_same(self, agent):
+        self.tokens["google"] = "tok"
+        agent._calendar_run(lambda backend: backend)
+        from gaia.connectors.errors import ConnectionRevokedError
+
+        calls = iter([ConnectionRevokedError("google")])
+
+        def once(*, provider, scopes, agent_id):
+            for failure in calls:
+                raise failure
+            return "tok"
+
+        with patch("gaia.connectors.api.get_access_token_sync", once):
+            result = _run(agent, "cancel_calendar_event", **TARGET)
+        assert result["success"] is True
 
 
 class TestList:
