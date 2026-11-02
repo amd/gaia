@@ -182,8 +182,8 @@ def ensure_authenticated(
     if not result.get("models_discovered"):
         log.warning(
             f"The stored {provider} key was handed to Lemonade but no models were "
-            f"discovered, so {provider} rejected it. Enter a current key in the "
-            f"TUI's /provider panel."
+            f"discovered. Either {provider} rejected it or its model list is "
+            f"failing. Check the key in the TUI's /provider panel."
         )
         return False
     return True

@@ -264,6 +264,7 @@ def test_preload_failure_raises_actionable_and_does_not_poison_singleton(mock_cl
     msg = str(exc_info.value)
     assert "Lemonade" in msg
     assert "ctx_size=32768" in msg or "32768" in msg
+    assert "server returned 500" in msg, "the load's own error must reach the CLI"
     assert "systemctl --user start lemond" in msg
     assert "lemonade-server" not in msg
 

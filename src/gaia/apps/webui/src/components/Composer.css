@@ -228,6 +228,11 @@
     text-overflow: ellipsis;
 }
 
+/* Too long to sit beside the other chips on a phone; the eye icon carries the state. */
+@media (max-width: 480px) {
+    .composer-chip-memory .composer-chip-label { display: none; }
+}
+
 .composer-chip.is-warning {
     color: var(--accent-yellow);
 }

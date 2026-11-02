@@ -138,6 +138,11 @@ summary = conn.import_forwarded_connection(
 # summary carries metadata only — never the refresh token or client secret.
 ```
 
+If GAIA stops after writing the forwarded client but before writing its matching
+connection, the next locked connection read restores the pre-import pair before
+checking it. The caller can retry the import; GAIA does not treat that temporary
+mismatch as a reason to delete the prior connection.
+
 ### REST: `POST /v1/connections/{provider}`
 
 The same ingestion is exposed over REST by the Agent UI server (which binds

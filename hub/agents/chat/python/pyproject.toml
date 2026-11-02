@@ -25,7 +25,7 @@ requires-python = ">=3.10"
 # No `gaia.agent` entry points: the `chat`, `doc` and `file` ids resolve to the
 # flagship through gaia.agents.registry's legacy aliases.
 dependencies = [
-  "amd-gaia>=0.25.3",
+  "amd-gaia>=0.25.4",
   "gaia-agent-gaia>=0.3.3",
 ]
 

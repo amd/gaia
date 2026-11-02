@@ -12,13 +12,26 @@ This conftest auto-clears ``GAIA_MEMORY_DISABLED`` when collecting tests
 from any ``test_memory_*.py`` file so the per-test mocks take effect.
 """
 
+import importlib.util
 import os
 import socket
 import sys
 import tempfile
+import venv
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(scope="session")
+def python_with_pip(tmp_path_factory):
+    """A Python with ``-m pip``, which a ``uv venv`` dev environment does not have."""
+    if importlib.util.find_spec("pip") is not None:
+        return sys.executable
+    env_dir = tmp_path_factory.mktemp("pip-venv")
+    venv.create(env_dir, with_pip=True)
+    bin_dir = "Scripts" if sys.platform == "win32" else "bin"
+    return str(env_dir / bin_dir / Path(sys.executable).name)
 
 
 @pytest.fixture
@@ -34,6 +47,8 @@ def mock_home(tmp_path, monkeypatch):
     real_expanduser = os.path.expanduser
 
     def fake_expanduser(path):
+        # Like the real one, accept any path-like (matplotlib passes a Path).
+        path = os.fspath(path)
         if path == "~":
             return str(tmp_path)
         if path.startswith(("~/", "~\\")):
@@ -74,14 +89,25 @@ def _isolate_gaia_config(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
 
 
+@pytest.fixture(autouse=True)
+def _forget_crashed_loads(monkeypatch):
+    """A load one test crashed must not be refused, unsent, in the next."""
+    from gaia.llm import lemonade_client
+
+    monkeypatch.setattr(lemonade_client, "_CRASHED_LOADS", {})
+
+
 #: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
 _RUN_HOME = Path.home()
 
 
 def _patch_default_gaia_home(mp, default_gaia_home) -> None:
     from gaia import config as config_mod
+    from gaia import home as home_mod
     from gaia.connectors import _refresh_lock
 
+    # gaia_home() lives in gaia.home; config re-exports it.
+    mp.setattr(home_mod, "default_gaia_home", default_gaia_home)
     mp.setattr(config_mod, "default_gaia_home", default_gaia_home)
     # Bound at import; the connector lock is the one writer among those names.
     mp.setattr(_refresh_lock, "default_gaia_home", default_gaia_home)

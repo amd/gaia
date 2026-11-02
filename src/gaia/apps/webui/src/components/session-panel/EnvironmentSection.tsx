@@ -175,7 +175,7 @@ function Folders({ sessionId }: { sessionId: string }) {
                 ? <Folder size={13} className="sp-item-icon" aria-hidden="true" />
                 : <File size={13} className="sp-item-icon" aria-hidden="true" />}
             <div className="sp-item-text">
-                <span className="sp-item-name" title={entry.path}>{baseName(entry.path)}</span>
+                <span className="sp-item-name" dir="auto" title={entry.path}>{baseName(entry.path)}</span>
                 <span className="sp-meta" title={entry.path}>{t(SOURCE_LABEL[entry.source])} · <span dir="ltr">{entry.path}</span></span>
             </div>
             {entry.removable && !locked && (

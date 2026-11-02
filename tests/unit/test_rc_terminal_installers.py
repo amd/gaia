@@ -1,12 +1,13 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""A release candidate ships the terminal's .pkg/.deb/.rpm; a final ships them as before.
+"""Every release tag, final or RC, ships the terminal's .pkg/.deb/.rpm from publish.yml.
 
-Release candidates used to carry only the raw terminal binaries, so the
-installers a final ships were first exercised by the final itself. publish.yml
-now builds them for an RC around that RC's own flagship agent, refuses to
-publish unless every leg installed cleanly, and attaches them to the
-pre-release under the names a final uses.
+Release candidates used to carry only the raw terminal binaries, and a final got
+its installers from release_components.yml, behind the Agent Hub approval -- so
+a final could sit for hours with no Windows setup. publish.yml now builds them
+for every tag (an RC around its own flagship agent, a final around the one its
+lock pins), refuses to publish unless every leg installed cleanly, and attaches
+them with no approval of their own.
 
 These are configuration assertions plus one run of the attach script against a
 stubbed ``gh``: the publish path cannot be dry-run, so what it would upload is
@@ -15,6 +16,7 @@ proven here instead.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -34,9 +36,12 @@ import artifacts  # noqa: E402
 
 IS_RC = "needs.validate.outputs.is_rc == 'true'"
 NOT_RC = "needs.validate.outputs.is_rc != 'true'"
-ATTACH_JOB = "rc-github-release-installers"
+ATTACH_JOB = "github-release-installers"
 RC_VERSION = "0.25.1-rc.4"
+FINAL_VERSION = "0.25.1"
 PACKAGE_PLATFORMS = ("darwin-arm64", "darwin-x64", "linux-x64")
+LOCK = Path("hub/agents/gaia/npm/binaries.lock.json")
+SIDECAR = "${{ needs.validate.outputs.is_rc == 'true' && 'artifact' || 'pinned' }}"
 
 
 def _jobs(name: str) -> dict:
@@ -68,14 +73,17 @@ def _package_names(version: str) -> list[str]:
 # ── The build ────────────────────────────────────────────────────────────────
 
 
-def test_an_rc_builds_the_packages_around_its_own_flagship(publish):
-    tui = publish["rc-tui"]
+def test_every_tag_builds_the_packages_around_its_flagship(publish):
+    tui = publish["tui-installers"]
     assert tui["uses"] == "./.github/workflows/tui_installers.yml"
-    assert IS_RC in tui["if"] and "!cancelled()" in tui["if"]
-    # The agent THIS run froze, never the hub's -- same as rc-windows-setup.
-    assert tui["with"]["sidecar"] == "artifact"
+    assert "!cancelled()" in tui["if"]
+    # A final builds them too: no RC-only gate, and no approval environment.
+    assert IS_RC not in tui["if"]
+    assert "environment" not in tui
+    # An RC wraps the agent THIS run froze; a final the one its lock pins.
+    assert tui["with"]["sidecar"] == SIDECAR
     assert "rc-flagship" in tui["needs"]
-    assert "needs.rc-flagship.result == 'success'" in tui["if"]
+    assert f"({NOT_RC} || needs.rc-flagship.result == 'success')" in tui["if"]
     assert tui["with"].get("installers", True) is True
     # -rc.N in every file name, like the Windows setup and the desktop app.
     assert tui["with"]["version"] == "${{ needs.validate.outputs.npm_version }}"
@@ -83,22 +91,27 @@ def test_an_rc_builds_the_packages_around_its_own_flagship(publish):
     assert not tui["with"].get("artifact_prefix")
 
 
-def test_nothing_publishes_unless_all_four_rc_packages_installed(publish):
-    gate = f"({NOT_RC} || needs.rc-tui-complete.result == 'success')"
+def test_nothing_publishes_unless_every_package_installed(publish):
+    gate = "needs.tui-installers-complete.result == 'success'"
     for job in ("approve-publish", "github-release"):
-        assert "rc-tui-complete" in publish[job]["needs"]
-        assert gate in publish[job]["if"], f"{job} does not require rc-tui-complete"
+        assert "tui-installers-complete" in publish[job]["needs"]
+        assert gate in publish[job]["if"], f"{job} does not require the packages"
+        # For a final as well as an RC.
+        assert f"{NOT_RC} || {gate}" not in publish[job]["if"]
 
-    complete = publish["rc-tui-complete"]
-    assert complete["needs"] == ["validate", "rc-tui"]
-    assert IS_RC in complete["if"]
+    complete = publish["tui-installers-complete"]
+    assert complete["needs"] == ["validate", "tui-installers"]
+    assert IS_RC not in complete["if"]
     # Every leg passed its clean-runner install...
-    assert "needs.rc-tui.outputs.installers_ok == 'true'" in complete["if"]
-    # ...and each of the four files exists, by name (an Intel .pkg is skipped
-    # without failing a leg when its best-effort agent did not build).
+    assert "needs.tui-installers.outputs.installers_ok == 'true'" in complete["if"]
+    # ...and each file exists, by name (an Intel .pkg is skipped without
+    # failing a leg when there is no Intel agent to wrap).
     run = _step(complete, "Every terminal installer is present")["run"]
     assert "for platform in darwin-arm64 darwin-x64 linux-x64" in run
     assert "artifacts.py names" in run and "exit 1" in run
+    # A final is held to the platforms its flagship lock has an agent for.
+    assert "artifacts.py publish-args" in run
+    assert "--exclude-platform win-x64" in run
 
 
 def test_installers_ok_means_every_leg_smoke_tested():
@@ -113,11 +126,11 @@ def test_installers_ok_means_every_leg_smoke_tested():
 # ── The attach ───────────────────────────────────────────────────────────────
 
 
-def test_the_attach_job_runs_for_an_rc_after_its_prerelease_exists(publish):
+def test_the_attach_job_runs_for_every_tag_after_its_release_exists(publish):
     job = publish[ATTACH_JOB]
-    assert IS_RC in job["if"]
+    assert IS_RC not in job["if"] and NOT_RC not in job["if"]
     assert "needs.github-release.result == 'success'" in job["if"]
-    assert "needs.rc-tui-complete.result == 'success'" in job["if"]
+    assert "needs.tui-installers-complete.result == 'success'" in job["if"]
     assert job["permissions"] == {"contents": "write"}
     assert "environment" not in job
     (download,) = [
@@ -137,7 +150,7 @@ def test_the_attach_is_idempotent_and_github_only(publish):
     assert "publish_to_r2" not in text and "GAIA_HUB" not in text
 
 
-def test_the_final_release_job_is_unchanged(publish):
+def test_the_final_release_job_steps(publish):
     """The steps a final's GitHub Release runs, pinned. RC work is gated IS_RC."""
     final_steps = [
         s.get("name") or s.get("uses")
@@ -151,25 +164,67 @@ def test_the_final_release_job_is_unchanged(publish):
         "Extract release notes",
         "Download TUI binaries",
         "Checksum TUI binaries",
+        "Download the combined Windows setup",
+        "Check the combined Windows setup is this release's",
         "Download Desktop Installer (Windows NSIS)",
         "Download Desktop Installer (macOS DMG)",
         "Download Desktop Installer (Linux DEB + AppImage)",
+        "Check every desktop installer is attached",
         "Create GitHub Release",
     ]
 
 
-def test_a_final_still_gets_its_installers_from_release_components():
+def test_a_final_attaches_every_installer_from_publish_without_approval(publish):
+    """A final's Windows setup and packages never wait on a second approval."""
+    for job_id in (
+        "tui-installers",
+        "tui-installers-complete",
+        "windows-setup",
+        "github-release",
+        ATTACH_JOB,
+        "redeploy-website",
+    ):
+        job = publish[job_id]
+        assert "environment" not in job, f"{job_id} waits on an environment"
+        assert IS_RC not in job.get("if", ""), f"{job_id} runs for an RC only"
+    # approve-publish is the final's one approval; pypi and npm are the OIDC
+    # trusted-publisher environments, which carry no reviewers.
+    gated = sorted(j for j, job in publish.items() if "environment" in job)
+    assert gated == ["approve-publish", "publish-npm", "publish-pypi"]
+
+    setup = publish["windows-setup"]
+    assert setup["uses"] == "./.github/workflows/windows_setup.yml"
+    assert setup["with"]["sidecar"] == SIDECAR
+    # github-release attaches the setup for a final too.
+    (download,) = [
+        s
+        for s in publish["github-release"]["steps"]
+        if s.get("name") == "Download the combined Windows setup"
+    ]
+    assert download["if"] == "needs.windows-setup.outputs.ok == 'true'"
+    assert download["with"]["path"] == "release-assets"
+
+
+def test_release_components_no_longer_attaches_installers_on_a_tag():
     filters = _triggers("release_components.yml")["push"]["tags"]
     assert "v*" in filters and "!v*-rc*" in filters
     jobs = _jobs("release_components.yml")
+    dispatch_only = "github.event_name == 'workflow_dispatch'"
+    for job_id in ("windows-setup", "windows-setup-missing", ATTACH_JOB):
+        assert dispatch_only in jobs[job_id]["if"], f"{job_id} still runs on a tag"
+    # The six raw binaries still build on a tag for the hub; the packages don't.
     tui = jobs["tui"]
     assert tui["uses"] == "./.github/workflows/tui_installers.yml"
     assert tui["with"]["sidecar"] == "pinned"
-    assert "installers" not in tui["with"]
-    attach = _step(
-        jobs["github-release-installers"], "Attach the installers and their checksums"
-    )["run"]
+    assert tui["with"]["installers"] == "${{ " + dispatch_only + " }}"
+    # A dispatch embeds the published release's desktop app, never a run's.
+    assert "agent_ui_publish_run_sha" not in jobs["windows-setup"]["with"]
+    attach = _step(jobs[ATTACH_JOB], "Attach the installers and their checksums")["run"]
     assert "gh release upload" in attach and "--clobber" in attach
+    # The hub publish and its approval are untouched.
+    hub = jobs["terminal-hub"]
+    assert "agent-publish" in hub["environment"]
+    assert dispatch_only not in hub["if"]
 
 
 def test_rc_notes_name_the_packages_they_attach(publish):
@@ -214,12 +269,23 @@ def _exe(path: Path, body: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
-def _workspace(tmp_path: Path, present: list[str]) -> tuple[Path, dict]:
+def _workspace(
+    tmp_path: Path,
+    present: list[str],
+    version: str = RC_VERSION,
+    drop_lock_platform: str | None = None,
+) -> tuple[Path, dict]:
     ws = tmp_path / "ws"
     tui = ws / "installer" / "tui"
     tui.mkdir(parents=True)
     for f in ("artifacts.py", "fetch_sidecar.py"):
         shutil.copy(REPO_ROOT / "installer" / "tui" / f, tui / f)
+    # A final reads which platforms have an agent from the committed lock.
+    lock = json.loads((REPO_ROOT / LOCK).read_text(encoding="utf-8"))
+    if drop_lock_platform:
+        del lock["components"]["sidecar"]["platforms"][drop_lock_platform]
+    (ws / LOCK).parent.mkdir(parents=True)
+    (ws / LOCK).write_text(json.dumps(lock), encoding="utf-8")
     (ws / "dist").mkdir()
     for n in present:
         (ws / "dist" / n).write_bytes(f"bytes of {n}".encode())
@@ -234,8 +300,9 @@ def _workspace(tmp_path: Path, present: list[str]) -> tuple[Path, dict]:
     env = dict(os.environ)
     env.update(
         PATH=f"{stub}{os.pathsep}{env['PATH']}",
-        VERSION=RC_VERSION,
-        TAG="v0.25.1-rc4",
+        VERSION=version,
+        IS_RC="true" if version == RC_VERSION else "false",
+        TAG="v0.25.1-rc4" if version == RC_VERSION else "v0.25.1",
         GITHUB_REPOSITORY="amd/gaia",
         GH_TOKEN="stub",
     )
@@ -319,9 +386,9 @@ def test_the_prepublish_gate_fails_short_of_any_package(tmp_path, publish, drop)
     packages = _package_names(RC_VERSION)
     gone = packages.pop(drop) if drop is not None else None
     ws, env = _workspace(tmp_path, packages)
-    run = _step(publish["rc-tui-complete"], "Every terminal installer is present")[
-        "run"
-    ]
+    run = _step(
+        publish["tui-installers-complete"], "Every terminal installer is present"
+    )["run"]
     done = subprocess.run(
         [bash, "-c", run], cwd=ws, env=env, capture_output=True, text=True
     )
@@ -330,6 +397,79 @@ def test_the_prepublish_gate_fails_short_of_any_package(tmp_path, publish, drop)
     else:
         assert done.returncode != 0
         assert gone in done.stdout and "::error::" in done.stdout
+
+
+# ── A final: the platforms its flagship lock has an agent for ───────────────
+
+
+def _final_packages(skip: str | None = None) -> list[str]:
+    return [
+        n
+        for p in PACKAGE_PLATFORMS
+        if p != skip
+        for n, _ in artifacts.artifacts_for(p, FINAL_VERSION)
+    ]
+
+
+def test_a_final_attaches_its_packages_and_the_setup_sums(tmp_path, publish):
+    bash = _bash()
+    packages = _final_packages()
+    setup = artifacts.artifacts_for("win-x64", FINAL_VERSION)[0][0]
+    ws, env = _workspace(tmp_path, packages + [setup], version=FINAL_VERSION)
+
+    done = _run_attach(bash, ws, env, publish, windows_ok="true")
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    args = (tmp_path / "gh.args").read_text(encoding="utf-8").splitlines()
+    assert args[:3] == ["release", "upload", "v0.25.1"]
+    uploaded = sorted(a for a in args if a.startswith("dist/") and "SHA256" not in a)
+    assert uploaded == sorted(f"dist/{n}" for n in packages)
+    assert "dist/gaia-installers-SHA256SUMS.txt" in args
+    sums = _summed(ws / "dist" / "gaia-installers-SHA256SUMS.txt")
+    assert sums == sorted(packages + [setup])
+
+
+def test_a_final_with_no_intel_agent_ships_without_the_intel_pkg(tmp_path, publish):
+    bash = _bash()
+    packages = _final_packages(skip="darwin-x64")
+    ws, env = _workspace(
+        tmp_path, packages, version=FINAL_VERSION, drop_lock_platform="darwin-x64"
+    )
+
+    gate = _step(
+        publish["tui-installers-complete"], "Every terminal installer is present"
+    )
+    done = subprocess.run(
+        [bash, "-c", gate["run"]], cwd=ws, env=env, capture_output=True, text=True
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    done = _run_attach(bash, ws, env, publish, windows_ok="")
+    assert done.returncode == 0, done.stdout + done.stderr
+    args = (tmp_path / "gh.args").read_text(encoding="utf-8").splitlines()
+    uploaded = sorted(a for a in args if a.startswith("dist/") and "SHA256" not in a)
+    assert uploaded == sorted(f"dist/{n}" for n in packages)
+
+
+@pytest.mark.parametrize("drop", range(4))
+def test_a_final_missing_a_locked_package_publishes_nothing(tmp_path, publish, drop):
+    bash = _bash()
+    packages = _final_packages()
+    gone = packages.pop(drop)
+    ws, env = _workspace(tmp_path, packages, version=FINAL_VERSION)
+
+    gate = _step(
+        publish["tui-installers-complete"], "Every terminal installer is present"
+    )
+    done = subprocess.run(
+        [bash, "-c", gate["run"]], cwd=ws, env=env, capture_output=True, text=True
+    )
+    assert done.returncode != 0
+    assert gone in done.stdout + done.stderr and "::error::" in done.stdout
+
+    done = _run_attach(bash, ws, env, publish, windows_ok="")
+    assert done.returncode != 0
+    assert not (tmp_path / "gh.args").exists(), "gh ran despite a missing package"
 
 
 # ── The version inside the packages ──────────────────────────────────────────

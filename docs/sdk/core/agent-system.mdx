@@ -501,7 +501,7 @@ model only, with a one-line stub that names where the full text is:
 [evicted: read_file path=src/gaia/cli.py; 41203 chars; read_tool_output(artifact=output_…, entry=1) fetches it]
 ```
 
-This is not the context compaction GAIA's roadmap rules out ("memory + RAG
+This is not the context compaction GAIA rules out ("memory + RAG
 handles long conversations"): nothing is summarised and nothing is lost. Every
 evicted result is archived whole in the agent's artifact store and stays
 fetchable through `read_tool_output`; a result that already arrived as a chunk

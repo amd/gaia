@@ -83,6 +83,7 @@ _MEMORY = ConnectorSpec(
     tier=1,
     type="mcp_server",
     description="Knowledge graph-based persistent memory for agents.",
+    docs_url="https://amd-gaia.ai/docs/connectors/memory",
     mcp_command="npx",
     mcp_args=("-y", "@modelcontextprotocol/server-memory@2026.8.31"),
 )
@@ -95,6 +96,7 @@ _GIT = ConnectorSpec(
     tier=1,
     type="mcp_server",
     description="Git repository tools: status, diff, log, show, branch, and commit.",
+    docs_url="https://amd-gaia.ai/docs/connectors/git",
     # The reference Git server ships on PyPI only; the npm name never existed.
     mcp_command="uvx",
     mcp_args=("mcp-server-git==2026.8.18",),

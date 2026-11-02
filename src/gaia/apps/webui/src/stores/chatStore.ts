@@ -5,7 +5,7 @@
 
 import { create } from 'zustand';
 import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId } from '../types';
-import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
+import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
 import { DEFAULT_LOCALE, applyLocale, isLocaleCode } from '../i18n/registry';
@@ -532,6 +532,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     locale: readLocale(),
     setLocale: (code) => {
         applyLocale(code);
+        syncTitleBar();
         writePref(LOCALE_KEY, code);
         set({ locale: code });
     },

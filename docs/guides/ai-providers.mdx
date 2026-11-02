@@ -12,7 +12,7 @@ turns the cloud choices off.
 
 ## Connect from the TUI
 
-1. Start `gaia tui`. On a first run, setup opens by asking where chat should
+1. Start `gaia-tui`. On a first run, setup opens by asking where chat should
    run: choose **Fireworks AI** or **AMD LLM Gateway** there, and its key form
    opens once Lemonade is installed. Otherwise press **p** during setup, or enter
    **`/provider`** from the command palette in chat.
@@ -90,8 +90,9 @@ else, including CPU-only PCs. GAIA runs Qwen3.6 with thinking on, so each step
 reasons before it answers or calls a tool. It records the pick as `default_model` in `~/.gaia/config.json`,
 so the TUI's agent starts on it. Set `gaia config set default_model <id>` to
 choose your own; `gaia init` never overwrites it, and downloads it instead of
-Gemma. Questions about images then download Gemma (~6 GB) the first time you
-ask one. **Qwen3.8 Flash Next** is
+Gemma. If Lemonade explicitly reports your configured vision model as not
+downloaded, image questions explain which model to download first instead of
+starting a multi-gigabyte download during image analysis. **Qwen3.8 Flash Next** is
 available on a 128 GB Strix Halo, and never picked for you: it needs ~90 GB for
 models (82 GB of weights and vision projector plus its context cache). Choose it
 with `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`, then run
@@ -204,6 +205,35 @@ model sends its full size again.
 
 Gemma 4 E4B stays at 65,536 tokens on every PC.
 
+### Give the GPU more memory
+
+On a PC whose GPU shares the system's memory (a Strix Halo or other Ryzen AI
+APU), how much of it the GPU may use decides which models fit. GAIA reads the
+split, shows which models a bigger share would fit, and never suggests a value
+that leaves less than 16 GB the GPU can't use. The GPU and CPU figures add up
+to the PC's memory. If the PC has nothing more to give, there are no steps. Either way the change needs administrator rights and a restart, and
+GAIA never restarts the PC itself. After the restart it reads the split again
+and says whether the change took effect.
+
+- **Linux:** GAIA sets it for you after you confirm. It writes
+  `options ttm pages_limit=<pages>` to `/etc/modprobe.d/ttm.conf` (the setting
+  AMD's `amd-ttm` tool writes), rebuilds the boot image, and asks for your
+  password through `pkexec`. It keeps the file's previous contents so you can
+  undo the change. If the kernel command line, another file in
+  `/etc/modprobe.d`, or the kernel itself already decides the limit, GAIA shows
+  the exact commands instead of changing anything.
+- **Windows:** you change it in AMD Software: Adrenalin Edition, under
+  Performance › Tuning › Variable Graphics Memory, then restart. AMD allows up to
+  75% of RAM there. The steps give the one value to enter, as AMD Software
+  shows it, and say why it is smaller than the GPU total GAIA shows: usually
+  because Windows also lets the GPU use half of the remaining memory, otherwise
+  because AMD Software's GB are slightly larger. GAIA lists these steps rather
+  than applying them, because AMD's interface for this setting restarts the PC
+  by itself. Without that option, set UMA Frame Buffer Size in the BIOS.
+
+The Agent UI serves this at `/api/gpu-memory` and the daemon at
+`/daemon/v1/gpu-memory`, with `apply`, `revert` and `pending` routes under each.
+
 ## What the ranked picks measured
 
 The two flash picks were measured end to end with the GAIA flagship agent over the
@@ -248,9 +278,15 @@ with `gaia config set network_policy cloud_allowed`. Details and limits:
   TUI and every restarted Lemonade gets it back without asking. Lemonade itself
   holds the key in memory only; GAIA hands it over again when a chat starts on a
   cloud model, when you open `/provider`, and when GAIA's Lemonade restarts while
-  a cloud chat is open. A key that discovers no models is not
-  kept. GAIA never writes a key to config files, transcripts, control logs,
+  a cloud chat is open. A key Fireworks AI or the gateway rejects is not kept.
+  GAIA never writes a key to config files, transcripts, control logs,
   traces, or command-line arguments.
+- If Fireworks AI's model list fails but your key was not rejected, the Agent UI
+  says so and keeps the key. GAIA's own Lemonade then restarts with the Fireworks
+  models GAIA already knows, and any model loaded at that moment is unloaded. A
+  note in Settings says the list may be out of date, and the next time GAIA's
+  Lemonade starts after the list recovers, it goes back to the live list. While
+  this is active, the key is in the environment of GAIA's Lemonade process.
 - A key only goes to GAIA's own running Lemonade, to the server named in
   `LEMONADE_BASE_URL`, or to the system Lemonade when GAIA's own isn't installed.
   It never goes to whatever answers on port 13305 or 8000. If GAIA's Lemonade is

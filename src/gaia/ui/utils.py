@@ -514,21 +514,28 @@ def uploads_dir() -> Path:
 UPLOAD_URL_PREFIX = "/api/files/uploads/"
 
 
+def harden_served_file(response: Response, path: str) -> Response:
+    """Stop a user file served on the app's origin from ever running as the app.
+
+    ``sandbox`` gives the document an opaque origin with scripts off; PDFs are
+    exempt because Chromium refuses to show a sandboxed PDF, and its viewer
+    never runs on the page's origin anyway.
+    """
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if not path.lower().endswith(".pdf"):
+        response.headers["Content-Security-Policy"] = "sandbox"
+    return response
+
+
 class UploadStaticFiles(StaticFiles):
     """Serve chat uploads so an uploaded page can never run as the app.
 
     Uploads include ``.html`` and ``.svg``, and the chat links them on the
-    backend's own origin. ``sandbox`` gives the document an opaque origin with
-    scripts off; PDFs are exempt because Chromium refuses to show a sandboxed
-    PDF, and its viewer never runs on the page's origin anyway.
+    backend's own origin.
     """
 
     async def get_response(self, path: str, scope) -> Response:
-        response = await super().get_response(path, scope)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        if not path.lower().endswith(".pdf"):
-            response.headers["Content-Security-Policy"] = "sandbox"
-        return response
+        return harden_served_file(await super().get_response(path, scope), path)
 
 
 UPLOAD_LINK_RE = re.compile(

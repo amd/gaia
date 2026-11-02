@@ -93,7 +93,7 @@ python util/check_pe_resources.py bin/gaia-win-x64.exe
 CI builds the macOS and Linux packages in `.github/workflows/tui_installers.yml`
 and the Windows setup in `.github/workflows/windows_setup.yml`; both smoke-test on
 a runner that did not build them, on PRs (via `build_tui.yml`) and on release
-(via `release_components.yml`). The Windows smoke test is
+(via `publish.yml`). The Windows smoke test is
 [`nsis/smoke-test.ps1`](nsis/smoke-test.ps1). It installs, writes HKCU/HKLM keys,
 fonts and shortcuts, and uninstalls — run it only on a throwaway machine. Locally, each
 builder is self-contained — see the per-platform READMEs for the toolchain each

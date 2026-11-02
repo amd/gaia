@@ -22,10 +22,16 @@ log = get_logger(__name__)
 
 OUTPUT_FORMATS = ("text", "json")
 
+# What `-p` holds when given no text. Not "": an empty $PROMPT in a script must
+# be refused, not wait on a stdin that may never close.
+READ_STDIN = "\0stdin"
+
 
 def read_prompt(prompt: Optional[str]) -> str:
     """The prompt from ``-p``, or from stdin when ``-p`` was given no text."""
-    if prompt:
+    if prompt != READ_STDIN and prompt is not None:
+        if not prompt.strip():
+            raise ValueError("gaia -p was given an empty prompt.")
         return prompt
     if sys.stdin is None or sys.stdin.isatty():
         raise ValueError(
@@ -144,8 +150,8 @@ def run(
     except KeyboardInterrupt:
         return _emit_failure(output_format, "interrupted", code=130)
     except Exception as exc:  # noqa: BLE001 - CLI boundary: report, never a traceback
-        # INFO reaches the log file, not the console: the traceback stays findable.
-        log.info("gaia -p failed", exc_info=True)
+        # DEBUG, not INFO: the console handler prints INFO, traceback and all.
+        log.debug("gaia -p failed", exc_info=True)
         return _emit_failure(output_format, f"{type(exc).__name__}: {exc}")
 
     if output_format == "json":
@@ -154,11 +160,10 @@ def run(
         # A failed turn with no answer leaves stdout empty, not one blank line.
         print(record["result"])
     if record["is_error"]:
-        print(
-            f"❌ gaia -p: the turn ended with status '{record['status']}'"
-            + (f": {record['error']}" if record.get("error") else ""),
-            file=sys.stderr,
-        )
+        ended = f"the turn ended with status '{record['status']}'"
+        error = record.get("error")
+        detail = f": {error}" if error and error != ended else ""
+        print(f"❌ gaia -p: {ended}{detail}", file=sys.stderr)
         return 1
     return 0
 

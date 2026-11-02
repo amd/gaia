@@ -20,10 +20,6 @@ invariants a future editor will otherwise break.
 >   this"), shared by the code audit and the doc walkthrough. It names no cadence.
 > - this **skill's `name`**, referenced from `CLAUDE.md`.
 >
-> `claude-account-switch.yml` watches the audits by **display name** (`workflow_run`), so
-> renaming one without updating its list silently unhooks the account switch; a contract
-> test checks it.
->
 > An earlier version of this note justified the label by claiming a rename "would re-file
 > every open finding." That is **false**, and worth correcting because it is the reasoning
 > a future editor inherits: GitHub renames a label in place and every issue keeps it, and
@@ -50,14 +46,13 @@ walks the guides that waited longest. Only rotation runs (run-name "… rotation
 and legacy cron runs count as history; a hand dispatch may be a dry run that filed
 nothing.
 
-**Quota gate.** Each audit's first job probes Claude once (`scripts/audit/require_claude.py`,
-same classifier as the canary and account switch). Refused → the run fails there with the
-account and reset time in the summary, before any lens or self-hosted job starts. On a
-quota verdict the `request-account-switch` job **dispatches** `claude-account-switch.yml`.
-Don't drop that for the switch's `workflow_run` hook: the rotation starts every audit with
-`GITHUB_TOKEN`, GitHub only promises that `workflow_dispatch`/`repository_dispatch` from that
-token create runs, and it does not document `workflow_run` firing for such a run's completion.
-A contract test checks every audit has the dispatch job.
+**Quota gate.** Each audit's first job picks the run's Claude account once with
+`.github/actions/claude-credential`: the primary if it answers, else the secondary if the
+primary is out of quota. If both are out, or a token is rejected, the run fails there with
+the reset times or the secret to rotate in the summary, before any lens or self-hosted job
+starts. The gate job exports the label as `claude_account`, and every lens and synthesis
+step picks its token from `needs.<gate>.outputs.claude_account`. A contract test checks both
+halves.
 
 **Explicit modes are honoured.** Only `auto` (what the rotation sends) may escalate to a deep
 sweep. A hand-dispatched `mode=normal` with no recent successful run reviews the last 7 days

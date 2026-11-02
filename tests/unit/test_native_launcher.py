@@ -10,10 +10,16 @@ script elsewhere) so the launcher can exec it exactly as it would a binary:
 ``<shim> --stdio``.
 """
 
+import os
 import platform
+import re
+import signal
 import stat
+import subprocess
 import sys
 import textwrap
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,6 +45,19 @@ _FAKE_AGENT_IMPL = textwrap.dedent("""
         sys.stderr.write("boom: simulated startup crash\\n")
         sys.stderr.flush()
         sys.exit(3)
+
+    if mode == "crash_orphan_stderr":
+        import subprocess
+        time.sleep(0.5)  # past the spawn grace window, so the handshake sees it
+        holder = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=sys.stderr,
+        )
+        sys.stderr.write(f"boom: crash with orphaned stderr holder={holder.pid}\\n")
+        sys.stderr.flush()
+        sys.exit(4)
 
     def send(obj):
         sys.stdout.write(json.dumps(obj) + "\\n")
@@ -211,6 +230,94 @@ def test_start_immediate_crash(launcher, fake_agent):
     # crash stderr rather than registering a dead agent.
     with pytest.raises(NativeAgentError, match="simulated startup crash"):
         _start(launcher, fake_agent, mode="crash")
+
+
+def _fake_state(proc, reader, stderr_lines):
+    return SimpleNamespace(
+        proc=proc,
+        _stderr_reader=reader,
+        recent_stderr=lambda: "\n".join(stderr_lines),
+    )
+
+
+class _DeferredStderrReader:
+    """Publishes the crash line only once join() runs, like a lagging reader."""
+
+    def __init__(self, stderr_lines):
+        self.stderr_lines = stderr_lines
+        self.join_timeouts = []
+
+    def join(self, timeout):
+        self.join_timeouts.append(timeout)
+        self.stderr_lines.append("boom: simulated startup crash")
+
+
+def test_dead_process_error_waits_for_crashed_stderr_reader(launcher):
+    stderr_lines = []
+    reader = _DeferredStderrReader(stderr_lines)
+    proc = SimpleNamespace(pid=1234, returncode=3, wait=lambda timeout: 3)
+
+    error = launcher._dead_process_error(_fake_state(proc, reader, stderr_lines))
+
+    assert "process died (exit code 3" in str(error)
+    assert "boom: simulated startup crash" in str(error)
+    assert len(reader.join_timeouts) == 1
+    assert 0 < reader.join_timeouts[0] <= 1
+
+
+def test_dead_process_error_waits_when_exit_not_yet_reapable(launcher):
+    # stdout EOF can arrive a moment before the exit is reapable (poll() still
+    # None); the crash text must not be lost in that window.
+    stderr_lines = []
+    reader = _DeferredStderrReader(stderr_lines)
+    proc = SimpleNamespace(pid=1234, returncode=None, poll=lambda: None)
+
+    def wait(timeout):
+        proc.returncode = 3
+        return 3
+
+    proc.wait = wait
+
+    error = launcher._dead_process_error(_fake_state(proc, reader, stderr_lines))
+
+    assert "exit code 3" in str(error)
+    assert "boom: simulated startup crash" in str(error)
+
+
+def test_dead_process_error_does_not_wait_for_live_stderr_reader(launcher):
+    # A native agent may close stdout while staying alive with stderr open:
+    # the wait for its exit is bounded and its live reader is never joined.
+    class ActiveStderrReader:
+        def join(self, timeout):
+            pytest.fail("must not wait for stderr of a live process")
+
+    wait_timeouts = []
+
+    def wait(timeout):
+        wait_timeouts.append(timeout)
+        raise subprocess.TimeoutExpired("agent", timeout)
+
+    proc = SimpleNamespace(pid=5678, returncode=None, wait=wait)
+
+    error = launcher._dead_process_error(_fake_state(proc, ActiveStderrReader(), []))
+
+    assert "process died (exit code None" in str(error)
+    assert len(wait_timeouts) == 1
+    assert 0 < wait_timeouts[0] <= 1
+
+
+def test_crash_reported_promptly_when_descendant_holds_stderr(launcher, fake_agent):
+    # A grandchild inherits stderr and outlives the agent by seconds; the
+    # handshake failure must still carry the crash text without waiting on it.
+    began = time.monotonic()
+    with pytest.raises(NativeAgentError, match="crash with orphaned stderr") as exc:
+        _start(launcher, fake_agent, mode="crash_orphan_stderr")
+    elapsed = time.monotonic() - began
+    holder = re.search(r"holder=(\d+)", str(exc.value))
+    if holder:
+        os.kill(int(holder.group(1)), signal.SIGTERM)
+    assert holder, "the crash line must reach the error"
+    assert elapsed < 15.0, f"waited {elapsed:.1f}s on a descendant's stderr"
 
 
 def test_start_bad_handshake_is_fatal(launcher, fake_agent):

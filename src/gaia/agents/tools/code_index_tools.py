@@ -157,7 +157,7 @@ class CodeIndexToolsMixin:
         # The sandbox ceilings: what a requested repo_path must sit under.
         # ``_repo_path`` tracks the repository currently indexed and does move —
         # conflating the two meant the first index narrowed the ceiling to that
-        # repo, so a second repository could never be indexed (#3544).
+        # repo, so a second repository could never be indexed.
         new_ceilings = (
             tuple(os.path.abspath(os.path.expanduser(p)) for p in ceiling_paths)
             if ceiling_paths is not None

@@ -1,6 +1,6 @@
 {
   "name": "@amd-gaia/agent-ui",
-  "version": "0.25.3",
+  "version": "0.25.4",
   "type": "module",
   "productName": "GAIA Agent UI",
   "description": "Chat with the GAIA agent - local and private by default on AMD Ryzen AI, cloud models when you choose them",
@@ -51,15 +51,16 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "start": "electron .",
-    "package": "npm run build && electron-builder --config electron-builder.yml",
+    "package": "npm run build && node scripts/strip-appimage-copyleft.cjs && electron-builder --config electron-builder.yml",
     "make": "npm run package",
     "package:win": "npm run build && electron-builder --win --config electron-builder.yml",
     "package:mac": "npm run build && electron-builder --mac --config electron-builder.yml",
-    "package:linux": "npm run build && electron-builder --linux --config electron-builder.yml",
+    "package:linux": "npm run build && node scripts/strip-appimage-copyleft.cjs && electron-builder --linux --config electron-builder.yml",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:visual": "vite build && playwright test -c visual/playwright.config.ts",
+    "test:rtl": "vite build && playwright test -c visual/playwright.config.ts rtl --project=light",
     "gen:api-types": "node scripts/gen-api-types.mjs"
   },
   "dependencies": {

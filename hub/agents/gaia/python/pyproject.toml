@@ -14,20 +14,21 @@ license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
 # Floors:
-# - amd-gaia>=0.25.1: ChatAgent (gaia_agent.chat_agent) imports
-#   gaia.agents.tools.reasoning_tools, which 0.25.1 is the first core to ship.
-#   (0.25.0 added gaia.agents.tools.path_access, #4656; 0.24.1 was the first
-#   core whose daemon can supervise this sidecar, #2932.) Raise it in step
-#   with min_gaia_version, never ahead of a real release.
+# - amd-gaia>=0.25.4: ChatAgent calls RAGSDK.document_scripts on any turn
+#   with an indexed document (#6165), and 0.25.4 is the first core to ship it.
+#   (0.25.1 added gaia.agents.tools.reasoning_tools; 0.25.0 added
+#   gaia.agents.tools.path_access, #4656; 0.24.1 was the first core whose
+#   daemon can supervise this sidecar, #2932.) Raise it in step with
+#   min_gaia_version, never ahead of a real release.
 #
 # ChatAgent lives in this package (#6099); it no longer depends on
 # gaia-agent-chat, which is now a deprecated re-export shim of this one.
 #
 # Intentionally bare `amd-gaia` (no `[rag]` marker): a plain pip install must
-# not drag faiss/pymupdf in just to import the class. RAG's real dependencies
+# not drag faiss/pypdfium2 in just to import the class. RAG's real dependencies
 # come from `gaia init` into the active interpreter (#2358).
 dependencies = [
-  "amd-gaia>=0.25.3",
+  "amd-gaia>=0.25.4",
 ]
 
 [project.scripts]

@@ -1368,9 +1368,11 @@ class FileIOToolsMixin:
                 # Backup before editing
                 backup_path = path_validator.create_backup(str(path))
 
-                # Generate diff before writing
+                # Generate diff before writing. keepends lets a line-ending-only
+                # change still diff; stripping it terminates each line once.
                 diff = "\n".join(
-                    difflib.unified_diff(
+                    line.rstrip("\r\n")
+                    for line in difflib.unified_diff(
                         current_content.splitlines(keepends=True),
                         updated_content.splitlines(keepends=True),
                         fromfile=f"a/{os.path.basename(str(path))}",

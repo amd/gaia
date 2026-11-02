@@ -113,7 +113,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <div className="connection-banner__icon">
                     {isError ? <AlertTriangle size={16} /> : <Download size={16} />}
                 </div>
-                <div className="connection-banner__text">
+                <div className="connection-banner__text" dir="auto">
                     {isError ? (
                         <>
                             Download of <strong>{downloadName}</strong> failed.{' '}
@@ -201,7 +201,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <div className="connection-banner__icon">
                     <Loader2 size={16} className="connection-banner__spinner" />
                 </div>
-                <div className="connection-banner__text">
+                <div className="connection-banner__text" dir="auto">
                     {label}<span className="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
                 </div>
             </div>
@@ -221,7 +221,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <div className="connection-banner__icon">
                     <WifiOff size={16} />
                 </div>
-                <div className="connection-banner__text">
+                <div className="connection-banner__text" dir="auto">
                     Lost the connection to GAIA.{' '}
                     <span className="connection-banner__hint">
                         Check that GAIA is still running, then retry.
@@ -239,7 +239,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <div className="connection-banner__icon">
                     <AlertTriangle size={16} />
                 </div>
-                <div className="connection-banner__text">
+                <div className="connection-banner__text" dir="auto">
                     GAIA's backend answered with an error ({backendError}).{' '}
                     <span className="connection-banner__hint">
                         It may be overloaded. GAIA keeps checking; if it lasts, restart GAIA.
@@ -257,7 +257,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <div className="connection-banner__icon">
                     <AlertTriangle size={16} />
                 </div>
-                <div className="connection-banner__text">
+                <div className="connection-banner__text" dir="auto">
                     GAIA is slow to answer.{' '}
                     <span className="connection-banner__hint">
                         It may be busy with another chat or app. GAIA keeps checking.
@@ -276,7 +276,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <div className="connection-banner__icon">
                     <AlertTriangle size={16} />
                 </div>
-                <div className="connection-banner__text">
+                <div className="connection-banner__text" dir="auto">
                     GAIA settings could not be loaded.{' '}
                     <span className="connection-banner__hint">{systemStatus.config_error}</span>
                 </div>
@@ -294,7 +294,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <div className="connection-banner__icon">
                     <AlertTriangle size={16} />
                 </div>
-                <div className="connection-banner__text">
+                <div className="connection-banner__text" dir="auto">
                     {unresponsive
                         ? `The model server is not answering (${systemStatus.lemonade_error}). It may be busy with another app or loading a model.`
                         : "The model server isn't running."}{' '}
@@ -332,7 +332,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <div className="connection-banner__icon">
                     <Layers size={16} />
                 </div>
-                <div className="connection-banner__text">
+                <div className="connection-banner__text" dir="auto">
                     LLM context window is too small ({current.toLocaleString()} tokens;{' '}
                     {MIN_CONTEXT_SIZE.toLocaleString()} required).{' '}
                     <span className="connection-banner__hint">

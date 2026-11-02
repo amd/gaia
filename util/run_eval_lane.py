@@ -54,7 +54,12 @@ def baseline_eval_model() -> str:
     return model
 
 
-JUDGE_CREDENTIALS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+JUDGE_CREDENTIALS = (
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN_BACKUP",
+    "CLAUDE_CODE_OAUTH_TOKEN_SECONDARY",
+    "ANTHROPIC_API_KEY",
+)
 FIXTURE_PORT = 8765
 MCP_STUB = "tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py"
 

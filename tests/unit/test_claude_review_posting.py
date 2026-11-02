@@ -428,3 +428,108 @@ def test_the_ok_verdict_requires_the_pinned_model(runner, tmp_path, args, models
     assert (proc.returncode == 0) is ok, proc.stdout + proc.stderr
     if not ok:
         assert "::error" in proc.stdout
+
+
+# --- a refused account hands the job to the other account, in the same run ---
+# Carried over from #6196: the failover must never post twice, so it retries only a
+# call that never reached a model.
+
+QUOTA_REFUSAL = {**OUTAGE_RESULT, "result": "You've hit your limit · resets 3pm (UTC)"}
+
+
+def _by_id(runner, step_id):
+    return next(s for s in runner["jobs"]["run"]["steps"] if s.get("id") == step_id)
+
+
+def test_a_refused_call_runs_again_on_the_other_account(runner):
+    a1, b1 = _by_id(runner, "a1"), _by_id(runner, "b1")
+    assert b1["if"] == "!cancelled() && steps.quota.outputs.retry == 'true'"
+    assert b1["with"]["claude_code_oauth_token"] == (
+        "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}"
+    )
+    # The same action, prompt and model as the first attempt; only the account moves.
+    assert b1["uses"] == a1["uses"]
+    for key in ("prompt", "claude_args", "allowed_non_write_users"):
+        assert b1["with"][key] == a1["with"][key], key
+    ids = [s.get("id") for s in runner["jobs"]["run"]["steps"]]
+    assert ids.index("a2") < ids.index("quota") < ids.index("b1") < ids.index("harness")
+
+
+def test_the_verdict_reads_the_failover_run_first(classify):
+    exec_file = classify["env"]["EXEC_FILE"]
+    assert exec_file.index("steps.b1.") < exec_file.index("steps.a1.")
+
+
+def _run_quota(runner, tmp_path, records, has_secondary="true"):
+    step = _by_id(runner, "quota")
+    log = tmp_path / "execution.json"
+    if records is not None:
+        log.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+    script = tmp_path / "quota.sh"
+    script.write_text(step["run"], encoding="utf-8", newline="\n")
+    out = tmp_path / "gh_output"
+    out.touch()
+    job_env = runner["jobs"]["run"]["env"]
+    proc = subprocess.run(
+        [BASH, script.as_posix()],
+        env={
+            "PATH": os.environ["PATH"],
+            "EXEC_FILE": log.as_posix() if log.exists() else "",
+            "HAS_SECONDARY": has_secondary,
+            "QUOTA_RE": job_env["QUOTA_RE"],
+            "CREDENTIAL_RE": job_env["CREDENTIAL_RE"],
+            "GITHUB_OUTPUT": out.as_posix(),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    values = dict(
+        line.split("=", 1)
+        for line in out.read_text(encoding="utf-8").splitlines()
+        if "=" in line
+    )
+    return values, proc.stdout
+
+
+@needs_shell
+def test_a_quota_refusal_before_any_model_work_fails_over(runner, tmp_path):
+    values, stdout = _run_quota(runner, tmp_path, [QUOTA_REFUSAL])
+    assert values == {"quota": "true", "retry": "true"}
+    assert "retried once on the secondary account" in stdout
+
+
+@needs_shell
+def test_a_refusal_with_no_secondary_says_so_and_does_not_retry(runner, tmp_path):
+    values, stdout = _run_quota(
+        runner, tmp_path, [QUOTA_REFUSAL], has_secondary="false"
+    )
+    assert values == {"quota": "true", "retry": "false"}
+    assert "CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set" in stdout
+
+
+@needs_shell
+def test_quota_after_model_work_is_never_retried(runner, tmp_path):
+    """pr-comment / issue-handler / issue-triage post through `gh` mid-run."""
+    spent = {**QUOTA_REFUSAL, "total_cost_usd": 0.4, "modelUsage": {"m": {}}}
+    values, stdout = _run_quota(runner, tmp_path, [spent])
+    assert values == {"quota": "true", "retry": "false"}
+    assert "could post twice" in stdout
+
+
+@needs_shell
+@pytest.mark.parametrize(
+    "records",
+    [
+        None,  # crashed before writing a log: attempt 2 owns that
+        [OUTAGE_RESULT],  # a bare refusal could be a bad token
+        [{**OUTAGE_RESULT, "result": "Invalid API key · Please run /login"}],
+        [{**OUTAGE_RESULT, "result": "API Error: 429 rate_limit_error"}],
+        [{"type": "result", "is_error": False, "modelUsage": {"m": {}}}],
+    ],
+    ids=["no-log", "bare-refusal", "credential", "per-minute-429", "clean"],
+)
+def test_only_a_quota_refusal_fails_over(runner, tmp_path, records):
+    values, _ = _run_quota(runner, tmp_path, records)
+    assert values["retry"] == "false"

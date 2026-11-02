@@ -1520,9 +1520,29 @@ class ChatDatabase:
                 # Update last_accessed_at and chunk_count (if newly indexed
                 # count is higher, e.g. fixing a previous 0-chunk bug)
                 new_chunk_count = max(chunk_count, doc.get("chunk_count", 0))
+                # The file moved: follow it instead of keeping a dead path.
+                if (
+                    filepath != doc["filepath"]
+                    and not Path(doc["filepath"] or "").is_file()
+                    and Path(filepath).is_file()
+                ):
+                    doc["filename"], doc["filepath"] = filename, filepath
+                    if doc["indexing_status"] == "missing":
+                        doc["indexing_status"] = "complete"
                 self._conn.execute(
-                    "UPDATE documents SET last_accessed_at = ?, chunk_count = ?, file_mtime = ? WHERE id = ?",
-                    (now, new_chunk_count, file_mtime, doc["id"]),
+                    """UPDATE documents
+                       SET last_accessed_at = ?, chunk_count = ?, file_mtime = ?,
+                           filename = ?, filepath = ?, indexing_status = ?
+                       WHERE id = ?""",
+                    (
+                        now,
+                        new_chunk_count,
+                        file_mtime,
+                        doc["filename"],
+                        doc["filepath"],
+                        doc["indexing_status"],
+                        doc["id"],
+                    ),
                 )
                 self._conn.commit()
                 doc["chunk_count"] = new_chunk_count

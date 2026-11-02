@@ -431,7 +431,7 @@ class CanonicalTranslator:
         # The handler names the card only when it lifted one, so a failed call
         # never draws an "Invalid payload" card ahead of the model's retry.
         render = event.get("render")
-        if render:
+        if isinstance(render, str) and render:
             canonical["render"] = render
         return [canonical]
 

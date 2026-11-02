@@ -88,7 +88,7 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
                 aria-label={t('perm.chipAria', { mode: ref(full ? 'perm.fullLower' : 'perm.askLower') })}
             >
                 <Icon size={13} aria-hidden="true" />
-                <span className="composer-chip-label">{full ? t('perm.full') : t('env.ask')}</span>
+                <span className="composer-chip-label" dir="auto">{full ? t('perm.full') : t('env.ask')}</span>
                 <ChevronDown size={12} aria-hidden="true" />
             </button>
             <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label={t('env.permission')}>

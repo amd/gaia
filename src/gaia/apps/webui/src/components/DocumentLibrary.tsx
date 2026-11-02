@@ -601,7 +601,7 @@ export function DocumentLibrary() {
             default:
                 return (
                     <span className="doc-meta">
-                        {formatSize(doc.file_size)} &middot; {t.plural('docs.chunks', doc.chunk_count)}
+                        <bdi dir="ltr">{formatSize(doc.file_size)}</bdi> &middot; {t.plural('docs.chunks', doc.chunk_count)}
                         {indexedTime && (
                             <span className="doc-timestamp" title={t('docs.indexedAt', { time: indexedTimeFull })}>
                                 <Clock size={10} />
@@ -719,7 +719,7 @@ export function DocumentLibrary() {
                             <span>&middot;</span>
                             <span>{t.plural('docs.chunks', totalChunks)}</span>
                             <span>&middot;</span>
-                            <span>{formatSize(totalSize)}</span>
+                            <bdi dir="ltr">{formatSize(totalSize)}</bdi>
                         </div>
                     )}
 

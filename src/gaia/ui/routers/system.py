@@ -726,7 +726,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 # populated — so treat it as unknown and keep the safe default
                 # (don't warn) rather than firing a false "too small" alarm on
                 # load. Once a genuine ctx arrives, the next poll re-evaluates.
-                if status.model_context_size:
+                # Another model's window says nothing about chat: indexing loads
+                # a small vision model, and chat reloads its own at the right size.
+                if status.model_context_size and status.expected_model_loaded:
                     status.context_size_sufficient = (
                         status.model_context_size >= _MIN_CONTEXT_SIZE
                     )

@@ -43,6 +43,7 @@ from gaia.agents.install_hints import (
     gaia_extra_requirements,
     resolve_pip_frontend,
 )
+from gaia.installer import model_choice
 from gaia.installer._stdin import stdin_is_tty
 from gaia.llm.model_fit import MachineCapacity, format_gb
 from gaia.logger import get_logger
@@ -120,8 +121,9 @@ FLAGSHIP_AGENT_ID = "gaia"
 _AGENT_IMPORT_NAMES = {"gaia": "gaia_agent"}
 
 _NPU_ACTIVE_NOTE = (
-    "NPU is now the default device. Switch back with: "
-    "gaia config set default_device gpu"
+    "The NPU model is now the default. To go back to the GPU, run: "
+    "gaia config set default_model <id> (a pick in the Agent UI or TUI model "
+    "list changes only what they open on)"
 )
 
 # The profile a bare `gaia init` runs — the flagship agent's configuration.
@@ -219,13 +221,12 @@ INIT_PROFILES = {
         # co-resident on the NPU backend. A GGUF embedder would run on Vulkan
         # and evict the FLM chat model every turn (#1744). Both are built-in
         # Lemonade *-FLM models, pulled by name only (no recipe — #1655).
-        "models": ["gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"],
-        "approx_size": "~3 GB",
+        # The chat model is Gemma 4 E4B's NPU twin (``with_chat_model``).
+        "models": ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"],
+        "approx_size": "~10 GB",
         "min_lemonade_version": LEMONADE_MIN_VERSION,
-        # NPU context window. Matches GPU/CPU (32768) so the init report and
-        # the runtime load path agree (issue #1745) — the prior 4096 pin made
-        # `gaia init --profile npu` report 4096 while the loader requested
-        # 32768. FLM at 32k is confirmed loading on a Ryzen AI 7 350 / 16 GB.
+        # The floor every profile shares (issue #1745); the chat model itself
+        # loads at its own window, 64K for the NPU twin.
         "min_context_size": 32768,
         # Same as the gaia profile: the daemon and Agent UI the flagship runs in.
         "pip_extras": ["ui"],
@@ -311,7 +312,7 @@ class ChatModelChoice:
 
 
 def resolve_init_chat_model(
-    client, *, reset_corrupt: bool, enforce_fit: bool
+    client, *, reset_corrupt: bool, enforce_fit: bool, profile: str = "gaia"
 ) -> ChatModelChoice:
     """The chat model `gaia init` sets up: the user's ``default_model`` when it
     is a local Lemonade model, else the largest default that fits this machine
@@ -327,8 +328,11 @@ def resolve_init_chat_model(
     from gaia.llm.lemonade_client import (
         cloud_model_provider,
         recommend_default_chat_model,
+        recommend_npu_chat_model,
+        runs_on_npu,
     )
 
+    on_npu = profile == "npu"
     try:
         configured = GaiaConfig.load().default_model
     except GaiaConfigError as e:
@@ -338,16 +342,20 @@ def resolve_init_chat_model(
         configured = None
     # A Claude or cloud default has nothing to download; the local chat model
     # then follows the hardware, and the user's setting is left as it is.
+    # `--profile npu` asks for the NPU, so a GPU default does not hold there;
+    # an NPU model picked in the UI holds on every profile.
     is_local = (
         configured
         and not configured.startswith("claude-")
         and not cloud_model_provider(configured)
+        and (runs_on_npu(configured) or not on_npu)
     )
     if is_local:
         if enforce_fit:
             _refuse_if_it_does_not_fit(client, configured)
         return ChatModelChoice(model_id=configured, user_set=True, skipped=[])
-    model_id, skipped, capacity = recommend_default_chat_model(client)
+    recommend = recommend_npu_chat_model if on_npu else recommend_default_chat_model
+    model_id, skipped, capacity = recommend(client)
     return ChatModelChoice(
         model_id=model_id, user_set=False, skipped=skipped, capacity=capacity
     )
@@ -366,12 +374,14 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
         find_model_requirement,
         kv_cache_for,
         lemonade_server_version,
+        runs_on_npu,
     )
     from gaia.llm.model_fit import (
         ModelFitError,
         capacity_from_system_info,
         check_fit,
         check_server_supports,
+        npu_capacity,
     )
 
     size = None
@@ -385,6 +395,14 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
     size = size or (mr.size_gb if mr else None)
     if size:
         capacity = capacity_from_system_info(client.get_system_info(timeout=15))
+        if runs_on_npu(model_id):
+            capacity = npu_capacity(capacity)
+            if capacity is None:
+                raise ModelFitError(
+                    f"default_model {model_id} runs on an AMD NPU, and Lemonade "
+                    "reports none on this PC. Choose a GPU model with `gaia config "
+                    "set default_model <id>`, then re-run `gaia init`."
+                )
         verdict = check_fit(
             float(size), capacity, kv_cache_for(mr, capacity) if mr else 0.0
         )
@@ -402,9 +420,11 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
             raise ModelFitError(f"default_model {model_id} {supported.reason}.")
 
 
-def pending_download_sizes(client, model_ids) -> dict:
+def pending_download_sizes(client, model_ids, full: bool = False) -> dict:
     """GB each model still costs to download: 0.0 when already on disk, None
-    when neither Lemonade's catalog nor GAIA's registry knows its size."""
+    when neither Lemonade's catalog nor GAIA's registry knows its size.
+
+    *full* gives a downloaded model's size instead of 0.0."""
     from gaia.llm.lemonade_client import _model_ids_match, find_model_requirement
 
     catalog = client.list_models(show_all=True).get("data", [])
@@ -413,7 +433,7 @@ def pending_download_sizes(client, model_ids) -> dict:
         entry = next(
             (e for e in catalog if _model_ids_match(e.get("id"), model_id)), None
         )
-        if entry and entry.get("downloaded"):
+        if entry and entry.get("downloaded") and not full:
             sizes[model_id] = 0.0
             continue
         size = entry.get("size") if entry else None
@@ -505,13 +525,22 @@ def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
     hardware-chosen profiles, so the others never probe Lemonade. A chat model
     the hardware picked is added beside Gemma, which the image tools load by
     name. A ``default_model`` the user chose replaces Gemma: the image tools
-    then download Gemma the first time they are used (:func:`skipped_gemma`).
+    then ask the user to download Gemma first (:func:`skipped_gemma`).
     """
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, _model_ids_match
+    from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_NAME,
+        NPU_DEFAULT_MODEL_NAME,
+        _model_ids_match,
+    )
 
     ids = list(model_ids)
-    if profile in ("sd", "npu"):
+    if profile == "sd":
         return ids
+    if profile == "npu":
+        # Both NPU models see images, so the pick replaces the floor model.
+        chat = resolve_chat().model_id
+        ids = [m for m in ids if not _model_ids_match(m, NPU_DEFAULT_MODEL_NAME)]
+        return [chat, *(m for m in ids if not _model_ids_match(m, chat))]
     if profile not in HARDWARE_CHAT_PROFILES:
         chat = DEFAULT_MODEL_NAME
     else:
@@ -689,19 +718,40 @@ def check_setup_status(
                 stage="server",
             )
 
+    chat_choice = None
     if not skip_chat_model:
-        model_ids = with_chat_model(
-            profile,
-            model_ids,
-            lambda: resolve_init_chat_model(
-                client, reset_corrupt=False, enforce_fit=False
-            ),
-        )
+        resolved = []
+
+        def resolve_chat():
+            resolved.append(
+                resolve_init_chat_model(
+                    client, reset_corrupt=False, enforce_fit=False, profile=profile
+                )
+            )
+            return resolved[-1]
+
+        model_ids = with_chat_model(profile, model_ids, resolve_chat)
+        if resolved:
+            chat_choice = resolved[-1].model_id
+        elif profile not in ("sd", "npu"):
+            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+            chat_choice = DEFAULT_MODEL_NAME
 
     if skip_chat_model:
         model_ids = [m for m in model_ids if is_embedding_model_id(m)]
+    # The user chose not to have these; setup is not waiting on them.
+    model_ids, dropped = model_choice.split_skipped(
+        model_ids, model_choice.skipped_models()
+    )
 
     reasons = []
+    if chat_choice and any(model_choice.ids_match(chat_choice, m) for m in dropped):
+        # Loading it on the first chat would make Lemonade pull it unasked.
+        reasons.append(
+            f"No local chat model: {chat_choice} is skipped. Pick another chat "
+            "model (`gaia init --use-model`) or a cloud provider"
+        )
     downloaded: Dict[str, bool] = {}
     for model_id in model_ids:
         try:
@@ -716,11 +766,7 @@ def check_setup_status(
     if reasons:
         # Sizes let a caller say what the download will cost before it starts;
         # ``downloaded`` lets it leave out models the server already has.
-        models = (
-            [_describe_model(client, m, downloaded.get(m)) for m in model_ids]
-            if load
-            else []
-        )
+        models = _describe_models(client, model_ids, downloaded) if load else []
         return SetupStatus(ready=False, reasons=reasons, stage="setup", models=models)
     if not load:
         return SetupStatus(ready=True, reasons=[])
@@ -742,17 +788,54 @@ def check_setup_status(
     return SetupStatus(ready=True, reasons=[], models=models)
 
 
+def remaining_download_gb(full_gb, on_disk_bytes) -> Optional[float]:
+    """GB still to download: the full size less what an interrupted pull left.
+
+    The setup plan and ``gaia init --check`` both size downloads with this, so
+    the two never show different totals for the same models.
+    """
+    if not isinstance(full_gb, (int, float)):
+        return None
+    partial_gb = round((on_disk_bytes or 0) / 1e9, 2)
+    return round(max(0.0, float(full_gb) - partial_gb), 2)
+
+
+def _describe_models(client, model_ids, downloaded: Dict[str, bool]) -> list:
+    """Each model setup needs, sized the way the setup plan sizes it."""
+    from gaia.llm.lemonade_client import LemonadeClientError
+    from gaia.llm.model_fit import model_store_free_gb
+
+    missing = [m for m in model_ids if downloaded.get(m) is False]
+    on_disk: dict = {}
+    if missing:
+        try:
+            _free, store = model_store_free_gb(client.get_system_info(timeout=15))
+            on_disk = bytes_already_on_disk(client, missing, store)
+        except LemonadeClientError as e:
+            # The sizes are still right for a model with nothing on disk; the
+            # reason is logged, and the check's own reasons carry on.
+            log.warning("Could not read partial downloads for the check: %s", e)
+    return [
+        _describe_model(client, m, downloaded.get(m), on_disk.get(m)) for m in model_ids
+    ]
+
+
 def _describe_model(
-    client, model_id: str, downloaded: Optional[bool] = None
+    client,
+    model_id: str,
+    downloaded: Optional[bool] = None,
+    on_disk_bytes: Optional[int] = None,
 ) -> "ModelLoad":
     """A model setup needs, its download size, and whether the server has it."""
     from gaia.llm.lemonade_client import LemonadeClientError
 
     role = "embedding" if is_embedding_model_id(model_id) else "chat"
     try:
-        size_gb = client.get_model_info(model_id)["size_gb"]
+        size_gb = pending_download_sizes(client, [model_id], full=True)[model_id]
     except LemonadeClientError as e:
         return ModelLoad(model_id, role, None, False, str(e), downloaded)
+    if downloaded is False:
+        size_gb = remaining_download_gb(size_gb, on_disk_bytes)
     return ModelLoad(model_id, role, size_gb, False, downloaded=downloaded)
 
 
@@ -993,6 +1076,9 @@ class InitCommand:
         lemonade_url: Optional[str] = None,
         gaia_lemonade: bool = False,
         progress_json: bool = False,
+        allow_low_disk: bool = False,
+        keep_trying: bool = False,
+        extra_models: Optional[list] = None,
     ):
         """
         Initialize the init command.
@@ -1022,6 +1108,12 @@ class InitCommand:
             gaia_lemonade: Use GAIA's own Lemonade, and save that choice.
             progress_json: Also print step and download progress as JSON
                 lines (see InitEvents), for the desktop installer.
+            allow_low_disk: Download even when the models need more disk than
+                the model store has free, instead of stopping.
+            keep_trying: When a download's connection drops, retry it for up
+                to two minutes before failing.
+            extra_models: Models to download beside the profile's, e.g. the
+                vision model when ``default_model`` replaced it.
         """
         if lemonade_url and gaia_lemonade:
             raise ValueError(
@@ -1049,6 +1141,11 @@ class InitCommand:
         self.verbose = verbose
         self.remote = remote
         self.skip_chat_model = skip_chat_model
+        self.allow_low_disk = allow_low_disk
+        self.keep_trying = keep_trying
+        self.extra_models = list(extra_models or [])
+        # Models in skipped_models that this run left out.
+        self._skipped_now: list = []
         self.progress_callback = progress_callback
         self.events = InitEvents(progress_json)
 
@@ -1364,6 +1461,11 @@ class InitCommand:
                 )
                 if not self._install_backend():
                     return self._fail_before_agent(has_hub_agent_check)
+
+            # Any PC with an NPU gets its backend, so the NPU models show up in
+            # the model pickers without a separate profile.
+            if not has_backend_install and self.profile in HARDWARE_CHAT_PROFILES:
+                self._enable_npu_if_present()
 
             # Step 3+: Download models (unless skipped)
             if not self.skip_models:
@@ -1858,17 +1960,49 @@ class InitCommand:
             self._print_error(self._server_problem_hint())
             return False
 
-    def _install_backend(self) -> bool:
-        """Install the Lemonade backend required by the current profile.
+    def _enable_npu_if_present(self) -> None:
+        """Install Lemonade's NPU backend when Lemonade reports an NPU.
 
-        Only called for profiles with a ``backend`` key (e.g. ``"flm:npu"``).
+        The NPU models are an option beside the GPU default, so a PC whose
+        backend will not install still finishes setup — with a warning that
+        says the NPU models will not be offered and how to retry.
+        """
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+        try:
+            devices = (
+                LemonadeClient(verbose=self.verbose)
+                .get_system_info()
+                .get("devices", {})
+            )
+        except LemonadeClientError as e:
+            self._print_warning(
+                f"Could not ask Lemonade whether this PC has an NPU ({e}), so the "
+                "NPU models will not be offered. Re-run `gaia init` to retry."
+            )
+            return
+        npu = devices.get("amd_npu")
+        if not (isinstance(npu, dict) and npu.get("available")):
+            return
+        self._print(f"   NPU detected: {npu.get('name', 'AMD NPU')}")
+        if not self._install_backend("flm:npu", "flm"):
+            self._print_warning(
+                "The NPU models will not be offered until Lemonade's NPU backend "
+                "installs. Re-run `gaia init` to retry."
+            )
+
+    def _install_backend(
+        self, backend_spec: Optional[str] = None, recipe: Optional[str] = None
+    ) -> bool:
+        """Install a Lemonade backend: *backend_spec*, else the current profile's.
+
         Checks recipe status first to skip if already installed.
 
         Returns:
             True if backend is ready, False on failure.
         """
         profile_config = INIT_PROFILES[self.profile]
-        backend_spec = profile_config.get("backend")
+        backend_spec = backend_spec or profile_config.get("backend")
         if not backend_spec:
             return True
 
@@ -1884,7 +2018,7 @@ class InitCommand:
             spec_recipe, backend_key = split_backend_spec(backend_spec)
 
             # Check if already installed via recipe status
-            recipe_name = profile_config.get("recipe", spec_recipe)
+            recipe_name = recipe or profile_config.get("recipe", spec_recipe)
             recipe_status = client.get_recipe_status(recipe_name)
 
             if recipe_status:
@@ -1908,20 +2042,40 @@ class InitCommand:
 
     def _record_chat_choice(self, config) -> None:
         """Save a hardware-picked chat model as ``default_model`` so every agent
-        resolves to it. Never overwrites a model the user chose, and records
-        nothing when the pick is the floor model every agent already defaults to
-        or when setup did not download it (declined, or ``--skip-models``) or
-        could not verify it.
+        resolves to it. Never overwrites a model the user chose, except under
+        ``--profile npu``: asking for the NPU is the choice, so its model
+        replaces a local ``default_model`` and ``last_model``, the one the Agent
+        UI and TUI start on. A Claude or cloud model is left as it is.
+        Records nothing when the pick is the floor model every agent already
+        defaults to or when setup did not download it (declined, or
+        ``--skip-models``) or could not verify it.
         """
-        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+        from gaia.llm.lemonade_client import (
+            DEFAULT_MODEL_NAME,
+            cloud_model_provider,
+            runs_on_npu,
+        )
 
         choice = self._chat_choice
-        if choice is None or choice.user_set or config.default_model:
+        if choice is None:
             return
         # An undownloaded default would make every agent's first load fail.
-        if not self._chat_model_ready:
+        if not self._chat_model_ready or not self._setup_verified:
             return
-        if not self._setup_verified:
+
+        def replaceable(model_id) -> bool:
+            return not model_id or not (
+                model_id.startswith("claude-") or cloud_model_provider(model_id)
+            )
+
+        if self.profile == "npu" and runs_on_npu(choice.model_id):
+            if replaceable(config.default_model):
+                config.default_model = choice.model_id
+            if replaceable(config.last_model):
+                config.last_model = choice.model_id
+                config.last_provider = "local"
+            return
+        if choice.user_set or config.default_model:
             return
         if choice.model_id != DEFAULT_MODEL_NAME:
             config.default_model = choice.model_id
@@ -1935,7 +2089,7 @@ class InitCommand:
         """This machine's chat model; says why on first resolution."""
         if self._chat_choice is None:
             choice = resolve_init_chat_model(
-                client, reset_corrupt=True, enforce_fit=True
+                client, reset_corrupt=True, enforce_fit=True, profile=self.profile
             )
             self._chat_choice = choice
             if choice.user_set:
@@ -1960,6 +2114,116 @@ class InitCommand:
                 )
         return self._chat_choice.model_id
 
+    def _models_to_ensure(self, client) -> list:
+        """The profile's models plus this PC's chat model, minus the user's skips."""
+        profile_config = INIT_PROFILES[self.profile]
+        if profile_config["models"]:
+            model_ids = list(profile_config["models"])
+        else:
+            model_ids = client.get_required_models(profile_config["agent"])
+
+        # SD brings its own LLM; the NPU profile's chat model is its own FLM pick.
+        if not self.skip_chat_model:
+            model_ids = with_chat_model(
+                self.profile, model_ids, lambda: self._chat_model_choice(client)
+            )
+            if skipped_gemma(self.profile, model_ids):
+                from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+                self._print(
+                    f"   Not downloading {DEFAULT_MODEL_NAME}: your "
+                    f"default_model is {self._chat_choice.model_id}. To ask "
+                    "about images, download it (~6 GB) with "
+                    "`gaia download --agent vlm`."
+                )
+
+        # A Claude-backed session never calls the local chat LLM — only
+        # RAG/memory/code-index embeddings still need Lemonade (Anthropic has
+        # no embeddings API). Drop every non-embedding model rather than
+        # pulling several GB that will sit unused.
+        if self.skip_chat_model:
+            model_ids = [m for m in model_ids if is_embedding_model_id(m)]
+
+        for model_id in self.extra_models:
+            if not any(model_choice.ids_match(model_id, m) for m in model_ids):
+                model_ids.append(model_id)
+
+        model_ids, self._skipped_now = model_choice.split_skipped(
+            model_ids, self._skip_list()
+        )
+        chat = self._chat_choice.model_id if self._chat_choice else None
+        for model_id in self._skipped_now:
+            caveat = model_choice.if_skipped(
+                model_id, model_choice.roles_for(model_id, chat)
+            )
+            self._print(f"   Skipping {model_id} (in skipped_models). {caveat or ''}")
+        return model_ids
+
+    def _skipped_chat_model(self) -> Optional[str]:
+        """The chat model when this run left it out; ``--check`` calls that not ready."""
+        if self.skip_chat_model:
+            return None
+        if self._chat_choice is not None:
+            chat = self._chat_choice.model_id
+        elif self.profile not in ("sd", "npu"):
+            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+            chat = DEFAULT_MODEL_NAME
+        else:
+            return None
+        if any(model_choice.ids_match(chat, m) for m in self._skipped_now):
+            return chat
+        return None
+
+    def _no_chat_model(self, chat: str) -> bool:
+        """Fail the way ``gaia init --check`` reports it: no local chat model.
+
+        A run that only fetches ``--download-model`` models succeeds or fails on
+        those downloads; the missing chat model is then a note, not a failure.
+        """
+        message = (
+            f"No local chat model: {chat} is skipped. Pick another chat model "
+            "(`gaia init --use-model <id>`) or a cloud provider, then re-run "
+            "`gaia init`."
+        )
+        if self.extra_models:
+            self._print_warning(message)
+            return True
+        self._print_error(message)
+        self.events.emit("error", message=message)
+        return False
+
+    @staticmethod
+    def _skip_list() -> list:
+        return model_choice.skipped_models()
+
+    def _show_plan(self, model_ids, sizes) -> None:
+        notes = {m: _size_note(sizes.get(m)) for m in model_ids}
+        total_gb = sum(s for s in sizes.values() if s)
+        if RICH_AVAILABLE and self.console:
+            self.console.print(
+                f"   [bold]Ensuring {len(model_ids)} model(s) are downloaded:[/bold]"
+            )
+            for model_id in model_ids:
+                self.console.print(
+                    f"   [cyan]•[/cyan] {model_id}[dim]{notes[model_id]}[/dim]"
+                )
+        else:
+            self._print(f"   Ensuring {len(model_ids)} model(s) are downloaded:")
+            for model_id in model_ids:
+                self._print(f"   • {model_id}{notes[model_id]}")
+        if total_gb:
+            self._print(f"   Total download: about {total_gb:.1f} GB")
+        self._print("")
+
+    def _say_retrying(self, model_id: str, until: float) -> None:
+        left = max(0, int(until - time.time()))
+        self._print_warning(
+            f"The connection dropped while downloading {model_id}. Trying again "
+            f"for up to {left} more seconds (--keep-trying)."
+        )
+        self.events.emit("retrying", model=model_id, until=int(until))
+
     def _download_models(self) -> bool:
         """
         Download models for the selected profile.
@@ -1983,63 +2247,29 @@ class InitCommand:
 
             client = LemonadeClient(verbose=self.verbose)
 
-            # Get profile config
             profile_config = INIT_PROFILES[self.profile]
-
-            # Get models to download
-            if profile_config["models"]:
-                model_ids = list(profile_config["models"])
-            else:
-                model_ids = client.get_required_models(profile_config["agent"])
-
-            # Include this machine's chat model for profiles that use llamacpp.
-            # SD profile has its own LLM and doesn't need the default model.
-            # NPU profile uses FLM models exclusively — don't append GGUF model.
-            if not self.skip_chat_model:
-                model_ids = with_chat_model(
-                    self.profile, model_ids, lambda: self._chat_model_choice(client)
-                )
-                if skipped_gemma(self.profile, model_ids):
-                    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-
-                    self._print(
-                        f"   Not downloading {DEFAULT_MODEL_NAME}: your "
-                        f"default_model is {self._chat_choice.model_id}. Questions "
-                        "about images download it (~6 GB) the first time you ask one."
-                    )
-
-            # A Claude-backed session never calls the local chat LLM — only
-            # RAG/memory/code-index embeddings still need Lemonade (Anthropic has
-            # no embeddings API). Drop every non-embedding model rather than
-            # pulling several GB that will sit unused.
-            if self.skip_chat_model:
-                model_ids = [m for m in model_ids if is_embedding_model_id(m)]
-
+            model_ids = self._models_to_ensure(client)
             if not model_ids:
+                self.events.emit(
+                    "plan",
+                    models=[],
+                    skipped=self._skipped_now,
+                    bytes_total=0,
+                    disk_free_bytes=None,
+                )
+                skipped_chat = self._skipped_chat_model()
+                if skipped_chat:
+                    return self._no_chat_model(skipped_chat)
                 self._print_success("No models required for this profile")
                 return True
 
             # Show which models will be ensured, and what they cost to download
             sizes = pending_download_sizes(client, model_ids)
-            notes = {m: _size_note(sizes.get(m)) for m in model_ids}
+            self._show_plan(model_ids, sizes)
             total_gb = sum(s for s in sizes.values() if s)
-            if RICH_AVAILABLE and self.console:
-                self.console.print(
-                    f"   [bold]Ensuring {len(model_ids)} model(s) are downloaded:[/bold]"
-                )
-                for model_id in model_ids:
-                    self.console.print(
-                        f"   [cyan]•[/cyan] {model_id}[dim]{notes[model_id]}[/dim]"
-                    )
-            else:
-                self._print(f"   Ensuring {len(model_ids)} model(s) are downloaded:")
-                for model_id in model_ids:
-                    self._print(f"   • {model_id}{notes[model_id]}")
-            if total_gb:
-                self._print(f"   Total download: about {total_gb:.1f} GB")
-            self._print("")
 
             disk_free_gb = None
+            on_disk: dict = {}
             if total_gb:
                 from gaia.llm.lemonade_client import LemonadeClientError
                 from gaia.llm.model_fit import (
@@ -2075,8 +2305,17 @@ class InitCommand:
                             "not read what an earlier download left there, so it "
                             "downloads anyway; Lemonade stops if the disk fills."
                         )
+                    elif self.allow_low_disk:
+                        self._print_warning(
+                            f"Not enough disk space: {fits.reason}. Downloading "
+                            "anyway (--allow-low-disk); Lemonade stops if the "
+                            "disk fills."
+                        )
                     else:
-                        message = f"Not enough disk space: {fits.reason}."
+                        message = (
+                            f"Not enough disk space: {fits.reason}. Or pass "
+                            "--allow-low-disk to download anyway."
+                        )
                         self._print_error(message)
                         self.events.emit("error", message=message)
                         return False
@@ -2087,14 +2326,20 @@ class InitCommand:
                         "id": m,
                         "bytes_total": _gb_to_bytes(sizes.get(m)),
                         "downloaded": sizes.get(m) == 0,
+                        # What an interrupted pull left: the progress rows say
+                        # "resumed" from this, never from the first event.
+                        "bytes_on_disk": on_disk.get(m),
                     }
                     for m in model_ids
                 ],
+                skipped=self._skipped_now,
                 bytes_total=_gb_to_bytes(total_gb) or 0,
                 disk_free_bytes=_gb_to_bytes(disk_free_gb),
             )
 
-            if not self._prompt_yes_no("Continue?", default=True):
+            # Nothing to download is nothing to ask about.
+            to_pull = any(sizes.get(m) != 0.0 for m in model_ids)
+            if to_pull and not self._prompt_yes_no("Continue?", default=True):
                 self._print("   Skipping model downloads")
                 return True
 
@@ -2128,26 +2373,14 @@ class InitCommand:
             # with checkpoint + recipe + the embedding label. Look those up from
             # the model registry so the pull request is valid (#1745 auto-label bug
             # is avoided by passing ``embedding=True`` explicitly).
-            from gaia.llm.lemonade_client import find_model_requirement
-
             recipe = profile_config.get("recipe")
             success = True
             for index, model_id in enumerate(model_ids, start=1):
                 self._print("")
-                mr = find_model_requirement(model_id)
                 label = f"{model_id} (recipe={recipe})" if recipe else model_id
                 self.agent_console.print(
                     f"   [bold cyan]Downloading:[/bold cyan] {label}"
                 )
-                # Built-in models are pulled by name only. Passing recipe (even
-                # =None) can make Lemonade treat the call as a custom-model
-                # registration, which 400s on built-in names (#1655). Only
-                # user.-namespaced models carry their registration fields.
-                pull_kwargs = mr.pull_kwargs() if mr else {}
-                # Two hours covers a few GB on any link; an 80 GB model needs
-                # time proportional to its size (~5 MB/s floor).
-                if mr and mr.size_gb:
-                    pull_kwargs["timeout"] = max(7200, int(mr.size_gb * 200))
                 if self.events.enabled:
                     progress = _JsonDownloadProgress(
                         self.agent_console,
@@ -2159,8 +2392,13 @@ class InitCommand:
                     )
                 else:
                     progress = _DownloadProgress(self.agent_console, model_id)
-                if client.ensure_model_downloaded(
-                    model_id, on_progress=progress, **pull_kwargs
+                if model_choice.pull_model(
+                    client,
+                    model_id,
+                    progress,
+                    keep_trying_s=model_choice.KEEP_TRYING_S if self.keep_trying else 0,
+                    on_retry=lambda until, m=model_id: self._say_retrying(m, until),
+                    **model_choice.pull_kwargs_for(model_id),
                 ):
                     if progress.events:
                         self._print_success(f"Downloaded {model_id}")
@@ -2182,6 +2420,9 @@ class InitCommand:
                     self._print(f"   {self._server_problem_hint()}")
                     success = False
 
+            skipped_chat = self._skipped_chat_model()
+            if success and skipped_chat:
+                success = self._no_chat_model(skipped_chat)
             self.events.emit("done", ok=success)
             return success
 
@@ -2307,14 +2548,14 @@ class InitCommand:
                     steps=1,  # Minimal steps for quick test
                     size="512x512",
                 )
-                # Check if we got a valid image in b64_json format
-                if (
-                    response
-                    and response.get("data")
-                    and response["data"][0].get("b64_json")
-                ):
-                    return (True, None)
-                return (False, "No image generated")
+                from gaia.sd import decode_image_response, image_problem
+
+                image_bytes, problem = decode_image_response(response)
+                if problem is None:
+                    problem = image_problem(image_bytes)
+                if problem is not None:
+                    return (False, f"No usable image: {problem}")
+                return (True, None)
             elif is_embedding_model:
                 # Test embedding model with a simple text
                 response = client.embeddings(
@@ -2383,17 +2624,31 @@ class InitCommand:
             profile_config = INIT_PROFILES[self.profile]
             min_ctx = profile_config.get("min_context_size")
             # Loading an undownloaded model makes Lemonade pull it, unannounced.
-            if min_ctx and not self.skip_chat_model and not self.skip_models:
+            if (
+                min_ctx
+                and not self.skip_chat_model
+                and not self.skip_models
+                and not model_choice.is_skipped(
+                    self._chat_model(client), self._skip_list()
+                )
+            ):
                 from gaia.llm.lemonade_client import (
                     fit_ctx_to_free_memory,
                     resolve_ctx_size,
+                    runs_on_npu,
                 )
                 from gaia.llm.lemonade_manager import LemonadeManager
 
                 # The window the chat model gets in the memory free right now.
                 min_ctx = fit_ctx_to_free_memory(
                     self._chat_model(client),
-                    resolve_ctx_size(device="npu" if self.profile == "npu" else "gpu"),
+                    # An NPU model's window is its own (64K for the twins, 32K
+                    # for other FLM builds), not one profile-wide number.
+                    (
+                        resolve_ctx_size(self._chat_model(client))
+                        if runs_on_npu(self._chat_model(client))
+                        else resolve_ctx_size(device="gpu")
+                    ),
                     client.base_url,
                 )
 
@@ -2423,7 +2678,7 @@ class InitCommand:
             else:
                 model_ids = client.get_required_models(profile_config["agent"])
 
-            # Same chat model the download step set up (NPU and SD bring their own).
+            # Same chat model the download step set up (SD brings its own).
             if not self.skip_chat_model:
                 model_ids = with_chat_model(
                     self.profile, model_ids, lambda: self._chat_model_choice(client)
@@ -2431,6 +2686,7 @@ class InitCommand:
 
             if self.skip_chat_model:
                 model_ids = [m for m in model_ids if is_embedding_model_id(m)]
+            model_ids, _ = model_choice.split_skipped(model_ids, self._skip_list())
 
             if not model_ids or self.skip_models:
                 return True
@@ -3107,6 +3363,9 @@ def run_init(
     lemonade_url: Optional[str] = None,
     gaia_lemonade: bool = False,
     progress_json: bool = False,
+    allow_low_disk: bool = False,
+    keep_trying: bool = False,
+    extra_models: Optional[list] = None,
 ) -> int:
     """
     Entry point for `gaia init` command.
@@ -3125,6 +3384,9 @@ def run_init(
         lemonade_url: Use (and save) the Lemonade Server the user runs here
         gaia_lemonade: Use (and save) GAIA's own Lemonade Server
         progress_json: Also print progress as JSON lines (see InitEvents)
+        allow_low_disk: Download even when the model store looks too small
+        keep_trying: Retry a dropped download for up to two minutes
+        extra_models: Models to download beside the profile's
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -3143,6 +3405,9 @@ def run_init(
             lemonade_url=lemonade_url,
             gaia_lemonade=gaia_lemonade,
             progress_json=progress_json,
+            allow_low_disk=allow_low_disk,
+            keep_trying=keep_trying,
+            extra_models=extra_models,
         )
         return cmd.run()
     except ValueError as e:

@@ -344,7 +344,7 @@ class LemonadeSupervisor:
         except OSError as e:
             raise LemonadeStartError(
                 f"GAIA could not launch the local model server "
-                f"(`{' '.join(spec.argv)}`): {e}\n"
+                f"(`{render_command(spec)}`): {e}\n"
                 "To fix: re-run `gaia init` to repair the install, or set "
                 "LEMONADE_SERVER_PATH to a working server executable.\n"
                 f"Where to look: {self.log_path()}"
@@ -376,7 +376,7 @@ class LemonadeSupervisor:
         except OSError as e:
             log.warning("Could not rotate %s (%s); appending to it.", path, e)
         self._log_handle = open(path, "a", encoding="utf-8", errors="replace")
-        self._log_handle.write(f"\n=== GAIA daemon start: {' '.join(spec.argv)} ===\n")
+        self._log_handle.write(f"\n=== GAIA daemon start: {render_command(spec)} ===\n")
         self._log_handle.flush()
 
         group_kwargs = background_popen_kwargs()

@@ -118,8 +118,8 @@ def test_a_remembered_fact_fails_the_check(tmp_path):
 @pytest.mark.parametrize(
     "missing, root",
     [
-        # Without GAIA_CONFIG_DIR the skills root stays in the real ~/.gaia.
-        ("GAIA_CONFIG_DIR", "skills root"),
+        # The RAG cache and ChatAgent sessions still follow GAIA_CONFIG_DIR.
+        ("GAIA_CONFIG_DIR", "GAIA_CONFIG_DIR is None"),
         # GAIA_CONFIG_DIR happens to cover for it today; the check still
         # insists, so a resolver that reads only GAIA_HOME cannot escape.
         ("GAIA_HOME", "GAIA_HOME is None"),

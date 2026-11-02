@@ -200,6 +200,71 @@ class TestToolCallersReportAnError:
         assert result["status"] == "error"
         assert "description" not in result
 
+    @pytest.mark.parametrize(
+        "focus",
+        ["composition", "colors", "mood", "details", "all"],
+    )
+    def test_analyze_image_accepts_each_documented_focus(self, tmp_path, focus):
+        image = tmp_path / "chart.png"
+        image.write_bytes(b"not-really-a-png")
+        host = self._mixin("description")
+
+        result = host._analyze_image(str(image), focus=focus)
+
+        assert result["status"] == "success"
+        assert result["focus"] == focus
+        host.vlm_client.extract_from_image.assert_called_once()
+
+    def test_analyze_image_rejects_unknown_focus_before_reading_the_file(
+        self, tmp_path
+    ):
+        missing = tmp_path / "missing.png"
+        host = self._mixin("description")
+
+        result = host._analyze_image(str(missing), focus="faces")
+
+        assert result == {
+            "status": "error",
+            "error": (
+                "Unknown focus 'faces'. Use one of: all, colors, composition, "
+                "details, mood; for a specific question about text, faces, or "
+                "an object, call answer_question_about_image."
+            ),
+        }
+        host.vlm_client.extract_from_image.assert_not_called()
+
+    @pytest.mark.parametrize("focus", [" Colors ", "MOOD", "details	"])
+    def test_analyze_image_normalizes_case_and_whitespace(self, tmp_path, focus):
+        image = tmp_path / "chart.png"
+        image.write_bytes(b"not-really-a-png")
+        host = self._mixin("description")
+
+        result = host._analyze_image(str(image), focus=focus)
+
+        assert result["status"] == "success"
+        assert result["focus"] == focus.strip().lower()
+
+    @pytest.mark.parametrize(
+        "focus", ["", "   ", "text", "all colors", "colour", None, 3, ["all"]]
+    )
+    def test_analyze_image_rejects_near_misses_and_non_strings(self, tmp_path, focus):
+        image = tmp_path / "chart.png"
+        image.write_bytes(b"not-really-a-png")
+        host = self._mixin("description")
+
+        result = host._analyze_image(str(image), focus=focus)
+
+        assert result["status"] == "error"
+        assert "Unknown focus" in result["error"]
+        host.vlm_client.extract_from_image.assert_not_called()
+
+    def test_documented_focus_lists_match_the_accepted_set(self):
+        from gaia.vlm.mixin import IMAGE_ANALYSIS_FOCUSES, VLMToolsMixin
+
+        guidelines = VLMToolsMixin.get_base_vlm_guidelines()
+        for focus in IMAGE_ANALYSIS_FOCUSES:
+            assert focus in guidelines
+
     def test_answer_question_reports_an_error_envelope(self, tmp_path):
         image = tmp_path / "chart.png"
         image.write_bytes(b"not-really-a-png")
@@ -264,3 +329,131 @@ class TestIngestReportsAnError:
 
         assert result["status"] == "error"
         assert "text" not in result
+
+
+# ============================================================================
+# A vision model the catalog says isn't downloaded is reported, not fetched
+# ============================================================================
+
+_OK = {"choices": [{"message": {"content": "text"}}]}
+_GEMMA = "Gemma-4-E4B-it-GGUF"
+
+
+def _catalog(*entries):
+    return {"data": list(entries)}
+
+
+class TestMissingVisionModelPreflight:
+    def test_an_explicitly_missing_model_is_reported_before_the_request(self, vlm):
+        vlm.client.list_models.return_value = _catalog(
+            {"id": _GEMMA, "downloaded": False, "size": 5.56}
+        )
+
+        with pytest.raises(VLMExtractionError) as excinfo:
+            vlm.extract_from_image(b"fake-png", page_num=3, image_num=2)
+
+        message = str(excinfo.value)
+        assert "5.56 GB" in message
+        assert "Settings → Model" in message
+        assert "`gaia download --agent vlm`" in message
+        assert "gaia init" not in message
+        assert (excinfo.value.page_num, excinfo.value.image_num) == (3, 2)
+        vlm.client.list_models.assert_called_once_with(show_all=True)
+        vlm.client.chat_completions.assert_not_called()
+
+    def test_the_cli_hint_is_only_offered_for_a_model_it_downloads(self, vlm):
+        vlm.vlm_model = "Qwen3-VL-4B-Instruct-GGUF"
+        vlm.client.list_models.return_value = _catalog(
+            {"id": "Qwen3-VL-4B-Instruct-GGUF", "downloaded": False}
+        )
+
+        with pytest.raises(VLMExtractionError) as excinfo:
+            vlm.extract_from_image(b"fake-png")
+
+        assert "gaia download" not in str(excinfo.value)
+        assert "GB)" not in str(excinfo.value)
+        vlm.client.chat_completions.assert_not_called()
+
+    def test_ids_match_case_insensitively_like_the_rest_of_the_client(self, vlm):
+        vlm.client.list_models.return_value = _catalog(
+            {"id": _GEMMA.lower(), "downloaded": False}
+        )
+
+        with pytest.raises(VLMExtractionError):
+            vlm.extract_from_image(b"fake-png")
+
+    @pytest.mark.parametrize(
+        "catalog",
+        [
+            pytest.param(_catalog(), id="model-not-listed"),
+            pytest.param(
+                _catalog({"id": "Other-GGUF", "downloaded": False}),
+                id="only-another-model-missing",
+            ),
+            pytest.param(_catalog({"id": _GEMMA}), id="no-downloaded-field"),
+            pytest.param(
+                _catalog({"id": _GEMMA, "downloaded": None}), id="downloaded-null"
+            ),
+            pytest.param(_catalog({"id": _GEMMA, "downloaded": True}), id="downloaded"),
+            pytest.param({"object": "list"}, id="no-data-key"),
+            pytest.param(["not", "a", "dict"], id="not-a-dict"),
+        ],
+    )
+    def test_only_an_explicit_downloaded_false_blocks(self, vlm, catalog):
+        vlm.client.list_models.return_value = catalog
+        vlm.client.chat_completions.return_value = _OK
+
+        assert vlm.extract_from_image(b"fake-png") == "text"
+        vlm.client.chat_completions.assert_called_once()
+
+    def test_a_cloud_model_is_never_blocked(self, vlm):
+        vlm.vlm_model = "openai.gpt-vision"
+        vlm.client.list_models.return_value = _catalog(
+            {
+                "id": "openai.gpt-vision",
+                "downloaded": False,
+                "recipe": "cloud",
+                "cloud_provider": "openai",
+            }
+        )
+        vlm.client.chat_completions.return_value = _OK
+
+        assert vlm.extract_from_image(b"fake-png") == "text"
+
+    def test_an_unreachable_catalog_leaves_the_request_authoritative(self, vlm):
+        vlm.client.list_models.side_effect = LemonadeClientError("catalog unavailable")
+        vlm.client.chat_completions.return_value = _OK
+
+        assert vlm.extract_from_image(b"fake-png") == "text"
+        vlm.client.chat_completions.assert_called_once()
+
+    def test_a_bug_in_the_check_is_not_swallowed(self, vlm):
+        vlm.client.list_models.side_effect = AttributeError("broken")
+
+        with pytest.raises(VLMExtractionError, match="broken"):
+            vlm.extract_from_image(b"fake-png")
+        vlm.client.chat_completions.assert_not_called()
+
+    def test_a_multi_image_document_reads_the_catalog_once(self, vlm):
+        vlm.client.list_models.return_value = _catalog(
+            {"id": _GEMMA, "downloaded": True}
+        )
+        vlm.client.chat_completions.return_value = _OK
+
+        for page in range(1, 6):
+            vlm.extract_from_image(b"fake-png", page_num=page)
+
+        vlm.client.list_models.assert_called_once()
+        assert vlm.client.chat_completions.call_count == 5
+
+    def test_a_missing_model_is_rechecked_so_a_download_unblocks_it(self, vlm):
+        vlm.client.list_models.side_effect = [
+            _catalog({"id": _GEMMA, "downloaded": False}),
+            _catalog({"id": _GEMMA, "downloaded": True}),
+        ]
+        vlm.client.chat_completions.return_value = _OK
+
+        with pytest.raises(VLMExtractionError):
+            vlm.extract_from_image(b"fake-png")
+        assert vlm.extract_from_image(b"fake-png") == "text"
+        assert vlm.client.list_models.call_count == 2

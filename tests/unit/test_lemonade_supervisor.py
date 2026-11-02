@@ -23,7 +23,11 @@ import threading
 import pytest
 
 from gaia.llm import lemonade_supervisor as sup
-from gaia.llm.lemonade_launcher import LemonadeTooling
+from gaia.llm.lemonade_launcher import (
+    LemonadeTooling,
+    build_start_command,
+    render_command,
+)
 from gaia.llm.lemonade_supervisor import LemonadeStartError, LemonadeSupervisor
 
 
@@ -248,6 +252,45 @@ def test_a_server_that_dies_on_launch_names_the_exit_code_and_the_log(
 
     assert "exited with code 3" in str(e.value)
     assert str(s.log_path()) in str(e.value)
+
+
+def _spawn_fails(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(sup.subprocess, "Popen", refuse)
+
+
+@pytest.mark.parametrize(
+    "launcher",
+    [
+        r"C:\lemonade\bin\LemonadeServer.exe",
+        r"C:\Program Files\Lemonade Server\bin\LemonadeServer.exe",
+    ],
+)
+def test_a_launch_that_cannot_exec_shows_the_full_command_with_its_env(
+    tmp_path, client, monkeypatch, free_port, launcher
+):
+    """The window rides in the env on a modern install, so a bare argv in the
+    error or the log is a command that starts the server at the wrong size."""
+    tooling = LemonadeTooling(
+        found=True,
+        kind="modern",
+        client_path=r"C:\lemonade\bin\lemonade.exe",
+        server_launcher=launcher,
+    )
+    monkeypatch.setattr(sup, "resolve_lemonade", lambda: tooling)
+    _spawn_fails(monkeypatch)
+    s = _supervisor(tmp_path, client, monkeypatch)
+    expected = render_command(build_start_command(tooling, 65536))
+    assert "LEMONADE_CTX_SIZE" in expected
+
+    with pytest.raises(LemonadeStartError) as e:
+        s.ensure_running(ctx_size=65536, timeout=5.0)
+
+    assert f"(`{expected}`)" in str(e.value)
+    header = f"=== GAIA daemon start: {expected} ==="
+    assert header in s.log_path().read_text(encoding="utf-8")
 
 
 def test_a_server_that_never_answers_is_reaped_rather_than_left_behind(

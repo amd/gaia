@@ -1,3 +1,6 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """Output sinks for scheduled runs.
 
 A sink decides *where* a scheduled run's output goes. Per the GAIA no-fallback

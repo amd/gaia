@@ -672,7 +672,7 @@ function isFileLockedError(output) {
 /**
  * Detect a transient network failure in `uv pip install` output so the
  * install stage can retry instead of failing the whole bootstrap. The
- * install stage downloads transitive deps (numpy, faiss, pymupdf, …) from
+ * install stage downloads transitive deps (numpy, faiss, pypdfium2, …) from
  * PyPI; a single mid-stream hiccup ("stream closed because of a broken pipe")
  * otherwise fails the entire backend install — and, in the release pipeline,
  * the whole AppImage smoke test that gates publishing.
@@ -1799,7 +1799,7 @@ async function installBackend(opts = {}) {
     GAIA_PYTHON_BIN,
   ];
   // Retry the install on transient PyPI/network failures. The transitive
-  // deps (numpy, faiss, pymupdf, …) are fetched live from PyPI even
+  // deps (numpy, faiss, pypdfium2, …) are fetched live from PyPI even
   // when the gaia wheel itself is local, so a single broken-pipe mid-download
   // would otherwise fail the whole bootstrap (and block a release). File-lock
   // failures (Windows os-error-32) are NOT retried — they need user action.

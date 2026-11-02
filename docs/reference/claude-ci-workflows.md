@@ -1,8 +1,8 @@
 # Claude CI Workflows — Helper Guide
 
-Quick reference to the Claude-powered GitHub Actions in `amd/gaia`. Eight workflow files:
+Quick reference to the Claude-powered GitHub Actions in `amd/gaia`. Seven workflow files:
 one reactive assistant, its shared runner, three proactive reviewers and the rotation that
-schedules them, an auth canary, and an account switch.
+schedules them, and an auth canary. Every one picks its Claude account at run time (§8).
 
 All links point to `main`:
 
@@ -15,7 +15,7 @@ All links point to `main`:
 | Security Audit (static) | [`.github/workflows/claude-security-audit.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/claude-security-audit.yml) |
 | Doc Walkthrough (live) | [`.github/workflows/claude-weekly-doc-walkthrough.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/claude-weekly-doc-walkthrough.yml) |
 | Auth Canary | [`.github/workflows/claude-auth-canary.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/claude-auth-canary.yml) |
-| Account Switch | [`.github/workflows/claude-account-switch.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/claude-account-switch.yml) |
+| Account picker (composite action) | [`.github/actions/claude-credential/action.yml`](https://github.com/amd/gaia/blob/main/.github/actions/claude-credential/action.yml) |
 
 Related config the workflows depend on:
 [`REVIEW.md`](https://github.com/amd/gaia/blob/main/REVIEW.md) (the PR-review rubric) and the
@@ -91,29 +91,50 @@ synthesis step files one issue per defect.
 ## 7. `claude-auth-canary.yml` — monthly health check
 
 All Claude jobs use an OAuth token that expires ~yearly and fails *silently* (jobs go green but
-post nothing). Once a month this runs a trivial Haiku prompt; if auth is broken it opens a
-tracking issue with fix steps — turning a silent multi-week outage into a notification.
+post nothing). Once a month this runs a trivial prompt on **both** accounts; if either token is
+rejected, or both are out of quota, it opens a tracking issue with fix steps — turning a silent
+multi-week outage into a notification. Probing both matters because the failover in §8 would
+otherwise hide a lapsed token behind the other account.
 
-## 8. `claude-account-switch.yml` — second subscription when the first runs out
+## 8. Two accounts, picked per job at run time
 
-Every Claude step reads `CLAUDE_CODE_OAUTH_TOKEN_SECONDARY` instead of
-`CLAUDE_CODE_OAUTH_TOKEN` while the repo variable `CLAUDE_ACCOUNT` is `secondary`. It runs
-when Claude hits a wall, not on a clock: `claude.yml` dispatches it when a review, reply or
-triage call is refused before reaching a model, and the code audit, security audit and doc
-walkthrough dispatch it when their quota probe is refused. They dispatch it rather than rely on
-its `workflow_run` hook because the rotation starts them with `GITHUB_TOKEN`, and GitHub does not
-document that `workflow_run` fires for a run started that way. The hook still covers the auth
-canary, hand-dispatched audits, and a lens refused after the probe passed. It probes the primary
-account with the canary's probe:
+CI holds two subscription tokens: `CLAUDE_CODE_OAUTH_TOKEN` (primary) and
+`CLAUDE_CODE_OAUTH_TOKEN_SECONDARY` (backup). Nothing is stored about which one is current. Each
+job asks:
 
-- **Out of quota:** it checks the secondary account answers, then sets `CLAUDE_ACCOUNT=secondary`.
-- **Answering again** (the weekly limit reset): it sets `CLAUDE_ACCOUNT=primary`.
-- **Bad credential:** it fails and switches nothing — rotate the token instead.
+- **Primary answers:** the job uses it.
+- **Primary out of quota:** the job uses the secondary if it answers, with a warning naming
+  the primary's reset time.
+- **Both out of quota:** the job fails before doing any work, naming both reset times.
+- **A token is rejected:** the job fails naming the secret to rotate. A bad credential never
+  moves a job to the other account, because that would hide it.
 
-Each run's summary shows the primary probe's verdict, when its limit resets, the plan, and
-what actually happened. Every Claude job also posts a "Claude account" notice naming the account
-it ran on — including when `CLAUDE_ACCOUNT` asks for the secondary but its secret is missing, so
-the job fell back to the primary.
+Moving back to the primary needs nothing: the next job probes it first.
+
+"Out of quota" means the refusal says so ("You've hit your limit", "usage limit
+reached", "weekly limit", a 402, and so on). The phrases live in one list,
+[`src/gaia/eval/claude_refusal.py`](https://github.com/amd/gaia/blob/main/src/gaia/eval/claude_refusal.py),
+which the picker, the eval runner and `claude-run.yml` all use; a unit test fails if
+`claude-run.yml`'s copy drifts. A bare per-minute 429 (`rate_limit_error`) is throttling
+on an account that still has quota, so it never moves a job to the other account.
+
+How each workflow asks:
+
+| Where | How |
+|-------|-----|
+| Single-job workflows (auto-fix, release notes, Lemonade bump, patch release, skill review, the evals) | The [`claude-credential`](https://github.com/amd/gaia/blob/main/.github/actions/claude-credential/action.yml) action probes with a one-word prompt and reports a label (`primary`, `secondary`, or `none` when neither token is set and `ANTHROPIC_API_KEY` is used). The workflow picks the secret by that label, so no token is written to an output. |
+| The three audits | Their gate job runs the action once and exports the label; every lens and synthesis job reads it. |
+| `claude-run.yml` (reviews, replies, triage) | Inline: it runs on the primary and, if refused with quota wording before reaching a model, once more on the secondary. A run that reached the model is never retried, because replies post through `gh` mid-run and could post twice. It cannot use the action, because it checks out fork code and a local action would be read from that checkout. |
+| `gaia eval agent` (long eval lanes) | Starts on the probed account with the other as `CLAUDE_CODE_OAUTH_TOKEN_BACKUP`. If the first runs out mid-run, the runner switches once, re-runs the scenario that was cut off, and prints `[ACCOUNT SWITCH]`. |
+
+**When both accounts run out mid-eval,** the runner stops starting scenarios and keeps what
+finished. `scorecard.json` gets a `partial` block (`partial: N of M ran, stopped because both
+Claude accounts are out of quota (...)`), and every unstarted scenario is `NOT_RUN`, never a
+pass, fail or zero score. The collect, compare and upload steps still run, so the partial
+scorecard is uploaded. `--compare` leaves `NOT_RUN` scenarios out of regressions and progress
+and prints `[INCOMPLETE]`. The integrity gate fails the job whatever `enforce` says, so a
+partial run is never read as a full one. Resume it with the `gaia eval agent --resume` command
+the log prints.
 
 Setup, once:
 
@@ -121,27 +142,16 @@ Setup, once:
 # Signed in to the second account:
 claude setup-token
 gh secret set CLAUDE_CODE_OAUTH_TOKEN_SECONDARY --repo amd/gaia
-# A fine-grained token with "Variables: write" on amd/gaia — GITHUB_TOKEN cannot set variables:
-gh secret set CLAUDE_ACCOUNT_SWITCH_TOKEN --repo amd/gaia
 ```
-
-Without `CLAUDE_ACCOUNT_SWITCH_TOKEN` the job still probes, and when a switch is needed it fails
-once with the `gh variable set` command to run by hand. When no switch is needed it stays green.
-Force an account with `gh workflow run claude-account-switch.yml -f account=secondary` (or
-`primary`), or set the variable directly: `gh variable set CLAUDE_ACCOUNT --body secondary`.
-
-Moving back to the primary happens only when a run's probe gets a clean answer from it. While CI
-is on a working secondary, nothing triggers a run, so it stays there until a Claude job is refused
-again or someone dispatches the workflow.
 
 ---
 
 ## Key facts worth knowing
 
 - **Auth:** all jobs prefer a subscription OAuth token over a billed API key: the primary
-  account's `CLAUDE_CODE_OAUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN_SECONDARY` while
-  `CLAUDE_ACCOUNT=secondary` (see §8). They fall back to `ANTHROPIC_API_KEY` if the selected
-  token is missing. An OAuth token
+  account's `CLAUDE_CODE_OAUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN_SECONDARY` when the primary
+  is out of quota (see §8). They fall back to `ANTHROPIC_API_KEY` only when neither token is
+  set. An OAuth token
   cannot authenticate a direct SDK call, so anything that judges through the Anthropic SDK has
   to route the token through the `claude` CLI instead — that is what
   `gaia.eval.judge_client` does for the email evals (drafting / action-item / briefing). A judge
@@ -153,5 +163,5 @@ again or someone dispatches the workflow.
   upstream bug that silently ignores `--model`).
 - **Shape overall:** `claude.yml` = reactive assistant → `claude-run.yml` = shared secure
   runner → audit rotation (code audit, security audit, doc walkthrough, one a night) =
-  proactive coverage → canary = keeps it all from dying silently → account switch = keeps it running when one
-  subscription runs out.
+  proactive coverage → canary = keeps it all from dying silently → per-job account pick = keeps
+  it running when one subscription runs out.

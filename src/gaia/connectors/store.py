@@ -385,6 +385,8 @@ def save_connection(
     username = _connection_username(provider, DEFAULT_ACCOUNT)
 
     _kr_set(username, payload)
+    # A completed write supersedes an interrupted forward's recovery record.
+    _kr_delete(_forward_recovery_username(provider))
 
 
 def load_connection(
@@ -512,6 +514,65 @@ def peek_connection(
         return None
 
 
+def _forward_recovery_username(provider: str) -> str:
+    """Keyring slot for an interrupted forwarded-connection save."""
+    return f"recovery:forward:{provider}"
+
+
+def has_forward_recovery(provider: str) -> bool:
+    """Whether a previous forwarded save left a recovery marker."""
+    verify_keyring_backend()
+    return _kr_get(_forward_recovery_username(provider)) is not None
+
+
+def write_forward_recovery(provider: str, snapshot: dict) -> None:
+    """Record the old pair before a forwarded save changes either slot.
+
+    The marker is itself stored through the torn-write-safe keyring helper. It
+    contains encrypted credential values and is never logged.
+    """
+    verify_keyring_backend()
+    payload = json.dumps({"version": 1, "slots": snapshot}, sort_keys=True)
+    _kr_set(_forward_recovery_username(provider), payload)
+
+
+def clear_forward_recovery(provider: str) -> None:
+    """Remove the recovery marker after a forwarded save is complete."""
+    verify_keyring_backend()
+    _kr_delete(_forward_recovery_username(provider))
+
+
+def recover_forward_recovery(provider: str) -> bool:
+    """Restore an interrupted forwarded save; return whether one existed."""
+    verify_keyring_backend()
+    username = _forward_recovery_username(provider)
+    raw = _kr_get(username)
+    if raw is None:
+        return False
+    expected = {
+        _provider_credentials_username(provider),
+        _connection_username(provider, DEFAULT_ACCOUNT),
+    }
+    try:
+        marker = json.loads(raw)
+        if marker.get("version") != 1 or not isinstance(marker.get("slots"), dict):
+            raise ValueError("unsupported marker")
+        slots = marker["slots"]
+        # Restore only this provider's two slots, never a slot the marker names.
+        if set(slots) != expected or not all(
+            v is None or isinstance(v, str) for v in slots.values()
+        ):
+            raise ValueError("unexpected marker slots")
+    except (json.JSONDecodeError, AttributeError, ValueError) as exc:
+        raise ConnectorsError(
+            f"The recovery record for the {provider} connection is corrupt. "
+            "Reconnect from Settings → Connectors before using it again."
+        ) from exc
+    restore_connection_slots(slots)
+    _kr_delete(username)
+    return True
+
+
 def snapshot_connection_slots(provider: str) -> dict:
     """The stored client config and connection values for ``provider``.
 
@@ -545,6 +606,8 @@ def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) ->
     verify_keyring_backend()
     username = _connection_username(provider, account_email)
     _kr_delete(username)
+    # Otherwise the next read would restore the connection just removed.
+    _kr_delete(_forward_recovery_username(provider))
 
 
 def _secret_username(name: str) -> str:

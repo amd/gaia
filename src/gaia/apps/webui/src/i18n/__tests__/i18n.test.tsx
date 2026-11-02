@@ -9,12 +9,11 @@ import { LOCALES, getLocale, localeOptionLabel, ref, stripIsolates, translate, t
 import { PALETTES } from '../../utils/palette';
 import { translator, useT } from '../useT';
 import { readLocale, useChatStore } from '../../stores/chatStore';
+import { readsAs } from '../../test/readsAs';
 import { GeneralSettings } from '../../components/settings/GeneralSettings';
 
 const EN_KEYS = Object.keys(enMessages).sort();
-/** Matches rendered text as read, ignoring the invisible bidi isolates. */
-const plain = (text: string) => (content: string) => stripIsolates(content) === text;
-const ar = (key: MessageKey, params?: Parameters<typeof translate>[2]) => stripIsolates(translate('ar', key, params));
+const ar =(key: MessageKey, params?: Parameters<typeof translate>[2]) => stripIsolates(translate('ar', key, params));
 const placeholders = (text: string) => [...text.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
 afterEach(() => {
@@ -94,7 +93,7 @@ describe('useT and the language setting', () => {
         render(<Label k="sidebar.newChat" />);
         expect(screen.getByText('New chat')).toBeInTheDocument();
         act(() => useChatStore.getState().setLocale('ar'));
-        expect(screen.getByText(plain('محادثة جديدة (New chat)'))).toBeInTheDocument();
+        expect(screen.getByText(readsAs('محادثة جديدة (New chat)'))).toBeInTheDocument();
     });
 
     it('flips the document to right-to-left, and back', () => {
@@ -123,9 +122,9 @@ describe('useT and the language setting', () => {
         expect([...select.options].map((o) => stripIsolates(o.textContent ?? ''))).toEqual(['English', 'العربية (Arabic)']);
         await userEvent.selectOptions(select, 'ar');
         expect(useChatStore.getState().locale).toBe('ar');
-        expect(screen.getByLabelText(plain('اللغة (Language)'))).toHaveValue('ar');
-        expect(screen.getByRole('heading', { name: plain('عام (General)') })).toBeInTheDocument();
-        expect(screen.getByText(plain('رمادي دافئ (Warm gray)'))).toBeInTheDocument();
+        expect(screen.getByLabelText(readsAs('اللغة (Language)'))).toHaveValue('ar');
+        expect(screen.getByRole('heading', { name: readsAs('عام (General)') })).toBeInTheDocument();
+        expect(screen.getByText(readsAs('رمادي دافئ (Warm gray)'))).toBeInTheDocument();
     });
 
     it('names every palette in English exactly as the palette list does', () => {

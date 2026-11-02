@@ -42,6 +42,7 @@ from ..utils import (
     compute_file_hash_from_fd,
     doc_to_response,
     ensure_document_path_allowed,
+    harden_served_file,
     managed_documents_dir,
     safe_open_document,
     unsupported_type_message,
@@ -593,7 +594,7 @@ async def get_document_file(doc_id: str, db: ChatDatabase = Depends(get_db)):
             status_code=404,
             detail=f"{doc.get('filename') or doc_id} is no longer on disk at {path}",
         )
-    return FileResponse(
+    response = FileResponse(
         path=str(real),
         media_type=_INLINE_MEDIA_TYPES.get(
             path.suffix.lower(), "application/octet-stream"
@@ -601,6 +602,7 @@ async def get_document_file(doc_id: str, db: ChatDatabase = Depends(get_db)):
         filename=doc.get("filename") or path.name,
         content_disposition_type="inline",
     )
+    return harden_served_file(response, path.name)
 
 
 @router.post("/api/documents/{doc_id}/cancel")

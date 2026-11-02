@@ -37,7 +37,10 @@ _LIST_SELECT = (
     "id,conversationId,subject,from,toRecipients,ccRecipients,"
     "receivedDateTime,isRead,isDraft,flag,categories,bodyPreview"
 )
-_FULL_SELECT = _LIST_SELECT + ",body"
+# Graph only needs the header collection when reading a full conversation;
+# keeping it off list/search calls avoids asking those endpoints for data the
+# caller does not use.
+_FULL_SELECT = _LIST_SELECT + ",internetMessageHeaders,body"
 
 # Graph caps $top at 999; asking for more is a 400, not a truncation.
 _MAX_TOP = 999
@@ -102,6 +105,11 @@ def message_summary(
     shape, so the tools and the skill never learn which mailbox they are on.
     """
     flag = (msg.get("flag") or {}).get("flagStatus")
+    headers = {
+        str(header.get("name") or "").lower(): str(header.get("value") or "")
+        for header in msg.get("internetMessageHeaders") or []
+        if header.get("name")
+    }
     summary: Dict[str, Any] = {
         "id": msg.get("id"),
         "thread_id": msg.get("conversationId") or msg.get("id"),
@@ -114,6 +122,9 @@ def message_summary(
         "flagged": flag in ("flagged", "complete"),
         "categories": list(msg.get("categories") or []),
         "preview": (msg.get("bodyPreview") or "").strip(),
+        # Provider-neutral metadata consumed by the waiting-on-you detector.
+        "auto_submitted": headers.get("auto-submitted", ""),
+        "x_autoreply": headers.get("x-autoreply", ""),
     }
     if include_body:
         body = msg.get("body") or {}

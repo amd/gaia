@@ -5,6 +5,7 @@
 
 import io
 import json
+import logging
 import os
 import sys
 import types
@@ -36,8 +37,11 @@ def test_long_form_print_is_the_same_flag(parser):
 
 
 def test_bare_p_means_read_stdin(parser):
-    # const="" is what tells run() to read the prompt from stdin.
-    assert parser.parse_args(["-p"]).print_prompt == ""
+    assert parser.parse_args(["-p"]).print_prompt == print_mode.READ_STDIN
+
+
+def test_empty_p_is_not_a_request_to_read_stdin(parser):
+    assert parser.parse_args(["-p", ""]).print_prompt == ""
 
 
 def test_no_p_leaves_print_prompt_unset(parser):
@@ -242,13 +246,28 @@ def test_read_prompt_prefers_the_argument(monkeypatch):
 
 def test_read_prompt_reads_and_strips_stdin(monkeypatch):
     monkeypatch.setattr(sys, "stdin", _FakeStdin("  line one\nline two\n\n"))
-    assert print_mode.read_prompt("") == "line one\nline two"
+    assert print_mode.read_prompt(print_mode.READ_STDIN) == "line one\nline two"
+
+
+@pytest.mark.parametrize("prompt", ["", "   "])
+def test_an_empty_prompt_is_refused_without_touching_stdin(monkeypatch, prompt):
+    # A stdin that never closes: reading it is the hang this guards against.
+    class _Open:
+        def isatty(self):
+            return False
+
+        def read(self):
+            raise AssertionError("read stdin for an explicitly empty prompt")
+
+    monkeypatch.setattr(sys, "stdin", _Open())
+    with pytest.raises(ValueError, match="empty prompt"):
+        print_mode.read_prompt(prompt)
 
 
 def test_read_prompt_rejects_a_terminal(monkeypatch):
     monkeypatch.setattr(sys, "stdin", _FakeStdin("", tty=True))
     with pytest.raises(ValueError, match="needs a prompt"):
-        print_mode.read_prompt("")
+        print_mode.read_prompt(print_mode.READ_STDIN)
 
 
 def test_read_prompt_rejects_missing_stdin(monkeypatch):
@@ -261,7 +280,7 @@ def test_read_prompt_rejects_missing_stdin(monkeypatch):
 def test_read_prompt_rejects_empty_stdin(monkeypatch, text):
     monkeypatch.setattr(sys, "stdin", _FakeStdin(text))
     with pytest.raises(ValueError, match="empty prompt"):
-        print_mode.read_prompt("")
+        print_mode.read_prompt(print_mode.READ_STDIN)
 
 
 # ---------------------------------------------------------------------------
@@ -564,7 +583,7 @@ def test_run_returns_1_with_an_actionable_message_when_the_server_fails(
 
 def test_run_reads_the_prompt_from_stdin(stub_env, monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", _FakeStdin("piped prompt\n"))
-    assert print_mode.run("", model="m") == 0
+    assert print_mode.run(print_mode.READ_STDIN, model="m") == 0
     assert _agent().queries == ["piped prompt"]
 
 
@@ -576,7 +595,7 @@ def test_run_rejects_an_unknown_output_format_before_starting_anything(stub_env)
 
 def test_run_with_no_prompt_on_a_terminal_starts_nothing(stub_env, monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", _FakeStdin("", tty=True))
-    assert print_mode.run("", model="m") == 1
+    assert print_mode.run(print_mode.READ_STDIN, model="m") == 1
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "needs a prompt" in captured.err
@@ -805,3 +824,26 @@ def test_main_forwards_full_access(monkeypatch):
     _run_main(monkeypatch, ["-p", "hi", "--full-access"])
     assert run.call_args.kwargs["full_access"] is True
     assert run.call_args.kwargs["skip_permissions"] is False
+
+
+def test_a_failure_with_no_recorded_error_says_its_status_once(stub_env, capsys):
+    class _Incomplete(_StubAgent):
+        def process_query(self, text):
+            return {"status": "incomplete", "result": "partial", "conversation": []}
+
+    sys.modules["gaia_agent.agent"].GaiaAgent = _Incomplete
+    assert print_mode.run("q", model="m") == 1
+    assert capsys.readouterr().err.count("ended with status") == 1
+
+
+def test_an_unexpected_failure_does_not_log_its_traceback_at_info(
+    stub_env, capsys, caplog
+):
+    class _Boom(_StubAgent):
+        def process_query(self, text):
+            raise ConnectionError("reset")
+
+    sys.modules["gaia_agent.agent"].GaiaAgent = _Boom
+    with caplog.at_level(logging.INFO):
+        assert print_mode.run("q", model="m") == 1
+    assert not [r for r in caplog.records if r.exc_info]

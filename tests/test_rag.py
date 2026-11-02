@@ -104,6 +104,9 @@ class TestRAGConfig:
         assert config.chunk_overlap == 100
         assert config.max_chunks == 5
         assert config.embedding_model == "user.embeddinggemma-300m-GGUF"
+        # RAG image extraction shares the VLM that every normal init profile
+        # already downloads; it must not point first-time users at an extra model.
+        assert config.vlm_model == "Gemma-4-E4B-it-GGUF"
         assert Path(config.cache_dir).is_absolute()
         assert Path(config.cache_dir).parts[-2:] == ("cache", "rag")
         assert config.show_stats is False
@@ -1033,7 +1036,11 @@ class TestMemoryLimits:
                 show_stats=False,
             )
 
-            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+            with (
+                patch("gaia.rag.sdk.RAGSDK._check_dependencies"),
+                # The mocked faiss index holds no vectors to copy on removal.
+                patch("gaia.rag.sdk.RAGSDK._index_without_rows"),
+            ):
                 rag = RAGSDK(config)
 
                 # Create two temp PDF files with different names
