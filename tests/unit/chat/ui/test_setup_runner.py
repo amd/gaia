@@ -26,11 +26,6 @@ _REAL_SERVER_PROBLEM = sr.server_problem
 
 
 @pytest.fixture(autouse=True)
-def no_real_agent_turn(monkeypatch):
-    monkeypatch.setattr(sr, "_agent_turn_problem", lambda: None)
-
-
-@pytest.fixture(autouse=True)
 def gaia_home(tmp_path, monkeypatch):
     home = tmp_path / "gaia-home"
     monkeypatch.setenv("GAIA_HOME", str(home))

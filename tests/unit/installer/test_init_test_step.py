@@ -258,6 +258,13 @@ def _ran(code, out="", err=""):
     return MagicMock(returncode=code, stdout=out, stderr=err)
 
 
+@pytest.fixture
+def real_agent_turn(monkeypatch):
+    real = setup_runner._agent_turn_problem.real
+    monkeypatch.setattr(setup_runner, "_agent_turn_problem", real)
+
+
+@pytest.mark.usefixtures("real_agent_turn")
 def test_a_real_agent_turn_passes_when_gaia_answers():
     with patch.object(
         setup_runner.subprocess, "run", return_value=_ran(0, json.dumps({"ok": 1}))
@@ -267,12 +274,14 @@ def test_a_real_agent_turn_passes_when_gaia_answers():
     assert "-p" in argv and "--output-format" in argv
 
 
+@pytest.mark.usefixtures("real_agent_turn")
 @pytest.mark.parametrize("result", [_ran(1, "", "agent crashed"), _ran(0, "   ", "")])
 def test_an_agent_turn_that_fails_says_so(result):
     with patch.object(setup_runner.subprocess, "run", return_value=result):
         assert "didn't answer" in setup_runner._agent_turn_problem()
 
 
+@pytest.mark.usefixtures("real_agent_turn")
 def test_an_agent_turn_that_hangs_says_so():
     with patch.object(
         setup_runner.subprocess,
