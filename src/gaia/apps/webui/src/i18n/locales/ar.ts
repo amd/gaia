@@ -1105,6 +1105,10 @@ const messages: Messages = {
     'settings.connectors.disable': 'تعطيل',
     'settings.connectors.enable': 'تفعيل',
 
+    // The connection banner
+    'banner.serverStopped': 'خادم النماذج لا يعمل.',
+    'banner.finishSetup': 'أكمل إعداد GAIA لاستخدام النماذج على هذا الجهاز، أو اختر نموذجًا سحابيًا من الإعدادات.',
+
     // The update chip
     'update.now': 'تحديث الآن',
     'update.downloadingTitle': 'جارٍ تنزيل التحديث {version}…',

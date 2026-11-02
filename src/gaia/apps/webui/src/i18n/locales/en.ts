@@ -1105,6 +1105,10 @@ export const enMessages = {
     'settings.connectors.disable': 'Disable',
     'settings.connectors.enable': 'Enable',
 
+    // The connection banner
+    'banner.serverStopped': "The model server isn't running.",
+    'banner.finishSetup': "Finish GAIA's setup to use models on this PC, or choose a cloud model in Settings.",
+
     // The update chip
     'update.now': 'Update now',
     'update.downloadingTitle': 'Downloading update {version}…',

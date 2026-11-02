@@ -11,6 +11,7 @@ import { formatGb } from '../../utils/modelLabels';
 import { useT } from '../../i18n/useT';
 import type { SystemStatus, MCPServerStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
+import { namesSetupCommand } from './ErrorNotice';
 import { ModelServerPanel } from './ModelServerPanel';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../SettingsModal.css';
@@ -163,7 +164,8 @@ export function AdvancedSettings() {
                                     : status.lemonade_error ? t('settings.advanced.unavailable') : t('settings.advanced.notRunning')}
                                 ok={status.lemonade_running}
                                 hint={!status.lemonade_running
-                                    ? (status.lemonade_error ? t('settings.advanced.queryFailed', { reason: status.lemonade_error }) : t('settings.advanced.notRunningHint'))
+                                    ? (status.lemonade_error ? t('settings.advanced.queryFailed', { reason: status.lemonade_error })
+                                        : status.start_instruction && !namesSetupCommand(status.start_instruction) ? status.start_instruction : t('settings.advanced.notRunningHint'))
                                     : undefined}
                             />
                             <StatusRow

@@ -9,6 +9,11 @@ export function isServerDown(message: string): boolean {
     return /not reachable|not answering|model server at|ConnectionPool|NewConnectionError|Connection refused|Max retries/i.test(message);
 }
 
+/** True for a remedy that sends a person to a terminal for GAIA's own setup, which the app handles. */
+export function namesSetupCommand(text: string | null | undefined): boolean {
+    return /gaia init/i.test(text ?? '');
+}
+
 /** An error in plain words; a server failure keeps its raw text one click away. */
 export function ErrorNotice({ message, onRetry }: { message: string; onRetry?: () => void }) {
     const t = useT();

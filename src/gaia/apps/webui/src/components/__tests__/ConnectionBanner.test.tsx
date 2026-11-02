@@ -33,7 +33,8 @@ describe('the model server is down', () => {
         const install = 'Lemonade Server is not installed. Run `gaia init` to install it, or set LEMONADE_SERVER_PATH to an existing install.';
         useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null, start_instruction: install } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(container).toHaveTextContent(`The model server isn't running. ${install}`);
+        expect(container).toHaveTextContent("The model server isn't running. Finish GAIA's setup to use models on this PC");
+        expect(container).not.toHaveTextContent('gaia init');
         expect(container).not.toHaveTextContent('stopped');
     });
 
