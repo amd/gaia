@@ -320,8 +320,40 @@ rag = RAGSDK(config)
 ```
 
 <Note>
-The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks, never vectors: vectors are regenerated via Lemonade on every index, so changing `embedding_model` needs no cache clearing. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap`, `use_llm_chunking` and the embedder's input limit, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings.
+The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks, never vectors: vectors are regenerated via Lemonade on every index, so changing `embedding_model` needs no cache clearing. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap`, `use_llm_chunking`, `json_loader` and the embedder's input limit, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings.
 </Note>
+
+### Indexing JSON records
+
+By default a `.json` file is flattened into one document. For an export that holds
+many records (Jira issues, Confluence pages), set `json_loader` so each object in the
+array is indexed on its own, and every chunk starts with that record's citation
+fields:
+
+```python
+from gaia.rag.sdk import JsonLoaderConfig, RAGConfig, RAGSDK
+
+rag = RAGSDK(RAGConfig(
+    json_loader=JsonLoaderConfig(
+        content_fields=["bodyText", "descriptionText", "summary"],
+        metadata_fields=["key", "title", "webUrl", "author"],
+        document_array_path="confluencePages",  # dotted path; "" if the file is the array
+    ),
+))
+rag.index_document("export.json")
+# A retrieved chunk reads:
+#   key: OAI-12
+#   title: OAI HWSD Bug Report
+#   webUrl: https://...
+#   The GPT-OSS 120B serving...
+```
+
+Content from two records never shares a chunk, and fields not listed in either
+list stay out of the index. Records with no text in `content_fields` are skipped
+with a warning. A path that doesn't resolve to an array of objects, or field names
+that match no record, fail the index with an error saying what to fix. The loader
+applies to every `.json` file this `RAGSDK` indexes, and it is part of the cache
+key, so changing it re-indexes the file.
 
 ### Tuning `max_chunks`
 
