@@ -6,8 +6,6 @@ version: 1.0.0
 metadata:
   gaia:
     security_tier: community
-    permissions:
-      - filesystem:write
     tools_required:
       - transcribe_media
       - refine_transcript

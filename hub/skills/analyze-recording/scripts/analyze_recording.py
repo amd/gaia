@@ -8,7 +8,8 @@ transcript, extracts everything matching a request, and writes subtitles. All of
 it goes next to the recording unless --output-dir says otherwise.
 
 Finished work is reused, so a re-run after a failure, or with a new request,
-only does what is left. Pass --force to start the transcript again.
+only does what is left. To transcribe again, delete the transcript's .txt and
+.txt.timing.json files first.
 
     python analyze_recording.py cooking-class.mp4 \\
         --request "every recipe taught in the class" \\
@@ -27,7 +28,6 @@ from gaia.agents.tools.audio_tools import (
     DOWNLOAD_DIR,
     EXPORT_FORMATS,
     AudioToolsMixin,
-    timings_path_for,
 )
 from gaia.audio.media_url import MediaUrlError, fetch_media, is_url
 from gaia.llm.lemonade_client import resolve_default_chat_model
@@ -77,7 +77,9 @@ def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
         "--model", help="Chat model (default: GAIA's configured default model)"
     )
     parser.add_argument("--whisper-model", help="Lemonade transcription model")
-    parser.add_argument("--language", help='Language code such as "en" (default: detect)')
+    parser.add_argument(
+        "--language", help='Language code such as "en" (default: detect)'
+    )
     parser.add_argument(
         "--speakers",
         type=int,
@@ -92,10 +94,9 @@ def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
         help="Also write this format. Repeat for several.",
     )
     parser.add_argument(
-        "--output-dir", type=Path, help="Where files go (default: next to the recording)"
-    )
-    parser.add_argument(
-        "--force", action="store_true", help="Transcribe again even if a transcript exists"
+        "--output-dir",
+        type=Path,
+        help="Where files go (default: next to the recording)",
     )
     return parser.parse_args(argv)
 
@@ -118,9 +119,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         output_dir = (args.output_dir or recording.parent).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     transcript = output_dir / f"{recording.stem}.txt"
-    if args.force:
-        transcript.unlink(missing_ok=True)
-        timings_path_for(transcript).unlink(missing_ok=True)
 
     transcribed = _require_success(
         pipeline._transcribe_media(

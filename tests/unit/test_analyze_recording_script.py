@@ -9,8 +9,6 @@ from unittest.mock import patch
 
 import pytest
 
-from gaia.agents.tools.audio_tools import timings_path_for
-
 SCRIPT = (
     Path(__file__).resolve().parents[2]
     / "hub/skills/analyze-recording/scripts/analyze_recording.py"
@@ -116,22 +114,6 @@ def test_a_failed_stage_stops_with_its_message(script, recording):
     ):
         with pytest.raises(SystemExit, match="Lemonade is down"):
             script.main([str(recording), "--model", "m"])
-
-
-def test_force_discards_the_transcript_so_it_is_redone(script, recording, tmp_path):
-    transcript = recording.with_suffix(".txt")
-    transcript.write_text("old", encoding="utf-8")
-    timings_path_for(transcript).write_text("{}", encoding="utf-8")
-    failure = {"status": "error", "error": "stop here"}
-
-    with patch.object(
-        script.RecordingPipeline, "_transcribe_media", return_value=failure
-    ):
-        with pytest.raises(SystemExit):
-            script.main([str(recording), "--model", "m", "--force"])
-
-    assert not transcript.exists()
-    assert not timings_path_for(transcript).exists()
 
 
 def test_the_default_request_works_for_any_recording(script, recording):
