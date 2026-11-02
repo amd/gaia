@@ -85,6 +85,7 @@ updates:
       - "/docs"
       - "/workers/agent-hub"
       - "/workers/admin"
+      - "/workers/website-router"
       - "/src/vscode/gaia"
     schedule:
       interval: "weekly"
