@@ -117,7 +117,9 @@ setup(
             "dist/*.webmanifest",
             "dist/*.json",
             "dist/*.txt",
+            "dist/*.js",
             "dist/assets/*",
+            "dist/icons/*",
         ],
     },
     install_requires=[

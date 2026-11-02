@@ -461,6 +461,24 @@ func TestClaudeCheckStopsBeforeLocalProbesWhenCredentialIsMissing(t *testing.T) 
 	}
 }
 
+func TestMissingCLISetupCheckDoesNotSuggestGaiaInit(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return "", gaiainit.ErrNoCLI })
+
+	row := modelRow(localRunner{})
+	if row.State != StateUnknown || row.Disposition != status.DispositionNotify {
+		t.Fatalf("missing CLI state = %+v, want an informational unknown row", row)
+	}
+	if row.Remedy.Command != gaiainit.InstallCommand {
+		t.Fatalf("missing CLI remedy command = %q, want the install command", row.Remedy.Command)
+	}
+	if strings.Contains(row.Remedy.Command, "gaia init") {
+		t.Fatalf("missing CLI remedy command = %q, must not suggest gaia init", row.Remedy.Command)
+	}
+	if !strings.Contains(row.Remedy.Action, "Install the GAIA CLI") {
+		t.Fatalf("missing CLI remedy = %q", row.Remedy.Action)
+	}
+}
+
 // Exit 2 is what an installed gaia older than `--check` returns for
 // "unrecognized arguments". Reading it as "not ready" ran a full multi-minute
 // `gaia init` on EVERY launch.

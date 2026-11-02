@@ -5,6 +5,7 @@ package preflight
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -39,6 +40,9 @@ import (
 type FullAccessConfig struct {
 	Enabled bool
 	Path    string
+	// Err is non-nil when the saved setting could not be read. Callers must
+	// surface it instead of treating a lock timeout as "full access is off".
+	Err error
 }
 
 // ReadFullAccess reports the persisted `full_access` preference.
@@ -54,9 +58,16 @@ func readFullAccess(p hostProbe) FullAccessConfig {
 	if path == "" {
 		return FullAccessConfig{}
 	}
-	raw, err := p.readFile(path)
-	if err != nil {
+	read := p.readConfig
+	if read == nil {
+		read = p.readFile
+	}
+	raw, err := read(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return FullAccessConfig{Path: path}
+	}
+	if err != nil {
+		return FullAccessConfig{Path: path, Err: fmt.Errorf("cannot read %s: %w", path, err)}
 	}
 	var cfg struct {
 		FullAccess *bool `json:"full_access"`

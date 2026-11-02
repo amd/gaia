@@ -59,7 +59,6 @@ def _apply_env_overrides():
         GAIA_API_DEBUG: Enable debug logging and console output
         GAIA_API_SHOW_PROMPTS: Display prompts sent to LLM
         GAIA_API_STREAMING: Enable real-time streaming of LLM responses
-        GAIA_API_STEP_THROUGH: Enable step-through debugging mode
     """
     debug = os.environ.get("GAIA_API_DEBUG") == "1"
     show_prompts = os.environ.get("GAIA_API_SHOW_PROMPTS") == "1"

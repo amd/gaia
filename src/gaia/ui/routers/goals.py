@@ -11,7 +11,13 @@ from typing import Optional, get_args
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, field_validator
 
-from gaia.agents.base.goal_store import AgentMode, GoalStatus, Priority, TaskStatus
+from gaia.agents.base.goal_store import (
+    AgentMode,
+    GoalStatus,
+    GoalTransitionError,
+    Priority,
+    TaskStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +226,10 @@ def get_goal(goal_id: str):
 @router.put("/api/goals/{goal_id}/approve")
 def approve_goal(goal_id: str):
     """Approve an agent-inferred goal for autonomous execution."""
-    goal = _get_store().approve_goal(goal_id)
+    try:
+        goal = _get_store().approve_goal(goal_id)
+    except GoalTransitionError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     if goal is None:
         raise HTTPException(status_code=404, detail="Goal not found")
     return _goal_to_dict(goal)
@@ -229,7 +238,10 @@ def approve_goal(goal_id: str):
 @router.put("/api/goals/{goal_id}/reject")
 def reject_goal(goal_id: str):
     """Reject an agent-inferred goal."""
-    goal = _get_store().reject_goal(goal_id)
+    try:
+        goal = _get_store().reject_goal(goal_id)
+    except GoalTransitionError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     if goal is None:
         raise HTTPException(status_code=404, detail="Goal not found")
     return _goal_to_dict(goal)
@@ -238,7 +250,10 @@ def reject_goal(goal_id: str):
 @router.put("/api/goals/{goal_id}/cancel")
 def cancel_goal(goal_id: str):
     """Cancel a queued or in-progress goal."""
-    goal = _get_store().cancel_goal(goal_id)
+    try:
+        goal = _get_store().cancel_goal(goal_id)
+    except GoalTransitionError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     if goal is None:
         raise HTTPException(status_code=404, detail="Goal not found")
     # Persist first, then stop an in-flight background tick if this goal owns it.

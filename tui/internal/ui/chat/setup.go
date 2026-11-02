@@ -5,6 +5,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -149,12 +150,19 @@ func (m ChatModel) handleSetupCheckResult(msg setupCheckResultMsg) (tea.Model, t
 	m.setupChecking = false
 
 	if msg.err != nil {
+		message := fmt.Sprintf(
+			"Could not check whether %s is set up: %v\nType /setup to try running it directly.",
+			m.agentName, msg.err)
+		if errors.Is(msg.err, gaiainit.ErrNoCLI) {
+			message = fmt.Sprintf(
+				"Could not check whether %s is set up: %v\nInstall the GAIA CLI first, then retry.",
+				m.agentName, msg.err)
+		} else {
+			message += fmt.Sprintf(" Or run `%s` in a terminal.", gaiainit.RunCommand(m.skipLocalChatSetup()))
+		}
 		m.messages = append(m.messages, Message{
-			Role: RoleError,
-			Content: fmt.Sprintf(
-				"Could not check whether %s is set up: %v\nType /setup to try running it directly, "+
-					"or run `%s` in a terminal.",
-				m.agentName, msg.err, gaiainit.RunCommand(m.skipLocalChatSetup())),
+			Role:    RoleError,
+			Content: message,
 		})
 		m.updateViewport()
 		return m, m.releaseAfterSetupGate()

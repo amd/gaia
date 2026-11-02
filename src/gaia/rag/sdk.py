@@ -18,7 +18,7 @@ import secrets
 import threading
 import time
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -82,6 +82,106 @@ _TEXT_FALLBACK_ENCODINGS = ("utf-8", "cp1252", "latin-1")
 _TEXT_TRIED_ENCODINGS = ", ".join(
     dict.fromkeys([e for _, e in _TEXT_BOM_ENCODINGS] + list(_TEXT_FALLBACK_ENCODINGS))
 )
+
+
+#: Plain-text documents, read as text.
+TEXT_DOCUMENT_EXTENSIONS = frozenset(
+    {".txt", ".md", ".mdx", ".markdown", ".rst", ".log"}
+)
+
+#: Source, markup and config files, read as text for Q&A.
+CODE_EXTENSIONS = frozenset(
+    {
+        ".py",
+        ".pyw",
+        ".java",
+        ".cpp",
+        ".cc",
+        ".cxx",
+        ".hpp",
+        ".h",
+        ".c",
+        ".cs",
+        ".go",
+        ".rs",
+        ".rb",
+        ".php",
+        ".swift",
+        ".kt",
+        ".kts",
+        ".scala",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".mjs",
+        ".cjs",
+        ".vue",
+        ".svelte",
+        ".astro",
+        ".css",
+        ".scss",
+        ".sass",
+        ".less",
+        ".styl",
+        ".stylus",
+        ".html",
+        ".htm",
+        ".svg",
+        ".sh",
+        ".bash",
+        ".ps1",
+        ".r",
+        ".sql",
+        ".yaml",
+        ".yml",
+        ".xml",
+        ".toml",
+        ".ini",
+        ".cfg",
+        ".conf",
+        ".env",
+        ".properties",
+        ".gradle",
+        ".cmake",
+        ".mk",
+        ".make",
+    }
+)
+
+#: Formats with a dedicated extractor (PDF, Office, CSV, JSON, EPUB).
+STRUCTURED_DOCUMENT_EXTENSIONS = frozenset(
+    {".pdf", ".pptx", ".docx", ".xlsx", ".csv", ".json", ".epub"}
+)
+
+#: What a folder walk indexes. Images need the vision model, and *.env files
+#: hold secrets, so both are indexed only when picked one at a time.
+FOLDER_INDEX_EXTENSIONS = (
+    STRUCTURED_DOCUMENT_EXTENSIONS | TEXT_DOCUMENT_EXTENSIONS | CODE_EXTENSIONS
+) - {".env"}
+
+
+def folder_index_skip_reason(file_path) -> Optional[str]:
+    """Why a folder walk should skip *file_path*, or None when it is indexable."""
+    path = Path(file_path)
+    ext = path.suffix.lower()
+    if ext in FOLDER_INDEX_EXTENSIONS:
+        return None
+    if ext in UNSUPPORTED_DOCUMENTS:
+        return unsupported_document_message(path.name, ext)
+    if ext == ".env":
+        return (
+            ".env files usually hold secrets and are not indexed from a folder; "
+            "index the file on its own if it is safe to."
+        )
+    if ext in IMAGE_EXTENSIONS:
+        return (
+            f"{ext} images are read by the vision model and are not indexed "
+            "from a folder; index the image file on its own."
+        )
+    if not ext:
+        return "no file extension, so the document type is unknown"
+    return f"{ext} files are not a supported document type"
 
 
 def _decode_text_bytes(data: bytes) -> str:
@@ -458,6 +558,111 @@ def default_rag_cache_dir() -> str:
 
 
 @dataclass
+class JsonLoaderConfig:
+    """Index each object of a JSON array as its own record.
+
+    Every chunk of a record starts with that record's ``metadata_fields`` as
+    ``key: value`` lines, so a retrieved chunk carries its citation.
+    """
+
+    #: Fields whose values are the searchable text, in order.
+    content_fields: List[str]
+    #: Fields copied onto every chunk of the record (id, title, url, ...).
+    metadata_fields: List[str] = field(default_factory=list)
+    #: Dotted path to the array of records; "" means the file is the array.
+    document_array_path: str = ""
+
+    def __post_init__(self):
+        if isinstance(self.content_fields, str) or not self.content_fields:
+            raise ValueError(
+                "JsonLoaderConfig.content_fields must be a non-empty list of "
+                "field names, e.g. ['bodyText', 'summary']."
+            )
+        if isinstance(self.metadata_fields, str):
+            raise ValueError(
+                "JsonLoaderConfig.metadata_fields must be a list of field names."
+            )
+
+
+_JSON_RECORD_MARKER = re.compile(r"^=== JSON record \d+ ===\n", re.MULTILINE)
+# Any content line that is exactly a marker, the last line included.
+_JSON_MARKER_LINE = re.compile(r"^(?==== JSON record \d+ ===$)", re.MULTILINE)
+
+
+def _json_to_text_lines(obj, indent: int = 0) -> List[str]:
+    """Render parsed JSON as indented ``key: value`` lines."""
+    lines = []
+    prefix = "  " * indent
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(value, (dict, list)):
+                lines.append(f"{prefix}{key}:")
+                lines.extend(_json_to_text_lines(value, indent + 1))
+            else:
+                lines.append(f"{prefix}{key}: {value}")
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if isinstance(item, (dict, list)):
+                lines.append(f"{prefix}Item {i + 1}:")
+                lines.extend(_json_to_text_lines(item, indent + 1))
+            else:
+                lines.append(f"{prefix}- {item}")
+    else:
+        lines.append(f"{prefix}{obj}")
+    return lines
+
+
+def _json_value_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (dict, list)):
+        return "\n".join(_json_to_text_lines(value)).strip()
+    return str(value)
+
+
+def _json_metadata_value(value) -> str:
+    """One-line form of a metadata value; a newline would end the header."""
+    if isinstance(value, list):
+        value = ", ".join(_json_value_text(v) for v in value)
+    elif isinstance(value, dict):
+        value = json.dumps(value, ensure_ascii=False)
+    return " ".join(_json_value_text(value).split())
+
+
+def _json_records(data, loader: JsonLoaderConfig, source: str) -> List[dict]:
+    """The record array *loader* points at inside *data*."""
+    node = data
+    walked = []
+    for key in [k for k in loader.document_array_path.split(".") if k]:
+        if not isinstance(node, dict) or key not in node:
+            where = ".".join(walked) or "the top level"
+            found = sorted(node) if isinstance(node, dict) else type(node).__name__
+            raise ValueError(
+                f"document_array_path '{loader.document_array_path}' not found in "
+                f"{source}: no key '{key}' at {where} (found: {found}). Fix "
+                "JsonLoaderConfig.document_array_path."
+            )
+        node = node[key]
+        walked.append(key)
+    if not isinstance(node, list):
+        where = loader.document_array_path or "the top level"
+        raise ValueError(
+            f"{source}: expected an array of records at {where}, found "
+            f"{type(node).__name__}. Set JsonLoaderConfig.document_array_path "
+            "to the array that holds the records."
+        )
+    for i, record in enumerate(node):
+        if not isinstance(record, dict):
+            raise ValueError(
+                f"{source}: record {i + 1} is a {type(record).__name__}, not an "
+                "object; JsonLoaderConfig needs an array of objects."
+            )
+    return node
+
+
+@dataclass
 class RAGConfig:
     """Configuration for RAG SDK."""
 
@@ -491,6 +696,8 @@ class RAGConfig:
     use_vlm: bool = True
     # Security settings
     allowed_paths: Optional[List[str]] = None
+    # Index each object of a JSON array as its own record (None: whole file)
+    json_loader: Optional[JsonLoaderConfig] = None
 
 
 @dataclass
@@ -883,6 +1090,11 @@ class RAGSDK:
                 "embed_max_chars": EMBED_MAX_CHARS,
                 # Only when off, so existing caches keep their keys.
                 **({} if self.config.use_vlm else {"use_vlm": False}),
+                **(
+                    {"json_loader": asdict(self.config.json_loader)}
+                    if self.config.json_loader is not None
+                    else {}
+                ),
             },
             sort_keys=True,
         )
@@ -2263,38 +2475,23 @@ These positions indicate where to split the text."""
             raise
 
     def _extract_text_from_json(self, json_path: str) -> str:
-        """Extract text from JSON file."""
+        """Extract text from JSON file.
+
+        With ``config.json_loader`` set, each record of the configured array
+        becomes its own ``=== JSON record N ===`` block (metadata lines, a
+        blank line, then content) that :meth:`_chunk_json_records` chunks
+        record by record.
+        """
         try:
             # Use _safe_open to prevent symlink attacks
             with self._safe_open(json_path, "rb") as f:
                 data = json.load(f)
 
-            # Convert JSON to readable text format
-            def json_to_text(obj, indent=0):
-                """Recursively convert JSON to readable text."""
-                lines = []
-                prefix = "  " * indent
-
-                if isinstance(obj, dict):
-                    for key, value in obj.items():
-                        if isinstance(value, (dict, list)):
-                            lines.append(f"{prefix}{key}:")
-                            lines.extend(json_to_text(value, indent + 1))
-                        else:
-                            lines.append(f"{prefix}{key}: {value}")
-                elif isinstance(obj, list):
-                    for i, item in enumerate(obj):
-                        if isinstance(item, (dict, list)):
-                            lines.append(f"{prefix}Item {i + 1}:")
-                            lines.extend(json_to_text(item, indent + 1))
-                        else:
-                            lines.append(f"{prefix}- {item}")
-                else:
-                    lines.append(f"{prefix}{obj}")
-
-                return lines
-
-            text = "\n".join(json_to_text(data))
+            loader = self.config.json_loader
+            if loader is None:
+                text = "\n".join(_json_to_text_lines(data))
+            else:
+                text = self._render_json_records(data, loader, Path(json_path).name)
 
             if self.config.show_stats:
                 print(f"  ✅ Loaded JSON file ({len(text):,} characters)")
@@ -2304,6 +2501,62 @@ These positions indicate where to split the text."""
         except Exception as e:
             self._log_read_failure(e, json_path, f"Error reading JSON {json_path}: {e}")
             raise
+
+    def _render_json_records(self, data, loader: JsonLoaderConfig, source: str) -> str:
+        blocks = []
+        empty = 0
+        for record in _json_records(data, loader, source):
+            content = [
+                _json_value_text(record.get(name)) for name in loader.content_fields
+            ]
+            body = "\n\n".join(part for part in content if part)
+            # A content line shaped like a record marker would split the record.
+            body = _JSON_MARKER_LINE.sub(" ", body)
+            if not body:
+                empty += 1
+                continue
+            header = [
+                f"{name}: {_json_metadata_value(record[name])}"
+                for name in loader.metadata_fields
+                if name in record and _json_metadata_value(record[name])
+            ]
+            blocks.append(
+                f"=== JSON record {len(blocks) + 1} ===\n"
+                + "\n".join(header)
+                + "\n\n"
+                + body
+            )
+        if not blocks:
+            raise ValueError(
+                f"{source}: none of its records has text in content_fields "
+                f"{loader.content_fields}. Check the field names in "
+                "JsonLoaderConfig.content_fields."
+            )
+        if empty:
+            self.log.warning(
+                f"{source}: skipped {empty} record(s) with no text in "
+                f"{loader.content_fields}"
+            )
+        return "\n\n".join(blocks)
+
+    def _chunk_json_records(self, text: str) -> List[str]:
+        """Chunk each record on its own, prefixing every chunk with its metadata."""
+        chunks = []
+        for block in _JSON_RECORD_MARKER.split(text):
+            if not block.strip():
+                continue
+            header, _, body = block.partition("\n\n")
+            room = EMBED_MAX_CHARS - (len(header) + 1 if header else 0)
+            if room < EMBED_MAX_CHARS // 2:
+                raise ValueError(
+                    f"A JSON record's metadata_fields render to {len(header)} "
+                    f"chars, over half the embedder's {EMBED_MAX_CHARS}-char "
+                    "input. List fewer or shorter JsonLoaderConfig.metadata_fields."
+                )
+            for chunk in self._split_text_into_chunks(body):
+                for piece in split_for_embedding(chunk, room):
+                    chunks.append(f"{header}\n{piece}" if header else piece)
+        return chunks
 
     def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
         """Extract text from an Excel .xlsx workbook using openpyxl.
@@ -2665,7 +2918,7 @@ These positions indicate where to split the text."""
             return self._extract_text_from_image(file_path)
 
         # Text-based files
-        elif file_type in [".txt", ".md", ".mdx", ".markdown", ".rst", ".log"]:
+        elif file_type in TEXT_DOCUMENT_EXTENSIONS:
             return self._extract_text_from_text_file(file_path), metadata
 
         # CSV files
@@ -2694,76 +2947,7 @@ These positions indicate where to split the text."""
             raise ValueError(unsupported_document_message(file_path, file_type))
 
         # Code files (treat as text for Q&A purposes)
-        elif file_type in [
-            # Backend languages
-            ".py",
-            ".pyw",  # Python
-            ".java",  # Java
-            ".cpp",
-            ".cc",
-            ".cxx",
-            ".hpp",
-            ".h",  # C++
-            ".c",  # C
-            ".cs",  # C#
-            ".go",  # Go
-            ".rs",  # Rust
-            ".rb",  # Ruby
-            ".php",  # PHP
-            ".swift",  # Swift
-            ".kt",
-            ".kts",  # Kotlin
-            ".scala",  # Scala
-            # Web - JavaScript/TypeScript
-            ".js",
-            ".jsx",  # JavaScript
-            ".ts",
-            ".tsx",  # TypeScript
-            ".mjs",
-            ".cjs",  # JavaScript modules
-            # Web - Frameworks
-            ".vue",  # Vue.js
-            ".svelte",  # Svelte
-            ".astro",  # Astro
-            # Web - Styling
-            ".css",  # CSS
-            ".scss",
-            ".sass",  # Sass
-            ".less",  # Less
-            ".styl",
-            ".stylus",  # Stylus
-            # Web - Markup
-            ".html",
-            ".htm",  # HTML
-            ".svg",  # SVG
-            ".jsx",
-            ".tsx",  # JSX/TSX (already listed but emphasizing)
-            # Scripting
-            ".sh",
-            ".bash",  # Shell
-            ".ps1",  # PowerShell
-            ".r",
-            ".R",  # R
-            # Database
-            ".sql",  # SQL
-            # Configuration
-            ".yaml",
-            ".yml",  # YAML
-            ".xml",  # XML
-            ".toml",  # TOML
-            ".ini",
-            ".cfg",
-            ".conf",  # Config files
-            ".env",  # Environment files
-            ".properties",  # Properties files
-            # Build & Package
-            ".gradle",  # Gradle
-            ".cmake",  # CMake
-            ".mk",
-            ".make",  # Makefiles
-            # Documentation
-            ".rst",  # ReStructuredText
-        ]:
+        elif file_type in CODE_EXTENSIONS:
             self.log.info(f"Indexing code/web file: {file_type}")
             return self._extract_text_from_text_file(file_path), metadata
 
@@ -3244,6 +3428,22 @@ These positions indicate where to split the text."""
             return index, chunks, embeddings
         return index, chunks
 
+    def _index_without_rows(self, removed: set):
+        """A new index with every vector of ``self.index`` except rows *removed*.
+
+        Copies the stored vectors instead of re-embedding, and leaves
+        ``self.index`` untouched for readers holding a snapshot of it.
+        """
+        total = self.index.ntotal
+        if total != len(self.chunks):
+            raise RuntimeError(
+                f"Vector index holds {total} vectors for {len(self.chunks)} "
+                "chunks; re-index the documents to rebuild it."
+            )
+        keep = np.ones(total, dtype=bool)
+        keep[sorted(removed)] = False
+        return self._create_faiss_index(self.index.reconstruct_n(0, total)[keep])
+
     def _snapshot_query_state(self) -> Dict[str, Any]:
         """Capture a consistent read snapshot for query operations."""
         with self._state_lock:
@@ -3310,9 +3510,8 @@ These positions indicate where to split the text."""
                                 new_file_to_chunk_indices[owner] = []
                             new_file_to_chunk_indices[owner].append(new_idx)
 
-                    # Rebuild index only after the new chunk set is ready.
                     if new_chunks:
-                        new_index, new_chunks = self._create_vector_index(new_chunks)
+                        new_index = self._index_without_rows(chunk_indices_set)
                     else:
                         new_index = None
 
@@ -3928,7 +4127,10 @@ These positions indicate where to split the text."""
                 raise ValueError(error_msg)
 
             # Split into chunks
-            new_chunks = self._split_text_into_chunks(text)
+            if file_type == ".json" and self.config.json_loader is not None:
+                new_chunks = self._chunk_json_records(text)
+            else:
+                new_chunks = self._split_text_into_chunks(text)
 
             new_index, _, file_embeddings = self._create_vector_index(
                 list(new_chunks),

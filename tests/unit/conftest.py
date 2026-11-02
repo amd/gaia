@@ -12,13 +12,50 @@ This conftest auto-clears ``GAIA_MEMORY_DISABLED`` when collecting tests
 from any ``test_memory_*.py`` file so the per-test mocks take effect.
 """
 
+import importlib.util
 import os
 import socket
 import sys
 import tempfile
+import venv
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(scope="session")
+def python_with_pip(tmp_path_factory):
+    """A Python with ``-m pip``, which a ``uv venv`` dev environment does not have."""
+    if importlib.util.find_spec("pip") is not None:
+        return sys.executable
+    env_dir = tmp_path_factory.mktemp("pip-venv")
+    venv.create(env_dir, with_pip=True)
+    bin_dir = "Scripts" if sys.platform == "win32" else "bin"
+    return str(env_dir / bin_dir / Path(sys.executable).name)
+
+
+class _OsNamed:
+    """``os`` as one module sees it, with only ``name`` overridden."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
+@pytest.fixture
+def fake_os_name(monkeypatch):
+    """Make one module see another ``os.name`` without touching the real one.
+
+    Patching the real os.name makes pathlib, pytest and coverage build the
+    wrong Path flavour, which crashes the xdist worker.
+    """
+
+    def _set(module, name):
+        monkeypatch.setattr(module, "os", _OsNamed(name))
+
+    return _set
 
 
 @pytest.fixture

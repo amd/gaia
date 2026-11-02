@@ -36,6 +36,9 @@ export const enMessages = {
     'sidebar.notificationsUnread': 'Notifications, {n} unread',
     'sidebar.mobileAccess': 'Mobile access',
     'sidebar.mobileAccessOn': 'Mobile access is on',
+    'mobileAccess.installTitle': 'Keep GAIA on your phone',
+    'mobileAccess.installSteps': 'Once GAIA opens, add it to your home screen: in Safari, or Chrome on iPhone, tap Share, then Add to Home Screen. In Chrome on Android, open the ⋮ menu and tap Add to Home screen.',
+    'mobileAccess.linkLifetime': 'This link stops working when mobile access stops. Each time you start it, scan the new code. If GAIA on your home screen no longer connects, open the new link and add it again.',
     'sidebar.settings': 'Settings',
 
     // A chat's row in the sidebar
@@ -125,6 +128,23 @@ export const enMessages = {
     'composer.stop': 'Stop',
     'composer.stopping': 'Stopping…',
     'composer.send': 'Send',
+    'composer.private': 'Private',
+    'composer.memoryOn': 'Memory on',
+    'composer.memoryOff': 'Memory off',
+    'composer.memoryUnknown': 'Memory unknown',
+    'composer.memoryOffTitle': 'Memory is off in Settings, so no chat is saved to memory',
+    'composer.memoryUnknownTitle': "Couldn't read the memory setting. Turn on private chat to keep this chat out of memory either way.",
+    'composer.privateOn': 'Turn on private chat',
+    'composer.privateOnTitle': "Turn on private chat. It won't be saved to memory.",
+    'composer.privateOff': 'Turn off private chat',
+    'composer.privateOffTitle': "Turn off private chat. This chat won't be saved to memory.",
+
+    // Notice when the GAIA agent is missing
+    'agentNotice.missing': "The GAIA agent isn't installed, so new chats can't start yet.",
+    'agentNotice.install': 'Install GAIA agent',
+    'agentNotice.installing': 'Installing the GAIA agent… {percent}%',
+    'agentNotice.failed': 'The GAIA agent could not be installed: {error}',
+    'agentNotice.retry': 'Try again',
 
     // A message and its actions
     'msg.sent': 'Sent {time}',
@@ -138,6 +158,14 @@ export const enMessages = {
     'msg.confirmDelete': 'Click again to confirm',
     'msg.confirmDeleteAria': 'Confirm delete message',
     'msg.error': 'Something went wrong',
+    'msg.tryAgain': 'Try again',
+    'chatError.context': 'This conversation is longer than the model can read at once. Start a new chat, or ask about fewer documents, then ask again.',
+    'chatError.modelServer': 'The model server did not answer. Open Settings → Model to check it, then try again.',
+    'chatError.connection': 'Lost the connection to GAIA. Check that GAIA is still running, then try again.',
+    'chatError.timeout': 'The request timed out. Try a shorter question, or a faster model in Settings → Model.',
+    'chatError.resendFailed': 'Your message was not sent again',
+    'chatError.resendStale': 'This chat changed since it was opened, so nothing was sent. Reopen the chat, then try again.',
+    'chatError.unknown': 'Something went wrong while GAIA was answering. Try again; if it keeps happening, report it with the link below.',
     'msg.showAll': 'Show all',
     'msg.showLess': 'Show less',
     'msg.stopped': 'Stopped',
@@ -152,6 +180,8 @@ export const enMessages = {
     'code.copyAria': 'Copy code',
     'retry.button': 'Retry with another model',
     'retry.head': 'Retry with…',
+    'media.showFull': 'Show full size',
+    'media.showSmaller': 'Show smaller',
 
     // Agent activity while GAIA works
     'activity.thinking': 'Thinking',
@@ -512,6 +542,14 @@ export const enMessages = {
     'out.goToAria': 'Go to the turn that made {name}',
     'out.fewer': 'Show fewer',
     'out.more': 'Show {n} more',
+    'tools.title': 'Agent info',
+    'tools.listLabel': 'Tools this chat\'s agent can use',
+    'tools.listError': 'Couldn\'t list this agent\'s tools: {error}',
+    'tools.empty': 'This agent has no tools: it answers from the model alone.',
+    'tools.notRunning': 'This chat\'s agent isn\'t running yet. It starts with your next message, and its tools show here after that.',
+    'tools.cat.mcp': 'Connectors',
+    'tools.cat.skill': 'Skills',
+    'tools.cat.agent': 'Built in',
     'chg.title': 'Changes',
     'chg.files.one': '{n} file',
     'chg.files.other': '{n} files',
@@ -910,6 +948,19 @@ export const enMessages = {
     'download.chip': 'Downloading {done} of {count} · {pct}%',
     'download.chipFailed': 'A download failed',
     'download.chipAria': 'Model downloads. Open Settings to see them.',
+
+    // Mobile access: ngrok not installed
+    'mobile.ngrokRequired': 'ngrok required',
+    'mobile.setupTitle': 'Set up ngrok (one-time)',
+    'mobile.setupIntro': 'Mobile access uses ngrok to reach this PC from your phone.',
+    'mobile.setupInstall': 'Install it with the command below, then press Retry.',
+    'mobile.setupDownload': 'Download it for your system, then press Retry.',
+    'mobile.installCommand': 'ngrok install command',
+    'mobile.copyCommand': 'Copy command',
+    'mobile.copy': 'Copy',
+    'mobile.copied': 'Copied',
+    'mobile.downloadPage': 'ngrok download page',
+    'mobile.retry': 'Retry',
 } as const;
 
 export const en: Locale = {

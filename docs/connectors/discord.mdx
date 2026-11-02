@@ -1,0 +1,109 @@
+---
+title: "Discord"
+icon: "discord"
+description: "Let GAIA agents read and send messages in your Discord servers."
+---
+
+<Info>
+  **Connector ID:** `mcp-discord` · **Type:** `mcp_server` · **Catalog entry:** [`src/gaia/connectors/catalog/mcp_servers.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/mcp_servers.py)
+</Info>
+
+## What you'll need
+
+The connector is an **MCP server**. GAIA starts
+[`mcp-discord`](https://github.com/barryyip0625/mcp-discord) through `npx`
+(pinned to `mcp-discord@1.3.4`) when an agent needs it, and the agents you
+grant it to can list channels, read messages, and send messages in every
+Discord server your bot has joined.
+
+It needs one secret: a **Discord bot token**. It lives in your OS keyring,
+and the server gets it through a `$keyring` reference when it starts.
+
+<Warning>
+  The bot can do whatever its Discord permissions allow, and the server also
+  offers tools that delete messages and channels and manage webhooks. Invite
+  the bot with only the permissions in Step 1, not **Administrator**, and
+  grant the connector only to agents you trust to post for you.
+</Warning>
+
+## Step 1 — Create a bot and copy its token
+
+1. Open the <a href="https://discord.com/developers/applications" target="_blank">Discord Developer Portal</a>
+   → **New Application**.
+2. Under **Bot**, click **Reset Token** and copy it. Discord shows it only once.
+3. On the same page, turn on **Message Content Intent**. Without it the bot
+   can't log in.
+4. Under **OAuth2** → **URL Generator**, tick the `bot` scope and the
+   **View Channels**, **Read Message History**, **Send Messages**, and
+   **Add Reactions** permissions. Open the generated URL and add the bot to
+   your server. A bot sees only the servers it has been added to.
+
+## Step 2 — Configure GAIA
+
+**From the CLI:**
+
+```bash
+gaia connectors configure mcp-discord --set DISCORD_TOKEN=<your-bot-token>
+```
+
+**From the Agent UI:**
+
+1. Launch the Agent UI: `gaia chat --ui`.
+2. **Settings** (gear) → **Connectors** → click the **Discord** tile.
+3. Paste the token into the **Discord Bot Token** field and click **Save**.
+
+Either path saves the token in your OS keyring and writes only a `$keyring`
+reference into `~/.gaia/mcp_servers.json`. The token is never written to disk
+in plaintext.
+
+## Step 3 — Use it
+
+Grant **and** activate the connector for each agent that should use it. The
+grant lets the agent use the credential; activation makes the tools visible
+to it, and is off by default:
+
+```bash
+gaia connectors grants grant mcp-discord builtin:chat --scopes "*"
+gaia connectors activations activate mcp-discord builtin:chat
+```
+
+(In the UI, the tile's **Per-agent** toggle does both.)
+
+The tools take Discord IDs, not names. Turn on **Developer Mode** in Discord
+(User Settings → Advanced), right-click your server, and choose **Copy Server
+ID**. Then give the agent that ID, for example *"In Discord server
+123456789012345678, what was discussed in #general today?"* The agent calls
+`discord_get_server_info` to look up the channel IDs, then
+`discord_read_messages` or `discord_send`.
+
+## Common issues
+
+### `Used disallowed intents` / login failed
+
+**Message Content Intent** is off. Turn it on in the Developer Portal; you
+don't need a new token.
+
+### `Missing Access` when reading a channel
+
+The bot's role can't see that channel. Give it **View Channels** and
+**Read Message History** there.
+
+### `npx: command not found`
+
+`mcp-discord` is started through `npx`. Install Node 18+ and make sure `npx`
+is on your `PATH`.
+
+## Revoking access
+
+- **From GAIA:** Settings → Connectors → Discord → **Disconnect** (or
+  `gaia connectors disconnect mcp-discord`). This deletes the token from the
+  keyring, removes the entry from `mcp_servers.json`, and clears every
+  per-agent grant.
+- **From Discord:** reset the token under **Bot** in the Developer Portal,
+  or kick the bot from your server.
+
+## See also
+
+- [Connectors overview](/connectors)
+- [mcp-discord documentation](https://github.com/barryyip0625/mcp-discord/tree/v1.3.4)
+- [Connectors security model](/security/connections)
