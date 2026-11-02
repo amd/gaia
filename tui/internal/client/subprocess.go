@@ -2,7 +2,6 @@ package client
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -185,7 +184,7 @@ type SubprocessClient struct {
 	proc    *procHandle
 	stdin   io.WriteCloser
 	stdout  *bufio.Scanner
-	stderr  *bytes.Buffer
+	stderr  *tailBuffer
 	started bool
 	// turnDone is closed by the in-flight turn's reader when it exits. nil when
 	// no turn is running.
@@ -291,7 +290,7 @@ type turnState struct {
 	stdin    io.WriteCloser
 	scanner  *bufio.Scanner
 	proc     *procHandle
-	stderr   *bytes.Buffer
+	stderr   *tailBuffer
 	turnDone chan struct{}
 	// notice is non-empty when this turn is the first against a REPLACEMENT
 	// child, and says what the replacement no longer knows.
@@ -331,7 +330,7 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 	}
 
 	cmd := exec.Command(s.path, s.spawnArgs(s.fullAccess)...)
-	stderr := &bytes.Buffer{}
+	stderr := newTailBuffer(agentStderrCap)
 	cmd.Stderr = stderr
 
 	// Created before Start so a POSIX child is forked straight into its own
@@ -610,7 +609,7 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 	return ch, nil
 }
 
-// exitedOutputLabel heads the stderr a dead child wrote over its whole life.
+// exitedOutputLabel heads the tail of the stderr a dead child wrote.
 const exitedOutputLabel = "Output from the process that exited:"
 
 // isTerminalEvent reports whether evt ends a turn in either dialect.

@@ -199,6 +199,8 @@ my-agents.zip
     └── agent.py
 ```
 
+Every other file in the agent's directory is included, except `__pycache__/` directories, `.pyc`/`.pyo` bytecode and `.DS_Store`. Those tie a bundle to the exporter's Python version or OS.
+
 Bundles are validated on import. The receiving end enforces conservative limits (max 1000 entries, 500 MB uncompressed, 50 MB per file) and rejects symlinks, device or other special files, and path-traversal entries.
 
 ### Security

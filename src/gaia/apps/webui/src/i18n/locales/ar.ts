@@ -909,6 +909,19 @@ const messages: Messages = {
     'download.chip': 'جارٍ التنزيل {done} من {count} · {pct}%',
     'download.chipFailed': 'فشل أحد التنزيلات',
     'download.chipAria': 'تنزيلات النماذج. افتح الإعدادات لعرضها.',
+
+    // Mobile access: ngrok not installed
+    'mobile.ngrokRequired': 'ngrok مطلوب',
+    'mobile.setupTitle': 'إعداد ngrok (مرة واحدة)',
+    'mobile.setupIntro': 'يستخدم الوصول من الهاتف ngrok للوصول إلى هذا الجهاز من هاتفك.',
+    'mobile.setupInstall': 'ثبّته بالأمر أدناه، ثم اضغط «إعادة المحاولة».',
+    'mobile.setupDownload': 'نزّله لنظامك، ثم اضغط «إعادة المحاولة».',
+    'mobile.installCommand': 'أمر تثبيت ngrok',
+    'mobile.copyCommand': 'نسخ الأمر',
+    'mobile.copy': 'نسخ',
+    'mobile.copied': 'تم النسخ',
+    'mobile.downloadPage': 'صفحة تنزيل ngrok',
+    'mobile.retry': 'إعادة المحاولة',
 };
 
 export const ar: Locale = {

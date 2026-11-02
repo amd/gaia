@@ -700,7 +700,7 @@ error. To run the chat model in the cloud instead, see
     Symptoms like `request exceeds the available context size`, spurious `INFRA_ERROR`, or `llama-server failed to start` usually mean two evals raced the same Lemonade server.
     - **Rule**: run at most one `gaia eval agent` process at a time — never in parallel (`&`). Chain runs serially instead.
     - **Backend**: the Agent UI backend must be running (`python -m gaia.ui.server --port 4200`).
-    - **Judge access**: if the run errors with `ANTHROPIC_API_KEY not found`, export the key for the judge/simulator.
+    - **Judge access**: the judge uses your Claude Code login (`claude`, then `/login`) or `ANTHROPIC_API_KEY` when it is set. If it errors with `No Claude judge available`, install and log in to the `claude` CLI or export the key.
   </Accordion>
 
   <Accordion title="Dependency compatibility issues" icon="cubes">
@@ -723,6 +723,25 @@ error. To run the chat model in the cloud instead, see
 ## Electron App Issues
 
 <AccordionGroup>
+  <Accordion title="GAIA says it keeps crashing" icon="triangle-exclamation">
+    After GAIA crashes three times in a row without you reaching its window,
+    the next launch starts in safe mode: it shows a "GAIA has crashed N times
+    in a row" dialog before doing anything else, and skips copying console
+    output to `~/.gaia/electron-main.log` on that launch.
+
+    - **Try again** clears the crash count
+      (`~/.gaia/electron-startup-failures.json`) and starts GAIA normally. It
+      changes nothing else, so if the cause remains, GAIA asks again after
+      three more crashes.
+    - **Open log folder** opens `~/.gaia/` so you can attach the logs to a
+      bug report, then asks again.
+    - **Quit** closes GAIA and keeps the count, so the next launch asks again.
+
+    The count also resets the first time a GAIA window gets focus. Only errors
+    GAIA catches are counted: a crash of the app process itself does not
+    reach safe mode.
+  </Accordion>
+
   <Accordion title="Cannot find module 'electron'" icon="window-restore">
     **Cause**: Import path is incorrect
 

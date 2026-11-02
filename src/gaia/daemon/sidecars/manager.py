@@ -950,8 +950,9 @@ class AgentSidecarManager:
                     self.spec.agent_id,
                 )
             return
-        self._proc = None
+        # Fire before clearing _proc so the hook can name the reaped pid.
         self._fire_reaped()
+        self._proc = None
         logger.info("%s sidecar: shut down", self.spec.agent_id)
 
     @staticmethod
