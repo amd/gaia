@@ -295,6 +295,47 @@ def _components(
     return components
 
 
+def _devices(system_info: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Each processor Lemonade found: CPU, GPUs and NPU, with what it calls them."""
+    found: List[Dict[str, Any]] = []
+    for kind, entries in ((system_info or {}).get("devices") or {}).items():
+        for device in entries if isinstance(entries, list) else [entries]:
+            if not isinstance(device, dict) or not device.get("name"):
+                continue
+            found.append(
+                {
+                    "kind": kind,
+                    "name": device["name"],
+                    "family": device.get("family"),
+                    "available": bool(device.get("available")),
+                    "integrated": device.get("integrated"),
+                    "cores": device.get("cores"),
+                    "threads": device.get("threads"),
+                }
+            )
+    return found
+
+
+def _system_summary(system_info: Optional[Dict[str, Any]], client) -> Dict[str, Any]:
+    """What setup found across the stack, for the user to check: GAIA, the
+    model server, this PC. None where nothing here could find out."""
+    from gaia.hub import installer as hub_installer
+    from gaia.llm.lemonade_client import lemonade_server_version
+    from gaia.version import get_package_version
+
+    info = system_info or {}
+    agent = hub_installer.read_sentinel("gaia")
+    return {
+        "gaia_version": get_package_version(),
+        "agent_version": agent.version if agent else None,
+        "lemonade_version": lemonade_server_version(client) if client else None,
+        "os": info.get("OS Version"),
+        "processor": info.get("Processor"),
+        "physical_memory": info.get("Physical Memory"),
+        "devices": _devices(system_info),
+    }
+
+
 def _backends(system_info: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Each backend Lemonade reports for this PC, and whether it is here yet."""
     backends = []
@@ -306,6 +347,7 @@ def _backends(system_info: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     "recipe": recipe,
                     "backend": name,
                     "state": backend.get("state"),
+                    "version": backend.get("version"),
                     "default": name == default,
                 }
             )
@@ -557,6 +599,7 @@ def build_plan(
         "catalog": catalog,
         "components": _components(lemonade, skip_models=False, system_info=system_info),
         "backends": _backends(system_info),
+        "system": _system_summary(system_info, client),
         "vision_model": _saved_vision_model(),
     }
 

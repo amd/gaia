@@ -295,6 +295,13 @@ export { expect };
 
 export const stepTitle = (page: Page) => page.locator('#setup-title');
 
+/** The checks stop on what they found: check it is there, then Continue to the plan. */
+export async function pastChecks(page: Page, say: Say, timeout = 2 * 60_000): Promise<void> {
+    await expect(page.getByRole('region', { name: say('setup.found.title') })).toBeVisible({ timeout });
+    await page.getByRole('button', { name: say('setup.continue') }).click();
+    await expect(stepTitle(page)).toHaveText(say('setup.plan.title'));
+}
+
 /** From the plan: press Download and start, watch the bar move, end on Ready. */
 export async function downloadToReady(page: Page, say: Say, shot: (name: string) => Promise<void>): Promise<void> {
     await page.getByRole('button', { name: say('setup.plan.start') }).click();

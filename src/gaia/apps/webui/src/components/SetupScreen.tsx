@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Cloud, Info, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Cloud, Info, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
 import { shortModelName, useModelStore } from '../stores/modelStore';
 import { lemonadeKeyRejected } from '../utils/lemonade';
@@ -20,6 +20,7 @@ import { formatFitGb, formatSize } from './setup/format';
 import { GpuMemoryPanel } from './setup/GpuMemoryPanel';
 import { tooBigText } from './setup/ModelChecklist';
 import { StageLogs } from './setup/StageLogs';
+import { DetectedSummary } from './setup/DetectedSummary';
 import { SetupChecks } from './setup/SetupChecks';
 import { SetupRail, type RailStep } from './setup/SetupRail';
 import { TestStep } from './setup/TestStep';
@@ -484,10 +485,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         void start(false, { serverOnly: true });
     }, [phase, statusRead, lemonadeSettled, plan, run, start]);
 
-    // The checks finished: on to the recommendation, with nothing to click.
-    useEffect(() => {
-        if (phase === 'check' && selection && plan?.catalog && plan.lemonade.reachable && (hardware || hardwareError)) setPhase('plan');
-    }, [phase, selection, plan, hardware, hardwareError]);
+    // The checks finished: they stop on what they found, for the user to check.
+    const checksDone = !!(selection && plan?.catalog && plan.lemonade.reachable && (hardware || hardwareError));
 
     const retryRun = useCallback(() => {
         const { gaiaLemonade, options } = lastRun.current;
@@ -562,21 +561,23 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
 
     // Customize's steps stay on the rail, so Next can return to them.
     const backToPlan = useCallback(() => {
-        setChoice('local');
+        if (viewing == null) setChoice('local');
         stepTo('plan');
-    }, [stepTo]);
+    }, [stepTo, viewing]);
 
     const customize = useCallback(() => {
+        if (running && viewing != null) return;
         setChoice('local');
         setCustomizing(true);
         stepTo('pc');
-    }, [stepTo]);
+    }, [stepTo, running, viewing]);
 
     const useCloud = useCallback(() => {
+        if (running && viewing != null) return;
         setCustomizing(false);
         setChoice(readChoice() === 'amd' ? 'amd' : 'fireworks');
         stepTo('key');
-    }, [stepTo]);
+    }, [stepTo, running, viewing]);
 
     const showGpu = !!gpu?.applies;
     const backOne = useCallback(() => {
@@ -589,6 +590,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             if (!e.altKey || confirm) return;
+            const target = e.target instanceof Element ? e.target : null;
+            if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
             const to = e.key === 'ArrowLeft' ? navRef.current.prev : e.key === 'ArrowRight' ? navRef.current.next : null;
             if (!to) return;
             e.preventDefault();
@@ -653,6 +656,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     }, [cancel, retryRun]);
 
     const connect = useCallback(async () => {
+        if (running) return;
         setKeyState({ busy: true, error: null, done: false });
         try {
             await api.connectProviderWaitingForOs(
@@ -672,7 +676,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         } catch (err) {
             setKeyState({ busy: false, error: errorText(err), done: false });
         }
-    }, [choice, key, selectModel, usersServer, download, t]);
+    }, [choice, key, selectModel, usersServer, download, t, running]);
 
     const switchCloud = useCallback((id: ProviderId) => {
         saveChoice(id);
@@ -733,6 +737,17 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     useEffect(() => {
         setVisited((v) => (v.has(stage) ? v : new Set(v).add(stage)));
     }, [stage]);
+    // A new step: start at its top, with focus on its title, as a page change would.
+    const firstStage = useRef(true);
+    useEffect(() => {
+        if (firstStage.current) {
+            firstStage.current = false;
+            return;
+        }
+        const inner = document.querySelector('.setup-inner');
+        if (inner) inner.scrollTop = 0;
+        document.getElementById('setup-title')?.focus({ preventScroll: true });
+    }, [stage]);
     const trail: Array<{ id: Stage; label: string; key: MessageKey; sub?: boolean }> = [
         { id: 'check', label: t('setup.check.title'), key: 'setup.check.title' },
         { id: 'plan', label: t('setup.plan.step'), key: 'setup.plan.step' },
@@ -748,7 +763,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     ];
     const at = trail.findIndex((s) => s.id === liveStage);
     // A step can be opened once setup has reached it.
-    const reachable = (id: Stage, i: number) => i <= at || visited.has(id);
+    const runStep = (id: Stage) => id === 'download' || id === 'test' || id === 'ready';
+    const reachable = (id: Stage, i: number) => i <= at || (visited.has(id) && !runStep(id));
     const railSteps: RailStep[] = trail.map((s, i) => ({
         id: s.id,
         label: s.label,
@@ -762,6 +778,13 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         onOpen: s.id !== stage && reachable(s.id, i) ? () => stepTo(s.id) : undefined,
     }));
     const shownAt = trail.findIndex((s) => s.id === stage);
+    // Which way the step moved, so the new one slides in from that side.
+    const lastShownAt = useRef(shownAt);
+    const stepDir = useRef<'forward' | 'back'>('forward');
+    if (lastShownAt.current !== shownAt) {
+        stepDir.current = shownAt > lastShownAt.current ? 'forward' : 'back';
+        lastShownAt.current = shownAt;
+    }
     const prevStep = shownAt > 0 ? trail[shownAt - 1].id : null;
     const nextStep = shownAt >= 0 && shownAt < trail.length - 1 && reachable(trail[shownAt + 1].id, shownAt + 1) ? trail[shownAt + 1].id : null;
     navRef.current = { prev: prevStep, next: nextStep };
@@ -786,6 +809,22 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         <main className="setup" aria-labelledby="setup-title">
             <SetupRail steps={railSteps} />
             <div className="setup-inner">
+                {shownAt >= 0 && (
+                    <nav className="setup-topnav" aria-label={t('setup.nav.label')}>
+                        <button type="button" className="setup-arrow" onClick={() => prevStep && stepTo(prevStep)} disabled={!prevStep} aria-label={t('setup.nav.prev')}>
+                            <ChevronLeft size={16} aria-hidden="true" />
+                        </button>
+                        <button type="button" className="setup-arrow" onClick={() => nextStep && stepTo(nextStep)} disabled={!nextStep} aria-label={t('setup.nav.next')}>
+                            <ChevronRight size={16} aria-hidden="true" />
+                        </button>
+                        <span><bdi>{t('setup.nav.stepOf', { n: String(shownAt + 1), total: String(trail.length) })}</bdi></span>
+                        {viewing != null && viewing !== liveStage && (
+                            <button type="button" className="link-btn" onClick={() => setViewing(null)}>
+                                {t.compose((say) => say('setup.nav.toLive', { step: say(trail.find((s) => s.id === liveStage)?.key ?? 'setup.download.step') }))}
+                            </button>
+                        )}
+                    </nav>
+                )}
                 {resumeOffer && phase !== 'download' && (
                     <div className="setup-banner" role="status">
                         <Info size={14} aria-hidden="true" />
@@ -797,354 +836,362 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     </div>
                 )}
 
-                {stage === 'check' && (
-                    <>
-                        <h1 id="setup-title" className="setup-title">{t('setup.check.heading')}</h1>
-                        <p className="setup-lede">{t('setup.check.lede')}</p>
-                        <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} />
-                        {statusRead && plan && !plan.lemonade.reachable && !serverRun && (
-                            <ExistingLemonadeOffer
-                                onNothingToOffer={lemonadeNothing}
-                                onChosen={(mode) => { setUsersServer(mode === 'external'); setLemonadeSettled(true); loadHardware(); void loadPlan(); }}
-                            />
-                        )}
-                        {serverRun && runFailed && (
-                            <>
-                                <RunError run={serverRun} />
-                                {serverRun.problem
-                                    ? <ServerProblem problem={serverRun.problem} onRetry={() => void start(false, { serverOnly: true })} onUseGaia={() => void start(true, { serverOnly: true })} />
-                                    : <button type="button" className="btn-primary setup-start" onClick={() => void start(!!serverRun.gaia_lemonade, { serverOnly: true })}>{t('setup.tryAgain')}</button>}
-                            </>
-                        )}
-                        {planError && !plan && (
-                            <>
-                                <p className="setup-error" role="alert">{planError}</p>
-                                <div className="setup-row">
-                                    <button type="button" className="btn-primary" onClick={() => void loadPlan()}>{t('setup.tryAgain')}</button>
-                                    <button type="button" className="btn-secondary" onClick={() => void start(false, { keepTrying })}>{t('setup.models.useRecommended')}</button>
+                <div key={stage} className={`setup-stage is-${stepDir.current}`}>
+                    {stage === 'check' && (
+                        <>
+                            <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.check.heading')}</h1>
+                            <p className="setup-lede">{t('setup.check.lede')}</p>
+                            <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} />
+                            {checksDone && plan && <DetectedSummary plan={plan} hardware={hardware} />}
+                            {checksDone && viewing == null && (
+                                <div className="setup-row setup-found-next">
+                                    <button type="button" className="btn-primary" onClick={() => stepTo('plan')}>{t('setup.continue')}</button>
                                 </div>
-                                <p className="setup-hint">{t('setup.models.useRecommendedNote')}</p>
-                            </>
-                        )}
-                        {startError && <p className="setup-error" role="alert">{startError}</p>}
-                    </>
-                )}
-
-                {stage === 'plan' && plan && selection && (
-                    <>
-                        <h1 id="setup-title" className="setup-title">{t('setup.plan.title')}</h1>
-                        <p className="setup-lede">{t('setup.plan.lede')}</p>
-                        <section className="setup-hero" aria-label={t('setup.plan.label')}>
-                            <p className="setup-eyebrow">{selection.chatChosen ? t('setup.plan.yours') : t('setup.plan.recommended')}</p>
-                            <p className="setup-hero-title"><bdi>{t('setup.plan.run', { name: chatEntry?.name ?? '' })}</bdi></p>
-                            <dl className="setup-facts">
-                                <div><dt>{t('setup.summary.download')}</dt><dd><bdi dir="ltr">{formatSize(totals(plan, selection).downloadGb ?? 0)}</bdi></dd></div>
-                                <div><dt>{t('setup.plan.runsOn')}</dt><dd><bdi>{hardware?.gpu_name ?? t('setup.plan.cpu')}</bdi></dd></div>
-                                <div><dt>{t('setup.plan.diskAfter')}</dt><dd><bdi dir="ltr">{totals(plan, selection).afterGb != null ? formatSize(Math.max(0, totals(plan, selection).afterGb as number)) : '—'}</bdi></dd></div>
-                            </dl>
-                            <ul className="setup-reasons">
-                                {!selection.chatChosen && <li>{t('setup.plan.why.evaluated')}</li>}
-                                {chatEntry?.need_gb != null && chatEntry.capacity_gb != null && chatEntry.fits && (
-                                    <li>{t('setup.plan.why.fits', { need: formatFitGb(chatEntry.need_gb), have: formatFitGb(chatEntry.capacity_gb) })}</li>
-                                )}
-                                <li>{t('setup.plan.why.private')}</li>
-                                {biggerOption && biggerOption.id !== chatEntry?.id && <li><bdi>{biggerOption.name}</bdi>: {tooBigText(biggerOption, t)}</li>}
-                            </ul>
-                            <div className="setup-row">
-                                <button type="button" className="btn-primary" onClick={() => (short ? setConfirm({ kind: 'low_disk' }) : void commit(false))} disabled={busy || blocked || runGoing}>
-                                    {busy && <Loader2 size={13} className="spin" aria-hidden="true" />} {pending.length ? t('setup.plan.start') : t('setup.plan.startNoDownload')}
-                                </button>
-                                <button type="button" className="link-btn" onClick={customize}>{t('setup.plan.customize')}</button>
-                                <button type="button" className="link-btn" onClick={useCloud}>{t('setup.plan.cloud')}</button>
-                                {onClose && <button type="button" className="link-btn" onClick={onClose}>{t('setup.again.notNow')}</button>}
-                            </div>
-                            {blocked && <p className="setup-error" role="alert"><bdi dir="ltr">{hardware?.blockers.join(' ')}</bdi></p>}
-                            {short && <p className="setup-error" role="alert">{t('setup.summary.short', { need: formatSize(short.needGb), free: formatSize(short.freeGb), drive: t('setup.summary.theDrive'), freeUp: formatSize(short.freeUpGb) })}</p>}
-                            {(actionError ?? startError) && <p className="setup-error" role="alert">{actionError ?? startError}</p>}
-                        </section>
-                        <details className="setup-disclosure">
-                            <summary>{t('setup.plan.whatDownloads')}</summary>
-                            <DownloadContents plan={plan} models={pending} />
-                        </details>
-                    </>
-                )}
-
-                {stage === 'pc' && (
-                    <>
-                        <h1 id="setup-title" className="setup-title">{t('setup.pc.title')}</h1>
-                        <p className="setup-lede">{t('setup.pc.lede')}</p>
-                        <section className="setup-card"><SystemCheck hardware={hardware} error={hardwareError} /></section>
-                        {(plan?.backends?.length ?? 0) > 0 && (
-                            <section className="setup-card" aria-label={t('setup.pc.backends')}>
-                                <h3 className="mc-job-title">{t('setup.pc.backends')}</h3>
-                                <ul className="setup-rows">
-                                    {plan?.backends?.map((b) => (
-                                        <li key={`${b.recipe}:${b.backend}`} className={`setup-result is-${b.state === 'unsupported' ? 'waiting' : 'done'}`}>
-                                            <span className="setup-result-label"><bdi dir="ltr">{b.recipe}</bdi> <bdi dir="ltr">{b.backend}</bdi>{b.default && <span className="mc-pill">{t('setup.models.recommended')}</span>}</span>
-                                            <span className="setup-result-value">{t(`setup.pc.backend.${b.state === 'installed' ? 'installed' : b.state === 'unsupported' ? 'unsupported' : 'available'}`)}</span>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </section>
-                        )}
-                        <ExistingLemonadeOffer onChosen={(mode) => { setUsersServer(mode === 'external'); loadHardware(); void loadPlan(); }} />
-                        <div className="setup-row setup-nav">
-                            <button type="button" className="btn-secondary" onClick={backToPlan}>{t('setup.back')}</button>
-                            <button type="button" className="btn-primary" onClick={() => stepTo(showGpu ? 'gpu' : 'models')}>{t('setup.continue')}</button>
-                        </div>
-                    </>
-                )}
-
-                {stage === 'gpu' && gpu && (
-                    <>
-                        <h1 id="setup-title" className="setup-title">{t('setup.gpu.title')}</h1>
-                        <p className="setup-lede">{t('setup.gpu.lede')}</p>
-                        <GpuMemoryPanel
-                            status={gpu}
-                            onStatus={setGpu}
-                            mode="setup"
-                            headingId="setup-title"
-                            names={names}
-                            onBack={backOne}
-                            onSkip={() => stepTo('models')}
-                            onContinue={() => stepTo('models')}
-                        />
-                    </>
-                )}
-
-                {stage === 'models' && (
-                    <>
-                        <h1 id="setup-title" className="setup-title">{t('setup.models.title')}</h1>
-                        <ModelsStep
-                            plan={plan}
-                            planError={planError}
-                            onRetryPlan={() => void loadPlan()}
-                            onUseRecommended={() => void start(false, { keepTrying })}
-                            selection={selection}
-                            onSelection={setSelection}
-                            cloud={false}
-                            keepTrying={keepTrying}
-                            onKeepTrying={setKeepTrying}
-                            onBack={backOne}
-                            onContinue={(ack) => void commit(ack)}
-                            busy={busy || runGoing}
-                            error={actionError ?? startError}
-                        />
-                    </>
-                )}
-
-                {stage === 'key' && (
-                    <form onSubmit={(e) => { e.preventDefault(); void connect(); }} className="setup-form">
-                        <h1 id="setup-title" className="setup-title">{t('setup.key.title')}</h1>
-                        <div className="setup-choices" role="radiogroup" aria-label={t('setup.key.provider')}>
-                            {CHOICES.filter((c) => c.id !== 'local').map((c) => (
-                                <button
-                                    key={c.id}
-                                    type="button"
-                                    role="radio"
-                                    aria-checked={choice === c.id}
-                                    className={`setup-choice${choice === c.id ? ' is-active' : ''}${unreachable(c.id) ? ' is-disabled' : ''}`}
-                                    onClick={() => switchCloud(c.id)}
-                                    disabled={keyState.busy || unreachable(c.id)}
-                                >
-                                    <Cloud size={16} aria-hidden="true" />
-                                    <span>
-                                        <span className="setup-choice-title"><bdi>{choiceTitle(c, t)}</bdi></span>
-                                        <span className="setup-choice-note">{unreachable(c.id) ? t('setup.key.gatewayOff') : t(c.note)}</span>
-                                    </span>
-                                </button>
-                            ))}
-                        </div>
-                        {gateway?.reachable === false && (
-                            <button type="button" className="link-btn setup-start" onClick={recheckGateway}>{t('setup.key.checkAgain')}</button>
-                        )}
-                        {choice === 'fireworks' && !usersServer && (
-                            <section className="setup-card">
-                                <h3 className="mc-job-title">{t('setup.key.getOne')}</h3>
-                                <ol className="setup-key-steps">
-                                    <li><a href={FIREWORKS_KEYS_URL} target="_blank" rel="noreferrer">{t('setup.key.step1')}</a></li>
-                                    <li>{t('setup.key.step2')}</li>
-                                    <li>{t('setup.key.step3')}</li>
-                                </ol>
-                            </section>
-                        )}
-                        {choice === 'amd' && !usersServer && (
-                            <section className="setup-card">
-                                <p className="setup-hint"><a href={GATEWAY_GUIDE_URL} target="_blank" rel="noreferrer">{t('setup.key.gatewayHelp')}</a></p>
-                            </section>
-                        )}
-                        <CloudPrices provider={choice} limit={3} />
-                        <p className="setup-hint">{usersServer ? t('setup.key.usersServer') : t('setup.key.where')}</p>
-                        <div className="setup-row">
-                            {!usersServer && <input
-                                className="settings-input"
-                                type="password"
-                                autoComplete="off"
-                                value={key}
-                                onChange={(e) => setKey(e.target.value)}
-                                placeholder={t('setup.key.placeholder')}
-                                aria-label={t('setup.key.label')}
-                            />}
-                            <button type="submit" className="btn-primary" disabled={keyState.busy || unreachable(choice)}>
-                                {keyState.busy && <Loader2 size={13} className="spin" />} {t('setup.key.connect')}
-                            </button>
-                        </div>
-                        {keyState.busy && !keyState.waiting && <p className="setup-hint" role="status">{t('setup.key.testing')}</p>}
-                        {keyState.busy && keyState.waiting && <p className="setup-hint" role="status">{keyState.waiting}</p>}
-                        {keyState.error && <p className="setup-error" role="alert">{keyState.error}</p>}
-                        <div className="setup-row setup-nav">
-                            <button type="button" className="btn-secondary" onClick={backToPlan} disabled={keyState.busy}>{t('setup.back')}</button>
-                        </div>
-                    </form>
-                )}
-
-                {stage === 'download' && fullRun && (
-                    <>
-                        <h1 id="setup-title" className="setup-title">{t('setup.download.title')}</h1>
-                        <p className="setup-lede">{t('setup.download.lede')}</p>
-                        {plan && <section className="setup-card" aria-label={t('setup.contents.title')}><DownloadContents plan={plan} run={fullRun} /></section>}
-                        {(fullRun.models?.length ?? 0) > 0 ? (
-                            <div className={lostContact ? 'is-stale' : undefined}>
-                                <DownloadProgress
-                                    status={{ ...fullRun, overall: overallFromPlan(fullRun, startPlan ?? plan) }}
-                                    names={names}
-                                    freeGb={plan?.disk?.free_gb ?? null}
-                                    onCancel={() => void cancel()}
-                                    onRetry={(id, kind) => void retryModel(id, kind)}
-                                    onResume={(id) => void retryModel(id, null)}
-                                    onResumeAll={retryRun}
-                                    onSkip={(id) => void skipModel(id)}
-                                    onRestart={() => void restartDownloads()}
-                                    busy={busy || !!lostContact}
-                                    retryLater={running}
-                                    labelledBy="setup-title"
-                                />
-                            </div>
-                        ) : running ? (
-                            <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {fullRun.text}</p>
-                        ) : null}
-                        {optional.length > 0 && (
-                            <section className="setup-card" aria-label={t('setup.optional.title')}>
-                                <h3 className="mc-job-title">{t('setup.optional.title')}</h3>
-                                <p className="setup-hint">{t('setup.optional.lede')}</p>
-                                <ul className="setup-rows">
-                                    {optional.map((e) => {
-                                        const added = queued.includes(e.id);
-                                        return (
-                                            <li key={e.id} className="setup-result is-waiting">
-                                                <span className="setup-result-label">{t(`setup.purpose.${e.roles[0]}`)}</span>
-                                                <span className="setup-result-value">
-                                                    <bdi dir="ltr">{e.size_gb != null ? formatSize(e.size_gb) : t('setup.contents.sizeOnDownload')}</bdi>
-                                                    <button type="button" className="btn-secondary" aria-pressed={added} onClick={() => setQueued((q) => (added ? q.filter((id) => id !== e.id) : [...q, e.id]))}>
-                                                        {added ? t('setup.optional.added') : t('setup.optional.add')}
-                                                    </button>
-                                                </span>
-                                            </li>
-                                        );
-                                    })}
-                                </ul>
-                            </section>
-                        )}
-                        {lostContact && (
-                            <div className="setup-row" role="alert">
-                                <span className="setup-error">{t('setup.lostContact', { error: lostContact })}</span>
-                                <button type="button" className="btn-secondary" onClick={() => void poll()}>{t('setup.reconnect')}</button>
-                            </div>
-                        )}
-                        {runFailed && downloadDone && fullRun.state === 'failed' && !fullRun.model_failed && (
-                            fullRun.problem
-                                ? <ServerProblem problem={fullRun.problem} onRetry={retryRun} onUseGaia={() => void start(true, lastRun.current.options)} />
-                                : (
-                                    <div className="setup-error" role="alert">
-                                        <p>{t('setup.download.stoppedBeforeCheck')}</p>
-                                        {fullRun.error && (
-                                            <details className="dl-details">
-                                                <summary>{t('setup.progress.details')}</summary>
-                                                <pre dir="ltr">{fullRun.error}</pre>
-                                            </details>
-                                        )}
-                                    </div>
-                                )
-                        )}
-                        {runFailed && downloadDone && (
-                            <div className="setup-row">
-                                <button type="button" className="btn-primary" onClick={retryRun} disabled={busy}>{t('setup.finish')}</button>
-                                <span className="setup-hint">{t('setup.download.finishNote')}</span>
-                            </div>
-                        )}
-                        {runFailed && !downloadDone && !(fullRun.models ?? []).some((m) => m.state === 'failed' || m.state === 'cancelled') && (
-                            <>
-                                <RunError run={fullRun} />
-                                {fullRun.problem
-                                    ? <ServerProblem problem={fullRun.problem} onRetry={retryRun} onUseGaia={() => void start(true, lastRun.current.options)} />
-                                    : <button type="button" className="btn-primary setup-start" onClick={() => void start(!!fullRun.gaia_lemonade, lastRun.current.options)}>{t('setup.tryAgain')}</button>}
-                            </>
-                        )}
-                        {(actionError || startError) && <p className="setup-error" role="alert">{actionError ?? startError}</p>}
-                    </>
-                )}
-
-                {stage === 'test' && fullRun && (
-                    <>
-                        <h1 id="setup-title" className="setup-title">{t('setup.test.title')}</h1>
-                        <p className="setup-lede">{t('setup.test.lede')}</p>
-                        <TestStep
-                            run={fullRun}
-                            expected={expectedTests}
-                            names={names}
-                            catalog={catalog}
-                            onRetry={retryRun}
-                            onChooseAnother={customize}
-                            onDownloadAgain={(id) => void retryModel(id, 'verify')}
-                            busy={busy}
-                        />
-                        {runFailed && fullRun.error && (
-                            <details className="dl-details">
-                                <summary>{t('setup.progress.details')}</summary>
-                                <pre dir="ltr">{fullRun.error}</pre>
-                            </details>
-                        )}
-                        {(actionError || startError) && <p className="setup-error" role="alert">{actionError ?? startError}</p>}
-                    </>
-                )}
-
-                {stage === 'ready' && (
-                    <>
-                        <h1 id="setup-title" className="setup-title">{t('setup.ready.heading')}</h1>
-                        <div className="setup-done" role="status">
-                            <div className="setup-done-head">
-                                <p>
-                                    {t.compose((say) => [
-                                        say('setup.ready.title'),
-                                        answering ? say(cloud ? 'setup.ready.answersCloud' : 'setup.ready.answersLocal', { model: cloud ? shortModelName(answering) : (names[answering] ?? finalPlan?.catalog?.find((e) => e.id === answering)?.name ?? shortModelName(answering)) }) : null,
-                                    ].filter(Boolean).join(' '))}
-                                </p>
-                                <button type="button" className="btn-primary" onClick={() => void finish()} autoFocus>
-                                    {t('setup.ready.start')}
-                                </button>
-                            </div>
-                            {!cloud && finalPlan && <ReadySummary plan={finalPlan} chatModel={answering} gpu={gpu} />}
-                            {startError && <p className="setup-error" role="alert">{startError}</p>}
-                            {(fullRun?.tests ?? []).filter((r) => r.state === 'failed').map((r) => (
-                                <p key={`${r.job}:${r.subject ?? ''}`} className="setup-failed-extra" role="alert">
-                                    {t('setup.ready.extraFailed', { job: t(`setup.test.job.${r.job}`) })}
-                                </p>
-                            ))}
-                            {notFetched.length > 0 && !confirm && (
-                                <p className="setup-failed-extra" role="alert">
-                                    {t('setup.ready.extraNotFetched', { names: notFetched.map((id) => names[id] ?? id).join(', ') })}
-                                </p>
                             )}
-                            {firstTasks.length > 0 && (
+                            {statusRead && plan && !plan.lemonade.reachable && !serverRun && (
+                                <ExistingLemonadeOffer
+                                    onNothingToOffer={lemonadeNothing}
+                                    onChosen={(mode) => { setUsersServer(mode === 'external'); setLemonadeSettled(true); loadHardware(); void loadPlan(); }}
+                                />
+                            )}
+                            {serverRun && runFailed && (
                                 <>
-                                    <p className="setup-hint">{t('setup.ready.tasks')}</p>
-                                    <StartCards cards={firstTasks} onPick={(card) => void finish(card)} />
+                                    <RunError run={serverRun} />
+                                    {serverRun.problem
+                                        ? <ServerProblem problem={serverRun.problem} onRetry={() => void start(false, { serverOnly: true })} onUseGaia={() => void start(true, { serverOnly: true })} />
+                                        : <button type="button" className="btn-primary setup-start" onClick={() => void start(!!serverRun.gaia_lemonade, { serverOnly: true })}>{t('setup.tryAgain')}</button>}
                                 </>
                             )}
-                        </div>
-                    </>
-                )}
+                            {planError && !plan && (
+                                <>
+                                    <p className="setup-error" role="alert">{planError}</p>
+                                    <div className="setup-row">
+                                        <button type="button" className="btn-primary" onClick={() => void loadPlan()}>{t('setup.tryAgain')}</button>
+                                        <button type="button" className="btn-secondary" onClick={() => void start(false, { keepTrying })}>{t('setup.models.useRecommended')}</button>
+                                    </div>
+                                    <p className="setup-hint">{t('setup.models.useRecommendedNote')}</p>
+                                </>
+                            )}
+                            {startError && <p className="setup-error" role="alert">{startError}</p>}
+                        </>
+                    )}
 
+                    {stage === 'plan' && plan && selection && (
+                        <>
+                            <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.plan.title')}</h1>
+                            <p className="setup-lede">{t('setup.plan.lede')}</p>
+                            <section className="setup-hero" aria-label={t('setup.plan.label')}>
+                                <p className="setup-eyebrow">{selection.chatChosen ? t('setup.plan.yours') : t('setup.plan.recommended')}</p>
+                                <p className="setup-hero-title"><bdi>{t('setup.plan.run', { name: chatEntry?.name ?? '' })}</bdi></p>
+                                <dl className="setup-facts">
+                                    <div><dt>{t('setup.summary.download')}</dt><dd><bdi dir="ltr">{formatSize(totals(plan, selection).downloadGb ?? 0)}</bdi></dd></div>
+                                    <div><dt>{t('setup.plan.runsOn')}</dt><dd><bdi>{hardware?.gpu_name ?? t('setup.plan.cpu')}</bdi></dd></div>
+                                    <div><dt>{t('setup.plan.diskAfter')}</dt><dd><bdi dir="ltr">{totals(plan, selection).afterGb != null ? formatSize(Math.max(0, totals(plan, selection).afterGb as number)) : '—'}</bdi></dd></div>
+                                </dl>
+                                <ul className="setup-reasons">
+                                    {!selection.chatChosen && <li>{t('setup.plan.why.evaluated')}</li>}
+                                    {chatEntry?.need_gb != null && chatEntry.capacity_gb != null && chatEntry.fits && (
+                                        <li>{t('setup.plan.why.fits', { need: formatFitGb(chatEntry.need_gb), have: formatFitGb(chatEntry.capacity_gb) })}</li>
+                                    )}
+                                    <li>{t('setup.plan.why.private')}</li>
+                                    {biggerOption && biggerOption.id !== chatEntry?.id && <li><bdi>{biggerOption.name}</bdi>: {tooBigText(biggerOption, t)}</li>}
+                                </ul>
+                                <div className="setup-row">
+                                    <button type="button" className="btn-primary" onClick={() => (short ? setConfirm({ kind: 'low_disk' }) : void commit(false))} disabled={busy || blocked || runGoing}>
+                                        {busy && <Loader2 size={13} className="spin" aria-hidden="true" />} {pending.length ? t('setup.plan.start') : t('setup.plan.startNoDownload')}
+                                    </button>
+                                    <button type="button" className="link-btn" onClick={customize} disabled={runGoing}>{t('setup.plan.customize')}</button>
+                                    <button type="button" className="link-btn" onClick={useCloud} disabled={runGoing}>{t('setup.plan.cloud')}</button>
+                                    {onClose && <button type="button" className="link-btn" onClick={onClose}>{t('setup.again.notNow')}</button>}
+                                </div>
+                                {blocked && <p className="setup-error" role="alert"><bdi dir="ltr">{hardware?.blockers.join(' ')}</bdi></p>}
+                                {short && <p className="setup-error" role="alert">{t('setup.summary.short', { need: formatSize(short.needGb), free: formatSize(short.freeGb), drive: t('setup.summary.theDrive'), freeUp: formatSize(short.freeUpGb) })}</p>}
+                                {(actionError ?? startError) && <p className="setup-error" role="alert">{actionError ?? startError}</p>}
+                            </section>
+                            <details className="setup-disclosure">
+                                <summary>{t('setup.plan.whatDownloads')}</summary>
+                                <DownloadContents plan={plan} models={pending} />
+                            </details>
+                        </>
+                    )}
+
+                    {stage === 'pc' && (
+                        <>
+                            <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.pc.title')}</h1>
+                            <p className="setup-lede">{t('setup.pc.lede')}</p>
+                            <section className="setup-card"><SystemCheck hardware={hardware} error={hardwareError} /></section>
+                            {(plan?.backends?.length ?? 0) > 0 && (
+                                <section className="setup-card" aria-label={t('setup.pc.backends')}>
+                                    <h3 className="mc-job-title">{t('setup.pc.backends')}</h3>
+                                    <ul className="setup-rows">
+                                        {plan?.backends?.map((b) => (
+                                            <li key={`${b.recipe}:${b.backend}`} className={`setup-result is-${b.state === 'unsupported' ? 'waiting' : 'done'}`}>
+                                                <span className="setup-result-label"><bdi dir="ltr">{b.recipe}</bdi> <bdi dir="ltr">{b.backend}</bdi>{b.default && <span className="mc-pill">{t('setup.models.recommended')}</span>}</span>
+                                                <span className="setup-result-value">{t(`setup.pc.backend.${b.state === 'installed' ? 'installed' : b.state === 'unsupported' ? 'unsupported' : 'available'}`)}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </section>
+                            )}
+                            <ExistingLemonadeOffer onChosen={(mode) => { setUsersServer(mode === 'external'); loadHardware(); void loadPlan(); }} />
+                            <div className="setup-row setup-nav">
+                                <button type="button" className="btn-secondary" onClick={backToPlan}>{t('setup.back')}</button>
+                                <button type="button" className="btn-primary" onClick={() => stepTo(showGpu ? 'gpu' : 'models')}>{t('setup.continue')}</button>
+                            </div>
+                        </>
+                    )}
+
+                    {stage === 'gpu' && gpu && (
+                        <>
+                            <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.gpu.title')}</h1>
+                            <p className="setup-lede">{t('setup.gpu.lede')}</p>
+                            <GpuMemoryPanel
+                                status={gpu}
+                                onStatus={setGpu}
+                                mode="setup"
+                                headingId="setup-title"
+                                names={names}
+                                onBack={backOne}
+                                onSkip={() => stepTo('models')}
+                                onContinue={() => stepTo('models')}
+                            />
+                        </>
+                    )}
+
+                    {stage === 'models' && (
+                        <>
+                            <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.models.title')}</h1>
+                            <ModelsStep
+                                plan={plan}
+                                planError={planError}
+                                onRetryPlan={() => void loadPlan()}
+                                onUseRecommended={() => void start(false, { keepTrying })}
+                                selection={selection}
+                                onSelection={setSelection}
+                                cloud={false}
+                                keepTrying={keepTrying}
+                                onKeepTrying={setKeepTrying}
+                                onBack={backOne}
+                                onContinue={(ack) => void commit(ack)}
+                                busy={busy || runGoing}
+                                error={actionError ?? startError}
+                            />
+                        </>
+                    )}
+
+                    {stage === 'key' && (
+                        <form onSubmit={(e) => { e.preventDefault(); void connect(); }} className="setup-form">
+                            <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.key.title')}</h1>
+                            <div className="setup-choices" role="radiogroup" aria-label={t('setup.key.provider')}>
+                                {CHOICES.filter((c) => c.id !== 'local').map((c) => (
+                                    <button
+                                        key={c.id}
+                                        type="button"
+                                        role="radio"
+                                        aria-checked={choice === c.id}
+                                        className={`setup-choice${choice === c.id ? ' is-active' : ''}${unreachable(c.id) ? ' is-disabled' : ''}`}
+                                        onClick={() => switchCloud(c.id)}
+                                        disabled={keyState.busy || unreachable(c.id)}
+                                    >
+                                        <Cloud size={16} aria-hidden="true" />
+                                        <span>
+                                            <span className="setup-choice-title"><bdi>{choiceTitle(c, t)}</bdi></span>
+                                            <span className="setup-choice-note">{unreachable(c.id) ? t('setup.key.gatewayOff') : t(c.note)}</span>
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                            {gateway?.reachable === false && (
+                                <button type="button" className="link-btn setup-start" onClick={recheckGateway}>{t('setup.key.checkAgain')}</button>
+                            )}
+                            {choice === 'fireworks' && !usersServer && (
+                                <section className="setup-card">
+                                    <h3 className="mc-job-title">{t('setup.key.getOne')}</h3>
+                                    <ol className="setup-key-steps">
+                                        <li><a href={FIREWORKS_KEYS_URL} target="_blank" rel="noreferrer">{t('setup.key.step1')}</a></li>
+                                        <li>{t('setup.key.step2')}</li>
+                                        <li>{t('setup.key.step3')}</li>
+                                    </ol>
+                                </section>
+                            )}
+                            {choice === 'amd' && !usersServer && (
+                                <section className="setup-card">
+                                    <p className="setup-hint"><a href={GATEWAY_GUIDE_URL} target="_blank" rel="noreferrer">{t('setup.key.gatewayHelp')}</a></p>
+                                </section>
+                            )}
+                            <CloudPrices provider={choice} limit={3} />
+                            <p className="setup-hint">{usersServer ? t('setup.key.usersServer') : t('setup.key.where')}</p>
+                            <div className="setup-row">
+                                {!usersServer && <input
+                                    className="settings-input"
+                                    type="password"
+                                    autoComplete="off"
+                                    value={key}
+                                    onChange={(e) => setKey(e.target.value)}
+                                    placeholder={t('setup.key.placeholder')}
+                                    aria-label={t('setup.key.label')}
+                                />}
+                                <button type="submit" className="btn-primary" disabled={keyState.busy || unreachable(choice) || runGoing}>
+                                    {keyState.busy && <Loader2 size={13} className="spin" />} {t('setup.key.connect')}
+                                </button>
+                            </div>
+                            {keyState.busy && !keyState.waiting && <p className="setup-hint" role="status">{t('setup.key.testing')}</p>}
+                            {keyState.busy && keyState.waiting && <p className="setup-hint" role="status">{keyState.waiting}</p>}
+                            {keyState.error && <p className="setup-error" role="alert">{keyState.error}</p>}
+                            <div className="setup-row setup-nav">
+                                <button type="button" className="btn-secondary" onClick={backToPlan} disabled={keyState.busy}>{t('setup.back')}</button>
+                            </div>
+                        </form>
+                    )}
+
+                    {stage === 'download' && fullRun && (
+                        <>
+                            <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.download.title')}</h1>
+                            <p className="setup-lede">{t('setup.download.lede')}</p>
+                            {plan && <section className="setup-card" aria-label={t('setup.contents.title')}><DownloadContents plan={plan} run={fullRun} /></section>}
+                            {(fullRun.models?.length ?? 0) > 0 ? (
+                                <div className={lostContact ? 'is-stale' : undefined}>
+                                    <DownloadProgress
+                                        status={{ ...fullRun, overall: overallFromPlan(fullRun, startPlan ?? plan) }}
+                                        names={names}
+                                        freeGb={plan?.disk?.free_gb ?? null}
+                                        onCancel={() => void cancel()}
+                                        onRetry={(id, kind) => void retryModel(id, kind)}
+                                        onResume={(id) => void retryModel(id, null)}
+                                        onResumeAll={retryRun}
+                                        onSkip={(id) => void skipModel(id)}
+                                        onRestart={() => void restartDownloads()}
+                                        busy={busy || !!lostContact}
+                                        retryLater={running}
+                                        labelledBy="setup-title"
+                                    />
+                                </div>
+                            ) : running ? (
+                                <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {fullRun.text}</p>
+                            ) : null}
+                            {optional.length > 0 && (
+                                <section className="setup-card" aria-label={t('setup.optional.title')}>
+                                    <h3 className="mc-job-title">{t('setup.optional.title')}</h3>
+                                    <p className="setup-hint">{t('setup.optional.lede')}</p>
+                                    <ul className="setup-rows">
+                                        {optional.map((e) => {
+                                            const added = queued.includes(e.id);
+                                            return (
+                                                <li key={e.id} className="setup-result is-waiting">
+                                                    <span className="setup-result-label">{t(`setup.purpose.${e.roles[0]}`)}</span>
+                                                    <span className="setup-result-value">
+                                                        <bdi dir="ltr">{e.size_gb != null ? formatSize(e.size_gb) : t('setup.contents.sizeOnDownload')}</bdi>
+                                                        <button type="button" className="btn-secondary" aria-pressed={added} onClick={() => setQueued((q) => (added ? q.filter((id) => id !== e.id) : [...q, e.id]))}>
+                                                            {added ? t('setup.optional.added') : t('setup.optional.add')}
+                                                        </button>
+                                                    </span>
+                                                </li>
+                                            );
+                                        })}
+                                    </ul>
+                                </section>
+                            )}
+                            {lostContact && (
+                                <div className="setup-row" role="alert">
+                                    <span className="setup-error">{t('setup.lostContact', { error: lostContact })}</span>
+                                    <button type="button" className="btn-secondary" onClick={() => void poll()}>{t('setup.reconnect')}</button>
+                                </div>
+                            )}
+                            {runFailed && downloadDone && fullRun.state === 'failed' && !fullRun.model_failed && (
+                                fullRun.problem
+                                    ? <ServerProblem problem={fullRun.problem} onRetry={retryRun} onUseGaia={() => void start(true, lastRun.current.options)} />
+                                    : (
+                                        <div className="setup-error" role="alert">
+                                            <p>{t('setup.download.stoppedBeforeCheck')}</p>
+                                            {fullRun.error && (
+                                                <details className="dl-details">
+                                                    <summary>{t('setup.progress.details')}</summary>
+                                                    <pre dir="ltr">{fullRun.error}</pre>
+                                                </details>
+                                            )}
+                                        </div>
+                                    )
+                            )}
+                            {runFailed && downloadDone && (
+                                <div className="setup-row">
+                                    <button type="button" className="btn-primary" onClick={retryRun} disabled={busy}>{t('setup.finish')}</button>
+                                    <span className="setup-hint">{t('setup.download.finishNote')}</span>
+                                </div>
+                            )}
+                            {runFailed && !downloadDone && !(fullRun.models ?? []).some((m) => m.state === 'failed' || m.state === 'cancelled') && (
+                                <>
+                                    <RunError run={fullRun} />
+                                    {fullRun.problem
+                                        ? <ServerProblem problem={fullRun.problem} onRetry={retryRun} onUseGaia={() => void start(true, lastRun.current.options)} />
+                                        : <button type="button" className="btn-primary setup-start" onClick={() => void start(!!fullRun.gaia_lemonade, lastRun.current.options)}>{t('setup.tryAgain')}</button>}
+                                </>
+                            )}
+                            {(actionError || startError) && <p className="setup-error" role="alert">{actionError ?? startError}</p>}
+                        </>
+                    )}
+
+                    {stage === 'test' && fullRun && (
+                        <>
+                            <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.test.title')}</h1>
+                            <p className="setup-lede">{t('setup.test.lede')}</p>
+                            <TestStep
+                                run={fullRun}
+                                expected={expectedTests}
+                                names={names}
+                                catalog={catalog}
+                                onRetry={retryRun}
+                                onChooseAnother={customize}
+                                onDownloadAgain={(id) => void retryModel(id, 'verify')}
+                                busy={busy}
+                            />
+                            {runFailed && fullRun.error && (
+                                <details className="dl-details">
+                                    <summary>{t('setup.progress.details')}</summary>
+                                    <pre dir="ltr">{fullRun.error}</pre>
+                                </details>
+                            )}
+                            {(actionError || startError) && <p className="setup-error" role="alert">{actionError ?? startError}</p>}
+                        </>
+                    )}
+
+                    {stage === 'ready' && (
+                        <>
+                            <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.ready.heading')}</h1>
+                            <div className="setup-done" role="status">
+                                <div className="setup-done-head">
+                                    <p>
+                                        {t.compose((say) => [
+                                            say('setup.ready.title'),
+                                            answering ? say(cloud ? 'setup.ready.answersCloud' : 'setup.ready.answersLocal', { model: cloud ? shortModelName(answering) : (names[answering] ?? finalPlan?.catalog?.find((e) => e.id === answering)?.name ?? shortModelName(answering)) }) : null,
+                                        ].filter(Boolean).join(' '))}
+                                    </p>
+                                    <button type="button" className="btn-primary" onClick={() => void finish()} autoFocus>
+                                        {t('setup.ready.start')}
+                                    </button>
+                                </div>
+                                {!cloud && finalPlan && <ReadySummary plan={finalPlan} chatModel={answering} gpu={gpu} />}
+                                {startError && <p className="setup-error" role="alert">{startError}</p>}
+                                {(fullRun?.tests ?? []).filter((r) => r.state === 'failed').map((r) => (
+                                    <p key={`${r.job}:${r.subject ?? ''}`} className="setup-failed-extra" role="alert">
+                                        {t('setup.ready.extraFailed', { job: t(`setup.test.job.${r.job}`) })}
+                                    </p>
+                                ))}
+                                {notFetched.length > 0 && !confirm && (
+                                    <p className="setup-failed-extra" role="alert">
+                                        {t('setup.ready.extraNotFetched', { names: notFetched.map((id) => names[id] ?? id).join(', ') })}
+                                    </p>
+                                )}
+                                {firstTasks.length > 0 && (
+                                    <>
+                                        <p className="setup-hint">{t('setup.ready.tasks')}</p>
+                                        <StartCards cards={firstTasks} onPick={(card) => void finish(card)} />
+                                    </>
+                                )}
+                            </div>
+                        </>
+                    )}
+
+                </div>
                 {onClose && !running && stage !== 'plan' && stage !== 'ready' && (
                     <div className="setup-row">
                         <button type="button" className="link-btn" onClick={onClose}>{t('setup.again.notNow')}</button>
@@ -1152,17 +1199,6 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 )}
                 {runGoing && (choiceStep || stage === 'plan') && (
                     <p className="setup-hint" role="status">{t('setup.nav.runGoing')}</p>
-                )}
-                {(!choiceStep || viewing != null) && (prevStep || nextStep || viewing) && (
-                    <nav className="setup-row setup-stepnav" aria-label={t('setup.nav.label')}>
-                        {prevStep && !choiceStep && <button type="button" className="btn-secondary" onClick={() => stepTo(prevStep)}>{t('setup.back')}</button>}
-                        {nextStep && <button type="button" className="btn-secondary" onClick={() => stepTo(nextStep)}>{t('setup.next')}</button>}
-                        {viewing && (
-                            <button type="button" className="link-btn" onClick={() => setViewing(null)}>
-                                {t.compose((say) => say('setup.nav.toLive', { step: say(trail.find((s) => s.id === liveStage)?.key ?? 'setup.download.step') }))}
-                            </button>
-                        )}
-                    </nav>
                 )}
                 <StageLogs run={run} />
             </div>

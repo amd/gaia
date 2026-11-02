@@ -420,12 +420,14 @@ def test_backends_come_from_what_lemonade_reports():
             "recipe": "llamacpp",
             "backend": "vulkan",
             "state": "installed",
+            "version": None,
             "default": True,
         },
         {
             "recipe": "llamacpp",
             "backend": "cpu",
             "state": "installable",
+            "version": None,
             "default": False,
         },
     ]
@@ -499,3 +501,58 @@ def test_a_server_that_will_not_start_fetches_no_agent_either():
     ):
         assert cmd.run() == 1
     agent.assert_not_called()
+
+
+def test_the_summary_names_what_setup_found_across_the_stack(monkeypatch):
+    from gaia.hub import installer as hub_installer
+
+    info = {
+        "OS Version": "Windows 11 Pro 6.3 (Build 26300)",
+        "Processor": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+        "Physical Memory": "128.00 GB",
+        "devices": {
+            "cpu": {
+                "available": True,
+                "name": "AMD RYZEN AI MAX+ 395",
+                "cores": 16,
+                "threads": 32,
+            },
+            "amd_gpu": [
+                {
+                    "available": True,
+                    "name": "AMD Radeon(TM) 8060S Graphics",
+                    "family": "gfx1151",
+                    "integrated": True,
+                }
+            ],
+            "amd_npu": {
+                "available": True,
+                "name": "AMD RYZEN AI MAX+ 395",
+                "family": "XDNA2",
+            },
+            "nvidia_gpu": [{"available": False, "name": ""}],
+        },
+    }
+    client = MagicMock()
+    client.health_check.return_value = {"version": "2026.44.1"}
+    agent = MagicMock(version="0.3.3")
+    monkeypatch.setattr(hub_installer, "read_sentinel", lambda *_a: agent)
+
+    found = setup_plan._system_summary(info, client)
+
+    assert found["lemonade_version"] == "2026.44.1"
+    assert found["agent_version"] == "0.3.3"
+    assert found["os"].startswith("Windows 11")
+    assert [d["kind"] for d in found["devices"]] == ["cpu", "amd_gpu", "amd_npu"]
+    assert found["devices"][1]["family"] == "gfx1151"
+    assert found["gaia_version"]
+
+
+def test_the_summary_says_nothing_it_could_not_find(monkeypatch):
+    from gaia.hub import installer as hub_installer
+
+    monkeypatch.setattr(hub_installer, "read_sentinel", lambda *_a: None)
+    found = setup_plan._system_summary(None, None)
+    assert found["lemonade_version"] is None
+    assert found["agent_version"] is None
+    assert found["devices"] == []

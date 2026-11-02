@@ -51,6 +51,15 @@ const PLAN = {
     capacity_gb: 16, disk: { path: 'C:\\Users\\you\\.cache\\huggingface\\hub', free_gb: 25.3, source: 'lemonade' },
     download_gb: 6.3, disk_warning: null, skipped_models: [], options: [], models: [], catalog: CATALOG,
     components: COMPONENTS, backends: BACKENDS,
+    system: {
+        gaia_version: '0.25.4', agent_version: '0.3.3', lemonade_version: '2026.44.1',
+        os: 'Windows 11 Pro 6.3 (Build 26300)', processor: 'AMD RYZEN AI MAX+ 395 w/ Radeon 8060S', physical_memory: '128.00 GB',
+        devices: [
+            { kind: 'cpu', name: 'AMD RYZEN AI MAX+ 395 w/ Radeon 8060S', family: 'x86_64', available: true, cores: 16, threads: 32 },
+            { kind: 'amd_gpu', name: 'AMD Radeon(TM) 8060S Graphics', family: 'gfx1151', available: true, integrated: true },
+            { kind: 'amd_npu', name: 'AMD RYZEN AI MAX+ 395 w/ Radeon 8060S', family: 'XDNA2', available: true },
+        ],
+    },
 };
 
 const PLAN_COLD = { ...PLAN, lemonade: { mode: 'gaia', url: null, reachable: false }, decided_after_server: true, catalog: [] };
@@ -207,7 +216,10 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
 
 const hero = (page: Page) => page.locator('.setup-hero');
 
+/** The checks stop on what they found; Continue goes on to the plan. */
 export async function toPlan(page: Page): Promise<void> {
+    await expect(page.locator('.found')).toBeVisible();
+    await page.locator('.setup-found-next .btn-primary').click();
     await expect(hero(page)).toBeVisible();
 }
 
@@ -244,6 +256,10 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.setup-result.is-done').first()).toBeVisible();
             await expect(page.locator('.setup-result.is-active').first()).toBeVisible();
         },
+    },
+    {
+        name: 'check-found',
+        reach: (page) => expect(page.locator('.found')).toBeVisible(),
     },
     {
         name: 'check-failed',

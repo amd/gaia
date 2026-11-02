@@ -40,11 +40,17 @@ afterEach(() => {
     act(() => useChatStore.getState().setLocale('en'));
 });
 
+/** The checks stop on what they found: Continue, then the plan's start button. */
+async function pastChecks() {
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+    return screen.findByRole('button', { name: /Download and start/ });
+}
+
 describe('SetupScreen', () => {
     it('a double click on "Download and start" starts one run, not two', async () => {
         mockedApi.startSetup.mockImplementation(() => new Promise(() => {}));
         render(<SetupScreen onReady={vi.fn()} />);
-        const btn = await screen.findByRole('button', { name: /Download and start/ });
+        const btn = await pastChecks();
         fireEvent.click(btn);
         fireEvent.click(btn);
         await act(async () => {});
@@ -76,7 +82,7 @@ describe('SetupScreen', () => {
 
     it('setup run again from Settings does not refetch everything on every parent render', async () => {
         const { rerender } = render(<SetupScreen onReady={vi.fn()} onClose={() => {}} />);
-        await screen.findByRole('button', { name: /Download and start/ });
+        await pastChecks();
         const before = mockedApi.getSetupPlan.mock.calls.length;
         rerender(<SetupScreen onReady={vi.fn()} onClose={() => {}} />);
         rerender(<SetupScreen onReady={vi.fn()} onClose={() => {}} />);
@@ -98,7 +104,7 @@ describe('SetupScreen', () => {
         mockedApi.startSetup.mockResolvedValue({ ...runStatus([], { state: 'failed', error: 'boom' }) });
         const onClose = vi.fn();
         render(<SetupScreen onReady={vi.fn()} onClose={onClose} />);
-        fireEvent.click(await screen.findByRole('button', { name: /Download and start/ }));
+        fireEvent.click(await pastChecks());
         await screen.findByText('Try again');
         await waitFor(() => expect(screen.queryByRole('button', { name: 'Not now' })).not.toBeNull());
     });

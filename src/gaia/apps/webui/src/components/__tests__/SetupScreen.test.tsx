@@ -91,7 +91,16 @@ function renderSetup(props: { onClose?: () => void } = {}) {
     return onReady;
 }
 
-const planScreen = () => screen.findByRole('region', { name: 'Recommended setup' });
+/** The checks stop on what they found; Continue goes on to the recommendation. */
+const planScreen = () => waitFor(() => {
+    const plan = screen.queryByRole('region', { name: 'Recommended setup' });
+    if (plan) return plan;
+    if (screen.queryByRole('heading', { name: 'Checking this PC' })) {
+        const go = screen.queryByRole('button', { name: 'Continue' });
+        if (go) fireEvent.click(go);
+    }
+    throw new Error('not on the recommendation yet: ' + (document.querySelector('#setup-title')?.textContent ?? 'no title') + ' | ' + [...document.querySelectorAll('button')].map((b) => b.textContent).join(','));
+}, { timeout: 4000 });
 
 /** Render and let the checks finish, which lands on the recommendation. */
 async function open(props: { onClose?: () => void } = {}) {
@@ -135,19 +144,31 @@ const visionRadio = (name: RegExp) => job('Reading images').getByRole('radio', {
 const startChatting = (timeout = 1000) => screen.findByRole('button', { name: 'Start chatting' }, { timeout });
 
 describe('SetupScreen: checking this PC', () => {
-    it('moves on to the recommendation by itself, with nothing to click', async () => {
+    it('stops on what it found, and Continue goes on to the recommendation', async () => {
         let answer!: (r: PreflightReport) => void;
         mockedApi.getOnboardingPreflight.mockImplementation(() => new Promise((r) => { answer = r; }));
         renderSetup();
         expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
         await waitFor(() => expect(mockedApi.getSetupPlan).toHaveBeenCalled());
-        // Only the troubleshooting report, which is always there.
-        expect(screen.queryAllByRole('button').map((b) => b.textContent)).toEqual(['Save a troubleshooting report']);
-        expect(railStep('Check this PC')).toHaveClass('is-current');
+        // While it checks, only the troubleshooting report can be pressed.
+        const enabled = () => screen.queryAllByRole('button').filter((b) => !(b as HTMLButtonElement).disabled).map((b) => b.textContent);
+        expect(enabled()).toEqual(['Save a troubleshooting report']);
+        expect(railStep('Check this PC')).toHaveAttribute('aria-current', 'step');
         answer(HARDWARE);
+        expect(await screen.findByRole('region', { name: 'What setup found' })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
         await planScreen();
         expect(railStep('Check this PC')).toHaveClass('is-done');
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
+    });
+
+    it('opening Check this PC again stays there', async () => {
+        await open();
+        fireEvent.click(rail().getByRole('button', { name: /Check this PC/ }));
+        expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+        expect(screen.getByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        expect(screen.getByRole('region', { name: 'What setup found' })).toBeInTheDocument();
     });
 
     it('keeps going when the hardware could not be read, and says so on the PC screen', async () => {
@@ -242,7 +263,7 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledExactlyOnceWith(false, false, { serverOnly: true }));
         expect(screen.getByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
         expect(screen.queryByRole('region', { name: 'Recommended setup' })).not.toBeInTheDocument();
-        await screen.findByRole('region', { name: 'Recommended setup' }, { timeout: 5000 });
+        await planScreen();
         expect(screen.getByRole('button', { name: /Download and start/ })).toBeInTheDocument();
         expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
     });
@@ -529,7 +550,7 @@ describe('SetupScreen: the rail', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Back' }));
         await screen.findByRole('heading', { name: 'Your setup' });
         const steps = within(screen.getByRole('navigation', { name: 'Move between setup steps' }));
-        fireEvent.click(steps.getByRole('button', { name: 'Next' }));
+        fireEvent.click(steps.getByRole('button', { name: 'Next step' }));
         expect(await screen.findByRole('heading', { name: 'What we found on this PC' })).toBeInTheDocument();
     });
 
@@ -540,12 +561,12 @@ describe('SetupScreen: the rail', () => {
         await startLocal();
         await screen.findByRole('button', { name: 'Cancel' });
         const steps = () => within(screen.getByRole('navigation', { name: 'Move between setup steps' }));
-        fireEvent.click(steps().getByRole('button', { name: 'Back' }));
+        fireEvent.click(steps().getByRole('button', { name: 'Previous step' }));
         expect(await screen.findByRole('heading', { name: 'Your setup' })).toBeInTheDocument();
-        fireEvent.click(steps().getByRole('button', { name: 'Back' }));
+        fireEvent.click(steps().getByRole('button', { name: 'Previous step' }));
         expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
-        fireEvent.click(steps().getByRole('button', { name: 'Next' }));
-        fireEvent.click(steps().getByRole('button', { name: 'Next' }));
+        fireEvent.click(steps().getByRole('button', { name: 'Next step' }));
+        fireEvent.click(steps().getByRole('button', { name: 'Next step' }));
         expect(await screen.findByRole('button', { name: 'Cancel' })).toBeInTheDocument();
     });
 });
@@ -719,8 +740,8 @@ describe('SetupScreen: downloading', () => {
         expect(await screen.findByRole('progressbar', { name: 'Qwen3.6-35B-A3B, Downloading' })).toBeInTheDocument();
         expect(screen.getByRole('progressbar', { name: 'Overall download' })).toHaveAttribute('aria-valuenow', '26');
         expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
-        // Back only looks at an earlier step; the download keeps going.
-        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+        // Going back only looks at an earlier step; the download keeps going.
+        fireEvent.click(screen.getByRole('button', { name: 'Previous step' }));
         expect(mockedApi.cancelSetup).not.toHaveBeenCalled();
     });
 

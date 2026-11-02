@@ -1031,6 +1031,26 @@ export interface SetupProblem {
     switch_hint: string | null;
 }
 
+export interface SetupDevice {
+    kind: string;
+    name: string;
+    family: string | null;
+    available: boolean;
+    integrated?: boolean | null;
+    cores?: number | null;
+    threads?: number | null;
+}
+
+export interface SetupSystem {
+    gaia_version: string;
+    agent_version: string | null;
+    lemonade_version: string | null;
+    os: string | null;
+    processor: string | null;
+    physical_memory: string | null;
+    devices: SetupDevice[];
+}
+
 export type SetupLogStage = 'check' | 'download' | 'test';
 
 export interface SetupRunStatus {
@@ -1083,7 +1103,9 @@ export interface SetupPlan {
     skipped_models?: string[];
     catalog?: SetupCatalogEntry[];
     /** Backends Lemonade reports for this PC. */
-    backends?: Array<{ recipe: string; backend: string; state: string | null; default: boolean }>;
+    backends?: Array<{ recipe: string; backend: string; state: string | null; version?: string | null; default: boolean }>;
+    /** What setup found across the stack; null where nothing could find out. */
+    system?: SetupSystem;
     /** Everything else setup fetches. */
     components?: SetupComponent[];
     /** The model the user chose to read images; null is GAIA's choice. */

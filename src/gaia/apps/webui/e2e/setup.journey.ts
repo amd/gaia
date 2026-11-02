@@ -7,7 +7,7 @@
  */
 
 import {
-    CHAT_MODEL, EMBEDDER, UNTESTED_CHAT_MODEL, downloadToReady, expect, expectTestsPassed, stepTitle, test,
+    CHAT_MODEL, EMBEDDER, UNTESTED_CHAT_MODEL, downloadToReady, expect, expectTestsPassed, pastChecks, stepTitle, test,
     testToReady, type Say,
 } from './harness';
 import type { Page } from '@playwright/test';
@@ -40,7 +40,7 @@ test('checks finish with no click, then download reaches Test and Ready, and a s
     await expect(stepTitle(page)).toHaveText(say('setup.check.heading'), { timeout: 2 * 60_000 });
     await shot('checks');
 
-    await expect(stepTitle(page)).toHaveText(say('setup.plan.title'));
+    await pastChecks(page, say);
     await shot('plan');
     expect(journey.pulls(), 'nothing downloads before the user says so').toEqual([]);
 
@@ -66,7 +66,7 @@ test('Customize picks another chat model, vision follows it, and the labels say 
     await journey.startFake();
     await journey.startBackend();
     await open();
-    await expect(stepTitle(page)).toHaveText(say('setup.plan.title'), { timeout: 2 * 60_000 });
+    await pastChecks(page, say);
     await page.getByRole('button', { name: say('setup.plan.customize') }).click();
     await expect(stepTitle(page)).toHaveText(say('setup.pc.title'));
     await shot('this-pc');
@@ -105,7 +105,7 @@ test('the cloud path greys the gateway with its reason, and offers it once the h
     await journey.startFake();
     await journey.startBackend({ GAIA_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}/Unified/v1` });
     await open();
-    await expect(stepTitle(page)).toHaveText(say('setup.plan.title'), { timeout: 2 * 60_000 });
+    await pastChecks(page, say);
     await page.getByRole('button', { name: say('setup.plan.cloud') }).click();
     await expect(stepTitle(page)).toHaveText(say('setup.key.title'));
 
@@ -172,7 +172,7 @@ test('finishing setup without choosing a GPU size changes nothing', async ({ pag
         if (r.method() !== 'GET' && r.url().includes('/api/gpu-memory')) gpuWrites.push(`${r.method()} ${r.url()}`);
     });
     await open();
-    await expect(stepTitle(page)).toHaveText(say('setup.plan.title'), { timeout: 2 * 60_000 });
+    await pastChecks(page, say);
     await page.getByRole('button', { name: say('setup.plan.customize') }).click();
     await page.getByRole('button', { name: say('setup.continue') }).click();
     // GAIA offers this step on Windows and Linux only.

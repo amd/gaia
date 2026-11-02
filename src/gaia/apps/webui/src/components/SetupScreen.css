@@ -687,3 +687,206 @@ button.setup-rail-step:hover {
 .setup-stepnav {
     margin-top: 20px;
 }
+
+/* What setup found: three groups of label and value, side by side when there is room. */
+.found {
+    display: grid;
+    gap: 12px;
+}
+
+.found-groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px 24px;
+}
+
+.found-group {
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    min-inline-size: 0;
+}
+
+.found-heading {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+}
+
+.found-list {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+}
+
+.found-row {
+    display: grid;
+    gap: 1px;
+    min-inline-size: 0;
+}
+
+.found-row dt {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.found-row dd {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.found-line {
+    display: block;
+}
+
+.found-muted {
+    color: var(--text-muted);
+}
+
+.found-warnings {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--accent-yellow);
+    font-size: 13px;
+}
+
+/* Back and Next at the top of every step. */
+.setup-topnav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-block-end: 12px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+/* Quiet arrows: no fill until hovered. */
+.setup-arrow {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 26px;
+    block-size: 26px;
+    border-radius: var(--radius-full);
+    color: var(--text-secondary);
+    transition: background-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+
+.setup-arrow:hover:not(:disabled),
+.setup-arrow:focus-visible {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.setup-arrow:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+[dir="rtl"] .setup-arrow svg {
+    transform: scaleX(-1);
+}
+
+.setup-topnav .link-btn {
+    margin-inline-start: auto;
+}
+
+.found-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Quiet until wanted: no fill, muted, full strength on hover or focus. */
+.found-copy {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 24px;
+    block-size: 24px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    opacity: 0.7;
+    transition: opacity var(--duration-fast) var(--ease), background-color var(--duration-fast) var(--ease);
+}
+
+.found-copy:hover,
+.found-copy:focus-visible {
+    opacity: 1;
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.found-copied {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+/* Each step slides in from the side it comes from: forward from the end of the
+   line, back from its start, which right to left flips. */
+.setup-stage {
+    --step-from: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-inline-size: 0;
+    animation: setup-step-in var(--duration-slow) var(--ease) both;
+}
+
+.setup-stage.is-back {
+    --step-from: -24px;
+}
+
+[dir="rtl"] .setup-stage {
+    --step-from: -24px;
+}
+
+[dir="rtl"] .setup-stage.is-back {
+    --step-from: 24px;
+}
+
+@keyframes setup-step-in {
+    from {
+        opacity: 0;
+        transform: translateX(var(--step-from));
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.setup-rail-step {
+    transition: background-color var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .setup-stage {
+        animation: none;
+    }
+}
+
+/* A narrow window: a check's value goes under its label instead of squeezing it. */
+@media (max-width: 520px) {
+    .setup-result {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .setup-result:not(:has(> svg)) {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .setup-result > .setup-result-value {
+        grid-column: -2;
+        justify-self: start;
+        color: var(--text-muted);
+    }
+}
