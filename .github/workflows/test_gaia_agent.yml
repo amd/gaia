@@ -74,7 +74,7 @@ on:
       - 'tests/unit/skills_helpers.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - '.github/workflows/test_gaia_agent.yml'
       - '.github/workflows/build_flagship_sidecar.yml'
@@ -185,6 +185,12 @@ jobs:
           # (packaging/ has no __init__.py so it never ships in the frozen
           # binary).
           python hub/agents/gaia/python/packaging/capability_matrix.py --check
+
+      # Catch a partial version bump on the PR, not at release time: every
+      # version file (manifest, pyproject, npm package.json + package-lock.json,
+      # binaries.lock.json) must match __version__.
+      - name: Verify version references are in sync
+        run: python hub/agents/gaia/python/packaging/stamp_version.py --check
 
       - name: Run Gaia Agent Package Tests
         env:
