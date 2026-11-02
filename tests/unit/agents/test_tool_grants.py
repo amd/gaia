@@ -94,19 +94,58 @@ class TestUngrantableCommands:
 
 
 class TestPathGrants:
-    def test_scope_is_the_exact_file(self):
+    def test_scope_is_the_exact_file_without_a_host_resolved_target(self):
         scope = grant_scope("write_file", {"file_path": "/tmp/a/notes.md"})
         assert scope.key == "write_file:/tmp/a/notes.md"
-        assert "notes.md" in scope.label
+        assert scope.subject == "notes.md"
 
-    def test_a_grant_does_not_cover_a_sibling_file(self):
-        one = grant_scope("write_file", {"file_path": "/tmp/a/notes.md"})
-        two = grant_scope("write_file", {"file_path": "/tmp/a/secrets.env"})
-        assert one.key != two.key
+    def test_a_host_resolved_target_grants_its_named_folder(self):
+        scope = grant_scope(
+            "write_file",
+            {
+                "file_path": "notes.md",
+                "_resolved_file_path": "/tmp/a/notes.md",
+            },
+        )
+        assert scope.key == "write_file:/tmp/a/*"
+        assert scope.subject == "/tmp/a"
 
-    def test_the_same_file_two_ways_is_one_grant(self):
-        one = grant_scope("write_file", {"file_path": "/tmp/a/./notes.md"})
-        two = grant_scope("write_file", {"file_path": "/tmp/a/notes.md"})
+    def test_a_folder_grant_covers_sibling_files(self):
+        one = grant_scope(
+            "write_file",
+            {
+                "file_path": "/tmp/a/notes.md",
+                "_resolved_file_path": "/tmp/a/notes.md",
+            },
+        )
+        two = grant_scope(
+            "write_file",
+            {
+                "file_path": "/tmp/a/secrets.env",
+                "_resolved_file_path": "/tmp/a/secrets.env",
+            },
+        )
+        assert one.key == two.key
+
+    def test_a_bare_filename_stays_exact(self):
+        scope = grant_scope("write_file", {"file_path": "notes.md"})
+        assert scope.key == "write_file:notes.md"
+
+    def test_a_relative_path_uses_the_resolved_parent_for_the_same_folder_grant(self):
+        one = grant_scope(
+            "write_file",
+            {
+                "file_path": "nested/./notes.md",
+                "_resolved_file_path": "/tmp/a/nested/notes.md",
+            },
+        )
+        two = grant_scope(
+            "write_file",
+            {
+                "file_path": "nested/secrets.env",
+                "_resolved_file_path": "/tmp/a/nested/secrets.env",
+            },
+        )
         assert one.key == two.key
 
     def test_a_grant_does_not_cross_tools(self):

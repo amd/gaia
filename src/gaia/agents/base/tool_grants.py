@@ -37,6 +37,7 @@ it. Scoping keeps the affordance and takes away the blast radius.
 from __future__ import annotations
 
 import glob
+import ntpath
 import os
 import posixpath
 import re
@@ -198,8 +199,9 @@ _MAX_SHELL_SCOPE_WORDS = 2
 #: "any command, as long as you poll with it".
 _SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command", "wait_for_condition"})
 
-#: Tools whose blast radius is one path. The grant is that exact path — not its
-#: directory: the prompt named a file, so the grant covers a file.
+#: Tools whose blast radius is one path. A prompt for a file inside a named
+#: folder may offer a chat-scoped folder grant; a bare filename stays exact so
+#: it cannot silently follow a changing working directory.
 PATH_TOOLS = frozenset(
     {
         "write_file",
@@ -237,6 +239,9 @@ _UNGRANTABLE_TOOLS = frozenset({"capture_skill", PATH_ACCESS_PROMPT_TOOL})
 #: Prompt argument set by the agent (never the model) when a script it runs sits
 #: in its own scratch folder. Such a call is never offered "always".
 SCRATCH_ARG = "_scratch_dir"
+#: Prompt-only absolute target derived by the host's file preflight. It makes a
+#: folder grant stable without changing the tool's model-supplied arguments.
+RESOLVED_PATH_ARG = "_resolved_file_path"
 
 #: Tools whose every call is the same kind of action, so the family IS the
 #: tool. The label says how wide that is.
@@ -642,6 +647,25 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     # the arguments, so it cannot depend on the filesystem or the process's cwd.
     normalised = posixpath.normpath(raw.replace("\\", "/"))
     display = posixpath.basename(normalised) or normalised
+    # A resolved path has no working-directory ambiguity, so its parent can
+    # describe a folder grant. Relative/bare names remain exact because their
+    # meaning can change with the process working directory. Callers attach
+    # ``_resolved_file_path`` only after the host's target preflight has run.
+    resolved = args.get(RESOLVED_PATH_ARG)
+    if isinstance(resolved, str):
+        # The prompt can carry a Windows absolute path even when this helper
+        # runs under a POSIX test host; use the matching path semantics rather
+        # than letting backslashes become ordinary filename characters.
+        resolved_for_match = resolved.replace("\\", "/")
+        if ntpath.isabs(resolved) or posixpath.isabs(resolved_for_match):
+            target = posixpath.normpath(resolved_for_match)
+            parent = posixpath.dirname(target)
+            if parent not in ("", ".", "/"):
+                return GrantScope(
+                    keys=(f"{tool_name}:{parent}/*",),
+                    label=f"{tool_name} in {parent}",
+                    subject=parent,
+                )
     return GrantScope(
         keys=(f"{tool_name}:{normalised}",),
         label=f"{tool_name} on {display}",
