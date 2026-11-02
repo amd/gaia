@@ -99,6 +99,7 @@ from gaia.llm.lemonade_client import (
     _endpoint_label,
     configured_lemonade_url,
     resolve_default_chat_model,
+    resolve_default_vision_model,
     resolve_lemonade_base_url,
 )
 from gaia.mcp.mixin import MCPClientMixin
@@ -2309,7 +2310,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             # getattr: tools can register from super().__init__(), before
             # _base_url is assigned. None then falls through to the resolver.
             self.init_vlm(
-                base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None))
+                model=resolve_default_vision_model(),
+                base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None)),
             )
             logger.debug(
                 "VLM tools registered (analyze_image, answer_question_about_image)"

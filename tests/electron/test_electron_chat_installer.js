@@ -733,12 +733,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   // ── CI AppImage Smoke Contract ───────────────────────────────────
 
   describe('CI AppImage smoke configuration', () => {
-    it('never runs gaia init from the app installer', () => {
+    it('runs gaia init from the app installer only to refresh the agent', () => {
       const installer = fs.readFileSync(
         path.join(CHAT_APP_PATH, 'services/backend-installer.cjs'),
         'utf8',
       );
-      expect(installer).not.toMatch(/\["init"/);
+      expect(installer.match(/\["init"[^\]]*\]/g)).toEqual(['["init", "--agent-only"]']);
     });
 
     it('still skips gaia init for the published release the CI installs', () => {

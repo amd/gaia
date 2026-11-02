@@ -23,8 +23,14 @@
 #                 release's version. A release before #5629 runs `gaia init`
 #                 (Lemonade + several GB of models) on first launch, so
 #                 GAIA_SKIP_GAIA_INIT stays set; later apps download no model
-#                 until first-run setup, which needs real hardware and is
-#                 covered by the eval and hardware lanes.
+#                 until first-run setup.
+#   setup         (a pushed v* tag, desktop rows only) the installed app's own
+#                 first-run setup, walked in Chromium against its backend and a
+#                 fake Lemonade with nothing downloaded: Download, Test, Ready.
+#                 A PR or a dispatch can pick a release that predates that
+#                 setup, so only the tag, whose checkout is the code under
+#                 test, runs it. test_setup_journey.yml covers the screens on
+#                 PRs, and test_setup_real_download.yml a real download nightly.
 #   terminal      `gaia-tui version` reports the release, and one non-interactive
 #                 turn (`gaia-tui chat --agent gaia --query ...`) completes
 #                 through the installed gaia-agent against a fake model server
@@ -275,6 +281,7 @@ jobs:
             title: One setup, desktop app only
             kind: win-setup
             components: ui
+            setup: true
             phases: download install launch health quit uninstall leftovers
           - row: win-setup-tui
             title: One setup, terminal only
@@ -285,11 +292,13 @@ jobs:
             title: One setup, desktop app and terminal
             kind: win-setup
             components: ui,tui
+            setup: true
             phases: download install launch health preflight quit uninstall leftovers
           - row: win-agent-ui-exe
             title: Desktop app's own setup
             kind: agent-ui-exe
             components: ''
+            setup: true
             phases: download install launch health quit uninstall leftovers
           - row: win-setup-upgrade
             title: Upgrade from the previous stable release (installed and launched once) to the one setup
@@ -305,6 +314,7 @@ jobs:
       ROW: ${{ matrix.row }}
       KIND: ${{ matrix.kind }}
       COMPONENTS: ${{ matrix.components }}
+      SETUP_PHASE: ${{ github.event_name == 'push' && github.ref_type == 'tag' && matrix.setup == true }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -314,6 +324,10 @@ jobs:
         with:
           name: release-json
           path: ${{ runner.temp }}/release
+      - uses: actions/setup-node@v7
+        if: env.SETUP_PHASE == 'true'
+        with:
+          node-version: '22'
       - name: Run the journey
         env:
           TITLE: ${{ matrix.title }}
@@ -323,6 +337,10 @@ jobs:
           export WORK="${RUNNER_TEMP}/journey" RELEASE_JSON="${RUNNER_TEMP}/release/release.json"
           R="${RUNNER_TEMP}/results/${ROW}.json"; export RESULTS="$R"
           J=installer/headless/journey.py
+          if [ "${SETUP_PHASE}" = true ]; then
+            PHASES="${PHASES/ health / health setup }"
+            export SETUP_JOURNEY=1
+          fi
           python "$J" init --results "$R" --row "${ROW}" --title "${TITLE}" --os-label "Windows x64" \
             --installer "${KIND}" --release "$(python -c "import json;print(json.load(open(r'${RELEASE_JSON}'))['tag'])")" --source release
           python "$J" run --results "$R" --phases "${PHASES}" --logs "${WORK}/logs/phases" \
@@ -334,6 +352,12 @@ jobs:
           name: install-result-${{ matrix.row }}
           path: ${{ runner.temp }}/results/
           retention-days: 30
+      - uses: actions/upload-artifact@v7
+        if: always() && env.SETUP_PHASE == 'true'
+        with:
+          name: setup-screens-${{ matrix.row }}
+          path: ${{ runner.temp }}/journey/logs/setup-screens/
+          retention-days: 14
       - name: Collect logs
         if: failure()
         shell: pwsh
@@ -362,15 +386,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {row: mac-arm64-agent-ui-dmg, os: macos-latest, os_label: macOS arm64, kind: agent-ui-dmg, title: Desktop app .dmg, phases: download install launch health quit uninstall leftovers}
+          - {row: mac-arm64-agent-ui-dmg, os: macos-latest, os_label: macOS arm64, kind: agent-ui-dmg, setup: true, title: Desktop app .dmg, phases: download install launch health quit uninstall leftovers}
           - {row: mac-arm64-tui-pkg, os: macos-latest, os_label: macOS arm64, kind: tui-pkg, tui_platform: darwin-arm64, packages: macos, title: Terminal .pkg, phases: download install launch health preflight uninstall leftovers}
           - {row: mac-x64-tui-pkg, os: macos-15-intel, os_label: macOS x64, kind: tui-pkg, tui_platform: darwin-x64, packages: macos, title: Terminal .pkg, phases: download install launch health preflight uninstall leftovers}
           - {row: mac-arm64-install-sh, os: macos-latest, os_label: macOS arm64, kind: install-sh, title: install.sh in a sandbox home, phases: install launch health preflight uninstall leftovers}
           - {row: mac-x64-install-sh, os: macos-15-intel, os_label: macOS x64, kind: install-sh, title: install.sh in a sandbox home, phases: install launch health preflight uninstall leftovers}
-          - {row: ubuntu22-agent-ui-deb, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: agent-ui-deb, title: Desktop app .deb, phases: download install launch health quit uninstall leftovers}
-          - {row: ubuntu24-agent-ui-deb, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: agent-ui-deb, title: Desktop app .deb, phases: download install launch health quit uninstall leftovers}
-          - {row: ubuntu22-appimage, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: appimage, title: Desktop app .AppImage, phases: download install launch health quit uninstall leftovers}
-          - {row: ubuntu24-appimage, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: appimage, title: Desktop app .AppImage, phases: download install launch health quit uninstall leftovers}
+          - {row: ubuntu22-agent-ui-deb, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: agent-ui-deb, setup: true, title: Desktop app .deb, phases: download install launch health quit uninstall leftovers}
+          - {row: ubuntu24-agent-ui-deb, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: agent-ui-deb, setup: true, title: Desktop app .deb, phases: download install launch health quit uninstall leftovers}
+          - {row: ubuntu22-appimage, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: appimage, setup: true, title: Desktop app .AppImage, phases: download install launch health quit uninstall leftovers}
+          - {row: ubuntu24-appimage, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: appimage, setup: true, title: Desktop app .AppImage, phases: download install launch health quit uninstall leftovers}
           - {row: ubuntu22-tui-deb, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: tui-deb, packages: linux, title: Terminal .deb, phases: download install launch health preflight uninstall leftovers}
           - {row: ubuntu24-tui-deb, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: tui-deb, packages: linux, title: Terminal .deb, phases: download install launch health preflight uninstall leftovers}
           - {row: ubuntu24-tui-deb-upgrade, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: tui-deb-upgrade, packages: linux, title: Terminal .deb upgrade from the previous stable release, phases: download install upgrade launch health uninstall leftovers}
@@ -381,6 +405,7 @@ jobs:
       ROW: ${{ matrix.row }}
       KIND: ${{ matrix.kind }}
       TUI_PLATFORM: ${{ matrix.tui_platform }}
+      SETUP_PHASE: ${{ github.event_name == 'push' && github.ref_type == 'tag' && matrix.setup == true }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -400,6 +425,10 @@ jobs:
         with:
           name: previous-deb
           path: ${{ runner.temp }}/prev
+      - uses: actions/setup-node@v7
+        if: env.SETUP_PHASE == 'true'
+        with:
+          node-version: '22'
       # Host prerequisites a user would already have, installed before the
       # timed phases: a display for the desktop app, and FUSE for an AppImage.
       - name: Prepare the runner
@@ -431,6 +460,10 @@ jobs:
           HAS_PACKAGES: ${{ matrix.packages && 'true' || 'false' }}
         run: |
           set -uo pipefail
+          if [ "${SETUP_PHASE}" = true ]; then
+            PHASES="${PHASES/ health / health setup }"
+            export SETUP_JOURNEY=1
+          fi
           export WORK="${RUNNER_TEMP}/journey" RELEASE_JSON="${RUNNER_TEMP}/release/release.json"
           export PKG_DIR="${RUNNER_TEMP}/rebuilt" PREV_PKG_DIR="${RUNNER_TEMP}/prev" PYTHON=python
           R="${RUNNER_TEMP}/results/${ROW}.json"; export RESULTS="$R"
@@ -457,6 +490,12 @@ jobs:
           name: install-result-${{ matrix.row }}
           path: ${{ runner.temp }}/results/
           retention-days: 30
+      - uses: actions/upload-artifact@v7
+        if: always() && env.SETUP_PHASE == 'true'
+        with:
+          name: setup-screens-${{ matrix.row }}
+          path: ${{ runner.temp }}/journey/logs/setup-screens/
+          retention-days: 14
       - name: Collect logs
         if: failure()
         run: |

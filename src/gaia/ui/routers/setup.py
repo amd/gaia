@@ -146,6 +146,38 @@ def setup_chat_model(body: ChatModelRequest) -> Dict[str, Any]:
         ) from e
 
 
+class VisionModelRequest(BaseModel):
+    """A model that reads images, or null to go back to GAIA's choice."""
+
+    model_id: Optional[str] = None
+
+
+@router.post("/api/setup/vision-model", dependencies=[Depends(require_ui_header)])
+def setup_vision_model(body: VisionModelRequest) -> Dict[str, Any]:
+    """Pick the model that reads images; returns the new plan."""
+    try:
+        plan_api.choose_vision_model(body.model_id)
+        return build_plan()
+    except SetupPlanError as e:
+        raise _plan_error(e, f"{body.model_id} can't read images.") from e
+
+
+_MODEL_JOBS = ("chat", "vision", "embedding", "speech", "voice", "image_creation")
+
+
+@router.get("/api/setup/needs/{job}", dependencies=[Depends(require_ui_header)])
+def setup_model_need(job: str) -> Dict[str, Any]:
+    """Whether a job needs a model that isn't on this PC, and which."""
+    if job not in _MODEL_JOBS:
+        raise HTTPException(
+            status_code=422, detail=f"job must be one of {', '.join(_MODEL_JOBS)}."
+        )
+    try:
+        return plan_api.model_need(job)
+    except SetupPlanError as e:
+        raise _plan_error(e, _PLAN_FAILED) from e
+
+
 class SkipModelRequest(BaseModel):
     model_id: str
     skipped: bool = True

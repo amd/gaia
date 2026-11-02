@@ -1,0 +1,121 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# First-run setup, walked on Windows, macOS and Linux from this PR's own code.
+# Each OS installs this checkout, builds the web UI, and for every test starts
+# the real backend with an empty HOME and GAIA_HOME against a fake Lemonade
+# (installer/headless/fake_model_server.py --catalog), then drives the real app
+# with Playwright. `gaia init`, the Test step's checks and a real `gaia -p` agent
+# turn all run for real; only the model server is fake.
+#
+# This layer is Chromium against the UI the backend serves, not the Electron
+# shell: installers, the tray and window controls are test_installers_headless.yml's,
+# whose `setup` phase walks an installed app on each release tag. A real download
+# is test_setup_real_download.yml's, nightly.
+#
+# Covered, in English and Arabic (src/gaia/apps/webui/e2e/setup.journey.ts):
+# checks finish with no click; Download and start reaches Test and Ready;
+# Customize and its Verified/Untested labels; the gateway greyed, then offered;
+# a second launch; Settings' Setup run again; a failed download, a full disk and
+# a server that won't start, each recovered with a button; no GPU change unless
+# chosen; and a chat with no models prompting to download. Screenshots of every
+# screen, per language, are uploaded for each OS: open them, a pass says the
+# code ran, not that the screen looks right.
+
+name: Setup journey
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/test_setup_journey.yml'
+      - 'conftest.py'
+      - 'hub/agents/gaia/python/pyproject.toml'
+      - 'installer/headless/**'
+      - 'pyproject.toml'
+      - 'setup.py'
+      # All of it: the suite builds this app, so shared CSS or a locale can break setup.
+      - 'src/gaia/apps/webui/**'
+      - 'src/gaia/installer/**'
+      - 'src/gaia/llm/gpu_memory.py'
+      - 'src/gaia/llm/lemonade_embedded.py'
+      - 'src/gaia/ui/routers/setup.py'
+      - 'src/gaia/ui/setup*'
+      - 'tests/setup_journey/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: setup-journey-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  journey:
+    name: Setup journey (${{ matrix.os }})
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.draft == false ||
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-24.04]
+    env:
+      GAIA_E2E_SCREENS: ${{ github.workspace }}/setup-screens
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: src/gaia/apps/webui/package-lock.json
+
+      # The flagship from this checkout, so the agent turn is this PR's agent.
+      - name: Install this checkout
+        run: python -m pip install -e ".[ui,dev]" -e hub/agents/gaia/python
+
+      - name: Test the fake and these workflows
+        run: python -m pytest tests/setup_journey -q
+
+      - name: Build the web UI
+        working-directory: src/gaia/apps/webui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Chromium
+        working-directory: src/gaia/apps/webui
+        run: npx playwright install --with-deps chromium
+
+      - name: Walk first-run setup
+        working-directory: src/gaia/apps/webui
+        run: npx playwright test -c e2e/playwright.config.ts
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: setup-screens-${{ matrix.os }}
+          path: setup-screens/
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: setup-report-${{ matrix.os }}
+          path: src/gaia/apps/webui/e2e/test-results/
+          retention-days: 14

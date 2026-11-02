@@ -363,7 +363,7 @@ describe('first-run setup', () => {
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
 
         answer(NOT_READY);
-        expect(await screen.findByRole('heading', { name: 'Set up GAIA' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
     });
 
@@ -375,9 +375,8 @@ describe('first-run setup', () => {
         expect(screen.queryByText('Starting GAIA…')).not.toBeInTheDocument();
     });
 
-    /** Where GAIA runs, then setup's own model set (this suite has no plan to choose from). */
+    /** This suite has no plan to choose from, so setup offers its own model set. */
     async function runSetup() {
-        await userEvent.click(await screen.findByRole('button', { name: 'Continue' }));
         await userEvent.click(await screen.findByRole('button', { name: 'Use the recommended set' }));
     }
 
@@ -425,9 +424,9 @@ describe('first-run setup', () => {
         mocked.checkSetup.mockResolvedValue(NOT_READY);
         render(<App />);
 
-        expect(await screen.findByRole('heading', { name: 'Set up GAIA' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
         // Setup reads as progress: the check's reason is not shown as a problem.
-        expect(screen.getByText('A few minutes of setup, then your first chat.')).toBeInTheDocument();
+        expect(screen.getByText('This takes a few seconds and downloads no models.')).toBeInTheDocument();
         expect(screen.queryByText('The local model server is not installed.')).not.toBeInTheDocument();
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
     });

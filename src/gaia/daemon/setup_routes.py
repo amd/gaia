@@ -24,6 +24,7 @@ def build_setup_router(token: str) -> APIRouter:
     )
     router.add_api_route("/plan", ui.setup_plan, methods=["GET"])
     router.add_api_route("/chat-model", ui.setup_chat_model, methods=["POST"])
+    router.add_api_route("/vision-model", ui.setup_vision_model, methods=["POST"])
     router.add_api_route("/models/skip", ui.setup_skip_model, methods=["POST"])
     router.add_api_route(
         "/models/download", ui.setup_download_model, methods=["POST"], status_code=202

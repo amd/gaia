@@ -137,9 +137,42 @@ export interface GaiaWindowFrame {
   setColors: (colors: { color: string; symbolColor: string }) => Promise<boolean>;
 }
 
+/** FAILURE_REASONS in services/backend-installer.cjs. */
+export type EngineInstallReason = 'disk' | 'network' | 'tls' | 'locked';
+
+export interface EngineInstallError {
+  stage: string | null;
+  reason: EngineInstallReason | null;
+  /** The installer's own first line, in English. */
+  message: string;
+  logTail: string[];
+}
+
+/** services/engine-install.cjs: where the backend install has got to. */
+export interface EngineInstallStatus {
+  phase: 'running' | 'failed';
+  stage: string | null;
+  /** 0-100, or null for a stage with no percent to report. */
+  percent: number | null;
+  message: string;
+  error: EngineInstallError | null;
+}
+
+/** window.gaiaInstall (preload.cjs). */
+export interface GaiaInstallBridge {
+  onProgress: (cb: (status: EngineInstallStatus) => void) => () => void;
+  status: () => Promise<EngineInstallStatus>;
+  /** Resolves false when no failed install is waiting. */
+  retry: () => Promise<boolean>;
+  /** Past a failed agent update only; resolves false for any other failure. */
+  continueWithoutAgentUpdate: () => Promise<boolean>;
+  openLogFile: () => Promise<{ ok: boolean; message: string | null }>;
+}
+
 declare global {
   interface Window {
     gaiaAPI?: GaiaElectronAPI;
     gaiaWindow?: GaiaWindowFrame;
+    gaiaInstall?: GaiaInstallBridge;
   }
 }

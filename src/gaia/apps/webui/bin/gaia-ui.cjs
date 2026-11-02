@@ -324,7 +324,7 @@ async function main() {
         onProgress: (stage, percent, message) => {
           // Simple CLI progress formatting
           process.stdout.write(
-            `  [${stage}] ${percent}% ${message}\n`
+            `  [${stage}] ${percent === null ? "" : `${percent}% `}${message}\n`
           );
         },
       });

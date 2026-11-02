@@ -306,7 +306,7 @@ The smallest, highest-value change. Lands as its own PR before any installer mig
   - On `app.whenReady()`, call `ensureBackend()` from the new module
   - Show a progress dialog (borderless `BrowserWindow` with custom HTML) while the install runs
   - On failure, show a friendly error dialog with **Retry** / **Manual install instructions** / **Quit** buttons + log path
-- Add `services/backend-installer-progress-dialog.cjs` — owns the Electron-specific progress UI and IPC plumbing
+- Add `services/backend-installer-progress-dialog.cjs` — owns the Electron-specific progress UI and IPC plumbing (since replaced: `services/engine-install.cjs` drives `EngineInstallScreen` inside the app window)
 
 **Acceptance:**
 
@@ -406,7 +406,7 @@ Replace `forge.config.cjs` with electron-builder's `build` section. **The existi
 - **Remove `electron-squirrel-startup`** from `dependencies` and from `main.cjs`
 - Move locale-pruning logic to `installer/scripts/after-pack.cjs` (electron-builder `afterPack` hook)
 - Move 4-part → 3-part SemVer normalizer to `installer/version/normalize.mjs`
-- NSIS installer template at `installer/nsis/installer.nsh` — `customInstall` / `customUnInstall` hooks that write and remove the autostart HKCU Run key
+- NSIS installer template at `installer/nsis/installer.nsh` — `customInstall` / `customUnInstall` hooks that keep an existing autostart HKCU Run key across updates and remove it on uninstall
 - **No Squirrel migration code.** Release notes document the manual uninstall step for v0.17.1 users.
 
 **Acceptance:**
@@ -571,7 +571,7 @@ Apply for SignPath OSS for Windows; configure Apple Developer ID for macOS. Part
 installer/
 ├── README.md                          # How to build installers locally; Lemonade reference notes
 ├── nsis/
-│   ├── installer.nsh                  # customInstall/customUnInstall hooks (autostart Run key)
+│   ├── installer.nsh                  # customInstall/customUnInstall hooks (keep/remove autostart Run key)
 │   ├── installer-banner.bmp
 │   ├── installer-sidebar.bmp
 │   └── icon.ico
@@ -607,7 +607,7 @@ installer/
 
 src/gaia/apps/webui/services/
 ├── backend-installer.cjs              # Phase A — extracted shared install logic
-└── backend-installer-progress-dialog.cjs # Phase A — Electron progress UI
+└── engine-install.cjs                 # Runs the install behind EngineInstallScreen in the app window
 
 src/gaia/installer/
 └── uninstall_command.py               # Phase D

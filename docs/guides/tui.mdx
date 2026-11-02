@@ -64,8 +64,8 @@ On Windows this is the one GAIA installer: on **Choose Components**, tick
 covers the choice and silent installs (`/S /COMPONENTS=tui`).
 
 The Windows setup is per-user: it needs no administrator rights and shows no UAC
-prompt. It also bundles Lemonade Server, so the install itself needs no network
-(Lemonade downloads its own runtime the first time you run a model). Start Menu
+prompt. The install itself needs no network; GAIA sets up its own Lemonade Server
+and models the first time you open it. Start Menu
 and desktop shortcuts are created; open a **new** terminal afterwards, because an
 already-open one keeps the PATH it started with. Quit GAIA before upgrading —
 Windows cannot replace a running program, and the setup will tell you so rather
@@ -252,35 +252,60 @@ specific model rather than the default.
 #### Choose your models
 
 `Enter` on the last step opens the plan before anything downloads. The models,
-the GPU memory and the download are parts of that one step, so the header keeps
-the checklist's count. The plan shows every model
-setup would fetch, its size still to download, what it is for, whether it fits
-this PC's memory, and the free space on the drive Lemonade stores models on.
-The models recommended for this PC are ticked.
+the GPU memory, the download and the test are parts of that one step, so the
+header keeps the checklist's count. Models are grouped by the job they do, and
+each row says its size still to download, whether GAIA verified it, whether it
+fits this PC's memory, and which one is recommended. The free space on the drive
+Lemonade stores models on is underneath.
 
 ```
-  Choose your models                                 step 3 of 3 · part 1 of 2
+  Choose your models                                 step 3 of 3 · part 1 of 3
   ────────────────────────────────────────────────────────────────────────────
-  > [x] Gemma-4-E4B-it         Chat+Vision  6.0 GB    * recommended
-        Reads images and screenshots. Needs about 8.3 GB of memory; this PC
-        has 32.0 GB for models.
-    [x] embeddinggemma-300m    Documents    330 MB    * recommended
-    [x] Qwen3.6-35B-A3B        Chat         23.3 GB   * recommended
-    [ ] ggml-gpt-oss-20b-MXFP4 Chat         12.1 GB
-    [ ] gpt-oss-120b-mxfp      Chat         63.4 GB   [!] won't fit
-    [ ] Qwen3.8-Flash-Next     Chat         82.9 GB   [!] won't fit
+  Chat
+  > (•) Qwen3.6 35B A3B        Verified 23.3 GB   * recommended
+        Answers your chats and reads images. Needs about 27.1 GB of memory;
+        this PC has 32.0 GB for models.
+    ( ) Gemma 4 E4B            Verified 6.0 GB
+    ( ) gpt-oss 20B            Untested 12.1 GB
+    ( ) gpt-oss 120B           Untested 63.4 GB   [!] won't fit
+  Reading images
+  Handled by Qwen3.6 35B A3B · Nothing more to download
+    Choose a different vision model
+  Documents and memory
+    [x] EmbeddingGemma 300M    Verified 330 MB    * recommended
+  Optional extras (off by default)
+    [ ] Speech to text                  1.6 GB
+    [ ] Text to speech                  330 MB
+    [ ] Creating images                 6.5 GB
 
-  Default chat: Qwen3.6-35B-A3B   (c to change)
+  Default chat: Qwen3.6 35B A3B
   [ ] Keep trying if the connection drops (up to 2 minutes)  t
-  Download 29.6 GB · free on C: 200.0 GB · after 170.4 GB
+  Download 23.6 GB · free on C: 200.0 GB · after 176.4 GB
+  Also downloads Model runtime, Python packages. Press v to see everything.
   ────────────────────────────────────────────────────────────────────────────
-  a recommended · c default · space tick · enter continue · esc back
+  a recommended · v everything · space choose · enter continue · esc back
 ```
+
+**Verified** models passed GAIA's evaluations. **Untested** ones are used at your
+own risk: they may run, but tools, documents or images might not work well.
+
+Picking a chat model updates the rest:
+
+- The model it replaces stops downloading, unless it is already on this PC.
+- A chat model that reads images needs no separate vision model. With any other
+  chat model, Gemma is picked for that job. **Choose a different vision model**
+  opens the others, and **Skip for now** leaves it off until you need it.
+- Gemma can't take image creation, so **Creating images** is unticked and stays
+  off with the reason on screen. Choose a larger chat model to use it.
+
+Optional extras are off by default. Tick one and setup downloads and tests it
+with the rest.
 
 | Key | What it does |
 |---|---|
-| `space` | Tick or untick the model under the cursor. On a model already in Lemonade, make it the chat model |
-| `c` | Choose the default chat model from the ticked ones and the ones already in Lemonade (FLM/NPU models included) |
+| `space` | Choose the model under the cursor for its job, or tick a box. On a model already in Lemonade, make it the chat model |
+| `v` | List everything coming to this PC, with its size and where it comes from, before anything starts |
+| `c` | Choose the chat model from a list of the ones picked and the ones already in Lemonade (FLM/NPU models included) |
 | `l` | Show or hide the models already in Lemonade |
 | `a` | Back to the recommended set |
 | `t` | Keep trying for up to 2 minutes when the connection drops, instead of failing straight away (off until you turn it on) |
@@ -296,7 +321,8 @@ block:
 - **Disk:** when the selection needs more than is free, the line says how much to
   free and the one model to untick that would make it fit, and `Enter` becomes
   `continue anyway`.
-- **Vision:** without Gemma-4-E4B-it, GAIA can't read images or screenshots.
+- **Vision:** with a chat model that can't read images and no vision model, GAIA
+  can't read images or screenshots. It asks before downloading one.
 - **Fit unknown:** `[?] fit unknown` when GAIA couldn't read this PC's memory. It
   never shows a guessed number.
 
@@ -313,15 +339,21 @@ setting itself (Windows), `Enter` shows the exact steps in AMD Software and
 the one value to enter there, as AMD Software shows it (`c` copies it), and
 "I've done this" re-reads the split instead of trusting it. `s` skips it.
 
-Then the download, one row per model:
+Then the download: one row per model, then everything else setup fetches, each
+with its size and where it comes from. Models show real progress. The other
+pieces report only their state, so they read Waiting, In progress, Ready, Failed
+or Already here.
 
 ```
-  Downloading models                                 step 3 of 3 · part 2 of 2
+  Downloading models                                 step 3 of 3 · part 2 of 3
   ────────────────────────────────────────────────────────────────────────────
-  > [..] ⣟ Gemma-4-E4B-it       ██████▎░░░░░░░░░░░  2.1/6.0 GB  149 MB/s  27 sec
-    [ ]    embeddinggemma-300m  queued
-    [ ]    Qwen3.6-35B-A3B      queued
-  Overall ██▏░░░░░░░░░░░░░░░░░░░░░░░░░░░ 7% · 2.1/29.6 GB · about 6 min left
+  > [..] ⣟ Qwen3.6 35B A3B      ██████▎░░░░░░░░░░░  2.1/23.3 GB  149 MB/s  3 min
+    [ ]    EmbeddingGemma 300M  queued · 330 MB · From huggingface.co/google/…
+  Overall ██▏░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 7% · 2.1/23.6 GB · about 3 min left
+  [ok] GAIA's model server  Ready · 7 MB · From github.com/lemonade-sdk/lemon…
+  [..] Model runtime        In progress · 141 MB · From github.com/ggml-org/l…
+  [ ]  Python packages      Waiting · Size shown when it starts · From pypi.o…
+  [ok] GAIA agent           Already here · Size shown when it starts · From h…
   [x] Keep trying if the connection drops (up to 2 minutes)  t
   Leaving this screen cancels the download. Finished models stay.
   ────────────────────────────────────────────────────────────────────────────
@@ -339,11 +371,41 @@ connection dropped, the disk filled up (with how much to free), or the model
 downloaded but didn't load — and `r` retries it. A model that didn't load is
 deleted and downloaded again only after you confirm. Model names, sizes and
 these sentences read the same as in the Agent UI. `Esc` leaves, which cancels the download.
-Once every model is ready, a summary names the chat, vision and documents models
-and anything left out; `Enter` starts GAIA.
 
-When every model is already on the PC, setup goes straight to that summary
-("Everything is already on this PC."), and `m` reopens the choice.
+#### Testing everything
+
+A download isn't proof it works, so the last part runs each job for real: the
+model server answers, the chat model loads and answers, the vision model names a
+test image's colour, the embedder makes an embedding, each extra you ticked does
+its job, and GAIA answers one real chat. Each test shows as a row, and setup is
+ready only when the ones it needs have passed.
+
+```
+  Testing everything                                 step 3 of 3 · part 3 of 3
+  ────────────────────────────────────────────────────────────────────────────
+  Tests done: 2 of 2 ██████████████████████████████ 100%
+  [ok] Model server answers                                   Passed, 3 s
+  [!]  Chat: loads and answers · Qwen3.6 35B A3B              Failed
+        Lemonade answered 500: llama-server exited while loading the model.
+
+  Something didn't work, so GAIA isn't ready yet. Your downloads are safe.
+  Press x to download Qwen3.6 35B A3B again.
+  ────────────────────────────────────────────────────────────────────────────
+  m choose another model · x download again · r test again · esc back
+```
+
+A failed test shows its real error and holds the step: `r` tests again, `m` goes
+back to choose another model, and `x` replaces a broken model after you confirm,
+then tests it. When the PC is short of free memory, the screen says so and offers
+no new copy, because one wouldn't help. An optional extra that fails doesn't hold
+setup; the summary says which one and why.
+
+Once the tests pass, a summary names the chat, vision and documents models and
+anything left out; `Enter` starts GAIA.
+
+When every model is already on the PC, `Enter` reads **test and start**: nothing
+downloads, and the tests still run before the summary ("Everything is already on
+this PC."). `m` on the summary reopens the choice.
 
 If this PC already runs a Lemonade Server (v10.9.0 or newer) on its default
 port, the Lemonade row offers it instead of step 1: press `f` to use it, or `g`
@@ -616,7 +678,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 |---|---|
 | `/help` | Show the shortcut overlay (scrolls with `↑`/`↓`/`PgUp`/`PgDn` if it doesn't fit) |
 | `/clear` | Clear the conversation |
-| `/setup` | Re-run first-time setup for the flagship agent: choose the models, then download them |
+| `/setup` | Re-run first-time setup for the flagship agent: choose the models, download them, then test them |
 | `/models` | The models on this PC: tick one to download it, untick to stop using it, `x` removes one (it asks first), `c` picks the chat model, `a` applies. Downloads keep going when you close it, and the status line shows `downloading 38%` |
 | `/gpu` | Give the GPU more memory so bigger models fit. Offered only on a PC with an integrated GPU |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |

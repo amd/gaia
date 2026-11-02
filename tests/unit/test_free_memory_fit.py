@@ -627,7 +627,8 @@ def test_the_installer_leaves_setup_to_the_app():
     source = (
         REPO_ROOT / "src/gaia/apps/webui/services/backend-installer.cjs"
     ).read_text(encoding="utf-8")
-    assert not re.search(r'\[\s*"init",', source)
+    calls = re.findall(r'\[\s*"init",[^\]]*\]', source)
+    assert calls and all('"--agent-only"' in call for call in calls)
 
 
 def test_warm_up_does_not_load_the_model_on_a_small_machine(monkeypatch):

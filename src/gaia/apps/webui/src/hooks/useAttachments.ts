@@ -16,6 +16,7 @@ export interface UseAttachments {
     clear: () => void;
     /** True when at least one attachment has uploaded. */
     hasUploaded: boolean;
+    hasImage: boolean;
     uploading: boolean;
     /** The message text with markdown links to the uploaded files appended. */
     compose: (text: string) => string;
@@ -110,6 +111,7 @@ export function useAttachments(): UseAttachments {
         remove,
         clear,
         hasUploaded: attachments.some((a) => a.uploaded),
+        hasImage: attachments.some((a) => a.uploaded && a.isImage),
         uploading: attachments.some((a) => a.uploading),
         compose,
     };

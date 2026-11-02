@@ -5103,6 +5103,24 @@
     "title": "ValidationError",
     "type": "object"
   },
+  "VisionModelRequest": {
+    "description": "A model that reads images, or null to go back to GAIA's choice.",
+    "properties": {
+      "model_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Id"
+      }
+    },
+    "title": "VisionModelRequest",
+    "type": "object"
+  },
   "WarmUpStatus": {
     "description": "Whether a new chat's first turn will find its prompt already read.",
     "properties": {

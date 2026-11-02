@@ -39,7 +39,7 @@ func coldPlan() setupapi.Plan {
 	src := "lemonade"
 	url := "http://127.0.0.1:13305/api/v1"
 	rec := qwen
-	return setupapi.Plan{
+	return labelled(setupapi.Plan{
 		Profile:          "gaia",
 		Lemonade:         setupapi.LemonadeInfo{Mode: "gaia", URL: &url, Reachable: true},
 		ChatModel:        setupapi.ChatModel{ID: qwen},
@@ -52,7 +52,21 @@ func coldPlan() setupapi.Plan {
 			f.Entry(emb, embed, 0.33, false, true, true, f.Bool(true), 0.6, 96),
 			f.Entry(oss, chat, 12.1, false, false, false, f.Bool(true), 14.0, 96),
 		},
+	})
+}
+
+// labelled sets each model's support label, as the backend's plan does.
+func labelled(p setupapi.Plan) setupapi.Plan {
+	for i := range p.Catalog {
+		e := &p.Catalog[i]
+		switch e.ID {
+		case qwen, gemma, emb:
+			e.Support = f.Str(setupapi.SupportVerified)
+		default:
+			e.Support = f.Str(setupapi.SupportUntested)
+		}
 	}
+	return p
 }
 
 func warmPlan() setupapi.Plan {
@@ -77,7 +91,7 @@ func small16() setupapi.Plan {
 		f.Entry(emb, embed, 0.33, false, true, true, f.Bool(true), 0.6, 16),
 		f.Entry(qwen, chat, 23.3, false, false, false, f.Bool(false), 27.1, 16),
 	}
-	return p
+	return labelled(p)
 }
 
 // flmOnly has an FLM chat model on disk and nothing else.
@@ -86,8 +100,9 @@ func flmOnly() setupapi.Plan {
 	e := f.Entry(flm, chat, 2.1, true, false, false, nil, 0, 0)
 	recipe := "flm"
 	e.Recipe = &recipe
+	e.GaiaModel = false
 	p.Catalog = append(p.Catalog, e)
-	return p
+	return labelled(p)
 }
 
 // gpuShared is a 128 GB Strix Halo whose GPU gets 24 GB now: the setting
@@ -247,6 +262,31 @@ func (h *harness) expectNot(substr string) {
 	if s := h.screen(); strings.Contains(flat(s), flat(substr)) {
 		h.t.Fatalf("screen should not show %q:\n%s", substr, s)
 	}
+}
+
+// focusAction moves the cursor to a line that is a choice, not a model.
+func (h *harness) focusAction(action string) {
+	h.t.Helper()
+	for i, it := range h.m.items() {
+		if it.action == action {
+			h.m.focus = i
+			return
+		}
+	}
+	h.t.Fatalf("no %s line", action)
+}
+
+// focusJob moves the cursor to id's row under a job: Gemma is listed under
+// Chat and under Reading images.
+func (h *harness) focusJob(job, id string) {
+	h.t.Helper()
+	for i, it := range h.m.items() {
+		if !it.group && it.action == "" && it.job == job && sameID(it.row.id, id) {
+			h.m.focus = i
+			return
+		}
+	}
+	h.t.Fatalf("no %s row for %s", job, id)
 }
 
 // focusID moves the cursor to the row for id.

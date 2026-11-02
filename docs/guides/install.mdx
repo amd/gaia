@@ -24,7 +24,7 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 
     | Choice | What you get | Shortcut it adds |
     |---|---|---|
-    | **GAIA Agent UI** (desktop app) | A window with chat, your documents and files, and every tool call shown as it runs. Starts when you sign in to Windows — turn that off in the app's Settings → General or Task Manager → Startup. | **GAIA**, on the desktop and Start menu |
+    | **GAIA Agent UI** (desktop app) | A window with chat, your documents and files, and every tool call shown as it runs. To start it when you sign in to Windows, turn that on in the app's Settings → General. | **GAIA**, on the desktop and Start menu |
     | **GAIA Terminal UI** (terminal) | `gaia-tui` on your PATH, with a GAIA profile and font for Windows Terminal. See [Terminal UI](/guides/tui). | **GAIA Terminal UI**, on the desktop and Start menu |
 
     1. On [amd-gaia.ai](https://amd-gaia.ai/#install), click **Install GAIA for Windows**. The file is `gaia-<version>-win-x64-setup.exe`.
@@ -32,7 +32,7 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
     3. On **Choose Components**, tick the desktop app, the terminal, or both.
     4. Click **Finish**, then open GAIA from its desktop shortcut.
 
-    Either choice also installs Lemonade Server, the local model runtime, from inside the installer, so the install itself works offline.
+    The install itself works offline. GAIA sets up its own Lemonade Server, the local model runtime, the first time you open it, and no system-wide Lemonade is installed.
 
     **Updating or adding the other one:** run a newer (or the same) installer. It starts with what you already have ticked. Unticking something does not remove it — uninstall it instead (see [Uninstalling](#windows)).
 
@@ -123,7 +123,7 @@ To uninstall silently, run each component's `QuietUninstallString` from `HKCU\So
 
 ## First-launch setup (desktop app)
 
-The first time you launch the desktop app, it sets up its Python backend. It downloads no model. You'll see a progress dialog with these stages:
+The first time you launch the desktop app, its window opens right away and sets up the Python backend inside it. It downloads no model. You'll see these stages:
 
 1. **Pre-flight checks** (~5 seconds) — verifies free disk space (2 GB) and network connectivity
 2. **Download `uv`** (~30 seconds) — installs the `uv` Python package manager
@@ -132,6 +132,10 @@ The first time you launch the desktop app, it sets up its Python backend. It dow
 5. **Verify** (~5 seconds) — confirms the `gaia` command runs
 
 **Subsequent launches are instant** — the app reuses the installed environment.
+
+If a step fails, the window shows the error with a **Try again** button, and **Details** shows the end of the install log.
+
+After an app update, the same screen updates the backend and then the GAIA agent. Your models stay as they are. If the agent update fails, **Try again** picks it up, and the next launch does too.
 
 ### Choose where chat runs
 

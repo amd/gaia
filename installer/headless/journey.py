@@ -47,6 +47,7 @@ PHASES = [
     "upgrade",
     "launch",
     "health",
+    "setup",
     "preflight",
     "quit",
     "uninstall",

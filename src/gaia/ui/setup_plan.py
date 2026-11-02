@@ -14,6 +14,7 @@ only when asked.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 from gaia.installer import model_choice
@@ -209,6 +210,89 @@ def _display_name(model_id: str) -> str:
     return friendly_name(model_id)
 
 
+def _model_source(entry: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Where a model downloads from, as Lemonade's catalog names it."""
+    checkpoint = (entry or {}).get("checkpoint")
+    if not isinstance(checkpoint, str) or "/" not in checkpoint:
+        return None
+    return f"huggingface.co/{checkpoint.split(':')[0]}"
+
+
+def _components(lemonade: Dict[str, Any], skip_models: bool) -> List[Dict[str, Any]]:
+    """Everything besides the models that setup fetches, so the screen can say
+    what comes to this PC, how big it is and from where. ``size_gb`` is None
+    when nothing here can know it before the download starts."""
+    from gaia.hub import installer as hub_installer
+    from gaia.llm.lemonade_embedded import (
+        BUNDLED_ARCHIVE_DIR_ENV,
+        GITHUB_RELEASE_BASE,
+        EmbeddedLemonade,
+    )
+    from gaia.version import LEMONADE_VERSION
+
+    components: List[Dict[str, Any]] = []
+    if lemonade["mode"] != "external":
+        components.append(
+            {
+                "id": "server",
+                "version": LEMONADE_VERSION,
+                "size_gb": 0.007,
+                "source": (
+                    "included with GAIA"
+                    if os.environ.get(BUNDLED_ARCHIVE_DIR_ENV)
+                    else GITHUB_RELEASE_BASE.removeprefix("https://")
+                ),
+                "installed": EmbeddedLemonade().is_installed(),
+            }
+        )
+    if not skip_models:
+        components.append(
+            {
+                "id": "backend",
+                "version": None,
+                "size_gb": 0.141,
+                "source": "github.com/ggml-org/llama.cpp",
+                "installed": None,
+            }
+        )
+    components.append(
+        {
+            "id": "packages",
+            "version": None,
+            "size_gb": None,
+            "source": "pypi.org",
+            "installed": None,
+        }
+    )
+    components.append(
+        {
+            "id": "agent",
+            "version": None,
+            "size_gb": None,
+            "source": "hub.amd-gaia.ai",
+            "installed": hub_installer.read_sentinel("gaia") is not None,
+        }
+    )
+    return components
+
+
+def _backends(system_info: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Each backend Lemonade reports for this PC, and whether it is here yet."""
+    backends = []
+    for recipe, info in ((system_info or {}).get("recipes") or {}).items():
+        default = info.get("default_backend")
+        for name, backend in (info.get("backends") or {}).items():
+            backends.append(
+                {
+                    "recipe": recipe,
+                    "backend": name,
+                    "state": backend.get("state"),
+                    "default": name == default,
+                }
+            )
+    return backends
+
+
 def _catalog(
     client,
     profile: str,
@@ -241,13 +325,15 @@ def _catalog(
         return any(same(model_id, m) for m in ids)
 
     order: List[str] = []
-    known = [*planned, *_known_chat_models()]
+    offered = [*model_choice.VISION_ONLY_MODELS, *model_choice.OPTIONAL_MODELS]
+    known = [*planned, *_known_chat_models(), *offered]
     # GAIA's own models: a Lemonade-only model the user made the chat model is
     # planned, but stays in the Lemonade list where they found it.
     gaia_known = [
         *(m for m in planned if not same(m, chat_id)),
         *(INIT_PROFILES[profile]["models"] or []),
         *_known_chat_models(),
+        *offered,
     ]
     for model_id in known:
         if not listed(model_id, order):
@@ -311,7 +397,13 @@ def _catalog(
                 "selected": listed(model_id, selected),
                 "skipped": model_choice.is_skipped(model_id, skipped),
                 "chat_choice": not is_embedding_model_id(model_id)
+                and not model_choice.optional_role(model_id)
+                and not model_choice.is_vision_only(model_id)
                 and (entry is None or model_choice.is_chat_catalog_entry(entry)),
+                "support": model_choice.support_label(model_id),
+                "reads_images": model_choice.reads_images(model_id),
+                "feature_tier": model_choice.feature_tier(model_id),
+                "source": _model_source(entry),
                 **model_choice.memory_fit(model_id, full, capacity),
             }
         )
@@ -444,6 +536,9 @@ def build_plan(
         "options": _options(client, capacity),
         "models": models,
         "catalog": catalog,
+        "components": _components(lemonade, skip_models=False),
+        "backends": _backends(system_info),
+        "vision_model": _saved_vision_model(),
     }
 
 
@@ -570,6 +665,97 @@ def choose_chat_model(
             model_choice.set_skipped(model_id, False)
     except GaiaConfigError as e:
         raise SetupPlanError(str(e)) from e
+
+
+def _saved_vision_model() -> Optional[str]:
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    try:
+        return GaiaConfig.load().vision_model
+    except GaiaConfigError as e:
+        raise SetupPlanError(str(e)) from e
+
+
+def choose_vision_model(model_id: Optional[str]) -> None:
+    """Save the model that reads images; None goes back to GAIA's choice."""
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    if model_id is not None:
+        entry = next(
+            (
+                e
+                for e in build_plan()["catalog"]
+                if model_choice.ids_match(e["id"], model_id)
+            ),
+            None,
+        )
+        if entry is None or not (
+            entry["reads_images"] or model_choice.ROLE_VISION in entry["roles"]
+        ):
+            raise UnknownModel(f"{model_id} can't read images.")
+        model_id = entry["id"]
+    try:
+        GaiaConfig.save_key("vision_model", model_id)
+    except GaiaConfigError as e:
+        raise SetupPlanError(str(e)) from e
+
+
+def _job_model(job: str) -> Optional[str]:
+    """The model *job* would load now, or None when no local model is involved."""
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import (
+        DEFAULT_EMBEDDING_MODEL,
+        cloud_model_provider,
+        resolve_default_chat_model,
+        resolve_default_vision_model,
+    )
+
+    if job == model_choice.ROLE_CHAT:
+        config = GaiaConfig.load()
+        model = config.last_model or resolve_default_chat_model()
+        cloud = model.startswith("claude-") or cloud_model_provider(model)
+        return None if cloud else model
+    if job == model_choice.ROLE_VISION:
+        return resolve_default_vision_model()
+    if job == model_choice.ROLE_EMBEDDING:
+        return DEFAULT_EMBEDDING_MODEL
+    return next(
+        (m for m, role in model_choice.OPTIONAL_MODELS.items() if role == job), None
+    )
+
+
+def model_need(job: str) -> Dict[str, Any]:
+    """Whether *job* needs a model that isn't here, and which: the prompt's facts.
+
+    With no server reachable nothing can be said, so nothing is asked and the
+    job reports the server's own error.
+    """
+    from gaia.config import GaiaConfigError
+
+    try:
+        model_id = _job_model(job)
+    except GaiaConfigError as e:
+        raise SetupPlanError(str(e)) from e
+    plan = build_plan()
+    if model_id is None or not plan["lemonade"]["reachable"]:
+        return {"job": job, "needed": False, "model": None, "disk_free_gb": None}
+    entry = next(
+        (e for e in plan["catalog"] if model_choice.ids_match(e["id"], model_id)),
+        None,
+    )
+    if entry is None or entry["downloaded"]:
+        return {"job": job, "needed": False, "model": None, "disk_free_gb": None}
+    return {
+        "job": job,
+        "needed": True,
+        "model": {
+            "id": entry["id"],
+            "name": entry["name"],
+            "size_gb": entry["size_gb"],
+            "source": entry["source"],
+        },
+        "disk_free_gb": (plan.get("disk") or {}).get("free_gb"),
+    }
 
 
 def set_model_skipped(model_id: str, skipped: bool, profile: str = PROFILE) -> None:

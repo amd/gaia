@@ -3,7 +3,7 @@
 
 /** Plans and statuses shaped like the backend's (/api/setup/plan, /status, /api/gpu-memory). */
 
-import type { GpuMemoryStatus, SetupCatalogEntry, SetupModelProgress, SetupPlan, SetupRunStatus } from '../../../types';
+import type { GpuMemoryStatus, SetupCatalogEntry, SetupComponent, SetupModelProgress, SetupPlan, SetupRunStatus } from '../../../types';
 
 export function entry(over: Partial<SetupCatalogEntry> & { id: string }): SetupCatalogEntry {
     return {
@@ -24,6 +24,10 @@ export function entry(over: Partial<SetupCatalogEntry> & { id: string }): SetupC
         selected: false,
         skipped: false,
         chat_choice: true,
+        support: 'verified',
+        reads_images: false,
+        feature_tier: 'full',
+        source: null,
         fits: true,
         need_gb: 2,
         capacity_gb: 96,
@@ -49,6 +53,23 @@ export const FLM = entry({
     id: 'gemma4-it-e2b-FLM', name: 'Gemma 4 E2B (NPU)', recipe: 'flm', downloaded: true, size_gb: 0,
     full_size_gb: 3.2, gaia_model: false, fits: null, need_gb: null, capacity_gb: null,
 });
+
+/** As the backend reports them: Qwen reads images itself; Gemma E4B chats, reads images, and is compact. */
+export const QWEN_READS = { ...QWEN, reads_images: true };
+export const GEMMA_CHAT = entry({ ...GEMMA, roles: ['chat', 'vision'], reads_images: true, feature_tier: 'compact' });
+
+/** Optional extras carry no support label and aren't chat choices. */
+const optional = (over: Partial<SetupCatalogEntry> & { id: string }) => entry({ support: null, chat_choice: false, ...over });
+export const WHISPER = optional({ id: 'Whisper-Large-v3-Turbo', name: 'Whisper Large v3 Turbo', roles: ['speech'], purpose: 'Turns speech into text', size_gb: 1.6, full_size_gb: 1.6 });
+export const KOKORO = optional({ id: 'kokoro-v1', name: 'Kokoro', roles: ['voice'], purpose: 'Reads answers aloud', size_gb: 0.3, full_size_gb: 0.3 });
+export const SDXL = optional({ id: 'SDXL-Turbo', name: 'SDXL Turbo', roles: ['image_creation'], purpose: 'Makes pictures', size_gb: 6.9, full_size_gb: 6.9 });
+
+export const COMPONENTS: SetupComponent[] = [
+    { id: 'server', version: '10.9.1', size_gb: 0.007, source: 'github.com/lemonade-sdk/lemonade/releases', installed: false },
+    { id: 'backend', version: null, size_gb: 0.141, source: 'github.com/ggml-org/llama.cpp', installed: null },
+    { id: 'packages', version: null, size_gb: null, source: 'pypi.org', installed: null },
+    { id: 'agent', version: null, size_gb: null, source: 'hub.amd-gaia.ai', installed: true },
+];
 
 export function plan(catalog: SetupCatalogEntry[], over: Partial<SetupPlan> = {}): SetupPlan {
     const chat = catalog.find((e) => e.planned && e.roles.includes('chat')) ?? catalog.find((e) => e.chat_choice);

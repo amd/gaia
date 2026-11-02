@@ -24,12 +24,29 @@ log = get_logger(__name__)
 ROLE_CHAT = "chat"
 ROLE_VISION = "vision"
 ROLE_EMBEDDING = "embedding"
+ROLE_SPEECH = "speech"
+ROLE_VOICE = "voice"
+ROLE_IMAGE_CREATION = "image_creation"
 
 _PURPOSE = {
     ROLE_CHAT: "Answers your messages and runs GAIA's tools",
     ROLE_VISION: "Reads images and screenshots",
     ROLE_EMBEDDING: "Searches your documents and remembers things",
+    ROLE_SPEECH: "Turns speech and recordings into text",
+    ROLE_VOICE: "Reads answers aloud",
+    ROLE_IMAGE_CREATION: "Creates pictures from a description",
 }
+
+#: Optional models setup offers, off by default. A test pins them to the audio
+#: and image defaults, which import heavy packages this module must not.
+OPTIONAL_MODELS = {
+    "Whisper-Large-v3-Turbo": ROLE_SPEECH,
+    "kokoro-v1": ROLE_VOICE,
+    "SDXL-Turbo": ROLE_IMAGE_CREATION,
+}
+
+#: Vision-only models the user can pick besides a chat model that reads images.
+VISION_ONLY_MODELS = ("Qwen3-VL-4B-Instruct-GGUF",)
 
 #: How long an opted-in "keep trying" waits out a dropped connection.
 KEEP_TRYING_S = 120
@@ -103,13 +120,49 @@ def roles_for(model_id: str, chat_model: Optional[str]) -> List[str]:
 
     if is_embedding_model_id(model_id):
         return [ROLE_EMBEDDING]
+    optional = optional_role(model_id)
+    if optional:
+        return [optional]
     roles = []
     if chat_model and ids_match(model_id, chat_model):
         roles.append(ROLE_CHAT)
-    # The image tools load Gemma by name, whatever the chat model is.
-    if ids_match(model_id, DEFAULT_MODEL_NAME):
+    if ids_match(model_id, DEFAULT_MODEL_NAME) or is_vision_only(model_id):
         roles.append(ROLE_VISION)
     return roles or [ROLE_CHAT]
+
+
+def optional_role(model_id: str) -> Optional[str]:
+    """Speech, voice or image creation for one of :data:`OPTIONAL_MODELS`."""
+    return next((r for m, r in OPTIONAL_MODELS.items() if ids_match(model_id, m)), None)
+
+
+def is_vision_only(model_id: str) -> bool:
+    return any(ids_match(model_id, m) for m in VISION_ONLY_MODELS)
+
+
+def support_label(model_id: str) -> Optional[str]:
+    """``verified`` for a model GAIA's evals cover, ``untested`` for any other
+    chat or vision model, None for an optional model, which has no such label."""
+    from gaia.llm.lemonade_client import VERIFIED_MODELS
+
+    if optional_role(model_id):
+        return None
+    verified = any(ids_match(model_id, m) for m in VERIFIED_MODELS)
+    return "verified" if verified else "untested"
+
+
+def reads_images(model_id: str) -> bool:
+    """Whether GAIA reads images with *model_id* itself, so no second model loads."""
+    from gaia.llm.lemonade_client import VISION_CHAT_MODELS
+
+    return any(ids_match(model_id, m) for m in VISION_CHAT_MODELS)
+
+
+def feature_tier(model_id: str) -> str:
+    from gaia.llm.lemonade_client import find_model_requirement
+
+    requirement = find_model_requirement(model_id)
+    return requirement.feature_tier if requirement else "full"
 
 
 def purpose(roles: Iterable[str]) -> str:

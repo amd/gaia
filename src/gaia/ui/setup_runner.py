@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -34,6 +35,9 @@ PROFILE = "gaia"
 CHECK_TIMEOUT_S = 180
 #: The check plus a cold model load on a slow disk.
 VERIFY_TIMEOUT_S = CHECK_TIMEOUT_S + 150
+# One real agent turn: a cold first turn on a large prompt takes minutes.
+AGENT_TEST_TIMEOUT_S = 300
+_AGENT_TEST_PROMPT = "Reply with the single word: ok"
 _NOT_READY_EXIT = 1
 _LOAD_FAILED_EXIT = 3
 _UNWRAPPED_COLUMNS = 1000
@@ -175,7 +179,7 @@ def run_args(
     if gaia_lemonade:
         args.append("--gaia-lemonade")
     if server_only:
-        args.append("--skip-models")
+        args.append("--server-only")
     for model_id in extra_models or []:
         args += ["--download-model", model_id]
     return args
@@ -301,6 +305,35 @@ def describe(line: str) -> Optional[Progress]:
     m = _DOWNLOAD_RE.match(line)
     if m:
         return Progress(PHASE_MODELS, f"Downloading {m.group(1)}")
+    return None
+
+
+def _agent_turn_problem() -> Optional[str]:
+    """Why one headless agent turn failed, or None when GAIA answered."""
+    try:
+        proc = subprocess.run(
+            _gaia_argv("-p", _AGENT_TEST_PROMPT, "--output-format", "json"),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=AGENT_TEST_TIMEOUT_S,
+            check=False,
+            env=_child_env(),
+            **windows_hidden_popen_kwargs(),
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            f"GAIA didn't answer a test message within "
+            f"{AGENT_TEST_TIMEOUT_S // 60} minutes."
+        )
+    except OSError as e:
+        return f"GAIA's agent couldn't start: {e}"
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return (
+            "GAIA didn't answer a test message: "
+            f"{_last_line(proc.stderr + chr(10) + proc.stdout) or 'no output'}"
+        )
     return None
 
 
@@ -557,6 +590,10 @@ class SetupRun:
     extra_models: List[str] = field(default_factory=list)
     #: A model's download failed in this run: its row already says why.
     model_failed: bool = False
+    #: Each piece besides the models, by id: ``active``, ``done``, ``failed``.
+    components: Dict[str, str] = field(default_factory=dict)
+    #: The Test step's rows, in the order they ran, by (job, subject).
+    tests: Dict[Any, Dict[str, Any]] = field(default_factory=dict)
 
     def view(self) -> Dict[str, Any]:
         reached = PHASES.index(self.phase) if self.phase in PHASES else -1
@@ -590,6 +627,8 @@ class SetupRun:
             "gaia_lemonade": self.gaia_lemonade,
             "server_only": self.server_only,
             "model_failed": self.model_failed,
+            "components": dict(self.components),
+            "tests": list(self.tests.values()),
             "chat_model": None if self.skip_chat_model else self.chat_model,
         }
 
@@ -854,6 +893,14 @@ class SetupRunner:
                 for skipped in event.get("skipped") or []:
                     self._models[skipped] = ModelProgress(id=skipped, state="skipped")
                 return
+            if kind == "component":
+                if self._run is not None:
+                    self._run.components[event["component"]] = event["state"]
+                return
+            if kind == "test":
+                if self._run is not None:
+                    self._record_test(self._run, event)
+                return
             model_id = event.get("model")
             if not model_id:
                 if kind == "error" and self._run is not None:
@@ -885,6 +932,15 @@ class SetupRunner:
                 entry.error = _failure_text(model_id, entry.error_kind)
                 if self._run is not None:
                     self._run.model_failed = True
+
+    @staticmethod
+    def _record_test(run: SetupRun, event: Dict[str, Any]) -> None:
+        """One Test row. Caller holds the lock."""
+        row = {
+            k: event.get(k)
+            for k in ("job", "subject", "state", "error", "kind", "seconds")
+        }
+        run.tests[(row["job"], row["subject"])] = row
 
     def _mirror_totals(self, run: SetupRun) -> None:
         """Fill the run's single bar from the per-model totals. Caller holds the lock."""
@@ -1002,8 +1058,8 @@ class SetupRunner:
         with self._lock:
             run.status = status
             loaded = {m["id"] for m in loads if m.get("loaded")}
-            # An extra the user ticked has no load check: downloaded is as far
-            # as setup takes it. Any other model the check skipped stays unverified.
+            # gaia init's Test step ran what the user ticked; this check only
+            # covers the plan. Any other model it skipped stays unverified.
             checked = {m["id"] for m in loads}
             loaded |= {i for i in run.extra_models if i not in checked}
             self._settle_models(
@@ -1011,13 +1067,44 @@ class SetupRunner:
                 failed,
                 run_failed=not status.get("ready") and not loads,
             )
-            if status.get("ready"):
-                run.state, run.text = "ready", "GAIA is ready"
-            else:
+            ready = bool(status.get("ready"))
+            if not ready:
                 run.state = "failed"
                 run.error = "; ".join(status.get("reasons") or []) or (
                     "Setup finished but GAIA is still not ready."
                 )
+        if not ready:
+            return
+        problem = None if run.skip_chat_model else self._test_agent(run)
+        with self._lock:
+            if run.state == "cancelled":
+                return
+            if problem:
+                run.state, run.error = "failed", problem
+            else:
+                run.state, run.text = "ready", "GAIA is ready"
+
+    def _test_agent(self, run: SetupRun) -> Optional[str]:
+        """One real turn through the agent: every model passing doesn't prove GAIA answers."""
+        with self._lock:
+            self._record_test(
+                run, {"job": "agent", "subject": None, "state": "running"}
+            )
+        started = time.monotonic()
+        problem = _agent_turn_problem()
+        with self._lock:
+            self._record_test(
+                run,
+                {
+                    "job": "agent",
+                    "subject": None,
+                    "state": "failed" if problem else "passed",
+                    "error": problem,
+                    "kind": "broken" if problem else None,
+                    "seconds": round(time.monotonic() - started, 1),
+                },
+            )
+        return problem
 
     def _consume(self, run: SetupRun, line: str) -> None:
         # Defend the browser-facing log against a program that ignores NO_COLOR.

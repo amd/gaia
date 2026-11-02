@@ -26,6 +26,11 @@ _REAL_SERVER_PROBLEM = sr.server_problem
 
 
 @pytest.fixture(autouse=True)
+def no_real_agent_turn(monkeypatch):
+    monkeypatch.setattr(sr, "_agent_turn_problem", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def gaia_home(tmp_path, monkeypatch):
     home = tmp_path / "gaia-home"
     monkeypatch.setenv("GAIA_HOME", str(home))
@@ -72,7 +77,7 @@ def test_run_args_switch_to_gaias_own_server():
 
 def test_run_args_server_only_downloads_nothing():
     args = sr.run_args(False, server_only=True)
-    assert "--skip-models" in args and "--download-model" not in args
+    assert "--server-only" in args and "--download-model" not in args
     assert "--skip-models" not in sr.run_args(False)
 
 
@@ -511,7 +516,7 @@ def test_a_server_only_run_is_ready_without_loading_models(monkeypatch):
     assert view["state"] == "ready" and view["server_only"] is True
     assert [s["key"] for s in view["steps"]] == ["server"]
     assert view["steps"][0]["status"] == "done"
-    assert "--skip-models" in calls[0][0]
+    assert "--server-only" in calls[0][0]
 
 
 def test_an_extra_model_with_no_load_check_ends_ready(monkeypatch):

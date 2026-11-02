@@ -32,7 +32,38 @@ export interface SetupOverall {
     failed: number;
 }
 
-export type SetupRole = 'chat' | 'vision' | 'embedding';
+export type SetupRole = 'chat' | 'vision' | 'embedding' | 'speech' | 'voice' | 'image_creation';
+
+/** Something setup fetches besides the models (GET /api/setup/plan `components`). */
+export interface SetupComponent {
+    id: 'server' | 'backend' | 'packages' | 'agent';
+    version: string | null;
+    /** null when it can't be known before the download starts. */
+    size_gb: number | null;
+    source: string;
+    /** null when the plan can't tell yet. */
+    installed: boolean | null;
+}
+
+export type ModelNeedJob = 'chat' | 'vision' | 'embedding' | 'speech' | 'voice' | 'image_creation';
+
+/** GET /api/setup/needs/{job}: the facts behind the missing-model prompt. */
+export interface ModelNeed {
+    job: ModelNeedJob;
+    needed: boolean;
+    model: { id: string; name: string; size_gb: number | null; source: string | null } | null;
+    disk_free_gb: number | null;
+}
+
+/** One row of the Test step (GET /api/setup/status `tests`). */
+export interface SetupTest {
+    job: SetupRole | 'server' | 'agent';
+    subject: string | null;
+    state: 'running' | 'passed' | 'failed' | 'skipped';
+    error: string | null;
+    kind: 'memory' | 'stuck' | 'broken' | null;
+    seconds: number | null;
+}
 
 /** One model setup can pull or use (GET /api/setup/plan `catalog`). Every `*_gb` is decimal GB. */
 export interface SetupCatalogEntry {
@@ -57,6 +88,14 @@ export interface SetupCatalogEntry {
     selected: boolean;
     skipped: boolean;
     chat_choice: boolean;
+    /** `verified`: GAIA's evals cover it. null for an optional model. */
+    support: 'verified' | 'untested' | null;
+    /** GAIA reads images with this model itself, so no second model loads. */
+    reads_images: boolean;
+    /** `compact` withholds image creation and other tools. */
+    feature_tier: 'compact' | 'full';
+    /** Where it downloads from; null when the server doesn't say. */
+    source: string | null;
     /** null when this PC's memory couldn't be read: no invented numbers. */
     fits: boolean | null;
     need_gb: number | null;

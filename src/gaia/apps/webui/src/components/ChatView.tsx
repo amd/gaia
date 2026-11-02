@@ -8,6 +8,7 @@ import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
+import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
@@ -183,6 +184,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     /** The agent's own step number for the live turn, from its `step` events. */
     const toolOccurredRef = useRef(false);
     const sendMessageRef = useRef<(text?: string, options?: SendOptions) => void>(() => {});
+    const checkingModelRef = useRef(false);
     // Messages typed while a reply runs, kept per chat in the store, and whether the user stopped that reply.
     const queue = useChatStore((s) => s.messageQueues[sessionId] ?? NO_QUEUE);
     const setQueue = useCallback(
@@ -512,6 +514,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
             if (isInitializing) log.chat.debug('Send blocked: system initializing');
             return;
+        }
+
+        // Asked here so a send that was going to be queued or refused asks nothing.
+        if (!reattach && !fromQueue && !(modelKnownReady('chat') && (!attach.hasImage || modelKnownReady('vision')))) {
+            if (checkingModelRef.current) return;
+            checkingModelRef.current = true;
+            try {
+                if (!(await ensureModel('chat')) || (attach.hasImage && !(await ensureModel('vision')))) return;
+            } finally {
+                checkingModelRef.current = false;
+            }
         }
 
         // Build message text with attachment references
@@ -1509,6 +1522,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setIsDragOver(false);
         if (e.dataTransfer.files.length === 0) return;
 
+        if (!(await ensureModel('embedding'))) return;
         for (const file of Array.from(e.dataTransfer.files)) {
             log.doc.info(`Dropped on chat view: ${file.name}`);
             try {

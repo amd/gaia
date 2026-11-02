@@ -30,16 +30,16 @@ func TestColdMachineShowsThePlanBeforeAnyDownload(t *testing.T) {
 		}
 	}
 	h.expect("Choose your models")
-	h.expect("[x] Qwen3.6-35B-A3B")
-	h.expect("[x] Gemma-4-E4B-it")
+	h.expect("(•) Qwen3.6-35B-A3B")
+	h.expect("(•) Gemma-4-E4B-it")
 	h.expect("[x] embeddinggemma-300m")
-	h.expect("[ ] gpt-oss-20b")
+	h.expect("( ) gpt-oss-20b")
 	h.expect("* recommended")
 	// Remaining download, decimal GB, one decimal; below 1 GB in MB.
 	h.expect("23.3 GB")
 	h.expect("330 MB")
 	h.expect("Download 29.6 GB · free on C: 412.0 GB · after 382.4 GB")
-	h.expect("step 2 of 2 · part 1 of 2")
+	h.expect("step 2 of 2 · part 1 of 3")
 }
 
 // Already-downloaded rows say so; a partial one shows what is left.
@@ -60,8 +60,21 @@ func TestSizesAreWhatIsLeftToDownload(t *testing.T) {
 	}
 }
 
-func TestEverythingPresentGoesStraightToReady(t *testing.T) {
-	h := newHarness(t, ModeFirstRun, &f.Fake{P: warmPlan(), G: discreteGPU()})
+// A PC with every model still goes through the tests: being on disk proves
+// nothing about whether they run.
+func TestEverythingPresentIsTestedBeforeItIsReady(t *testing.T) {
+	api := &f.Fake{P: warmPlan(), G: discreteGPU()}
+	h := newHarness(t, ModeFirstRun, api)
+	if h.m.Screen() != "models" {
+		t.Fatalf("screen = %s, want models", h.m.Screen())
+	}
+	h.expect("enter test and start")
+	h.key("enter")
+	if !api.Called("run") {
+		t.Fatalf("nothing was tested: %v", api.CallList())
+	}
+	api.SetRunState(setupapi.RunReady)
+	h.poll()
 	if h.m.Screen() != "ready" {
 		t.Fatalf("screen = %s, want ready", h.m.Screen())
 	}
@@ -73,14 +86,16 @@ func TestEverythingPresentGoesStraightToReady(t *testing.T) {
 	}
 }
 
-// Unticking Gemma warns, in words, and does not block.
-func TestUntickingGemmaShowsTheVisionCaveatAndDoesNotBlock(t *testing.T) {
+// Skipping the vision model warns, in words, and does not block.
+func TestSkippingVisionShowsTheCaveatAndDoesNotBlock(t *testing.T) {
 	api := &f.Fake{P: coldPlan(), G: discreteGPU()}
 	h := newHarness(t, ModeFirstRun, api)
-	h.focusID(gemma)
+	h.focusAction(actionNoVision)
 	h.key("space")
 
-	h.expect("[ ] Gemma-4-E4B-it")
+	h.expect(skipVisionNote)
+	h.focusJob(jobVision, gemma)
+	h.expect("( ) Gemma-4-E4B-it")
 	h.expect("Without Gemma-4-E4B-it, GAIA can't read images or screenshots.")
 	h.expect("enter continue")
 	h.key("enter")
@@ -115,19 +130,10 @@ func TestTooBigModelAsksWithRealNumbersAndCanBeConfirmed(t *testing.T) {
 		t.Errorf("focus = %s, want %s", r.id, qwen)
 	}
 	h.key("enter", "y")
-	// Setup's own models download first; Qwen3.6, not one of them, follows.
-	if !api.Called("run") {
+	if !api.Called("chat "+qwen+" ack=true") || !api.Called("run") {
 		t.Fatalf("confirmed download did not start: %v", api.CallList())
 	}
-	if len(h.m.dl.queue) != 1 || h.m.dl.queue[0] != qwen {
-		t.Fatalf("queue = %v, want Qwen3.6 after setup's run", h.m.dl.queue)
-	}
 	h.expect("Qwen3.6-35B-A3B queued")
-	api.SetRunState(setupapi.RunReady)
-	h.poll()
-	if !api.Called("download " + qwen) {
-		t.Fatalf("Qwen3.6 did not download after the run: %v", api.CallList())
-	}
 }
 
 func TestDiskShortfallNamesHowMuchToFreeAndTheModelToDrop(t *testing.T) {
@@ -139,11 +145,12 @@ func TestDiskShortfallNamesHowMuchToFreeAndTheModelToDrop(t *testing.T) {
 	h.expect("Needs 29.6 GB; only 10.0 GB free on C:. Free 19.6 GB or untick Qwen3.6-35B-A3B (saves 23.3 GB).")
 	h.expect("enter continue anyway")
 
-	// Every tick updates the totals.
-	h.focusID(qwen)
+	// Every choice updates the totals.
+	h.focusID(gemma)
 	h.key("space")
 	h.expect("Download 6.3 GB · free on C: 10.0 GB · after 3.7 GB")
 	h.expectNot("Free 19.6 GB")
+	h.focusID(qwen)
 	h.key("space")
 
 	h.key("enter")
@@ -191,8 +198,9 @@ func TestUnknownFitNeverInventsANumber(t *testing.T) {
 	}
 }
 
-// An FLM-only user picks the FLM model and finishes with no downloads.
-func TestFLMOnlyUserFinishesWithNoDownloads(t *testing.T) {
+// An FLM-only user picks the FLM model and downloads nothing; setup still
+// tests it before calling GAIA ready.
+func TestFLMOnlyUserDownloadsNothingAndIsTested(t *testing.T) {
 	api := &f.Fake{P: flmOnly(), G: discreteGPU()}
 	h := newHarness(t, ModeFirstRun, api)
 	h.expect("1 more already in Lemonade (press l)")
@@ -202,7 +210,7 @@ func TestFLMOnlyUserFinishesWithNoDownloads(t *testing.T) {
 	h.focusID(flm)
 	h.key("space")
 	h.expect("Default chat: gemma4-it-e2b-FLM (NPU)")
-	h.focusID(gemma)
+	h.focusAction(actionNoVision)
 	h.key("space")
 	h.focusID(emb)
 	h.key("space")
@@ -212,9 +220,11 @@ func TestFLMOnlyUserFinishesWithNoDownloads(t *testing.T) {
 	if !api.Called("chat " + flm) {
 		t.Fatalf("the FLM model was not saved as the chat model: %v", api.CallList())
 	}
-	if api.Called("run") || api.Called("download") {
+	if api.Called("download") {
 		t.Fatalf("an FLM-only finish must download nothing: %v", api.CallList())
 	}
+	api.SetRunState(setupapi.RunReady)
+	h.poll()
 	if h.m.Screen() != "ready" {
 		t.Fatalf("screen = %s, want ready", h.m.Screen())
 	}
@@ -228,10 +238,11 @@ func TestFLMOnlyUserFinishesWithNoDownloads(t *testing.T) {
 // Zero chat models with local chat is the one disabled Continue, with its
 // reason in words.
 func TestNoChatModelIsTheOnlyDisabledContinue(t *testing.T) {
-	api := &f.Fake{P: small16(), G: discreteGPU()}
+	p := small16()
+	p.ChatModel.ID = ""
+	p.Catalog = p.Catalog[1:2]
+	api := &f.Fake{P: p, G: discreteGPU()}
 	h := newHarness(t, ModeFirstRun, api)
-	h.focusID(gemma)
-	h.key("space")
 	h.expect(zeroChat)
 	h.expectNot("enter continue")
 	h.expect("Default chat: none")
@@ -239,7 +250,16 @@ func TestNoChatModelIsTheOnlyDisabledContinue(t *testing.T) {
 	if api.Called("run") || api.Called("skip") {
 		t.Fatal("Continue went ahead with no chat model")
 	}
-	// Ticking any chat model clears it.
+}
+
+// /models ticks, so it can reach zero chat models, and ticking one clears it.
+func TestUntickingTheOnlyChatModelInModelsSaysSo(t *testing.T) {
+	api := &f.Fake{P: small16(), G: discreteGPU()}
+	h := newHarness(t, ModeModels, api)
+	h.focusID(gemma)
+	h.key("space")
+	h.expect(zeroChat)
+	h.expect("Default chat: none")
 	h.focusID(qwen)
 	h.key("space")
 	h.expectNot(zeroChat)
@@ -261,25 +281,25 @@ func TestResetTicksTheRecommendedSetOnly(t *testing.T) {
 	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: discreteGPU()})
 	h.focusID(oss)
 	h.key("space")
-	h.focusID(gemma)
+	h.focusAction(actionNoVision)
 	h.key("space")
 	h.key("a")
-	h.expect("[x] Gemma-4-E4B-it")
-	h.expect("[ ] gpt-oss-20b")
+	h.expect("(•) Qwen3.6-35B-A3B")
+	h.expect("(•) Gemma-4-E4B-it")
+	h.expect("( ) gpt-oss-20b")
 }
 
 func TestChatPickerChoosesTheDefault(t *testing.T) {
 	api := &f.Fake{P: coldPlan(), G: discreteGPU()}
 	h := newHarness(t, ModeFirstRun, api)
-	h.focusID(oss)
-	h.key("space", "c")
+	h.key("c")
 	if h.m.Screen() != "chat-pick" {
 		t.Fatalf("c did not open the picker: %s", h.m.Screen())
 	}
-	h.key("down", "down", "enter")
-	h.expect("Default chat: gpt-oss-20b")
+	h.key("down", "enter")
+	h.expect("Default chat: Gemma-4-E4B-it")
 	h.key("enter")
-	if !api.Called("chat " + oss) {
+	if !api.Called("chat " + gemma) {
 		t.Fatalf("the picked chat model was not saved: %v", api.CallList())
 	}
 }
@@ -287,7 +307,7 @@ func TestChatPickerChoosesTheDefault(t *testing.T) {
 func TestBackPreservesTheSelection(t *testing.T) {
 	api := &f.Fake{P: coldPlan(), G: gpuShared()}
 	h := newHarness(t, ModeFirstRun, api)
-	h.focusID(oss)
+	h.focusID(emb)
 	h.key("space", "enter")
 	if h.m.Screen() != "gpu" {
 		t.Fatalf("screen = %s, want gpu", h.m.Screen())
@@ -296,7 +316,7 @@ func TestBackPreservesTheSelection(t *testing.T) {
 	if h.m.Screen() != "models" {
 		t.Fatalf("esc on the GPU step went to %s", h.m.Screen())
 	}
-	h.expect("[x] gpt-oss-20b")
+	h.expect("[ ] embeddinggemma-300m")
 	h.key("esc")
 	// esc on the first screen leaves to the host.
 	var got bool
@@ -317,27 +337,27 @@ func TestBackPreservesTheSelection(t *testing.T) {
 func TestDiscreteGPUHasNoGPUStepAndContiguousNumbers(t *testing.T) {
 	api := &f.Fake{P: coldPlan(), G: discreteGPU()}
 	h := newHarness(t, ModeFirstRun, api)
-	h.expect("step 2 of 2 · part 1 of 2")
+	h.expect("step 2 of 2 · part 1 of 3")
 	h.key("enter")
 	if h.m.Screen() != "download" {
 		t.Fatalf("screen = %s, want download", h.m.Screen())
 	}
-	h.expect("step 2 of 2 · part 2 of 2")
+	h.expect("step 2 of 2 · part 2 of 3")
 }
 
 func TestUnknownGPUHasNoGPUStep(t *testing.T) {
 	api := &f.Fake{P: coldPlan(), GPUErr: errDropped}
 	h := newHarness(t, ModeFirstRun, api)
-	h.expect("part 1 of 2")
+	h.expect("part 1 of 3")
 }
 
 func TestIntegratedGPUShowsTheStepWithConsentAndCancelByDefault(t *testing.T) {
 	api := &f.Fake{P: coldPlan(), G: gpuShared()}
 	h := newHarness(t, ModeFirstRun, api)
-	h.expect("step 2 of 2 · part 1 of 3")
+	h.expect("step 2 of 2 · part 1 of 4")
 	h.key("enter")
 	h.expect("Give the GPU more memory")
-	h.expect("step 2 of 2 · part 2 of 3")
+	h.expect("step 2 of 2 · part 2 of 4")
 	h.expect("This PC shares 128.0 GB between the CPU and the GPU. The GPU has 24.0 GB now.")
 	h.expect("CPU 104.0 GB  |  GPU 24.0 GB")
 	// The GPU memory the user reads, and the setting that gives it.
@@ -393,11 +413,9 @@ func TestRefusedElevationChangesNothingAndOffersThreeWays(t *testing.T) {
 func TestStepHiddenWhenTheUserGaveUpEveryModelThatGains(t *testing.T) {
 	api := &f.Fake{P: coldPlan(), G: gpuShared()}
 	h := newHarness(t, ModeFirstRun, api)
-	h.focusID(qwen)
-	h.key("space") // Qwen unticked; the default moves to Gemma? no: to oss? none ticked
 	h.focusID(oss)
 	h.key("space")
-	h.expect("part 1 of 2")
+	h.expect("part 1 of 3")
 }
 
 // coldStrixHalo is a first run on a Strix Halo before the GPU share grows:
@@ -428,7 +446,12 @@ func TestGPUStepRuleOnAColdStrixHalo(t *testing.T) {
 	}{
 		{"default model that doesn't fit yet", coldStrixHalo, nil, true},
 		{"user ticked it", coldStrixHalo, func(h *harness) { h.focusID(qwen); h.key("space") }, true},
-		{"user ticked then unticked it", coldStrixHalo, func(h *harness) { h.focusID(qwen); h.key("space", "space") }, false},
+		{"user picked it, then went back", coldStrixHalo, func(h *harness) {
+			h.focusID(qwen)
+			h.key("space")
+			h.focusID(gemma)
+			h.key("space")
+		}, false},
 		{"user picked their own chat model", coldStrixHalo, func(h *harness) { h.key("c", "enter") }, false},
 		{"chat model saved earlier", func() setupapi.Plan {
 			p := coldStrixHalo()
@@ -439,7 +462,7 @@ func TestGPUStepRuleOnAColdStrixHalo(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, ModeFirstRun, &f.Fake{P: tc.plan(), G: gpuShared()})
-			h.expect("[ ] Qwen3.6-35B-A3B")
+			h.expect("( ) Qwen3.6-35B-A3B")
 			if tc.keys != nil {
 				tc.keys(h)
 			}
@@ -447,9 +470,9 @@ func TestGPUStepRuleOnAColdStrixHalo(t *testing.T) {
 				t.Fatalf("GPU step shown = %v, want %v", got, tc.want)
 			}
 			if tc.want {
-				h.expect("part 1 of 3")
+				h.expect("part 1 of 4")
 			} else {
-				h.expect("part 1 of 2")
+				h.expect("part 1 of 3")
 			}
 			// Enter saves the choice and re-reads the plan: the answer must
 			// survive it, not flip because the save recorded a chat model.
@@ -462,12 +485,12 @@ func TestGPUStepRuleOnAColdStrixHalo(t *testing.T) {
 					t.Fatalf("screen = %s, want the GPU step", h.m.Screen())
 				}
 				h.expect("Qwen3.6-35B-A3B fits.")
-				h.expect("part 2 of 3")
+				h.expect("part 2 of 4")
 			} else {
 				if s := h.m.Screen(); s == "gpu" || s == "gpu-guide" {
 					t.Fatalf("Enter opened the GPU step the choice ruled out")
 				}
-				h.expectNot("part 2 of 3")
+				h.expectNot("part 2 of 4")
 			}
 		})
 	}
@@ -1024,7 +1047,7 @@ func TestUnknownFitKeepsItsWordsWhenTheRowIsTight(t *testing.T) {
 	}
 	h := newHarness(t, ModeFirstRun, &f.Fake{P: p, G: discreteGPU()})
 	for _, l := range strings.Split(h.screen(), "\n") {
-		if strings.Contains(l, "Gemma-4-E4B-it ") && !strings.Contains(l, "[?] fit unknown *") {
+		if strings.Contains(l, "(•) Qwen3.6-35B-A3B ") && !strings.Contains(l, "[?] fit unknown *") {
 			t.Fatalf("row lost its words: %q", l)
 		}
 	}
@@ -1036,18 +1059,18 @@ func TestUnknownFitKeepsItsWordsWhenTheRowIsTight(t *testing.T) {
 func TestStepsCarryOnFromTheHost(t *testing.T) {
 	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: gpuShared()},
 		func(o *Options) { o.StepsBefore = 2; o.StepsTotal = 3 })
-	h.expect("step 3 of 3 · part 1 of 3")
+	h.expect("step 3 of 3 · part 1 of 4")
 	h.key("enter")
-	h.expect("step 3 of 3 · part 2 of 3")
+	h.expect("step 3 of 3 · part 2 of 4")
 	h.key("s")
-	h.expect("step 3 of 3 · part 3 of 3")
+	h.expect("step 3 of 3 · part 3 of 4")
 }
 
 // A host with steps after this one keeps its total.
 func TestTheHostsTotalIsKept(t *testing.T) {
 	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: discreteGPU()},
 		func(o *Options) { o.StepsBefore = 1; o.StepsTotal = 4 })
-	h.expect("step 2 of 4 · part 1 of 2")
+	h.expect("step 2 of 4 · part 1 of 3")
 }
 
 // A single pull stops at its next chunk, after the cancel call returns. The
@@ -1200,7 +1223,8 @@ func TestLeavingAndComingBackKeepsTheChoice(t *testing.T) {
 	h.focusID(emb)
 	h.key("space") // untick the embedder
 	h.key("t")
-	h.m.sel.chat = oss
+	h.focusID(oss)
+	h.key("space")
 	var back *BackMsg
 	_, cmd := h.m.Update(keyMsg("esc"))
 	for _, msg := range collect(cmd) {
@@ -1213,7 +1237,7 @@ func TestLeavingAndComingBackKeepsTheChoice(t *testing.T) {
 	}
 	h2 := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: discreteGPU()},
 		func(o *Options) { o.Keep = back.Choices })
-	h2.expect("[x] gpt-oss-20b")
+	h2.expect("(•) gpt-oss-20b")
 	h2.expect("[ ] embeddinggemma-300m")
 	h2.expect("Default chat: gpt-oss-20b")
 	h2.expect("[x] Keep trying")
@@ -1308,7 +1332,7 @@ func TestNothingToGiveHidesTheStepsAndTheValue(t *testing.T) {
 	g.Method = setupapi.MethodGuided
 	g.GuidedValue, g.GuidedSteps = nil, nil
 	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: g})
-	h.expect("part 1 of 2")
+	h.expect("part 1 of 3")
 	h.key("enter")
 	if h.m.Screen() == "gpu" || h.m.Screen() == "gpu-guide" {
 		t.Fatalf("a PC with nothing to give got the GPU step: %s", h.m.Screen())
@@ -1426,6 +1450,9 @@ func TestUncheckedModelsAreKeptNotFailed(t *testing.T) {
 				}
 			}
 			h.expect(uncheckedLine)
+			h.key("d")
+			h.expect(raw)
+			h.key("d")
 			before := len(h.api.CallList())
 			h.key("r")
 			for _, c := range h.api.CallList()[before:] {
@@ -1433,8 +1460,6 @@ func TestUncheckedModelsAreKeptNotFailed(t *testing.T) {
 					t.Fatalf("r on a kept model re-downloaded or removed it: %v", h.api.CallList()[before:])
 				}
 			}
-			h.key("d")
-			h.expect(raw)
 		})
 	}
 }
@@ -1527,13 +1552,4 @@ func TestFinishedModelsDownloadDropsTheEmptyOverallLine(t *testing.T) {
 	h.expect("Downloads finished.")
 	h.expectNot("Overall")
 	h.expectNot("0/0 MB")
-}
-
-// Gemma reads Chat only while it is the chat model.
-func TestTheVisionModelReadsChatOnlyAsTheChatModel(t *testing.T) {
-	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: discreteGPU()})
-	h.expectNot("Chat+Vision")
-	h.expect("Vision")
-	h = newHarness(t, ModeFirstRun, &f.Fake{P: small16(), G: discreteGPU()})
-	h.expect("Chat+Vision")
 }

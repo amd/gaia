@@ -16,10 +16,12 @@
  *   - ensureUv()                     → Promise<void>
  *   - installBackend(opts)           → Promise<void>
  *   - ensureBackend(opts)            → Promise<string>  (returns gaia bin path)
+ *   - isBackendCurrent()             → boolean  (nothing to install or refresh)
  *   - getInstalledVersion(gaiaBin)   → string | null
  *   - findGaiaBin()                  → string | null
  *   - getState() / setState()        → state machine helpers
  *   - getLogPath() / getStatePath()  → path helpers
+ *   - readLogTail(maxLines)          → string[]
  *   - runPreChecks(opts)             → Promise<PreCheckResult>
  *   - STATES                         → state name constants
  *
@@ -54,6 +56,8 @@ const GAIA_PYTHON_BIN = IS_WINDOWS
 
 const STATE_FILE = path.join(GAIA_HOME, "electron-install-state.json");
 const LOG_FILE = path.join(GAIA_HOME, "electron-install.log");
+// hub/installer.py writes this once the flagship is installed; first-run setup installs it.
+const FLAGSHIP_SENTINEL = path.join(GAIA_HOME, "agents", "gaia", ".installed");
 
 // Room for what this installer writes: Python 3.12, uv's wheel cache and the
 // `amd-gaia[ui]` venv (0.3 GB on macOS arm64 for 0.25.1rc5, under 1 GB in
@@ -134,6 +138,16 @@ const STAGES = Object.freeze({
   CREATE_VENV: "create-venv",
   INSTALL_PACKAGE: "install-package",
   VERIFY: "verify",
+  // After the package, and outside the weighted bar: it has no percent to report.
+  AGENT_REFRESH: "agent-refresh",
+});
+
+// Why an install failed, for what the app tells the user to do about it.
+const FAILURE_REASONS = Object.freeze({
+  DISK: "disk",
+  NETWORK: "network",
+  TLS: "tls",
+  LOCKED: "locked",
 });
 
 // Stage an older installer recorded while it ran `gaia init`; the package was
@@ -314,6 +328,16 @@ function getStatePath() {
   return STATE_FILE;
 }
 
+/** The end of the install log, or nothing when no install has written one. */
+function readLogTail(maxLines = 40) {
+  try {
+    return fs.readFileSync(LOG_FILE, "utf8").split(/\r?\n/).filter(Boolean).slice(-maxLines);
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+}
+
 // ── State machine ────────────────────────────────────────────────────────────
 
 /**
@@ -389,7 +413,8 @@ function computeOverallPercent(stage, withinStagePercent) {
 function makeProgressReporter(onProgress) {
   const safe = typeof onProgress === "function" ? onProgress : () => {};
   return function report(stage, withinStagePercent, message) {
-    const percent = computeOverallPercent(stage, withinStagePercent);
+    const percent =
+      withinStagePercent === null ? null : computeOverallPercent(stage, withinStagePercent);
     try {
       safe(stage, percent, message || "");
     } catch (err) {
@@ -929,13 +954,22 @@ async function runPreChecks(opts = {}) {
 // ── uv install ───────────────────────────────────────────────────────────────
 
 class InstallError extends Error {
-  constructor(message, { stage, code, suggestion } = {}) {
+  constructor(message, { stage, code, suggestion, reason } = {}) {
     super(message);
     this.name = "InstallError";
     this.stage = stage || null;
     this.code = code || null;
     this.suggestion = suggestion || null;
+    this.reason = reason || null;
   }
+}
+
+/** Which FAILURE_REASONS a uv failure's output shows, or null. */
+function failureReason(output) {
+  if (isFileLockedError(output)) return FAILURE_REASONS.LOCKED;
+  if (isTlsCertError(output)) return FAILURE_REASONS.TLS;
+  if (isTransientNetworkError(output)) return FAILURE_REASONS.NETWORK;
+  return null;
 }
 
 /**
@@ -1396,6 +1430,11 @@ function resolveBackendVersion(opts = {}) {
   }
 }
 
+/** The version the app ships with, whatever backend this run was asked to install. */
+function appVersion() {
+  return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version;
+}
+
 /**
  * The PEP 440 spelling of the app's npm version: `0.25.0-rc.1` -> `0.25.0rc1`.
  * pip pins and `gaia --version` use this form; a final version is unchanged.
@@ -1499,6 +1538,7 @@ async function installBackend(opts = {}) {
         {
           stage: STAGES.CREATE_VENV,
           code: venvResult.code,
+          reason: failureReason(`${venvResult.stdout || ""}\n${venvResult.stderr || ""}`),
           suggestion: `Try creating it manually:\n  ${manual}\nThen restart GAIA.`,
         }
       );
@@ -1615,6 +1655,7 @@ async function installBackend(opts = {}) {
       {
         stage: STAGES.INSTALL_PACKAGE,
         code: installResult.code,
+        reason: failureReason(output),
         suggestion,
       }
     );
@@ -1693,7 +1734,51 @@ async function installBackend(opts = {}) {
   log("Backend install complete");
 }
 
+// ── Agent refresh ────────────────────────────────────────────────────────────
+
+/**
+ * Update the flagship to this release, without Lemonade or models. A PC with
+ * no flagship is skipped: first-run setup installs it.
+ *
+ * The stage stays recorded until this succeeds, so an update that failed or was
+ * quit part way through refreshes again on the next launch.
+ */
+async function refreshAgent(gaiaBin, opts = {}) {
+  if (!fs.existsSync(FLAGSHIP_SENTINEL)) {
+    log("No GAIA agent installed yet — first-run setup installs it");
+    return;
+  }
+  const version = resolveBackendVersion(opts);
+  setState(STATES.INSTALLING, { stage: STAGES.AGENT_REFRESH, version });
+  makeProgressReporter(opts.onProgress)(STAGES.AGENT_REFRESH, null, "Updating the GAIA agent");
+
+  const result = await runCommand(gaiaBin, ["init", "--agent-only"], {
+    stageLabel: "agent",
+    env: { ...process.env, COLUMNS: "1000" },
+  });
+  if (result.code !== 0) {
+    const lastLine = `${result.stderr || ""}`.trim().split(/\r?\n/).pop();
+    throw new InstallError(
+      lastLine ? lastLine.replace(/^Error:\s*/, "") : `The GAIA agent update exited ${result.code}.`,
+      { stage: STAGES.AGENT_REFRESH, code: result.code }
+    );
+  }
+  setState(STATES.READY, { version, installedVersion: getInstalledVersion(gaiaBin) });
+}
+
 // ── Version-aware ensure ─────────────────────────────────────────────────────
+
+/**
+ * Whether the backend is finished at the app's version. A recorded failure or
+ * unfinished stage says no, so it reaches ensureBackend and the user.
+ */
+function isBackendCurrent() {
+  const bin = findGaiaBin();
+  if (!bin) return false;
+  const prev = getState();
+  if (prev && prev.state !== STATES.READY) return false;
+  return getInstalledVersion(bin) === toPep440(appVersion());
+}
 
 /**
  * The installed backend version, or null when it is not installed.
@@ -1810,6 +1895,7 @@ async function ensureBackend(opts = {}) {
         }.`,
         {
           stage: STAGES.PRE_CHECKS,
+          reason: FAILURE_REASONS.DISK,
           suggestion: `Free at least ${requiredMb} MB at ${path.dirname(
             GAIA_HOME
           )} and try again.`,
@@ -1852,11 +1938,16 @@ async function ensureBackend(opts = {}) {
       !prev ||
       prev.state === STATES.READY ||
       prev.stage === LEGACY_SETUP_STAGE ||
-      prev.stage === STAGES.VERIFY;
+      prev.stage === STAGES.VERIFY ||
+      prev.stage === STAGES.AGENT_REFRESH;
     if (existingBin) {
       const installedVersion = getInstalledVersion(existingBin);
       const versionMatches =
         expectedVersion !== null && installedVersion === toPep440(expectedVersion);
+      if (versionMatches && packageFinished && prev && prev.stage === STAGES.AGENT_REFRESH) {
+        await refreshAgent(existingBin, opts);
+        return existingBin;
+      }
       if (versionMatches && packageFinished) {
         log(
           `GAIA backend already installed at version ${installedVersion} — nothing to do`
@@ -1894,6 +1985,7 @@ async function ensureBackend(opts = {}) {
       throw err;
     }
 
+    await refreshAgent(verified, opts);
     return verified;
   } catch (err) {
     if (err instanceof InstallError) {
@@ -1921,6 +2013,7 @@ module.exports = {
   ensureUv,
   installBackend,
   ensureBackend,
+  isBackendCurrent,
   getInstalledVersion,
   findGaiaBin,
   toPep440,
@@ -1951,10 +2044,12 @@ module.exports = {
   logError,
   getLogPath,
   getStatePath,
+  readLogTail,
 
   // Constants
   STATES,
   STAGES,
+  FAILURE_REASONS,
   GAIA_HOME,
   GAIA_VENV,
   GAIA_BIN,

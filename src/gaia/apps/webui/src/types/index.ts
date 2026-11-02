@@ -4,7 +4,7 @@
 /** Types shared across the GAIA Agent UI frontend. */
 
 import type { TurnSummaryResponse } from './api.gen';
-import type { SetupCatalogEntry, SetupModelProgress, SetupOverall } from './setup';
+import type { SetupCatalogEntry, SetupComponent, SetupModelProgress, SetupOverall, SetupTest } from './setup';
 
 export * from './setup';
 
@@ -1039,6 +1039,9 @@ export interface SetupRunStatus {
     gaia_lemonade?: boolean;
     /** A model's download failed in this run; its row says why. */
     model_failed?: boolean;
+    /** Each piece besides the models, by id. */
+    components?: Record<string, 'active' | 'done' | 'failed'>;
+    tests?: SetupTest[];
     /** The run only starts the model server; models are chosen and pulled after. */
     server_only?: boolean;
     /** The chat model setup chose, once it has said. */
@@ -1067,6 +1070,12 @@ export interface SetupPlan {
     disk_warning?: string | null;
     skipped_models?: string[];
     catalog?: SetupCatalogEntry[];
+    /** Backends Lemonade reports for this PC. */
+    backends?: Array<{ recipe: string; backend: string; state: string | null; default: boolean }>;
+    /** Everything else setup fetches. */
+    components?: SetupComponent[];
+    /** The model the user chose to read images; null is GAIA's choice. */
+    vision_model?: string | null;
 }
 
 /** A task a new chat offers, from what is set up on this PC. */

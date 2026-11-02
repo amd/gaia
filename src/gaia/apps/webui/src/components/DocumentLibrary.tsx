@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { ensureModel } from '../stores/modelNeededStore';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2, RefreshCcw } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
@@ -315,6 +316,7 @@ export function DocumentLibrary() {
         uploader: () => Promise<Document>,
         onFolder?: () => Promise<void>,
     ) => {
+        if (!(await ensureModel('embedding'))) return;
         const ext = filename.includes('.') ? '.' + filename.split('.').pop()?.toLowerCase() : '';
         const unsupportedMessage = ext && !isExtensionSupported(ext)
             ? (getUnsupportedCategory(ext)?.message ?? `The file type "${ext}" is not supported for indexing.`)

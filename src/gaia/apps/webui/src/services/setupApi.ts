@@ -3,7 +3,7 @@
 
 /** First-run setup (`/api/setup/*`, the same `gaia init` the TUI runs) and the GPU memory split (`/api/gpu-memory`). */
 
-import type { SetupCheck, SetupRunStatus, SetupPlan, StartScreen, PreflightReport, SetupConfirm, GpuMemoryStatus } from '../types';
+import type { SetupCheck, SetupRunStatus, SetupPlan, StartScreen, PreflightReport, SetupConfirm, GpuMemoryStatus, ModelNeed, ModelNeedJob } from '../types';
 import { ApiError, apiFetch } from './api';
 
 /** The confirmation a setup choice's 409 asks for, or null for any other error. */
@@ -89,6 +89,16 @@ export async function getSetupPlan(): Promise<SetupPlan> {
 /** Pick setup's chat model before it starts; returns the new plan. A 409 `no_fit` asks to confirm. */
 export async function chooseSetupChatModel(modelId: string, acknowledgeNoFit = false): Promise<SetupPlan> {
     return apiFetch('POST', '/setup/chat-model', { model_id: modelId, acknowledge_no_fit: acknowledgeNoFit });
+}
+
+/** Pick the model that reads images, or null for GAIA's choice; returns the new plan. */
+export async function chooseSetupVisionModel(modelId: string | null): Promise<SetupPlan> {
+    return apiFetch('POST', '/setup/vision-model', { model_id: modelId });
+}
+
+/** Whether a job needs a model that isn't on this PC, and which. */
+export async function getModelNeed(job: ModelNeedJob): Promise<ModelNeed> {
+    return apiFetch('GET', `/setup/needs/${job}`);
 }
 
 // -- GPU memory split (integrated GPUs) -------------------------------------------

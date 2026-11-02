@@ -2392,6 +2392,11 @@ plan and make one set of choices.
     nothing. **403** without `X-Gaia-UI: 1`; **503** when the plan can't be
     worked out.
 
+    Each `catalog` entry says `support` (`verified`, `untested`, or null for an
+    optional model), `reads_images`, `feature_tier` and `source`. `components`
+    lists what setup fetches besides the models, `backends` what Lemonade
+    reports for this PC, and `vision_model` the user's vision pick.
+
     The same plan also carries what the model picker needs: `catalog` (every
     model the user can pick, with `roles`, `purpose`, `if_skipped`, `size_gb`
     left to download, `downloaded`, `recommended`, `selected`, `skipped`,
@@ -2415,6 +2420,21 @@ plan and make one set of choices.
     this PC; send it again with that field set to use it anyway. **422** when
     the model isn't a chat model GAIA or the server knows; **503** when the
     model server isn't running yet.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/vision-model">
+    Pick the model that reads images. Body: `{"model_id": "..."}`, or `null` for
+    GAIA's choice: the chat model when it reads images, otherwise Gemma 4 E4B.
+    Saved as `vision_model`. Returns the new plan. **422** when the model can't
+    read images.
+  </Accordion>
+
+  <Accordion title="GET /api/setup/needs/{job}">
+    Whether a job needs a model that isn't on this PC. `job` is `chat`, `vision`,
+    `embedding`, `speech`, `voice` or `image_creation`. Returns `{"job",
+    "needed", "model": {"id", "name", "size_gb", "source"}, "disk_free_gb"}`.
+    `needed` is false when the model is here, chat runs in the cloud, or the
+    model server isn't answering. **422** for any other `job`.
   </Accordion>
 
   <Accordion title="POST /api/setup/models/skip">
@@ -2465,6 +2485,10 @@ plan and make one set of choices.
   </Accordion>
 
   <Accordion title="GET /api/setup/status">
+    `components` maps each piece besides the models to `active`, `done` or
+    `failed`. `tests` holds the Test step's rows: `job`, `subject`, `state`,
+    `error`, `kind` (`memory`, `stuck`, `broken`) and `seconds`.
+
     The running (or last) setup: `state` (`running`, `verifying`, `ready`,
     `failed`, `cancelled`, or `idle` when none has run), the three steps with
     their status, progress `text`, `percent` and `size` (e.g. `"1.20 GB of

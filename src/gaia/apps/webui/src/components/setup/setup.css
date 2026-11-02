@@ -618,3 +618,10 @@
     .setup-step.is-active > .setup-step-body,
     .dl-row.is-failed, .dl-row.is-ready .dl-icon, .setup-done { animation: none; }
 }
+
+.mc-chip.is-verified { background: var(--accent-green-dim); color: var(--accent-green); }
+.mc-chip.is-untested { background: var(--accent-yellow-dim); color: var(--accent-yellow); }
+.mc-job { display: flex; flex-direction: column; gap: 8px; }
+.mc-job-title { color: var(--text-primary); font-size: 14px; font-weight: 600; }
+.mc-job-line { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; color: var(--text-primary); font-size: 14px; }
+.mc-row.is-off { opacity: 0.7; }

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 
 import logging
-import os
 import re
 import subprocess
 from importlib.metadata import PackageNotFoundError
@@ -97,40 +96,5 @@ def get_version_with_hash() -> str:
         return f"v{__version__}"
 
 
-def write_version_files() -> None:
-    """Write version information to version.txt and installer/version.nsh files.
-    Only used during build/installer process."""
-    try:
-        # Write version with hash to version.txt
-        with open("version.txt", "w", encoding="utf-8") as f:
-            f.write(get_version_with_hash())
-
-        # Write version with hash to installer/version.nsh
-        installer_dir = os.path.join("installer")
-        os.makedirs(installer_dir, exist_ok=True)
-        with open(
-            os.path.join(installer_dir, "version.nsh"), "w", encoding="utf-8"
-        ) as f:
-            f.write(f'!define GAIA_VERSION "{get_version_with_hash()}"\n')
-            f.write(f'!define LEMONADE_VERSION "{LEMONADE_VERSION}"\n')
-
-        print(
-            "Version files created successfully: version.txt and installer/version.nsh"
-        )
-    except Exception as e:
-        print(f"Failed to write version files: {str(e)}")
-        raise
-
-
 # For regular package usage - just version number
 version = get_package_version()
-
-
-def main():
-    """Generate version files when the script is run directly.
-    Only used during build/installer process."""
-    write_version_files()
-
-
-if __name__ == "__main__":
-    main()

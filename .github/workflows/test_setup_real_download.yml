@@ -1,0 +1,93 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Nightly: a real first run on each OS, with nothing faked and nothing cached.
+# `gaia init --yes` installs the real embedded Lemonade and the llama.cpp
+# backend, downloads a small real chat model and the real embedder, loads them
+# on the CPU and runs its real checks. The real backend must then say setup is
+# done and that the models load.
+#
+# Why this exists beside test_setup_journey.yml: a fake server proves the screens
+# and GAIA's calls. Only a real server proves those calls download something, and
+# a passing runtime says nothing about a cold download (#1655).
+#
+# The small model is set with `gaia config set default_model`: `gaia init` has no
+# flag for it on a real run. --chat-model only applies with --check and exits 2
+# otherwise, and --use-model needs a model server already running, which is what
+# a cold first run is here to install.
+
+name: Setup real download
+
+on:
+  schedule:
+    - cron: '23 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: setup-real-download
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # A Lemonade built-in small enough for a hosted runner's CPU.
+  CHAT_MODEL: Qwen3-0.6B-GGUF
+
+jobs:
+  download:
+    name: Real download (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install this checkout
+        run: python -m pip install -e ".[ui]"
+
+      - name: Confirm this is a first run
+        run: python installer/headless/check_real_setup.py --cold
+
+      - name: Choose the small chat model
+        run: python -m gaia.cli config set default_model "${CHAT_MODEL}"
+
+      - name: gaia init
+        timeout-minutes: 60
+        run: python -m gaia.cli init --profile gaia --yes --skip-webui-build
+
+      - name: Start the real backend
+        run: |
+          mkdir -p "${RUNNER_TEMP}/logs"
+          nohup python -m gaia.ui.server --host 127.0.0.1 --port 4200 \
+            >"${RUNNER_TEMP}/logs/backend.log" 2>&1 &
+
+      - name: The backend says setup is done and the models load
+        timeout-minutes: 20
+        run: >-
+          python installer/headless/check_real_setup.py
+          --url http://127.0.0.1:4200 --chat-model "${CHAT_MODEL}"
+
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p "${RUNNER_TEMP}/logs"
+          find "${HOME}/.gaia" -name '*.log' -exec cp {} "${RUNNER_TEMP}/logs/" \; 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: real-download-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/logs/
+          retention-days: 14
