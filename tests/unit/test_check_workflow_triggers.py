@@ -129,7 +129,109 @@ class TestRejected:
         assert check_workflow_triggers.run_check() == 1
 
 
+GATED_JOB = (
+    "jobs:\n  t:\n    if: contains(github.event.pull_request.labels.*.name, "
+    "'ready_for_ci')\n    runs-on: ubuntu-latest\n    steps: []\n"
+)
+
+
+class TestReadyForCiLabel:
+    """#2939: a workflow that checks `ready_for_ci` must wake up on `labeled`."""
+
+    def test_types_with_labeled_accepted(self, workflow_dir):
+        _write(
+            workflow_dir,
+            "ok.yml",
+            "on:\n  pull_request:\n    types: [opened, synchronize, labeled]\n"
+            + GATED_JOB,
+        )
+        assert check_workflow_triggers.run_check() == 0
+
+    def test_block_sequence_types_with_labeled_accepted(self, workflow_dir):
+        _write(
+            workflow_dir,
+            "ok.yml",
+            "on:\n  pull_request:\n    types:\n      - opened\n      - labeled\n"
+            + GATED_JOB,
+        )
+        assert check_workflow_triggers.run_check() == 0
+
+    def test_workflow_without_the_label_is_not_policed(self, workflow_dir):
+        _write(
+            workflow_dir,
+            "ok.yml",
+            "on:\n  pull_request:\n    types: [opened]\njobs: {}\n",
+        )
+        assert check_workflow_triggers.run_check() == 0
+
+    def test_label_check_without_a_pr_trigger_is_not_policed(self, workflow_dir):
+        _write(workflow_dir, "ok.yml", "on:\n  workflow_dispatch:\n" + GATED_JOB)
+        assert check_workflow_triggers.run_check() == 0
+
+    def test_types_without_labeled_rejected(self, workflow_dir, capsys):
+        _write(
+            workflow_dir,
+            "bad.yml",
+            "on:\n  pull_request:\n"
+            "    types: [opened, synchronize, reopened, ready_for_review]\n"
+            + GATED_JOB,
+        )
+        assert check_workflow_triggers.run_check() == 1
+        err = capsys.readouterr().err
+        assert "bad.yml" in err and "labeled" in err and "#2939" in err
+
+    def test_unlabeled_alone_does_not_count(self, workflow_dir):
+        """`unlabeled` is a different event; it never fires when a label is added."""
+        _write(
+            workflow_dir,
+            "bad.yml",
+            "on:\n  pull_request:\n    types: [opened, unlabeled]\n" + GATED_JOB,
+        )
+        assert check_workflow_triggers.run_check() == 1
+
+    def test_bare_pull_request_uses_default_types_and_is_rejected(self, workflow_dir):
+        """GitHub's default types are opened/synchronize/reopened — no `labeled`."""
+        _write(workflow_dir, "bad.yml", "on:\n  pull_request:\n" + GATED_JOB)
+        assert check_workflow_triggers.run_check() == 1
+
+    def test_pull_request_without_types_key_rejected(self, workflow_dir):
+        _write(
+            workflow_dir,
+            "bad.yml",
+            "on:\n  pull_request:\n    paths: ['src/**']\n" + GATED_JOB,
+        )
+        assert check_workflow_triggers.run_check() == 1
+
+    def test_scalar_types_rejected(self, workflow_dir):
+        _write(
+            workflow_dir,
+            "bad.yml",
+            "on:\n  pull_request:\n    types: opened\n" + GATED_JOB,
+        )
+        assert check_workflow_triggers.run_check() == 1
+
+    def test_pull_request_target_is_policed_too(self, workflow_dir):
+        _write(
+            workflow_dir,
+            "bad.yml",
+            "on:\n  pull_request_target:\n    types: [opened]\n" + GATED_JOB,
+        )
+        assert check_workflow_triggers.run_check() == 1
+
+    def test_each_offending_event_is_reported(self, workflow_dir, capsys):
+        _write(
+            workflow_dir,
+            "bad.yml",
+            "on:\n  pull_request:\n    types: [opened]\n"
+            "  pull_request_target:\n    types: [opened]\n" + GATED_JOB,
+        )
+        assert check_workflow_triggers.run_check() == 1
+        err = capsys.readouterr().err
+        assert "on.pull_request.types" in err
+        assert "on.pull_request_target.types" in err
+
+
 class TestRealRepository:
     def test_no_workflow_filters_on_base_branch(self):
-        """Regression guard for #2767 against the repo's actual workflows."""
+        """Regression guard for #2767 and #2939 against the real workflows."""
         assert check_workflow_triggers.run_check() == 0
