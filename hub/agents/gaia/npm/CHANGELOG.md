@@ -67,6 +67,14 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **A printed test log no longer marks an answer verified.** A `run_python`
+  snippet that printed an old log with a pytest summary counted as a test run
+  (#4013). Python code now counts only when it runs a test runner itself:
+  `pytest.main()`, `unittest.main()`, or a launched process whose program is
+  the runner, such as `subprocess.run([sys.executable, '-m', 'pytest'])`,
+  `os.system('npm test')`, `sh -c 'pytest -q'` or `uv run pytest`. Reading a
+  log with `cat` or `type` does not count, whatever the log is named. A runner
+  reached only through an imported helper reads as unverified.
 - **A slide request gets a slide file, not a picture.** Asked for a slide or
   deck, the agent ran Stable Diffusion and handed back a blurry image of one.
   It now asks whether you want PowerPoint (.pptx) or HTML when you didn't say,
