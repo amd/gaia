@@ -436,3 +436,103 @@ def test_the_provider_surfaces_variation_errors(monkeypatch, tmp_path):
     with pytest.raises(LemonadeClientError, match="does not exist"):
         provider.create_image_variation(tmp_path / "absent.png")
     assert len(responses.calls) == 0
+
+
+# --- input checks run before any request or model load -----------------------
+
+_NOT_PNG = {
+    "jpeg": b"\xff\xd8\xff\xe0" + b"\x00" * 16,
+    "empty": b"",
+    "text": b"hello, I am not an image",
+    "truncated signature": b"\x89PNG\r\n",
+}
+
+
+@pytest.mark.parametrize("content", list(_NOT_PNG.values()), ids=list(_NOT_PNG))
+@responses.activate
+def test_a_non_png_named_png_is_rejected_by_its_bytes(client, tmp_path, content):
+    fake = tmp_path / "fake.png"
+    fake.write_bytes(content)
+
+    with pytest.raises(LemonadeClientError, match="PNG only"):
+        client.create_image_variation(fake)
+    assert len(responses.calls) == 0
+
+
+@pytest.mark.parametrize(
+    "size", ["5١٢x512", "512x５１２", "99999999x99999999", "4097x512"]
+)
+@responses.activate
+def test_a_non_ascii_or_oversized_size_is_rejected(client, source, size):
+    with pytest.raises(LemonadeClientError, match="WIDTHxHEIGHT|too large"):
+        client.create_image_variation(source, size=size)
+    assert len(responses.calls) == 0
+
+
+@responses.activate
+def test_the_largest_allowed_side_is_accepted(client, source):
+    from gaia.llm.lemonade_client import IMAGE_VARIATION_MAX_SIDE
+
+    responses.add(responses.POST, URL, json={"data": []})
+
+    client.create_image_variation(source, size=f"{IMAGE_VARIATION_MAX_SIDE}x512")
+
+    assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_an_oversized_file_is_rejected_without_reading_it(client, source, monkeypatch):
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.IMAGE_VARIATION_MAX_BYTES",
+        source.stat().st_size - 1,
+    )
+    opened = []
+    real_open = Path.open
+    monkeypatch.setattr(
+        Path,
+        "open",
+        lambda self, *a, **k: opened.append(self) or real_open(self, *a, **k),
+    )
+
+    with pytest.raises(LemonadeClientError, match="at most"):
+        client.create_image_variation(source)
+    assert opened == []
+    assert len(responses.calls) == 0
+
+
+def test_a_file_exactly_at_the_cap_is_accepted(source, monkeypatch):
+    from gaia.llm.lemonade_client import check_image_variation_request
+
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.IMAGE_VARIATION_MAX_BYTES", source.stat().st_size
+    )
+    assert check_image_variation_request(source, 1, None) == source
+
+
+@pytest.mark.parametrize(
+    "kind, kwargs",
+    [
+        ("jpeg named png", {}),
+        ("unicode size", {"size": "5١٢x512"}),
+        ("oversized size", {"size": "99999999x99999999"}),
+        ("oversized file", {}),
+    ],
+)
+def test_the_tool_rejects_bad_input_before_touching_lemonade(
+    variation_tool, source, tmp_path, monkeypatch, kind, kwargs
+):
+    host, create, out = variation_tool
+    path = source
+    if kind == "jpeg named png":
+        path = tmp_path / "photo.png"
+        path.write_bytes(_NOT_PNG["jpeg"])
+    if kind == "oversized file":
+        monkeypatch.setattr("gaia.llm.lemonade_client.IMAGE_VARIATION_MAX_BYTES", 1)
+
+    result = create(str(path), model="SD-Turbo", **kwargs)
+
+    assert result["status"] == "error", result
+    host.sd_client.list_sd_models.assert_not_called()
+    host.sd_client.load_model.assert_not_called()
+    host.sd_client.create_image_variation.assert_not_called()
+    assert list(out.glob("variation_*")) == []

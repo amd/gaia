@@ -3744,30 +3744,60 @@ class OwnedServerProcess:
         self.kill_tree(get_logger(__name__))
 
 
+#: Largest source image /images/variations is sent; the file is uploaded whole.
+IMAGE_VARIATION_MAX_BYTES = 20 * 1024 * 1024
+#: Largest output side accepted for a variation; Lemonade's image models are
+#: tuned for 512-1024 and a huge size only fails slowly on the server.
+IMAGE_VARIATION_MAX_SIDE = 4096
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
 def check_image_variation_request(
     image_path: Union[str, Path], n: int, size: Optional[str]
 ) -> Path:
     """Validate an ``/images/variations`` request; return the image path.
 
+    Reads only the file's size and first 8 bytes, so it is cheap to call before
+    any model load.
+
     Raises:
-        LemonadeClientError: A missing or non-PNG file, *n* outside 1-10, or a
-            *size* that is not ``WIDTHxHEIGHT``.
+        LemonadeClientError: A missing, oversized or non-PNG file, *n* outside
+            1-10, or a *size* that is not ``WIDTHxHEIGHT`` within
+            ``IMAGE_VARIATION_MAX_SIDE``.
     """
     path = Path(image_path).expanduser()
     if not path.is_file():
         raise LemonadeClientError(f"Image file does not exist: {path}")
-    if path.suffix.lower() != ".png":
-        raise LemonadeClientError(
-            f"Image variations need a PNG, got '{path.name}'. Lemonade's "
-            "variations endpoint accepts PNG only."
-        )
     if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 10:
         raise LemonadeClientError(
             f"Image variations need n between 1 and 10, got {n!r}."
         )
-    if size is not None and not re.fullmatch(r"[1-9]\d*x[1-9]\d*", size):
+    if size is not None:
+        match = re.fullmatch(r"([1-9][0-9]*)x([1-9][0-9]*)", size)
+        if not match:
+            raise LemonadeClientError(
+                f"Image size must be WIDTHxHEIGHT, e.g. 512x512, got {size!r}."
+            )
+        if max(int(match.group(1)), int(match.group(2))) > IMAGE_VARIATION_MAX_SIDE:
+            raise LemonadeClientError(
+                f"Image size {size} is too large; each side must be at most "
+                f"{IMAGE_VARIATION_MAX_SIDE}."
+            )
+    try:
+        file_size = path.stat().st_size
+        if file_size > IMAGE_VARIATION_MAX_BYTES:
+            raise LemonadeClientError(
+                f"Image '{path.name}' is {file_size} bytes; image variations "
+                f"accept at most {IMAGE_VARIATION_MAX_BYTES} bytes."
+            )
+        with path.open("rb") as handle:
+            signature = handle.read(len(_PNG_SIGNATURE))
+    except OSError as exc:
+        raise LemonadeClientError(f"Cannot read image {path}: {exc}") from exc
+    if signature != _PNG_SIGNATURE:
         raise LemonadeClientError(
-            f"Image size must be WIDTHxHEIGHT, e.g. 512x512, got {size!r}."
+            f"Image variations need a PNG, and '{path.name}' is not one. "
+            "Lemonade's variations endpoint accepts PNG only."
         )
     return path
 
