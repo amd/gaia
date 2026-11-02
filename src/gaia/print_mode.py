@@ -49,7 +49,10 @@ def read_prompt(prompt: Optional[str]) -> str:
             text = stdin_buffer.read().decode("utf-8-sig")
         except UnicodeDecodeError as exc:
             raise ValueError(
-                "gaia -p expects piped stdin to be a UTF-8 text file."
+                "gaia -p expects piped stdin to be a UTF-8 text file. Save the "
+                "prompt as UTF-8 (in Windows PowerShell 5.1: "
+                "`Out-File -Encoding utf8`), or pass it as an argument: "
+                'gaia -p "<prompt>".'
             ) from exc
     text = text.strip()
     if not text:
