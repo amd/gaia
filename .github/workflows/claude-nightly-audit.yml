@@ -346,7 +346,7 @@ jobs:
       - name: Run Claude (${{ matrix.dimension }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064  # v1.0.265
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
           anthropic_api_key: ${{ needs.preflight.outputs.claude_account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -728,7 +728,7 @@ jobs:
       - name: Synthesize and file one issue per defect
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064  # v1.0.265
         with:
           anthropic_api_key: ${{ needs.preflight.outputs.claude_account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ needs.preflight.outputs.claude_account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
