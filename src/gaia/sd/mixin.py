@@ -303,7 +303,10 @@ class SDToolsMixin:
                         seed=seed,
                         bg_removal=bg_removal,
                     )
-                    safe_model = re.sub(r"[^\w\s-]", "", model).strip() or "trellis"
+                    safe_model = (
+                        re.sub(r"\s+", "_", re.sub(r"[^\w\s-]", "", model).strip())
+                        or "trellis"
+                    )
                     digest = hashlib.sha256(mesh).hexdigest()[:8]
                     output = self.sd_output_dir / (
                         f"model3d_{safe_model}_{datetime.now():%Y%m%d_%H%M%S}_{digest}.glb"
@@ -654,7 +657,7 @@ class SDToolsMixin:
             Path to saved image file
         """
         # Create safe filename from prompt
-        safe_prompt = re.sub(r"[^\w\s-]", "", prompt[:40]).strip().replace(" ", "_")
+        safe_prompt = re.sub(r"\s+", "_", re.sub(r"[^\w\s-]", "", prompt[:40]).strip())
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # Content hash: two fast Turbo runs of one prompt land in the same second.
         digest = hashlib.sha256(image_bytes).hexdigest()[:8]
