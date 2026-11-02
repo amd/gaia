@@ -89,6 +89,11 @@ const PICKER_FEED_PAGES = 3;
 // shows nothing, so the next launch is what finds out.
 const INSTALL_ATTEMPT_PATH = path.join(os.homedir(), ".gaia", "update-attempt.json");
 const PREVIOUS_VERSION_KEY = "previousAppVersion";
+const LAUNCHES_SINCE_UPDATE_KEY = "launchesSinceUpdate";
+// Same cap as the TUI's sumsAtOnce, to go easy on proxies.
+const RELEASE_CHECKS_AT_ONCE = 8;
+// A backend that dies weeks after an update isn't the update's fault.
+const START_FAILURE_REVERT_LAUNCHES = 3;
 
 // The installer removes the old version before unpacking the new one.
 const MIN_INSTALL_FREE_BYTES = 1024 * 1024 * 1024;
@@ -724,7 +729,9 @@ async function listReleases() {
       0,
       MAX_RELEASES_SHOWN * 2
     );
-    const ready = await Promise.all(candidates.map((r) => _releaseHasUpdate(r.tag_name)));
+    const ready = await _mapLimited(candidates, RELEASE_CHECKS_AT_ONCE, (r) =>
+      _releaseHasUpdate(r.tag_name)
+    );
     installable = candidates.filter((_, i) => ready[i]).slice(0, MAX_RELEASES_SHOWN);
   } catch (err) {
     return { error: _releasesErrorMessage(err, "list releases") };
@@ -959,6 +966,20 @@ function _abandonDownload() {
   _applyInstallPolicy();
 }
 
+/** Promise.all over items, with at most `limit` calls in flight. */
+async function _mapLimited(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 function _readJsonFile(file) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8")) || {};
@@ -1019,10 +1040,30 @@ async function revertUpdate() {
   }
 }
 
-/** The app opened but its backend didn't come up: offer the way back if there is one. */
+/** True for the first few launches after an update landed, the only time a failed start blames it. */
+function _updateIsRecent() {
+  if (_readJsonFile(INSTALL_ATTEMPT_PATH).from) return true;
+  const launches = _readJsonFile(UPDATE_CONFIG_PATH)[LAUNCHES_SINCE_UPDATE_KEY];
+  return Number.isInteger(launches) && launches <= START_FAILURE_REVERT_LAUNCHES;
+}
+
+/** The app opened soon after an update but its backend didn't come up: offer the way back. */
 function reportStartFailure() {
   const previous = previousVersion();
-  if (previous) setState({ startFailed: true, previousVersion: previous });
+  if (previous && _updateIsRecent()) setState({ startFailed: true, previousVersion: previous });
+}
+
+/** Count this launch toward the window in which a failed start offers to go back. */
+function _countLaunchSinceUpdate() {
+  const config = _readJsonFile(UPDATE_CONFIG_PATH);
+  const launches = config[LAUNCHES_SINCE_UPDATE_KEY];
+  if (!config[PREVIOUS_VERSION_KEY] || !Number.isInteger(launches)) return;
+  if (launches > START_FAILURE_REVERT_LAUNCHES) return;
+  try {
+    _writeConfig({ [LAUNCHES_SINCE_UPDATE_KEY]: launches + 1 });
+  } catch (err) {
+    log("warn", "Couldn't count this launch since the update:", err && err.message);
+  }
 }
 
 /** A slow backend came up after all, so there's nothing to offer a way back from. */
@@ -1051,12 +1092,14 @@ function _readInstallOutcome() {
   } catch (err) {
     if (err && err.code !== "ENOENT") {
       log("warn", "Couldn't read the last update attempt:", err.message);
+      return;
     }
+    _countLaunchSinceUpdate();
     return;
   }
   if (attempt.from !== state.currentVersion) {
     try {
-      _writeConfig({ [PREVIOUS_VERSION_KEY]: attempt.from });
+      _writeConfig({ [PREVIOUS_VERSION_KEY]: attempt.from, [LAUNCHES_SINCE_UPDATE_KEY]: 1 });
     } catch (err) {
       // The attempt file stays, so previousVersion() still knows the way back.
       log("warn", "Couldn't save the previous version:", err && err.message);

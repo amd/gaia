@@ -860,23 +860,28 @@ async function goBackToPreviousVersion(version) {
     const percent = autoUpdater.getState().progress;
     progress.onProgress("revert-download", percent, `${percent}%`);
   }, 500);
+  let failed = false;
+  let failure;
   try {
     autoUpdater.init(null, { confirmRestart: async () => true });
     await autoUpdater.revertUpdate();
-    return true;
   } catch (err) {
+    failed = true;
+    failure = err;
+  } finally {
     clearInterval(ticker);
-    progress.close();
-    await dialog.showMessageBox({
-      type: "error",
-      title: "GAIA",
-      message: `GAIA couldn't go back to ${version}.`,
-      detail: `${(err && err.message) || err}\n\nYou can also download it from https://github.com/amd/gaia/releases.`,
-      buttons: ["OK"],
-      noLink: true,
-    });
-    return false;
   }
+  if (!failed) return true;
+  progress.close();
+  await dialog.showMessageBox({
+    type: "error",
+    title: "GAIA",
+    message: `GAIA couldn't go back to ${version}.`,
+    detail: `${(failure && failure.message) || failure}\n\nYou can also download it from https://github.com/amd/gaia/releases.`,
+    buttons: ["OK"],
+    noLink: true,
+  });
+  return false;
 }
 
 /**

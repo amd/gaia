@@ -712,6 +712,19 @@ describe("going back after a bad update", () => {
     expect(m.getState().startFailed).toBe(true);
   });
 
+  test("a backend failure only blames the update for its first three launches", () => {
+    updatedFrom("0.25.0");
+    for (let launch = 1; launch <= 3; launch += 1) {
+      const m = initUpdater({ confirmRestart: async () => true });
+      m.reportStartFailure();
+      expect(m.getState().startFailed).toBe(true);
+      m.destroy();
+    }
+    const m = initUpdater({ confirmRestart: async () => true });
+    m.reportStartFailure();
+    expect(m.getState()).toMatchObject({ startFailed: false, previousVersion: "0.25.0" });
+  });
+
   test("a backend failure with no earlier version offers nothing", () => {
     const m = initUpdater({ confirmRestart: async () => true });
     m.reportStartFailure();

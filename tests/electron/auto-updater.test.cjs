@@ -136,6 +136,28 @@ describe("listReleases()", () => {
     expect(result.slice(1).every((r) => r.isCurrent === false)).toBe(true);
   });
 
+  test("checks at most 8 releases at once", async () => {
+    const mod = loadModule();
+    const versions = Array.from({ length: 20 }, (_, i) => `v0.${40 - i}.0`);
+    serveReleases(versions.map((v) => release(v)));
+    const served = global.fetch;
+    let inFlight = 0;
+    let most = 0;
+    global.fetch = jest.fn(async (url, options) => {
+      if (!String(url).includes("/releases/download/")) return served(url, options);
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return served(url, options);
+    });
+    electronMock.app.getVersion = jest.fn(() => "0.21.0");
+
+    const result = await mod.listReleases();
+    expect(result.map((r) => r.tag)).toEqual(versions.slice(0, 10));
+    expect(most).toBe(8);
+  });
+
   test("leaves out tags that aren't app releases", async () => {
     // Opted in, or the "-" in the tag would hide it as a candidate.
     process.env.GAIA_UPDATE_PRERELEASE = "1";
