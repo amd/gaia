@@ -154,7 +154,10 @@ def test_the_workflow_name_it_listens_to_is_real():
 def test_reviews_are_stamped_with_the_commit_they_read():
     text = (WORKFLOWS / "claude-run.yml").read_text("utf-8")
     assert "reviewed-sha: %s" in text
-    assert "REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}" in text
+    assert (
+        "REVIEWED_SHA: ${{ github.event_name == 'pull_request_target' && "
+        "github.event.pull_request.head.sha || '' }}"
+    ) in text
     assert text.index("reviewed-sha: %s") < text.index('gh pr comment "$NUMBER"')
 
 

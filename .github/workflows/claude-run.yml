@@ -83,6 +83,11 @@ on:
         required: false
         type: string
         default: ""
+      comment_marker:
+        description: "With comment_file set: a hidden HTML comment appended to the posted body, so a later job can tell this caller's comments from other github-actions[bot] comments. The workflow appends it, not the model, so it is always there."
+        required: false
+        type: string
+        default: ""
       require_comment:
         description: "With comment_file set: true fails the job when Claude produced no comment (pr-review — a review is mandatory); false treats an absent file as legitimate silence (pr-rereview)."
         required: false
@@ -490,7 +495,7 @@ jobs:
       # conditions, both required:
       #   - the call never reached a model (is_error, empty modelUsage, $0). A run
       #     that did may already have posted through `gh` (pr-comment,
-      #     issue-handler, issue-triage), and a retry would post twice;
+      #     issue-triage), and a retry would post twice;
       #   - quota WORDING (QUOTA_RE, never a bare per-minute 429). A refusal with no
       #     text, or one naming the credential, never fails over: the other account
       #     would hide a token to rotate.
@@ -607,8 +612,10 @@ jobs:
           COMMENT_FILE: ${{ inputs.comment_file }}
           REQUIRE_COMMENT: ${{ inputs.require_comment }}
           HARNESS_STATUS: ${{ steps.harness.outputs.status }}
-          REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}
-          IS_PR: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment' }}
+          # Reviews only: a pr-comment reply carries no verdict, so a stamp would fail the status.
+          REVIEWED_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || '' }}
+          IS_PR: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null }}
+          COMMENT_MARKER: ${{ inputs.comment_marker }}
           NUMBER: ${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment') && github.event.pull_request.number || github.event.issue.number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -629,8 +636,11 @@ jobs:
             echo "No comment at $COMMENT_FILE — nothing to post (silence is a valid outcome for this job)."
             exit 0
           fi
+          if [ -n "$COMMENT_MARKER" ]; then
+            printf '\n\n%s\n' "$COMMENT_MARKER" >> "$COMMENT_FILE"
+          fi
           # util/check_review_verdict.py keys on this stamp, so it must stay the file's last one.
-          if [ "$GITHUB_EVENT_NAME" = "pull_request_target" ]; then
+          if [ -n "$REVIEWED_SHA" ]; then
             printf '\n<!-- reviewed-sha: %s -->\n' "$REVIEWED_SHA" >> "$COMMENT_FILE"
           fi
           if [ "$IS_PR" = "true" ]; then

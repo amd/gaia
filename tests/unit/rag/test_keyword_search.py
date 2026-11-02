@@ -2,7 +2,16 @@
 # SPDX-License-Identifier: MIT
 """The keyword half of document search returns the best matches, in any language."""
 
-from gaia.rag.keyword_search import rank_keyword_chunks
+import gc
+import math
+import random
+import threading
+import time
+import weakref
+from collections import Counter
+
+from gaia.rag import keyword_search
+from gaia.rag.keyword_search import KeywordIndex, keyword_index, rank_keyword_chunks
 
 
 def _top(query, texts, limit=5):
@@ -79,3 +88,201 @@ def test_chunk_keeps_its_own_index_and_matched_words():
 
 def test_limit_is_respected():
     assert len(_top("fee", ["fee a", "fee b", "fee c", "other"], limit=2)) == 2
+
+
+# The cached index (#6393) must rank exactly as the scoring read straight off
+# each chunk's words, which is what this computes.
+def _plain_rank(query, chunks, limit=5):
+    query_words = list(dict.fromkeys(keyword_search._words(query)))
+    query_pairs = list(zip(query_words, query_words[1:]))
+    if not query_words:
+        return []
+    indexed, held_by = {}, Counter()
+    for index, text in chunks:
+        words = keyword_search._words(text)
+        indexed[index] = (set(words), set(zip(words, words[1:])))
+        held_by.update(set(words) & set(query_words))
+    total = len(indexed)
+    weights = {
+        word: math.log((total + 1) / (held_by[word] + 1)) + 1 / (total + 1)
+        for word in query_words
+    }
+    whole = sum(weights.values()) + sum(
+        weights[first] + weights[second] for first, second in query_pairs
+    )
+    ranked = []
+    for index, (unique, pairs) in indexed.items():
+        matched = [word for word in query_words if word in unique]
+        if not matched:
+            continue
+        found = sum(weights[word] for word in matched) + sum(
+            weights[first] + weights[second]
+            for first, second in query_pairs
+            if (first, second) in pairs
+        )
+        if found / whole >= 0.1:
+            ranked.append((found / whole, index, matched))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [
+        (index, 0.6 + 0.3 * share, matched) for share, index, matched in ranked[:limit]
+    ]
+
+
+_VOCAB = (
+    "the net debt fee large business subscriber clause contract of and 2025 "
+    "x86_64 get_user_by_id الشركة شركة بالشركة والشركه صافي الدين رسوم ٢٠٢٥ ولد"
+).split()
+
+
+def _random_text(rng):
+    return " ".join(rng.choice(_VOCAB) for _ in range(rng.randint(0, 25)))
+
+
+def test_index_ranks_exactly_as_the_plain_scoring():
+    rng = random.Random(6393)
+    for _ in range(300):
+        texts = [_random_text(rng) for _ in range(rng.randint(0, 30))]
+        query = _random_text(rng)
+        limit = rng.choice([1, 3, 5, 50])
+        index = KeywordIndex(texts)
+
+        assert repr(index.rank(query, limit=limit)) == repr(
+            _plain_rank(query, enumerate(texts), limit)
+        )
+        positions = [rng.randrange(len(texts)) for _ in range(len(texts))]
+        assert repr(index.rank(query, positions, limit)) == repr(
+            _plain_rank(query, ((p, texts[p]) for p in positions), limit)
+        )
+
+
+def test_skipping_the_prefix_regex_changes_no_word():
+    text = (
+        "والشركة فالعقد بالشركة كالبيت للعميل الكتاب وولد فلل أحمد إيرادات "
+        "و ف ال بل ولد Large x86_64 ١٢٣ Über straße"
+    )
+    lowered = keyword_search._ARABIC_MARKS.sub("", text.lower()).translate(
+        keyword_search._ARABIC_LETTERS
+    )
+    expected = [
+        keyword_search._ARABIC_PREFIX.sub("", word)
+        for word in keyword_search._WORD.findall(lowered)
+    ]
+
+    assert keyword_search._words(text) == expected
+
+
+def test_removing_chunks_reads_no_kept_chunk_again(monkeypatch):
+    texts = [f"clause {n} about the fee" for n in range(20)]
+    old = KeywordIndex(texts)
+    kept = texts[:5] + texts[10:]
+    read = []
+    words = keyword_search._words
+    monkeypatch.setattr(
+        keyword_search, "_words", lambda text: read.append(text) or words(text)
+    )
+
+    rebuilt = KeywordIndex(kept + ["a new fee"], reuse=old)
+
+    assert read == ["a new fee"]
+    for query in ("fee", "clause 12", "new fee", "the"):
+        assert rebuilt.rank(query, limit=50) == KeywordIndex(kept + ["a new fee"]).rank(
+            query, limit=50
+        )
+
+
+def test_a_mostly_dead_vocabulary_is_dropped():
+    old = KeywordIndex([f"word{n} fee" for n in range(5000)])
+    rebuilt = KeywordIndex(["fee one", "fee two"], reuse=old)
+
+    assert len(rebuilt._vocab) == 3
+    assert [i for i, _s, _w in rebuilt.rank("fee one")] == [0, 1]
+
+
+class _Rag:
+    def __init__(self, chunks):
+        self.chunks = chunks
+
+
+def test_index_is_read_once_and_follows_every_change_to_the_chunks():
+    rag = _Rag(["the fee is large", "the term is short"])
+    first = keyword_index(rag)
+    assert keyword_index(rag) is first
+
+    rag.chunks.append("a new fee")  # changed in place
+    assert keyword_index(rag).texts == [
+        "the fee is large",
+        "the term is short",
+        "a new fee",
+    ]
+
+    rag.chunks[0] = "no match here"  # replaced in place
+    assert [i for i, _s, _w in keyword_index(rag).rank("fee")] == [2]
+
+    rag.chunks = ["fee"]  # a new list, as index, re-index and removal publish
+    assert [i for i, _s, _w in keyword_index(rag).rank("fee")] == [0]
+
+    rag.chunks = []
+    assert keyword_index(rag).rank("fee") == []
+
+
+def test_each_rag_keeps_its_own_index():
+    a, b = _Rag(["alpha fee"]), _Rag(["beta fee", "gamma"])
+
+    assert keyword_index(a).texts == ["alpha fee"]
+    assert keyword_index(b).texts == ["beta fee", "gamma"]
+    assert keyword_index(a).texts == ["alpha fee"]
+
+
+def test_index_goes_away_with_its_rag():
+    gc.collect()
+    before = len(keyword_search._SLOTS)
+    rag = _Rag(["fee"])
+    keyword_index(rag)
+    assert len(keyword_search._SLOTS) == before + 1
+
+    gone = weakref.ref(rag)
+    del rag
+    gc.collect()
+
+    assert gone() is None
+    assert len(keyword_search._SLOTS) == before
+
+
+def test_concurrent_searches_build_the_index_once(monkeypatch):
+    rag = _Rag([f"clause {n} fee" for n in range(300)])
+    builds = []
+    real = keyword_search.KeywordIndex
+
+    def counting(*args, **kwargs):
+        builds.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(keyword_search, "KeywordIndex", counting)
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(keyword_index(rag).rank("fee")))
+        for _ in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(builds) == 1
+    assert all(result == results[0] for result in results)
+
+
+def test_search_time_does_not_grow_with_the_library_text():
+    # Re-reading every chunk per search cost ~1.5 s at this size (#6393).
+    rng = random.Random(0)
+    words = [f"term{n}" for n in range(3000)] + ["the", "of", "and"] * 200
+    texts = [" ".join(rng.choice(words) for _ in range(300)) for _ in range(4000)]
+    index = KeywordIndex(texts)
+    queries = [" ".join(rng.choice(words) for _ in range(6)) for _ in range(20)]
+
+    start = time.perf_counter()
+    for query in queries:
+        index.rank(query)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 2.0, f"20 searches over 4,000 chunks took {elapsed:.2f}s"

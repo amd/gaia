@@ -159,6 +159,12 @@ skills/<name>/<version>/audit.json              # security-audit report (#2468) 
 skills/<name>/<version>/<filename>              # the skill bundle artifact
 ```
 
+An artifact shares its version directory with that version's docs, so the
+artifact `<filename>` may not be one of the doc names listed above (nor
+`package-files.json` for agents). Such a publish is rejected with `400
+invalid_artifact`, since the doc write would otherwise replace the artifact
+after its SHA-256 was recorded.
+
 Example:
 
 ```

@@ -11,7 +11,6 @@ import copy
 import hashlib
 import json
 import logging
-import os
 import re
 import time
 from collections import OrderedDict
@@ -366,11 +365,12 @@ class ClaudeProvider(LLMClient):
         self, sdk: Any, api_key: Optional[str], max_retries: int, timeout: float
     ) -> Any:
         # The repo keeps ANTHROPIC_API_KEY in .env — same load as gaia.eval.claude.
-        from gaia.env import load_env  # pylint: disable=import-outside-toplevel
+        # pylint: disable-next=import-outside-toplevel
+        from gaia.env import credential, load_env
 
         load_env()
 
-        key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        key = api_key or credential("ANTHROPIC_API_KEY")
         if not key:
             raise ValueError(
                 "ANTHROPIC_API_KEY not found in environment.\n\n"
