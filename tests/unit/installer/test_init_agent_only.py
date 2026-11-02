@@ -8,7 +8,7 @@ stay out of date must exit non-zero with the cause as stderr's last line.
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

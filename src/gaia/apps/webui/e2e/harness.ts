@@ -327,7 +327,8 @@ export async function watchDownload(page: Page, say: Say, shot: (name: string) =
 
 /** The Test step runs for real, and Ready comes only when it passed. */
 export async function testToReady(page: Page, say: Say, shot: (name: string) => Promise<void>): Promise<void> {
-    await expect(stepTitle(page)).toHaveText(say('setup.test.title'));
+    // The Download step stays up for as long as the models take.
+    await expect(stepTitle(page)).toHaveText(say('setup.test.title'), { timeout: 5 * 60_000 });
     await expect(page.locator('.setup-result.is-running, .setup-result.is-passed').first()).toBeVisible();
     await shot('testing');
     const ready = page.getByRole('button', { name: say('setup.ready.start') });

@@ -36,11 +36,17 @@ on:
       - 'setup.py'
       # All of it: the suite builds this app, so shared CSS or a locale can break setup.
       - 'src/gaia/apps/webui/**'
+      - 'src/gaia/audio/lemonade_asr.py'
+      - 'src/gaia/audio/lemonade_tts.py'
       - 'src/gaia/installer/**'
       - 'src/gaia/llm/gpu_memory.py'
+      - 'src/gaia/llm/lemonade_client.py'
       - 'src/gaia/llm/lemonade_embedded.py'
+      - 'src/gaia/llm/model_fit.py'
+      - 'src/gaia/sd/mixin.py'
       - 'src/gaia/ui/routers/setup.py'
       - 'src/gaia/ui/setup*'
+      - 'tests/conftest.py'
       - 'tests/setup_journey/**'
   workflow_dispatch:
 
