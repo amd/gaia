@@ -2915,14 +2915,17 @@ def compare_scorecards(baseline_path, current_path):
         # Corpus availability change — not a quality signal
         if b_skipped or c_skipped:
             corpus_changed.append(entry)
+            continue
         # This run produced no measurement — nothing to compare, including the
-        # wall clock, so this is checked ahead of the time-regression branch.
-        elif c_unmeasured:
+        # wall clock.
+        if c_unmeasured:
             unmeasured.append(entry)
-        elif entry.get("time_regressed"):
-            # Time regressions reported separately from score regressions
+            continue
+        # Slowness is a label on top of the status verdict, never a substitute
+        # for it — a PASS→FAIL that also ran long must still count as regressed.
+        if entry.get("time_regressed"):
             time_regressed.append(entry)
-        elif not b_pass and c_pass:
+        if not b_pass and c_pass:
             improved.append(entry)
         elif b_pass and not c_pass:
             regressed.append(entry)
