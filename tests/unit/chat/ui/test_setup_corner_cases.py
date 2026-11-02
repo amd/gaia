@@ -5,13 +5,11 @@
 
 import io
 import json
-import threading
 import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.installer import init_command
 from gaia.installer.init_command import (
     ChatModelChoice,
     CheckTimedOut,
