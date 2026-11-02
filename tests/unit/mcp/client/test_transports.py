@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from gaia.mcp.client.transports import stdio as stdio_module
 from gaia.mcp.client.transports.stdio import StdioTransport
 
 
@@ -360,11 +361,13 @@ class TestStdioTransport:
             r"--root=C:\Program Files\data",
         ]
 
-    @patch("gaia.mcp.client.transports.stdio.os.name", "nt")
     @patch("gaia.mcp.client.transports.stdio.shutil.which", return_value=None)
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
-    def test_stdio_transport_preserves_backslash_paths_on_windows(self, mock_popen, _):
+    def test_stdio_transport_preserves_backslash_paths_on_windows(
+        self, mock_popen, _, fake_os_name
+    ):
         """On Windows a backslash is a path separator, not an escape."""
+        fake_os_name(stdio_module, "nt")
         mock_process = Mock()
         mock_process.poll.return_value = None
         mock_popen.return_value = mock_process
@@ -374,11 +377,13 @@ class TestStdioTransport:
 
         assert mock_popen.call_args[0][0] == ["python", r"C:\tools\srv.py"]
 
-    @patch("gaia.mcp.client.transports.stdio.os.name", "posix")
     @patch("gaia.mcp.client.transports.stdio.shutil.which", return_value=None)
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
-    def test_stdio_transport_honours_backslash_escapes_on_posix(self, mock_popen, _):
+    def test_stdio_transport_honours_backslash_escapes_on_posix(
+        self, mock_popen, _, fake_os_name
+    ):
         """On POSIX a backslash escapes the next character, as the shell did."""
+        fake_os_name(stdio_module, "posix")
         mock_process = Mock()
         mock_process.poll.return_value = None
         mock_popen.return_value = mock_process

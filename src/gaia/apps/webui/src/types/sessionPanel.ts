@@ -49,6 +49,21 @@ export interface SessionOutputs {
     items: OutputItem[];
 }
 
+/** One tool the chat's agent can call (#440). */
+export interface AgentTool {
+    name: string;
+    /** The description the model is given. */
+    description: string;
+    /** A KNOWN_TOOLS mixin name (`rag`, `file_io`, ...), `mcp`, `skill` or `agent`. */
+    category: string;
+}
+
+export interface AgentCapabilities {
+    session_id: string;
+    agent_type: string;
+    tools: AgentTool[];
+}
+
 export interface ChatFileChange {
     path: string;
     change: FileChangeKind;

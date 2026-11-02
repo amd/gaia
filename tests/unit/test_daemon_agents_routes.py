@@ -1005,7 +1005,9 @@ def test_pid_alive_excludes_zombies(monkeypatch):
 @pytest.mark.skipif(
     os.name == "nt", reason="Windows cannot group-kill a dead leader's survivors"
 )
-def test_reap_stale_zombie_leader_takes_the_group_kill_path(daemon_home, monkeypatch):
+def test_reap_stale_zombie_leader_takes_the_group_kill_path(
+    daemon_home, monkeypatch, fake_os_name
+):
     # An unreaped leader has already exited, so its re-parented child is what
     # still serves the port: group-kill, NOT the "pid reused, leave it" branch.
     import psutil
@@ -1024,7 +1026,7 @@ def test_reap_stale_zombie_leader_takes_the_group_kill_path(daemon_home, monkeyp
     killed = []
     group_killed = []
     _fake_pid_status(monkeypatch, psutil.STATUS_ZOMBIE)
-    monkeypatch.setattr(ledger.os, "name", "posix")
+    fake_os_name(ledger, "posix")
     monkeypatch.setattr(
         ledger,
         "_probe_health",

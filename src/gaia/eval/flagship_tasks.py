@@ -23,6 +23,7 @@ from __future__ import annotations
 import difflib
 import json
 import os
+import re
 import shutil
 import statistics
 import subprocess
@@ -31,7 +32,17 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.checks import check_kind, runner_summary, summary_reports_failure
@@ -622,6 +633,295 @@ def workspace_diff(workdir: Path, original: Path) -> str:
 
 # ---------------------------------------------------------------------------
 # Running the flagship
+#: ``eval/tasks`` named anywhere, possibly split by quotes: worth a closer look.
+_ANSWER_KEY_MENTION = re.compile(r"eval[\\/\"'.]+tasks", re.IGNORECASE)
+#: Characters a path may begin right after. None ends a path, since each can
+#: sit inside a folder name too (``OneDrive - Acme, Inc``, ``R&D``, ``a [b]``).
+_BEGIN = " \t\r\n(=;|&<>[,`"
+_BEGIN_RUN = re.compile("[" + re.escape(_BEGIN) + "]+")
+_AT_START = "(^|[" + re.escape(_BEGIN) + "])"
+_SHELL_ESCAPE = re.compile(r"\\([ ()\[\]&;,=`])")
+_QUOTE = re.compile(r"[\"']")
+#: A quote that opens a string, with any Python prefix: ``open(r'/c/x')``.
+_OPENING_QUOTE = re.compile(_AT_START + r"(?:[rbfu]{1,2})?[\"']", re.IGNORECASE)
+#: Quotes that join pieces of one path: ``"C:/x/gaia"/"eval/tasks"``, ``'a/''b'``.
+_JOINING_QUOTES = re.compile(r"[\"']+(?=[\\/])|(?<=[\\/])[\"']+|[\"']{2,}")
+#: Every separator but a lone ``/``, which needs no rewriting.
+_SLASHES = re.compile(r"\\[\\/]*|/[\\/]+")
+#: ``/./``, which names the folder it is in.
+_DOT_FOLDER = re.compile(r"/\.(?=/)")
+#: ``/c/`` (MSYS) and ``/mnt/c/`` (WSL) at a path start: drive C.
+# Also right after a short option: ``tar -C/c/...``, ``-v/mnt/c/...``.
+_POSIX_DRIVE = re.compile(
+    r"(^|[" + re.escape(_BEGIN) + r"]|(?<=\s)-[a-z]|^-[a-z])/(?:mnt/)?([a-z])/",
+    re.IGNORECASE,
+)
+#: How a shell or script may spell the home folder, casefolded.
+_HOME_TOKEN = re.compile(
+    _AT_START + r"(?:~|\$home|\$\{home\}|\$userprofile|\$\{userprofile\}|%userprofile%"
+    r"|\$env:userprofile|%homedrive%%homepath%|\$env:homedrive\$env:homepath)(?=/)"
+)
+#: ``eval/tasks`` as whole segments of normalized text (literal first, for speed).
+_TASK_DIR = re.compile(r"eval/tasks(?<![\w.-]eval/tasks)(?![\w.-])")
+_DRIVE = re.compile(r"[a-z]:")
+#: Field names only the task file carries.
+ANSWER_KEY_FIELDS = ("genuine_answer", "must_establish", "wrong_answers")
+#: One of them as a mapping key: JSON, JSON inside a JSON string, or a Python repr.
+_ANSWER_KEY_FIELD = re.compile(
+    r"[\"'](" + "|".join(ANSWER_KEY_FIELDS) + r")\\*[\"']\s*:"
+)
+
+
+def _text(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value, default=str)
+
+
+def _strings(value: Any) -> Iterator[str]:
+    """Every string in a tool call, JSON-encoded ones decoded, so escapes are real.
+
+    Walked with an explicit stack: a tool call may nest deeper than Python recurses.
+    """
+    stack: List[Tuple[Any, int]] = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, str):
+            if depth < 4 and item.lstrip()[:1] in ("{", "["):
+                try:
+                    decoded = json.loads(item)
+                except (ValueError, RecursionError):
+                    decoded = None  # too deep or not JSON: scanned as written
+                if isinstance(decoded, (dict, list)):
+                    stack.append((decoded, depth + 1))
+                    continue
+            yield item
+        elif isinstance(item, Mapping):
+            stack.extend((v, depth) for v in reversed(list(item.values())))
+        elif isinstance(item, (list, tuple)):
+            stack.extend((v, depth) for v in reversed(item))
+        elif item is not None and not isinstance(item, (bool, int, float)):
+            yield str(item)
+
+
+def _raw_call_requests(transcript: Mapping[str, Any]) -> List[Tuple[str, Any]]:
+    """GAIA's native tool calls as the model sent them, before any parsing.
+
+    On the native tool-calling path a call's arguments live only on the
+    assistant turn that requested it, never on the tool entry.
+    """
+    found = []
+    for entry in transcript.get("conversation") or []:
+        if entry.get("role") != "assistant":
+            continue
+        content = entry.get("content")
+        for calls in (
+            entry.get("tool_calls"),
+            content.get("tool_calls") if isinstance(content, dict) else None,
+        ):
+            for call in calls if isinstance(calls, list) else ():
+                if isinstance(call, dict):
+                    function = call.get("function")
+                    if not isinstance(function, dict):
+                        function = {}
+                    name = call.get("name") or function.get("name")
+                    found.append((str(name or "tool"), call))
+    return found
+
+
+def _normalize(text: str) -> str:
+    """*text* casefolded with one ``/`` per separator.
+
+    A quote that opens a string, or stands alone, becomes a space, where a
+    path may begin; one against a separator is dropped, so
+    ``"C:/x/gaia"/"eval/tasks"`` reads as one path.
+    """
+    if '"' in text or "'" in text:
+        text = _OPENING_QUOTE.sub(lambda m: m[1] + " ", text)
+        text = _QUOTE.sub(" ", _JOINING_QUOTES.sub("", text))
+    text = _SLASHES.sub("/", text).casefold()
+    return _DOT_FOLDER.sub("", text) if "/./" in text else text
+
+
+class _TaskDirMatcher:
+    """Whether a string names this checkout's ``eval/tasks``.
+
+    Linear in the string's length: a substring search for the absolute
+    path, then a walk back from each ``eval/tasks`` that stops a set number
+    of mentions back, so no text is walked more than that many times.
+    """
+
+    def __init__(self, workdir: Optional[Path]):
+        self.home = _normalize(os.path.expanduser("~")).rstrip("/")
+        target = _normalize(str(TASKS_DIR)).rstrip("/")
+        self.drive = _DRIVE.match(target) is not None
+        self.parts = [self._fold(p) for p in target.split("/")]
+        # A rooted POSIX path inside a longer one (``/backup/home/...``, a URL) is not
+        # it, but one glued to a short option (``tar -C/home/...``) is.
+        left = "" if self.drive else r"(?:(?<![\w.-])|(?<=\s-[A-Za-z])|(?<=^-[A-Za-z]))"
+        self.exact = re.compile(left + re.escape(target) + r"(?![\w.-])")
+        base = _normalize(str(workdir)).rstrip("/") if workdir else ""
+        self.base = [self._fold(p) for p in base.split("/")] if base else []
+        self.common = 0
+        for mine, theirs in zip(self.base, self.parts):
+            if mine != theirs:
+                break
+            self.common += 1
+        self.longest = max(len(p) for p in self.parts) + 3
+        # A walk may pass back through one other ``eval/tasks`` (``x/eval/tasks/../..``).
+        self.chain = len(_TASK_DIR.findall(target)) + 1
+        # From a workdir outside the checkout, every path to it names its folder.
+        outside = self.common < len(self.parts) - 2
+        self.anchor = self.parts[-3] if outside and len(self.parts) > 2 else ""
+
+    def _fold(self, segment: str) -> str:
+        # Windows drops a folder name's trailing dots and spaces.
+        if self.drive and segment not in (".", ".."):
+            return segment.rstrip(". ")
+        return segment
+
+    def names_task_dir(self, text: str) -> bool:
+        # ``a\ b`` is a shell escape or a Windows separator; read it both ways
+        # only when the string also holds a backslash that is not an escape.
+        variants = [text]
+        if _SHELL_ESCAPE.search(text):
+            unescaped = _SHELL_ESCAPE.sub(r"\1", text)
+            variants = [unescaped, text] if "\\" in unescaped else [unescaped]
+        for variant in variants:
+            norm = _normalize(variant)
+            if self.drive:
+                norm = _POSIX_DRIVE.sub(lambda m: f"{m[1]}{m[2]}:/", norm)
+            if "~" in norm or "$" in norm or "%" in norm:
+                norm = _HOME_TOKEN.sub(lambda m: m[1] + self.home, norm)
+            if self.exact.search(norm) or self._walks_to_target(norm):
+                return True
+        return False
+
+    def _walks_to_target(self, text: str) -> bool:
+        ends: List[int] = []
+        for hit in _TASK_DIR.finditer(text):
+            lo = ends[-self.chain] if len(ends) >= self.chain else 0
+            if not self.anchor or text.rfind(self.anchor, lo, hit.start()) >= 0:
+                if self._walk(text, hit.start(), lo):
+                    return True
+            ends.append(hit.end())
+        return False
+
+    def _walk(self, text: str, pos: int, lo: int) -> bool:
+        """Resolve right to left from ``eval/tasks`` at *pos*, trying each start.
+
+        ``..`` only removes folders to its left, so a start is checked in
+        constant time from the pops still owed and the target folders matched.
+        """
+        owed, kept = 0, 2  # pops still owed, target folders matched
+        if pos == 0 or text[pos - 1] != "/":
+            return self._relative(owed, kept)
+        parts, find_run = self.parts, _BEGIN_RUN.search
+        while True:  # ``_step``, inlined: this loop is the hot path
+            end = pos - 1
+            slash = text.rfind("/", lo, end)
+            start = slash + 1 if slash >= 0 else lo
+            seg = text[start:end]
+            # A path starting after trailing begin characters (``x (/..``) is rooted.
+            name_end = start + len(seg.rstrip(_BEGIN))
+            if name_end < end and self._starts("", owed, kept):
+                return True
+            # Starts inside this folder; any longer than a target folder is
+            # a name the next ``..`` removes, so one check covers them all.
+            tail = max(start, name_end - self.longest)
+            run = find_run(text, tail, name_end)
+            inside = run is not None or (
+                owed and tail > start and find_run(text, start, tail)
+            )
+            while run is not None:
+                first = text[run.end() : end]
+                if self._starts(first, owed, kept):
+                    return True
+                run = find_run(text, run.end(), name_end)
+                # A path starts inside this name (``x && cat ..``): not a folder.
+                if run is None and (first in (".", "..") or first[1:2] == ":"):
+                    return False
+            if inside and owed and self._relative(owed - 1, kept):
+                return True
+            if slash < 0:
+                return start == 0 and self._starts(seg, owed, kept)
+            if seg == "..":
+                owed += 1
+            elif seg == ".":
+                pass
+            elif len(seg) == 2 and seg[1] == ":":
+                return self._rooted(seg, kept)
+            elif owed:
+                owed -= 1
+            elif kept < len(parts) and self._fold(seg) == parts[-kept - 1]:
+                kept += 1
+            else:
+                return False
+            pos = start
+
+    def _step(self, segment: str, owed: int, kept: int) -> Optional[Tuple[int, int]]:
+        """The walk's state with *segment* added on the left, or None if off target."""
+        if segment == "..":
+            return owed + 1, kept
+        if segment == ".":
+            return owed, kept
+        if owed:
+            return owed - 1, kept
+        if kept < len(self.parts) and self._fold(segment) == self.parts[-kept - 1]:
+            return owed, kept + 1
+        return None
+
+    def _starts(self, first: str, owed: int, kept: int) -> bool:
+        """Whether a path whose first folder is *first* resolves to the target."""
+        if first == "":
+            return not self.drive and kept == len(self.parts) - 1
+        if _DRIVE.fullmatch(first):
+            return self._rooted(first, kept)
+        if first[2:] in (".", "..") and self.base and first[:2] == self.base[0]:
+            first = first[2:]  # ``C:..``: relative to the current folder on C
+        state = self._step(first, owed, kept)
+        return state is not None and self._relative(*state)
+
+    def _rooted(self, drive: str, kept: int) -> bool:
+        return drive == self.parts[0] and kept == len(self.parts) - 1
+
+    def _relative(self, owed: int, kept: int) -> bool:
+        """Whether the workdir, *owed* folders up, then *kept* is the target."""
+        if not self.base:
+            return False
+        left = max(len(self.base) - owed, 1)
+        return left == len(self.parts) - kept and left <= self.common
+
+
+def answer_key_contact(
+    transcript: Mapping[str, Any], workdir: Optional[Path] = None
+) -> str:
+    """How the agent's tools reached the suite's answer key, or ``""``.
+
+    Read from the tool record, never the model's wording: a call that named
+    this checkout's ``eval/tasks`` (relative paths resolved against
+    *workdir*), or a tool result carrying the task file's own fields. Both
+    harnesses' transcripts are read (``transcripts.tool_calls``).
+    """
+    requests = [(name, args) for name, args, _r in transcripts.tool_calls(transcript)]
+    matcher: Optional[_TaskDirMatcher] = None
+    for name, args in requests + _raw_call_requests(transcript):
+        for text in _strings(args):
+            mention = _ANSWER_KEY_MENTION.search(text)
+            if mention is None:
+                continue
+            matcher = matcher or _TaskDirMatcher(workdir)
+            if matcher.names_task_dir(text):
+                return f"{name} named {mention.group(0)!r}"
+    for name, _args, result in transcripts.tool_calls(transcript):
+        if result is None:
+            continue
+        # Two different fields as keys; a result showing only one passes this check.
+        fields = sorted(set(_ANSWER_KEY_FIELD.findall(_text(result))))
+        if len(fields) >= 2:
+            shown = ", ".join(repr(f) for f in fields)
+            return f"{name} returned the task file's {shown} fields"
+    return ""
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -661,6 +961,8 @@ class TaskResult:
     gh_blocked_writes: int = 0
     #: Tools that ran after the answer on work nobody asked for (``calls_after_answer``).
     after_answer: List[str] = field(default_factory=list)
+    #: How its tools reached the answer key (``answer_key_contact``); "" when clean.
+    contamination: str = ""
 
 
 _CALL_FIELDS = ("seconds", "first_byte_seconds", "tokens", "timings")
@@ -955,7 +1257,13 @@ def run_task(
                 result.after_answer = calls_after_answer(
                     ran.conversation, prompt, workdir
                 )
-            if ran.error:
+            result.contamination = answer_key_contact(ran.transcript, workdir)
+            if result.contamination:
+                # Fails whatever the project looks like: the fix may be copied.
+                result.passed = False
+                result.why = f"read the answer key: {result.contamination}"
+                result.error = ran.error
+            elif ran.error:
                 result.error = result.why = ran.error
             elif no_patch:
                 result.passed, result.why = False, no_patch
@@ -1576,7 +1884,7 @@ def _apply_verdict(entry: Dict[str, Any], task: Task) -> None:
     A SWE-bench task is not the judge's to pass: the official harness decides
     it (``swebench_grade_run``); the judge grades its quality only.
     """
-    if entry.get("error") or entry.get("after_answer"):
+    if entry.get("error") or entry.get("after_answer") or entry.get("contamination"):
         return
     grade = entry["judge"]
     if task.check == "stated" and grade.get("answers_correctly") is not None:
@@ -1618,8 +1926,9 @@ def swebench_grade_run(
 ) -> Dict[str, Any]:
     """Grade a ``swebench`` run's predictions with the official harness; update the scorecard.
 
-    A task the agent left without a patch, or that errored, keeps its result;
-    every other task's pass is the harness's ``resolved``.
+    A task the agent left without a patch, that errored, or that read the
+    answer key keeps its result; every other task's pass is the harness's
+    ``resolved``.
     """
     card = read_scorecard(run_dir)
     if card.get("suite") != swebench.SUITE:
@@ -1642,7 +1951,11 @@ def swebench_grade_run(
         # A pass already set by an earlier grading is the harness's to revise.
         graded_before = "swebench" in entry
         entry["swebench"] = verdict.as_dict()
-        if entry.get("error") or (entry.get("passed") is False and not graded_before):
+        if (
+            entry.get("error")
+            or entry.get("contamination")
+            or (entry.get("passed") is False and not graded_before)
+        ):
             continue
         if verdict.resolved is None:
             entry["passed"], entry["why"] = None, f"not graded: {verdict.error}"
@@ -1691,6 +2004,7 @@ def summarize(card: Mapping[str, Any]) -> Dict[str, Any]:
         "coding": len(coding),
         "verified": sum(1 for t in coding if t.get("verified") is True),
         "errors": sum(1 for t in tasks if t.get("error")),
+        "contaminated": sum(1 for t in tasks if t.get("contamination")),
         "unmeasured": sum(1 for t in tasks if t.get("error_kind") == "unavailable"),
         "judged": len(judged),
         "quality": (
@@ -1742,6 +2056,13 @@ def gate(card: Mapping[str, Any], expected: Mapping[str, Any]) -> List[GateCheck
     unjudged = f"{s['tasks'] - s['judged']} task(s) not judged"
     min_verified = expected.get("min_verified")
     return [
+        # Never absorbed by PASS_SLACK: one copied answer voids the comparison.
+        GateCheck(
+            "Tasks that read the answer key",
+            s["contaminated"],
+            "0",
+            s["contaminated"] == 0,
+        ),
         GateCheck(
             "Tasks measured",
             f"{s['tasks'] - s['unmeasured']}/{s['tasks']}",
@@ -1823,15 +2144,19 @@ def _task_row(t: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         "id": t["id"],
         "result": (
-            "NOT MEASURED"
-            if t.get("error_kind") == "unavailable"
+            "CONTAMINATED"
+            if t.get("contamination")
             else (
-                "ERROR"
-                if t.get("error")
+                "NOT MEASURED"
+                if t.get("error_kind") == "unavailable"
                 else (
-                    "AWAITING JUDGE"
-                    if t["passed"] is None
-                    else "PASS" if t["passed"] else "FAIL"
+                    "ERROR"
+                    if t.get("error")
+                    else (
+                        "AWAITING JUDGE"
+                        if t["passed"] is None
+                        else "PASS" if t["passed"] else "FAIL"
+                    )
                 )
             )
         ),
@@ -1854,6 +2179,11 @@ def propose_expectations(card: Mapping[str, Any]) -> Dict[str, Any]:
         raise ValueError(
             f"{s['unmeasured']} task(s) were not measured (the model backend was "
             "unreachable); re-run before proposing expectations from this run."
+        )
+    if s["contaminated"]:
+        raise ValueError(
+            f"{s['contaminated']} task(s) read the answer key; a baseline from "
+            "this run would bless copied answers. Re-run before proposing."
         )
     if s["judged"] != s["tasks"]:
         raise ValueError(
