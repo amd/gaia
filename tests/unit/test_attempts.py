@@ -867,3 +867,119 @@ def test_descendants_are_listed_every_few_seconds_not_every_wake(tmp_path, monke
     )
     assert (code, timed_out) == (0, False)
     assert 1 <= len(calls) <= 3  # waking every 0.5 s would list ~6 times
+
+
+# --- which daemon is spared ---------------------------------------------------
+
+
+def _instance_file(tmp_path, monkeypatch, write):
+    """Point instance.json into *tmp_path*; *write* fills it on every lookup."""
+    from gaia.daemon import paths
+
+    path = tmp_path / "instance.json"
+
+    def instance_path():
+        text = write()
+        if text is not None:
+            path.write_text(text, encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(paths, "instance_path", instance_path)
+    return path
+
+
+def _instance(pid, started_at):
+    return f'{{"pid": {pid}, "port": 1, "token": "t", "started_at": {started_at}}}'
+
+
+def _workdir(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    return work
+
+
+def test_the_daemon_is_spared_when_its_start_time_matches(tmp_path, monkeypatch):
+    psutil = pytest.importorskip("psutil")
+    me = psutil.Process(os.getpid())
+    _instance_file(
+        tmp_path, monkeypatch, lambda: _instance(me.pid, me.create_time() + 1)
+    )
+    assert attempts._gaia_daemon() == [me.pid]
+
+
+def test_a_pid_that_started_after_the_daemon_is_not_spared(tmp_path, monkeypatch):
+    psutil = pytest.importorskip("psutil")
+    me = psutil.Process(os.getpid())
+    _instance_file(
+        tmp_path, monkeypatch, lambda: _instance(me.pid, me.create_time() - 60)
+    )
+    assert attempts._gaia_daemon() == []
+
+
+@pytest.mark.parametrize("pid", ["-5", "0", "1e999", '"x"', "99999999999999999999"])
+def test_a_malformed_instance_spares_nothing_and_never_raises(
+    tmp_path, monkeypatch, pid
+):
+    _instance_file(tmp_path, monkeypatch, lambda: _instance(pid, 0))
+    assert attempts._gaia_daemon() == []
+
+
+def test_a_missing_instance_is_logged_and_spares_nothing(tmp_path, monkeypatch, caplog):
+    import logging
+
+    _instance_file(tmp_path, monkeypatch, lambda: None)
+    with caplog.at_level(logging.DEBUG, logger=attempts.__name__):
+        assert attempts._gaia_daemon() == []
+    assert any("no GAIA daemon to spare" in r.message for r in caplog.records)
+
+
+def test_the_kill_path_never_raises_on_a_bad_spare_pid(tmp_path):
+    from gaia.utils import process_tree
+
+    code, timed_out = process_tree.launch(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env=os.environ,
+        cwd=tmp_path,
+        timeout_s=1,
+        stdout_path=tmp_path / "out",
+        stderr_path=tmp_path / "err",
+        spare=lambda: [-5, 0],
+    )
+    assert (code, timed_out) == (None, True)
+
+
+@pytest.mark.parametrize("which", [0, 1], ids=["child", "grandchild"])
+def test_a_stale_daemon_pid_reused_by_the_attempt_is_still_killed(
+    tmp_path, stub, monkeypatch, which
+):
+    def stale():
+        pids = stub()
+        return _instance(pids[which], time.time() - 3600) if pids else None
+
+    _instance_file(tmp_path, monkeypatch, stale)
+    monkeypatch.setattr(attempts, "ATTEMPT_TIMEOUT_S", 3)
+    record = attempts._run_attempt("t", _workdir(tmp_path), [])
+    assert "stopped after" in record["error"]
+    assert len(stub()) == 2
+    assert not any(_alive(p) for p in stub())
+
+
+@pytest.mark.parametrize("pid", ["-5", "1e999"])
+def test_a_malformed_instance_still_kills_a_timed_out_tree(
+    tmp_path, stub, monkeypatch, pid
+):
+    _instance_file(tmp_path, monkeypatch, lambda: _instance(pid, 0))
+    monkeypatch.setattr(attempts, "ATTEMPT_TIMEOUT_S", 3)
+    record = attempts._run_attempt("t", _workdir(tmp_path), [])
+    assert "stopped after" in record["error"]
+    assert len(stub()) == 2
+    assert not any(_alive(p) for p in stub())
+
+
+@pytest.mark.parametrize("pid", ["-5", "1e999"])
+def test_a_malformed_instance_does_not_crash_a_finished_attempt(
+    tmp_path, linger, monkeypatch, pid
+):
+    _instance_file(tmp_path, monkeypatch, lambda: _instance(pid, 0))
+    assert attempts._run_attempt("t", _workdir(tmp_path), []) == {"result": "done"}
+    assert not _alive(linger()[1])

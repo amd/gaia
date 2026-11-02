@@ -32,7 +32,6 @@ src/gaia/hub/packager.py:subprocess_no_timeout 1
 src/gaia/hub/publisher.py:subprocess_no_timeout 1
 src/gaia/hub/publisher.py:swallowed_exception 1
 src/gaia/installer/uninstall_command.py:swallowed_exception 1
-src/gaia/logger.py:swallowed_exception 1
 src/gaia/mcp/mixin.py:swallowed_exception 1
 src/gaia/mcp/servers/agent_ui_mcp.py:swallowed_exception 2
 src/gaia/rag/sdk.py:swallowed_exception 1

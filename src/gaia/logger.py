@@ -46,7 +46,12 @@ def configure_console_encoding():
             # capture mechanism (causes "I/O operation on closed file" errors).
             for stream_name in ("stdout", "stderr"):
                 stream = getattr(sys, stream_name)
-                if stream and not stream.closed and hasattr(stream, "reconfigure"):
+                # A replacement stream (a tee, a capture) may lack .closed.
+                if (
+                    stream
+                    and not getattr(stream, "closed", False)
+                    and hasattr(stream, "reconfigure")
+                ):
                     stream.reconfigure(encoding="utf-8", errors="replace")
 
             # Also try to set the console code page to UTF-8
@@ -66,7 +71,7 @@ def configure_console_encoding():
                     "chcp 65001 failed; console code page unchanged: %s", e
                 )
 
-        except (OSError, ValueError, LookupError) as e:
+        except (OSError, ValueError, LookupError, AttributeError, TypeError) as e:
             # The streams keep their original encoding; output still works.
             logging.getLogger(__name__).debug(
                 "UTF-8 console setup failed; using the original streams: %s", e

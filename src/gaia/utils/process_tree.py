@@ -69,6 +69,8 @@ def _unspared(
     spared = set()
     for pid in spare():
         try:
+            if pid <= 0:
+                raise ValueError(f"pid {pid}")
             root = psutil.Process(pid)
             spared.add(pid)
             spared.update(p.pid for p in root.children(recursive=True))
@@ -79,6 +81,8 @@ def _unspared(
                 spared.add(parent.pid)
         except psutil.Error:
             continue  # gone, or not ours to read: nothing more to spare
+        except (ValueError, OverflowError, TypeError) as e:
+            log.warning("not sparing %r, not a process id: %s", pid, e)
     kept = {pid: p for pid, p in seen.items() if pid not in spared}
     return kept, len(kept) < len(seen)
 

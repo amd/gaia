@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import psutil
+
 from gaia.logger import get_logger
 from gaia.utils.process_tree import launch
 
@@ -193,11 +195,57 @@ def _run(
         try_remove(io)
 
 
+#: How far the daemon's process may start after the start time it records.
+_DAEMON_CLOCK_SLACK_S = 2.0
+
+
 def _gaia_daemon() -> List[int]:
+    """The running GAIA daemon's pid, when instance.json still names it.
+
+    Never raises: it runs while a tree is being killed, and an error there
+    would leave the whole tree alive. When the daemon can't be confirmed,
+    nothing is spared.
+    """
+    from gaia.daemon import paths
     from gaia.daemon.instance import read_instance
 
-    inst = read_instance()
-    return [inst.pid] if inst is not None else []
+    path = "instance.json"
+    try:
+        path = paths.instance_path()
+        if not path.exists():
+            log.debug("no %s: no GAIA daemon to spare", path)
+            return []
+        inst = read_instance(path)
+        if inst is None:
+            return []  # read_instance logged why
+        if inst.pid <= 0:
+            raise ValueError(f"pid {inst.pid} is not a process id")
+        created = psutil.Process(inst.pid).create_time()
+    except psutil.NoSuchProcess:
+        log.debug("GAIA daemon in %s is not running; nothing spared", path)
+        return []
+    except (
+        psutil.Error,
+        OSError,
+        RuntimeError,
+        ValueError,
+        OverflowError,
+        TypeError,
+    ) as e:
+        log.warning(
+            "cannot confirm the GAIA daemon in %s (%s); nothing spared", path, e
+        )
+        return []
+    # The daemon records its start once running, so its process began before
+    # that. A process that began after it reused a dead daemon's pid.
+    if created > inst.started_at + _DAEMON_CLOCK_SLACK_S:
+        log.debug(
+            "pid %s in %s started after the daemon it names; nothing spared",
+            inst.pid,
+            path,
+        )
+        return []
+    return [inst.pid]
 
 
 def _git(
