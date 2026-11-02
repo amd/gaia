@@ -999,8 +999,8 @@ const emailAgentGrantID = "installed:email"
 // union; only the daemon's forward-out mint narrows to what it enforces.
 var connectScopes = map[string][]string{
 	"google": {
-		// catalog/google.py default_scopes
-		"openid", "email", "profile",
+		// providers/google.py GOOGLE_IDENTITY_SCOPES (the catalog's default_scopes)
+		"openid", "https://www.googleapis.com/auth/userinfo.email",
 		// gaia_agent_email.scopes.ALL_SCOPES (GMAIL_SCOPES + CALENDAR_SCOPES)
 		"https://www.googleapis.com/auth/gmail.modify",
 		"https://www.googleapis.com/auth/gmail.send",

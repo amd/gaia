@@ -7,6 +7,7 @@ GAIA Code Index — semantic search over source-code repositories.
 
 from gaia.code_index.sdk import (
     CodeChunk,
+    CodeIndexCacheError,
     CodeIndexConfig,
     CodeIndexSDK,
     IndexResult,
@@ -19,4 +20,5 @@ __all__ = [
     "CodeChunk",
     "SearchResult",
     "IndexResult",
+    "CodeIndexCacheError",
 ]

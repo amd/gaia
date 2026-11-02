@@ -43,6 +43,7 @@ const SCOPE_LABELS: Record<string, MessageKey> = {
     'https://www.googleapis.com/auth/spreadsheets.readonly': 'settings.connectors.scope.sheetsRead',
     'https://www.googleapis.com/auth/spreadsheets': 'settings.connectors.scope.sheets',
     'openid': 'settings.connectors.scope.openid',
+    'https://www.googleapis.com/auth/userinfo.email': 'settings.connectors.scope.email',
     'email': 'settings.connectors.scope.email',
     'profile': 'settings.connectors.scope.profile',
     'https://graph.microsoft.com/Mail.ReadWrite': 'settings.connectors.scope.outlookMail',

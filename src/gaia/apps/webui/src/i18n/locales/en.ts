@@ -1355,6 +1355,19 @@ export const enMessages = {
     'download.chip': 'Downloading {done} of {count} · {pct}%',
     'download.chipFailed': 'A download failed',
     'download.chipAria': 'Model downloads. Open Settings to see them.',
+
+    // Mobile access: ngrok not installed
+    'mobile.ngrokRequired': 'ngrok required',
+    'mobile.setupTitle': 'Set up ngrok (one-time)',
+    'mobile.setupIntro': 'Mobile access uses ngrok to reach this PC from your phone.',
+    'mobile.setupInstall': 'Install it with the command below, then press Retry.',
+    'mobile.setupDownload': 'Download it for your system, then press Retry.',
+    'mobile.installCommand': 'ngrok install command',
+    'mobile.copyCommand': 'Copy command',
+    'mobile.copy': 'Copy',
+    'mobile.copied': 'Copied',
+    'mobile.downloadPage': 'ngrok download page',
+    'mobile.retry': 'Retry',
 } as const;
 
 export const en: Locale = {

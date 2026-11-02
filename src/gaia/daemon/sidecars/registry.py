@@ -8,6 +8,7 @@ liveness verification (D-4b).
 
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 import time
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from gaia.daemon.instance import pid_alive
+from gaia.daemon.sidecars import platform as plat
 from gaia.daemon.sidecars.errors import (
     CapacityError,
     DevSrcDirResolutionError,
@@ -28,6 +30,7 @@ from gaia.daemon.sidecars.errors import (
 from gaia.daemon.sidecars.manager import AgentSidecarManager
 from gaia.daemon.sidecars.spec import (
     AgentSidecarSpec,
+    repo_root_from_agent_binary_lock_path,
     repo_root_from_agent_dev_src_dir,
 )
 from gaia.logger import get_logger
@@ -75,7 +78,7 @@ class SidecarRegistry:
         max_live: int = MAX_LIVE_SIDECARS,
         *,
         on_spawn: Optional[Callable[[str, AgentSidecarManager], None]] = None,
-        on_stop: Optional[Callable[[str], None]] = None,
+        on_stop: Optional[Callable[[str, Optional[int]], None]] = None,
         on_started: Optional[Callable[[str, AgentSidecarManager], None]] = None,
         custody_auth=None,
         custody_base_url: Optional[str] = None,
@@ -141,10 +144,11 @@ class SidecarRegistry:
 
         # A single reaped hook fires both the ledger removal and the custody
         # revoke so a crashed/killed sidecar's secret stops resolving the moment
-        # its process is confirmed gone.
-        def _on_reaped(_aid=agent_id) -> None:
+        # its process is confirmed gone. It names the reaped pid so an earlier
+        # spawn that outlived its shutdown keeps its ledger entry.
+        def _on_reaped(_aid=agent_id, _m=manager) -> None:
             if self._on_stop is not None:
-                self._on_stop(_aid)
+                self._on_stop(_aid, _m.pid)
             self._revoke_custody(_aid)
 
         manager.on_process_reaped = _on_reaped
@@ -167,6 +171,8 @@ class SidecarRegistry:
         agent_id: str,
         mode: Optional[str] = None,
         dev_src_dir: Optional[str] = None,
+        binary_lock_sha256: Optional[str] = None,
+        binary_lock_path: Optional[str] = None,
     ) -> dict:
         """Spawn-or-attach *agent_id*'s sidecar; return its fields + token.
 
@@ -176,6 +182,12 @@ class SidecarRegistry:
         source; a caller in a different checkout gets a loud refusal instead
         of silently being served the daemon's checkout (or, in the attach
         case, whatever checkout is already running).
+
+        *binary_lock_sha256* is the user-mode mirror (issue #2596): the digest
+        of the caller's own ``binaries.lock.json``, compared against the
+        daemon's lock. *binary_lock_path* only names the caller's file in the
+        refusal; the daemon never reads it. A checked ensure echoes the
+        daemon's digest as ``binary_lock_sha256``.
         """
         spec = self._spec(agent_id)
         with self._lock:
@@ -189,6 +201,9 @@ class SidecarRegistry:
         manager, agent_lock = holder
         with agent_lock:
             self._check_dev_src_dir(agent_id, spec, mode, dev_src_dir)
+            lock_digest = self._check_binary_lock(
+                agent_id, spec, mode, manager, binary_lock_sha256, binary_lock_path
+            )
             if manager.is_running:
                 # Attaching without an explicit mode is not a mode request —
                 # only an explicit, differing mode conflicts (compared against
@@ -200,7 +215,7 @@ class SidecarRegistry:
                         f"requested. Stop it first (`gaia daemon stop-agent "
                         f"{agent_id}`), then re-ensure in the new mode."
                     )
-                return self._entry(agent_id, manager, include_token=True)
+                return self._ensured(agent_id, manager, lock_digest)
             _raise_if_inhibited(agent_id)
             with self._lock:
                 # Cap counts running AND starting: the reservation closes the
@@ -223,7 +238,7 @@ class SidecarRegistry:
                         self._managers[agent_id] = (manager, agent_lock)
                 manager.start()
                 self._fire_started(agent_id, manager)
-                return self._entry(agent_id, manager, include_token=True)
+                return self._ensured(agent_id, manager, lock_digest)
             finally:
                 with self._lock:
                     self._starting.discard(agent_id)
@@ -300,6 +315,63 @@ class SidecarRegistry:
             "caller sends it — restart the daemon from a Python "
             f"environment/editable install rooted at {caller_repo_root}."
         )
+
+    def _check_binary_lock(
+        self,
+        agent_id: str,
+        spec: AgentSidecarSpec,
+        mode: Optional[str],
+        manager,
+        caller_sha256: Optional[str],
+        caller_path: Optional[str],
+    ) -> Optional[str]:
+        """Refuse a user-mode ensure whose caller pins a different binary than
+        the daemon's own ``binaries.lock.json`` (issue #2596).
+
+        Returns the daemon's lock digest when the check ran and matched, else
+        ``None``. Only digests are compared; *caller_path* is message text.
+        Like the dev-mode check, an attach compares against the lock on disk
+        now, not the pin the running sidecar was spawned from.
+        """
+        if caller_sha256 is None or self._resolve_mode(spec, mode) != "user":
+            return None
+        daemon_lock = Path(manager.lock_path or plat.default_lock_path(agent_id))
+        try:
+            daemon_sha256 = hashlib.sha256(daemon_lock.read_bytes()).hexdigest()
+        except FileNotFoundError:
+            daemon_sha256 = None
+        if daemon_sha256 is not None and daemon_sha256 == caller_sha256.lower():
+            return daemon_sha256
+        if caller_path is not None:
+            caller_root = repo_root_from_agent_binary_lock_path(
+                Path(caller_path), agent_id
+            )
+            caller_desc = caller_path
+            remedy = (
+                "restart the daemon from a Python environment/editable install "
+                f"rooted at {caller_root}"
+            )
+        else:
+            caller_desc = "your checkout's binaries.lock.json"
+            remedy = "restart the daemon from your checkout's Python environment"
+        daemon_desc = (
+            f"pins a different binary in {daemon_lock}"
+            if daemon_sha256 is not None
+            else f"has no binaries.lock.json (looked for {daemon_lock})"
+        )
+        raise ModeConflictError(
+            f"agent '{agent_id}' user mode would not run the binary pinned in "
+            f"{caller_desc}: the daemon {daemon_desc}, and it never reads a "
+            f"lock file a caller sends it. To run your pin, {remedy}. To run "
+            "the daemon's pin instead, start the agent from the daemon's "
+            "checkout."
+        )
+
+    def _ensured(self, agent_id: str, manager, lock_digest: Optional[str]) -> dict:
+        entry = self._entry(agent_id, manager, include_token=True)
+        if lock_digest is not None:
+            entry["binary_lock_sha256"] = lock_digest
+        return entry
 
     def connection(self, agent_id: str) -> "tuple[str, str]":
         """``(base_url, bearer token)`` for *agent_id*'s RUNNING sidecar.

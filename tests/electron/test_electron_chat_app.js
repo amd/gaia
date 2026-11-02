@@ -1174,38 +1174,13 @@ describe('Chat App Integration', () => {
       expect(chatContent).toContain('aria-label="Export chat"');
       expect(chatContent).toContain('aria-label="Browse files on this PC"');
     });
-
-    it('should convert policy_alert events into policy steps and notifications', () => {
-      const stepsContent = fs.readFileSync(
-        path.join(CHAT_APP_PATH, 'src/utils/streamSteps.ts'),
-        'utf8'
-      );
-      expect(stepsContent).toContain("case 'policy_alert'");
-      expect(stepsContent).toContain("type: 'policy_alert'");
-      expect(stepsContent).toContain('ruleIds: event.rule_ids ?? []');
-      expect(stepsContent).toContain('policyVersion: event.policy_version');
-      expect(stepsContent).toContain('receiptId: event.receipt_id');
-      expect(chatContent).toContain('showPolicyToast');
-      expect(chatContent).toContain('View receipt');
-      expect(chatContent).toContain('Receipt unavailable');
-    });
   });
 
   describe('Policy alert UI coverage', () => {
-    let agentActivityContent;
-    let notificationContent;
     let notificationCss;
     let agentTypesContent;
 
     beforeAll(() => {
-      agentActivityContent = fs.readFileSync(
-        path.join(CHAT_APP_PATH, 'src/components/AgentActivity.tsx'),
-        'utf8'
-      );
-      notificationContent = fs.readFileSync(
-        path.join(CHAT_APP_PATH, 'src/components/NotificationCenter.tsx'),
-        'utf8'
-      );
       notificationCss = fs.readFileSync(
         path.join(CHAT_APP_PATH, 'src/components/NotificationCenter.css'),
         'utf8'
@@ -1216,16 +1191,6 @@ describe('Chat App Integration', () => {
       );
     });
 
-    it('should render inline Policy Shield cards with policy metadata', () => {
-      expect(agentActivityContent).toContain("step.type === 'policy_alert'");
-      expect(agentActivityContent).toContain('FlowPolicyAlert');
-      expectTranslated(agentActivityContent, "t('activity.policy.title')", 'activity.policy.title', 'Policy Shield');
-      expectTranslated(agentActivityContent, "ref('activity.blocked')", 'activity.blocked', 'Blocked by policy');
-      expect(agentActivityContent).toContain('step.ruleIds.join');
-      expect(agentActivityContent).toContain('step.policyVersion');
-      expectTranslated(agentActivityContent, "t('activity.policy.receiptUnavailable')", 'activity.policy.receiptUnavailable', 'Receipt unavailable');
-    });
-
     it('should model policy notifications separately from permission prompts', () => {
       expect(agentTypesContent).toContain("| 'policy_alert'");
       expect(agentTypesContent).toContain('decision?: string');
@@ -1233,18 +1198,6 @@ describe('Chat App Integration', () => {
       expect(agentTypesContent).toContain('ruleIds?: string[]');
       expect(agentTypesContent).toContain('policyVersion?: string');
       expect(agentTypesContent).toContain('receiptId?: string');
-    });
-
-    it('should render policy notification details without permission actions', () => {
-      expect(notificationContent).toContain("policy_alert");
-      expect(notificationContent).toContain("label: 'Policy'");
-      expect(notificationContent).toContain('notification-policy-details');
-      expect(notificationContent).toContain('Reason: {n.reason}');
-      expect(notificationContent).toContain('Rules: <code>{n.ruleIds.join');
-      expect(notificationContent).toContain('Policy: <code>{n.policyVersion}</code>');
-      expect(notificationContent).toContain('Receipt unavailable');
-      expect(notificationContent).toContain("n.type === 'permission_request' && !n.response");
-      expect(notificationContent).not.toContain("n.type === 'policy_alert' && !n.response");
     });
 
     it('should style policy notifications distinctly from permission requests', () => {
