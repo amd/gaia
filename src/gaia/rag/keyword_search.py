@@ -53,9 +53,10 @@ def rank_keyword_chunks(
         held_by.update(unique & set(query_words))
 
     # Plus one, so a word in every chunk of a small document still counts a little.
+    # A word no chunk holds weighs as if one did, or it outweighs every match.
     total = len(indexed)
     weights = {
-        word: math.log((total + 1) / (held_by[word] + 1)) + 1 / (total + 1)
+        word: math.log((total + 1) / (max(held_by[word], 1) + 1)) + 1 / (total + 1)
         for word in query_words
     }
     whole = sum(weights.values()) + sum(
