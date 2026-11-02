@@ -84,12 +84,33 @@ ACCOUNT_LABEL_VAR = "GAIA_CLAUDE_ACCOUNT"
 
 _OTHER_LABEL = {"primary": "secondary", "secondary": "primary"}
 
+API_KEY_VAR = "ANTHROPIC_API_KEY"
+
+
+def driver_api_key() -> str:
+    """The API key the ``claude -p`` driver may use, or ``""``.
+
+    Only a key from the real process environment counts. A ``.env`` file —
+    found by searching parent directories — is not a choice the operator made,
+    and its key would switch off working subscription auth (#3367).
+    """
+    import gaia  # pylint: disable=import-outside-toplevel
+
+    shell_key = (gaia.pre_dotenv_env(API_KEY_VAR) or "").strip()
+    current = (os.environ.get(API_KEY_VAR) or "").strip()
+    return current if shell_key and current else ""
+
+
+def dotenv_only_api_key() -> bool:
+    """True when ``ANTHROPIC_API_KEY`` is set only because a ``.env`` set it."""
+    return bool((os.environ.get(API_KEY_VAR) or "").strip()) and not driver_api_key()
+
 
 def claude_account() -> str:
     """Which credential the driver used, without revealing it."""
     label = os.environ.get(ACCOUNT_LABEL_VAR, "").strip()
     suffix = f" (the {label} account)" if label else ""
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    if driver_api_key():
         return f"the API key in ANTHROPIC_API_KEY{suffix}"
     if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
         return f"the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN{suffix}"
@@ -106,7 +127,7 @@ def switch_to_backup_account(outage: dict) -> Optional[dict]:
     """
     backup = os.environ.get(BACKUP_TOKEN_VAR, "").strip()
     active = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
-    if not backup or backup == active or os.environ.get("ANTHROPIC_API_KEY"):
+    if not backup or backup == active or driver_api_key():
         return None
     was = os.environ.get(ACCOUNT_LABEL_VAR, "").strip() or "first"
     now = _OTHER_LABEL.get(was, "backup")

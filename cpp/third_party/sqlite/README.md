@@ -63,5 +63,7 @@ Two things are deliberately **not** compile flags:
    Note it is **SHA3-256**, not SHA-256 — checking the wrong algorithm will
    look like a tampered download.
 3. Replace `sqlite3.c` and `sqlite3.h` with the new files, unmodified.
-4. Update [`SQLITE_VERSION.txt`](SQLITE_VERSION.txt) with the new version, source id, URL, and both checksums.
+4. Update [`SQLITE_VERSION.txt`](SQLITE_VERSION.txt) with the new version, source id, URL, and both checksums,
+   and the `sqlite` package in [`../../SBOM.spdx.json`](../../SBOM.spdx.json) to match
+   (`python util/check_cpp_sbom.py` checks it).
 5. Rebuild and run `ctest -R Database --output-on-failure`.

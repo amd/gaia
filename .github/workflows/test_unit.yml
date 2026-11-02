@@ -32,6 +32,8 @@ on:
       # run their checks over every workflow and action.
       - '.github/workflows/**'
       - '.github/actions/**'
+      # test_check_dependabot.py checks the real config against the tracked lockfiles.
+      - '.github/dependabot.yml'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
       # The flagship's npm package files and lock, read by the installer and version tests.
@@ -51,6 +53,7 @@ on:
       - 'scripts/dev/**'
       - 'scripts/audit/**'
       - 'examples/skill_references_example.py'
+      - 'examples/mcp_windows_system_health_agent.py'
       - 'eval/ci_lanes.json'
       - 'eval/ci_tiers.json'
       - 'eval/retrieval/**'
@@ -84,7 +87,7 @@ on:
       - 'hub/agents/*/npm/SKILL.md'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - 'src/**'
       - 'tests/**'
@@ -96,6 +99,8 @@ on:
       # run their checks over every workflow and action.
       - '.github/workflows/**'
       - '.github/actions/**'
+      # test_check_dependabot.py checks the real config against the tracked lockfiles.
+      - '.github/dependabot.yml'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
       # The flagship's npm package files and lock, read by the installer and version tests.
@@ -115,6 +120,7 @@ on:
       - 'scripts/dev/**'
       - 'scripts/audit/**'
       - 'examples/skill_references_example.py'
+      - 'examples/mcp_windows_system_health_agent.py'
       - 'eval/ci_lanes.json'
       - 'eval/ci_tiers.json'
       - 'eval/retrieval/**'
@@ -593,6 +599,7 @@ jobs:
             tests/integration/test_scheduler_e2e.py \
             tests/integration/test_tui_control_e2e.py \
             tests/mcp/test_agent_mcp_server_stdio.py \
+            tests/mcp/test_code_index_mcp.py \
             tests/mcp/test_engineering_mcp.py \
             tests/mcp/test_mcp_cli_to_agent_workflow.py \
             tests/mcp/test_mcp_sdk_integration.py \
