@@ -22,12 +22,17 @@ MAILBOX_REQUIREMENTS: Tuple[ConnectorRequirement, ...] = (
     ConnectorRequirement(
         connector_id=GOOGLE_CONNECTOR_ID,
         scopes=list(DECLARED_SCOPES[GOOGLE_CONNECTOR_ID]),
-        reason="Read and search your Gmail so the agent can triage your inbox.",
+        reason=(
+            "Read and search your Gmail, and draft and send mail when you approve it."
+        ),
     ),
     ConnectorRequirement(
         connector_id=MICROSOFT_CONNECTOR_ID,
         scopes=list(DECLARED_SCOPES[MICROSOFT_CONNECTOR_ID]),
-        reason="Read and search your Outlook mail so the agent can triage your inbox.",
+        reason=(
+            "Read and search your Outlook mail, and draft and send mail when you "
+            "approve it."
+        ),
     ),
 )
 

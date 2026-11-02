@@ -42,7 +42,12 @@ from typing import (
 )
 
 from gaia.agents.base import turn_metrics
-from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG, SHELL_TOOLS
+from gaia.agents.base.call_risk import (
+    EXACT_TEXT_ARG,
+    NEEDS_PERSON_ARG,
+    RISK_NOTE_ARG,
+    SHELL_TOOLS,
+)
 from gaia.agents.base.completion import (
     CompletionEvidence,
     caveated_answer,
@@ -6955,7 +6960,7 @@ Do NOT wrap conversational replies in JSON.
         reserved = sorted(
             key
             for key in (tool_args if isinstance(tool_args, dict) else {})
-            if key in (RISK_NOTE_ARG, SCRATCH_ARG, NEEDS_PERSON_ARG)
+            if key in (RISK_NOTE_ARG, SCRATCH_ARG, NEEDS_PERSON_ARG, EXACT_TEXT_ARG)
         )
         if reserved:
             return {
@@ -7003,9 +7008,12 @@ Do NOT wrap conversational replies in JSON.
         # call runs. Display only: the tool runs with tool_args.
         shows = getattr(self, "confirmation_args_for_call", None)
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
-        prompt_args = _with_resolved_target(
-            prompt_args, (self._tools_registry.get(tool_name) or {}).get("preflight")
-        )
+        preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
+        prompt_args = _with_resolved_target(prompt_args, preflight)
+        # A tool whose arguments don't say what will happen shows what will.
+        prompt_args_of = getattr(preflight, "prompt_args_of", None)
+        if callable(prompt_args_of):
+            prompt_args = prompt_args_of(tool_args)
         # Scratch writes never ask, so code run from there is asked about on
         # every run — the marker keeps "always" (and any broader grant) off it.
         scratch = _scratch_reached_by(self, tool_name, prompt_args)

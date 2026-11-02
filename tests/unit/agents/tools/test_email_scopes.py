@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: MIT
 """What the flagship asks a mailbox connection for, and when.
 
-Two lists per provider, and the difference between them is the whole point: a
-new consent requests read only, while an existing connection that already
-carries a broader scope is used as-is rather than forcing a browser reconnect.
+A new consent asks once for reading and writing. An existing connection keeps
+reading with whatever read scope it carries, with no browser reconnect, and a
+write resolves its own scopes separately.
 """
 
 import pytest
@@ -13,12 +13,17 @@ from gaia.agents.tools._email.scopes import (
     DECLARED_SCOPES,
     GOOGLE_CONNECTOR_ID,
     MICROSOFT_CONNECTOR_ID,
+    OPERATION_DRAFT,
+    OPERATION_SEND,
     READ_CAPABLE_SCOPES,
     SCOPE_GMAIL_FULL_MAILBOX,
     SCOPE_GMAIL_MODIFY,
     SCOPE_GMAIL_READONLY,
     SCOPE_MAIL_READ,
     SCOPE_MAIL_READWRITE,
+    SCOPE_MAIL_SEND,
+    WRITE_SCOPES,
+    missing_write_scopes,
     resolve_request_scope,
 )
 
@@ -90,14 +95,42 @@ def test_an_unknown_provider_resolves_to_nothing():
     )
 
 
-def test_declared_scopes_are_read_only():
-    """A first-time user must never be asked to consent to more than reading."""
-    assert DECLARED_SCOPES[GOOGLE_CONNECTOR_ID] == (SCOPE_GMAIL_READONLY,)
-    for scope in DECLARED_SCOPES[GOOGLE_CONNECTOR_ID]:
-        assert "modify" not in scope and "send" not in scope
-    # Microsoft keeps Mail.ReadWrite: narrowing it would re-consent every
-    # existing Outlook user for no benefit here.
-    assert DECLARED_SCOPES[MICROSOFT_CONNECTOR_ID] == (SCOPE_MAIL_READWRITE,)
+def test_one_consent_covers_reading_and_writing():
+    """Every write's scopes are declared, and permanent delete stays out of reach."""
+    assert DECLARED_SCOPES[GOOGLE_CONNECTOR_ID] == (SCOPE_GMAIL_MODIFY,)
+    assert DECLARED_SCOPES[MICROSOFT_CONNECTOR_ID] == (
+        SCOPE_MAIL_READWRITE,
+        SCOPE_MAIL_SEND,
+    )
+    for provider, operations in WRITE_SCOPES.items():
+        for scopes in operations.values():
+            assert set(scopes) <= set(DECLARED_SCOPES[provider])
+            assert SCOPE_GMAIL_FULL_MAILBOX not in scopes
+    for provider, declared in DECLARED_SCOPES.items():
+        assert set(declared) & set(READ_CAPABLE_SCOPES[provider])
+
+
+@pytest.mark.parametrize(
+    "provider,operation,held,missing",
+    [
+        (GOOGLE_CONNECTOR_ID, OPERATION_SEND, [SCOPE_GMAIL_MODIFY], ()),
+        (
+            GOOGLE_CONNECTOR_ID,
+            OPERATION_DRAFT,
+            [SCOPE_GMAIL_READONLY],
+            (SCOPE_GMAIL_MODIFY,),
+        ),
+        (MICROSOFT_CONNECTOR_ID, OPERATION_DRAFT, [SCOPE_MAIL_READWRITE], ()),
+        (
+            MICROSOFT_CONNECTOR_ID,
+            OPERATION_SEND,
+            [SCOPE_MAIL_READWRITE],
+            (SCOPE_MAIL_SEND,),
+        ),
+    ],
+)
+def test_missing_write_scopes(provider, operation, held, missing):
+    assert missing_write_scopes(provider, operation, held_scopes=held) == missing
 
 
 def test_read_capable_scopes_are_ordered_narrowest_first():

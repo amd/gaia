@@ -28,6 +28,17 @@ afterEach(() => {
 });
 
 describe('PermissionPrompt', () => {
+    it.each([
+        ['from the args', { _exact_text: 'To: a@b.co\nSubject: Hi\n\nFull body' }, ''],
+        ['from a relayed summary', {}, 'To: a@b.co\nSubject: Hi\n\nFull body'],
+    ])('shows an email whole, %s, with no way to approve a shortened one', (_name, toolArgs, summary) => {
+        useNotificationStore.getState().addNotification(request({ tool: 'send_now', toolArgs, summary }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByTestId('perm-exact-text').textContent).toBe('To: a@b.co\nSubject: Hi\n\nFull body');
+        expect(screen.queryByRole('button', { name: /Show all/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /always/i })).not.toBeInTheDocument();
+    });
+
     it('shows short code whole, with no expand control', () => {
         useNotificationStore.getState().addNotification(request({
             tool: 'run_python', toolArgs: { code: 'print(1)\nprint(2)' },

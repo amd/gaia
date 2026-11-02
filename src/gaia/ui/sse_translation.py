@@ -71,7 +71,11 @@ import os
 import re
 from typing import Any, Callable, Dict, List, Optional
 
-from gaia.agents.base.call_risk import RISK_NOTE_ARG, plain_risk_note
+from gaia.agents.base.call_risk import (
+    EXACT_TEXT_ARG,
+    RISK_NOTE_ARG,
+    plain_risk_note,
+)
 from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
@@ -639,6 +643,8 @@ class CanonicalTranslator:
         ``action`` field, not here. Agents with domain detail worth showing
         (recipients, paths) pass ``summary_renderer``.
         """
+        if isinstance(args.get(EXACT_TEXT_ARG), str):
+            return args[EXACT_TEXT_ARG]
         if self._summary_renderer is not None:
             return self._summary_renderer(tool, args)
         # The prompt's title already says what kind of action this is; the
@@ -779,7 +785,7 @@ PROMPT_ARG_VALUE_CHARS = 64_000
 
 
 #: Keys GAIA writes into a prompt's arguments; the agent refuses them from a model.
-PROMPT_ONLY_ARGS = frozenset({RISK_NOTE_ARG, SCRATCH_ARG})
+PROMPT_ONLY_ARGS = frozenset({RISK_NOTE_ARG, SCRATCH_ARG, EXACT_TEXT_ARG})
 
 
 def _model_call_args(event: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:

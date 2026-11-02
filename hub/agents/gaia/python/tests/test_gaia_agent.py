@@ -627,17 +627,13 @@ def _requirement(connector_id):
     )
 
 
-def test_required_connectors_declare_google_read_only():
-    """The consent screen renders this. A first Gmail user sees read, only read."""
-    from gaia.agents.tools._email.scopes import (
-        SCOPE_GMAIL_MODIFY,
-        SCOPE_GMAIL_READONLY,
-    )
+def test_required_connectors_declare_gmail_modify_only():
+    """One consent reads and writes, and never asks for permanent delete."""
+    from gaia.agents.tools._email.scopes import SCOPE_GMAIL_MODIFY
 
     google = _requirement("google")
     assert google is not None, "the flagship declares no Google mailbox requirement"
-    assert list(google.scopes) == [SCOPE_GMAIL_READONLY]
-    assert SCOPE_GMAIL_MODIFY not in google.scopes
+    assert list(google.scopes) == [SCOPE_GMAIL_MODIFY]
     assert "https://mail.google.com/" not in google.scopes
 
 
@@ -719,10 +715,13 @@ def test_the_callable_entry_point_publishes_the_requirements_to_the_registry():
     registry.discover_installed_agents()
 
     assert resolve_declared_scopes(registry, "google", ["installed:gaia"]) == {
-        "installed:gaia": ["https://www.googleapis.com/auth/gmail.readonly"]
+        "installed:gaia": ["https://www.googleapis.com/auth/gmail.modify"]
     }
     assert resolve_declared_scopes(registry, "microsoft", ["installed:gaia"]) == {
-        "installed:gaia": ["https://graph.microsoft.com/Mail.ReadWrite"]
+        "installed:gaia": [
+            "https://graph.microsoft.com/Mail.ReadWrite",
+            "https://graph.microsoft.com/Mail.Send",
+        ]
     }
 
 

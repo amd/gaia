@@ -109,10 +109,12 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"send_draft":                  RiskWrite,
 	"schedule_send":               RiskWrite,
 	"forward_message":             RiskWrite,
+	"reply_to_message":            RiskWrite,
 	"accept_invite":               RiskWrite,
 	"decline_invite":              RiskWrite,
 	"create_event_from_email":     RiskWrite,
 	"permanent_delete":            RiskDestructive,
+	"discard_draft":               RiskDestructive,
 	"quarantine_phishing_message": RiskDestructive,
 
 	"run_shell_command":   RiskDestructive,
@@ -156,6 +158,11 @@ var actionTitles = map[string]string{
 	"install_skill":       "Install this skill?",
 	"remove_skill":        "Remove this skill?",
 	"allow_path_access":   "Allow access to this location?",
+	"send_now":            "Send this email?",
+	"send_draft":          "Send this email?",
+	"reply_to_message":    "Send this reply?",
+	"forward_message":     "Forward this email?",
+	"discard_draft":       "Delete this draft?",
 }
 
 // ActionTitle is the prompt's question for a gated action.
