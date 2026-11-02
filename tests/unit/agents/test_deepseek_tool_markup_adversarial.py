@@ -181,12 +181,23 @@ def test_a_500kb_parameter_parses_and_strips_quickly():
 
 def test_many_inline_mentions_are_not_checked_quadratically():
     """Each match used to be checked against every code span: 64 KB took ~2 s."""
-    text = '`<tool_call>` and `<｜DSML｜invoke name="x">` ' * 4000
-    start = time.perf_counter()
-    assert not has_tool_markup(text)
-    assert strip_tool_markup(text) == text
-    assert parse_deepseek_tool_calls(text) is None
-    assert time.perf_counter() - start < 0.5
+
+    def fastest_scan(repeats):
+        text = '`<tool_call>` and `<｜DSML｜invoke name="x">` ' * repeats
+        best = float("inf")
+        for _ in range(3):
+            start = time.perf_counter()
+            assert not has_tool_markup(text)
+            assert strip_tool_markup(text) == text
+            assert parse_deepseek_tool_calls(text) is None
+            best = min(best, time.perf_counter() - start)
+        return best
+
+    # A ratio, not a wall-clock cap, so a loaded CI runner can't fail it: 4x the
+    # text costs ~4x when linear and ~16x when quadratic.
+    small, large = fastest_scan(1000), fastest_scan(4000)
+    assert large < 8 * small + 0.05
+    assert large < 5.0
 
 
 # --------------------------------------------------------------- the loop
