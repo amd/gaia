@@ -1321,6 +1321,8 @@ def test_a_failed_single_download_says_why_and_can_retry():
     assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "failed")
     row = _models(runner)[GEMMA]
     assert row["error_kind"] == "network" and row["can_retry"]
+    assert row["log"][0].startswith(f"Downloading {GEMMA} through Lemonade")
+    assert row["log"][-1].startswith("Failed:")
 
 
 def test_one_model_cannot_download_twice_or_during_a_run():
@@ -1346,6 +1348,7 @@ def test_cancelling_one_download_marks_it_cancelled_and_resumable():
     gate.set()
     assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "cancelled")
     assert _models(runner)[GEMMA]["can_retry"]
+    assert _models(runner)[GEMMA]["log"][-1] == "Cancelled"
     assert runner.cancel("not-downloading") is False
 
 
@@ -1757,3 +1760,59 @@ def test_report_route_names_a_failed_bundle(client, monkeypatch):
     res = http.post("/api/setup/report")
     assert res.status_code == 500
     assert "disk full" in res.json()["detail"]
+
+
+# ── Each download's own log ────────────────────────────────────────────────
+
+
+def test_each_download_keeps_its_own_lines_and_one_progress_bar():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event(
+        {
+            "event": "plan",
+            "models": [{"id": "a-GGUF"}, {"id": "b-GGUF", "downloaded": True}],
+        }
+    )
+    runner._consume(run, "Step 2/5: Downloading models for 'gaia' profile...")
+    runner._consume(run, "Downloading: a-GGUF")
+    for pct in (10, 40, 90):
+        runner._consume(run, f"[====------] {pct}% ({pct} MB/100 MB)")
+    runner._on_event({"event": "model_done", "model": "a-GGUF"})
+    runner._consume(run, "Step 3/5: Installing Python dependencies...")
+
+    rows = {m["id"]: m for m in runner.status()["models"]}
+    assert rows["a-GGUF"]["log"] == [
+        "Downloading: a-GGUF",
+        "[====------] 90% (90 MB/100 MB)",
+        "Downloaded",
+    ]
+    assert rows["b-GGUF"]["log"] == ["Already on this PC"]
+
+
+def test_a_failed_download_says_why_on_its_row():
+    runner = sr.SetupRunner()
+    runner._run = sr.SetupRun(skip_chat_model=False)
+    runner._on_event({"event": "plan", "models": [{"id": "a-GGUF"}]})
+    runner._on_event(
+        {"event": "progress", "model": "a-GGUF", "bytes_done": 1, "bytes_total": 9}
+    )
+    runner._on_event({"event": "retrying", "model": "a-GGUF", "until": 1})
+    runner._on_event(
+        {"event": "error", "model": "a-GGUF", "message": "connection reset"}
+    )
+    log = runner.status()["models"][0]["log"]
+    assert log == ["Connection dropped; still trying", "Failed: connection reset"]
+
+
+def test_the_row_shows_the_tail_and_the_report_keeps_the_rest():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event({"event": "plan", "models": [{"id": "a-GGUF"}]})
+    runner._consume(run, "Downloading: a-GGUF")
+    for i in range(sr.MODEL_LOG_SHOWN + 20):
+        runner._consume(run, f"note {i}")
+    assert len(runner.status()["models"][0]["log"]) == sr.MODEL_LOG_SHOWN
+    assert len(runner.report()["models"][0]["log"]) == sr.MODEL_LOG_SHOWN + 21

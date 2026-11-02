@@ -914,3 +914,49 @@ button.setup-rail-step:hover {
         color: var(--text-muted);
     }
 }
+
+/* Each download's own log, behind a quiet chevron at the end of its row. */
+.dl-log-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 24px;
+    block-size: 24px;
+    margin-inline-start: 2px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    transition: background-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+
+.dl-log-toggle:hover,
+.dl-log-toggle:focus-visible {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.dl-log-toggle svg {
+    transition: transform var(--duration-fast) var(--ease);
+}
+
+.dl-log-toggle svg.is-open {
+    transform: rotate(90deg);
+}
+
+[dir="rtl"] .dl-log-toggle svg:not(.is-open) {
+    transform: scaleX(-1);
+}
+
+.dl-log {
+    max-block-size: 180px;
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    overflow: auto;
+    background: var(--bg-code);
+    color: var(--text-code);
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}

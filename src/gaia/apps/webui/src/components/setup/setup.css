@@ -625,3 +625,10 @@
 .mc-job-title { color: var(--text-primary); font-size: 14px; font-weight: 600; }
 .mc-job-line { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; color: var(--text-primary); font-size: 14px; }
 .mc-row.is-off { opacity: 0.7; }
+
+/* A phone: the model's name keeps a line of its own; state and log toggle go under it. */
+@media (max-width: 520px) {
+    .dl-row-head { flex-wrap: wrap; }
+    .dl-name { flex: 1 1 calc(100% - 40px); overflow-wrap: break-word; }
+    .dl-state { margin-inline-start: 22px; }
+}

@@ -529,6 +529,17 @@ MODEL_STATES = (
 )
 
 
+#: A line that starts one model's download in ``gaia init``'s output.
+_DOWNLOADING_RE = re.compile(
+    r"^\s*(?:\S+\s+)?(?:Downloading|Pulling)\b[:\s]+(\S+)", re.I
+)
+#: A progress bar's redraw: only its latest state is worth keeping.
+_BAR_RE = re.compile(r"^\s*\[[=#>\-. ]*\]|\d{1,3}%")
+_MODEL_LOG_KEPT = 300
+#: Lines each row shows; the troubleshooting report keeps them all.
+MODEL_LOG_SHOWN = 80
+
+
 @dataclass
 class ModelProgress:
     """One model's download, as the progress rows show it."""
@@ -543,6 +554,17 @@ class ModelProgress:
     retrying_until: Optional[int] = None
     #: Bytes already on disk when this pull started (a resumed download).
     bytes_before: Optional[int] = None
+    #: What the download printed and reported, this model's lines only.
+    log: List[str] = field(default_factory=list)
+
+    def add_log(self, line: str) -> None:
+        """Keep *line*; a progress bar's redraw replaces the one before it."""
+        if self.log and _BAR_RE.search(line) and _BAR_RE.search(self.log[-1]):
+            self.log[-1] = line
+            return
+        self.log.append(line)
+        if len(self.log) > _MODEL_LOG_KEPT:
+            del self.log[:-_MODEL_LOG_KEPT]
 
     def view(self, chat_model: Optional[str] = None) -> Dict[str, Any]:
         from gaia.installer.model_choice import roles_for
@@ -567,6 +589,7 @@ class ModelProgress:
             "downloaded_before_gb": (
                 round(self.bytes_before / 1e9, 2) if self.bytes_before else None
             ),
+            "log": self.log[-MODEL_LOG_SHOWN:],
         }
 
 
@@ -745,6 +768,8 @@ class SetupRunner:
         self._pulls: Dict[str, threading.Event] = {}
         #: The checks' log, kept when the run that started the server is replaced.
         self._check_log: List[str] = []
+        #: The model gaia init is downloading now, so its printed lines go to its row.
+        self._log_model: Optional[str] = None
 
     def _logs(self, shown: Optional[int]) -> Dict[str, List[str]]:
         """Each stage's log, its last *shown* lines. Caller holds the lock."""
@@ -758,7 +783,9 @@ class SetupRunner:
         with self._lock:
             view = self._run.view() if self._run else {"state": "idle"}
             chat = self._run.chat_model if self._run else None
-            view["models"] = [m.view(chat) for m in self._models.values()]
+            view["models"] = [
+                {**m.view(chat), "log": list(m.log)} for m in self._models.values()
+            ]
             view["log_tail"] = list(self._run.log) if self._run else []
             view["logs"] = self._logs(None)
             view["check_result"] = self._run.status if self._run else None
@@ -889,13 +916,17 @@ class SetupRunner:
             # Start from the bytes already down, so the first poll doesn't read 0
             # and the next one jump to the partial size.
             before = self._models.get(model_id)
-            self._models[model_id] = ModelProgress(
+            entry = ModelProgress(
                 id=model_id,
                 state="downloading",
                 bytes_done=before.bytes_done if before else 0,
                 bytes_total=before.bytes_total if before else 0,
                 bytes_before=on_disk or None,
+                log=list(before.log) if before else [],
             )
+            resumed = f", resuming from {on_disk / 1e9:.2f} GB" if on_disk else ""
+            entry.add_log(f"Downloading {model_id} through Lemonade{resumed}")
+            self._models[model_id] = entry
         threading.Thread(
             target=self._pull_one,
             args=(client, model_id, keep_trying, stop),
@@ -957,19 +988,30 @@ class SetupRunner:
                 )
             outcome, kind = ("ready" if ok else "failed"), "lemonade"
         except ModelDownloadCancelledError:
-            outcome, kind = "cancelled", None
+            outcome, kind, cause = "cancelled", None, None
         except LemonadeClientError as e:
             logger.exception("Download of %s failed", model_id)
-            outcome, kind = "failed", model_choice.error_kind(str(e))
-        except Exception:  # pylint: disable=broad-exception-caught
+            outcome, kind, cause = "failed", model_choice.error_kind(str(e)), str(e)
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.exception("Download of %s stopped on an unexpected error", model_id)
-            outcome, kind = "failed", "lemonade"
+            outcome, kind, cause = "failed", "lemonade", f"{type(e).__name__}: {e}"
+        else:
+            cause = None
         with self._lock:
             self._pulls.pop(model_id, None)
             entry = self._models.setdefault(model_id, ModelProgress(id=model_id))
             entry.speed_bps, entry.retrying_until = 0, None
             if stop.is_set():
                 outcome = "cancelled"
+            entry.add_log(
+                "Downloaded"
+                if outcome == "ready"
+                else (
+                    "Cancelled"
+                    if outcome == "cancelled"
+                    else f"Failed: {cause or 'Lemonade reported the download failed'}"
+                )
+            )
             if outcome == "ready":
                 entry.state, entry.bytes_done = "ready", max(
                     entry.bytes_done, entry.bytes_total
@@ -998,6 +1040,7 @@ class SetupRunner:
                     )
                     if planned.get("downloaded"):
                         entry.bytes_done = entry.bytes_total
+                        entry.add_log("Already on this PC")
                     self._models[planned["id"]] = entry
                 for skipped in event.get("skipped") or []:
                     self._models[skipped] = ModelProgress(id=skipped, state="skipped")
@@ -1025,6 +1068,7 @@ class SetupRunner:
                 return
             entry = self._models.setdefault(model_id, ModelProgress(id=model_id))
             if kind == "progress":
+                self._log_model = model_id
                 if entry.state in ("queued", "cancelled", "failed", "downloading"):
                     entry.state = "downloading"
                 entry.bytes_done = int(event.get("bytes_done") or 0)
@@ -1036,6 +1080,9 @@ class SetupRunner:
             elif kind == "model_done":
                 entry.state, entry.speed_bps = "verifying", 0
                 entry.bytes_done = max(entry.bytes_done, entry.bytes_total)
+                entry.add_log("Downloaded")
+                if self._log_model == model_id:
+                    self._log_model = None
                 if self._run is not None:
                     self._run.note(f"{model_id}: downloaded")
             elif kind == "retrying":
@@ -1043,11 +1090,13 @@ class SetupRunner:
                 entry.state, entry.speed_bps = "downloading", 0
                 entry.error = entry.error_kind = None
                 entry.retrying_until = int(event.get("until") or 0)
+                entry.add_log("Connection dropped; still trying")
                 if self._run is not None:
                     self._run.note(f"{model_id}: connection dropped, still trying")
             elif kind == "error":
                 message = str(event.get("message") or "")
                 logger.warning("Download of %s failed: %s", model_id, message)
+                entry.add_log(f"Failed: {message}")
                 if self._run is not None:
                     self._run.note(f"{model_id}: download failed: {message}")
                 entry.error_kind = error_kind(message)
@@ -1055,6 +1104,19 @@ class SetupRunner:
                 entry.error = _failure_text(model_id, entry.error_kind)
                 if self._run is not None:
                     self._run.model_failed = True
+
+    def _attribute(self, line: str) -> None:
+        """Give a printed line to the model it is about. Caller holds the lock."""
+        from gaia.installer.model_choice import ids_match
+
+        m = _DOWNLOADING_RE.match(line)
+        if m:
+            named = m.group(1).rstrip(".:,")
+            self._log_model = next(
+                (k for k in self._models if ids_match(k, named)), self._log_model
+            )
+        if self._log_model and self._log_model in self._models:
+            self._models[self._log_model].add_log(line)
 
     @staticmethod
     def _record_test(run: SetupRun, event: Dict[str, Any]) -> None:
@@ -1297,6 +1359,7 @@ class SetupRunner:
         progress = describe(line)
         with self._lock:
             run.note(line, printed=True)
+            self._attribute(line)
             if progress is None:
                 return
             if progress.failed:

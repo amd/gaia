@@ -106,8 +106,8 @@ const RUN = {
         download: ['$ gaia init --profile gaia', `Plan: ${EMBED_ID}, ${GEMMA_ID}`, 'backend: active', `${EMBED_ID}: downloaded`, `Downloading: ${GEMMA_ID} [====------] 34% (2.0 GB/5.97 GB)`],
     },
     models: [
-        row(EMBED_ID, ['embedding'], 'verifying', 330e6, 330e6),
-        row(GEMMA_ID, ['chat', 'vision'], 'downloading', 2e9, 5.97e9),
+        { ...row(EMBED_ID, ['embedding'], 'verifying', 330e6, 330e6), log: [`Downloading: ${EMBED_ID}`, '[==========] 100% (330 MB/330 MB)', 'Downloaded'] },
+        { ...row(GEMMA_ID, ['chat', 'vision'], 'downloading', 2e9, 5.97e9), log: [`Downloading: ${GEMMA_ID}`, 'Fetching unsloth/gemma-4-E4B-it-GGUF:Q4_K_M from huggingface.co', '[===-------] 34% (2.0 GB/5.97 GB)'] },
     ],
     overall: { bytes_done: 2.33e9, bytes_total: 6.3e9, speed_bps: 0, eta_s: null, percent: 36, failed: 0 },
 };

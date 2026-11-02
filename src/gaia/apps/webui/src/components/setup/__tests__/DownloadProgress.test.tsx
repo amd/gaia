@@ -19,6 +19,31 @@ function rowOf(name: string): HTMLElement {
 }
 
 describe('DownloadProgress', () => {
+    it("opens each download's own log from a chevron on its row, closed at first", () => {
+        const log = ['Downloading: Qwen3.6-35B-A3B-GGUF', '[====------] 33% (7.6 GB/23.3 GB)'];
+        const { rerender } = render(<DownloadProgress status={runStatus([
+            progress({ id: QWEN.id, state: 'downloading', bytes_done: 7.6e9, bytes_total: 23.3e9, log }),
+            progress({ id: EMBED.id, roles: ['embedding'], state: 'queued', bytes_total: 0.3e9 }),
+        ])} names={NAMES} />);
+        const row = within(rowOf('Qwen3.6-35B-A3B'));
+        const toggle = row.getByRole('button', { name: 'Download log for Qwen3.6-35B-A3B' });
+        expect(toggle).toHaveAttribute('aria-expanded', 'false');
+        expect(row.queryByText(/33% \(7\.6 GB/)).toBeNull();
+        // Nothing printed yet: no chevron to open an empty log.
+        expect(within(rowOf('embeddinggemma-300m')).queryByRole('button', { name: /Download log/ })).toBeNull();
+
+        fireEvent.click(toggle);
+        expect(toggle).toHaveAttribute('aria-expanded', 'true');
+        expect(row.getByText(/33% \(7\.6 GB/)).toBeInTheDocument();
+
+        // It keeps up while the download runs.
+        rerender(<DownloadProgress status={runStatus([
+            progress({ id: QWEN.id, state: 'downloading', bytes_done: 9e9, bytes_total: 23.3e9, log: [log[0], '[======----] 39% (9.0 GB/23.3 GB)'] }),
+            progress({ id: EMBED.id, roles: ['embedding'], state: 'queued', bytes_total: 0.3e9 }),
+        ])} names={NAMES} />);
+        expect(row.getByText(/39% \(9\.0 GB/)).toBeInTheDocument();
+    });
+
     it('shows each state as a word, with the embedder first, then chat, then the rest', () => {
         render(<DownloadProgress status={runStatus([
             progress({ id: GEMMA.id, roles: ['vision'], state: 'queued', bytes_total: 5.97e9 }),

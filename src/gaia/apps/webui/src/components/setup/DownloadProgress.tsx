@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Check, Pause, RotateCw } from 'lucide-react';
+import { AlertCircle, Check, ChevronRight, Pause, RotateCw } from 'lucide-react';
 import { useT, type Translate } from '../../i18n/useT';
 import type { SetupModelProgress, SetupModelState, SetupRunStatus } from '../../types';
 import { ConfirmSheet } from './ConfirmSheet';
@@ -76,9 +76,37 @@ interface RowProps {
     checkingFor: number;
 }
 
+/** A download's own output, following the newest line unless the reader scrolled up. */
+function RowLog({ lines, id }: { lines: string[]; id: string }) {
+    const box = useRef<HTMLPreElement>(null);
+    const pinned = useRef(true);
+    useEffect(() => {
+        const el = box.current;
+        if (el && pinned.current) el.scrollTop = el.scrollHeight;
+    }, [lines]);
+    return (
+        <pre
+            ref={box}
+            id={id}
+            className="dl-log"
+            dir="ltr"
+            tabIndex={0}
+            onScroll={(e) => {
+                const el = e.currentTarget;
+                pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+            }}
+        >
+            {lines.join('\n')}
+        </pre>
+    );
+}
+
 function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume, onSkip, onRestart, busy, retryLater, checking, checkingFor }: RowProps) {
     const t = useT();
     const errId = useId();
+    const logId = useId();
+    const [showLog, setShowLog] = useState(false);
+    const lines = m.log ?? [];
     const pct = m.bytes_total > 0 ? Math.min(100, (m.bytes_done / m.bytes_total) * 100) : m.state === 'ready' ? 100 : 0;
     const state = t(STATE_KEY[m.state]);
     const retryingFor = m.retrying_until ? Math.max(0, Math.round(m.retrying_until - now / 1000)) : 0;
@@ -130,6 +158,19 @@ function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume,
                 <span className="dl-name"><bdi title={m.id}>{name}</bdi></span>
                 <span className="dl-state">{state}</span>
                 {m.state === 'downloading' && <bdi className="dl-pct">{Math.floor(pct)}%</bdi>}
+                {lines.length > 0 && (
+                    <button
+                        type="button"
+                        className="dl-log-toggle"
+                        onClick={() => setShowLog((v) => !v)}
+                        aria-expanded={showLog}
+                        aria-controls={logId}
+                        aria-label={t('setup.progress.logFor', { name })}
+                        title={t('setup.progress.logFor', { name })}
+                    >
+                        <ChevronRight size={14} className={showLog ? 'is-open' : ''} aria-hidden="true" />
+                    </button>
+                )}
             </div>
             <div
                 className="dl-track"
@@ -143,6 +184,7 @@ function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume,
                 <span className="dl-fill" style={{ inlineSize: `${m.state === 'verifying' ? 100 : pct}%` }} />
             </div>
             {detail && <p className="dl-detail"><bdi>{detail}</bdi></p>}
+            {showLog && lines.length > 0 && <RowLog lines={lines} id={logId} />}
             {m.state === 'failed' && (
                 <div className="dl-fail">
                     <p className="dl-error" id={errId}>{failureText(m, name, freeGb, t)}</p>

@@ -1060,6 +1060,7 @@ export const enMessages = {
     'setup.progress.stalled': 'No data for {n} seconds. Still trying…',
     'setup.progress.stuck': 'The download seems stuck. Retry?',
     'setup.progress.details': 'Details',
+    'setup.progress.logFor': 'Download log for {name}',
     'setup.logs.title': 'Setup logs',
     'setup.logs.check': 'Checks log',
     'setup.logs.download': 'Download log',

@@ -21,6 +21,8 @@ export interface SetupModelProgress {
     /** Unix seconds while a keep-trying wait runs; the state stays `downloading`. */
     retrying_until: number | null;
     downloaded_before_gb: number | null;
+    /** This model's own download output, newest last; empty until there is some. */
+    log?: string[];
 }
 
 export interface SetupOverall {

@@ -1060,6 +1060,7 @@ const messages: Messages = {
     'setup.progress.stalled': 'لا بيانات منذ {n} ثانية. ما زالت المحاولة جارية…',
     'setup.progress.stuck': 'يبدو أن التنزيل متوقف. إعادة المحاولة؟',
     'setup.progress.details': 'التفاصيل',
+    'setup.progress.logFor': 'سجل تنزيل {name}',
     'setup.logs.title': 'سجلات الإعداد',
     'setup.logs.check': 'سجل الفحوص',
     'setup.logs.download': 'سجل التنزيل',
