@@ -1604,6 +1604,18 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertIn("lemonade-server.ai", error)
         self.assertIn("LEMONADE_BASE_URL", error)
 
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=(
+            'ID=pop\nID_LIKE="ubuntu debian"\n'
+            'VERSION_ID="24.04"\nPRETTY_NAME="Pop!_OS 24.04 LTS"\n'
+        ),
+    )
+    def test_check_linux_version_accepts_ubuntu_family_derivative(self, mock_os_release):
+        """Ubuntu-family derivatives retain the PPA path via ID_LIKE."""
+        assert LemonadeInstaller._check_linux_version() is None
+
     @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value=None)
     @patch("subprocess.run")
