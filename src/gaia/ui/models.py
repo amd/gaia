@@ -739,6 +739,57 @@ class DocumentResponse(BaseModel):
     error_kind: Optional[str] = None
 
 
+class IndexProgress(BaseModel):
+    """How far one document's index has got, and how long is left."""
+
+    phase: str  # queued | reading | embedding
+    done: int
+    total: Optional[int] = None
+    # Null unless ``estimate`` is ready or at_least.
+    seconds_left: Optional[int] = None
+    # estimating | ready | at_least (a lower bound) | waiting (for a model)
+    # | stalled (no progress for much longer than expected)
+    estimate: str
+    elapsed_seconds: int = 0
+
+
+class DocumentStatusResponse(BaseModel):
+    """One document's indexing status."""
+
+    id: str
+    indexing_status: str
+    chunk_count: int
+    is_active: bool
+    progress: Optional[IndexProgress] = None
+
+
+class IndexingDocument(BaseModel):
+    """A document in the batch being indexed."""
+
+    id: str
+    filename: str
+    state: str  # queued | running | complete | failed | cancelled
+    progress: Optional[IndexProgress] = None
+    error: Optional[str] = None
+
+
+class IndexingOverview(BaseModel):
+    """All documents indexing now, or the last batch until it is dismissed."""
+
+    batch_id: Optional[str] = None
+    active: bool = False
+    total: int = 0
+    done: int = 0
+    failed: int = 0
+    cancelled: int = 0
+    current_id: Optional[str] = None
+    current: Optional[str] = None
+    percent: Optional[int] = None
+    seconds_left: Optional[int] = None
+    estimate: str = "estimating"
+    documents: List[IndexingDocument] = Field(default_factory=list)
+
+
 class DocumentListResponse(BaseModel):
     """List of documents."""
 
@@ -752,6 +803,8 @@ class DocumentUploadRequest(BaseModel):
     """Request to index a document by path."""
 
     filepath: str
+    # Answer at once and index on its own, whatever the file's size.
+    background: bool = False
 
 
 class AttachDocumentRequest(BaseModel):
@@ -799,6 +852,8 @@ class IndexFolderRequest(BaseModel):
 
     folder_path: str
     recursive: bool = True
+    # Add every file at once and index them on their own.
+    background: bool = False
 
 
 class IndexFolderResponse(BaseModel):
@@ -808,6 +863,8 @@ class IndexFolderResponse(BaseModel):
     failed: int = 0
     # Files in the folder that aren't a type GAIA indexes.
     skipped: int = 0
+    # Files now indexing on their own (a ``background`` request).
+    queued: int = 0
     documents: List[DocumentResponse] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
 

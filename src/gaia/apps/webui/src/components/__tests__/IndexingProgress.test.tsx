@@ -19,6 +19,23 @@ afterEach(() => {
 });
 
 describe('IndexingProgress', () => {
+    it('shows a queued document as waiting, with an empty bar and no time', () => {
+        render(<IndexingProgress progress={{ phase: 'queued', done: 0, total: null, estimate: 'estimating', seconds_left: null }} />);
+        expect(screen.getByText('Waiting its turn')).toBeInTheDocument();
+        expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
+        expect(screen.queryByText('Estimating…')).not.toBeInTheDocument();
+    });
+
+    it('adds the time left beside the count', () => {
+        render(<IndexingProgress progress={{ phase: 'reading', done: 37, total: 229, estimate: 'ready', seconds_left: 300 }} />);
+        expect(screen.getByText('About 5 minutes left')).toBeInTheDocument();
+    });
+
+    it('says a stall instead of a number', () => {
+        render(<IndexingProgress progress={{ phase: 'embedding', done: 4, total: 10, estimate: 'stalled', seconds_left: null }} />);
+        expect(screen.getByText('Taking longer than expected')).toBeInTheDocument();
+    });
+
     it('says which page is being read, with a percent', () => {
         render(<IndexingProgress progress={{ phase: 'reading', done: 37, total: 229 }} />);
         expect(screen.getByText('Reading page 37 of 229')).toBeInTheDocument();

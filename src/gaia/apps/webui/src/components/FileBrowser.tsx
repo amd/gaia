@@ -12,6 +12,7 @@ import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { useT } from '../i18n/useT';
 import { formatSize } from '../utils/format';
 import { UploadErrorToast, isExtensionSupported, getUnsupportedCategory } from './UnsupportedFeature';
 import type { FileEntry, BrowseResponse, QuickLink } from '../types';
@@ -99,6 +100,7 @@ async function indexAndAttachFiles(
     entries: FileEntry[],
     sessionId: string | null,
     updateSessionInList: (id: string, patch: Record<string, unknown>) => void,
+    background: boolean,
 ): Promise<IndexResult> {
     const supported: string[] = [];
     const unsupported: string[] = [];
@@ -120,7 +122,7 @@ async function indexAndAttachFiles(
     for (const filepath of supported) {
         try {
             if (folderPaths.has(filepath)) {
-                const result = await api.indexFolder(filepath);
+                const result = await api.indexFolder(filepath, true, background);
                 const newIds: string[] = [];
                 result.documents.forEach(d => { if (d.id) newIds.push(d.id); });
                 if (newIds.length > 0) {
@@ -128,7 +130,7 @@ async function indexAndAttachFiles(
                     succeededFiles.push(filepath);
                 }
             } else {
-                const doc = await api.uploadDocumentByPath(filepath);
+                const doc = await api.uploadDocumentByPath(filepath, background);
                 if (doc?.id) {
                     docIds.push(doc.id);
                     succeededFiles.push(filepath);
@@ -182,6 +184,7 @@ interface FileBrowserProps {
 }
 
 export function FileBrowser({ onStartChat }: FileBrowserProps) {
+    const t = useT();
     const { setShowFileBrowser, currentSessionId, updateSessionInList, setPendingPrompt } = useChatStore();
     const closeBrowser = useCallback(() => setShowFileBrowser(false), [setShowFileBrowser]);
     useEscapeToClose(true, closeBrowser);
@@ -337,22 +340,22 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         }
 
         setIndexingFiles(new Set(files));
-        setIndexStatus(`Indexing ${files.length} file(s)...`);
+        setIndexStatus(t.plural('files.adding', files.length));
 
         try {
-            const result = await indexAndAttachFiles(files, entries, currentSessionId, updateSessionInList);
+            const result = await indexAndAttachFiles(files, entries, currentSessionId, updateSessionInList, true);
 
             if (result.failed > 0) {
-                setIndexStatus(`Done: ${result.docIds.length} indexed, ${result.failed} failed`);
+                setIndexStatus(t('files.addedSome', { added: result.docIds.length, failed: result.failed }));
                 setIndexError({
                     filename: `${result.failed} file(s)`,
                     error: result.lastError || 'Indexing failed for some files',
                 });
             } else {
-                const skippedNote = result.unsupported.length > 0
-                    ? ` (${result.unsupported.length} skipped — unsupported type)`
-                    : '';
-                setIndexStatus(`Successfully indexed ${result.docIds.length} file(s)${skippedNote}`);
+                const added = t.plural('files.added', result.docIds.length);
+                setIndexStatus(result.unsupported.length > 0
+                    ? `${added} ${t.plural('files.skipped', result.unsupported.length)}`
+                    : added);
             }
             if (indexStatusTimerRef.current) clearTimeout(indexStatusTimerRef.current);
             indexStatusTimerRef.current = setTimeout(() => setIndexStatus(null), 5000);
@@ -366,7 +369,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         } finally {
             setIndexingFiles(new Set());
         }
-    }, [selectedFiles, currentSessionId, updateSessionInList, entries]);
+    }, [selectedFiles, currentSessionId, updateSessionInList, entries, t]);
 
     // A second click can land before the re-render that disables the button.
     const askingRef = useRef(false);
@@ -379,7 +382,8 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         setIndexStatus(`Indexing ${files.length} file(s) for analysis...`);
 
         try {
-            const result = await indexAndAttachFiles(files, entries, currentSessionId, updateSessionInList);
+            // Asked about now, so a small file is worth the short wait.
+            const result = await indexAndAttachFiles(files, entries, currentSessionId, updateSessionInList, false);
 
             if (result.supported.length === 0) {
                 const dotIdx = files[0].lastIndexOf('.');

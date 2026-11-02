@@ -75,6 +75,7 @@ from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
 from gaia.utils import awake_clock as _awake_clock
 from gaia.utils.awake_clock import AwakeClockError
+from gaia.utils.index_tracker import index_tracker
 
 from . import followups
 from . import permissions as session_permissions
@@ -1539,6 +1540,68 @@ def reload_all_session_agents_mcp() -> int:
     return count
 
 
+#: Seconds between "how far has this chat's index got" lines in the turn.
+_CHAT_INDEX_TICK_S = 2.0
+
+
+class _ChatIndexTicks:
+    """Shows an index running inside a turn, once it turns out to be real work.
+
+    A document already cached finishes without one page read, and would
+    otherwise flash through the app's indexing view on every new agent.
+    """
+
+    def __init__(self, fpath: str, name: str, sse_handler):
+        self.key = f"chat:{fpath}"
+        self.fpath = fpath
+        self.name = name
+        self.sse_handler = sse_handler
+        self.tracked = False
+        self.pages = 0
+        self.page_total: Optional[int] = None
+        self.last_tick = 0.0
+
+    def _track(self) -> None:
+        if self.tracked:
+            return
+        self.tracked = True
+        path = Path(self.fpath)
+        size = path.stat().st_size if path.exists() else 0
+        index_tracker.enqueue(self.key, self.name, self.fpath, size)
+        self.page_total = _page_total(path)
+        index_tracker.set_pages(self.key, self.page_total)
+
+    def _tick(self, phase: str, done: int, total: Optional[int]) -> None:
+        index_tracker.report(self.key, phase, done, total)
+        now = _time.monotonic()
+        if now - self.last_tick < _CHAT_INDEX_TICK_S:
+            return
+        self.last_tick = now
+        self.sse_handler._emit(
+            {
+                "type": "status",
+                "status": "working",
+                "message": f"Indexing {self.name}: {phase} {done} of {total or '?'}",
+                "index": {"name": self.name, **(index_progress(self.key) or {})},
+            }
+        )
+
+    def page_read(self) -> None:
+        self._track()
+        self.pages += 1
+        self._tick("reading", self.pages, self.page_total)
+
+    def embedded(self, done: int, total: int) -> None:
+        if not self.tracked and done >= total:
+            return
+        self._track()
+        self._tick("embedding", done, total)
+
+    def finish(self, outcome: str, error: Optional[str] = None) -> None:
+        if self.tracked:
+            index_tracker.finish(self.key, outcome, error)
+
+
 def _index_rag_with_progress(
     agent, fpath_list, sse_handler, *, rebuild_per_doc=False, label="document(s)"
 ):
@@ -1568,10 +1631,17 @@ def _index_rag_with_progress(
                 "message": f"Indexing [{i}/{n}]: {doc_name}",
             }
         )
+        if index_tracker.key_for(fpath):
+            doc_stats.append(f"  {doc_name} — still indexing elsewhere")
+            continue
+        tick = _ChatIndexTicks(fpath, doc_name, sse_handler)
         try:
-            result = agent.rag.index_document(fpath)
+            result = agent.rag.index_document(
+                fpath, progress_callback=tick.embedded, heartbeat=tick.page_read
+            )
             n_chunks = result.get("num_chunks", 0)
             error = result.get("error")
+            tick.finish("failed" if error else "complete", error)
             if error:
                 logger.warning("RAG error for %s: %s", fpath, error)
                 doc_stats.append(f"  {doc_name} — ERROR: {error}")
@@ -1601,6 +1671,7 @@ def _index_rag_with_progress(
                 if rebuild_per_doc:
                     agent.rebuild_system_prompt()
         except Exception as idx_err:
+            tick.finish("failed", str(idx_err))
             logger.warning("Failed to index %s: %s", fpath, idx_err)
             doc_stats.append(f"  {doc_name} — FAILED: {idx_err}")
             sse_handler._emit(
@@ -1682,6 +1753,70 @@ def _build_history_pairs(messages: list) -> list:
     return pairs
 
 
+# A chat never indexes these itself. Running ones would be read a second time
+# inside the turn; cancelled or failed ones wait for the user's Retry.
+_INDEXING_STATUSES = ("pending", "indexing")
+_NOT_SEARCHABLE_STATUSES = _INDEXING_STATUSES + ("failed", "cancelled")
+
+
+def _documents_not_ready(db: ChatDatabase, document_ids: list) -> tuple:
+    """Attached documents this turn can't search: ``(still_indexing, not_indexed)``."""
+    still_indexing, not_indexed = [], []
+    for doc_id in document_ids or []:
+        doc = db.get_document(doc_id)
+        status = doc.get("indexing_status") if doc else None
+        if status in _INDEXING_STATUSES:
+            still_indexing.append(doc)
+        elif status in _NOT_SEARCHABLE_STATUSES:
+            not_indexed.append(doc)
+    return still_indexing, not_indexed
+
+
+def _still_indexing_line(names: list) -> str:
+    """The note a relayed agent gets, worded as the in-process prompt line is."""
+    return (
+        "[Still indexing in the background, not searchable yet: "
+        f"{', '.join(sorted(names))}]"
+    )
+
+
+def _say_documents_not_ready(
+    sse_handler, still_indexing: list, not_indexed: list
+) -> None:
+    """Tell the user why this turn can't search some of its documents."""
+    if still_indexing:
+        names = [d["filename"] for d in still_indexing]
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "info",
+                "message": (
+                    f"Still indexing, so this reply can't search it yet: "
+                    f"{', '.join(names)}"
+                ),
+                "notice": {"kind": "still_indexing", "names": names},
+            }
+        )
+    if not_indexed:
+        names = [d["filename"] for d in not_indexed]
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "warning",
+                "message": f"Not indexed, so this reply can't search it: {', '.join(names)}",
+                "notice": {"kind": "not_indexed", "names": names},
+            }
+        )
+
+
+def _watch_indexing_documents(agent, still_indexing: list) -> None:
+    """Show the model these documents as indexing, and keep its tools off them."""
+    if still_indexing and hasattr(agent, "rag") and agent.rag:
+        from gaia.agents.tools.rag_tools import watch_documents_indexing
+
+        watch_documents_indexing(agent.rag, [d["filepath"] for d in still_indexing])
+
+
 def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> tuple:
     """Resolve document IDs to file paths for RAG.
 
@@ -1689,6 +1824,9 @@ def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> tuple:
     resolves those IDs to file paths for auto-indexing.  Otherwise returns
     them as library documents (available but not auto-indexed) so the agent
     can index on demand based on the user's request.
+
+    Documents still indexing, cancelled or failed are left out; see
+    :func:`_documents_not_ready`.
 
     Returns:
         Tuple of (rag_file_paths, library_file_paths).
@@ -1701,7 +1839,8 @@ def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> tuple:
         for doc_id in document_ids:
             doc = db.get_document(doc_id)
             if doc and doc.get("filepath"):
-                rag_file_paths.append(doc["filepath"])
+                if doc.get("indexing_status") not in _NOT_SEARCHABLE_STATUSES:
+                    rag_file_paths.append(doc["filepath"])
             else:
                 logger.warning("Document %s not found in database, skipping", doc_id)
         return rag_file_paths, []
@@ -3636,8 +3775,12 @@ async def _get_chat_response(
         # Resolve document IDs to file paths.
         document_ids = session.get("document_ids", [])
         rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
+        still_indexing, _ = _documents_not_ready(db, document_ids)
 
-        all_doc_paths = rag_file_paths + library_paths
+        # Still readable while it indexes, just not searchable.
+        all_doc_paths = (
+            rag_file_paths + library_paths + [d["filepath"] for d in still_indexing]
+        )
         if all_doc_paths:
             logger.info(
                 "Chat: %d auto-index doc(s), %d library doc(s)",
@@ -3719,6 +3862,7 @@ async def _get_chat_response(
             _extend_cached_scope(agent, allowed)
             if hasattr(agent, "config"):
                 agent.config.working_directory = working_directory
+            _watch_indexing_documents(agent, still_indexing)
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
                 for fpath in new_paths:
@@ -3817,6 +3961,7 @@ async def _get_chat_response(
                         # connected mailbox (#1596).
                         mail_provider=_session_mail_provider(session),
                     )
+                _watch_indexing_documents(agent, still_indexing)
                 if rag_file_paths and hasattr(agent, "_index_documents") and agent.rag:
                     index_failures.extend(agent._index_documents(rag_file_paths) or [])
                 logger.info(
@@ -4078,8 +4223,12 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # for on-demand indexing by the agent based on user's query.
         document_ids = session.get("document_ids", [])
         rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
+        still_indexing, not_indexed = _documents_not_ready(db, document_ids)
 
-        all_doc_paths = rag_file_paths + library_paths
+        # Still readable while it indexes, just not searchable.
+        all_doc_paths = (
+            rag_file_paths + library_paths + [d["filepath"] for d in still_indexing]
+        )
         if all_doc_paths:
             logger.info(
                 "Streaming chat: %d auto-index doc(s), %d library doc(s)",
@@ -4171,6 +4320,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             turn_box["recording"] = recording
             try:
                 t0 = _time.monotonic()
+                _say_documents_not_ready(sse_handler, still_indexing, not_indexed)
 
                 # ── Agent cache check ─────────────────────────────────────────
                 # Reuse what a running warm-up is caching rather than read it twice.
@@ -4200,6 +4350,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         return
 
                     _extend_cached_scope(agent, allowed)
+                    _watch_indexing_documents(agent, still_indexing)
                     # Index any session docs newly attached since last turn.
                     new_rag_paths = [
                         p for p in rag_file_paths if p not in agent.indexed_files
@@ -4241,9 +4392,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         session_id[:8],
                     )
                     relayed_env = load_environment(db, session_id)
+                    relayed_request = request
+                    if still_indexing:
+                        note = _still_indexing_line(
+                            [d["filename"] for d in still_indexing]
+                        )
+                        relayed_request = request.model_copy(
+                            update={"message": f"{note}\n\n{request.message}"}
+                        )
                     _dispatch_sidecar_query(
                         sse_handler,
-                        request,
+                        relayed_request,
                         history_pairs,
                         model_id,
                         agent_type,
@@ -4347,6 +4506,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         if sse_handler.cancelled.is_set():
                             return
 
+                        _watch_indexing_documents(agent, still_indexing)
                         # Index session-attached RAG docs (single pass, with SSE progress).
                         if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                             _index_rag_with_progress(agent, rag_file_paths, sse_handler)
@@ -5485,15 +5645,9 @@ class UnreadableDocumentError(RuntimeError):
         self.kind = kind
 
 
-# Live progress of running indexes, keyed by the ``progress_key`` the caller
-# passed (the document id). Written by the indexing thread, read by the status
-# endpoint; each value is replaced whole, never mutated in place.
-INDEX_PROGRESS: dict = {}
-
-
 def index_progress(key: str) -> Optional[dict]:
-    """``{"phase", "done", "total"}`` for a running index, or None."""
-    return INDEX_PROGRESS.get(key)
+    """How far the index tracked under ``progress_key`` has got, or None."""
+    return index_tracker.progress(key)
 
 
 def _page_total(filepath: Path) -> Optional[int]:
@@ -5501,11 +5655,11 @@ def _page_total(filepath: Path) -> Optional[int]:
     if filepath.suffix.lower() != ".pdf":
         return None
     from pypdf import PdfReader
-    from pypdf.errors import PdfReadError
+    from pypdf.errors import PyPdfError
 
     try:
         return len(PdfReader(str(filepath)).pages)
-    except (PdfReadError, OSError, ValueError) as e:
+    except (PyPdfError, OSError, ValueError) as e:
         # Indexing reads the file again and reports the failure properly.
         logger.info("No page count for %s: %s", filepath.name, e)
         return None
@@ -5521,8 +5675,8 @@ async def _index_document(
     ``display_name`` is the user's name for the file when *filepath* is a
     copy; every error message names it instead of the copy.
 
-    With ``progress_key``, ``INDEX_PROGRESS[progress_key]`` tracks pages read
-    and then chunks embedded until the index ends.
+    With ``progress_key``, ``index_tracker`` follows it from queued through
+    pages read and chunks embedded to its outcome.
 
     Runs on an indexing pool (``_INDEX_MAX_PARALLEL`` at once per pool; small
     files have their own, and the rest wait their turn). Cancelling the
@@ -5555,11 +5709,7 @@ async def _index_document(
 
     def _report(phase: str, done: int, total: Optional[int]) -> None:
         if progress_key is not None:
-            INDEX_PROGRESS[progress_key] = {
-                "phase": phase,
-                "done": done,
-                "total": total,
-            }
+            index_tracker.report(progress_key, phase, done, total)
 
     pages = {"done": 0, "total": None}
 
@@ -5576,6 +5726,8 @@ async def _index_document(
         # Waiting in line for the embedder or vision model is not a stall.
         # Runs on the waiting thread, so it only notes the time.
         progress["at"] = _time.monotonic()
+        if progress_key is not None:
+            index_tracker.waiting(progress_key)
 
     def _do_index():
         from gaia.daemon.broker_client import lease_cancel_scope, lease_wait_listener
@@ -5583,7 +5735,6 @@ async def _index_document(
 
         _step()
         if progress_key is not None:
-            pages["total"] = _page_total(filepath)
             _report("reading", 0, pages["total"])
         # Allow access to the file's directory (and user home) since the UI
         # explicitly selected this file via the file browser.
@@ -5631,19 +5782,30 @@ async def _index_document(
         return chunks
 
     try:
-        small = filepath.stat().st_size < _INDEX_SMALL_FILE_BYTES
+        size = filepath.stat().st_size
     except OSError:
-        small = False
-    pool = _INDEX_SMALL_EXECUTOR if small else _INDEX_EXECUTOR
-    future = asyncio.get_running_loop().run_in_executor(pool, _do_index)
-    future.add_done_callback(_settled_quietly)
+        size = None
     if progress_key is not None:
-        future.add_done_callback(lambda _f: INDEX_PROGRESS.pop(progress_key, None))
+        index_tracker.enqueue(progress_key, name, str(filepath), size or 0)
+    outcome, failure = "failed", None
     try:
+        if progress_key is not None:
+            # Counted before the queue, so waiting documents join the estimate.
+            pages["total"] = await asyncio.to_thread(_page_total, filepath)
+            index_tracker.set_pages(progress_key, pages["total"])
+        small = size is not None and size < _INDEX_SMALL_FILE_BYTES
+        pool = _INDEX_SMALL_EXECUTOR if small else _INDEX_EXECUTOR
+        future = asyncio.get_running_loop().run_in_executor(pool, _do_index)
+        future.add_done_callback(_settled_quietly)
         while True:
             done, _ = await asyncio.wait({future}, timeout=_INDEX_POLL_S)
             if done:
-                return future.result()
+                chunks = future.result()
+                if chunks:
+                    outcome = "complete"
+                else:
+                    failure = "indexing produced 0 chunks"
+                return chunks
             last = progress["at"]
             if last is not None and _time.monotonic() - last > _INDEX_TIMEOUT_S:
                 stop.set()
@@ -5653,12 +5815,18 @@ async def _index_document(
                     f"if it stalls again, raise {_INDEX_TIMEOUT_ENV}."
                 )
     except asyncio.CancelledError:
+        outcome = "cancelled"
         stop.set()
         raise
-    except (RuntimeError, IndexingStopped):
+    except (RuntimeError, IndexingStopped) as e:
+        failure = str(e)
         raise
     except Exception as e:
         detail = str(e)
         if display_name:
             detail = name_file_for_user(detail, str(filepath), display_name)
+        failure = detail
         raise RuntimeError(f"Failed to index {name}: {detail}") from e
+    finally:
+        if progress_key is not None:
+            index_tracker.finish(progress_key, outcome, failure)

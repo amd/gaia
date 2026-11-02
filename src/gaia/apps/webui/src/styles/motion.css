@@ -48,7 +48,8 @@
 
 .task-view > .messages-scroll,
 .task-view > .input-area,
-.task-view > .doc-context-bar {
+.task-view > .doc-context-bar,
+.task-view > .index-chat-notice {
     transition: margin-inline-end var(--duration-slow) var(--ease);
 }
 

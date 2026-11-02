@@ -15,7 +15,7 @@ const iso = (minutesAgo: number) => new Date(NOW.getTime() - minutesAgo * 60_000
 
 export const ANSWER_SESSION = 'a1b2c3d4-0000-4000-8000-000000000001';
 
-const session = (id: string, title: string, minutesAgo: number, messages: number) => ({
+export const session = (id: string, title: string, minutesAgo: number, messages: number) => ({
     id,
     title,
     title_is_custom: false,
@@ -154,6 +154,7 @@ const ROUTES: Record<string, unknown> = {
     'GET /mcp/status': { servers: [] },
     'GET /schedules': SCHEDULES,
     'GET /documents': DOCUMENTS,
+    'GET /documents/indexing': { active: false, total: 0, estimate: 'estimating', documents: [] },
     'GET /agents': { agents: [] },
     'GET /connectors': { connectors: [] },
     'GET /skills': { skills: [] },

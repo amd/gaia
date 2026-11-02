@@ -153,10 +153,32 @@ says where the documents you add go: the open chat, or your next new chat. A
 new chat lists the library's documents and offers to attach them; picking
 **Ask about your documents** attaches them all.
 
-While a large document indexes, its row in the library shows how far it has
-got: "Reading page 37 of 229" for a PDF, then "Embedding 412 of 1,180", each
-with a percent. Formats without a page count show a moving bar and the count
-so far.
+Documents index on their own, in the background. Adding one takes a moment
+however long it will take to read, so you can close the library and keep
+chatting. While anything is indexing, a line above the chat shows how many
+documents are done and about how long is left; click it to open the library.
+The library shows the same at the top: one bar for everything, the file being
+read, and how many failed or were cancelled. Each row has its own bar, "Reading
+page 37 of 229" for a PDF, then "Embedding 412 of 1,180", and a **Cancel**
+button, including for documents still waiting their turn. Formats without a
+page count show a moving bar and the count so far.
+
+The time left is measured on your PC, not guessed:
+
+- **Estimating…** until it has timed enough pages and chunks.
+- **At least 12 minutes left** while part of the work hasn't been timed yet,
+  such as embedding during your first document.
+- **About 12 minutes left** once it covers everything still to do: this file's
+  later steps and the documents waiting behind it.
+- **Taking longer than expected** when nothing has moved for a while, instead of
+  a number that stands still.
+- **Waiting for the model to be free** while a chat is using it.
+
+A chat can't search a document until it has finished indexing. Until then the
+chat says so above the conversation and in the steps of each reply, the model
+is told too, and nothing starts reading the same file a second time. Cancelled
+and failed documents stay in the library with **Retry**, and a chat says it
+can't use them.
 
 When an answer names a document from your library, the name is a link that
 opens the document, and each page it cites ("pages 175 and 205", "الصفحتان
@@ -899,7 +921,7 @@ Chats, documents and schedules are saved on disk as you go. What happens to work
 |---------------|-----------------------|--------------------------|
 | You switch chats, open Memory or Scheduled tasks, or close the browser tab | Keeps going; reopen the chat to watch it finish | Keeps going |
 | You close the desktop window | Keeps going: the window hides to the tray (unless you turned that off) and GAIA keeps running | Keeps going |
-| You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, which tools it had started, then "This answer was interrupted when GAIA closed. Send again to retry." A scheduled run cut short shows the same in its chat. | Stops. On the next start it shows as **Failed** with **Retry**, and "Indexing was interrupted when GAIA closed" under the document |
+| You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, which tools it had started, then "This answer was interrupted when GAIA closed. Send again to retry." A scheduled run cut short shows the same in its chat. | Stops. On the next start the line above the chat says how many couldn't finish, each shows as **Failed** with **Retry**, and "Indexing was interrupted when GAIA closed" appears under the document. Retry reads it from the start |
 
 GAIA never re-runs an interrupted reply by itself: it may already have run tools, and running them twice is not safe. Send the message again to retry.
 

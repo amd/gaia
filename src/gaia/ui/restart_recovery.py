@@ -27,6 +27,7 @@ import sqlite3
 import time
 from typing import Callable, Dict, List, Optional
 
+from gaia.utils.index_tracker import index_tracker
 from gaia.utils.process_owner import owner_is_gone
 
 from .database import ChatDatabase
@@ -181,7 +182,13 @@ def recover_interrupted_work(db: ChatDatabase) -> Dict[str, int]:
             # The chat list shows it failed and unread, as a turn that errors does.
             db.finish_session_run(row["session_id"], "failed")
             turns += 1
-    documents = len(db.fail_unfinished_indexing(INTERRUPTED_INDEXING_ERROR))
+    interrupted = db.fail_unfinished_indexing(INTERRUPTED_INDEXING_ERROR)
+    for doc_id in interrupted:
+        doc = db.get_document(doc_id)
+        if doc:
+            index_tracker.enqueue(doc_id, doc["filename"])
+            index_tracker.finish(doc_id, "failed", INTERRUPTED_INDEXING_ERROR)
+    documents = len(interrupted)
     if turns or documents:
         logger.info(
             "Closed work an ended GAIA process left unfinished: %d chat "

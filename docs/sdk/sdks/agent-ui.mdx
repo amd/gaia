@@ -1271,9 +1271,16 @@ Deleting a chat deletes its copies.
     **Request:**
     ```json
     {
-      "filepath": "/home/user/docs/report.pdf"
+      "filepath": "/home/user/docs/report.pdf",
+      "background": false
     }
     ```
+
+    Files up to 5 MB are indexed before the response unless `background` is
+    `true`. With `background`, and for bigger files, the response comes first
+    with `indexing_status: "indexing"`; follow it with
+    `GET /api/documents/indexing`. Adding a file that is indexing or already
+    indexed starts nothing.
 
     **Response:** `DocumentResponse`. A failed index still returns 200, with
     `indexing_status: "failed"`, the reason in `last_error`, and `error_kind`
@@ -1673,7 +1680,27 @@ Used to reach the UI from a phone.
     enqueues it for indexing. A file that can't be read is a **422** whose
     `detail.status` is one of the `error_kind` values listed under
     `upload-path` and whose
-    `detail.message` says what to do.
+    `detail.message` says what to do. With `?background=true` the response
+    comes before indexing, and a file that then fails stays in the library as
+    a `failed` document instead.
+  </Accordion>
+
+  <Accordion title="GET /api/documents/indexing">
+    Every document indexing now, or the last batch until it is dismissed:
+    `active`, `total`, `done`, `failed`, `cancelled`, `current` (a file name),
+    `percent` (one bar for the batch), `seconds_left`, `estimate`, and
+    `documents` with each one's `state` and `progress`. `estimate` says how to
+    read `seconds_left`, which is `null` except for the middle two:
+
+    - `estimating`: too few samples to give a number
+    - `ready`: all remaining work, including later phases and queued files
+    - `at_least`: a lower bound; part of the work hasn't been timed yet
+    - `waiting`: in line for a model
+    - `stalled`: no progress for far longer than expected
+  </Accordion>
+
+  <Accordion title="POST /api/documents/indexing/{batch_id}/dismiss">
+    Clear a finished batch from the overview. A running batch stays.
   </Accordion>
 
   <Accordion title="GET /api/documents/monitor/status">
@@ -1682,9 +1709,12 @@ Used to reach the UI from a phone.
 
   <Accordion title="GET /api/documents/{doc_id}/status">
     Indexing state for a single document. While it indexes, `progress` is
-    `{"phase", "done", "total"}`: `reading` counts PDF pages read (`total` is
-    `null` when the page count isn't known up front), then `embedding` counts
-    chunks embedded. `progress` is `null` when nothing is running.
+    `{"phase", "done", "total", "seconds_left", "estimate", "elapsed_seconds"}`:
+    `queued` means it is waiting for a slot, `reading` counts PDF pages read
+    (`total` is `null` when the page count isn't known up front), then
+    `embedding` counts chunks embedded. `seconds_left` and `estimate` are read
+    as in `GET /api/documents/indexing`, for this document alone. `progress` is
+    `null` when nothing is running.
   </Accordion>
 
   <Accordion title="GET /api/documents/{doc_id}/file">
@@ -1694,19 +1724,22 @@ Used to reach the UI from a phone.
   </Accordion>
 
   <Accordion title="POST /api/documents/{doc_id}/cancel">
-    Cancel an in-flight indexing job.
+    Cancel an in-flight indexing job, running or still queued.
   </Accordion>
 
   <Accordion title="POST /api/documents/index-folder">
     Index the supported files in a folder (`recursive`, default `true`, also
     takes subfolders). Returns `indexed`, `failed` with one line per file in
-    `errors`, and `skipped`: files of a type GAIA doesn't index.
+    `errors`, and `skipped`: files of a type GAIA doesn't index. With
+    `background: true` it returns as soon as every file has a row, counting
+    them in `queued`.
   </Accordion>
 
   <Accordion title="POST /api/documents/{doc_id}/reindex">
     Re-run the RAG indexing pipeline for a document — clears any previous
     failure, then always ends in `complete` or `failed` (never 200 while
-    leaving the document in a bad state).
+    leaving the document in a bad state). With `?background=true` it returns
+    once indexing has started, and the document carries the outcome.
   </Accordion>
 </AccordionGroup>
 

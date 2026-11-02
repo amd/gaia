@@ -36,6 +36,7 @@ export interface ApiSchemas {
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
   DocumentResponse: DocumentResponse;
+  DocumentStatusResponse: DocumentStatusResponse;
   DocumentUploadRequest: DocumentUploadRequest;
   DownloadProgress: DownloadProgress;
   EvalMailboxRequest: EvalMailboxRequest;
@@ -60,6 +61,9 @@ export interface ApiSchemas {
   HTTPValidationError: HTTPValidationError;
   IndexFolderRequest: IndexFolderRequest;
   IndexFolderResponse: IndexFolderResponse;
+  IndexProgress: IndexProgress;
+  IndexingDocument: IndexingDocument;
+  IndexingOverview: IndexingOverview;
   InferenceCommit: InferenceCommit;
   InferenceCommitItem: InferenceCommitItem;
   InferenceStatsResponse: InferenceStatsResponse;
@@ -463,9 +467,31 @@ export interface DocumentResponse {
   sessions_using?: number;
 }
 /**
+ * One document's indexing status.
+ */
+export interface DocumentStatusResponse {
+  chunk_count: number;
+  id: string;
+  indexing_status: string;
+  is_active: boolean;
+  progress?: IndexProgress | null;
+}
+/**
+ * How far one document's index has got, and how long is left.
+ */
+export interface IndexProgress {
+  done: number;
+  elapsed_seconds?: number;
+  estimate: string;
+  phase: string;
+  seconds_left?: number | null;
+  total?: number | null;
+}
+/**
  * Request to index a document by path.
  */
 export interface DocumentUploadRequest {
+  background?: boolean;
   filepath: string;
 }
 /**
@@ -643,6 +669,7 @@ export interface ValidationError {
  * Request to index all supported documents in a folder.
  */
 export interface IndexFolderRequest {
+  background?: boolean;
   folder_path: string;
   recursive?: boolean;
 }
@@ -654,7 +681,35 @@ export interface IndexFolderResponse {
   errors?: string[];
   failed?: number;
   indexed?: number;
+  queued?: number;
   skipped?: number;
+}
+/**
+ * A document in the batch being indexed.
+ */
+export interface IndexingDocument {
+  error?: string | null;
+  filename: string;
+  id: string;
+  progress?: IndexProgress | null;
+  state: string;
+}
+/**
+ * All documents indexing now, or the last batch until it is dismissed.
+ */
+export interface IndexingOverview {
+  active?: boolean;
+  batch_id?: string | null;
+  cancelled?: number;
+  current?: string | null;
+  current_id?: string | null;
+  documents?: IndexingDocument[];
+  done?: number;
+  estimate?: string;
+  failed?: number;
+  percent?: number | null;
+  seconds_left?: number | null;
+  total?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];
