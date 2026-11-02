@@ -92,7 +92,6 @@ def test_main_tree_passes():
 def test_only_the_declared_targets_are_held():
     """Held drift is reported, never failed; the list must not quietly grow."""
     assert {(t.path, t.what) for t in HELD} == {
-        ("hub/agents/gaia/npm/package-lock.json", "root version"),
         ("hub/agents/chat/python/gaia_agent_chat/__init__.py", "__version__"),
     }
 

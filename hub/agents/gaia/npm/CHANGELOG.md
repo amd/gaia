@@ -10,6 +10,16 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **On Gemma 4 E4B the agent stops offering features that model fails.** The
+  SQL scratchpad, email, image generation, and finding or installing skills
+  failed GAIA's agent evals on Gemma, and their 16 tool descriptions were read
+  on every step. On Gemma, on the GPU or the NPU, they are now left out, along
+  with the skills built on them; larger models keep everything.
+  `GAIA_FEATURE_TIER=full` or `compact` forces one set for any model.
+- **Gemma 4 E2B on the NPU answers instead of showing an empty `json` block.**
+  The agent sent it tools as JSON in text, and its reply, wrapped in a code
+  fence, reached the chat as a bare "```json" (#6008). It now gets them as
+  native tool calls, which FastFlowLM 1.0.7 serves.
 - **Docs name the terminal UI binary correctly.** README, SPEC and SKILL said
   a core install runs it as `gaia tui`; the binary is `gaia-tui`, and the
   Python `gaia` CLI rejects `gaia tui`.
@@ -38,6 +48,14 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   models get the prompt they had before, because they scored no better with it
   and paid for it in tokens. `gaia config set project_context full|off|auto`
   changes the choice.
+
+### For integrators: contract 2.27
+
+- **A session's tools can be listed** (contract **2.27**).
+  `GET /v1/gaia/sessions/{session_id}/tools` returns the tools the session's
+  agent can call now, as `{ name, description, category }`, skills loaded so
+  far included. The Agent UI shows them in the chat's Agent info. An unknown
+  session is a `404`.
 
 ### For integrators: contract 2.26
 

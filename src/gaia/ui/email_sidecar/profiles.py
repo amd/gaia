@@ -200,6 +200,11 @@ class RelayProfile:
     #: Contract version from which ``/query`` takes ``reasoning`` and streams the
     #: model's reasoning as ``reasoning`` events. ``None`` means the relay never asks.
     min_reasoning_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``GET /sessions/{id}/tools`` lists the tools
+    #: the session's agent has. ``None`` means the agent has no such route.
+    min_tools_api_version: Optional[Tuple[int, int]] = None
+    #: Shown in Agent info when the installed agent can't list its tools.
+    tools_upgrade_message: str = ""
     #: Shown when the agent itself fails to start (it crashed or never got
     #: healthy). Shown through :meth:`start_failed_text`, which adds the log folder.
     start_failed_message: str = ""
@@ -364,6 +369,9 @@ EMAIL_PROFILE = RelayProfile(
     # 2.12 added /query's session_id (#2829): a follow-up can then name a
     # thread the previous turn showed (#2834).
     min_session_id_api_version=(2, 12),
+    tools_upgrade_message=(
+        "The email agent can't list its tools here. Its tools still work in chat."
+    ),
 )
 
 
@@ -604,6 +612,13 @@ GAIA_PROFILE = RelayProfile(
     min_turns_api_version=(2, 25),
     # 2.26 added /sessions/{id}/grants.
     min_grants_api_version=(2, 26),
+    # 2.27 added GET /sessions/{id}/tools.
+    min_tools_api_version=(2, 27),
+    tools_upgrade_message=(
+        "The installed GAIA agent is too old to list its tools here. Update GAIA "
+        "to the latest version, then reopen Agent info. Its tools still work in "
+        "chat."
+    ),
 )
 
 
@@ -799,6 +814,15 @@ def reasoning_supported(profile: RelayProfile, api_version: Optional[str]) -> bo
     return floor is not None and _meets(api_version, floor)
 
 
+def tools_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* lists a session's tools on ``/sessions/{id}/tools``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_tools_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def _meets(api_version: Optional[str], floor: Tuple[int, int]) -> bool:
     if not api_version:
         return False
@@ -831,4 +855,5 @@ __all__ = [
     "internet_supported",
     "changes_supported",
     "session_id_supported",
+    "tools_supported",
 ]

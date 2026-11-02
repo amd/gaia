@@ -1,5 +1,5 @@
 {
-  "_source": "hub/agents/email/python/gaia_agent_email/scopes.py and outlook_scopes.py — hand-maintained, guarded by tests/unit/connectors/test_email_scope_drift.py (Python) and tui/internal/ui/preflight/check_test.go (Go). Edit the source constants first, then this fixture, then let the guards confirm agreement.",
+  "_source": "hub/agents/email/python/gaia_agent_email/scopes.py and outlook_scopes.py — hand-maintained, guarded by tests/unit/connectors/test_email_scope_drift.py (Python) and tui/internal/ui/preflight/check_test.go (Go). Edit the source constants first, then this fixture, then let the guards confirm agreement. identity_scopes is the one spelling both the catalog spec's default_scopes and the OAuthProvider's default_scopes must equal (#2738).",
   "google": {
     "agent_scopes": {
       "required": [
@@ -11,14 +11,10 @@
         "https://www.googleapis.com/auth/calendar.readonly"
       ]
     },
-    "identity_scopes": {
-      "catalog": ["openid", "email", "profile"],
-      "provider": ["openid", "https://www.googleapis.com/auth/userinfo.email"]
-    },
+    "identity_scopes": ["openid", "https://www.googleapis.com/auth/userinfo.email"],
     "connect_union": [
       "openid",
-      "email",
-      "profile",
+      "https://www.googleapis.com/auth/userinfo.email",
       "https://www.googleapis.com/auth/gmail.modify",
       "https://www.googleapis.com/auth/gmail.send",
       "https://www.googleapis.com/auth/calendar.events",
@@ -33,10 +29,7 @@
       ],
       "optional": ["https://graph.microsoft.com/Calendars.ReadWrite"]
     },
-    "identity_scopes": {
-      "catalog": ["offline_access", "https://graph.microsoft.com/User.Read"],
-      "provider": ["offline_access", "https://graph.microsoft.com/User.Read"]
-    },
+    "identity_scopes": ["offline_access", "https://graph.microsoft.com/User.Read"],
     "connect_union": [
       "offline_access",
       "https://graph.microsoft.com/User.Read",
@@ -54,10 +47,7 @@
       ],
       "optional": ["https://graph.microsoft.com/Calendars.ReadWrite"]
     },
-    "identity_scopes": {
-      "catalog": ["offline_access", "https://graph.microsoft.com/User.Read"],
-      "provider": ["offline_access", "https://graph.microsoft.com/User.Read"]
-    },
+    "identity_scopes": ["offline_access", "https://graph.microsoft.com/User.Read"],
     "connect_union": [
       "offline_access",
       "https://graph.microsoft.com/User.Read",

@@ -18,6 +18,14 @@ contract version is tracked separately as
   the model the session already runs does not rebuild. This matters now that the Agent UI sends `session_id`, so a
   follow-up can name a thread the previous turn showed. (#2834)
 
+- **`gaia email autonomy status` now says what the last cycle did.** Every
+  autonomy cycle, whether run over REST, from the CLI or on the scheduler,
+  records a counts-only summary (or a redacted error if it failed).
+  `GET /v1/email/agent/autonomy/{id}` returns it as `last_cycle`, so "ran,
+  nothing to do" is no longer indistinguishable from "never ran", and a run
+  whose caller timed out still has a readable result. (#2618)
+
+- **The served endpoint spec (`GET /v1/email/spec`) now documents `POST /v1/email/agent/autonomy/undo` and the `/v1/connections` intake routes.** A new test checks every route on the agent and connection routers against the rendered spec. (#3321)
 - **Concurrent startup no longer fails to open the email state database
   during SQLite WAL-mode setup.** The agent now uses GAIA core's bounded WAL
   retry helper when another email agent is opening the same `state.db`.

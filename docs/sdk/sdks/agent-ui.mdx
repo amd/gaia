@@ -1388,6 +1388,14 @@ Deleting a chat deletes its copies.
   <Accordion title="GET /api/files/image">
     Stream an image file from the filesystem for display in the UI.
   </Accordion>
+
+  <Accordion title="GET /api/media/{kind}/{name}">
+    Serve an image (`kind=image`) or audio file (`kind=audio`) GAIA generated,
+    for the chat's inline `image` and `audio` cards. `name` must be one plain
+    file name sitting directly in the generation tools' output folder
+    (`~/.gaia/cache/sd/images` or `~/.gaia/cache/audio/generations`); paths,
+    `..`, symlinks and other suffixes get a 404.
+  </Accordion>
 </AccordionGroup>
 
 ### Agents
@@ -1444,10 +1452,10 @@ of that router's connector types.
   </Accordion>
 </AccordionGroup>
 
-### Session environment and outputs
+### Session environment, outputs and agent info
 
-What one chat may reach and what it produced, behind the session panel's
-Environment and Outputs sections. Folder and internet changes are stored with
+What one chat may reach, what it produced, and which tools its agent has,
+behind the session panel's Environment, Outputs and Agent info sections. Folder and internet changes are stored with
 the chat, applied to its agent before every turn, and applied to a running
 agent at once, so they take effect on its next step.
 
@@ -1540,6 +1548,43 @@ agent at once, so they take effect on its next step.
     summary (`turn_summary.outputs`) and the undo snapshots, so it survives a
     restart.
   </Accordion>
+
+  <Accordion title="GET /api/sessions/{session_id}/capabilities">
+    The tools this chat's agent can call, behind the session panel's Agent
+    info section:
+
+    ```json
+    {
+      "session_id": "...",
+      "agent_type": "gaia",
+      "tools": [
+        {"name": "query_documents", "description": "Search the indexed documents ...", "category": "rag"},
+        {"name": "mcp_github_list_issues", "description": "[MCP:github] List issues ...", "category": "mcp"}
+      ]
+    }
+    ```
+
+    Read from the agent the chat talks to: the one GAIA keeps for the chat
+    between turns, or, for an agent that runs as its own process (the Hub
+    GAIA agent), that agent's own session through the daemon (agent contract
+    2.27 or later). Skills loaded in earlier turns and connector tools are
+    included. `description` is the text the model is given. `category` is the
+    [`KNOWN_TOOLS`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)
+    name of the mixin that defines the tool (`rag`, `file_io`, `shell`, ...),
+    `mcp`, `skill`, or `agent` for a tool the agent class defines itself.
+
+    It never answers with an empty list in place of an error:
+
+    | Status | When |
+    |--------|------|
+    | 404 | No such chat |
+    | 409 | The chat's agent isn't running: no message yet, or GAIA restarted or switched the chat's model or agent since its last answer. It starts with the next message. |
+    | 502 | A relayed agent failed to answer, or sent a list with a malformed entry or the same tool twice |
+    | 503 | A relayed agent couldn't be started, or can't list its tools (older than contract 2.27, or the email agent) |
+
+    The SDK call behind it is `Agent.describe_tools()`, which returns the
+    same `{name, description, category}` list for any agent.
+  </Accordion>
 </AccordionGroup>
 
 ### Tunnel
@@ -1559,7 +1604,11 @@ Used to reach the UI from a phone.
   <Accordion title="GET /api/tunnel/status">
     Current tunnel status — active/inactive, public URL, provider, uptime, and
     `device`: `{"name": "iPhone", "lastSeen": "..."}` for the latest
-    authenticated request through the tunnel, or null.
+    authenticated request through the tunnel, or null. When ngrok is not
+    installed, `reason` is `"ngrok_not_installed"` and `installCommands` lists
+    this OS's install commands (empty where none is known); `error` still
+    carries the same instructions as text. Both `start` and `status` return
+    this shape.
   </Accordion>
 </AccordionGroup>
 
@@ -2249,15 +2298,15 @@ Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/approve">
-    Approve an agent-inferred goal for autonomous execution.
+    Approve an agent-inferred goal for autonomous execution. Only a goal in `pending_approval` can be approved; approving an already-queued goal just returns it, marked approved. Any other state returns 409, so a rejected, cancelled or finished goal is never re-queued.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/reject">
-    Reject an agent-inferred goal.
+    Reject an agent-inferred goal. Only a goal in `pending_approval` can be rejected; rejecting an already-rejected goal just returns it. Any other state returns 409.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/cancel">
-    Cancel a queued or in-progress goal.
+    Cancel a queued or in-progress goal; cancelling an already-cancelled goal just returns it. Any other state returns 409.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/status">

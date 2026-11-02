@@ -264,6 +264,21 @@ class SidecarProxy:
                 f"skills: {exc}"
             ) from exc
 
+    def session_tools(self, session_id: str) -> dict:
+        """The tools the sidecar session's agent has (flagship, contract >= 2.27).
+
+        A 404 (no such session) raises; the caller decides what it means.
+        """
+        import requests
+
+        try:
+            return self._get(f"{self.prefix}/sessions/{session_id}/tools")
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to list its "
+                f"tools: {exc}"
+            ) from exc
+
     def set_bypass(self, session_id: str, enabled: bool) -> dict:
         """Turn the sidecar session's unattended tool approval on or off.
 

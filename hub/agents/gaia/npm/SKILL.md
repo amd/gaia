@@ -252,7 +252,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.26**; the stream is
+package — call it with plain `fetch`. Contract version **2.27**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -375,7 +375,9 @@ Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
 Twelve of the agent's 101 tools mutate the machine and need explicit approval
-before they run. Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
+offered the scratchpad, email, image-generation or skill-hub tools, so
+`install_skill` and `remove_skill` never reach it.) Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
@@ -462,6 +464,18 @@ Omit `key` to revoke them all. A revoke applies to the very next gated call,
 including one in a turn already running. An unknown session, or a `key` the
 session does not hold, is a **404**. Grants live in the session: they end when
 it does (evicted, idle, or the sidecar restarts).
+
+**Contract ≥ 2.27 lists a session's tools**, so your UI can show the user what
+the agent can do:
+
+```
+GET /v1/gaia/sessions/{session_id}/tools   → { session_id, tools: [{ name, description, category }] }
+```
+
+It reads the session's own agent, so skills loaded in earlier turns are
+included. `category` is a tool-mixin name (`rag`, `file_io`, `shell`, ...),
+`mcp`, `skill`, or `agent` for a tool the agent defines itself. An unknown
+session is a **404**: send a query on it first.
 
 **That bypass stops the prompts; it does not open the shell.** The stdio
 transport's `--full-access` does both — it runs gated tools unasked *and*
@@ -711,7 +725,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.26","agentVersion":"0.3.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.27","agentVersion":"0.3.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \

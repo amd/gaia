@@ -83,6 +83,7 @@ _MEMORY = ConnectorSpec(
     tier=1,
     type="mcp_server",
     description="Knowledge graph-based persistent memory for agents.",
+    docs_url="https://amd-gaia.ai/docs/connectors/memory",
     mcp_command="npx",
     mcp_args=("-y", "@modelcontextprotocol/server-memory@2026.8.31"),
 )
@@ -95,9 +96,35 @@ _GIT = ConnectorSpec(
     tier=1,
     type="mcp_server",
     description="Git repository tools: status, diff, log, show, branch, and commit.",
+    docs_url="https://amd-gaia.ai/docs/connectors/git",
     # The reference Git server ships on PyPI only; the npm name never existed.
     mcp_command="uvx",
     mcp_args=("mcp-server-git==2026.8.18",),
+)
+
+# @modelcontextprotocol/server-slack is deprecated on npm; this is the maintained successor.
+_SLACK = ConnectorSpec(
+    id="mcp-slack",
+    display_name="Slack",
+    icon="💬",
+    category="communication",
+    tier=2,
+    type="mcp_server",
+    description="Read channels, threads, and DMs in your Slack workspace.",
+    docs_url="https://amd-gaia.ai/docs/connectors/slack",
+    mcp_command="npx",
+    mcp_args=("-y", "slack-mcp-server@1.3.0", "--transport", "stdio"),
+    mcp_env_keys=("SLACK_MCP_XOXB_TOKEN",),
+    config_schema=(
+        ConfigField(
+            key="SLACK_MCP_XOXB_TOKEN",
+            label="Slack Bot User OAuth Token",
+            kind="secret",
+            placeholder="xoxb-…",
+            help_md="Create a [Slack app](https://api.slack.com/apps), add the bot scopes listed in the [setup guide](https://amd-gaia.ai/docs/connectors/slack), install it to your workspace, and copy the **Bot User OAuth Token**.",
+            secret=True,
+        ),
+    ),
 )
 
 # ---------------------------------------------------------------------------
@@ -109,6 +136,7 @@ _ALL_SPECS = (
     _TAVILY,
     _MEMORY,
     _GIT,
+    _SLACK,
 )
 
 for _spec in _ALL_SPECS:
