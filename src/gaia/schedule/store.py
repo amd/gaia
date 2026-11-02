@@ -78,7 +78,14 @@ def parse_at(value: str, now: Optional[datetime] = None) -> datetime:
             raise ValueError(
                 f"--at {value!r} is not in the future; give {_AT_EXAMPLES}"
             )
-        return (now + timedelta(seconds=seconds)).replace(microsecond=0)
+        try:
+            due = (now + timedelta(seconds=seconds)).replace(microsecond=0)
+            due.astimezone()
+        except (OverflowError, OSError) as e:
+            raise ValueError(
+                f"--at {value!r} is too far away; give {_AT_EXAMPLES}"
+            ) from e
+        return due
     # A date alone would silently mean midnight.
     if text.startswith("+") or not re.search(r"\d[T ]\d", text):
         raise ValueError(
@@ -92,8 +99,18 @@ def parse_at(value: str, now: Optional[datetime] = None) -> datetime:
         raise ValueError(
             f"--at {value!r} is not a time GAIA can read; give {_AT_EXAMPLES}"
         ) from e
-    # No offset means the user's wall clock.
-    moment = (moment if moment.tzinfo else moment.astimezone()).astimezone(timezone.utc)
+    try:
+        # No offset means the user's wall clock.
+        moment = (moment if moment.tzinfo else moment.astimezone()).astimezone(
+            timezone.utc
+        )
+        # It is shown in local time, which must exist too.
+        moment.astimezone()
+    except (OverflowError, OSError) as e:
+        raise ValueError(
+            f"--at {value!r} is outside the dates this PC can schedule; "
+            f"give {_AT_EXAMPLES}"
+        ) from e
     if moment <= now:
         raise ValueError(
             f"--at {value!r} is in the past (it is now "
@@ -160,15 +177,20 @@ class Schedule:
 
     def due_at(self) -> datetime:
         """A one-time schedule's due time as an aware UTC datetime."""
+        unreadable = (
+            f"schedule {self.name!r} has an unreadable at {self.at!r} in the "
+            "schedule store; write it as a quoted ISO datetime, like "
+            'at = "2027-01-01T09:00:00", or delete that line in schedules.toml'
+        )
+        # An unquoted TOML datetime loads as a datetime, not a string.
+        if not isinstance(self.at, str):
+            raise ValueError(unreadable)
         try:
-            due = datetime.fromisoformat(self.at or "")
-        except ValueError as e:
-            raise ValueError(
-                f"schedule {self.name!r} has an unreadable at {self.at!r} in the "
-                "schedule store; fix or delete that line in schedules.toml"
-            ) from e
-        # No offset means local time, as ``parse_at`` reads ``--at``.
-        return (due if due.tzinfo else due.astimezone()).astimezone(timezone.utc)
+            due = datetime.fromisoformat(self.at)
+            # No offset means local time, as ``parse_at`` reads ``--at``.
+            return (due if due.tzinfo else due.astimezone()).astimezone(timezone.utc)
+        except (ValueError, OverflowError, OSError) as e:
+            raise ValueError(unreadable) from e
 
     def to_toml_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -273,7 +295,9 @@ class ScheduleStore(Protocol):
         self, name: str, now: datetime, *, due_only: bool = True
     ) -> Optional[Schedule]: ...
 
-    def finish_one_shot(self, name: str, finished_at: str, ok: bool) -> Schedule: ...
+    def finish_one_shot(
+        self, claimed: Schedule, finished_at: str, ok: bool
+    ) -> Schedule: ...
 
 
 class TomlScheduleStore:
@@ -428,16 +452,28 @@ class TomlScheduleStore:
             self.save(schedules)
             return schedule
 
-    def finish_one_shot(self, name: str, finished_at: str, ok: bool) -> Schedule:
-        """Record how a claimed one-time schedule's only run ended."""
+    def finish_one_shot(
+        self, claimed: Schedule, finished_at: str, ok: bool
+    ) -> Schedule:
+        """Record how the *claimed* one-time schedule's only run ended.
+
+        Raises :class:`KeyError` when that entry is gone: removed, or removed
+        and added again under the same name, which must stay untouched.
+        """
+        name = claimed.name
         with store_lock(self.path):
             schedules = self.load()
-            if name not in schedules:
+            schedule = schedules.get(name)
+            if (
+                schedule is None
+                or schedule.state != ONE_SHOT_RUNNING
+                or (schedule.created_at, schedule.at)
+                != (claimed.created_at, claimed.at)
+            ):
                 raise KeyError(
-                    f"no schedule named {name!r} in {self.path}; it was removed "
-                    "while its one-time run was in progress"
+                    f"the one-time schedule {name!r} that ran is no longer in "
+                    f"{self.path}; it was removed while its run was in progress"
                 )
-            schedule = schedules[name]
             schedule.last_run = finished_at
             schedule.state = ONE_SHOT_COMPLETED if ok else ONE_SHOT_FAILED
             self.save(schedules)

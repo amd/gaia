@@ -63,6 +63,12 @@ def _one_shot(name="once", at=NOW, **overrides):
     return Schedule(**kwargs)
 
 
+def _finish(store_, name, ok):
+    claimed = store_.claim_one_shot(name, NOW, due_only=False)
+    assert claimed is not None
+    return store_.finish_one_shot(claimed, NOW.isoformat(), ok=ok)
+
+
 class _FrozenDatetime(datetime):
     frozen = NOW
 
@@ -120,6 +126,24 @@ class TestParseAt:
     def test_past_or_present_absolute_time_is_rejected(self, value):
         with pytest.raises(ValueError, match="in the past"):
             parse_at(value, NOW)
+
+    @pytest.mark.parametrize(
+        "value", ["+99999999d", "+999999999999999999999999m", "+2914000d"]
+    )
+    def test_huge_delay_is_a_value_error(self, value):
+        with pytest.raises(ValueError, match="too far away"):
+            parse_at(value, NOW)
+
+    @pytest.mark.parametrize(
+        "value", ["9999-12-31T23:59", "9999-12-31T23:59:59+14:00", "0001-01-01T00:00"]
+    )
+    def test_dates_at_the_calendar_edge_are_value_errors(self, value):
+        with pytest.raises(ValueError, match="--at"):
+            parse_at(value, NOW)
+
+    def test_1960_is_rejected_as_past_or_out_of_range(self):
+        with pytest.raises(ValueError, match="in the past|outside the dates"):
+            parse_at("1960-01-01T00:00", NOW)
 
     @pytest.mark.parametrize("value", ["+0m", "+0h0m", "+0d"])
     def test_zero_delay_is_rejected(self, value):
@@ -192,6 +216,25 @@ class TestScheduleModel:
         with pytest.raises(ValueError, match="unreadable at"):
             store.get("x").due_at()
 
+    @pytest.mark.parametrize(
+        "line", ["at = 2027-01-01T09:00:00", "at = 2027-01-01T09:00:00Z", "at = 5"]
+    )
+    def test_unquoted_toml_at_is_an_actionable_error(self, store, line):
+        store.path.write_text(
+            f'[schedules.x]\n{line}\nprompt = "hi"\n', encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="quoted ISO datetime") as exc:
+            store.get("x").due_at()
+        assert "'x'" in str(exc.value) and "schedules.toml" in str(exc.value)
+
+    @pytest.mark.parametrize("at", ["1960-01-01T00:00", "9999-12-31T23:59"])
+    def test_hand_edited_out_of_range_at_is_a_value_error(self, store, at):
+        store.path.write_text(
+            f'[schedules.x]\nat = "{at}"\nprompt = "hi"\n', encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="unreadable at"):
+            store.get("x").due_at()
+
     def test_hand_edited_naive_at_is_local_like_the_cli(self, store):
         store.path.write_text(
             '[schedules.x]\nat = "2030-01-02T09:00"\nprompt = "hi"\n',
@@ -251,15 +294,39 @@ class TestClaim:
     def test_finish_records_outcome(self, store):
         store.add(_one_shot("a"))
         store.add(_one_shot("b"))
-        store.finish_one_shot("a", NOW.isoformat(), ok=True)
-        store.finish_one_shot("b", NOW.isoformat(), ok=False)
+        _finish(store, "a", ok=True)
+        _finish(store, "b", ok=False)
         assert store.get("a").state == ONE_SHOT_COMPLETED
         assert store.get("a").last_run == NOW.isoformat()
         assert store.get("b").state == ONE_SHOT_FAILED
 
     def test_finish_after_removal_fails_loudly(self, store):
-        with pytest.raises(KeyError, match="removed while its one-time run"):
-            store.finish_one_shot("ghost", NOW.isoformat(), ok=True)
+        store.add(_one_shot())
+        claimed = store.claim_one_shot("once", NOW)
+        store.remove("once")
+        with pytest.raises(KeyError, match="removed while its run"):
+            store.finish_one_shot(claimed, NOW.isoformat(), ok=True)
+
+    def test_finish_never_touches_a_re_added_entry(self, store):
+        store.add(_one_shot("brief", prompt="old"))
+        claimed = store.claim_one_shot("brief", NOW)
+        store.remove("brief")
+        store.add(_one_shot("brief", at=NOW + timedelta(days=1), prompt="new"))
+        with pytest.raises(KeyError, match="removed while its run"):
+            store.finish_one_shot(claimed, NOW.isoformat(), ok=True)
+        fresh = store.get("brief")
+        assert (fresh.state, fresh.prompt, fresh.last_run) == (
+            ONE_SHOT_PENDING,
+            "new",
+            None,
+        )
+
+    def test_finish_needs_a_running_entry(self, store):
+        store.add(_one_shot())
+        pending = store.get("once")
+        with pytest.raises(KeyError):
+            store.finish_one_shot(pending, NOW.isoformat(), ok=True)
+        assert store.get("once").state == ONE_SHOT_PENDING
 
 
 # ---------------------------------------------------------------------------
@@ -320,8 +387,8 @@ class TestDaemonFiresOnce:
         store.add(_one_shot("done"))
         store.add(_one_shot("broke"))
         store.add(_one_shot("crashed"))
-        store.finish_one_shot("done", NOW.isoformat(), ok=True)
-        store.finish_one_shot("broke", NOW.isoformat(), ok=False)
+        _finish(store, "done", ok=True)
+        _finish(store, "broke", ok=False)
         # A daemon that died mid-run leaves it running: never run it again.
         store.claim_one_shot("crashed", NOW)
         restarted = TomlScheduleStore(store.path)
@@ -383,6 +450,25 @@ class TestDaemonFiresOnce:
         assert daemon.run_one_shot(claimed, store) == "done"
         assert "outcome (completed) was not recorded" in caplog.text
 
+    def test_remove_then_re_add_mid_run_leaves_the_new_one_pending(
+        self, store, monkeypatch, clock, caplog
+    ):
+        def replace_then_finish(schedule):
+            store.remove("brief")
+            store.add(_one_shot("brief", at=NOW + timedelta(days=1), prompt="new"))
+            return "old output"
+
+        monkeypatch.setattr(daemon.runner, "fire", replace_then_finish)
+        store.add(_one_shot("brief", prompt="old"))
+        job = _armed(store).get_job("brief")
+        job.func(*job.args)
+        fresh = store.get("brief")
+        assert (fresh.state, fresh.prompt) == (ONE_SHOT_PENDING, "new")
+        assert "removed while it ran" in caplog.text
+        assert _armed(store).get_job("brief").trigger.run_date == NOW + timedelta(
+            days=1
+        )
+
     def test_paused_one_shot_is_not_armed_until_resumed(self, store, clock):
         store.add(_one_shot(enabled=False))
         scheduler = _armed(store)
@@ -409,6 +495,26 @@ class TestDaemonFiresOnce:
         daemon.refresh_schedules(scheduler, store)
         job = scheduler.get_job("x")
         assert job.func is daemon._one_shot_job
+
+    def test_bad_hand_edited_one_shot_does_not_stop_the_others(
+        self, store, clock, caplog, monkeypatch
+    ):
+        monkeypatch.setattr(daemon, "_reported_unarmable", set())
+        store.add(_one_shot("good", at=NOW + timedelta(hours=1)))
+        store.add(Schedule(name="c", cron="0 9 * * *", prompt="hi"))
+        text = store.path.read_text(encoding="utf-8")
+        store.path.write_text(
+            text + '\n[schedules.bad]\nat = 2027-01-01T09:00:00\nprompt = "hi"\n',
+            encoding="utf-8",
+        )
+        scheduler = _armed(store)
+        assert {job.id for job in scheduler.get_jobs()} == {"good", "c"}
+        assert "'bad'" in caplog.text and str(store.path) in caplog.text
+        assert "quoted ISO datetime" in caplog.text
+        caplog.clear()
+        daemon.refresh_schedules(scheduler, store)
+        # Logged once, not on every reload tick.
+        assert "'bad'" not in caplog.text
 
     def test_missed_run_accounting_skips_one_shots(self, store, clock):
         store.add(_one_shot(at=NOW - timedelta(days=1)))
@@ -499,6 +605,9 @@ class TestCli:
             ("tomorrow", "not a time GAIA can read"),
             ("+0m", "not in the future"),
             ("2099-01-02", "not a time GAIA can read"),
+            ("1960-01-01T00:00", "--at '1960-01-01T00:00'"),
+            ("9999-12-31T23:59", "--at '9999-12-31T23:59'"),
+            ("+99999999d", "too far away"),
         ],
     )
     def test_add_bad_at_fails_and_stores_nothing(
@@ -545,7 +654,7 @@ class TestCli:
         due = datetime.now(timezone.utc) + timedelta(hours=3)
         cli_store.add(_one_shot("pend", at=due))
         cli_store.add(_one_shot("done", at=due))
-        cli_store.finish_one_shot("done", NOW.isoformat(), ok=True)
+        _finish(cli_store, "done", ok=True)
         cli_store.add(Schedule(name="c", cron="0 9 * * *", prompt="hi"))
         _run(parser, "list")
         lines = {line.split()[0]: line for line in capsys.readouterr().out.splitlines()}
@@ -556,7 +665,7 @@ class TestCli:
 
     def test_show_prints_due_time_state_and_ran_at(self, parser, cli_store, capsys):
         cli_store.add(_one_shot("n", at=NOW))
-        cli_store.finish_one_shot("n", NOW.isoformat(), ok=True)
+        _finish(cli_store, "n", ok=True)
         _run(parser, "show", "n")
         out = capsys.readouterr().out
         assert f"once at:    {NOW.astimezone().isoformat()}" in out
@@ -575,7 +684,7 @@ class TestCli:
         self, parser, cli_store, fired, capsys
     ):
         cli_store.add(_one_shot("n"))
-        cli_store.finish_one_shot("n", NOW.isoformat(), ok=True)
+        _finish(cli_store, "n", ok=True)
         with pytest.raises(SystemExit) as exc:
             _run(parser, "run", "n")
         assert exc.value.code == 1

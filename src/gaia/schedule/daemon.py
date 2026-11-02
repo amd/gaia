@@ -89,9 +89,7 @@ def run_one_shot(schedule: Schedule, store: ScheduleStore) -> str:
 
 def _finish_one_shot(schedule: Schedule, store: ScheduleStore, ok: bool) -> None:
     try:
-        store.finish_one_shot(
-            schedule.name, datetime.now(timezone.utc).isoformat(), ok=ok
-        )
+        store.finish_one_shot(schedule, datetime.now(timezone.utc).isoformat(), ok=ok)
     except KeyError:
         # Removed mid-run: nothing left to mark, and the run's own error wins.
         log.warning(
@@ -324,6 +322,23 @@ def _trigger(schedule: Schedule, now: datetime):
     return DateTrigger(run_date=max(schedule.due_at(), now))
 
 
+#: Bad one-time entries already logged, so a reload tick doesn't repeat it.
+_reported_unarmable: set = set()
+
+
+def _report_unarmable(store: ScheduleStore, schedule: Schedule, error: Exception):
+    key = (getattr(store, "path", None), schedule.name, repr(schedule.at))
+    if key in _reported_unarmable:
+        return
+    _reported_unarmable.add(key)
+    log.error(
+        "not arming one-time schedule %r from %s: %s",
+        schedule.name,
+        getattr(store, "path", "the schedule store"),
+        error,
+    )
+
+
 def refresh_schedules(scheduler: BackgroundScheduler, store: ScheduleStore) -> None:
     """Reconcile running timers with the schedules currently persisted on disk."""
     schedules = store.load()
@@ -335,7 +350,16 @@ def refresh_schedules(scheduler: BackgroundScheduler, store: ScheduleStore) -> N
     }
     now = datetime.now(timezone.utc)
     # Validate all triggers before changing timers, so a bad edit fails loudly.
-    triggers = {name: _trigger(schedule, now) for name, schedule in armed.items()}
+    triggers = {}
+    for name, schedule in list(armed.items()):
+        try:
+            triggers[name] = _trigger(schedule, now)
+        except ValueError as e:
+            if not schedule.one_shot:
+                raise
+            # One bad hand-edited one-time entry must not stop the others.
+            del armed[name]
+            _report_unarmable(store, schedule, e)
     existing = {job.id: job for job in scheduler.get_jobs()}
     for name in existing.keys() - armed.keys():
         scheduler.remove_job(name)
