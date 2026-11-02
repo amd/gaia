@@ -82,9 +82,9 @@ if _stubbed_modules:
 
 # Hard ceilings — chosen so Gemma 4 E4B can comfortably prompt-process
 # the full system prompt + a typical RAG tool result + the user query
-# on Windows iGPU within Lemonade's upstream timeout. The numbers below
-# include healthy headroom (~2× of post-trim sizes measured at the time
-# of the #1030 fix).
+# on Windows iGPU within Lemonade's upstream timeout. ("full", 0) is a tight
+# ratchet (~3% over the Windows size), so the next prompt growth forces a
+# trim-or-raise decision; the others keep their #1030-era headroom.
 _BUDGET_CHARS = {
     # profile + indexed-doc count -> max chars
     # Windows environment block + #5977's SLIDES/DECKS rule (Windows: 12,597).
