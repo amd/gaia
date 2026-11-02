@@ -15,7 +15,7 @@ persona: casual_user
 setup:
   index_documents: []
   memory_clear: true
-  notes: "Every hub skill except rss-digest is installed; fixture server on 127.0.0.1:8765. v1/v2 stand in for one page at two points in time."
+  notes: "Every hub/skills skill ships with the flagship; fixture server on 127.0.0.1:8765. v1/v2 stand in for one page at two points in time."
 
 turns:
   - turn: 1

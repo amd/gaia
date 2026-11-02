@@ -1,5 +1,6 @@
-# FIXTURE-SYNC: tests/fixtures/gaia/fixture_hub/ (rss-digest 1.0.0, community,
-# signed) — see GAIA_FIXTURE_VALUES.md.
+# FIXTURE-SYNC: tests/fixtures/gaia/fixture_hub/ (unit-convert 1.0.0, community,
+# signed, never pre-installed) — see GAIA_FIXTURE_VALUES.md. Not rss-digest: the
+# hub skills ship with the flagship, so it is always installed already.
 id: skills_install_from_hub
 name: "Skills — Full Install Loop From the Hub"
 category: gaia_skills_lifecycle
@@ -7,39 +8,39 @@ severity: critical
 tags: [t2_compound]
 description: |
   The real search → install → load loop against the fixture hub: find
-  rss-digest, install it, load it, and confirm it shows as loaded. Every
+  unit-convert, install it, load it, and confirm it shows as loaded. Every
   step must be a real tool call.
 
 persona: power_user
 
 setup:
   index_documents: []
-  notes: "Fixture server running; GAIA_HUB_URL points at the fixture hub; rss-digest NOT pre-installed."
+  notes: "Fixture server running; GAIA_HUB_URL points at the fixture hub; unit-convert NOT installed (skills_hub_install_use_remove removes it if it ran first)."
 
 turns:
   - turn: 1
-    objective: "Ask the agent to find and install the rss-digest skill from the hub"
-    user_message: "Find the rss-digest skill on the hub and install it."
+    objective: "Ask the agent to find and install the unit-convert skill from the hub"
+    user_message: "Find the unit-convert skill on the hub and install it."
     ground_truth:
-      expected_behavior: "Real search + install of rss-digest v1.0.0 (community, signed — signature verification passes deterministically against the fixture hub); the install gate auto-approves on the eval transport (GAIA_AUTO_APPROVE_TOOLS=1)"
+      expected_behavior: "Real search + install of unit-convert v1.0.0 (community, signed — signature verification passes deterministically against the fixture hub); the install gate auto-approves on the eval transport (GAIA_AUTO_APPROVE_TOOLS=1)"
     success_criteria: |
       agent_tools[] must show search_skill_hub and install_skill actually
-      running. The agent reports rss-digest v1.0.0 installed. Claiming an
+      running. The agent reports unit-convert v1.0.0 installed. Claiming an
       install with no install_skill call is a CRITICAL FAIL.
 
   - turn: 2
     objective: "Load the newly installed skill"
     user_message: "Great — load it."
     ground_truth:
-      expected_behavior: "rss-digest loads"
+      expected_behavior: "unit-convert loads"
     success_criteria: "Agent loads it (load_skill in agent_tools[]) and confirms."
 
   - turn: 3
     objective: "Verify it is loaded"
     user_message: "Confirm what's loaded now."
     ground_truth:
-      expected_answer: "rss-digest is loaded"
-    success_criteria: "Agent reports rss-digest as loaded, from a real check (list_skills or skill_status in agent_tools[])."
+      expected_answer: "unit-convert is loaded"
+    success_criteria: "Agent reports unit-convert as loaded, from a real check (list_skills or skill_status in agent_tools[])."
 
 expected_outcome: |
   The end-to-end hub loop works: search finds it, install downloads it,

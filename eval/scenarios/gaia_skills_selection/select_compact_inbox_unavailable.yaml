@@ -13,7 +13,7 @@ persona: casual_user
 setup:
   index_documents: []
   mailbox_fixture: attached
-  notes: "Every hub skill except rss-digest is installed; the agent runs a compact-tier model (Gemma-4-E4B); the fixture mailbox is attached."
+  notes: "Every hub/skills skill ships with the flagship; the agent runs a compact-tier model (Gemma-4-E4B); the fixture mailbox is attached."
 
 turns:
   - turn: 1

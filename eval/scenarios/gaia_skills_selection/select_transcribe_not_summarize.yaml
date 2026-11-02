@@ -13,7 +13,7 @@ persona: casual_user
 
 setup:
   index_documents: []
-  notes: "Every hub skill except rss-digest is installed; clip staged at ~/gaia-eval/media/facilities_update.wav."
+  notes: "Every hub/skills skill ships with the flagship; clip staged at ~/gaia-eval/media/facilities_update.wav."
 
 turns:
   - turn: 1

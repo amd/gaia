@@ -13,7 +13,7 @@ persona: power_user
 
 setup:
   index_documents: []
-  notes: "Every hub skill except rss-digest is installed; fixture server on 127.0.0.1:8765."
+  notes: "Every hub/skills skill ships with the flagship; fixture server on 127.0.0.1:8765."
 
 turns:
   - turn: 1

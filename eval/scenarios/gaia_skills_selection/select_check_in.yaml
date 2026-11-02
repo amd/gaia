@@ -12,7 +12,7 @@ persona: casual_user
 setup:
   index_documents: []
   memory_clear: true
-  notes: "Every hub skill except rss-digest is installed."
+  notes: "Every hub/skills skill ships with the flagship."
 
 turns:
   - turn: 1

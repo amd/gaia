@@ -263,8 +263,10 @@ Set up by the eval workflow, not by scenarios:
   dir prepended to PATH; `github-triage` installed at `~/.gaia/skills/`
   (copied, not `gaia skill import` — import re-stamps tier experimental).
 - `gaia_skills_lifecycle`: fixture server running; `GAIA_HUB_URL` set to the
-  fixture hub; `github-triage` pre-installed; `rss-digest` NOT pre-installed
-  (install scenarios download it).
+  fixture hub. Every `hub/skills/` skill is always installed: the flagship
+  bundles them (from the checkout's `hub/skills/`, or packaged), so install
+  and "not installed" scenarios use `unit-convert`, which exists only on the
+  fixture hub.
 - `gaia_web`, `gaia_skills_tasks` (web-based skills): fixture server running.
 - `gaia_data`, `gaia_code`: fixture CSV / mini repo staged at `~/gaia-eval/`
   (see Path staging above).

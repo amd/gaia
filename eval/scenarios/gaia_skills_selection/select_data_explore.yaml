@@ -14,7 +14,7 @@ persona: power_user
 
 setup:
   index_documents: []
-  notes: "Every hub skill except rss-digest is installed; staged fixture CSV at ~/gaia-eval/csv/sales.csv. data-explore needs the scratchpad, which only full-tier models get."
+  notes: "Every hub/skills skill ships with the flagship; staged fixture CSV at ~/gaia-eval/csv/sales.csv. data-explore needs the scratchpad, which only full-tier models get."
 
 turns:
   - turn: 1
