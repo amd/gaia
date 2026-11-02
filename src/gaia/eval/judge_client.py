@@ -35,6 +35,11 @@ import tempfile
 from dataclasses import dataclass
 
 from gaia.env import load_env
+from gaia.eval.claude_outage import (
+    dotenv_only_api_key,
+    driver_api_key,
+    without_dotenv_api_key,
+)
 from gaia.eval.claude_usage import TOKEN_FIELDS, usage_from_cli
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
 from gaia.llm.local_only import assert_provider_permitted
@@ -206,6 +211,7 @@ class ClaudeCliClient:
                 errors="replace",
                 timeout=self.timeout,
                 cwd=self._workdir.name,
+                env=without_dotenv_api_key(os.environ),
                 check=False,
             )
         except subprocess.TimeoutExpired as e:
@@ -275,13 +281,14 @@ def _split_cost(model: str, input_tokens: int, output_tokens: int, total: float)
 def make_judge_client(model: str | None = None, max_tokens: int | None = None):
     """Build the judge client the available credential can actually drive.
 
-    The runner's rule: ``ANTHROPIC_API_KEY`` means the Messages API (the
-    workflow blanks it when it wants the subscription path). Otherwise the
+    The runner's rule: an exported ``ANTHROPIC_API_KEY`` means the Messages
+    API (the workflow blanks it when it wants the subscription path); one that
+    only a ``.env`` set is ignored. Otherwise the
     subscription through ``claude -p`` — a ``CLAUDE_CODE_OAUTH_TOKEN`` or the
     CLI's own login. Raises when neither is available; never returns a
     degraded scorer. ``max_tokens`` applies to the API transport only.
     """
-    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    api_key = driver_api_key()
     oauth_token = (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
 
     if api_key:
@@ -292,6 +299,12 @@ def make_judge_client(model: str | None = None, max_tokens: int | None = None):
         return ClaudeClient(model=model, max_tokens=max_tokens)
     if oauth_token or shutil.which("claude"):
         return ClaudeCliClient(model=model)
+    if dotenv_only_api_key():
+        raise ValueError(
+            MISSING_CREDENTIAL_ERROR
+            + "\nThe ANTHROPIC_API_KEY found only in a .env file is ignored; "
+            "export it in the shell to judge with it.\n"
+        )
     raise ValueError(MISSING_CREDENTIAL_ERROR)
 
 

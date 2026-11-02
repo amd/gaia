@@ -18,7 +18,9 @@ from types import SimpleNamespace
 
 import pytest
 
+import gaia
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.eval import claude_outage
 from gaia.eval import flagship_tasks as ft
 from gaia.eval import task_setups as setups
 from gaia.eval.bench import gaia_child, harness
@@ -1381,6 +1383,31 @@ def test_one_call_grades_every_attempt_outside_the_repo(monkeypatch):
     assert sent.index("+++ b/planted.py") < sent.index("the answer")
     assert Path(calls[0]["cwd"]).resolve() != ft.REPO_ROOT.resolve()
     assert calls[0]["env"] == {"CLAUDE_CODE_OAUTH_TOKEN": "t"}
+
+
+@pytest.mark.parametrize("exported", [False, True])
+def test_the_judge_uses_only_an_exported_api_key(monkeypatch, exported):
+    """#6403: a key only a `.env` set must not switch the judge to `--bare`."""
+    monkeypatch.setattr(ft.shutil, "which", lambda name: "/bin/claude")
+    monkeypatch.setattr(claude_outage, "_warned_dotenv_api_key", False)
+    if exported:
+        monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", "k")
+    else:
+        monkeypatch.delitem(gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", False)
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs["env"]))
+        return SimpleNamespace(returncode=0, stdout=_envelope({"a": GRADE}), stderr="")
+
+    monkeypatch.setattr(ft.subprocess, "run", fake_run)
+    ft.judge_batch(
+        [_attempt("a", CODING)], "m", {"ANTHROPIC_API_KEY": "k", "PATH": "/kept"}
+    )
+    cmd, env = calls[0]
+    assert ("--bare" in cmd) is exported
+    assert ("ANTHROPIC_API_KEY" in env) is exported
+    assert env["PATH"] == "/kept"
 
 
 def _run_dir(tmp_path, ids=("02-bugfix", "21-qa")):

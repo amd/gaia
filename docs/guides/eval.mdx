@@ -41,8 +41,9 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
     export ANTHROPIC_API_KEY=sk-ant-...
     ```
 
-    The scenario driver ignores an `ANTHROPIC_API_KEY` that only a `.env` file sets,
-    so a stale key in a parent directory can't override a working login.
+    The scenario driver, the Claude judge, and `gaia eval tasks` ignore an
+    `ANTHROPIC_API_KEY` that only a `.env` file sets, so a stale key in a parent
+    directory can't override a working login.
   </Step>
 
   <Step title="Install Claude Code CLI">

@@ -9,13 +9,15 @@ empty CLI reply surfaces as an actionable error instead of an unscored case.
 """
 
 import json
+import logging
 import subprocess
 import sys
 from types import SimpleNamespace
 
 import pytest
 
-from gaia.eval import judge_client
+import gaia
+from gaia.eval import claude_outage, judge_client
 from gaia.eval.judge_client import (
     ClaudeCliClient,
     make_judge_client,
@@ -32,6 +34,14 @@ def _clear_credentials(monkeypatch):
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delitem(gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(claude_outage, "_warned_dotenv_api_key", False)
+
+
+def _export_key(monkeypatch, value):
+    """Set the key as the shell would, not as a `.env` would."""
+    monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", value)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", value)
 
 
 @pytest.fixture
@@ -117,26 +127,58 @@ def _stub_sdk_client(monkeypatch):
 
 
 def test_api_key_selects_the_sdk_transport(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api-test")
+    _export_key(monkeypatch, "sk-ant-api-test")
     sentinel = _stub_sdk_client(monkeypatch)
     assert make_judge_client(model="claude-opus-5") is sentinel
 
 
 def test_api_key_wins_when_both_are_set(monkeypatch, fake_claude_bin):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api-test")
+    _export_key(monkeypatch, "sk-ant-api-test")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
     sentinel = _stub_sdk_client(monkeypatch)
     assert make_judge_client() is sentinel
 
 
 def test_max_tokens_reaches_only_the_sdk_client(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api-test")
+    _export_key(monkeypatch, "sk-ant-api-test")
     sentinel = _stub_sdk_client(monkeypatch)
     make_judge_client(model="m", max_tokens=8192)
     assert sentinel.kwargs == {"model": "m", "max_tokens": 8192}
     make_judge_client(model="m")
     # Unset, the client's own default applies.
     assert sentinel.kwargs == {"model": "m"}
+
+
+def test_a_dotenv_only_key_rides_the_cli_login(monkeypatch, fake_claude_bin, caplog):
+    """#6403: a key only a `.env` set must not override the CLI's login."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-dotenv-secret")
+    monkeypatch.setenv("PATH", "/kept")
+    captured = _run_replying(monkeypatch, "ok")
+    with caplog.at_level(logging.WARNING):
+        client = make_judge_client()
+        assert isinstance(client, ClaudeCliClient)
+        client.get_completion("judge this")
+        client.get_completion("judge this")
+    env = captured["kwargs"]["env"]
+    assert "ANTHROPIC_API_KEY" not in env
+    assert env["PATH"] == "/kept"
+    warnings = [r for r in caplog.records if ".env" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "sk-ant-dotenv-secret" not in caplog.text
+
+
+def test_an_exported_key_reaches_the_cli_child(monkeypatch, fake_claude_bin):
+    _export_key(monkeypatch, "sk-ant-api-test")
+    captured = _run_replying(monkeypatch, "ok")
+    ClaudeCliClient().get_completion("judge this")
+    assert captured["kwargs"]["env"]["ANTHROPIC_API_KEY"] == "sk-ant-api-test"
+
+
+def test_a_dotenv_only_key_without_a_cli_says_why(monkeypatch, no_claude_bin):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-dotenv-secret")
+    with pytest.raises(ValueError, match="only in a .env file is ignored") as excinfo:
+        make_judge_client()
+    assert "sk-ant-dotenv-secret" not in str(excinfo.value)
 
 
 def test_missing_claude_cli_is_an_actionable_error(monkeypatch):
