@@ -378,7 +378,7 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Twelve of the agent's 101 tools mutate the machine and need explicit approval
+Seventeen of the agent's 109 tools change something and need explicit approval
 before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
 offered the scratchpad, email, image-generation or skill-hub tools, so
 `install_skill` and `remove_skill` never reach it.) Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
@@ -387,10 +387,14 @@ offered the scratchpad, email, image-generation or skill-hub tools, so
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
 a PowerShell child on Windows to draw the notification, and **`install_cli`** /
 **`sign_in_cli`**, which install software and sign a CLI in to the user's
-account — and the flagship adds three of its own
+account — and the flagship adds eight of its own
 (`CONFIRMATION_REQUIRED_TOOLS`): **`install_skill`**, **`capture_skill`**, and
 **`remove_skill`**, because installing or capturing a skill writes third-party
-content under `~/.gaia/skills` and removing one deletes it. A capture that does
+content under `~/.gaia/skills` and removing one deletes it; **`send_now`**,
+**`send_draft`**, **`reply_to_message`** and **`forward_message`**, because mail
+leaves the mailbox, and **`discard_draft`**, because a draft can't be recovered.
+The four sending tools are refused, with nothing sent, wherever no person can
+answer the prompt, including a pre-approved run. A capture that does
 land is additionally **code-inert**: its instructions load, but any
 `tools.py`/scripts stay unregistered until a human runs
 `gaia skill promote <name>` in a terminal. Everything else — reading,

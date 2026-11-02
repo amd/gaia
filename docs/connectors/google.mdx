@@ -111,7 +111,7 @@ inside GAIA.
 
 You only need to declare the scopes the agents you actually use will
 request — the flagship [`gaia` agent](/guides/email) needs only
-`gmail.readonly`; `openid` and `userinfo.email` are requested on every
+`gmail.modify`; `openid` and `userinfo.email` are requested on every
 connection regardless of agent. GAIA no longer requests the short `email`
 and `profile` names (`email` is the same permission as `userinfo.email`). It
 still accepts them so connections made by older GAIA versions keep working,
@@ -246,8 +246,8 @@ On the CLI, lead with `--grant-agent` — GAIA reads the scopes the agent
 already declares in its own code, so there's no list to type out or keep
 in sync:
 
-**Flagship `gaia` agent — the read-only Gmail scope** it needs to read and
-search your mailbox:
+**Flagship `gaia` agent — the one Gmail scope** it needs to read, search,
+draft and send, with a confirmation before anything is sent:
 
 ```bash
 gaia connectors connect google --grant-agent installed:gaia
@@ -390,7 +390,7 @@ Two places — both work:
 ## See also
 
 - [Connectors overview](/connectors)
-- [Email](/guides/email) — the flagship agent, which uses `gmail.readonly`
+- [Email](/guides/email) — the flagship agent, which uses `gmail.modify`
 - [Google OAuth client runbook](https://github.com/amd/gaia/blob/main/docs/runbooks/google-oauth-client.md) — the AMD-internal client + rotation procedure (maintainers)
 - [Manage OAuth Clients — Google Cloud Console Help](https://support.google.com/cloud/answer/15549257)
 - [Get started with the Google Auth Platform — Google Cloud Console Help](https://support.google.com/cloud/answer/15544987)
