@@ -649,7 +649,6 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     # Normalised for matching, never resolved: this must stay a pure function of
     # the arguments, so it cannot depend on the filesystem or the process's cwd.
     normalised = posixpath.normpath(raw.replace("\\", "/"))
-    display = posixpath.basename(normalised) or normalised
     # A resolved path has no working-directory ambiguity, so its parent can
     # describe a folder grant only when the existing edit safety rules also
     # allow silent edits in that folder. Home/drive roots, hidden paths, PATH
@@ -661,8 +660,10 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
         if ntpath.isabs(resolved) or posixpath.isabs(resolved_for_match):
             resolved_target = posixpath.normpath(resolved_for_match)
             parent = posixpath.dirname(resolved_target)
-            if parent not in ("", ".", "/") and _folder_grant_is_safe(
-                resolved_target, parent
+            if (
+                parent not in ("", ".", "/")
+                and not re.fullmatch(r"[A-Za-z]:", parent)
+                and _folder_grant_is_safe(resolved_target, parent)
             ):
                 return GrantScope(
                     keys=(f"{tool_name}:{parent}/*",),
@@ -689,7 +690,9 @@ def _folder_grant_is_safe(target: str, parent: str) -> bool:
     if real_parent == home or os.path.dirname(real_parent) == real_parent:
         return False
     parts = {part.lower() for part in real_target.replace("\\", "/").split("/")}
-    if ".git" in parts or any(part.startswith(".") and part not in (".", "..") for part in parts):
+    if ".git" in parts or any(
+        part.startswith(".") and part not in (".", "..") for part in parts
+    ):
         return False
     if any(
         entry and os.path.normcase(os.path.realpath(entry)) == real_parent

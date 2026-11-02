@@ -131,6 +131,16 @@ class TestPathGrants:
         scope = grant_scope("write_file", {"file_path": "notes.md"})
         assert scope.key == "write_file:notes.md"
 
+    def test_a_windows_drive_root_resolution_stays_exact(self):
+        scope = grant_scope(
+            "write_file",
+            {
+                "file_path": r"C:\notes.md",
+                "_resolved_file_path": r"C:\notes.md",
+            },
+        )
+        assert scope.key == "write_file:C:/notes.md"
+
     def test_a_home_folder_resolution_stays_exact(self, tmp_path, monkeypatch):
         home = tmp_path / "home"
         home.mkdir()
