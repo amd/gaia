@@ -1966,10 +1966,16 @@ def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
 
     A thinking model bills its reasoning against ``max_tokens``, so a side call
     that wants a few hundred tokens of JSON instead reasons until the cap and
-    returns nothing. Empty for cloud models and for local models whose template
-    has no thinking switch (``requested_thinking`` is None), which send nothing.
+    returns nothing. Empty for local models whose template has no thinking switch
+    (``requested_thinking`` is None), and for cloud models, which reject the field
+    or do not reason, except DeepSeek: it reasons hard, and spent 7,274 of 8,192
+    tokens on one reply, and accepts the switch.
     """
-    if not isinstance(model_id, str) or cloud_model_provider(model_id):
+    if not isinstance(model_id, str):
+        return {}
+    if cloud_model_provider(model_id):
+        if "deepseek" in model_id.lower():
+            return {"chat_template_kwargs": {"enable_thinking": False}}
         return {}
     mr = find_model_requirement(model_id)
     if mr is not None and mr.reasoning_effort:

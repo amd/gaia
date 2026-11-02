@@ -1360,6 +1360,21 @@ Deleting a chat deletes its copies.
     file indexed for Q&A.
   </Accordion>
 
+  <Accordion title="Recording progress events">
+    Long recording work streams `status` events with `"phase": "recording"`. `stage` is
+    a position in download, decode, transcribe, voices, prepare, analyze. `state` is 0
+    running, 1 done or 2 skipped. `percent` and `eta_seconds` are present once known;
+    both are estimates until a part of the recording finishes. `message` is an English
+    line for clients that draw no stages.
+  </Accordion>
+  <Accordion title="POST /api/files/upload-media">
+    Save an audio or video recording as a chat attachment, for the agent to
+    transcribe. The request body is the raw file, streamed straight to disk, and
+    the `name` query parameter carries its file name. Returns **400** for a type
+    that is not a recording or an empty body, **413** past 64 GB, and **507** when
+    the drive lacks room. GAIA removes these copies after 14 days.
+  </Accordion>
+
   <Accordion title="GET /api/files/browse">
     Browse filesystem contents. Returns entries under a directory with size,
     mtime, and type metadata.

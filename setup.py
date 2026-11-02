@@ -242,6 +242,11 @@ setup(
         "diarize": [
             "sherpa-onnx>=1.13,<3",
         ],
+        # Fetches videos from links. Installed on first use in a source install;
+        # a frozen build has to bundle it, as with diarize above.
+        "media-url": [
+            "yt-dlp>=2025.1.1",
+        ],
         "mcp": [
             # Supports mcp 2.x: its public MCPServer API replaced
             # mcp.server.fastmcp (FastMCP). Keep the upper bound below the next

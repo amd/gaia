@@ -28,6 +28,8 @@ import {
     Circle,
     Sparkles,
     Link,
+    AudioLines,
+    Captions,
     type LucideIcon,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -84,6 +86,11 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     dump_document: FileText,
     rag_status: Database,
     add_watch_directory: FolderOpen,
+    // Recordings
+    transcribe_media: AudioLines,
+    refine_transcript: FileText,
+    analyze_transcript: ListChecks,
+    export_transcript: Captions,
     // Web
     web_search: Globe,
     search_web: Globe,

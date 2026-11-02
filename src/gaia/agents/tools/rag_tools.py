@@ -47,6 +47,19 @@ _SESSION_SAVE_WARNING = (
 SUMMARY_MAX_TOKENS = 8192
 
 
+def _split_oversized_page(page: str, max_words: int) -> List[str]:
+    """Cut text with no page markers, such as a transcript, into section-sized parts.
+
+    Parts stay well under ``max_words`` because each section re-reads the
+    previous part as overlap.
+    """
+    words = page.split()
+    if len(words) <= max_words:
+        return [page]
+    size = max(max_words // 4, 1)
+    return [" ".join(words[i : i + size]) for i in range(0, len(words), size)]
+
+
 def _summary_text(chat: Any, prompt: str) -> str:
     """One summary reply, never one the output limit cut short."""
     response = chat.send(
@@ -1854,7 +1867,8 @@ class RAGToolsMixin:
                         "'Overall' or 'In summary'."
                     ),
                     "detailed": (
-                        "Write a comprehensive summary of at least 250 words covering "
+                        "Write a comprehensive summary of at least 250 words and at "
+                        "most 1,000 words covering "
                         "every major topic, key point, and important detail in full "
                         "paragraphs. Keep every number, percentage, dollar amount, "
                         "date, and metric. Do not use bullets."
@@ -1934,6 +1948,12 @@ class RAGToolsMixin:
                 # Add last page
                 if current_page.strip():
                     pages.append(current_page.strip())
+
+                pages = [
+                    piece
+                    for page in pages
+                    for piece in _split_oversized_page(page, max_words_per_section)
+                ]
 
                 # Group pages into sections that fit within max_words_per_section
                 # Include overlap: last page of previous section is included in next section

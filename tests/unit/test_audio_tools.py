@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from gaia.agents.registry import KNOWN_TOOLS
+from gaia.agents.tools import audio_tools
 from gaia.agents.tools.audio_tools import AudioToolsMixin
 from gaia.audio.lemonade_asr import Segment, Transcript, Word
 
@@ -67,8 +68,13 @@ class TestRegistration:
         with patch("gaia.agents.base.tools.tool", _collecting_tool(registered)):
             Host().register_audio_tools()
 
-        # One tool only: a status companion caused a 4-call loop that never transcribed.
-        assert set(registered) == {"transcribe_media", "refine_transcript"}
+        # No status tool: a companion one caused a 4-call loop that never transcribed.
+        assert set(registered) == {
+            "transcribe_media",
+            "refine_transcript",
+            "analyze_transcript",
+            "export_transcript",
+        }
 
     def test_transcribe_declares_a_timeout_long_enough_for_a_real_meeting(self):
         """The agent's 180s default abandons a 45-min transcription mid-flight.
@@ -353,6 +359,38 @@ class TestTranscribeMedia:
 
         assert Path(result["transcript_path"]) == tmp_path / "out" / "standup.txt"
 
+    def test_a_chat_model_name_is_refused_before_decoding(self, tmp_path):
+        """A model passed 'lemonade' here and learned it only after the decode."""
+        source = tmp_path / "talk.mp4"
+        source.write_bytes(b"stub")
+
+        with (
+            patch("gaia.audio.media.to_wav16k_mono") as decode,
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+        ):
+            client.return_value.available_models.return_value = ["Whisper-Base"]
+            result = Host()._transcribe_media(str(source), model="lemonade")
+
+        assert result["status"] == "error"
+        assert "Whisper-Base" in result["error"]
+        decode.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "title, plain",
+        [
+            ("Ana's 2026 Keynote [aB3-x_9]", "Ana-s-2026-Keynote-aB3-x-9"),
+            ("Reunión – año (final) #1", "Reunión-año-final-1"),
+            ("درس الحياة ｜  [8EzdQ59JJ-Q]", "درس-الحياة-8EzdQ59JJ-Q"),
+            ("تعلَّم", "تعلم"),
+            ("!!!", "recording"),
+        ],
+    )
+    def test_transcript_names_survive_being_retyped(self, title, plain):
+        """A quote, bracket or odd separator in a title broke every later step."""
+        from gaia.agents.tools.audio_tools import _plain_stem
+
+        assert _plain_stem(Path(f"{title}.webm")) == plain
+
 
 class TestRefineTranscript:
     """Speaker turns come from pauses; the model only names them."""
@@ -415,9 +453,23 @@ class TestRefineTranscript:
         assert timings.read_text() == timings_before
 
     def test_missing_transcript_is_actionable(self, tmp_path):
-        result = Host()._refine_transcript(str(tmp_path / "nope.txt"))
+        with patch.object(audio_tools, "TRANSCRIPT_DIR", tmp_path / "none"):
+            result = Host()._refine_transcript(str(tmp_path / "nope.txt"))
         assert result["status"] == "error"
         assert "transcribe_media first" in result["error"]
+        assert "do exist" not in result["error"]
+
+    def test_a_mistyped_path_is_told_the_transcripts_that_exist(self, tmp_path):
+        """Small models retype a long path; the error hands them the real one."""
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+        real = transcripts / "Budget-Review-2026.txt"
+        real.write_text("[00:00] words", encoding="utf-8")
+        with patch.object(audio_tools, "TRANSCRIPT_DIR", transcripts):
+            result = Host()._refine_transcript(
+                str(transcripts / "Budget Review 2026.txt")
+            )
+        assert str(real) in result["error"]
 
     def test_empty_transcript_is_rejected(self, tmp_path):
         raw = tmp_path / "t.txt"
@@ -534,6 +586,393 @@ class TestRefineTranscript:
         assert "text" not in result
 
 
+class TestTimedTranscripts:
+    """Times have to reach the files a reader, RAG and analysis actually use."""
+
+    @staticmethod
+    def _timed(tmp_path, segments, speakers=()):
+        from gaia.agents.tools.audio_tools import timings_path_for
+
+        raw = tmp_path / "talk.txt"
+        raw.write_text("spoken words", encoding="utf-8")
+        timings_path_for(raw).write_text(
+            json.dumps({"segments": segments, "speakers": list(speakers)}),
+            encoding="utf-8",
+        )
+        return raw
+
+    def _refined(self, tmp_path, segments, speakers=()):
+        raw = self._timed(tmp_path, segments, speakers)
+        with patch.object(Host, "_llm_text", return_value="Speaker 1 -> Speaker 1"):
+            return Host()._refine_transcript(str(raw))
+
+    def test_one_presenter_is_paragraphed_and_timed_not_one_block(self, tmp_path):
+        segments = [
+            {"start": i * 10.0, "end": i * 10.0 + 9.0, "text": f"Point {i}."}
+            for i in range(60)
+        ]
+        spans = [{"start": 0.0, "end": 600.0, "speaker": "Speaker 1"}]
+
+        result = self._refined(tmp_path, segments, spans)
+
+        body = Path(result["refined_path"]).read_text(encoding="utf-8")
+        assert "[00:00] Speaker 1: Point 0." in body
+        assert "[09:00] Speaker 1:" in body
+        assert body.count("Speaker 1:") == 10
+        assert result["turns"] == 1, "paragraphs are not new speaker turns"
+        for segment in segments:
+            assert segment["text"] in body
+
+    def test_a_change_of_speaker_opens_a_paragraph_at_its_time(self, tmp_path):
+        segments = [
+            {"start": 70.0, "end": 71.0, "text": "Mine."},
+            {"start": 72.0, "end": 73.0, "text": "Yours."},
+        ]
+        spans = [
+            {"start": 70.0, "end": 71.5, "speaker": "Speaker 1"},
+            {"start": 71.5, "end": 73.0, "speaker": "Speaker 2"},
+        ]
+
+        body = Path(self._refined(tmp_path, segments, spans)["refined_path"]).read_text(
+            encoding="utf-8"
+        )
+
+        assert "[01:10] Speaker 1: Mine." in body
+        assert "[01:12] Speaker 2: Yours." in body
+
+    def test_the_refined_file_carries_timings_with_final_speakers(self, tmp_path):
+        from gaia.agents.tools.audio_tools import timings_path_for
+
+        segments = [{"start": 1.0, "end": 2.0, "text": "Hello."}]
+        spans = [{"start": 0.0, "end": 3.0, "speaker": "Speaker 1"}]
+        refined = Path(self._refined(tmp_path, segments, spans)["refined_path"])
+
+        saved = json.loads(timings_path_for(refined).read_text(encoding="utf-8"))
+
+        assert saved["segments"][0]["speaker"] == "Speaker 1"
+
+    def test_analyze_writes_a_report_and_cleans_up_its_checkpoint(self, tmp_path):
+        segments = [{"start": 5.0, "end": 9.0, "text": "Do ten lunges."}]
+        refined = Path(
+            self._refined(
+                tmp_path, segments, [{"start": 0.0, "end": 9.0, "speaker": "Speaker 1"}]
+            )["refined_path"]
+        )
+        reply = json.dumps(
+            {
+                "items": [
+                    {
+                        "title": "Lunges",
+                        "start": "00:05",
+                        "end": "00:05",
+                        "fields": {"reps": "ten"},
+                    }
+                ],
+                "summary": "Lunges.",
+            }
+        )
+
+        with patch.object(Host, "_analysis_reply", return_value=reply):
+            result = Host()._analyze_transcript(
+                str(refined), "every exercise", ["reps"]
+            )
+
+        assert result["status"] == "success"
+        report = Path(result["analysis_path"])
+        assert report.name == "talk.analysis.md"
+        assert "**Lunges** (00:05 → 00:09)" in report.read_text(encoding="utf-8")
+        assert not list(tmp_path.glob("*.progress.json"))
+
+    def test_analyze_failure_says_finished_sections_are_kept(self, tmp_path):
+        raw = self._timed(tmp_path, [{"start": 0.0, "end": 1.0, "text": "Hi."}])
+
+        with patch.object(
+            Host, "_analysis_reply", side_effect=ConnectionError("Lemonade down")
+        ):
+            result = Host()._analyze_transcript(str(raw), "every exercise", [])
+
+        assert result["status"] == "error"
+        assert "Lemonade down" in result["error"]
+        assert "same arguments" in result["error"]
+
+    @pytest.mark.parametrize(
+        "method,args",
+        [("_analyze_transcript", ("every exercise", [])), ("_export_transcript", ())],
+    )
+    def test_no_timings_is_refused_rather_than_invented(self, tmp_path, method, args):
+        raw = tmp_path / "talk.txt"
+        raw.write_text("words", encoding="utf-8")
+
+        result = getattr(Host(), method)(str(raw), *args)
+
+        assert result["status"] == "error"
+        assert "transcribe_media" in result["error"]
+
+    def test_a_cut_off_reply_is_reported_as_overflow(self):
+        from gaia.audio.transcript_analysis import ReplyOverflow
+
+        choice = {"message": {"content": '{"items": ['}, "finish_reason": "length"}
+        with patch.object(Host, "_llm_choice", return_value=choice):
+            with pytest.raises(ReplyOverflow):
+                Host()._analysis_reply("prompt")
+
+    def test_analysis_asks_a_thinking_model_not_to_think(self):
+        """DeepSeek spent 7,274 of 8,192 tokens reasoning over one section."""
+        choice = {"message": {"content": "{}"}, "finish_reason": "stop"}
+        host = Host()
+        host.model_id = "fireworks.deepseek-v4p1-flash"
+
+        with patch.object(Host, "_llm_choice", return_value=choice) as ask:
+            host._analysis_reply("prompt")
+
+        assert ask.call_args.kwargs["chat_template_kwargs"] == {
+            "enable_thinking": False
+        }
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("fireworks.deepseek-v4p1-flash", 4),
+            ("Gemma-4-E4B-it-GGUF", 1),
+            ("Qwen3.6-35B-A3B-GGUF", 1),
+            (None, 1),
+        ],
+    )
+    def test_only_a_cloud_model_reads_sections_at_once(self, model, expected):
+        host = Host()
+        host.model_id = model
+
+        assert host._analysis_parallelism() == expected
+
+    def test_section_replies_ask_for_valid_json(self):
+        choice = {"message": {"content": "{}"}, "finish_reason": "stop"}
+
+        with patch.object(Host, "_llm_choice", return_value=choice) as ask:
+            Host()._analysis_json_reply("prompt")
+
+        assert ask.call_args.kwargs["response_format"] == {"type": "json_object"}
+
+    def test_analysis_sends_no_switch_a_cloud_model_may_reject(self):
+        choice = {"message": {"content": "{}"}, "finish_reason": "stop"}
+        host = Host()
+        host.model_id = "fireworks.glm-5p3-flash"
+
+        with patch.object(Host, "_llm_choice", return_value=choice) as ask:
+            host._analysis_reply("prompt")
+
+        assert "chat_template_kwargs" not in ask.call_args.kwargs
+
+    @pytest.mark.parametrize(
+        "chosen,name,marker",
+        [
+            ("srt", "talk.srt", "00:00:01,000 --> 00:00:02,000"),
+            (".VTT", "talk.vtt", "WEBVTT"),
+            ("txt", "talk.timestamped.txt", "[00:01] Hello."),
+        ],
+    )
+    def test_export_formats(self, tmp_path, chosen, name, marker):
+        raw = self._timed(tmp_path, [{"start": 1.0, "end": 2.0, "text": "Hello."}])
+
+        result = Host()._export_transcript(str(raw), chosen)
+
+        assert result["status"] == "success"
+        exported = Path(result["export_path"])
+        assert exported.name == name
+        assert marker in exported.read_text(encoding="utf-8")
+
+    def test_export_refuses_an_unknown_format(self, tmp_path):
+        raw = self._timed(tmp_path, [{"start": 1.0, "end": 2.0, "text": "Hello."}])
+
+        result = Host()._export_transcript(str(raw), "docx")
+
+        assert result["status"] == "error"
+        assert "srt" in result["error"]
+
+
+class TestStopDuringVoiceSeparation:
+    def test_it_is_a_stop_and_not_a_missing_engine(self):
+        """Regression: Stop was recorded as speaker identification being unavailable."""
+        from gaia.audio import diarize
+        from gaia.tool_cancellation import ToolCancelled
+
+        with (
+            patch.object(diarize, "is_available", return_value=True),
+            patch.object(diarize, "diarize_in_child", side_effect=ToolCancelled()),
+        ):
+            with pytest.raises(ToolCancelled):
+                Host()._diarize_if_possible("a.wav")
+
+    def test_chunks_survive_it_so_a_retry_is_quick(self, tmp_path):
+        from gaia.agents.tools import audio_tools
+        from gaia.tool_cancellation import ToolCancelled
+
+        source = tmp_path / "talk.mp4"
+        source.write_bytes(b"stub")
+
+        with (
+            patch.object(audio_tools, "CHUNK_CHECKPOINT_DIR", tmp_path / "partial"),
+            patch.object(Host, "_diarize_if_possible", side_effect=ToolCancelled()),
+            patch("gaia.audio.media.ensure_ffmpeg"),
+            patch("gaia.audio.media.probe_duration", return_value=120.0),
+            patch("gaia.audio.media.to_wav16k_mono", return_value=Path("a.wav")),
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+        ):
+            client.return_value.model = "m"
+            client.return_value.transcribe.return_value = _transcript()
+            kept = audio_tools._chunk_checkpoint_dir(source, "m", None)
+            kept.mkdir(parents=True)
+            with pytest.raises(ToolCancelled, match="call transcribe_media again"):
+                Host()._transcribe_media(
+                    str(source), output_path=str(tmp_path / "talk.txt")
+                )
+
+        assert kept.is_dir()
+
+
+class TestSpeechWarning:
+    """Whisper writes "Thank you." over silence; that is not a transcript."""
+
+    @pytest.mark.parametrize(
+        "text,seconds",
+        [
+            ("Thank you.", 20.0),
+            ("so", 20.0),
+            (".", 600.0),
+            ("", 90.0),
+            ("Hi. " * 10, 3600.0),
+        ],
+    )
+    def test_almost_no_speech_is_called_out(self, text, seconds):
+        from gaia.agents.tools.audio_tools import _speech_warning
+
+        assert "almost no speech" in _speech_warning(text, seconds)
+
+    @pytest.mark.parametrize(
+        "text,seconds",
+        [("word " * 200, 60.0), ("Yes, go ahead please.", 5.0), ("a" * 300, 300.0)],
+    )
+    def test_real_speech_is_left_alone(self, text, seconds):
+        from gaia.agents.tools.audio_tools import _speech_warning
+
+        assert _speech_warning(text, seconds) is None
+
+
+class TestLargeRecordings:
+    @staticmethod
+    def _transcribed(host, source, output, **kwargs):
+        """Run _transcribe_media with every external stage stubbed."""
+        with (
+            patch("gaia.audio.media.ensure_ffmpeg"),
+            patch("gaia.audio.media.probe_duration", return_value=120.0),
+            patch("gaia.audio.media.to_wav16k_mono", return_value=Path("a.wav")),
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+        ):
+            client.return_value.model = "Whisper-Large-v3-Turbo"
+            client.return_value.transcribe.return_value = _transcript()
+            result = host._transcribe_media(
+                str(source), output_path=str(output), **kwargs
+            )
+        return result, client
+
+    def test_speakers_one_skips_voice_separation(self, tmp_path):
+        from gaia.agents.tools.audio_tools import timings_path_for
+
+        source = tmp_path / "talk.mp4"
+        source.write_bytes(b"stub")
+        out = tmp_path / "talk.txt"
+
+        with patch.object(Host, "_diarize_if_possible") as diarize:
+            result, _ = self._transcribed(Host(), source, out, speakers=1)
+
+        assert result["status"] == "success"
+        diarize.assert_not_called()
+        saved = json.loads(timings_path_for(out).read_text(encoding="utf-8"))
+        assert saved["speakers"] == [
+            {"start": 0.0, "end": 120.0, "speaker": "Speaker 1"}
+        ]
+
+    def test_a_known_speaker_count_reaches_the_diarizer(self, tmp_path):
+        source = tmp_path / "talk.mp4"
+        source.write_bytes(b"stub")
+
+        with patch.object(Host, "_diarize_if_possible", return_value=[]) as diarize:
+            self._transcribed(Host(), source, tmp_path / "talk.txt", speakers=3)
+
+        assert diarize.call_args.args[1] == 3
+
+    def test_a_negative_speaker_count_is_refused(self, tmp_path):
+        source = tmp_path / "talk.mp4"
+        source.write_bytes(b"stub")
+
+        result = Host()._transcribe_media(str(source), speakers=-1)
+
+        assert result["status"] == "error"
+
+    def test_chunks_resume_and_are_removed_with_the_transcript(self, tmp_path):
+        from gaia.agents.tools import audio_tools
+
+        source = tmp_path / "talk.mp4"
+        source.write_bytes(b"stub")
+
+        with (
+            patch.object(audio_tools, "CHUNK_CHECKPOINT_DIR", tmp_path / "partial"),
+            patch.object(Host, "_diarize_if_possible", return_value=[]),
+        ):
+            expected = audio_tools._chunk_checkpoint_dir(
+                source, "Whisper-Large-v3-Turbo", "en"
+            )
+            expected.mkdir(parents=True)
+            _, client = self._transcribed(
+                Host(), source, tmp_path / "talk.txt", language="en"
+            )
+
+        kwargs = client.return_value.transcribe.call_args.kwargs
+        assert kwargs["checkpoint_dir"] == expected
+        assert not expected.exists()
+
+    def test_a_replaced_recording_gets_its_own_checkpoints(self, tmp_path):
+        from gaia.agents.tools.audio_tools import _chunk_checkpoint_dir
+
+        source = tmp_path / "talk.mp4"
+        source.write_bytes(b"one")
+        first = _chunk_checkpoint_dir(source, "m", None)
+        source.write_bytes(b"other")
+
+        assert _chunk_checkpoint_dir(source, "m", None) != first
+
+    def test_two_recordings_with_one_name_do_not_share_a_transcript(self, tmp_path):
+        """talk.mp4 here and talk.mp4 there must not answer for each other."""
+        from gaia.agents.tools import audio_tools
+
+        first = tmp_path / "a" / "talk.mp4"
+        second = tmp_path / "b" / "talk.mp4"
+        for path, body in ((first, b"short"), (second, b"much longer")):
+            path.parent.mkdir()
+            path.write_bytes(body)
+        transcripts = tmp_path / "transcripts"
+
+        with (
+            patch.object(audio_tools, "TRANSCRIPT_DIR", transcripts),
+            patch.object(audio_tools, "CHUNK_CHECKPOINT_DIR", transcripts / ".partial"),
+            patch.object(Host, "_diarize_if_possible", return_value=[]),
+            patch.object(Host, "_transcript_access_error", return_value=None),
+            patch("gaia.audio.media.ensure_ffmpeg"),
+            patch("gaia.audio.media.probe_duration", return_value=1.0),
+            patch("gaia.audio.media.to_wav16k_mono", return_value=Path("a.wav")),
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+        ):
+            client.return_value.model = "m"
+            client.return_value.transcribe.return_value = _transcript()
+            one = Host()._transcribe_media(str(first))
+            two = Host()._transcribe_media(str(second))
+            again = Host()._transcribe_media(str(first))
+
+        assert one["transcript_path"] != two["transcript_path"]
+        assert "reused" not in two
+        assert again["reused"] is True
+        assert again["transcript_path"] == one["transcript_path"]
+
+
 class TestNamingSurvivesReplyOverflow:
     """A long meeting must not lose speaker labels to the reply budget."""
 
@@ -592,7 +1031,7 @@ class TestDegradedSpeakerIdIsVisible:
             patch("gaia.audio.media.to_wav16k_mono", return_value=wav),
             patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
             patch.object(
-                Host, "_diarize_if_possible", lambda self, w: self._fail_diar()
+                Host, "_diarize_if_possible", lambda self, w, n: self._fail_diar()
             ),
         ):
             Host._fail_diar = lambda self: (
@@ -620,7 +1059,7 @@ class TestDegradedSpeakerIdIsVisible:
             patch("gaia.audio.media.probe_duration", return_value=120.0),
             patch("gaia.audio.media.to_wav16k_mono", return_value=wav),
             patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
-            patch.object(Host, "_diarize_if_possible", lambda self, w: []),
+            patch.object(Host, "_diarize_if_possible", lambda self, w, n: []),
         ):
             client.return_value.transcribe.return_value = _transcript()
             result = Host()._transcribe_media(

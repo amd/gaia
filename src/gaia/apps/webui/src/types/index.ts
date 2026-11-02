@@ -489,6 +489,10 @@ export interface Attachment {
     uploaded: boolean;
     serverUrl?: string; // Server URL after upload completes
     isImage: boolean;
+    /** A recording, which GAIA transcribes rather than reads. */
+    isMedia?: boolean;
+    /** Upload progress of a recording, 0 to 100. */
+    progress?: number;
     error?: string;
 }
 
@@ -875,6 +879,11 @@ export interface StreamEvent {
     message?: string;
     /** Model phase on a status event: reading, loading_model, reasoning, tool_call, … */
     phase?: string;
+    /** On a `recording` phase: which stage, and how it stands. */
+    stage?: number;
+    state?: number;
+    percent?: number;
+    eta_seconds?: number;
     step?: number;
     total?: number;
     tool?: string;

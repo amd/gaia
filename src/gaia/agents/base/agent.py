@@ -6300,9 +6300,13 @@ Do NOT wrap conversational replies in JSON.
         # Time spent on a question the body raised (e.g. path access) is the
         # user's, not the tool's: abandoning there strands a live prompt. Time
         # the PC sleeps is nobody's: the awake clock leaves it out.
+        stop = getattr(self, "_cancel_event", None)
         try:
             started = awake_clock.monotonic()
             while worker.is_alive():
+                # The user's Stop reaches a tool that polls for cancellation.
+                if (stop is not None and stop.is_set()) or self._console_cancelled():
+                    cancel.set()
                 remaining = (
                     started + timeout + user_wait.waited() - awake_clock.monotonic()
                 )

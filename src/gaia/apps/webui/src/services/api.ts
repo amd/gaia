@@ -1101,6 +1101,34 @@ export async function uploadFile(file: File): Promise<{
     return data;
 }
 
+/** Upload a recording, reporting progress: it can take minutes, and fetch cannot say. */
+export function uploadMedia(file: File, onProgress: (percent: number) => void, signal?: AbortSignal): ReturnType<typeof uploadFile> {
+    const url = `${API_BASE}/files/upload-media?name=${encodeURIComponent(file.name)}`;
+    log.api.info(`POST ${url}`, { fileName: file.name, size: file.size });
+
+    return new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open('POST', url);
+        for (const [name, value] of Object.entries(UI_HEADER)) request.setRequestHeader(name, value);
+        request.upload.onprogress = (event) => {
+            if (event.lengthComputable) onProgress(Math.floor((event.loaded / event.total) * 100));
+        };
+        request.onerror = () => reject(new ApiError(getFriendlyError(0, 'network error'), 0, 'network error', null));
+        request.onabort = () => reject(new DOMException('Upload cancelled', 'AbortError'));
+        signal?.addEventListener('abort', () => request.abort());
+        request.onload = () => {
+            if (request.status >= 200 && request.status < 300) {
+                resolve(JSON.parse(request.responseText));
+                return;
+            }
+            log.api.error(`POST ${url} - HTTP ${request.status}`, { errorText: request.responseText });
+            const detail = parseErrorDetail(request.responseText);
+            reject(new ApiError(getFriendlyError(request.status, detail), request.status, detail, parseErrorStatus(request.responseText)));
+        };
+        request.send(file);
+    });
+}
+
 // -- File Search & Preview ----------------------------------------------------------
 
 export async function searchFiles(query: string, fileTypes?: string, maxResults?: number): Promise<{

@@ -8,12 +8,14 @@ import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
+import { RecordingProgress } from './RecordingProgress';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { refreshActiveRuns } from '../services/activeRuns';
 import { claimView, dispatchNext, idleByPoll, isBusyError, markActivity, requeueRefused, type QueuedSend, type SendOutcome } from '../services/queueDispatch';
 import { log } from '../utils/logger';
+import { isMediaFile } from '../utils/mediaFiles';
 import { bugReportUrl } from './UnsupportedFeature';
 import { describeStreamError, isStreamInterrupted, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
@@ -989,6 +991,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         setLiveHistoryNotice(historyNotice ?? null);
                         return;
                     }
+                    if (event.phase === 'recording' && event.stage != null) {
+                        useChatStore.getState().setRecordingStage(event.stage, {
+                            state: event.state ?? 0,
+                            percent: event.percent,
+                            etaSeconds: event.eta_seconds,
+                        });
+                        return;
+                    }
                     if (event.phase && msg) useChatStore.getState().setLiveStatus(msg, event.phase);
                     // The client's own wait notice is not a step of the turn.
                     if (event.phase === 'waiting') return;
@@ -1509,7 +1519,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setIsDragOver(false);
         if (e.dataTransfer.files.length === 0) return;
 
-        for (const file of Array.from(e.dataTransfer.files)) {
+        const dropped = Array.from(e.dataTransfer.files);
+        // A recording is transcribed by the agent, not indexed as a document.
+        const recordings = dropped.filter((file) => isMediaFile(file.name));
+        if (recordings.length > 0) attach.addFiles(recordings);
+        const documents = dropped.filter((file) => !isMediaFile(file.name));
+        if (documents.length === 0) return;
+
+        for (const file of documents) {
             log.doc.info(`Dropped on chat view: ${file.name}`);
             try {
                 const doc = await api.uploadDocumentBlob(file);
@@ -1537,7 +1554,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         } catch (err) {
             log.doc.error('Could not refresh the document list after a drop', err);
         }
-    }, [sessionId, updateSessionInList, setDocuments]);
+    }, [sessionId, updateSessionInList, setDocuments, attach]);
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
@@ -1731,6 +1748,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     })}
 
                     {(isStreaming || streamEnding) && liveHistoryNotice && <HistoryNotice text={liveHistoryNotice} />}
+                    {isStreaming && <RecordingProgress />}
                     {(isStreaming || streamEnding) && (
                         <div className={`streaming-bubble ${streamEnding ? 'stream-ending' : 'stream-active'}`}>
                             <MessageBubble

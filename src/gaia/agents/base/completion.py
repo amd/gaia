@@ -34,6 +34,8 @@ READ_TOOLS = frozenset({"read_file", "read_python_file", "read_markdown_file"})
 SIDE_EFFECT_PATHS = {
     "transcribe_media": ("transcript_path",),
     "refine_transcript": ("refined_path", "output_path"),
+    "analyze_transcript": ("analysis_path", "output_path"),
+    "export_transcript": ("export_path", "output_path"),
     "take_screenshot": ("file_path", "output_path", "path"),
     "text_to_speech": ("file_path", "output_path", "audio_path"),
     "generate_image": ("file_path", "output_path", "image_path"),

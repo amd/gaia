@@ -125,8 +125,9 @@ SUMMARY_VIEW_KEYS = (
 MCP_TOOL_FIELDS = ("mcp_server", "mcp_server_label", "mcp_tool")
 
 #: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning
-#: words so far, or characters of a tool call's arguments so far.
-_PHASE_COUNT_FIELDS = ("words", "chars")
+#: words so far, characters of a tool call's arguments so far, or where a
+#: recording stands (see ``AudioToolsMixin._report_stage``).
+_PHASE_COUNT_FIELDS = ("words", "chars", "stage", "state", "percent", "eta_seconds")
 
 #: What a ``model_queue`` status carries under ``queue``: where a turn waiting
 #: for the model stands (see ``broker_client.queue_status_event``).
