@@ -1037,3 +1037,21 @@ decorator writes only to that mapping, including when it is empty. Merge it into
 the owning agent's instance registry after normal registration. This prevents
 concurrently constructed agents from snapshotting another instance's gated tools.
 Existing callers that omit `registry` keep the normal global registration behavior.
+
+## Listing an agent's tools
+
+`agent.describe_tools()` returns what the agent can call, for showing to a
+user rather than to the model:
+
+```python
+for t in agent.describe_tools():
+    print(f"{t['category']:>10}  {t['name']}")
+```
+
+Each entry is `{"name", "description", "category"}`, in registry order.
+`description` is the text the model is given. `category` is the `KNOWN_TOOLS`
+name of the mixin that defines the tool (`rag`, `file_io`, `shell`, ...),
+`mcp` for a connector tool, `skill` for a tool a skill registered
+(`<skill>/<tool>`), or `agent` for one the agent class defines itself. The
+Agent UI's Agent info panel is built from it
+(`GET /api/sessions/{session_id}/capabilities`).

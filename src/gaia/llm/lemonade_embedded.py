@@ -90,10 +90,10 @@ _MACHINE_ALIASES = {
 # install() fail loudly; tests/integration/test_lemonade_embeddable_assets.py
 # checks them against the live release so CI catches the omission first.
 EMBEDDABLE_SHA256: Dict[str, str] = {
-    "lemonade-embeddable-2026.43.3-windows-x64.zip": "665c697182f775e0a4a22b40d012e145591b67adec910bc38db59859982fc5a7",
-    "lemonade-embeddable-2026.43.3-ubuntu-x64.tar.gz": "d9a2fe01d7fd60ed9ec94822fea814a6d0e8aed46b39be8f126de74ba242b023",
-    "lemonade-embeddable-2026.43.3-ubuntu-arm64.tar.gz": "371786bc405d80592dc1249ffbf85e66c9dee7fdb9e8605619e41c68594c6703",
-    "lemonade-embeddable-2026.43.3-macos-arm64.tar.gz": "53540e45a449773eabcd71d472e97639bf5f50e73d8efba3ce458edaf2738584",
+    "lemonade-embeddable-2026.44.1-windows-x64.zip": "7ff6c5d6ab612c33690411a7e53d6d0dd62eb515a073375c35015b0778a5a344",
+    "lemonade-embeddable-2026.44.1-ubuntu-x64.tar.gz": "16f156a7f44a32b20936e76019b24dbccc7b82e60a3acea12e8614da8bca8e90",
+    "lemonade-embeddable-2026.44.1-ubuntu-arm64.tar.gz": "b458a1cfbcfa3f382c5cacc90486c216a5f100f56d5266912eaea141aa9be7ae",
+    "lemonade-embeddable-2026.44.1-macos-arm64.tar.gz": "204e436477c6391f503baf245828251eb0007e91a204e7196fd87887df385017",
 }
 
 # lemond reads these from <config_dir>/config.json.
@@ -1882,7 +1882,15 @@ class EmbeddedLemonade:
         """
         api_key = secrets.token_urlsafe(32)
 
-        env = child_env({"LEMONADE_API_KEY": api_key, **vulkan_workarounds()})
+        from gaia.llm.fireworks_known_models import start_env
+
+        env = child_env(
+            {
+                "LEMONADE_API_KEY": api_key,
+                **vulkan_workarounds(),
+                **start_env(self.config_dir),
+            }
+        )
 
         argv = [
             str(self.daemon_path),

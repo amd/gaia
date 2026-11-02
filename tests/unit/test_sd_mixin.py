@@ -4,12 +4,29 @@
 """Unit tests for SDToolsMixin - Stable Diffusion image generation tools."""
 
 import base64
+import io
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from PIL import Image
 
 from gaia.sd import SDToolsMixin
+
+
+def _png_bytes(colours=((200, 30, 30), (20, 20, 220))) -> bytes:
+    """A real PNG, two-coloured unless given one colour."""
+    img = Image.new("RGB", (8, 8), colours[0])
+    if len(colours) > 1:
+        img.paste(colours[1], (0, 0, 4, 8))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _png_b64(colours=((200, 30, 30), (20, 20, 220))) -> str:
+    """A real PNG, base64-encoded the way Lemonade returns it."""
+    return base64.b64encode(_png_bytes(colours)).decode()
 
 
 @pytest.fixture
@@ -134,7 +151,7 @@ class TestSDToolsMixinGeneration:
     def test_generate_image_success(self, tmp_path, mock_lemonade_client):
         """Test successful image generation."""
         # Mock response with base64 PNG
-        fake_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100).decode()
+        fake_png = _png_b64()
         mock_lemonade_client.generate_image.return_value = {
             "data": [{"b64_json": fake_png}]
         }
@@ -153,7 +170,7 @@ class TestSDToolsMixinGeneration:
 
     def test_generate_image_tracks_history(self, tmp_path, mock_lemonade_client):
         """Test that successful generation is tracked in history."""
-        fake_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100).decode()
+        fake_png = _png_b64()
         mock_lemonade_client.generate_image.return_value = {
             "data": [{"b64_json": fake_png}]
         }
@@ -188,7 +205,7 @@ class TestSDToolsMixinGeneration:
 
     def test_generate_image_with_seed(self, tmp_path, mock_lemonade_client):
         """Test generation with seed parameter."""
-        fake_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100).decode()
+        fake_png = _png_b64()
         mock_lemonade_client.generate_image.return_value = {
             "data": [{"b64_json": fake_png}]
         }
@@ -208,7 +225,7 @@ class TestSDToolsMixinGeneration:
 
     def test_generate_image_returns_absolute_path(self, tmp_path, mock_lemonade_client):
         """Test that generated image path is absolute."""
-        fake_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100).decode()
+        fake_png = _png_b64()
         mock_lemonade_client.generate_image.return_value = {
             "data": [{"b64_json": fake_png}]
         }
@@ -224,7 +241,7 @@ class TestSDToolsMixinGeneration:
 
     def test_load_model_called_before_generation(self, tmp_path, mock_lemonade_client):
         """Test that load_model is called before image generation."""
-        fake_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100).decode()
+        fake_png = _png_b64()
         mock_lemonade_client.generate_image.return_value = {
             "data": [{"b64_json": fake_png}]
         }
@@ -239,6 +256,107 @@ class TestSDToolsMixinGeneration:
         mock_lemonade_client.load_model.assert_called()
         call_args = mock_lemonade_client.load_model.call_args
         assert call_args[0][0] == "SDXL-Turbo"  # Default model
+        assert call_args.kwargs["auto_download"] is True
+
+    def test_success_names_the_saved_file(self, tmp_path, mock_lemonade_client):
+        mock_lemonade_client.generate_image.return_value = {
+            "data": [{"b64_json": _png_b64()}]
+        }
+        mixin = SDToolsMixin()
+        mixin.init_sd(output_dir=str(tmp_path))
+
+        result = mixin._generate_image("a red fox")
+
+        assert result["display_message"] == f"Saved {result['image_path']}"
+        Image.open(result["image_path"]).verify()
+
+
+class TestSDToolsMixinRejectsNonImages:
+    """Success means a real picture is on disk, whatever the server said."""
+
+    @pytest.mark.parametrize(
+        "response, reason",
+        [
+            ({}, "no image data"),
+            ({"data": []}, "no image data"),
+            ({"data": [{"url": "http://x/1.png"}]}, "empty image"),
+            ({"data": [{"b64_json": ""}]}, "empty image"),
+            ({"data": [{"b64_json": "not base64!"}]}, "not valid base64"),
+            (
+                {
+                    "data": [
+                        {
+                            "b64_json": base64.b64encode(
+                                b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+                            ).decode()
+                        }
+                    ]
+                },
+                "not a readable image",
+            ),
+            ({"data": [{"b64_json": _png_b64(((0, 0, 0),))}]}, "single flat colour"),
+            (
+                {"data": [{"b64_json": base64.b64encode(_png_bytes()[:-30]).decode()}]},
+                "not a readable image",
+            ),
+        ],
+        ids=[
+            "no-data",
+            "empty-list",
+            "url-only",
+            "empty",
+            "bad-b64",
+            "corrupt",
+            "black",
+            "truncated",
+        ],
+    )
+    def test_bad_payload_is_an_error_and_writes_nothing(
+        self, tmp_path, mock_lemonade_client, response, reason
+    ):
+        mock_lemonade_client.generate_image.return_value = response
+        mixin = SDToolsMixin()
+        mixin.init_sd(output_dir=str(tmp_path))
+
+        result = mixin._generate_image("a slide about agentic AI")
+
+        assert result["status"] == "error"
+        assert reason in result["error"]
+        assert "SDXL-Turbo" in result["error"]
+        assert list(tmp_path.iterdir()) == []
+        assert mixin.sd_generations == []
+
+    def test_an_oversized_image_is_an_error_not_a_crash(
+        self, tmp_path, mock_lemonade_client, monkeypatch
+    ):
+        monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)
+        mock_lemonade_client.generate_image.return_value = {
+            "data": [{"b64_json": _png_b64()}]
+        }
+        mixin = SDToolsMixin()
+        mixin.init_sd(output_dir=str(tmp_path))
+
+        result = mixin._generate_image("a red fox")
+
+        assert result["status"] == "error"
+        assert "not a readable image" in result["error"]
+        assert list(tmp_path.iterdir()) == []
+
+    def test_file_missing_after_save_is_an_error(self, tmp_path, mock_lemonade_client):
+        mock_lemonade_client.generate_image.return_value = {
+            "data": [{"b64_json": _png_b64()}]
+        }
+        mixin = SDToolsMixin()
+        mixin.init_sd(output_dir=str(tmp_path))
+        ghost = tmp_path / "never_written.png"
+
+        with patch.object(mixin, "_save_image", return_value=ghost):
+            result = mixin._generate_image("a red fox")
+
+        assert result == {
+            "status": "error",
+            "error": f"SDXL-Turbo image was not written to {ghost}",
+        }
 
 
 class TestSDToolsMixinHealthCheck:

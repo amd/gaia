@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
+from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, LemonadeClientError
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
 from gaia.security import PathValidator
@@ -28,6 +28,15 @@ def _missing_deps_msg() -> str:
     from gaia.agents.install_hints import missing_extra_hint
 
     return f"code_index dependencies missing. {missing_extra_hint('rag')}"
+
+
+def _check_dependencies() -> None:
+    """Fail before embedding when the code-index runtime is incomplete."""
+    try:
+        import faiss  # noqa: F401  # pylint: disable=unused-import
+        import numpy  # noqa: F401  # pylint: disable=unused-import
+    except ImportError as exc:
+        raise ImportError(_missing_deps_msg()) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +58,14 @@ _SENSITIVE_PREFIXES = (".env.",)
 
 # Extensions that are always sensitive
 _SENSITIVE_EXTENSIONS = {".pem", ".key", ".pfx", ".p12", ".jks", ".keystore"}
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _is_sensitive_file(filename: str) -> bool:
@@ -148,6 +165,10 @@ class IndexResult:
 _CACHE_VERSION = 2
 
 
+class CodeIndexCacheError(RuntimeError):
+    """The on-disk index and its metadata do not belong together."""
+
+
 # ---------------------------------------------------------------------------
 # CodeIndexSDK
 # ---------------------------------------------------------------------------
@@ -191,6 +212,8 @@ class CodeIndexSDK:
         self._metadata: Optional[Dict[str, Any]] = None
         self._embedder = None
         self._llm_client = None
+        #: Chunks embedded so far by the running index build, of how many.
+        self.progress: Dict[str, int] = {"embedded": 0, "to_embed": 0}
 
     # ------------------------------------------------------------------
     # Public API
@@ -201,9 +224,13 @@ class CodeIndexSDK:
         Index the repository: discover files, parse, embed, build FAISS index,
         persist atomically.
         """
+        self.progress = {"embedded": 0, "to_embed": 0}
         start = time.time()
 
         self.log.info(f"Indexing repository: {self._repo_root}")
+
+        # Fail before the embedding pass, not after it at index construction.
+        _check_dependencies()
 
         # Load existing metadata (for incremental indexing)
         existing_meta = self._load_metadata()
@@ -335,7 +362,13 @@ class CodeIndexSDK:
                     "chunks missed the embedding cache — re-embedding only "
                     "those"
                 )
-            if reused_indices and self._ensure_index_loaded():
+            try:
+                cache_loaded = bool(reused_indices) and self._ensure_index_loaded()
+            except CodeIndexCacheError as e:
+                # Rebuilding is the remedy; the unchanged chunks re-embed below.
+                self.log.warning(f"Not reusing embeddings: {e}")
+                cache_loaded = False
+            if cache_loaded:
                 try:
                     reused_embeddings = np.array(
                         [self._faiss_index.reconstruct(i) for i in reused_indices],
@@ -500,7 +533,7 @@ class CodeIndexSDK:
         self._load_embedder()
         try:
             query_emb = self._encode_texts([query])
-        except (RuntimeError, ConnectionError, TimeoutError) as e:
+        except (RuntimeError, ConnectionError, TimeoutError, LemonadeClientError) as e:
             raise RuntimeError(
                 f"Query encoding failed against "
                 f"{self.config.embedding_model!r}: {e}. "
@@ -554,10 +587,19 @@ class CodeIndexSDK:
         return self._meta_path.exists() and self._index_path.exists()
 
     def get_status(self) -> Dict[str, Any]:
-        """Return index statistics."""
-        meta = self._load_metadata()
-        if not meta:
+        """Return index statistics; "indexed" means loadable and consistent."""
+        try:
+            loaded = self._ensure_index_loaded()
+        except RuntimeError as e:
+            return {
+                "indexed": False,
+                "repo_path": str(self._repo_root),
+                "error": str(e),
+                "cache_path": str(self._cache_dir),
+            }
+        if not loaded:
             return {"indexed": False, "repo_path": str(self._repo_root)}
+        meta = self._metadata
 
         chunks = meta.get("chunks", [])
         code_count = sum(1 for c in chunks if c.get("chunk_type") == "code")
@@ -844,7 +886,7 @@ class CodeIndexSDK:
                     self.config.embedding_model,
                     llamacpp_args="--ubatch-size 2048 --split-mode none",
                 )
-        except (ConnectionError, TimeoutError, RuntimeError) as e:
+        except (ConnectionError, TimeoutError, RuntimeError, LemonadeClientError) as e:
             # Re-raise with an actionable hint. Swallowing this caused
             # opaque downstream encode failures — surface the root cause
             # so the caller knows whether Lemonade is down vs. the model
@@ -957,9 +999,11 @@ class CodeIndexSDK:
 
         valid_chunks = []
         valid_embeddings = []
+        self.progress = {"embedded": 0, "to_embed": len(texts)}
 
         for batch_start in range(0, len(texts), BATCH_SIZE):
             raise_if_cancelled()
+            self.progress["embedded"] = batch_start
             batch_texts = texts[batch_start : batch_start + BATCH_SIZE]
             batch_chunks = chunks[batch_start : batch_start + BATCH_SIZE]
             safe_texts = [t[:MAX_EMBED_CHARS] for t in batch_texts]
@@ -1003,6 +1047,7 @@ class CodeIndexSDK:
                         f"Skipping chunk with no embedding: {getattr(chunk, 'file_path', '?')}"
                     )
 
+        self.progress["embedded"] = len(texts)
         if not valid_embeddings:
             return np.array([], dtype=np.float32), []
 
@@ -1035,15 +1080,16 @@ class CodeIndexSDK:
 
         try:
             faiss.write_index(faiss_index, str(tmp_index))
+            meta["index_sha256"] = _file_sha256(tmp_index)
             tmp_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-            # Rename index first — if crash happens between renames,
-            # _load_metadata will detect stale metadata via ntotal check.
+            # Metadata first: a crash between the renames leaves new metadata
+            # whose index_sha256 the old index fails, never an unchecked pair.
             # Path.replace (not .rename) — on Windows, rename() raises
             # FileExistsError when the destination already exists, so every
             # re-index after the first would crash here. replace() atomically
             # overwrites on both Windows and POSIX.
-            tmp_index.replace(self._index_path)
             tmp_meta.replace(self._meta_path)
+            tmp_index.replace(self._index_path)
             self.log.debug(f"Index saved to {self._cache_dir}")
         except Exception as e:
             self.log.error(f"Failed to save index: {e}")
@@ -1075,7 +1121,11 @@ class CodeIndexSDK:
             return None
 
     def _ensure_index_loaded(self) -> bool:
-        """Load FAISS index into memory if not already loaded."""
+        """Load the index into memory; False when none exists.
+
+        Raises CodeIndexCacheError when the index and metadata on disk do not
+        match, so a corrupt cache is never reported as "no results".
+        """
         if self._faiss_index is not None and self._metadata is not None:
             return True
 
@@ -1089,7 +1139,9 @@ class CodeIndexSDK:
         except ImportError as e:
             raise ImportError(_missing_deps_msg()) from e
 
+        stored_sha = meta.get("index_sha256")
         try:
+            actual_sha = _file_sha256(self._index_path) if stored_sha else None
             index = faiss.read_index(str(self._index_path))
         except (RuntimeError, OSError) as e:
             # FAISS raises RuntimeError on a corrupt/incompatible binary,
@@ -1100,16 +1152,28 @@ class CodeIndexSDK:
                 "The cache may be corrupt; run `clear_index()` and re-index."
             ) from e
 
+        if stored_sha and actual_sha != stored_sha:
+            raise CodeIndexCacheError(
+                self._cache_error("the index file does not match its metadata")
+            )
         expected = len(meta.get("chunks", []))
         if index.ntotal != expected:
-            self.log.warning(
-                f"Index/metadata mismatch: FAISS has {index.ntotal} vectors "
-                f"but metadata has {expected} chunks — cache corrupt, ignoring"
+            raise CodeIndexCacheError(
+                self._cache_error(
+                    f"the index holds {index.ntotal} vectors but the metadata "
+                    f"lists {expected} chunks"
+                )
             )
-            return False
         self._faiss_index = index
         self._metadata = meta
         return True
+
+    def _cache_error(self, detail: str) -> str:
+        return (
+            f"Code index cache at {self._cache_dir} is inconsistent: {detail}. "
+            "Re-index the repository (the index_codebase tool, or "
+            "CodeIndexSDK.index_repository()) to rebuild it."
+        )
 
     # ------------------------------------------------------------------
     # Serialization helpers

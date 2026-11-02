@@ -264,11 +264,13 @@ are no implicit grants — a skill declares every domain it touches.
 | `database` | `read`, `write`, `none` | Local-capability domain (new). | **Refused at load** |
 | `desktop` | `control`, `none` | Local-capability domain (new). | **Refused at load** |
 | `env` | `read`, `none` | Environment beyond declared `env_vars`. | **Refused at load** |
+| `program` | `run`, `none` | One named program the skill's own code starts: `program:run:soffice`. | **Bridged** — through `gaia.skills.context.run_program` only; no shell, scrubbed environment |
+| `scratch` | `write`, `none` | A fresh temporary folder per tool call. Takes no scope. | **Bridged** — through `gaia.skills.context.temp_dir` and friends; deleted when the call returns |
 
 Scopes narrow a grant: `filesystem:read:~/.gaia/data/**`,
 `network:read:*.brave.com`, `shell:execute:gh`. An unscoped grant covers the
-whole domain — except `mcp:connect` and `shell:execute`, where a scope is
-mandatory (below). Grammar violations — an empty entry, a missing level, an
+whole domain — except `mcp:connect`, `shell:execute` and `program:run`, where a
+scope is mandatory (below). Grammar violations — an empty entry, a missing level, an
 unknown domain, or a level the domain does not define — fail loudly at parse
 time.
 
@@ -441,10 +443,10 @@ version bump.
 `min(claimed tier, tier the signature earned)` and enforces the ceiling against
 that, so an unsigned skill can never install as `verified` no matter what its front
 matter says. A key's trust-store role decides what it attests: `publisher` →
-`community`, `amd` → `verified`. The trust store ships empty and **no AMD key is
-bundled**, so out of the box every skill installs `experimental` — the honest floor
-rather than a placeholder that makes the top tier look anchored. See
-[`gaia skill install`](/reference/cli#skills).
+`community`, `amd` → `verified`. GAIA trusts one key out of the box: the AMD key
+the release signs `hub/skills/*` with, so first-party skills install from the hub
+with no setup. Every other key installs `experimental` until an operator trusts it.
+See [`gaia skill install`](/reference/cli#skills).
 
 The dangerous set the spec names — `shell:execute`, `desktop:control`,
 `database:write` — is retained as authoritative. `shell:execute:<binary>` is

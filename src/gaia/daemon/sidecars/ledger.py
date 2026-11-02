@@ -3,7 +3,9 @@
 """``sidecars.json`` — the daemon's spawn ledger, for crash-reap (#2142 D-4a).
 
 Every sidecar spawn is recorded (``agent_id``, ``pid``, ``port``, ``mode``,
-``argv``, ``started_at`` — NEVER the token); a clean stop removes the entry.
+``argv``, ``started_at`` — NEVER the token), one entry per pid; a clean stop
+removes that pid's entry. An earlier spawn of the same agent that survived its
+shutdown keeps its own entry, so the next daemon start can still reap it.
 After a hard daemon death (SIGKILL / OOM / power loss) the next daemon start
 runs :func:`reap_stale`: a live recorded pid is killed only on a cmdline
 identity match; a dead leader whose port still serves our service gets a
@@ -72,7 +74,11 @@ def record_spawn(
     argv: "list[str]",
     started_at: float,
 ) -> None:
-    """Record (or replace) the spawn entry for *agent_id*. Never records tokens."""
+    """Record the spawn of *pid* for *agent_id*. Never records tokens.
+
+    Keyed by pid: a respawn of the same agent appends rather than replacing,
+    so a predecessor that outlived its shutdown stays reapable.
+    """
     entry = {
         "agent_id": agent_id,
         "pid": pid,
@@ -82,15 +88,23 @@ def record_spawn(
         "started_at": started_at,
     }
     with _LEDGER_LOCK:
-        entries = [e for e in read_entries() if e.get("agent_id") != agent_id]
+        entries = [e for e in read_entries() if e.get("pid") != pid]
         entries.append(entry)
         _write_entries(entries)
 
 
-def remove_entry(agent_id: str) -> None:
-    """Drop *agent_id*'s entry after a clean stop."""
+def remove_entry(agent_id: str, pid: int) -> None:
+    """Drop *agent_id*'s *pid* entry after that process is confirmed gone.
+
+    Only that pid's entry goes: an earlier spawn of the same agent that is
+    still alive keeps its entry for the next crash-reap.
+    """
     with _LEDGER_LOCK:
-        entries = [e for e in read_entries() if e.get("agent_id") != agent_id]
+        entries = [
+            e
+            for e in read_entries()
+            if not (e.get("agent_id") == agent_id and e.get("pid") == pid)
+        ]
         _write_entries(entries)
 
 
@@ -142,9 +156,17 @@ def _tree_kill(pid: int) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
+                timeout=30,
             )
         else:
             os.killpg(os.getpgid(pid), 9)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"Stopping the stale sidecar pid {pid} hung: taskkill did not return "
+            f"within {e.timeout:g}s, so it may still be running. Stop it in Task "
+            f"Manager (or `taskkill /PID {pid} /T /F` from an elevated prompt), "
+            "then start the daemon again."
+        ) from e
     except (ProcessLookupError, OSError):
         pass
 
@@ -185,6 +207,10 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
       and log the outcome. Windows: no group survives the parent — log the
       survivor loudly as a known gap, never guess-kill.
 
+    An entry whose agent has no spec any more (uninstalled since the spawn)
+    still takes the cmdline-gated kill for a live pid; with no service id to
+    check the port against, a dead one is only logged.
+
     The ledger is truncated to ``[]`` afterwards regardless — no silent
     adoption.
     """
@@ -197,8 +223,29 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
             port = entry.get("port")
             argv = entry.get("argv") or []
             spec = specs.get(agent_id)
-            if spec is None or pid is None or port is None:
+            if pid is None or port is None:
                 logger.warning("sidecar ledger: skipping unreapable entry %r", entry)
+                continue
+            if spec is None:
+                if _pid_alive(pid) and _cmdline_matches(_pid_cmdline(pid), argv, port):
+                    logger.info(
+                        "sidecar ledger: reaping stale sidecar of unregistered "
+                        "agent %s pid=%s port=%s",
+                        agent_id,
+                        pid,
+                        port,
+                    )
+                    _tree_kill(pid)
+                    killed.append(pid)
+                else:
+                    logger.warning(
+                        "sidecar ledger: agent %s is no longer registered and "
+                        "pid=%s is gone or not ours; if port %s still answers, "
+                        "stop that process manually",
+                        agent_id,
+                        pid,
+                        port,
+                    )
                 continue
             if _pid_alive(pid):
                 if _cmdline_matches(_pid_cmdline(pid), argv, port):

@@ -34,7 +34,7 @@ from __future__ import annotations
 import multiprocessing
 import sys
 
-from gaia_agent_chat.python_runner import dispatch as python_dispatch
+from gaia_agent.python_runner import dispatch as python_dispatch
 
 if __name__ == "__main__":
     # A script's multiprocessing workers re-launch this binary too.
@@ -43,6 +43,9 @@ if __name__ == "__main__":
     if _python_exit is not None:
         sys.exit(_python_exit)
 
+from gaia.logger import configure  # noqa: E402
+
+configure()
 from gaia_agent.server import (  # noqa: E402,F401  (re-exported for the freeze/daemon)
     DEFAULT_HOST,
     DEFAULT_PORT,

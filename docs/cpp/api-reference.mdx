@@ -520,7 +520,7 @@ public:
 
 It reads the same file and the same shape as the Python runtime, so a server configured
 once is reachable from both. Ids are whatever the file uses; `gaia connectors` keys
-entries by their catalog id (`mcp-github`, `mcp-tavily`, `mcp-memory`, `mcp-git`):
+entries by their catalog id (for example `mcp-github` or `mcp-memory`):
 
 ```json
 {
@@ -553,7 +553,7 @@ silently losing its MCP tools is worse than one that refuses to start.
 <Warning>
 **Servers with secrets are Python-only today.** `gaia connectors configure <id>` stores
 secret env values in the OS keyring and writes a `$keyring` reference into the config.
-The C++ runtime has no keychain support, so those entries (`mcp-github`, `mcp-tavily`)
+The C++ runtime has no keychain support, so those entries (such as `mcp-github`)
 throw rather than launching the server with the reference string as the credential.
 Servers whose env values are literal — or empty — work from both runtimes.
 </Warning>

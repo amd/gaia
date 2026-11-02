@@ -94,7 +94,7 @@
 }
 .setting-row-path > :last-child {
     min-width: 0;
-    text-align: right;
+    text-align: end;
     overflow-wrap: anywhere;
 }
 .setting-path {
@@ -425,7 +425,7 @@
     position: absolute;
     width: 13px;
     height: 13px;
-    left: 2px;
+    inset-inline-start: 2px;
     top: 2px;
     background: var(--switch-knob);
     border-radius: 50%;
@@ -439,6 +439,9 @@
 
 .toggle-switch input:checked + .toggle-track::before {
     transform: translateX(13px);
+}
+.toggle-switch input:checked + .toggle-track:dir(rtl)::before {
+    transform: translateX(-13px);
 }
 
 .toggle-switch input:focus-visible + .toggle-track {

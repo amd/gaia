@@ -20,6 +20,7 @@ except ImportError:
 
 from gaia.env import load_env
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
+from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 
 load_env()
@@ -101,20 +102,18 @@ class ClaudeClient:
         if not self.api_key:
             error_msg = (
                 "ANTHROPIC_API_KEY not found in environment.\n\n"
-                "Two ways to set this up:\n"
-                "  1. SUBSCRIPTION (recommended if you have Claude Code Max):\n"
-                "     Run `claude setup-token` in a terminal, follow the\n"
-                "     browser prompt, then export the printed token:\n"
-                "       export ANTHROPIC_API_KEY=<token>\n"
-                "  2. API KEY (alternative — billed to your Anthropic console):\n"
-                "       export ANTHROPIC_API_KEY=sk-ant-...\n"
-                "Either path can also be added to a `.env` file in the\n"
-                "repo root for persistence.\n"
+                "ClaudeClient calls the Messages API and needs a console API key:\n"
+                "  export ANTHROPIC_API_KEY=sk-ant-...\n"
+                "To use a Claude Code subscription instead, build the client with\n"
+                "gaia.eval.judge_client.make_judge_client(), which drives the\n"
+                "logged-in `claude` CLI (or CLAUDE_CODE_OAUTH_TOKEN). A subscription\n"
+                "token is not an API key; do not export it as ANTHROPIC_API_KEY.\n"
             )
             self.log.error(error_msg)
             raise ValueError(error_msg)
         # Initialize Anthropic client with retry support
         # The SDK handles exponential backoff automatically
+        assert_provider_permitted("Anthropic Claude")
         self.client = anthropic.Anthropic(
             api_key=self.api_key,
             max_retries=max_retries,
@@ -174,6 +173,7 @@ class ClaudeClient:
         if self.log.isEnabledFor(logging.DEBUG):
             self.log.debug(f"Prompt token count: {self.count_tokens(prompt)}")
         try:
+            assert_provider_permitted("Anthropic Claude")
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -197,6 +197,7 @@ class ClaudeClient:
         """
         self.log.info("Getting completion with usage tracking from Claude")
         try:
+            assert_provider_permitted("Anthropic Claude")
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -238,6 +239,7 @@ class ClaudeClient:
             raise
 
     def count_tokens(self, prompt):
+        assert_provider_permitted("Anthropic Claude")
         return self.client.messages.count_tokens(
             model=self.model, messages=[{"role": "user", "content": prompt}]
         )
@@ -300,6 +302,7 @@ class ClaudeClient:
                 text_content = self._convert_html_to_text(
                     file_path, save_text, output_dir
                 )
+                assert_provider_permitted("Anthropic Claude")
                 message = self.client.messages.create(
                     model=self.model,
                     max_tokens=self.max_tokens,
@@ -332,6 +335,7 @@ class ClaudeClient:
                 self.log.debug(f"File encoded, size: {len(file_content)} bytes")
 
             self.log.info("Sending file for analysis")
+            assert_provider_permitted("Anthropic Claude")
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -398,6 +402,7 @@ class ClaudeClient:
                     self.log.debug(
                         f"Read text file, length: {len(text_content)} characters"
                     )
+                assert_provider_permitted("Anthropic Claude")
                 message = self.client.messages.create(
                     model=self.model,
                     max_tokens=self.max_tokens,
@@ -446,6 +451,7 @@ class ClaudeClient:
                 self.log.debug(f"File encoded, size: {len(file_content)} bytes")
 
             self.log.info("Sending file for analysis")
+            assert_provider_permitted("Anthropic Claude")
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -554,6 +560,7 @@ class ClaudeClient:
             if prompt:
                 message_content.append({"type": "text", "text": prompt})
 
+            assert_provider_permitted("Anthropic Claude")
             token_count = self.client.messages.count_tokens(
                 model=self.model,
                 messages=[{"role": "user", "content": message_content}],

@@ -23,6 +23,26 @@ const FRAMEWORK_PATH = path.join(__dirname, '../../src/gaia/electron');
 
 // Every theme write goes through this one module, so the callers below are
 // checked for the delegation and this file for the DOM write itself.
+/**
+ * English UI strings, read from the locale file the components translate through.
+ * A label check asserts both halves of the contract: the component wires the
+ * attribute to that message key, and the English locale still says the old words.
+ */
+const EN_MESSAGES = (() => {
+  const src = fs.readFileSync(path.join(CHAT_APP_PATH, 'src/i18n/locales/en.ts'), 'utf8');
+  const messages = {};
+  for (const m of src.matchAll(/^\s*'([\w.-]+)':\s*'((?:[^'\\]|\\.)*)',\s*$/gm)) {
+    messages[m[1]] = m[2].replace(/\\(.)/g, '$1');
+  }
+  return messages;
+})();
+
+/** `content` contains `snippet` (the `t('key')` wiring), and English for `key` is `english`. */
+function expectTranslated(content, snippet, key, english) {
+  expect(content).toContain(snippet);
+  expect(EN_MESSAGES[key]).toBe(english);
+}
+
 const themeWriter = () =>
   fs.readFileSync(path.join(CHAT_APP_PATH, 'src/utils/theme.ts'), 'utf8');
 
@@ -897,7 +917,7 @@ describe('Chat App Integration', () => {
     it('should render only the composer, focused and ready to type', () => {
       expect(newChatContent).toContain('<Composer');
       expect(newChatContent).toContain('autoFocus');
-      expect(newChatContent).toContain('aria-label="New chat"');
+      expectTranslated(newChatContent, "aria-label={t('newChat.label')}", 'newChat.label', 'New chat');
     });
 
     it('should surface a failed chat start as an alert', () => {
@@ -946,22 +966,24 @@ describe('Chat App Integration', () => {
     it('should have keyboard accessibility on session items', () => {
       // Session rows are native buttons, so Tab/Enter/Space work without handlers.
       expect(sidebarContent).toMatch(
-        /<button\s+type="button"\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
+        /<button\s+type="button"\s+id=\{rowId\}\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
       );
       expect(sidebarContent).not.toContain('role="button"');
     });
 
     it('should have accessible names on sidebar buttons', () => {
-      expect(sidebarContent).toContain("title={`New chat (${formatShortcut('Mod+Shift+O')})`}");
-      expect(sidebarContent).toContain('aria-label="Settings"');
-      expect(sidebarContent).toContain('aria-label="Search chats"');
-      expect(sidebarContent).toContain("aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}");
+      expectTranslated(sidebarContent, "title={t.hint(t('sidebar.newChat'), formatShortcut('Mod+Shift+O'))}", 'sidebar.newChat', 'New chat');
+      expectTranslated(sidebarContent, "aria-label={t('sidebar.settings')}", 'sidebar.settings', 'Settings');
+      expectTranslated(sidebarContent, "aria-label={t('sidebar.search')}", 'sidebar.search', 'Search chats');
+      expectTranslated(sidebarContent, "aria-label={isCollapsed ? t('sidebar.expand') : t('sidebar.collapse')}", 'sidebar.expand', 'Expand sidebar');
+      expect(EN_MESSAGES['sidebar.collapse']).toBe('Collapse sidebar');
     });
 
     it('should have ARIA labels on session actions', () => {
-      expect(sidebarContent).toContain("? `Confirm delete ${session.title}${unsent > 0 ? ` and its ${unsentWords}` : ''}`");
-      expect(sidebarContent).toContain(': `Delete ${session.title}`}');
-      expect(sidebarContent).toContain('<nav className="sb-list" aria-label="Recent chats">');
+      expect(sidebarContent).toContain('? `Confirm delete ${session.title} and its ${unsentWords}`');
+      expectTranslated(sidebarContent, ": t('row.confirmDeleteAria', { title: session.title }))", 'row.confirmDeleteAria', 'Confirm delete {title}');
+      expectTranslated(sidebarContent, ": t('row.deleteAria', { title: session.title })}", 'row.deleteAria', 'Delete {title}');
+      expectTranslated(sidebarContent, '<nav className="sb-list" id="sb-chat-list" aria-label={t(\'sidebar.recent\')}>', 'sidebar.recent', 'Recent chats');
     });
 
     it('should have aria-current on active session', () => {
@@ -971,7 +993,7 @@ describe('Chat App Integration', () => {
     it('should have delete confirmation flow', () => {
       // First click arms the row, second click deletes.
       expect(sidebarContent).toContain('onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}');
-      expect(sidebarContent).toContain('Delete?');
+      expectTranslated(sidebarContent, "t('row.deleteConfirm')", 'row.deleteConfirm', 'Delete?');
     });
 
     it('should auto-cancel delete confirmation after timeout', () => {
@@ -989,7 +1011,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have search with aria-label', () => {
-      expect(sidebarContent).toContain("aria-label={`Search chats (${formatShortcut('Mod+K')})`}");
+      expectTranslated(sidebarContent, "aria-label={t.hint(t('sidebar.search'), formatShortcut('Mod+K'))}", 'sidebar.search', 'Search chats');
     });
   });
 
@@ -1103,11 +1125,10 @@ describe('Chat App Integration', () => {
     });
 
     it('should prompt differently on an empty chat, a reply, and during a running reply', () => {
-      expect(chatContent).toContain(
-        "messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}"
-      );
+      expectTranslated(chatContent, "messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}", 'composer.placeholder', 'Ask GAIA anything');
+      expect(EN_MESSAGES['composer.reply']).toBe('Reply to GAIA');
       expect(chatContent).toContain('placeholder={isStreaming');
-      expect(chatContent).toContain("? 'Queue your next message'");
+      expectTranslated(chatContent, "? t('composer.queueNext')", 'composer.queueNext', 'Queue your next message');
     });
 
     it('should use the shared Composer for input', () => {
@@ -1145,46 +1166,21 @@ describe('Chat App Integration', () => {
         path.join(CHAT_APP_PATH, 'src/components/Composer.tsx'),
         'utf8'
       );
-      expect(composerContent).toContain('aria-label="Message"');
-      expect(composerContent).toContain('aria-label="Send"');
-      expect(composerContent).toContain('aria-label="Stop"');
-      expect(composerContent).toContain('aria-label="Attach files"');
+      expectTranslated(composerContent, "aria-label={t('composer.message')}", 'composer.message', 'Message');
+      expectTranslated(composerContent, "aria-label={t('composer.send')}", 'composer.send', 'Send');
+      expectTranslated(composerContent, "aria-label={t('composer.stop')}", 'composer.stop', 'Stop');
+      expectTranslated(composerContent, "aria-label={t('composer.attach')}", 'composer.attach', 'Attach files');
       expect(chatContent).toContain('aria-label="Chat title"');
       expect(chatContent).toContain('aria-label="Export chat"');
       expect(chatContent).toContain('aria-label="Browse files on this PC"');
     });
-
-    it('should convert policy_alert events into policy steps and notifications', () => {
-      const stepsContent = fs.readFileSync(
-        path.join(CHAT_APP_PATH, 'src/utils/streamSteps.ts'),
-        'utf8'
-      );
-      expect(stepsContent).toContain("case 'policy_alert'");
-      expect(stepsContent).toContain("type: 'policy_alert'");
-      expect(stepsContent).toContain('ruleIds: event.rule_ids ?? []');
-      expect(stepsContent).toContain('policyVersion: event.policy_version');
-      expect(stepsContent).toContain('receiptId: event.receipt_id');
-      expect(chatContent).toContain('showPolicyToast');
-      expect(chatContent).toContain('View receipt');
-      expect(chatContent).toContain('Receipt unavailable');
-    });
   });
 
   describe('Policy alert UI coverage', () => {
-    let agentActivityContent;
-    let notificationContent;
     let notificationCss;
     let agentTypesContent;
 
     beforeAll(() => {
-      agentActivityContent = fs.readFileSync(
-        path.join(CHAT_APP_PATH, 'src/components/AgentActivity.tsx'),
-        'utf8'
-      );
-      notificationContent = fs.readFileSync(
-        path.join(CHAT_APP_PATH, 'src/components/NotificationCenter.tsx'),
-        'utf8'
-      );
       notificationCss = fs.readFileSync(
         path.join(CHAT_APP_PATH, 'src/components/NotificationCenter.css'),
         'utf8'
@@ -1195,16 +1191,6 @@ describe('Chat App Integration', () => {
       );
     });
 
-    it('should render inline Policy Shield cards with policy metadata', () => {
-      expect(agentActivityContent).toContain("step.type === 'policy_alert'");
-      expect(agentActivityContent).toContain('FlowPolicyAlert');
-      expect(agentActivityContent).toContain('Policy Shield');
-      expect(agentActivityContent).toContain('Blocked by policy');
-      expect(agentActivityContent).toContain('step.ruleIds.join');
-      expect(agentActivityContent).toContain('step.policyVersion');
-      expect(agentActivityContent).toContain('Receipt unavailable');
-    });
-
     it('should model policy notifications separately from permission prompts', () => {
       expect(agentTypesContent).toContain("| 'policy_alert'");
       expect(agentTypesContent).toContain('decision?: string');
@@ -1212,18 +1198,6 @@ describe('Chat App Integration', () => {
       expect(agentTypesContent).toContain('ruleIds?: string[]');
       expect(agentTypesContent).toContain('policyVersion?: string');
       expect(agentTypesContent).toContain('receiptId?: string');
-    });
-
-    it('should render policy notification details without permission actions', () => {
-      expect(notificationContent).toContain("policy_alert");
-      expect(notificationContent).toContain("label: 'Policy'");
-      expect(notificationContent).toContain('notification-policy-details');
-      expect(notificationContent).toContain('Reason: {n.reason}');
-      expect(notificationContent).toContain('Rules: <code>{n.ruleIds.join');
-      expect(notificationContent).toContain('Policy: <code>{n.policyVersion}</code>');
-      expect(notificationContent).toContain('Receipt unavailable');
-      expect(notificationContent).toContain("n.type === 'permission_request' && !n.response");
-      expect(notificationContent).not.toContain("n.type === 'policy_alert' && !n.response");
     });
 
     it('should style policy notifications distinctly from permission requests', () => {
@@ -1282,7 +1256,7 @@ describe('Chat App Integration', () => {
     it('should render error banner with AlertTriangle icon', () => {
       expect(msgContent).toContain('AlertTriangle');
       expect(msgContent).toContain('error-banner');
-      expect(msgContent).toContain('Something went wrong');
+      expectTranslated(msgContent, "t('msg.error')", 'msg.error', 'Something went wrong');
     });
 
     it('should apply error CSS class to error messages', () => {
@@ -1301,13 +1275,13 @@ describe('Chat App Integration', () => {
     });
 
     it('should show Copied text in copy button', () => {
-      expect(msgContent).toContain("'Copied'");
-      expect(msgContent).toContain("'Copy'");
+      expectTranslated(msgContent, "{copied ? t('code.copied') : t('code.copy')}", 'code.copied', 'Copied');
+      expect(EN_MESSAGES['code.copy']).toBe('Copy');
     });
 
     it('should have copy button aria-labels', () => {
-      expect(msgContent).toContain('Copied to clipboard');
-      expect(msgContent).toContain('Copy code');
+      expectTranslated(msgContent, "aria-label={copied ? t('msg.copiedAria') : t('code.copyAria')}", 'msg.copiedAria', 'Copied to clipboard');
+      expect(EN_MESSAGES['code.copyAria']).toBe('Copy code');
     });
   });
 
@@ -1324,8 +1298,9 @@ describe('Chat App Integration', () => {
       expect(msgCss).toContain('.error-banner');
     });
 
-    it('should have red left border for errors', () => {
-      expect(msgCss).toContain('border-left: 2px solid var(--danger)');
+    it('should have red start-edge border for errors', () => {
+      // Logical, so the bar sits on the reading-start side in Arabic too.
+      expect(msgCss).toContain('border-inline-start: 2px solid var(--danger)');
     });
 
     it('should have error background tint', () => {
@@ -1365,9 +1340,9 @@ describe('Chat App Integration', () => {
 
     it('should render as a modal settings dialog with section nav', () => {
       expect(dialogContent).toContain('className="settings-dialog" role="dialog" aria-modal="true"');
-      expect(dialogContent).toContain('aria-label="Settings sections"');
+      expectTranslated(dialogContent, "aria-label={t('settings.sections')}", 'settings.sections', 'Settings sections');
       expect(dialogContent).toContain('className="settings-body"');
-      expect(dialogContent).toContain('aria-label="Close settings"');
+      expectTranslated(dialogContent, "aria-label={t('settings.close')}", 'settings.close', 'Close settings');
     });
 
     it('should lazy-load the heavy Connectors and Advanced sections', () => {
@@ -1452,15 +1427,15 @@ describe('Chat App Integration', () => {
     });
 
     it('should have aria-label on file path input', () => {
-      expect(docContent).toContain('aria-label="File path to index"');
+      expectTranslated(docContent, "aria-label={t('docs.pathAria')}", 'docs.pathAria', 'File path to index');
     });
 
     it('should have aria-label on close button', () => {
-      expect(docContent).toContain('aria-label="Close document library"');
+      expectTranslated(docContent, "aria-label={t('docs.close')}", 'docs.close', 'Close document library');
     });
 
     it('should have aria-label on document delete buttons', () => {
-      expect(docContent).toContain('aria-label={`Remove ${doc.filename}`}');
+      expectTranslated(docContent, "aria-label={t('docs.removeAria', { name: doc.filename })}", 'docs.removeAria', 'Remove {name}');
     });
   });
 

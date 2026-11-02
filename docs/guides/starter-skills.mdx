@@ -58,7 +58,7 @@ the SDK call below and simply reading the procedure yourself.
 Any agent built on GAIA's base `Agent` can load a skill by name:
 
 ```python
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 agent = ChatAgent(ChatAgentConfig())
 agent.load_skill("research-report")     # body joins the system prompt
@@ -217,9 +217,9 @@ function, declared in `metadata.gaia.tools` and registered as
 ### image-gen
 
 Turns "draw me a red bicycle" into a prompt worth generating, runs it through
-local Stable Diffusion, and iterates on the previous image instead of starting
-over. Written around the fact that generation is slow enough that you only get
-a couple of attempts.
+a downloaded Lemonade image model (Stable Diffusion or TheNoise), and iterates
+on the previous image instead of starting over. Written around the fact that
+generation is slow enough that you only get a couple of attempts.
 
 - **Demonstrates** — a local non-text model in a skill, and iterating from
   session history rather than regenerating from scratch.
@@ -235,6 +235,7 @@ This is the part that matters. Copying a skill and editing it is the whole
 workflow:
 
 ```bash
+mkdir -p ~/my-skills
 cp -r hub/skills/source-watch ~/my-skills/gpu-restock-watch
 ```
 

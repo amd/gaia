@@ -16,8 +16,9 @@ from reportlab.platypus import (
     Spacer,
 )
 
-from gaia.eval.claude import ClaudeClient, first_text_block
+from gaia.eval.claude import first_text_block
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+from gaia.eval.judge_client import make_judge_client
 from gaia.logger import get_logger
 
 
@@ -30,14 +31,10 @@ class PDFDocumentGenerator:
         # Initialize Claude client for dynamic content generation
         if claude_model is None:
             claude_model = DEFAULT_CLAUDE_MODEL
-        try:
-            self.claude_client = ClaudeClient(model=claude_model, max_tokens=max_tokens)
-            self.log.info(f"Initialized Claude client with model: {claude_model}")
-        except Exception as e:
-            self.log.error(f"Failed to initialize Claude client: {e}")
-            raise ValueError(
-                f"Could not initialize Claude client. Please ensure ANTHROPIC_API_KEY is set. Error: {e}"
-            )
+        self.claude_client = make_judge_client(
+            model=claude_model, max_tokens=max_tokens
+        )
+        self.log.info(f"Initialized Claude client with model: {claude_model}")
 
         # Document templates with different use cases
         self.document_templates = {
@@ -552,6 +549,9 @@ Generate only the additional content (without repeating the existing content).""
 
 def main():
     """Command line interface for PDF document generation."""
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(
         description="Generate example PDF documents using Claude AI for testing PDF processing and summarization",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -624,7 +624,6 @@ Examples:
         generator = PDFDocumentGenerator(claude_model=args.claude_model)
     except Exception as e:
         print(f"❌ Error initializing PDF document generator: {e}")
-        print("Make sure ANTHROPIC_API_KEY is set in your environment.")
         return 1
 
     try:

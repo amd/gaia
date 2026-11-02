@@ -53,8 +53,8 @@ def test_listed_write_sites_stay_out_of_real_home(tmp_path, monkeypatch):
     from gaia.security import PathValidator
     from gaia.ui.database import ChatDatabase, default_db_path
 
-    pytest.importorskip("gaia_agent_chat")
-    from gaia_agent_chat.agent import ChatAgentConfig
+    pytest.importorskip("gaia_agent")
+    from gaia_agent.chat_agent import ChatAgentConfig
 
     validator = PathValidator(allowed_paths=[])
     cache = Context7Cache()

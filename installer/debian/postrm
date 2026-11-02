@@ -8,8 +8,21 @@
 
 set -e
 
+remove_desktop_link() {
+    # Remove only the link created by postinst. Leave an unrelated file or
+    # replacement symlink at this path untouched.
+    if [ -L /usr/bin/gaia-desktop ] &&
+       [ "$(readlink /usr/bin/gaia-desktop)" = "/opt/GAIA/gaia-desktop" ]; then
+        rm -f /usr/bin/gaia-desktop
+    fi
+}
+
 case "$1" in
+    remove)
+        remove_desktop_link
+        ;;
     purge)
+        remove_desktop_link
         # Refresh the desktop database + icon cache after the files have
         # been removed so stale entries disappear from menus.
         if command -v update-desktop-database >/dev/null 2>&1; then
@@ -21,7 +34,7 @@ case "$1" in
 
         echo 'Per-user data remains in ~/.gaia; run ~/.gaia/venv/bin/gaia uninstall --purge to remove it.'
         ;;
-    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
         ;;
     *)
         echo "postrm called with unknown argument \`$1'" >&2

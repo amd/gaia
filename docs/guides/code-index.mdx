@@ -45,7 +45,7 @@ Embeddings are generated locally by Lemonade. If you haven't installed it yet, `
 The embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M). A cached index (under `~/.gaia/code_index/`) records the model it was built with, so an index built before v0.22.0 with `nomic-embed-text-v2-moe-GGUF` fails loudly with a model-mismatch error naming both models. Re-index to rebuild it with EmbeddingGemma.
 </Note>
 
-If FAISS or numpy are missing at runtime you'll see exactly:
+GAIA checks for FAISS and numpy before it reads or embeds repository files. If either is missing, it stops with:
 
 ```
 code_index dependencies missing. Install with: pip install -e '.[rag]'
@@ -63,10 +63,17 @@ The [`coding` skill](https://github.com/amd/gaia/blob/main/hub/skills/coding/SKI
 | `clear_code_index` | Remove the cached index |
 
 You don't have to call `index_codebase` first: the first `search_code_index`
-in a repository with no index builds it, then searches. That first search is
-slow on a large repository; a task that never searches never pays for the
-embedding pass. Set `GAIA_PROJECT_MAP_AUTO_INDEX=1` to build it in the
-background at task start instead.
+in a repository with no index starts building it in the background. A small
+repository finishes within that search's first minute and is searched at once.
+A large one keeps building — GAIA's own repository can take 20 minutes — and
+each search until then answers with how far it has got, so the agent uses text
+search meanwhile instead of waiting. `index_codebase` reports that same build
+rather than starting a second one, and `clear_code_index` refuses while it
+runs. The build is not tied to the chat: pressing Stop or closing it leaves the
+build running until it finishes or GAIA exits, so the next search finds the
+index ready. A task that never searches never pays for the embedding pass. Set
+`GAIA_PROJECT_MAP_AUTO_INDEX=1` to build it in the background at task start
+instead.
 
 ### Example interaction
 
@@ -118,7 +125,7 @@ See the [Code Index SDK Reference](/sdk/sdks/code-index) for the full `CodeIndex
     └── index.faiss      # FAISS IndexFlatL2 vectors
 ```
 
-Both files are written atomically (temp file + rename). The cache is keyed by the resolved repo path. If you switch embedding models the metadata mismatch is detected and `search()` raises a `ValueError` naming both models until you re-index (call `index_repository()`, or `clear_index()` first).
+Both files are written atomically (temp file + rename), and the metadata records a SHA-256 of the index file it was written with. If the two ever stop matching (an interrupted write, or a file copied from another index), `search()` raises `CodeIndexCacheError` and `get_status()` reports `indexed: False` with the reason. Re-index to rebuild. The cache is keyed by the resolved repo path. If you switch embedding models the metadata mismatch is detected and `search()` raises a `ValueError` naming both models until you re-index (call `index_repository()`, or `clear_index()` first).
 
 ## Privacy
 

@@ -166,6 +166,13 @@ class RelayProfile:
     #: agent can't take ``memory`` — it is below :attr:`min_memory_api_version`,
     #: or that floor is ``None`` — so it would save to memory.
     memory_upgrade_message: str = ""
+    #: Contract version from which ``/query/{run_id}/followup`` hands a running
+    #: turn a message sent mid-turn. ``None`` means it never does.
+    min_followup_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/sessions/{id}/grants`` lists and revokes
+    #: the session's "always allow" grants, so the chat may offer "always".
+    #: ``None`` means it never does, and only allow once / deny are offered.
+    min_grants_api_version: Optional[Tuple[int, int]] = None
     #: Contract version from which ``/query`` takes ``internet_off``. ``None``
     #: means the relay never sends it: the agent keeps its own network rules.
     min_internet_api_version: Optional[Tuple[int, int]] = None
@@ -184,9 +191,18 @@ class RelayProfile:
     #: Contract version from which ``/query`` takes ``surface``, the front-end
     #: the turn comes from. ``None`` means the relay never sends it.
     min_surface_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``turns`` (earlier turns
+    #: with their tool calls) and a ``final`` carries ``model_messages``.
+    #: ``None`` means the relay sends text ``context`` only.
+    min_turns_api_version: Optional[Tuple[int, int]] = None
     #: Contract version from which ``/query`` takes ``reasoning`` and streams the
     #: model's reasoning as ``reasoning`` events. ``None`` means the relay never asks.
     min_reasoning_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``GET /sessions/{id}/tools`` lists the tools
+    #: the session's agent has. ``None`` means the agent has no such route.
+    min_tools_api_version: Optional[Tuple[int, int]] = None
+    #: Shown in Agent info when the installed agent can't list its tools.
+    tools_upgrade_message: str = ""
     #: Shown when the agent itself fails to start (it crashed or never got
     #: healthy). Shown through :meth:`start_failed_text`, which adds the log folder.
     start_failed_message: str = ""
@@ -353,6 +369,9 @@ EMAIL_PROFILE = RelayProfile(
     # (gaia_agent_email.query_routes threads it into a session-scoped registry).
     # That is its own change, with its own test, not a rider on this one.
     sends_session_id=False,
+    tools_upgrade_message=(
+        "The email agent can't list its tools here. Its tools still work in chat."
+    ),
 )
 
 
@@ -386,6 +405,8 @@ _GAIA_MUTATING_TOOLS = frozenset(
         "index_document",
         "index_directory",
         "generate_image",
+        "generate_music",
+        "generate_sound_effect",
         "write_clipboard",
         "bookmark",
     }
@@ -474,6 +495,9 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "refine_transcript": "Refining transcript",
     "take_screenshot": "Taking screenshot",
     "generate_image": "Generating image",
+    "generate_music": "Generating music",
+    "generate_sound_effect": "Generating sound effect",
+    "list_audio_generation_models": "Listing audio models",
     "analyze_image": "Looking at image",
     "answer_question_about_image": "Reading image",
     "list_sd_models": "Listing image models",
@@ -490,6 +514,9 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "read_email": "Reading message",
     "list_mail_folders": "Listing mail folders",
     "check_mailbox_access": "Checking mailbox access",
+    "get_thread": "Reading conversation",
+    "list_connected_mailboxes": "Checking connected mailboxes",
+    "list_waiting_on_you": "Finding mail waiting on you",
     # Memory — the agent's own long-term store
     "remember": "Saving to memory",
     "forget": "Deleting from memory",
@@ -560,6 +587,8 @@ GAIA_PROFILE = RelayProfile(
         "told so and would save to memory. Update GAIA to the latest version, "
         "then try again, or turn memory back on for this chat."
     ),
+    # 2.15 added /query/{run_id}/followup.
+    min_followup_api_version=(2, 15),
     # 2.19 added /query's changes_turn_id field.
     min_changes_api_version=(2, 19),
     # 2.23 added /query's internet_off field.
@@ -578,6 +607,17 @@ GAIA_PROFILE = RelayProfile(
     context_upgrade_message=(
         "The installed GAIA agent is too old to report what fills its context. "
         "Update GAIA to the latest version, then send a message."
+    ),
+    # 2.25 added /query's turns field and final.model_messages.
+    min_turns_api_version=(2, 25),
+    # 2.26 added /sessions/{id}/grants.
+    min_grants_api_version=(2, 26),
+    # 2.27 added GET /sessions/{id}/tools.
+    min_tools_api_version=(2, 27),
+    tools_upgrade_message=(
+        "The installed GAIA agent is too old to list its tools here. Update GAIA "
+        "to the latest version, then reopen Agent info. Its tools still work in "
+        "chat."
     ),
 )
 
@@ -605,8 +645,18 @@ _NO_PROFILE = RelayProfile(
 
 
 def profile_for(agent_id: str) -> Optional[RelayProfile]:
-    """The relay profile for *agent_id*, or ``None`` if it is not a sidecar."""
-    return _PROFILES.get(agent_id)
+    """The relay profile for *agent_id*, or ``None`` if it is not a sidecar.
+
+    A legacy id that resolves to a sidecar agent (``chat`` -> ``gaia``) gets
+    that agent's profile, so a stored session relays like a new one.
+    """
+    from gaia.agents.registry import AgentRegistry
+
+    profile = _PROFILES.get(agent_id)
+    if profile is None:
+        canonical = AgentRegistry.legacy_alias(agent_id)
+        profile = _PROFILES.get(canonical) if canonical else None
+    return profile
 
 
 def full_access_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
@@ -692,6 +742,24 @@ def memory_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     return floor is not None and _meets(api_version, floor)
 
 
+def followups_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes a mid-turn message for a running ``/query``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_followup_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def grants_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* lists and revokes "always allow" grants.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_grants_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def internet_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when *api_version* takes ``/query``'s ``internet_off`` field.
 
@@ -719,12 +787,30 @@ def surface_supported(profile: RelayProfile, api_version: Optional[str]) -> bool
     return floor is not None and _meets(api_version, floor)
 
 
+def turns_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``turns`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_turns_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def reasoning_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when *api_version* takes ``/query``'s ``reasoning`` field.
 
     Same evidence rule as :func:`api_version_supported`: no version, no claim.
     """
     floor = profile.min_reasoning_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def tools_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* lists a session's tools on ``/sessions/{id}/tools``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_tools_api_version
     return floor is not None and _meets(api_version, floor)
 
 
@@ -755,6 +841,9 @@ __all__ = [
     "scope_supported",
     "working_directory_supported",
     "memory_supported",
+    "followups_supported",
+    "grants_supported",
     "internet_supported",
     "changes_supported",
+    "tools_supported",
 ]

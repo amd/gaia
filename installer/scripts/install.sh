@@ -749,12 +749,15 @@ show_next_steps() {
     else
         echo "  1. Open a new terminal (PATH was not written to a startup file)"
     fi
-    printf '  2. Set up the local model runtime: %sgaia init%s\n' "$COLOR_GREEN" "$COLOR_RESET"
-    echo "     (downloads GAIA's own Lemonade Server and a model — no password needed)"
     if [ "${FLAGSHIP_INSTALLED:-0}" = "1" ]; then
-        printf '  3. Talk to the agent: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
-        printf '     (it opens the GAIA agent; type %s/agents%s to list installed agents)\n' "$COLOR_GREEN" "$COLOR_RESET"
+        printf '  2. Open GAIA: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
+        echo "     On first launch it sets up the local model server and lets you"
+        echo "     choose which models to download before anything downloads."
+        printf '     (type %s/agents%s there to list installed agents)\n' "$COLOR_GREEN" "$COLOR_RESET"
+        printf '  For a scripted or headless install, run %sgaia init --yes%s instead.\n' "$COLOR_GREEN" "$COLOR_RESET"
     else
+        printf '  2. Set up the local model runtime: %sgaia init%s\n' "$COLOR_GREEN" "$COLOR_RESET"
+        echo "     (installs GAIA's own Lemonade Server and the models — no password needed)"
         printf '  3. Open the GAIA Terminal UI: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
         printf '     %sThe GAIA agent was skipped — see the warning above — so this\n' "$COLOR_YELLOW"
         printf '     opens the agent list, not a chat. Re-run this installer to retry.%s\n' "$COLOR_RESET"

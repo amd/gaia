@@ -27,7 +27,8 @@ def staged(tmp_path_factory):
     stale = home / "gaia-eval" / "stale.txt"
     stale.parent.mkdir()
     stale.write_text("left from an earlier run")
-    skills_root = stage_eval_env.stage(home)
+    # Never the checkout's fixture_hub/_prepared: xdist workers would share it.
+    skills_root = stage_eval_env.stage(home, hub_out=home / "fixture-hub")
     return home, skills_root
 
 
@@ -80,6 +81,7 @@ def test_stages_fixtures_skills_and_a_trusted_fixture_hub(staged):
     assert hub_skills - stage_eval_env.NOT_PRE_INSTALLED <= installed
     assert not stage_eval_env.NOT_PRE_INSTALLED & installed
     assert (skills_root / "trusted-keys.json").is_file()
+    assert (home / "fixture-hub" / "index.json").is_file()
 
     # The git workspaces are built into the staged copy, never the checkout.
     assert (staged / "tiers_resilience" / "journal" / ".git").is_dir()
@@ -146,7 +148,7 @@ def test_restaging_clears_read_only_files_and_built_repositories(staged):
     marker = journal_git / "left-from-the-first-staging"
     marker.write_text("x")
 
-    stage_eval_env.stage(home)
+    stage_eval_env.stage(home, hub_out=home / "fixture-hub")
 
     assert not locked.exists()
     assert journal_git.is_dir() and not marker.exists()
@@ -159,7 +161,7 @@ def test_skills_and_trust_go_to_an_isolated_gaia_home(tmp_path):
     home.mkdir()
     gaia_home = tmp_path / "gaia-home"
 
-    skills_root = stage_eval_env.stage(home, gaia_home)
+    skills_root = stage_eval_env.stage(home, gaia_home, hub_out=tmp_path / "hub")
 
     assert skills_root == gaia_home / "skills"
     assert (skills_root / "trusted-keys.json").is_file()

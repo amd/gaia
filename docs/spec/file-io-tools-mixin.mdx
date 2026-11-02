@@ -43,8 +43,8 @@ refusal shape, and how the rule interacts with confirmation prompts.
 
 Every tool that modifies an existing file backs it up first. If that backup
 cannot be made — a full disk, an unwritable cache directory — `write_file`,
-`write_python_file`, `write_markdown_file`, `replace_function`, `edit_file`, and
-`edit_python_file` refuse the change and leave the file untouched. The error
+`write_python_file`, `write_markdown_file`, `update_gaia_md`, `replace_function`,
+`edit_file`, and `edit_python_file` refuse the change and leave the file untouched. The error
 names the cause and the directory to free or make writable.
 
 The refusal carries `executed: False`, because nothing ran. A tool result
@@ -65,7 +65,7 @@ runs.
 |---|---|---|
 | `self.path_validator` | `PathValidator` | Enforces the allowlist/blocklist/size limits every write and read tool checks. |
 
-`ChatAgent` ([`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py))
+`ChatAgent` ([`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py))
 sets it before calling `super().__init__()`, because `_register_tools()` runs
 inside that call.
 
@@ -73,19 +73,15 @@ A host that forgets is told what's missing instead of the tool silently
 skipping its own check, or crashing with a bare, unhelpful `AttributeError`:
 
 - **Write-capable tools** (`write_python_file`, `edit_python_file`,
-  `write_markdown_file`, `write_file`, `edit_file`, `replace_function`)
-  report the missing setup and don't touch the target file, instead of
-  writing without running the check that would otherwise have applied.
-- **The remaining tools** (`read_file`, `search_code`, `generate_diff`,
-  `update_gaia_md`) raise a `MissingHostAttributeError` naming the host
-  class, the missing attribute, and this section.
-
-<Warning>
-  `update_gaia_md` writes `GAIA.md` despite sitting in the second group. It
-  checks the allowlist and nothing else — no blocked-directory check, size
-  limit, backup, or audit entry, all of which the six write-capable tools
-  apply. Tracked in [#4006](https://github.com/amd/gaia/issues/4006).
-</Warning>
+  `write_markdown_file`, `write_file`, `edit_file`, `replace_function`,
+  `update_gaia_md`) report the missing setup and don't touch the target file,
+  instead of writing without running the check that would otherwise have
+  applied. Each runs the allowlist, blocked-directory and size checks, backs up
+  an existing file before overwriting it, and records an audit entry for every
+  allowed, denied or failed write.
+- **The remaining tools** (`read_file`, `search_code`, `generate_diff`) raise a
+  `MissingHostAttributeError` naming the host class, the missing attribute, and
+  this section.
 
 `self.path_validator` has no legitimate `None` value — unlike `RAGToolsMixin`'s
 `self.rag`, there is no "intentionally disabled" state here.
@@ -150,8 +146,9 @@ model's tool-result budget (`limit` can shrink it) and ends on a line break:
 `start_line`/`end_line` work on the extracted text too. Extraction is cached
 per file while it is unchanged, so paging does not re-parse it. A scanned PDF
 with no text layer, an encrypted one, or a corrupt file is an error naming the
-file; `.doc`, `.pptx`, `.xls` and the OpenDocument formats are an error pointing
-at `index_document`.
+file; `.pptx` and `.epub` are an error pointing at `index_document`, and `.doc`,
+`.ppt`, `.xls` and the OpenDocument formats are an error saying to re-save the
+file as `.docx` / `.pptx` / `.xlsx` or PDF.
 
 When the agent also has `index_document`, the mixin adds a short
 `READING DOCUMENTS` prompt fragment: to review, compare, reconcile, audit or
@@ -410,7 +407,7 @@ module level, and the tool never renames or moves a definition.
 ### 9. write_markdown_file
 
 Write (or overwrite) a Markdown file, optionally creating parent directories.
-Used by the code agent when generating READMEs, spec documents, or reports.
+Used by agents that generate READMEs, spec documents, or reports.
 
 **Parameters:**
 - `file_path` (str, required): Destination path
@@ -429,8 +426,8 @@ Used by the code agent when generating READMEs, spec documents, or reports.
 ### 10. update_gaia_md
 
 Refresh the project's `GAIA.md` (or another project-level index file) with
-generated metadata — used by the code agent to keep project docs in sync with
-what it's building.
+generated metadata — used by agents to keep project docs in sync with
+what they are building.
 
 **Parameters:**
 - `project_root` (str, optional): Project root directory (default: `"."`)
@@ -439,12 +436,22 @@ what it's building.
 - `structure` (str or dict, optional): Formatted directory structure
 - `instructions` (str, optional): Agent-facing instructions section
 
+Runs the same write guardrails as `write_file`: allowlist, blocked
+directories and sensitive files, the size limit, read-before-overwrite, a backup
+of an existing `GAIA.md`, and an audit entry for every outcome.
+
+As with `write_file`, overwriting an existing `GAIA.md` in `gaia chat` on a real
+terminal now asks "Overwrite this file?" first; the Agent UI and TUI
+auto-approve it.
+
 **Returns:**
 ```python
 {
     "status": "success",
     "file_path": str,
-    "updated_sections": List[str],
+    "created": bool,          # False when an existing GAIA.md was replaced
+    "message": str,
+    "backup_path": str,       # present only when an existing file was backed up
 }
 ```
 

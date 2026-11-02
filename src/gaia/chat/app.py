@@ -345,6 +345,10 @@ Demo Types:
 
     args = parser.parse_args()
 
+    from gaia.logger import configure
+
+    configure()
+
     # Show just examples
     if args.demo == "examples":
         print_integration_examples()

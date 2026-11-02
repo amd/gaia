@@ -14,9 +14,9 @@ payload, or the raw output when there is no JSON. A scenario's transcript is
 never scanned, because the agent's own tool descriptions contain phrases such
 as "until a rate limit resets".
 
-The phrase lists extend :mod:`gaia.eval.judge_outage`'s with the wording the
-subscription CLI prints ("You've hit your limit", "session limit"), which the
-CI preflight probe (``util/classify_claude_probe.py``) also matches.
+The phrases come from :mod:`gaia.eval.claude_refusal`, which the CI account
+picker and ``claude-run.yml`` also read. A bare per-minute 429 is throttling,
+not quota: only wording or a 402 makes this a quota outage.
 """
 
 from __future__ import annotations
@@ -27,23 +27,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from gaia.eval.judge_outage import (
-    CREDENTIAL_PHRASES,
-    CREDENTIAL_STATUS,
-    QUOTA_PHRASES,
-    QUOTA_STATUS,
-)
-
-CLI_QUOTA_PHRASES: tuple[str, ...] = QUOTA_PHRASES + (
-    "session limit",
-    "hit your limit",
-    "limit reached",
-    "admin-settings/usage",
-)
-CLI_CREDENTIAL_PHRASES: tuple[str, ...] = CREDENTIAL_PHRASES + (
-    "oauth token",
-    "please run /login",
-    "no credential",
+from gaia.eval.claude_refusal import (
+    CREDENTIAL_CODES,
+    QUOTA_CODES,
+    credential_hits,
+    quota_hits,
 )
 
 # The runner already reports these as BUDGET_EXCEEDED / a capped run; they are
@@ -88,15 +76,71 @@ class ClaudeOutage:
         }
 
 
+#: The other subscription account's token, used once when the active one is
+#: out of quota. CI sets it to whichever account the job did not start on.
+BACKUP_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN_BACKUP"
+#: Label of the account behind ``CLAUDE_CODE_OAUTH_TOKEN`` (primary/secondary).
+ACCOUNT_LABEL_VAR = "GAIA_CLAUDE_ACCOUNT"
+
+_OTHER_LABEL = {"primary": "secondary", "secondary": "primary"}
+
+API_KEY_VAR = "ANTHROPIC_API_KEY"
+
+
+def driver_api_key() -> str:
+    """The API key the ``claude -p`` driver may use, or ``""``.
+
+    Only a key from the real process environment counts. A ``.env`` file —
+    found by searching parent directories — is not a choice the operator made,
+    and its key would switch off working subscription auth (#3367).
+    """
+    import gaia  # pylint: disable=import-outside-toplevel
+
+    shell_key = (gaia.pre_dotenv_env(API_KEY_VAR) or "").strip()
+    current = (os.environ.get(API_KEY_VAR) or "").strip()
+    return current if shell_key and current else ""
+
+
+def dotenv_only_api_key() -> bool:
+    """True when ``ANTHROPIC_API_KEY`` is set only because a ``.env`` set it."""
+    return bool((os.environ.get(API_KEY_VAR) or "").strip()) and not driver_api_key()
+
+
 def claude_account() -> str:
     """Which credential the driver used, without revealing it."""
-    label = os.environ.get("CLAUDE_ACCOUNT", "").strip()
-    suffix = f" (CLAUDE_ACCOUNT={label})" if label else ""
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    label = os.environ.get(ACCOUNT_LABEL_VAR, "").strip()
+    suffix = f" (the {label} account)" if label else ""
+    if driver_api_key():
         return f"the API key in ANTHROPIC_API_KEY{suffix}"
     if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
         return f"the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN{suffix}"
     return f"the account the `claude` CLI is logged in to{suffix}"
+
+
+def switch_to_backup_account(outage: dict) -> Optional[dict]:
+    """Move every later ``claude -p`` call to the backup token, at most once.
+
+    Called only for a quota outage. Returns what was switched (labels and the
+    exhausted account's reset time, never a token), or ``None`` when there is
+    no backup: no backup token, it is the token already in use, or an API key
+    is set, which the CLI prefers over any token.
+    """
+    backup = os.environ.get(BACKUP_TOKEN_VAR, "").strip()
+    active = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if not backup or backup == active or driver_api_key():
+        return None
+    was = os.environ.get(ACCOUNT_LABEL_VAR, "").strip() or "first"
+    now = _OTHER_LABEL.get(was, "backup")
+    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = backup
+    # Popped, so a second quota refusal stops the run instead of switching back.
+    os.environ.pop(BACKUP_TOKEN_VAR, None)
+    os.environ[ACCOUNT_LABEL_VAR] = now
+    return {
+        "from": was,
+        "to": now,
+        "from_resets": outage.get("resets"),
+        "detail": outage.get("detail"),
+    }
 
 
 def _reset_time(text: str) -> Optional[str]:
@@ -147,13 +191,10 @@ def classify_driver_failure(
         text = f"{payload.get('result') or ''} {stderr or ''}"
     else:
         text = f"{stderr or ''} {stdout or ''}"
-    lowered = text.lower()
     detail = " ".join(text.split())[:400] or f"exit {returncode}, no output"
 
-    quota = status in QUOTA_STATUS or any(p in lowered for p in CLI_QUOTA_PHRASES)
-    credential = status in CREDENTIAL_STATUS or any(
-        p in lowered for p in CLI_CREDENTIAL_PHRASES
-    )
+    quota = status in QUOTA_CODES or bool(quota_hits(text))
+    credential = status in CREDENTIAL_CODES or bool(credential_hits(text))
     # Both signatures, or a failure before Claude answered anything: every later
     # scenario would fail the same way, whatever the exact cause.
     if (quota and credential) or (

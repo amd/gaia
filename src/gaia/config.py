@@ -17,6 +17,11 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, Iterator, List, Optional
 
+# Re-exported: the resolver lives in a leaf module so gaia.logger can use it.
+from gaia.home import (  # noqa: F401  pylint: disable=unused-import
+    default_gaia_home,
+    gaia_home,
+)
 from gaia.utils.file_lock import (
     FileLockError,
     file_lock,
@@ -25,32 +30,6 @@ from gaia.utils.file_lock import (
 )
 
 log = logging.getLogger(__name__)
-
-
-def gaia_home() -> Path:
-    """Return the directory that holds GAIA's on-disk state.
-
-    Precedence:
-
-    1. ``GAIA_HOME`` relocates the whole tree.
-    2. ``GAIA_CONFIG_DIR`` keeps the existing config-directory override.
-    3. ``~/.gaia``.
-    """
-    for env_var in ("GAIA_HOME", "GAIA_CONFIG_DIR"):
-        raw = os.environ.get(env_var)
-        if raw is None:
-            continue
-        raw = raw.strip()
-        if not raw:
-            continue
-        return Path(os.path.expandvars(os.path.expanduser(raw)))
-    return default_gaia_home()
-
-
-def default_gaia_home() -> Path:
-    """``~/.gaia``: the home of a process with no ``GAIA_HOME``, and so of the
-    machine's default daemon and its Lemonade Server."""
-    return Path.home() / ".gaia"
 
 
 def mcp_servers_path() -> Path:
@@ -175,6 +154,12 @@ class GaiaConfig:
             undone for this many days.
         undo_max_mb: Keep at most this many megabytes of those copies; the
             oldest turns go first. The size limit never removes the newest turn.
+        skipped_models: Models the user chose not to download. ``gaia init``
+            and first-run setup leave them out until the user asks for one.
+        project_context: How much of a repository's CLAUDE.md, AGENTS.md and
+            ``.claude/skills`` the agent puts in its prompt: ``full``, ``off``,
+            or ``None`` (set it to ``auto``) to decide per model. See
+            :mod:`gaia.project_context`.
     """
 
     profile: str = "chat"
@@ -191,6 +176,8 @@ class GaiaConfig:
     context_sizes: Dict[str, int] = field(default_factory=dict)
     undo_retention_days: int = 7
     undo_max_mb: int = 500
+    skipped_models: List[str] = field(default_factory=list)
+    project_context: Optional[str] = None
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None
@@ -233,6 +220,10 @@ class GaiaConfig:
             return cls._coerce_lemonade_mode(value)
         if key == "lemonade_base_url":
             return cls._coerce_lemonade_url(value)
+        if key == "skipped_models":
+            return cls._coerce_model_list(value)
+        if key == "project_context":
+            return cls._check_project_context(value, "gaia config", "Use one of those.")
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
@@ -275,6 +266,19 @@ class GaiaConfig:
             raise GaiaConfigError(f"lemonade_base_url: {e}") from e
 
     @staticmethod
+    def _coerce_model_list(value: Any) -> List[str]:
+        """A list of model ids; the CLI passes them comma-separated."""
+        if isinstance(value, str):
+            value = [v for v in (p.strip() for p in value.split(",")) if v]
+        if not isinstance(value, list) or not all(
+            isinstance(v, str) and v.strip() for v in value
+        ):
+            raise GaiaConfigError(
+                f"skipped_models takes model ids, comma-separated, but got {value!r}."
+            )
+        return list(dict.fromkeys(v.strip() for v in value))
+
+    @staticmethod
     def _whole_number(key: str, value: Any) -> int:
         """*value* as a non-negative int, or a GaiaConfigError naming *key*."""
         if isinstance(value, bool):
@@ -311,6 +315,21 @@ class GaiaConfig:
                 "Run `gaia config set llamacpp_backend auto` to let Lemonade choose."
             )
         return word
+
+    @staticmethod
+    def _check_project_context(value: Any, where: str, remedy: str) -> Optional[str]:
+        """``full`` or ``off``; ``auto`` (or empty) is stored as None."""
+        from gaia.project_context import (
+            AUTO,
+            ProjectContextError,
+            normalize_project_context,
+        )
+
+        try:
+            word = normalize_project_context(value, where, remedy)
+        except ProjectContextError as e:
+            raise GaiaConfigError(str(e)) from e
+        return None if word == AUTO else word
 
     @staticmethod
     def _check_context_sizes(value: Any, config_file: Path) -> None:
@@ -437,10 +456,30 @@ class GaiaConfig:
             )
         if "context_sizes" in data:
             cls._check_context_sizes(data["context_sizes"], config_file)
+        if "skipped_models" in data:
+            skipped = data["skipped_models"]
+            if not isinstance(skipped, list) or not all(
+                isinstance(v, str) for v in skipped
+            ):
+                raise GaiaConfigError(
+                    f"GAIA config at {config_file}: 'skipped_models' must be a "
+                    f"list of model ids, but it is {skipped!r}. Fix it by hand, "
+                    "or delete the key to download every model setup needs."
+                )
+        if "custom_models" in data:
+            from gaia.llm.custom_models import validate_entries
+
+            validate_entries(data["custom_models"], config_file)
         kwargs = {k: v for k, v in data.items() if k in known}
         if "llamacpp_backend" in kwargs:
             kwargs["llamacpp_backend"] = cls._check_llamacpp_backend(
                 kwargs["llamacpp_backend"], f"GAIA config at {config_file}"
+            )
+        if "project_context" in kwargs:
+            kwargs["project_context"] = cls._check_project_context(
+                kwargs["project_context"],
+                f"GAIA config at {config_file}",
+                "Fix or delete that key in the file, then retry.",
             )
         return cls(**kwargs)._snapshot()
 

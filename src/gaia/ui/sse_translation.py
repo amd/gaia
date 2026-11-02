@@ -433,7 +433,10 @@ class CanonicalTranslator:
             # nor the latency the preview line is made of.
             "preview": derive_preview(tool, event),
         }
-        render = self._render_tool_map.get(self._last_tool or "")
+        # A handler-attached card (e.g. an edit's diff) outranks the tool map.
+        render = event.get("render")
+        if not isinstance(render, str) or not render:
+            render = self._render_tool_map.get(self._last_tool or "")
         if render:
             canonical["render"] = render
         return [canonical]
@@ -556,6 +559,10 @@ class CanonicalTranslator:
         always_scope = event.get("always_scope")
         if always_scope:
             canonical["always_scope"] = str(always_scope)
+            # The same grant in plain words, e.g. "editing notes.md".
+            always_label = event.get("always_label")
+            if always_label:
+                canonical["always_label"] = str(always_label)
         # What the call does (read / write / execute / destructive), so the
         # prompt's label is earned by the command rather than the tool name.
         risk = event.get("risk")

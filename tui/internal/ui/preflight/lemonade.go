@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/filelock"
 )
 
 // How this package answers "the local model server is not running".
@@ -120,6 +122,9 @@ type hostProbe struct {
 	getenv   func(string) string
 	homeDir  func() (string, error)
 	readFile func(string) ([]byte, error)
+	// readConfig is the locked reader for the shared config.json. Other probes
+	// keep readFile so their host tests can model ordinary file reads.
+	readConfig func(string) ([]byte, error)
 }
 
 // realHostProbe is a var so a test can resolve against a machine it does not
@@ -132,9 +137,10 @@ var realHostProbe = func() hostProbe {
 			_, err := os.Stat(path)
 			return err == nil
 		},
-		getenv:   os.Getenv,
-		homeDir:  os.UserHomeDir,
-		readFile: osReadFile,
+		getenv:     os.Getenv,
+		homeDir:    os.UserHomeDir,
+		readFile:   osReadFile,
+		readConfig: filelock.ReadFile,
 	}
 }
 
@@ -153,7 +159,7 @@ var macAppBundles = []string{
 // after it exits, and only launchctl can restart it.
 //
 // The label tracks the pinned Lemonade: upstream renamed it from
-// com.lemonade.server after 11.5.0, so the old one matches nothing on v2026.43.3.
+// com.lemonade.server after 11.5.0, so the old one matches nothing on v2026.44.1.
 const (
 	macDaemonLabel = "ai.lemonadeserver.server"
 	macDaemonPlist = "/Library/LaunchDaemons/ai.lemonadeserver.server.plist"

@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Smartphone, Copy, Check } from 'lucide-react';
+import { X, Smartphone, Copy, Check, ExternalLink, RotateCw } from 'lucide-react';
 import type { TunnelStatus } from '../types';
 import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { log } from '../utils/logger';
+import { useT } from '../i18n/useT';
 import './MobileAccessModal.css';
 
 // QRCode loaded lazily via dynamic import
@@ -19,11 +20,22 @@ interface MobileAccessModalProps {
     /** Explicitly stop the tunnel (shown only while the tunnel is active). */
     onStop?: () => void;
     error?: string | null;
+    /** Set when ngrok is not installed: this OS's install commands (may be empty). */
+    setupCommands?: string[] | null;
+    /** Try starting the tunnel again, e.g. after installing ngrok. */
+    onRetry?: () => void;
 }
 
-export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAccessModalProps) {
+const NGROK_DOWNLOAD_URL = 'https://ngrok.com/download';
+
+export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommands, onRetry }: MobileAccessModalProps) {
     const [status, setStatus] = useState<TunnelStatus | null>(null);
     const [copied, setCopied] = useState(false);
+    const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+    const t = useT();
+    const needsSetup = Array.isArray(setupCommands);
+    // Nothing to poll for or scan while the tunnel cannot start.
+    const halted = !!error || needsSetup;
     const [qrError, setQrError] = useState<string | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     useEscapeToClose(isOpen, onClose);
@@ -44,7 +56,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
 
     // Poll for tunnel status when modal is open
     useEffect(() => {
-        if (!isOpen || error) return;
+        if (!isOpen || halted) return;
 
         // Fetch immediately
         fetchStatus();
@@ -58,7 +70,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
         }, 2000);
 
         return () => clearInterval(interval);
-    }, [isOpen, error, fetchStatus]);
+    }, [isOpen, halted, fetchStatus]);
 
     // Generate QR code when URL is available
     useEffect(() => {
@@ -124,6 +136,14 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
         });
     }, [status]);
 
+    const copyCommand = useCallback((command: string) => {
+        navigator.clipboard.writeText(command).then(() => {
+            setCopiedCommand(command);
+            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+            copyTimerRef.current = setTimeout(() => setCopiedCommand(null), 2000);
+        }).catch((err) => log.system.error('Could not copy the ngrok install command', err));
+    }, []);
+
     // Clean up copy timer on unmount
     useEffect(() => {
         return () => {
@@ -155,28 +175,58 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                     <div className="tunnel-status">
                         <span className={`status-dot ${
                             status?.active ? 'active' :
+                            needsSetup ? 'setup' :
                             error ? 'error' :
                             'starting'
                         }`} />
                         <span>
                             {status?.active
                                 ? 'Tunnel active'
-                                : error
-                                    ? "Couldn't start mobile access"
-                                    : 'Starting tunnel...'}
+                                : needsSetup
+                                    ? t('mobile.ngrokRequired')
+                                    : error
+                                        ? "Couldn't start mobile access"
+                                        : 'Starting tunnel...'}
                         </span>
-                        {!status?.active && !error && <span className="tunnel-spinner" />}
+                        {!status?.active && !halted && <span className="tunnel-spinner" />}
                     </div>
 
+                    {/* Missing prerequisite: a setup step, not a failure. */}
+                    {needsSetup && (
+                        <div className="tunnel-setup">
+                            <div className="tunnel-setup-title">{t('mobile.setupTitle')}</div>
+                            <p>
+                                {t('mobile.setupIntro')}{' '}
+                                {setupCommands.length > 0 ? t('mobile.setupInstall') : t('mobile.setupDownload')}
+                            </p>
+                            {setupCommands.map((command) => (
+                                <div className="tunnel-url-row tunnel-setup-command" key={command}>
+                                    <input type="text" readOnly dir="ltr" value={command} aria-label={t('mobile.installCommand')} />
+                                    <button
+                                        className={`copy-url-btn ${copiedCommand === command ? 'copied' : ''}`}
+                                        onClick={() => copyCommand(command)}
+                                        title={t('mobile.copyCommand')}
+                                    >
+                                        {copiedCommand === command ? <Check size={13} /> : <Copy size={13} />}
+                                        {copiedCommand === command ? t('mobile.copied') : t('mobile.copy')}
+                                    </button>
+                                </div>
+                            ))}
+                            <a href={NGROK_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" className="tunnel-setup-link">
+                                {t('mobile.downloadPage')} <ExternalLink size={11} />
+                            </a>
+                        </div>
+                    )}
+
                     {/* Error message */}
-                    {error && (
+                    {error && !needsSetup && (
                         <div className="tunnel-error">
                             {error}
                         </div>
                     )}
 
                     {/* QR Code: nothing to scan, and no steps to follow, once it failed. */}
-                    {!error && (
+                    {!halted && (
                         <div className="qr-code-area">
                             {status?.active ? (
                                 <>
@@ -224,7 +274,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                     )}
 
                     {/* Instructions */}
-                    {!error && (
+                    {!halted && (
                         <div className="mobile-instructions">
                             <ol>
                                 <li>
@@ -250,6 +300,11 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                                 title="Close the tunnel and revoke the mobile URL"
                             >
                                 Stop tunnel
+                            </button>
+                        )}
+                        {needsSetup && onRetry && (
+                            <button className="btn-primary" onClick={onRetry}>
+                                <RotateCw size={13} /> {t('mobile.retry')}
                             </button>
                         )}
                         <button className="btn-secondary" onClick={onClose}>Close</button>

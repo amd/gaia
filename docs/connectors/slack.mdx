@@ -1,0 +1,129 @@
+---
+title: "Slack"
+icon: "slack"
+description: "Let GAIA agents read your Slack channels, threads, and DMs."
+---
+
+<Info>
+  **Connector ID:** `mcp-slack` · **Type:** `mcp_server` · **Catalog entry:** [`src/gaia/connectors/catalog/mcp_servers.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/mcp_servers.py)
+</Info>
+
+## What you'll need
+
+The connector is an **MCP server**. GAIA starts
+[`slack-mcp-server`](https://github.com/korotovsky/slack-mcp-server) through
+`npx` (pinned to `slack-mcp-server@1.3.0`) when an agent needs it, and the
+agents you grant it to can read channels, threads, and direct messages.
+The original `@modelcontextprotocol/server-slack` package is deprecated, so
+GAIA uses this maintained replacement.
+
+It needs one secret: a **Slack bot token** (`xoxb-…`). It lives in your OS
+keyring, and the server gets it through a `$keyring` reference when it starts.
+
+<Note>
+  The server can't post messages or add reactions unless you turn that on
+  yourself, and GAIA leaves it off. Bot tokens also can't use Slack's
+  message search, so `conversations_search_messages` isn't available.
+</Note>
+
+## Step 1 — Create a Slack app and copy its bot token
+
+1. Go to <a href="https://api.slack.com/apps" target="_blank">api.slack.com/apps</a>
+   → **Create New App** → **From scratch**, and pick your workspace.
+2. Under **OAuth & Permissions** → **Bot Token Scopes**, add:
+   `channels:history`, `channels:read`, `groups:history`, `groups:read`,
+   `im:history`, `im:read`, `mpim:history`, `mpim:read`, `users:read`, and
+   `usergroups:read`.
+3. Click **Install to Workspace** and approve.
+4. Copy the **Bot User OAuth Token**. It starts with `xoxb-`.
+5. In Slack, invite the bot to each channel it should read
+   (`/invite @your-app-name`). A bot sees only the channels it's in.
+
+## Step 2 — Configure GAIA
+
+**From the CLI:**
+
+```bash
+gaia connectors configure mcp-slack --set SLACK_MCP_XOXB_TOKEN=xoxb-...
+```
+
+**From the Agent UI:**
+
+1. Launch the Agent UI: `gaia chat --ui`.
+2. **Settings** (gear) → **Connectors** → click the **Slack** tile.
+3. Paste the token into the **Slack Bot User OAuth Token** field and click **Save**.
+
+Either path saves the token in your OS keyring and writes only a `$keyring`
+reference into `~/.gaia/mcp_servers.json`. The token is never written to disk
+in plaintext.
+
+## Step 3 — Use it
+
+Grant **and** activate the connector for each agent that should use it. The
+grant lets the agent use the credential; activation makes the tools visible
+to it, and is off by default:
+
+```bash
+gaia connectors grants grant mcp-slack builtin:chat --scopes "*"
+gaia connectors activations activate mcp-slack builtin:chat
+```
+
+(In the UI, the tile's **Per-agent** toggle does both.) Then ask the agent
+something like *"Summarise today's messages in #general."*
+
+With a bot token the useful tools are `channels_list`,
+`conversations_history`, `conversations_replies`, `users_search`, and
+`usergroups_list`. The server also lists tools that change things: join,
+leave, and mark-as-read for channels, and user-group create and edit. The bot
+scopes in Step 1 don't cover them, so Slack refuses each one with
+`missing_scope`, and GAIA asks you before an agent calls any of them.
+
+## Common issues
+
+### `not_in_channel` or an empty channel history
+
+The bot hasn't been invited to that channel. Run `/invite @your-app-name` in
+the channel and ask again.
+
+### `invalid_auth` / `missing_scope`
+
+The token is wrong, revoked, or missing a scope from Step 1. Add the scope,
+reinstall the app to the workspace, then **Disconnect** the tile (or
+`gaia connectors disconnect mcp-slack`) and configure it again with the new
+token.
+
+### The connector times out on its first start
+
+On a cold start, `slack-mcp-server` fetches your workspace's full user and
+channel list before it answers GAIA. GAIA waits 10 seconds for MCP servers to
+connect, which a very large workspace can exceed. Add a longer `timeout`
+(seconds, at most 600) to the `mcp-slack` entry in `~/.gaia/mcp_servers.json`,
+for example `"timeout": 120`. Configuring the connector again rewrites the
+entry, so add it back afterwards. Later starts read the cached lists and
+connect quickly.
+
+### `npx: command not found`
+
+`slack-mcp-server` is started through `npx`. Install Node 18+ and make sure
+`npx` is on your `PATH`.
+
+## Revoking access
+
+- **From GAIA:** Settings → Connectors → Slack → **Disconnect** (or
+  `gaia connectors disconnect mcp-slack`). This deletes the token from the
+  keyring, removes the entry from `mcp_servers.json`, and clears every
+  per-agent grant.
+- **From Slack:** open your app at
+  [api.slack.com/apps](https://api.slack.com/apps) → **OAuth & Permissions** →
+  **Revoke All OAuth Tokens**, or uninstall the app from the workspace.
+- **Cached lists:** `slack-mcp-server` keeps your workspace's users and
+  channels in `*_users_cache.json` and `*_channels_cache_v2.json` files, and
+  **Disconnect** doesn't remove them. Delete the `slack-mcp-server` folder
+  under `%LocalAppData%` on Windows, `~/Library/Caches` on macOS, or
+  `~/.cache` on Linux.
+
+## See also
+
+- [Connectors overview](/connectors)
+- [slack-mcp-server documentation](https://github.com/korotovsky/slack-mcp-server/tree/v1.3.0/docs)
+- [Connectors security model](/security/connections)

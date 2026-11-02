@@ -147,7 +147,7 @@ jobs:
             artifact: email-agent-win32-x64.exe
             frozen: email-agent.exe
             required: true
-          - os: macos-14
+          - os: macos-15
             platform: darwin-arm64
             key: darwin-arm64
             artifact: email-agent-darwin-arm64
@@ -188,8 +188,8 @@ jobs:
           # freeze.py bundles its cl100k_base data and fails the build without it.
           uv pip install --python .venv-freeze -e ".[api]" -e hub/agents/email/python "faiss-cpu>=1.7.0" tiktoken pyinstaller
 
-      # The package declares amd-gaia>=0.25.1 because its module-level imports
-      # require that released core floor. Keep this source-build check as a
+      # The package declares amd-gaia>=0.25.3 because its module-level imports
+      # and WAL retry helper require that released core floor. Keep this source-build check as a
       # release defense against publishing an incompatible
       # email agent binary.
       - name: Verify email agent runtime import chain (#4430)
@@ -208,6 +208,16 @@ jobs:
           set -euo pipefail
           PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
           "$PY" hub/agents/email/python/packaging/freeze.py --onefile
+
+      # GAIA must not ship GPL/AGPL code (GNU Readline, GNU dbm, PyInstaller's
+      # own package, PyMuPDF). Read off the built archive itself.
+      - name: Check the binary bundles no copyleft code
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" hub/agents/gaia/python/packaging/check_bundle_licenses.py \
+            "${FREEZE_DIST}/${{ matrix.frozen }}"
 
       - name: Smoke-test the frozen binary
         shell: bash

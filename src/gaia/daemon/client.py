@@ -464,6 +464,33 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     if relayed:
         return f"{relayed} agent turn(s) are still running on it"
     try:
+        agents = requests.get(
+            f"{inst.base_url}{API_PREFIX}/agents",
+            headers=headers,
+            timeout=5.0,
+        )
+    except requests.exceptions.RequestException as e:
+        return f"GAIA could not check whether it is busy ({e})"
+    owned_sidecars = set()
+    if agents.status_code != 404:
+        if agents.status_code != 200:
+            return f"GAIA could not check whether it is busy ({_error_detail(agents)})"
+        import psutil
+
+        for agent in agents.json().get("agents") or []:
+            pid = agent.get("pid")
+            if agent.get("state") != "running" or not isinstance(pid, int):
+                continue
+            owned_sidecars.add(pid)
+            try:
+                owned_sidecars.update(
+                    child.pid for child in psutil.Process(pid).children(recursive=True)
+                )
+            except psutil.Error:
+                # A launcher can exit while its packaged child is being
+                # reparented; an unavailable process contributes no children.
+                pass
+    try:
         clients = requests.get(
             f"{inst.base_url}{API_PREFIX}/lemonade/clients",
             headers=headers,
@@ -480,7 +507,11 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     users = [
         c.get("name") or c.get("kind") or "a GAIA app"
         for c in snapshot.get("clients") or []
-        if any(pid_alive(p) for p in c.get("pids") or [] if p not in ours)
+        if any(
+            pid_alive(p)
+            for p in c.get("pids") or []
+            if p not in ours and p not in owned_sidecars
+        )
     ]
     if users:
         return f"{', '.join(users)} is still using it"
@@ -526,13 +557,26 @@ def _daemon_env(drop: tuple = ()) -> dict:
     a stale ``GAIA_HOST_CUSTODY_URL`` would reach its sidecars without a secret.
     ``GAIA_CHILD_ENV_DENY`` is not applied: the daemon is GAIA itself.
     """
-    return {
+    env = {
         name: value
         for name, value in os.environ.items()
         if not is_internal_secret(name)
         and name != CUSTODY_URL_ENV_VAR
         and name not in drop
     }
+    # The daemon runs from its host dir, so a relative path must not follow it.
+    for name in ("GAIA_HOME", "GAIA_CONFIG_DIR"):
+        raw = env.get(name, "").strip()
+        if raw:
+            env[name] = os.path.abspath(os.path.expandvars(os.path.expanduser(raw)))
+    if env.get(paths.HOME_ENV_VAR):
+        env[paths.HOME_ENV_VAR] = os.path.abspath(env[paths.HOME_ENV_VAR])
+    if env.get("PYTHONPATH"):
+        env["PYTHONPATH"] = os.pathsep.join(
+            os.path.abspath(entry) if entry else entry
+            for entry in env["PYTHONPATH"].split(os.pathsep)
+        )
+    return env
 
 
 def _is_spawned_daemon(registered_pid: int, spawned_pid: int) -> bool:
@@ -567,7 +611,7 @@ def _spawn_and_wait(
     drop_env: tuple = (),
 ) -> DaemonInstance:
     """Spawn the daemon detached, wait until it registers a live instance.json."""
-    paths.ensure_host_dir()
+    host = paths.ensure_host_dir()
     # The daemon's stdout can't be rotated while it runs, so cap it per start.
     try:
         rotate_if_oversized(paths.log_path())
@@ -592,6 +636,9 @@ def _spawn_and_wait(
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             env=_daemon_env(drop_env),
+            # Not the launcher's cwd: the daemon outlives it, and on Windows a
+            # process's cwd cannot be deleted or renamed while it runs.
+            cwd=str(host),
             **spawn_kwargs,
         )
     except OSError as e:

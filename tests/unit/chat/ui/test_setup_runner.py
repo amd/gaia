@@ -70,6 +70,22 @@ def test_run_args_switch_to_gaias_own_server():
     assert "--gaia-lemonade" not in sr.run_args(False)
 
 
+def test_run_args_server_only_downloads_nothing():
+    args = sr.run_args(False, server_only=True)
+    assert "--skip-models" in args and "--download-model" not in args
+    assert "--skip-models" not in sr.run_args(False)
+
+
+def test_run_args_pull_each_ticked_extra_model():
+    args = sr.run_args(False, extra_models=["Qwen3-VL-4B-Instruct-GGUF", "gpt-oss-20b"])
+    assert args[-4:] == [
+        "--download-model",
+        "Qwen3-VL-4B-Instruct-GGUF",
+        "--download-model",
+        "gpt-oss-20b",
+    ]
+
+
 # ── parse_status ───────────────────────────────────────────────────────────
 
 
@@ -293,6 +309,23 @@ def test_describe_reads_the_download_size(line, size):
     assert progress is not None and progress.size == size
 
 
+def test_setup_output_removes_ansi_codes_from_the_model_and_details_log():
+    run = sr.SetupRun(False)
+    runner = sr.SetupRunner()
+
+    runner._consume(run, "\x1b[1;34mStep 1/5: Starting Lemonade Server...\x1b[0m")
+    runner._consume(
+        run,
+        "   Chat model: Gemma-\x1b[1;36m4\x1b[0m-E4B-it-GGUF (default_model)",
+    )
+
+    assert run.chat_model == "Gemma-4-E4B-it-GGUF"
+    assert run.log == [
+        "Step 1/5: Starting Lemonade Server...",
+        "Chat model: Gemma-4-E4B-it-GGUF (default_model)",
+    ]
+
+
 def test_describe_reads_the_chat_model_setup_chose():
     progress = sr.describe(
         "   Chat model: Qwen3.6-35B-A3B-GGUF — this PC has 32 GB for models (AMD iGPU)"
@@ -357,6 +390,18 @@ def test_view_names_the_chat_model_once_setup_picks_it():
     view = run.view()
     assert view["chat_model"] == "Qwen3.6-35B-A3B-GGUF"
     assert "Qwen3.6-35B-A3B-GGUF" in view["steps"][1]["detail"]
+
+
+def test_server_only_lists_just_the_server_step():
+    assert [s["key"] for s in sr.step_labels(False, server_only=True)] == ["server"]
+    mine = sr.step_labels(False, users_server="http://h:1/api/v1", server_only=True)
+    assert mine == [
+        {
+            "key": "server",
+            "label": "Use your Lemonade Server",
+            "detail": "http://h:1/api/v1",
+        }
+    ]
 
 
 def test_use_mine_replaces_the_install_step():
@@ -446,6 +491,97 @@ def test_a_clean_run_is_verified_then_ready(monkeypatch):
     assert argv[3:] == sr.run_args(True)
     assert kwargs["stdin"] is subprocess.DEVNULL
     assert "[====] 100% (5 MB/5 MB)" in view["log_tail"]
+
+
+def test_a_server_only_run_is_ready_without_loading_models(monkeypatch):
+    calls = []
+    _popen(
+        monkeypatch,
+        _FakeProc(io.BytesIO(b"Step 1/2: Starting Lemonade Server...\n")),
+        calls,
+    )
+
+    def check(*_a, **_k):
+        raise AssertionError("a server-only run has no models to load")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, server_only=True)
+    view = _wait_done(runner)
+    assert view["state"] == "ready" and view["server_only"] is True
+    assert [s["key"] for s in view["steps"]] == ["server"]
+    assert view["steps"][0]["status"] == "done"
+    assert "--skip-models" in calls[0][0]
+
+
+def test_an_extra_model_with_no_load_check_ends_ready(monkeypatch):
+    plan = json.dumps(
+        {
+            "event": "plan",
+            "models": [
+                {"id": "Gemma-4-E4B-it-GGUF", "bytes_total": 10, "downloaded": True},
+                {"id": "gpt-oss-20b-GGUF", "bytes_total": 10, "downloaded": True},
+            ],
+        }
+    )
+    _popen(monkeypatch, _FakeProc(io.BytesIO((plan + chr(10)).encode())))
+    monkeypatch.setattr(
+        sr,
+        "check",
+        lambda *_a, **_k: {
+            "ready": True,
+            "models": [{"id": "Gemma-4-E4B-it-GGUF", "loaded": True}],
+        },
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, extra_models=["gpt-oss-20b-GGUF"])
+    view = _wait_done(runner)
+    assert view["state"] == "ready"
+    assert {m["id"]: m["state"] for m in view["models"]} == {
+        "Gemma-4-E4B-it-GGUF": "ready",
+        "gpt-oss-20b-GGUF": "ready",
+    }
+
+
+def test_only_extras_skip_the_load_check(monkeypatch):
+    plan = json.dumps(
+        {
+            "event": "plan",
+            "models": [
+                {"id": "Gemma-4-E4B-it-GGUF", "bytes_total": 10, "downloaded": True},
+                {
+                    "id": "user.embeddinggemma-300m-GGUF",
+                    "bytes_total": 1,
+                    "downloaded": True,
+                },
+            ],
+        }
+    )
+    _popen(monkeypatch, _FakeProc(io.BytesIO((plan + chr(10)).encode())))
+    # The check reports Gemma only: the embedder was never verified.
+    monkeypatch.setattr(
+        sr,
+        "check",
+        lambda *_a, **_k: {
+            "ready": True,
+            "models": [{"id": "Gemma-4-E4B-it-GGUF", "loaded": True}],
+        },
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    states = {m["id"]: m["state"] for m in view["models"]}
+    assert states["Gemma-4-E4B-it-GGUF"] == "ready"
+    assert states["user.embeddinggemma-300m-GGUF"] != "ready"
+
+
+def test_a_failed_server_only_run_fails_like_any_run(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO("\u274c Port in use\n".encode()), 1))
+    monkeypatch.setattr(sr, "server_problem", lambda: None)
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, server_only=True)
+    view = _wait_done(runner)
+    assert view["state"] == "failed" and "Port in use" in view["error"]
 
 
 def test_a_run_follows_the_chat_model_and_the_users_server(monkeypatch):
@@ -670,7 +806,9 @@ def test_an_unexpected_error_fails_the_run_and_frees_the_runner(monkeypatch):
     runner.start(False)
     view = _wait_done(runner)
     assert view["state"] == "failed"
-    assert "marker file is read-only" in view["error"]
+    # The cause stays in the server log, never in what the browser is sent.
+    assert "marker file is read-only" not in view["error"]
+    assert "GAIA server log" in view["error"]
     # Not stranded in "verifying": a retry is allowed.
     monkeypatch.setattr(sr, "check", lambda *a, **k: {"ready": True})
     _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
@@ -812,6 +950,8 @@ def test_gaias_own_server_is_never_probed(users_server):
 def client(monkeypatch):
     runner = sr.SetupRunner()
     monkeypatch.setattr(setup_router, "runner", runner)
+    # The disk pre-flight has its own tests; here the drive always has room.
+    monkeypatch.setattr(setup_router.plan_api, "run_disk_warning", lambda **_k: None)
     app = FastAPI()
     app.include_router(setup_router.router)
     return TestClient(app, headers={"X-Gaia-UI": "1"}), runner
@@ -880,7 +1020,9 @@ def test_check_route_unanswered_is_503(client, monkeypatch):
     monkeypatch.setattr(setup_router, "check", check)
     resp = test_client.get("/api/setup/check")
     assert resp.status_code == 503
-    assert "exit 2" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert "exit 2" not in detail
+    assert "gaia init --check" in detail and "server log" in detail
 
 
 def test_status_route_idle(client):
@@ -906,8 +1048,585 @@ def test_run_route_passes_the_switch_to_gaias_own(client, monkeypatch):
     test_client, runner = client
     seen = []
     monkeypatch.setattr(
-        runner, "start", lambda skip, gaia: seen.append((skip, gaia)) or {}
+        runner, "start", lambda skip, gaia, **_k: seen.append((skip, gaia)) or {}
     )
     test_client.post("/api/setup/run", json={"gaia_lemonade": True})
     test_client.post("/api/setup/run", json={})
     assert seen == [(False, True), (False, False)]
+
+
+@pytest.mark.parametrize(
+    "raw, clean",
+    [
+        # SGR colour and bold.
+        ("\x1b[1;36mGemma\x1b[0m", "Gemma"),
+        # Cursor / erase CSI sequences, and the 8-bit CSI introducer.
+        ("\x1b[2K\x1b[1GStep 2/5: Pulling", "Step 2/5: Pulling"),
+        ("\x9b0mdone", "done"),
+        # OSC 8 hyperlink, ST- and BEL-terminated: the link text survives.
+        ("see \x1b]8;;https://x.example\x1b\\docs\x1b]8;;\x1b\\ now", "see docs now"),
+        ("\x1b]0;window title\x07Ready", "Ready"),
+        # Escapes cut off at the end of a captured line.
+        ("Downloading 40%\x1b[1;3", "Downloading 40%"),
+        ("Downloading 40%\x1b[", "Downloading 40%"),
+        ("Downloading 40%\x1b]8;;https://x.example", "Downloading 40%"),
+        ("Downloading 40%\x1b", "Downloading 40%"),
+        # Charset selection and other two-byte ESC sequences.
+        ("\x1b(BReady\x1b7", "Ready"),
+        # Literal brackets with no ESC are content, not escapes.
+        ("[1;36m is literal", "[1;36m is literal"),
+        ("[bold]Model[/bold] [x] 45%", "[bold]Model[/bold] [x] 45%"),
+        ("[2026-10-29 10:00:00] | INFO", "[2026-10-29 10:00:00] | INFO"),
+        ("[####----] 45% 1.2 GB / 2.5 GB", "[####----] 45% 1.2 GB / 2.5 GB"),
+    ],
+)
+def test_setup_output_strips_only_terminal_escapes(raw, clean):
+    run = sr.SetupRun(False)
+    sr.SetupRunner()._consume(run, raw)
+
+    assert run.log == [clean]
+
+
+def test_a_line_that_is_only_escapes_adds_nothing_to_the_log():
+    run = sr.SetupRun(False)
+    sr.SetupRunner()._consume(run, "\x1b[0m\x1b[2K\x1b]8;;\x1b\\")
+
+    assert run.log == []
+
+
+def test_progress_is_still_read_through_colour_codes():
+    progress = sr.describe(
+        sr._ANSI_RE.sub("", "\x1b[32m[####----]\x1b[0m \x1b[1m45%\x1b[0m")
+    )
+
+    assert progress is not None and progress.percent == 45
+
+
+# ── per-model progress (#6226) ─────────────────────────────────────────────
+
+GEMMA = "Gemma-4-E4B-it-GGUF"
+EMBED = "user.embeddinggemma-300m-GGUF"
+QWEN = "Qwen3.6-35B-A3B-GGUF"
+
+
+def _plan_event(**extra):
+    return json.dumps(
+        {
+            "event": "plan",
+            "models": [
+                {"id": EMBED, "bytes_total": 330_000_000, "downloaded": True},
+                {"id": QWEN, "bytes_total": 23_300_000_000, "downloaded": False},
+            ],
+            "skipped": [GEMMA],
+            **extra,
+        }
+    )
+
+
+def _models(runner):
+    return {m["id"]: m for m in runner.status()["models"]}
+
+
+def test_run_args_ask_for_json_progress_and_pass_the_users_confirmations():
+    args = sr.run_args(False, allow_low_disk=True, keep_trying=True)
+    assert "--progress-json" in args
+    assert "--allow-low-disk" in args and "--keep-trying" in args
+    assert "--allow-low-disk" not in sr.run_args(False)
+    assert "--keep-trying" not in sr.run_args(False)
+
+
+def test_progress_json_lines_become_per_model_rows_not_log_lines():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._consume(run, _plan_event())
+    rows = _models(runner)
+    assert rows[EMBED]["state"] == "verifying"
+    assert rows[QWEN]["state"] == "queued"
+    assert rows[GEMMA]["state"] == "skipped"
+    runner._consume(
+        run,
+        json.dumps(
+            {
+                "event": "progress",
+                "model": QWEN,
+                "bytes_done": 3_300_000_000,
+                "bytes_total": 23_300_000_000,
+                "speed_bps": 20_000_000,
+            }
+        ),
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "downloading"
+    assert qwen["eta_s"] == 1000
+    # Bytes in the first event are not "already on this PC": a fresh pull's
+    # first report already carries a few MB.
+    assert qwen["downloaded_before_gb"] is None
+    overall = runner.status()["overall"]
+    assert overall["bytes_total"] == 23_630_000_000
+    assert overall["speed_bps"] == 20_000_000
+    assert overall["percent"] == 15
+    assert run.log == []
+
+
+def test_a_full_disk_fails_the_model_with_what_to_do():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event(
+        {"event": "error", "model": QWEN, "message": "No space left on device"}
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "failed" and qwen["error_kind"] == "disk_full"
+    assert "Free some space" in qwen["error"] and qwen["can_retry"]
+    assert runner.status()["overall"]["failed"] == 1
+
+
+def test_keep_trying_shows_the_wait_not_a_failure():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event({"event": "error", "model": QWEN, "message": "Connection reset"})
+    runner._on_event({"event": "retrying", "model": QWEN, "until": 1_900_000_000})
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "downloading" and qwen["error"] is None
+    assert qwen["retrying_until"] == 1_900_000_000
+
+
+def test_a_finished_run_marks_what_loaded_ready_and_what_did_not_failed():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event({"event": "model_done", "model": QWEN, "downloaded": True})
+    with runner._lock:
+        runner._settle_models({EMBED}, {QWEN: "would not load"})
+    rows = _models(runner)
+    assert rows[EMBED]["state"] == "ready"
+    assert rows[QWEN]["state"] == "failed" and rows[QWEN]["error_kind"] == "verify"
+    assert rows[GEMMA]["state"] == "skipped"
+
+
+def test_a_downloaded_model_the_check_did_not_load_is_not_left_verifying():
+    """Once init saves the chat model, ``--check --load`` drops Gemma; its row
+    must still finish, or a front end waits on it forever."""
+    runner = sr.SetupRunner()
+    runner._on_event(
+        {
+            "event": "plan",
+            "models": [
+                {"id": QWEN, "bytes_total": 10, "downloaded": False},
+                {"id": GEMMA, "bytes_total": 10, "downloaded": False},
+            ],
+        }
+    )
+    for model in (QWEN, GEMMA):
+        runner._on_event({"event": "model_done", "model": model, "downloaded": True})
+    with runner._lock:
+        runner._settle_models(None, {})
+    rows = _models(runner)
+    assert rows[QWEN]["state"] == rows[GEMMA]["state"] == "ready"
+
+
+def test_the_init_child_never_inherits_the_daemons_broker_url(monkeypatch):
+    """Run from the daemon, the child got the broker URL with no credential and
+    every model load failed; it must find the daemon itself instead."""
+    from gaia.daemon.constants import BROKER_URL_ENV_VAR
+
+    monkeypatch.setenv(BROKER_URL_ENV_VAR, "http://127.0.0.1:5555")
+    monkeypatch.setenv("GAIA_HARNESS_MARK", "kept")
+    calls = []
+    _fake_run(monkeypatch, 0, '{"ready": true}\n', calls=calls)
+    sr.check()
+    env = calls[0][1]["env"]
+    assert BROKER_URL_ENV_VAR not in env
+    assert env["GAIA_HARNESS_MARK"] == "kept"
+
+    seen = []
+    proc = _FakeProc(io.BytesIO(b""))
+    _popen(monkeypatch, proc, calls=seen)
+    sr.SetupRunner().start(skip_chat_model=False)
+    env = seen[0][1]["env"]
+    assert BROKER_URL_ENV_VAR not in env
+    assert env["NO_COLOR"] == "1" and env["GAIA_HARNESS_MARK"] == "kept"
+
+
+class _PullClient:
+    """Lemonade for one in-process pull: *events* streamed, then *ok*."""
+
+    def __init__(self, events, ok=True, gate=None, system_info=None):
+        self.events, self.ok, self.gate = events, ok, gate
+        self.system_info = system_info or {}
+        self.calls = []
+
+    def get_system_info(self, timeout=None):
+        return self.system_info
+
+    def ensure_model_downloaded(self, model_id, on_progress=None, **kwargs):
+        self.calls.append((model_id, kwargs))
+        if self.gate is not None:
+            self.gate.wait(5)
+        for event in self.events:
+            on_progress(event)
+        return self.ok
+
+
+def _wait_until(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_retry_downloads_one_model_in_process_with_a_valid_pull():
+    runner = sr.SetupRunner()
+    client = _PullClient(
+        [
+            {
+                "event": "progress",
+                "file": "m.gguf",
+                "bytes_downloaded": 5,
+                "bytes_total": 5,
+            },
+            {"event": "complete"},
+        ]
+    )
+    runner.download_model(client, GEMMA)
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "ready")
+    # A built-in pulls by name only; a recipe here 400s (#1655).
+    assert client.calls == [(GEMMA, {"timeout": 7200})]
+
+
+def test_a_failed_single_download_says_why_and_can_retry():
+    runner = sr.SetupRunner()
+    client = _PullClient(
+        [{"event": "error", "error": "Connection reset by peer"}], ok=False
+    )
+    runner.download_model(client, GEMMA)
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "failed")
+    row = _models(runner)[GEMMA]
+    assert row["error_kind"] == "network" and row["can_retry"]
+
+
+def test_one_model_cannot_download_twice_or_during_a_run():
+    runner = sr.SetupRunner()
+    gate = threading.Event()
+    runner.download_model(_PullClient([], gate=gate), GEMMA)
+    with pytest.raises(sr.SetupError, match="already downloading"):
+        runner.download_model(_PullClient([]), GEMMA)
+    with pytest.raises(sr.SetupError, match="still downloading"):
+        runner.start(False)
+    gate.set()
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "ready")
+    runner._run = sr.SetupRun(skip_chat_model=False)
+    with pytest.raises(sr.SetupError, match="Setup is running"):
+        runner.download_model(_PullClient([]), EMBED)
+
+
+def test_cancelling_one_download_marks_it_cancelled_and_resumable():
+    runner = sr.SetupRunner()
+    gate = threading.Event()
+    runner.download_model(_PullClient([], ok=False, gate=gate), GEMMA)
+    assert runner.cancel(GEMMA) is True
+    gate.set()
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "cancelled")
+    assert _models(runner)[GEMMA]["can_retry"]
+    assert runner.cancel("not-downloading") is False
+
+
+def test_the_run_bar_still_moves_when_init_reports_progress_as_json():
+    """The setup screen draws run.percent; --progress-json must keep it filled."""
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._consume(run, _plan_event())
+    assert run.view()["percent"] is None
+    runner._consume(
+        run,
+        json.dumps(
+            {
+                "event": "progress",
+                "model": QWEN,
+                "bytes_done": 11_650_000_000,
+                "bytes_total": 23_300_000_000,
+                "speed_bps": 1,
+            }
+        ),
+    )
+    view = run.view()
+    assert view["percent"] == 50
+    assert view["size"] == "11.98 GB of 23.63 GB"
+
+
+@pytest.mark.parametrize(
+    "error, status, words",
+    [
+        (sr.SetupBusy("secret path C:/x"), 409, "already running"),
+        (sr.LemonadeOverridden("secret path C:/x"), 409, "LEMONADE_BASE_URL"),
+        (sr.SetupError("Could not start: [WinError 2] C:/secret"), 500, "server log"),
+    ],
+)
+def test_run_route_answers_with_fixed_words_never_the_exception(
+    client, monkeypatch, error, status, words
+):
+    test_client, runner = client
+
+    def start(*_a, **_k):
+        raise error
+
+    monkeypatch.setattr(runner, "start", start)
+    resp = test_client.post("/api/setup/run", json={})
+    assert resp.status_code == status
+    assert words in resp.json()["detail"]
+    assert "secret" not in resp.json()["detail"]
+
+
+def test_a_failed_pull_shows_fixed_words_and_logs_lemonades(caplog):
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event(
+        {"event": "error", "model": QWEN, "message": "HTTP 500 at /secret/path"}
+    )
+    row = _models(runner)[QWEN]
+    assert row["error_kind"] == "lemonade"
+    assert "/secret/path" not in row["error"] and "server log" in row["error"]
+    assert "/secret/path" in caplog.text
+
+
+def test_progress_after_cancel_does_not_revive_a_cancelled_row():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event(json.loads(_plan_event()))
+    run.state = "cancelled"
+    with runner._lock:
+        for entry in runner._models.values():
+            if entry.state == "queued":
+                entry.state = "cancelled"
+    runner._consume(
+        run,
+        json.dumps(
+            {"event": "progress", "model": QWEN, "bytes_done": 5, "bytes_total": 9}
+        ),
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "cancelled" and qwen["can_retry"]
+    assert not runner.busy_with(QWEN)
+
+
+def test_resume_after_a_cancelled_run_still_reports_its_progress():
+    """A single download feeds _on_event directly; the cancelled run must not mute it."""
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._consume(run, _plan_event())
+    run.state = "cancelled"
+    with runner._lock:
+        runner._models[QWEN].state = "cancelled"
+    runner._on_event(
+        {
+            "event": "progress",
+            "model": QWEN,
+            "bytes_done": 11_650_000_000,
+            "bytes_total": 23_300_000_000,
+            "speed_bps": 10,
+        }
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "downloading" and qwen["bytes_done"] == 11_650_000_000
+    assert runner.status()["overall"]["percent"] is not None
+    runner._on_event({"event": "retrying", "model": QWEN, "until": 1_900_000_000})
+    assert _models(runner)[QWEN]["retrying_until"] == 1_900_000_000
+    runner._on_event(
+        {"event": "error", "model": QWEN, "message": "No space left on device"}
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "failed" and qwen["error_kind"] == "disk_full"
+
+
+def test_a_failed_run_never_shows_unchecked_models_as_ready():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    with runner._lock:
+        runner._settle_models(None, {}, run_failed=True)
+    embed = _models(runner)[EMBED]
+    # Not ready, and not failed either: nothing is wrong with the file.
+    assert embed["state"] == "unchecked"
+    assert embed["error_kind"] is None and embed["error"] is None
+    assert not embed["can_retry"]
+    assert runner.status()["overall"]["failed"] == 0
+
+
+def test_a_later_download_failing_keeps_the_earlier_models(monkeypatch):
+    """gaia init exits 1 when any one pull fails; what already downloaded stays."""
+    lines = [
+        _plan_event(),
+        json.dumps({"event": "model_done", "model": QWEN, "downloaded": True}),
+        json.dumps(
+            {"event": "error", "model": GEMMA, "message": "Connection reset by peer"}
+        ),
+    ]
+    _popen(
+        monkeypatch,
+        _FakeProc(io.BytesIO((chr(10).join(lines) + chr(10)).encode()), returncode=1),
+    )
+    monkeypatch.setattr(
+        sr, "check", lambda *_a, **_k: pytest.fail("a failed run is not load-checked")
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    assert view["state"] == "failed"
+    rows = {m["id"]: m for m in view["models"]}
+    for kept in (QWEN, EMBED):
+        assert rows[kept]["state"] == "unchecked", rows[kept]
+        assert rows[kept]["error_kind"] is None and not rows[kept]["can_retry"]
+        assert rows[kept]["bytes_done"] == rows[kept]["bytes_total"]
+    assert rows[GEMMA]["state"] == "failed" and rows[GEMMA]["can_retry"]
+    # Only the real failure counts.
+    assert view["overall"]["failed"] == 1
+    # The run says a model is why it stopped, so the UI shows no second error.
+    assert view["model_failed"] is True
+
+
+def test_a_run_that_stopped_for_another_reason_names_no_model(monkeypatch):
+    lines = [_plan_event(), json.dumps({"event": "model_done", "model": QWEN})]
+    _popen(
+        monkeypatch,
+        _FakeProc(io.BytesIO((chr(10).join(lines) + chr(10)).encode()), returncode=1),
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    assert view["state"] == "failed" and view["model_failed"] is False
+
+
+def test_a_load_check_that_never_ran_leaves_models_unchecked(monkeypatch):
+    lines = [_plan_event(), json.dumps({"event": "model_done", "model": QWEN})]
+    _popen(monkeypatch, _FakeProc(io.BytesIO((chr(10).join(lines) + chr(10)).encode())))
+
+    def broken(*_a, **_k):
+        raise sr.SetupError("The model server stopped answering.")
+
+    monkeypatch.setattr(sr, "check", broken)
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    assert view["state"] == "failed"
+    assert {m["id"]: m["state"] for m in view["models"]}[QWEN] == "unchecked"
+    assert view["overall"]["failed"] == 0
+
+
+def test_only_a_real_load_failure_is_a_verify_failure():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event({"event": "model_done", "model": QWEN})
+    with runner._lock:
+        runner._settle_models({EMBED}, {QWEN: "would not load"})
+    rows = _models(runner)
+    assert rows[QWEN]["state"] == "failed" and rows[QWEN]["error_kind"] == "verify"
+    assert rows[EMBED]["state"] == "ready"
+
+
+def test_a_resume_starts_from_the_bytes_already_down():
+    """The first poll after Resume must not read 0 and then jump to the partial."""
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event(
+        {
+            "event": "progress",
+            "model": QWEN,
+            "bytes_done": 9_000_000_000,
+            "bytes_total": 23_300_000_000,
+        }
+    )
+    runner.cancel(QWEN)
+    with runner._lock:
+        runner._models[QWEN].state = "cancelled"
+    gate = threading.Event()
+    runner.download_model(_PullClient([], gate=gate), QWEN)
+    try:
+        row = _models(runner)[QWEN]
+        assert row["state"] == "downloading"
+        assert row["bytes_done"] == 9_000_000_000
+        assert row["bytes_total"] == 23_300_000_000
+    finally:
+        gate.set()
+
+
+def test_remove_is_refused_while_setup_runs_or_under_another_spelling(client):
+    test_client, runner = client
+    runner._run = sr.SetupRun(skip_chat_model=False)
+    r = test_client.post("/api/setup/models/remove", json={"model_id": GEMMA})
+    assert r.status_code == 409
+    runner._run.state = "ready"
+    runner._models[EMBED] = sr.ModelProgress(id=EMBED, state="downloading")
+    for spelling in (EMBED.removeprefix("user."), EMBED.upper()):
+        r = test_client.post("/api/setup/models/remove", json={"model_id": spelling})
+        assert r.status_code == 409, spelling
+
+
+def test_resumed_bytes_come_from_the_plan_not_the_first_progress_event():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._consume(run, _plan_event())
+    runner._consume(
+        run,
+        json.dumps({"event": "progress", "model": QWEN, "bytes_done": 10_000_000}),
+    )
+    assert _models(runner)[QWEN]["downloaded_before_gb"] is None
+
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    event = json.loads(_plan_event())
+    event["models"][1]["bytes_on_disk"] = 13_700_000_000
+    runner._consume(run, json.dumps(event))
+    runner._consume(
+        run,
+        json.dumps({"event": "progress", "model": QWEN, "bytes_done": 13_900_000_000}),
+    )
+    assert _models(runner)[QWEN]["downloaded_before_gb"] == 13.7
+
+
+def test_a_single_download_reads_what_is_already_on_disk(monkeypatch):
+    from gaia.installer import init_command
+
+    seen = {}
+
+    def on_disk(_client, ids, store):
+        seen["store"] = store
+        return {m: 2_500_000_000 for m in ids}
+
+    monkeypatch.setattr(init_command, "bytes_already_on_disk", on_disk)
+    runner = sr.SetupRunner()
+    gate = threading.Event()
+    client = _PullClient(
+        [],
+        gate=gate,
+        system_info={"model_storage": {"path": "/models", "free_bytes": 10**12}},
+    )
+    runner.download_model(client, GEMMA)
+    try:
+        assert _models(runner)[GEMMA]["downloaded_before_gb"] == 2.5
+        assert seen["store"] == "/models"
+    finally:
+        gate.set()
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "ready")
+
+
+def test_a_brand_new_single_download_is_not_called_resumed():
+    runner = sr.SetupRunner()
+    client = _PullClient(
+        [
+            {
+                "event": "progress",
+                "file": "m.gguf",
+                "bytes_downloaded": 10_000_000,
+                "bytes_total": 6_000_000_000,
+            },
+            {"event": "complete"},
+        ]
+    )
+    runner.download_model(client, GEMMA)
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "ready")
+    assert _models(runner)[GEMMA]["downloaded_before_gb"] is None

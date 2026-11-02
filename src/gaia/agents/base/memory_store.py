@@ -45,6 +45,8 @@ from typing import (
 )
 from uuid import uuid4
 
+from gaia.utils.sqlite_wal import enable_wal
+
 logger = logging.getLogger(__name__)
 
 
@@ -616,16 +618,14 @@ CREATE TABLE IF NOT EXISTS forgotten (
 # append-only — store_turn() only ever INSERTs, never UPDATEs existing rows.
 # If UPDATE support is added in the future, a corresponding AFTER UPDATE
 # trigger must be added here to keep the FTS index in sync.
-# Triggers are created separately (can't use IF NOT EXISTS on triggers
-# in all SQLite versions, so we catch the error).
 _TRIGGER_SQL = [
     """
-    CREATE TRIGGER conv_fts_ai AFTER INSERT ON conversations BEGIN
+    CREATE TRIGGER IF NOT EXISTS conv_fts_ai AFTER INSERT ON conversations BEGIN
         INSERT INTO conversations_fts(rowid, content) VALUES (new.id, new.content);
     END
     """,
     """
-    CREATE TRIGGER conv_fts_ad AFTER DELETE ON conversations BEGIN
+    CREATE TRIGGER IF NOT EXISTS conv_fts_ad AFTER DELETE ON conversations BEGIN
         INSERT INTO conversations_fts(conversations_fts, rowid, content)
         VALUES ('delete', old.id, old.content);
     END
@@ -643,6 +643,20 @@ _V2_INDEX_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_conv_not_consolidated "
     "ON conversations(session_id) WHERE consolidated_at IS NULL",
 ]
+
+_SCHEMA_VERSION = 8
+
+# Every table, index and trigger the schema creates, to tell a complete database
+# from one that still needs creating or migrating.
+_SCHEMA_OBJECTS = frozenset(
+    re.findall(
+        r"CREATE\s+(?:VIRTUAL\s+)?(?:TABLE|INDEX|TRIGGER)\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)",
+        re.sub(
+            r"--[^\n]*", "", "\n".join([_SCHEMA_SQL, *_TRIGGER_SQL, *_V2_INDEX_SQL])
+        ),
+        re.IGNORECASE,
+    )
+)
 
 
 # ============================================================================
@@ -777,38 +791,50 @@ class MemoryStore:
         tool history without discarding existing rows.
         """
         with self._locked():
-            self._conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(self._conn)
             # Allow up to 5 s of retries before raising SQLITE_BUSY.  This
             # prevents spurious errors when the dashboard REST singleton and
             # the ChatAgent instance share the same WAL file concurrently.
             self._conn.execute("PRAGMA busy_timeout=5000")
-            self._conn.executescript(_SCHEMA_SQL)
-
-            # Create triggers (ignore if already exist)
-            for trigger_sql in _TRIGGER_SQL:
-                try:
+            if self._schema_is_current_locked():
+                return
+            # One write transaction, not one per statement: another process
+            # creating the same database then waits for a single commit
+            # instead of losing the write lock to ~40 back-to-back ones.
+            try:
+                self._conn.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA_SQL)
+                for trigger_sql in _TRIGGER_SQL:
                     self._conn.execute(trigger_sql)
-                except sqlite3.OperationalError:
-                    pass  # Trigger already exists
 
-            # Initialize schema_version if empty (fresh install → v7)
-            cursor = self._conn.execute("SELECT COUNT(*) FROM schema_version")
-            if cursor.fetchone()[0] == 0:
-                self._conn.execute(
-                    "INSERT INTO schema_version VALUES (?, ?)",
-                    (8, _now_iso()),
-                )
-            else:
-                # Run migrations for existing databases
-                self._migrate_schema_locked()
+                cursor = self._conn.execute("SELECT COUNT(*) FROM schema_version")
+                if cursor.fetchone()[0] == 0:
+                    self._conn.execute(
+                        "INSERT INTO schema_version VALUES (?, ?)",
+                        (_SCHEMA_VERSION, _now_iso()),
+                    )
+                else:
+                    self._migrate_schema_locked()
 
-            # Create v2-specific indexes AFTER migration ensures the columns
-            # exist.  On fresh installs the columns are in the CREATE TABLE,
-            # so these are also safe.  IF NOT EXISTS makes them idempotent.
-            for idx_sql in _V2_INDEX_SQL:
-                self._conn.execute(idx_sql)
+                # After migration, which adds the columns these index.
+                for idx_sql in _V2_INDEX_SQL:
+                    self._conn.execute(idx_sql)
 
-            self._conn.commit()
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+
+    def _schema_is_current_locked(self) -> bool:
+        """True when every schema object exists at the current version (read-only).
+
+        Lets an existing database open without taking the write lock, so a
+        process writing to it cannot hold the open up.
+        """
+        names = {r[0] for r in self._conn.execute("SELECT name FROM sqlite_master")}
+        if not _SCHEMA_OBJECTS <= names:
+            return False
+        row = self._conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+        return row[0] == _SCHEMA_VERSION
 
     def _migrate_schema_locked(self):
         """Run schema migrations if needed. Must hold self._lock.
@@ -857,7 +883,7 @@ class MemoryStore:
         if current_version < 3:
             logger.info("[MemoryStore] migrating schema v%d -> v3", current_version)
 
-            # v2 -> v3: add the procedures table (procedural memory, #887).
+            # v2 -> v3: add the procedures table (procedural memory).
             # The table and its indexes are created by _SCHEMA_SQL's
             # CREATE TABLE IF NOT EXISTS, which already ran in _init_schema(),
             # so this step only advances the version marker.  Additive only —
@@ -872,7 +898,7 @@ class MemoryStore:
         if current_version < 4:
             logger.info("[MemoryStore] migrating schema v%d -> v4", current_version)
 
-            # v3 -> v4: add the skill_deltas table (adaptive skills, #2674).
+            # v3 -> v4: add the skill_deltas table (adaptive skills).
             # Same shape as the v2 -> v3 step: _SCHEMA_SQL's CREATE TABLE IF NOT
             # EXISTS already ran in _init_schema(), so this only advances the
             # marker. Additive — no existing row or read path is touched, and an
@@ -887,7 +913,7 @@ class MemoryStore:
         if current_version < 5:
             logger.info("[MemoryStore] migrating schema v%d -> v5", current_version)
 
-            # v4 -> v5: add the synthesis_marks table (procedural memory, #887).
+            # v4 -> v5: add the synthesis_marks table (procedural memory).
             # Same shape as the two steps above — _SCHEMA_SQL's CREATE TABLE IF
             # NOT EXISTS already ran in _init_schema(), so this only advances the
             # marker.  A store written before this build has no marks and no
@@ -901,7 +927,7 @@ class MemoryStore:
             current_version = 5
 
         if current_version < 6:
-            # v5 -> v6: add the forgotten table (#4730). Same shape as above:
+            # v5 -> v6: add the forgotten table. Same shape as above:
             # the table already exists, so this only advances the marker.
             self._conn.execute(
                 "UPDATE schema_version SET version = 6, migrated_at = ?",
@@ -1499,7 +1525,7 @@ class MemoryStore:
         except sqlite3.OperationalError as e:
             # A failed dedup search means store() falls through to inserting a
             # duplicate -- debug level hid exactly that for as long as this
-            # query could raise (#4142's own bug was one such cause).
+            # query could raise.
             logger.warning("[MemoryStore] FTS5 dedup search failed: %s", e)
 
         return None
@@ -2959,7 +2985,7 @@ class MemoryStore:
                 (now_iso,),
             ).fetchone()[0]
 
-            # Procedures (procedural memory / skills, #887). COUNT(*) instead of
+            # Procedures (procedural memory / skills). COUNT(*) instead of
             # fetching rows so a large procedure table never loads into memory.
             p_total = self._conn.execute("SELECT COUNT(*) FROM procedures").fetchone()[
                 0
@@ -3483,7 +3509,7 @@ class MemoryStore:
             ]
 
     # ==================================================================
-    # Procedures (v3 — procedural memory, #887)
+    # Procedures (v3 — procedural memory)
     # ==================================================================
 
     def _row_to_procedure_dict(self, row) -> Dict:
@@ -3788,7 +3814,7 @@ class MemoryStore:
                 raise
 
     # ------------------------------------------------------------------
-    # Skill deltas — the learned overlay on an authored skill (v4, #2674)
+    # Skill deltas — the learned overlay on an authored skill (v4)
     # ------------------------------------------------------------------
 
     def put_delta(
@@ -4159,7 +4185,7 @@ class MemoryStore:
         ]
 
     # ------------------------------------------------------------------
-    # Synthesis progress — what the distiller has already consumed (#887)
+    # Synthesis progress — what the distiller has already consumed
     # ------------------------------------------------------------------
 
     #: ``meta`` key holding the newest tool-history timestamp synthesis consumed.

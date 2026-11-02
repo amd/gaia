@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Cloud, Cpu, Loader2 } from 'lucide-react';
+import { Check, Cloud, Cpu, Loader2, Trash2 } from 'lucide-react';
 import * as api from '../../services/api';
-import { useModelStore, displayModelName, distinctModelLabels } from '../../stores/modelStore';
+import { useModelStore, displayModelName, distinctModelLabels, sameModelId } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
 import { ModelContextSize } from './ModelContextSize';
+import { AddCustomModel } from './AddCustomModel';
+import { LocalModelsSections } from './LocalModelsSections';
 import { STATE_LABELS, isDownloading, placementText } from '../modelMeta';
 import '../ModelPicker.css';
 import { CloudPrices } from './CloudPrices';
@@ -17,20 +19,9 @@ import type { ProviderId, ProviderInfo, ProviderModel } from '../../types';
 
 const DOWNLOAD_POLL_MS = 2000;
 
-function keyStatus(p: ProviderInfo): string {
-    if (p.key_state === 'waiting_for_os_permission') return p.key_message ?? 'Waiting for the OS to allow reading the saved key.';
-    switch (p.key_source) {
-        case 'environment': return `A key is set in ${p.env_var} and is in use.`;
-        case 'lemonade': return 'A key is already configured on the local model server.';
-        case 'stored': return 'A saved key will be used.';
-        default: return 'No key yet.';
-    }
-}
-
-function keyPlaceholder(p: ProviderInfo): string {
-    if (p.key_source === 'environment') return 'Blank uses the environment key';
-    if (p.key_source) return 'Blank keeps the saved key';
-    return 'Paste API key';
+function maskedKey(p: ProviderInfo): string {
+    if (p.key_source === 'environment') return `Set in ${p.env_var}`;
+    return `••••••••••••••••••••${p.key_hint ? ` ${p.key_hint}` : ''}`;
 }
 
 /** Local vs Fireworks AI vs AMD LLM Gateway, keys, and the model list — the TUI's /provider. */
@@ -49,16 +40,22 @@ export function ModelSettings() {
     const [query, setQuery] = useState('');
     const [showAllFireworksModels, setShowAllFireworksModels] = useState(false);
     const [key, setKey] = useState('');
+    const [replacingKey, setReplacingKey] = useState(false);
+    const [confirmForget, setConfirmForget] = useState(false);
     const [amd, setAmd] = useState({ base_url: '', auth_header_name: '', auth_header_prefix: '' });
     const [busy, setBusy] = useState<string | null>(null);
     const [memory, setMemory] = useState<string | null>(null);
     const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+    const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
     // A connect waiting on an OS prompt stops once the user picks another provider or leaves.
     const chosenRef = useRef(chosen);
     chosenRef.current = chosen;
     const mounted = useRef(true);
-    useEffect(() => () => { mounted.current = false; }, []);
+    useEffect(() => {
+        mounted.current = true;
+        return () => { mounted.current = false; };
+    }, []);
 
     const provider = providers?.find((p) => p.id === chosen) ?? null;
     const offline = (p: ProviderInfo | null) => p?.network?.reachable === false;
@@ -102,6 +99,8 @@ export function ModelSettings() {
     useEffect(() => { if (activeProvider && !requested) setChosen(activeProvider); }, [activeProvider, requested]);
     useEffect(() => {
         setKey('');
+        setReplacingKey(false);
+        setConfirmForget(false);
         setNotice(null);
         setQuery('');
         setShowAllFireworksModels(false);
@@ -128,10 +127,12 @@ export function ModelSettings() {
             );
             if (movedOn()) return;
             setKey('');
+            setReplacingKey(false);
             setNotice({
                 ok: true,
                 text: r.remember_error
                     ? `Connected for this session only — the key could not be kept: ${r.remember_error}`
+                    : r.known_models ? `${provider.name} can't list its models right now. Your key still works, so GAIA connected using models it already knows.`
                     : r.remembered ? 'Connected. The key is kept for next time.' : 'Connected.',
             });
             await loadProviders();
@@ -146,6 +147,7 @@ export function ModelSettings() {
 
     const forget = useCallback(async () => {
         setBusy('forget');
+        setConfirmForget(false);
         setNotice(null);
         try {
             await api.forgetProviderKey(chosen);
@@ -185,6 +187,30 @@ export function ModelSettings() {
         }
     }, [loadModels]);
 
+    const remove = useCallback(async (model: string) => {
+        setBusy(`rm:${model}`);
+        setNotice(null);
+        try {
+            const r = await api.removeCustomModel(model);
+            setConfirmRemove(null);
+            const cleared = r.cleared.includes('last_model')
+                ? ' New messages use your default model.'
+                : r.cleared.includes('default_model') ? " It was your default model, so GAIA's own default takes its place." : '';
+            setNotice({ ok: true, text: `Removed ${r.display_name} and its download.${cleared}` });
+            await loadModels('local', true);
+            await refreshActive();
+        } catch (err) {
+            setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
+        } finally {
+            setBusy(null);
+        }
+    }, [loadModels, refreshActive]);
+
+    const added = useCallback(async (name: string) => {
+        setNotice({ ok: true, text: `Added ${name}. Choose Download to fetch it, then Use.` });
+        await loadModels('local', true);
+    }, [loadModels]);
+
     // Poll while a download runs so its row shows progress, then its new state.
     const anyDownloading = !!models?.some(isDownloading);
     useEffect(() => {
@@ -210,7 +236,7 @@ export function ModelSettings() {
     const activeLocal = active && !active.remote && active.model ? active.model : null;
 
     const renderRow = (m: ProviderModel) => {
-        const current = active?.model === m.id;
+        const current = sameModelId(active?.model, m.id);
         const progress = isDownloading(m) ? m.download_progress : null;
         const meta = [
             placementText(m.placement),
@@ -226,6 +252,7 @@ export function ModelSettings() {
                         {m.rank && <span className="model-row-rank">#{m.rank} {m.note}</span>}
                         {m.state === 'loaded' && <span className="model-badge is-loaded">{STATE_LABELS.loaded}</span>}
                         {m.fits === true && m.available !== false && <span className="model-badge is-fit">Fits this PC</span>}
+                        {m.custom && <span className="model-badge is-custom">Added by you</span>}
                     </span>
                     {provider?.remote && (
                         <span className={`model-row-meta${m.price ? '' : ' is-unknown-price'}`}>{formatPrice(m.price)}</span>
@@ -238,7 +265,33 @@ export function ModelSettings() {
                     {progress && (
                         <progress max={100} value={progress.percent} aria-label={`Downloading ${labels[m.id]}`} />
                     )}
+                    {m.custom && m.source_url && (
+                        <span className="model-row-meta">From {m.source_url}</span>
+                    )}
                 </div>
+                {m.custom && !current && !progress && (
+                    confirmRemove === m.id ? (
+                        <span className="model-row-confirm">
+                            <button type="button" className="btn-danger" onClick={() => void remove(m.id)} disabled={busy !== null}>
+                                {busy === `rm:${m.id}` ? <Loader2 size={13} className="spin" /> : null}
+                                {m.downloaded ? 'Remove and delete download' : 'Remove'}
+                            </button>
+                            <button type="button" className="btn-secondary" onClick={() => setConfirmRemove(null)} disabled={busy !== null}>
+                                Keep
+                            </button>
+                        </span>
+                    ) : (
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => setConfirmRemove(m.id)}
+                            disabled={busy !== null}
+                            aria-label={`Remove ${labels[m.id]}`}
+                        >
+                            Remove
+                        </button>
+                    )
+                )}
                 {current ? (
                     <span className="model-row-current"><Check size={13} aria-hidden="true" /> In use</span>
                 ) : m.available === false ? null : progress ? (
@@ -316,9 +369,22 @@ export function ModelSettings() {
                             className="settings-field"
                             onSubmit={(e) => { e.preventDefault(); void connect(); }}
                         >
-                            <span className="settings-label">API key</span>
-                            <span className="settings-hint">{keyStatus(provider)}</span>
-                            {provider.id === 'amd' && (
+                            <div className="settings-row settings-row-between">
+                                <span className="settings-label">API key</span>
+                                {provider.key_source && (
+                                    <span className={`settings-key-status ${connected ? 'settings-ok' : 'settings-error'}`}>
+                                        {connected ? 'Connected' : 'Not connected'}
+                                    </span>
+                                )}
+                            </div>
+                            {!provider.key_source && (
+                                <span className="settings-hint">
+                                    {provider.key_state === 'waiting_for_os_permission'
+                                        ? provider.key_message ?? 'Waiting for the OS to allow reading the saved key.'
+                                        : 'No key yet.'}
+                                </span>
+                            )}
+                            {provider.id === 'amd' && (!provider.key_source || replacingKey) && (
                                 <div className="settings-grid">
                                     <input
                                         className="settings-input"
@@ -336,27 +402,66 @@ export function ModelSettings() {
                                     />
                                 </div>
                             )}
-                            <div className="settings-row">
-                                <input
-                                    className="settings-input"
-                                    type="password"
-                                    autoComplete="off"
-                                    spellCheck={false}
-                                    value={key}
-                                    onChange={(e) => setKey(e.target.value)}
-                                    placeholder={keyPlaceholder(provider)}
-                                    aria-label={`${provider.name} API key`}
-                                />
-                                <button type="submit" className="btn-primary" disabled={busy !== null || (!key && !provider.key_source)}>
-                                    {busy === 'connect' ? <Loader2 size={13} className="spin" /> : null}
-                                    {provider.models_discovered ? 'Reconnect' : 'Connect'}
-                                </button>
-                                {(provider.key_source === 'lemonade' || provider.key_source === 'stored') && (
-                                    <button type="button" className="btn-secondary" onClick={() => void forget()} disabled={busy !== null}>
-                                        Forget key
+                            {provider.key_source && !replacingKey ? (
+                                <div className="settings-row">
+                                    <input
+                                        className="settings-input settings-key-masked"
+                                        readOnly
+                                        value={maskedKey(provider)}
+                                        aria-label={`Saved ${provider.name} API key`}
+                                    />
+                                    {!connected && (
+                                        <button type="submit" className="btn-primary" disabled={busy !== null}>
+                                            {busy === 'connect' ? <Loader2 size={13} className="spin" /> : null}
+                                            Reconnect
+                                        </button>
+                                    )}
+                                    {provider.key_source !== 'environment' && (confirmForget ? (
+                                        <>
+                                            <span className="settings-hint">Remove this key?</span>
+                                            <button type="button" className="btn-danger" onClick={() => void forget()} disabled={busy !== null}>Remove</button>
+                                            <button type="button" className="btn-secondary" onClick={() => setConfirmForget(false)}>Keep</button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <button type="button" className="btn-secondary" onClick={() => setReplacingKey(true)} disabled={busy !== null}>Replace</button>
+                                            <button
+                                                type="button"
+                                                className="btn-secondary settings-key-remove"
+                                                onClick={() => setConfirmForget(true)}
+                                                disabled={busy !== null}
+                                                aria-label="Remove key"
+                                                title="Remove key"
+                                            >
+                                                <Trash2 size={14} aria-hidden="true" />
+                                            </button>
+                                        </>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="settings-row">
+                                    <input
+                                        className="settings-input"
+                                        type="password"
+                                        autoComplete="off"
+                                        spellCheck={false}
+                                        autoFocus={replacingKey}
+                                        value={key}
+                                        onChange={(e) => setKey(e.target.value)}
+                                        placeholder={replacingKey ? 'Paste your new key' : 'Paste API key'}
+                                        aria-label={`${provider.name} API key`}
+                                    />
+                                    <button type="submit" className="btn-primary" disabled={busy !== null || !key}>
+                                        {busy === 'connect' ? <Loader2 size={13} className="spin" /> : null}
+                                        {replacingKey ? 'Save key' : 'Connect'}
                                     </button>
-                                )}
-                            </div>
+                                    {replacingKey && (
+                                        <button type="button" className="btn-secondary" onClick={() => { setKey(''); setReplacingKey(false); }} disabled={busy !== null}>
+                                            Cancel
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                             {provider.error && <p className="settings-error" role="alert">{provider.error}</p>}
                         </form>
                     )}
@@ -364,6 +469,12 @@ export function ModelSettings() {
                     {notice && (
                         <p className={notice.ok ? 'settings-ok' : 'settings-error'} role={notice.ok ? 'status' : 'alert'}>
                             {notice.text}
+                        </p>
+                    )}
+
+                    {provider.known_models && (
+                        <p className="settings-hint" role="status">
+                            {provider.name} can't list its models right now, so GAIA is showing models it already knows. Your key still works, but this list may be out of date.
                         </p>
                     )}
 
@@ -414,6 +525,10 @@ export function ModelSettings() {
                             )}
                         </div>
                     )}
+
+                    {provider.id === 'local' && connected && <AddCustomModel onAdded={(name) => void added(name)} />}
+
+                    {provider.id === 'local' && connected && <LocalModelsSections />}
 
                     {provider.remote && <SpendingLimit />}
                 </section>

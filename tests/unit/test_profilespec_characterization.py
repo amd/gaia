@@ -16,10 +16,10 @@ never hand-typed. If a golden is wrong, this whole contract is corrupted; do
 not "fix" a failing comparison by editing the JSON unless you have re-verified
 the new golden is itself a real harness capture.
 
-The two ``test_*_is_not_yet_declarative`` smoke tests are EXPECTED TO FAIL on
-current main (the if/elif chain is still there) — that failure is the point.
-They flip to green once the ProfileSpec table (Increment 2) lands. Do not
-weaken them to a softer check to make them pass early.
+The two structural smoke tests verify that the current ProfileSpec implementation
+stays declarative rather than regressing to profile-specific branching. They are
+expected to pass in the installed chat package lane; keep them strict so a future
+regression is visible.
 """
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); skip the
+# ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
 from gaia.eval.tool_cost import (  # noqa: E402
     _build_skeleton_tool_loader,
@@ -101,7 +101,7 @@ def chat_agent_build_context(
         os.chdir(cwd)
     stubbed = _ensure_optional_deps_stubbed()
     try:
-        from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+        from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
         cfg = ChatAgentConfig(
             rag_documents=[],
@@ -170,9 +170,22 @@ def chat_agent_build_context(
             os.chdir(prev_cwd)
 
 
-def build_agent_for_row(profile: str, **kwargs) -> Tuple[str, List[str]]:
-    """Build one fixture row's agent, register tools, and capture (prompt, tools)."""
-    with chat_agent_build_context(profile, **kwargs) as agent:
+def build_agent_for_row(
+    profile: str, tool_calling: Optional[bool] = None, **kwargs
+) -> Tuple[str, List[str]]:
+    """Build one fixture row's agent, register tools, and capture (prompt, tools).
+
+    *tool_calling* overrides whether the row's model takes native tool calls.
+    """
+    with contextlib.ExitStack() as stack:
+        if tool_calling is not None:
+            stack.enter_context(
+                patch(
+                    "gaia.llm.lemonade_client.is_tool_calling_model",
+                    return_value=tool_calling,
+                )
+            )
+        agent = stack.enter_context(chat_agent_build_context(profile, **kwargs))
         agent._register_tools()
         tools = sorted(agent._tools_registry.keys())
         prompt = agent._get_system_prompt()
@@ -241,10 +254,14 @@ ROWS: List[Tuple[str, Dict]] = [
     ),
     (
         "row10_doc_loader_on_non_tool_calling_model",
-        # gemma4-it-e2b-FLM: MODELS["gemma-4-e2b"], tool_calling=False
-        # (lemonade_client.py) — the FLM/NPU server 500s on a native `tools=`
-        # payload, so is_tool_calling_model() is False for this id.
-        dict(profile="doc", dynamic_tools=True, model_id="gemma4-it-e2b-FLM"),
+        # No local chat model lacks native tool calls any more, so the row
+        # forces that path rather than naming a model that takes it.
+        dict(
+            profile="doc",
+            dynamic_tools=True,
+            model_id="gemma4-it-e2b-FLM",
+            tool_calling=False,
+        ),
     ),
     ("row11_file_no_docs_baseline", dict(profile="file")),
     (
@@ -297,38 +314,26 @@ def test_profile_prompt_and_tools_match_golden(row_id, kwargs, tmp_path):
     )
 
 
-# ── Structural smoke tests — MUST currently fail (#2323 Increment 2 target) ─
+# ── Structural smoke tests — keep the ProfileSpec implementation declarative ─
 
 
-def test_get_system_prompt_is_not_yet_declarative():
-    """Pins the CURRENT if/elif profile-branching state of `_get_system_prompt`.
-
-    Expected to FAIL on current main — the ProfileSpec table hasn't landed
-    yet. It flips to passing once Increment 2 replaces the chain; at that
-    point this test documents the refactor succeeded (or becomes a permanent
-    "don't regress back to if/elif" guard — reviewer's call which).
-    """
-    from gaia_agent_chat.agent import ChatAgent
+def test_get_system_prompt_uses_declarative_profile_spec():
+    """Keep system-prompt assembly declarative and table-driven."""
+    from gaia_agent.chat_agent import ChatAgent
 
     source = inspect.getsource(ChatAgent._get_system_prompt)
     assert "if profile ==" not in source, (
-        "ChatAgent._get_system_prompt still branches on `if profile ==` — "
-        "expected on pre-refactor main. This is not a bug to fix in this "
-        "commit; it documents the state Increment 2 must change."
+        "ChatAgent._get_system_prompt regressed to profile-specific branching; "
+        "keep prompt assembly driven by the ProfileSpec table."
     )
 
 
-def test_register_tools_is_not_yet_declarative():
-    """Pins the CURRENT if/elif profile-branching state of `_register_tools`.
-
-    See `test_get_system_prompt_is_not_yet_declarative` — same contract, the
-    tool-registration chain instead of the prompt-assembly chain.
-    """
-    from gaia_agent_chat.agent import ChatAgent
+def test_register_tools_uses_declarative_profile_spec():
+    """Keep tool registration declarative and table-driven."""
+    from gaia_agent.chat_agent import ChatAgent
 
     source = inspect.getsource(ChatAgent._register_tools)
     assert "if profile ==" not in source, (
-        "ChatAgent._register_tools still branches on `if profile ==` — "
-        "expected on pre-refactor main. This is not a bug to fix in this "
-        "commit; it documents the state Increment 2 must change."
+        "ChatAgent._register_tools regressed to profile-specific branching; "
+        "keep tool registration driven by the ProfileSpec table."
     )

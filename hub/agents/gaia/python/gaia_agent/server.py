@@ -15,8 +15,10 @@ so the two agents cannot drift into private dialects of the same contract.
 Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
 ``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
 ``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
-2.14), ``/sessions/{session_id}/bypass`` and ``/sessions/{session_id}/internet``
-(contract >= 2.23). ``needs_input`` is answered over
+2.14), ``/sessions/{session_id}/bypass``, ``/sessions/{session_id}/internet``
+(contract >= 2.23), ``/sessions/{session_id}/grants`` (contract >= 2.26) and
+``/sessions/{session_id}/tools`` (contract >= 2.27).
+``needs_input`` is answered over
 ``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
 the same way over ``/tool_decision`` — but only when there is a session to
 hold the grant AND the caller declared it can answer (``can_confirm`` in
@@ -49,6 +51,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
 from gaia_agent.entry import main as _entry_main
 from gaia_agent.memory_dump import build_memory_dump
+from gaia_agent.session import validate_session_id
 from gaia_agent.session_registry import (
     AGENT_BUILD_LOCK,
     PROVIDER_CLAUDE,
@@ -57,7 +60,6 @@ from gaia_agent.session_registry import (
     close_agent,
 )
 from gaia_agent.session_registry import registry as session_registry
-from gaia_agent_chat.session import validate_session_id
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import StreamingResponse
 
@@ -91,7 +93,11 @@ AGENT_ID = "gaia"
 #: 2.22 added ``/query``'s ``reasoning`` field.
 #: 2.23 added ``/query``'s ``internet_off`` field and ``/sessions/{id}/internet``.
 #: 2.24 added ``working_directory`` to ``/query``.
-API_VERSION = "2.24"
+#: 2.25 added ``/query``'s ``turns`` field and ``final.model_messages``.
+#: 2.26 added ``GET``/``DELETE /sessions/{id}/grants`` to list and revoke a
+#: session's "always" answers, and ``/skills``' ``claude-project`` source.
+#: 2.27 added ``GET /sessions/{id}/tools``: the tools the session's agent has.
+API_VERSION = "2.27"
 
 #: How long ``final`` waits for the turn's context measurement before going without.
 _CONTEXT_WAIT_SECONDS = 15.0
@@ -296,6 +302,39 @@ class QueryRequest(_Strict):
         ),
     )
 
+    turns: Optional[List[List[Dict[str, Any]]]] = Field(
+        default=None,
+        description=(
+            "Earlier turns as the model saw them, oldest first (contract >= "
+            "2.25): each is that turn's `final.model_messages`, tool calls and "
+            "results included, or a user/assistant text pair for a turn that "
+            "recorded none. Replaces `context` when sent, and `[]` means no "
+            "earlier turns and clears a retained session's history; the agent "
+            "keeps the newest whole turns that fit its context window. Sent, "
+            "even as `[]`, it makes `final` carry `model_messages`."
+        ),
+    )
+
+    @field_validator("turns")
+    @classmethod
+    def _turn_roles_known(
+        cls, v: Optional[List[List[Dict[str, Any]]]]
+    ) -> Optional[List[List[Dict[str, Any]]]]:
+        for turn in v or []:
+            for message in turn:
+                if message.get("role") not in {"user", "assistant", "system", "tool"}:
+                    raise ValueError(f"unknown role {message.get('role')!r} in turns")
+        return v
+
+    @model_validator(mode="after")
+    def _turns_replace_context(self) -> "QueryRequest":
+        if self.turns is not None and self.context:
+            raise ValueError(
+                "send `turns` or `context`, not both: with `turns`, `context` "
+                "must be [] (contract >= 2.25)."
+            )
+        return self
+
     reasoning: bool = Field(
         default=False,
         description=(
@@ -470,6 +509,36 @@ class InternetRequest(_Strict):
 class InternetResponse(_Strict):
     session_id: str
     internet_off: bool
+
+
+class GrantView(_Strict):
+    key: str = Field(description="The grant's handle, for revoking it.")
+    label: str = Field(description="What it allows, as the prompt worded it.")
+
+
+class GrantsResponse(_Strict):
+    """A session's "always" answers (contract >= 2.26)."""
+
+    session_id: str
+    grants: List[GrantView]
+
+
+class ToolView(_Strict):
+    name: str = Field(description="The tool's registered name.")
+    description: str = Field(description="What it does, as the model is told.")
+    category: str = Field(
+        description=(
+            "Where it comes from: a KNOWN_TOOLS mixin name (rag, file_io, ...), "
+            "mcp, skill, or agent for a tool the agent defines itself."
+        )
+    )
+
+
+class ToolsResponse(_Strict):
+    """The tools a session's agent can call (contract >= 2.27)."""
+
+    session_id: str
+    tools: List[ToolView]
 
 
 class _QueryRun:
@@ -1235,6 +1304,59 @@ def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
         checked_out[0].run_lock.release()
 
 
+#: How long a ``final`` waits for the loop to return its turn record. The
+#: answer is already streamed; only the record for later turns waits on it.
+_TURN_RECORD_WAIT_SECONDS = 15.0
+
+
+def _history_from_turns(
+    agent: Any, turns: List[List[Dict[str, Any]]], query: str, handler: Any
+) -> List[Dict[str, Any]]:
+    """The newest whole *turns* that fit *agent*'s window, as its model reads them."""
+    from gaia.agents.base.history import (
+        history_budget,
+        select_history,
+        text_tool_history,
+    )
+
+    uses_native = getattr(agent, "_uses_native_tool_calls", None)
+    if callable(uses_native) and not uses_native():
+        turns = text_tool_history(turns)
+    return select_history(
+        turns,
+        history_budget(agent, query),
+        lambda cut: handler._emit({"type": "status", "message": cut.notice}),
+    )
+
+
+async def _with_turn_record(
+    event: Dict[str, Any], run: _QueryRun, thread: threading.Thread, wanted: bool
+) -> Dict[str, Any]:
+    """*event* with the turn's ``model_messages`` when it is a ``final``.
+
+    Only a caller that sent ``turns`` (*wanted*) gets it: the record carries
+    every tool result in full, so it can outgrow a reader's frame limit.
+    The answer streams before the loop returns, so this waits for the record.
+    """
+    if not wanted or event.get("type") != "final":
+        return event
+    await asyncio.to_thread(thread.join, _TURN_RECORD_WAIT_SECONDS)
+    if thread.is_alive():
+        logger.warning(
+            "run_id=%s: the run had not finished %.0fs after its answer; this "
+            "turn is sent without its tool record, so later turns see only its text",
+            run.run_id,
+            _TURN_RECORD_WAIT_SECONDS,
+        )
+        return event
+    messages = (
+        run.result.get("model_messages") if isinstance(run.result, dict) else None
+    )
+    if messages is None:
+        return event
+    return {**event, "model_messages": messages}
+
+
 async def _finish_changes(run: _QueryRun) -> List[Dict[str, Any]]:
     """Complete the run's undo recording ahead of its terminal event.
 
@@ -1265,7 +1387,7 @@ _QUERY_SSE_RESPONSES = {
             "action, summary, confirm_id?, always_scope?, risk?, tool_label?, "
             "args?, args_truncated?, prompt_context?} | needs_input {run_id, "
             "request_id, question, options, allow_free_text, sensitive, "
-            "respond_url, timeout_seconds?} | final {answer, usage?, failed?} | "
+            "respond_url, timeout_seconds?} | final {answer, usage?, failed?, model_messages?} | "
             "error {detail, status}. A needs_confirmation's `args` are exactly "
             "the arguments the model sent for the gated call, each value capped "
             "at 64,000 characters (`args_truncated: true` when one was cut); "
@@ -1468,10 +1590,17 @@ async def query(request: QueryRequest):
             handler.answers_questions = False
 
         # Pushed context, never pulled (spec §2.4).
-        if request.context and hasattr(agent, "conversation_history"):
+        # Recorded turns are fitted on the run's thread, with the context.
+        pushed = bool(request.turns) or bool(request.context)
+        if (
+            request.context
+            and request.turns is None
+            and hasattr(agent, "conversation_history")
+        ):
             agent.conversation_history = [
                 {"role": c.role, "content": c.content} for c in request.context
             ]
+        if pushed and hasattr(agent, "conversation_history"):
             # The caller chose this text, not the user — so it must not count as
             # the user speaking when the agent decides what it is allowed to
             # learn permanently (Agent.turn_content_provenance).
@@ -1514,7 +1643,12 @@ async def query(request: QueryRequest):
     def _process() -> None:
         if request.documents:
             _index_attached_documents(agent, request.documents, handler)
-        if request.context and hasattr(agent, "conversation_history"):
+        if request.turns is not None and hasattr(agent, "conversation_history"):
+            # Sizing them can ask the model server for its window: never on the loop.
+            agent.conversation_history = _history_from_turns(
+                agent, request.turns, request.query, handler
+            )
+        elif request.context and hasattr(agent, "conversation_history"):
             # The caller sized this without our prompt and tools; re-fit it.
             agent.conversation_history = fit_pushed_history(
                 agent,
@@ -1692,7 +1826,11 @@ async def query(request: QueryRequest):
                     if ctype in TERMINAL_TYPES:
                         for warning in await _finish_changes(run):
                             yield _emit(warning)
-                        canonical = await _with_context(canonical)
+                        canonical = await _with_context(
+                            await _with_turn_record(
+                                canonical, run, thread, request.turns is not None
+                            )
+                        )
                     yield _emit(canonical)
                     last_write = time.monotonic()
                     if ctype == "needs_input":
@@ -1727,12 +1865,25 @@ async def query(request: QueryRequest):
                 if canonical.get("type") in TERMINAL_TYPES:
                     for warning in await _finish_changes(run):
                         yield _emit(warning)
-                    canonical = await _with_context(canonical)
+                    canonical = await _with_context(
+                        await _with_turn_record(
+                            canonical, run, thread, request.turns is not None
+                        )
+                    )
                 yield _emit(canonical)
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True
             if not terminated:
-                yield _emit(await _with_context(_terminal_from_run_result(run.result)))
+                yield _emit(
+                    await _with_context(
+                        await _with_turn_record(
+                            _terminal_from_run_result(run.result),
+                            run,
+                            thread,
+                            request.turns is not None,
+                        )
+                    )
+                )
         finally:
             # A client that disconnected mid-run should not leave the loop running.
             handler.cancelled.set()
@@ -1927,6 +2078,71 @@ async def set_internet(session_id: str, body: InternetRequest):
         )
     session.agent.internet_off = body.internet_off
     return InternetResponse(session_id=session_id, internet_off=body.internet_off)
+
+
+def _existing_session(session_id: str) -> Any:
+    _require_valid_session_id(session_id)
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists, so it holds no grants. It "
+                "may have ended or been evicted; its grants went with it."
+            ),
+        )
+    return session
+
+
+@router.get("/sessions/{session_id}/grants", response_model=GrantsResponse)
+async def list_grants(session_id: str) -> GrantsResponse:
+    """The calls the user answered "always" to in this session, so far.
+
+    Includes answers given in a turn still running, which is where a caller
+    shows the user what it may now do without asking.
+    """
+    session = _existing_session(session_id)
+    return GrantsResponse(session_id=session_id, grants=session.permissions.grants())
+
+
+@router.get("/sessions/{session_id}/tools", response_model=ToolsResponse)
+async def list_tools(session_id: str) -> ToolsResponse:
+    """The tools the session's agent can call now, skills loaded so far included.
+
+    Read from the session's own agent, so it is what the next turn is offered.
+    An unknown session is a 404: building an agent just to list tools would
+    describe a different agent than the one the chat talks to.
+    """
+    _require_valid_session_id(session_id)
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists, so it has no agent to list "
+                "tools for. Send a query on that session first."
+            ),
+        )
+    tools = await asyncio.to_thread(session.agent.describe_tools)
+    return ToolsResponse(session_id=session_id, tools=tools)
+
+
+@router.delete("/sessions/{session_id}/grants", response_model=GrantsResponse)
+async def revoke_grants(session_id: str, key: Optional[str] = None) -> GrantsResponse:
+    """Revoke one "always" answer (``?key=``), or all of them.
+
+    Applies from the very next gated call, including one in a running turn.
+    An unknown key is a 404 rather than a quiet success: a caller that thinks
+    it revoked something must not be left believing it.
+    """
+    session = _existing_session(session_id)
+    removed = session.permissions.revoke(key)
+    if key is not None and removed == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Session {session_id!r} has no grant {key!r}.",
+        )
+    return GrantsResponse(session_id=session_id, grants=session.permissions.grants())
 
 
 def _log_caller_auth_state(auth_config: Any) -> None:

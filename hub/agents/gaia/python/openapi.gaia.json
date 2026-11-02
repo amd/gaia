@@ -35,6 +35,50 @@
         "title": "BypassResponse",
         "type": "object"
       },
+      "GrantView": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "description": "The grant's handle, for revoking it.",
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "description": "What it allows, as the prompt worded it.",
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "GrantView",
+        "type": "object"
+      },
+      "GrantsResponse": {
+        "additionalProperties": false,
+        "description": "A session's \"always\" answers (contract >= 2.26).",
+        "properties": {
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/GrantView"
+            },
+            "title": "Grants",
+            "type": "array"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "grants"
+        ],
+        "title": "GrantsResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -335,6 +379,25 @@
             "description": "The front-end this turn comes from (contract >= 2.20). 'agent_ui' tells the agent that features like Scheduled tasks are in the caller's sidebar, and each front-end gets model-provider errors worded for its own settings. Fixed when a session is built; omit it for a headless caller, whose provider advice then points at the model server this GAIA host uses.",
             "title": "Surface"
           },
+          "turns": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Earlier turns as the model saw them, oldest first (contract >= 2.25): each is that turn's `final.model_messages`, tool calls and results included, or a user/assistant text pair for a turn that recorded none. Replaces `context` when sent, and `[]` means no earlier turns and clears a retained session's history; the agent keeps the newest whole turns that fit its context window. Sent, even as `[]`, it makes `final` carry `model_messages`.",
+            "title": "Turns"
+          },
           "working_directory": {
             "anyOf": [
               {
@@ -472,6 +535,56 @@
         "title": "ToolDecisionResponse",
         "type": "object"
       },
+      "ToolView": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "description": "Where it comes from: a KNOWN_TOOLS mixin name (rag, file_io, ...), mcp, skill, or agent for a tool the agent defines itself.",
+            "title": "Category",
+            "type": "string"
+          },
+          "description": {
+            "description": "What it does, as the model is told.",
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "description": "The tool's registered name.",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "category"
+        ],
+        "title": "ToolView",
+        "type": "object"
+      },
+      "ToolsResponse": {
+        "additionalProperties": false,
+        "description": "The tools a session's agent can call (contract >= 2.27).",
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/ToolView"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "session_id",
+          "tools"
+        ],
+        "title": "ToolsResponse",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -523,7 +636,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.24"
+    "version": "2.27"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -634,7 +747,7 @@
                 }
               }
             },
-            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`: status {message, phase?, queue?} | token {delta} | tool_call {tool, args} | tool_result {tool, data, render?} | needs_confirmation {run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?} | needs_input {run_id, request_id, question, options, allow_free_text, sensitive, respond_url, timeout_seconds?} | final {answer, usage?, failed?} | error {detail, status}. A needs_confirmation's `args` are exactly the arguments the model sent for the gated call, each value capped at 64,000 characters (`args_truncated: true` when one was cut); what the agent adds to its prompt is in `prompt_context` {working_directory?, risk_note?, file_path?}, never in `args`. The stream ends with exactly one `final` or `error`. `:`-prefixed heartbeat comments carry no payload."
+            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`: status {message, phase?, queue?} | token {delta} | tool_call {tool, args} | tool_result {tool, data, render?} | needs_confirmation {run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?} | needs_input {run_id, request_id, question, options, allow_free_text, sensitive, respond_url, timeout_seconds?} | final {answer, usage?, failed?, model_messages?} | error {detail, status}. A needs_confirmation's `args` are exactly the arguments the model sent for the gated call, each value capped at 64,000 characters (`args_truncated: true` when one was cut); what the agent adds to its prompt is in `prompt_context` {working_directory?, risk_note?, file_path?}, never in `args`. The stream ends with exactly one `final` or `error`. `:`-prefixed heartbeat comments carry no payload."
           },
           "422": {
             "content": {
@@ -944,6 +1057,118 @@
         ]
       }
     },
+    "/v1/gaia/sessions/{session_id}/grants": {
+      "delete": {
+        "description": "Revoke one \"always\" answer (``?key=``), or all of them.\n\nApplies from the very next gated call, including one in a running turn.\nAn unknown key is a 404 rather than a quiet success: a caller that thinks\nit revoked something must not be left believing it.",
+        "operationId": "revoke_grants_v1_gaia_sessions__session_id__grants_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Revoke Grants",
+        "tags": [
+          "gaia-query"
+        ]
+      },
+      "get": {
+        "description": "The calls the user answered \"always\" to in this session, so far.\n\nIncludes answers given in a turn still running, which is where a caller\nshows the user what it may now do without asking.",
+        "operationId": "list_grants_v1_gaia_sessions__session_id__grants_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "List Grants",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
     "/v1/gaia/sessions/{session_id}/internet": {
       "post": {
         "description": "Turn a session's internet on or off from its agent's next tool call.\n\n``/query``'s ``internet_off`` covers the turns that start after a change;\nthis reaches a turn already running, so a switch flipped mid-turn stops the\nnext web search rather than the one after the turn ends. An unknown session\nis a 404, as for bypass.",
@@ -998,6 +1223,55 @@
           {}
         ],
         "summary": "Set Internet",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/sessions/{session_id}/tools": {
+      "get": {
+        "description": "The tools the session's agent can call now, skills loaded so far included.\n\nRead from the session's own agent, so it is what the next turn is offered.\nAn unknown session is a 404: building an agent just to list tools would\ndescribe a different agent than the one the chat talks to.",
+        "operationId": "list_tools_v1_gaia_sessions__session_id__tools_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "List Tools",
         "tags": [
           "gaia-query"
         ]

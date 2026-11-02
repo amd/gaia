@@ -474,15 +474,14 @@ class TestConnectGrantAgent:
         assert captured["scopes"] == sorted(
             {
                 "openid",
-                "email",
-                "profile",
+                "https://www.googleapis.com/auth/userinfo.email",
                 "https://www.googleapis.com/auth/gmail.modify",
                 "https://www.googleapis.com/auth/gmail.send",
                 "https://www.googleapis.com/auth/calendar.events",
                 "https://www.googleapis.com/auth/calendar.readonly",
             }
         )
-        assert len(captured["scopes"]) == 7
+        assert len(captured["scopes"]) == 6
         # Bare connect never grants — it only authorizes.
         assert captured["grant_agents"] is None
 

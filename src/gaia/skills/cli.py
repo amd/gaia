@@ -43,7 +43,7 @@ from gaia.skills.format import (
     SkillTool,
 )
 from gaia.skills.lock import forget_skill
-from gaia.skills.manager import SkillManager
+from gaia.skills.manager import SkillManager, default_project_dir
 from gaia.skills.migrate import (
     VENDORS,
     MigrationOutcome,
@@ -106,7 +106,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--root",
         default=None,
         help="Only show skills from this discovery root "
-        "(agent-bundled | user | claude-import)",
+        "(agent-bundled | user | claude-project | claude-import)",
     )
 
     p_info = sub.add_parser("info", help="Show one skill's manifest in detail")
@@ -503,7 +503,7 @@ def handle(args: argparse.Namespace) -> int:
 
 
 def _manager() -> SkillManager:
-    return SkillManager()
+    return SkillManager(project_dir=default_project_dir())
 
 
 def _handle_list(args: argparse.Namespace) -> int:
@@ -1248,7 +1248,7 @@ def _handle_keygen(args: argparse.Namespace) -> int:
 
 
 def _handle_trust(args: argparse.Namespace) -> int:
-    from gaia.skills.signing import TrustStore
+    from gaia.skills.signing import BUILTIN_TRUSTED_KEYS, TrustStore
 
     action = getattr(args, "trust_action", None)
     if action is None:
@@ -1261,20 +1261,20 @@ def _handle_trust(args: argparse.Namespace) -> int:
     store = TrustStore.load(root)
 
     if action == "list":
-        if not store.entries:
-            print("No trusted signing keys.")
-            print(
-                f"  Every skill therefore installs at '{LOWEST_TIER}'. Trust a "
-                "publisher's public key with: gaia skill trust add <key>"
-            )
-            return EXIT_OK
         print(f"{'KEY ID':<34} {'ROLE':<11} {'ATTESTS':<13} PUBLISHER")
-        for entry in store.entries.values():
-            attests = "verified" if entry["role"] == ROLE_AMD else "community"
-            print(
-                f"{entry['key_id']:<34} {entry['role']:<11} {attests:<13} "
-                f"{entry.get('publisher') or '-'}"
-            )
+        builtin = {
+            k: v for k, v in BUILTIN_TRUSTED_KEYS.items() if k not in store.entries
+        }
+        for source, entries in (("built-in", builtin), ("", store.entries)):
+            for entry in entries.values():
+                attests = "verified" if entry["role"] == ROLE_AMD else "community"
+                publisher = entry.get("publisher") or "-"
+                if source:
+                    publisher = f"{publisher} ({source})"
+                print(
+                    f"{entry['key_id']:<34} {entry['role']:<11} {attests:<13} "
+                    f"{publisher}"
+                )
         return EXIT_OK
 
     if action == "add":
@@ -1291,6 +1291,13 @@ def _handle_trust(args: argparse.Namespace) -> int:
         print(f"   Trust store: {store.path}")
         return EXIT_OK
 
+    if args.key_id in BUILTIN_TRUSTED_KEYS and args.key_id not in store.entries:
+        sys.stderr.write(
+            f"❌ Key {args.key_id} is built into GAIA (it signs the skills GAIA "
+            "publishes), so it cannot be removed from the trust store. To stop "
+            "using a skill signed by it, run 'gaia skill remove <name>'.\n"
+        )
+        return EXIT_USAGE
     if not store.remove(args.key_id):
         sys.stderr.write(
             f"❌ Key {args.key_id} is not in the trust store at {store.path}. List "

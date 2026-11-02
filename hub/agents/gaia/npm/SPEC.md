@@ -83,7 +83,7 @@ delivers one binary from one lane. A `1.x`-shaped lock is likewise rejected.
 
 The TUI is **consumed, not built here**. It is the same `tui/cmd/gaia` binary the
 core release publishes as the `terminal-hub` component and a core install runs as
-`gaia tui` — so behaviour is identical by construction rather than by convention.
+`gaia-tui` — so behaviour is identical by construction rather than by convention.
 Building a second copy under this package's lane would put the same bytes at a
 different version under a third naming convention, and the two would drift.
 
@@ -258,7 +258,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.24"`                  |
+| Contract version   | `API_VERSION = "2.27"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -277,6 +277,9 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
 | `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
 | `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.23) |
+| `GET`  | `/v1/gaia/sessions/{session_id}/grants` | The session's "always" answers, `{ key, label }` each (≥ 2.26) |
+| `DELETE` | `/v1/gaia/sessions/{session_id}/grants` | Revoke one (`?key=`) or all of them (≥ 2.26) |
+| `GET`  | `/v1/gaia/sessions/{session_id}/tools` | The tools the session's agent can call now, `{ name, description, category }` each; an unknown session is a `404` (≥ 2.27) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 #### `/query` request body
@@ -340,8 +343,8 @@ the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
 
 `internet_off` (contract ≥ 2.23) is `true` when the caller's chat has the
 Internet switched off and `false` when it is on. With `true` the turn refuses
-web search and page fetches, the browser, connector (MCP), mailbox and Agent
-Hub tools and any call or shell command that contacts a host other than the agent's own machine, and
+web search and page fetches, the browser, connector (MCP) and Agent Hub
+tools, mailbox reads, and any call or shell command that contacts a host other than the agent's own machine, and
 the refusal tells the model the internet is off for this chat. A retained
 session keeps the last value, so send it every turn; omit it to leave the
 agent as it is. Pre-2.23 binaries `422` the field, so a caller whose chat has
@@ -385,6 +388,19 @@ names the `host:port` it went through; on a base URL the user set, a local
 model's failure reads "the model server at `host:port`", not "Lemonade on this
 machine". Pre-2.20 binaries `422` the field and word every such error for the
 TUI.
+
+`turns` (contract ≥ 2.25) is the conversation so far as the model saw it,
+oldest first. Each entry is one earlier turn's `final.model_messages`, which
+holds the assistant's tool calls and the tool results, or a user/assistant text
+pair for a turn that recorded none. The agent replays the newest whole turns
+that fit its context window and says in a `status` event when older ones drop
+out. Sent, it replaces `context`, which must then be `[]` (anything else is a
+`422`); `turns: []` means no earlier turns, and clears a retained session's
+history. A request that sent `turns`, even `[]`, gets `model_messages` on its
+`final` so the caller can store it with the reply; a request without `turns`
+never does, because the record holds every tool result in full. It is also
+absent when the run had not finished 15 s after its answer, and that turn then
+replays as text only. Pre-2.25 binaries `422` `turns`.
 
 `reasoning` (contract ≥ 2.22), when `true`, streams the model's reasoning as
 `reasoning` events, `{ "type": "reasoning", "delta": "…" }`, so a client can
@@ -435,10 +451,12 @@ paths call the same `build_memory_dump()` and return the identical shape.
 the same roots the agent does — its bundled skills, `~/.gaia/skills`, Claude
 Code skill folders — so a host without the Python package (the bundled skills
 live inside the binary) can still show them. `source` names the root a skill
-came from: `agent-bundled`, `user` or `claude-import`, or `null` for any other
-root. An agent that predates `source` omits the field; a host must treat a list
-where any skill lacks it as ungrouped and show it flat, not drop the skill. A skill root that cannot be read is a `500`
-naming it.
+came from: `agent-bundled`, `user`, `claude-project` (contract ≥ 2.26: the
+`.claude/skills` of the project the agent works in) or `claude-import` (other
+Claude Code skill folders), or `null` for any other root. An agent that predates
+`source` omits the field; a host must treat a list where any skill lacks it, or
+carries a value the host does not know, as ungrouped and show it flat, never
+drop the skill. A skill root that cannot be read is a `500` naming it.
 
 `/query` streams the answer as `token` events before its terminal `final`. A
 run cancelled mid-answer (`/cancel`, or a dropped connection) ends with an
@@ -504,7 +522,8 @@ directory shape, entry points, installed commands and platform quirks, present
 whenever the agent's working directory resolves to a code repository (a VCS
 directory or a recognised manifest at its root). `GAIA_PROJECT_ROOT=<path>`
 picks the project when the working directory is not it. If that repository has
-no code index, the first `search_code_index` builds one;
+no code index, the first `search_code_index` starts building one in the
+background and reports its progress until it lands;
 `GAIA_PROJECT_MAP_AUTO_INDEX=1` builds it in a background thread at task start
 instead. The same repository check also
 makes `run_shell_command` always-on for the session instead of semantically
@@ -648,7 +667,7 @@ keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model
 remotely, so a local server URL alone does not establish local inference.
 
-`--bypass-permissions` turns off more than the prompt. It also lifts the shell
+`--full-access` turns off more than the prompt. It also lifts the shell
 tool's own guardrails for the session: the shell-only operators — redirection
 (`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`) and the
 newline — parse and run, chaining (`&&`, `||`, `;`, `|`) already ran by
@@ -656,8 +675,10 @@ default, the read-only binary allowlist is replaced by a developer set
 (`node`, `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`,
 `timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`/`git`,
 which already had their own paths), and the shell rate limit is dropped. `git`
-being in that set means its policy's outright refusals — push, reset, rebase —
-also stop applying under bypass. That is
+being in that set means the policy that holds `git push`, `git reset` and
+`git rebase` also stops applying under bypass. Without bypass those commands ask
+the user once, and are refused only on a run nobody can answer; the destructive
+forms (`git push --force`, `git reset --hard`) are refused with no prompt. That is
 arbitrary code execution in the working directory, which is why it exists only
 on this transport: one local parent process on a private pipe. It is **not**
 reachable over HTTP, and the request body cannot ask for it —

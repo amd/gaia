@@ -35,8 +35,10 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, get_args
 from uuid import uuid4
+
+from gaia.utils.sqlite_wal import enable_wal
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,33 @@ Action = Literal[
 ]
 
 Risk = Literal["low", "medium", "high", "critical"]
+
+_GOAL_STATUSES = frozenset(get_args(GoalStatus))
+_TASK_STATUSES = frozenset(get_args(TaskStatus))
+
+
+def _require_status(status: str, allowed: frozenset, kind: str) -> None:
+    """Raise when ``status`` is not one the store's state machine knows."""
+    if status not in allowed:
+        raise ValueError(
+            f"unknown {kind} status {status!r}; expected one of {sorted(allowed)}"
+        )
+
+
+class GoalTransitionError(ValueError):
+    """A goal transition was asked of a goal in a state it does not apply to."""
+
+    def __init__(
+        self, goal_id: str, action: str, current: str, allowed_from: tuple
+    ) -> None:
+        self.goal_id = goal_id
+        self.action = action
+        self.current = current
+        super().__init__(
+            f"cannot {action} goal {goal_id}: it is {current!r}; {action} "
+            f"applies only to a goal that is "
+            f"{' or '.join(repr(s) for s in allowed_from)}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +287,7 @@ class GoalStore:
                 detect_types=sqlite3.PARSE_DECLTYPES,
             )
             self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(self._conn)
             self._conn.execute("PRAGMA foreign_keys=ON")
         return self._conn
 
@@ -429,7 +458,12 @@ class GoalStore:
         status: GoalStatus,
         progress_notes: Optional[str] = None,
     ) -> Optional[Goal]:
-        """Update a goal's status and optionally append progress notes."""
+        """Update a goal's status and optionally append progress notes.
+
+        Raises:
+            ValueError: ``status`` is not a ``GoalStatus``.
+        """
+        _require_status(status, _GOAL_STATUSES, "goal")
         now = _now_iso()
         with self._lock:
             conn = self._get_conn()
@@ -440,26 +474,89 @@ class GoalStore:
             conn.commit()
         return self.get_goal(goal_id)
 
-    def approve_goal(self, goal_id: str) -> Optional[Goal]:
-        """Approve an agent-inferred goal: move to queued and set approved_for_auto."""
+    def _transition_goal(
+        self,
+        goal_id: str,
+        action: str,
+        allowed_from: tuple,
+        status: GoalStatus,
+        approve: bool = False,
+    ) -> Optional[Goal]:
+        """Move a goal to ``status`` only from one of ``allowed_from``, atomically.
+
+        A goal already in ``status`` is returned unchanged (with ``approve``,
+        it is also marked approved). Returns None when the goal does not exist.
+
+        Raises:
+            GoalTransitionError: the goal exists but is in another state.
+        """
         now = _now_iso()
+        placeholders = ",".join("?" * len(allowed_from))
+        approval = ", approved_for_auto=1" if approve else ""
         with self._lock:
             conn = self._get_conn()
-            conn.execute(
-                "UPDATE goals SET status='queued', approved_for_auto=1, updated_at=? WHERE id=?",
-                (now, goal_id),
+            cursor = conn.execute(
+                f"UPDATE goals SET status=?{approval}, updated_at=? "
+                f"WHERE id=? AND status IN ({placeholders})",
+                (status, now, goal_id, *allowed_from),
             )
             conn.commit()
-        logger.debug("[GoalStore] approved goal %s", goal_id)
+            if cursor.rowcount == 0:
+                row = conn.execute(
+                    "SELECT status, approved_for_auto FROM goals WHERE id=?",
+                    (goal_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                if row["status"] != status:
+                    raise GoalTransitionError(
+                        goal_id, action, row["status"], allowed_from
+                    )
+                # Repeating the action (a double click) is a no-op, not a conflict.
+                if approve and not row["approved_for_auto"]:
+                    conn.execute(
+                        "UPDATE goals SET approved_for_auto=1, updated_at=? WHERE id=?",
+                        (now, goal_id),
+                    )
+                    conn.commit()
+        logger.debug("[GoalStore] %s goal %s -> %s", action, goal_id, status)
         return self.get_goal(goal_id)
 
+    def approve_goal(self, goal_id: str) -> Optional[Goal]:
+        """Approve a goal awaiting approval: move to queued and set approved_for_auto.
+
+        Approving a goal that is already queued just marks it approved.
+        Returns None when the goal does not exist.
+
+        Raises:
+            GoalTransitionError: the goal is in any other state — a rejected,
+                cancelled or finished goal is never re-queued.
+        """
+        return self._transition_goal(
+            goal_id, "approve", ("pending_approval",), "queued", approve=True
+        )
+
     def reject_goal(self, goal_id: str) -> Optional[Goal]:
-        """Reject an agent-inferred goal."""
-        return self.update_goal_status(goal_id, "rejected")
+        """Reject a goal awaiting approval.
+
+        Raises:
+            GoalTransitionError: the goal is neither ``pending_approval`` nor
+                already ``rejected``.
+        """
+        return self._transition_goal(
+            goal_id, "reject", ("pending_approval",), "rejected"
+        )
 
     def cancel_goal(self, goal_id: str) -> Optional[Goal]:
-        """Cancel a queued or in-progress goal."""
-        return self.update_goal_status(goal_id, "cancelled")
+        """Cancel a queued or in-progress goal.
+
+        Raises:
+            GoalTransitionError: the goal is neither queued, in progress, nor
+                already ``cancelled``.
+        """
+        return self._transition_goal(
+            goal_id, "cancel", ("queued", "in_progress"), "cancelled"
+        )
 
     def delete_goal(self, goal_id: str) -> bool:
         """Hard-delete a goal and all its tasks (CASCADE). Returns True if deleted."""
@@ -510,7 +607,12 @@ class GoalStore:
         status: TaskStatus,
         result: Optional[str] = None,
     ) -> Optional[Task]:
-        """Update a task's status and optionally record the outcome."""
+        """Update a task's status and optionally record the outcome.
+
+        Raises:
+            ValueError: ``status`` is not a ``TaskStatus``.
+        """
+        _require_status(status, _TASK_STATUSES, "task")
         now = _now_iso()
         with self._lock:
             conn = self._get_conn()

@@ -93,7 +93,8 @@
                       "guides/browser-use",
                       "guides/harness-engineering",
                       "guides/talk",
-                      "guides/transcription"
+                      "guides/transcription",
+                      "guides/audio-generation"
                     ]
                   },
                   {
@@ -138,6 +139,9 @@
                   "connectors/microsoft",
                   "connectors/github",
                   "connectors/tavily",
+                  "connectors/git",
+                  "connectors/memory",
+                  "connectors/slack",
                   "security/connections",
                   "security/connectors"
                 ]
@@ -439,7 +443,8 @@
               "plans/tool-loader",
               "plans/nightly-benchmarks",
               "plans/eval-hillclimbing",
-              "plans/release-train"
+              "plans/release-train",
+              "plans/release-eval-hardening"
             ]
           },
           {
@@ -457,6 +462,8 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.25.4",
+              "releases/v0.25.3",
               "releases/v0.25.2",
               "releases/v0.25.1",
               "releases/v0.25.0",
@@ -521,7 +528,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.25.2 \u00b7 Lemonade 2026.43.3",
+        "label": "v0.25.4 \u00b7 Lemonade 2026.44.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

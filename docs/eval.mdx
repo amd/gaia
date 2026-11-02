@@ -52,7 +52,7 @@ flowchart TD
     MCPS --> API(["FastAPI Backend · port 4200"])
     API --> DB(["SQLite DB\ngaia_chat.db"])
     API --> RAG(["FAISS Index\n~/.gaia/*.pkl"])
-    API -->|"chat · embeddings"| LEM(["Lemonade Server · port 8000"])
+    API -->|"chat · embeddings"| LEM(["Lemonade Server · port 13305"])
 
     EVAL -->|"structured JSON\nto stdout"| SCORE(["Score Recompute\n& Status Derive\n(runner.py)"])
     SCORE --> SC(["scorecard.json"])
@@ -271,7 +271,7 @@ The fixer subprocess (`claude -p fixer.md`) receives the `scorecard.json` path, 
     claude --version
     ```
 
-    If not installed, see [Claude Code installation](https://docs.anthropic.com/en/docs/claude-code).
+    If not installed, see [Claude Code installation](https://code.claude.com/docs/en/quickstart).
   </Step>
 </Steps>
 
@@ -407,15 +407,16 @@ The manifest also defines adversarial documents (`empty.txt`, `unicode_test.txt`
 | `--scenario ID` | -- | Run one scenario by ID |
 | `--category NAME` | -- | Run all scenarios in a category |
 | `--audit-only` | `false` | Check architecture constraints without running LLM calls |
-| `--generate-corpus` | `false` | Regenerate corpus documents and validate `manifest.json` |
+| `--generate-corpus` | `false` | Validate the committed corpus documents against `manifest.json`; fails if a listed file is missing |
 | `--backend URL` | `http://localhost:4200` | Agent UI backend URL |
 | `--model MODEL` | `claude-opus-5` | Driver **and** judge — it runs each scenario as well as scoring it, so it must match the baseline you compare against |
+| `--agent-model MODEL` | -- | Local model the agent must run (e.g. `Gemma-4-E4B-it-GGUF`). Each scenario's session is checked, and one that ran another model is discarded as `INFRA_ERROR`. It verifies, it does not switch: set `default_model` in the backend's GAIA home first |
 | `--budget USD` | `2.00` | Max spend per scenario |
 | `--timeout SECS` | `900` | Per-scenario timeout (auto-scaled for large-doc and multi-turn scenarios) |
 | `--fix` | `false` | Auto-invoke Claude Code to repair failures, then re-eval |
 | `--max-fix-iterations N` | `3` | Max repair cycles in `--fix` mode |
 | `--target-pass-rate N` | `0.90` | Stop fixing early when pass rate reaches this threshold |
-| `--compare PATH...` | -- | Compare two `scorecard.json` files or compare against saved baseline |
+| `--compare PATH...` | -- | Compare two `scorecard.json` files or compare against saved baseline. Exits 0 (no regression), 2 (regression) or 3 (measured with a different agent model or eval model) |
 | `--save-baseline` | `false` | Save this run's scorecard as `eval/results/baseline.json` |
 | `--capture-session UUID` | -- | Convert a live Agent UI session into a YAML scenario |
 
@@ -446,7 +447,7 @@ The fixer prioritizes repairs in this order:
 3. **Multi-scenario failures** before single-scenario issues
 
 <Note>
-  Fix mode uses Claude Code to patch `src/gaia/` source files. Review diffs before committing. Always run `python util/lint.py --all --fix` after fix iterations.
+  Fix mode uses Claude Code to patch `src/gaia/` source files. It refuses to start while tracked files have uncommitted changes, so `git diff` afterwards is exactly what the fixer changed — commit your work or run it from a separate worktree first. If a fixer iteration times out or fails, the loop stops instead of re-scoring a half-edited tree. Review diffs before committing. Always run `python util/lint.py --all --fix` after fix iterations.
 </Note>
 
 ---
@@ -458,11 +459,18 @@ The fixer prioritizes repairs in this order:
 gaia eval agent --save-baseline
 
 # Compare latest run against saved baseline (auto-detects eval/results/baseline.json)
-gaia eval agent --compare eval/results/latest/scorecard.json
+gaia eval agent --compare eval/results/eval-20261021-141300/scorecard.json
 
 # Explicit two-file comparison
 gaia eval agent --compare eval/results/run_20250320/scorecard.json eval/results/run_20250322/scorecard.json
 ```
+
+`--compare` refuses (exit 3) two scorecards measured with a different local model
+or a different eval model, because the scenario IDs match either way and the diff
+would measure the model swap. It reads the baseline's models from `meta.json` in
+the baseline's directory when there is one, otherwise from the baseline scorecard.
+A current scorecard records its model as `config.agent_model`: the `--agent-model`
+pin, or the one model every measured scenario ran.
 
 **Comparison output includes:**
 - Per-scenario delta: PASS to FAIL regressions (highlighted), FAIL to PASS improvements

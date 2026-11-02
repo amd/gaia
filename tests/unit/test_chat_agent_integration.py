@@ -7,11 +7,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); skip the
+# ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
+
+from gaia.agents.base.model_features import TIER_ENV  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _full_feature_tier(monkeypatch):
+    """These tests cover every tool group; the compact tier has its own tests."""
+    monkeypatch.setenv(TIER_ENV, "full")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -20,8 +29,8 @@ from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
 # All ChatAgent construction in these tests patches RAGSDK and RAGConfig so
 # that no real LLM or RAG backend is needed.
 _RAG_PATCHES = (
-    "gaia_agent_chat.agent.RAGSDK",
-    "gaia_agent_chat.agent.RAGConfig",
+    "gaia_agent.chat_agent.RAGSDK",
+    "gaia_agent.chat_agent.RAGConfig",
 )
 
 
@@ -91,8 +100,8 @@ class TestFileSystemIndexInit:
     def test_fs_index_graceful_import_error(self):
         """If FileSystemIndexService cannot be imported, _fs_index stays None."""
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
             patch.dict(
                 "sys.modules",
                 {"gaia.filesystem.index": None},

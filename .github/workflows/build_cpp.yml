@@ -26,9 +26,10 @@ on:
       - '.github/workflows/benchmark_cpp.yml'
       - '.github/actions/setup-venv/**'
       - 'installer/scripts/start-lemonade.ps1'
+      - 'util/check_cpp_sbom.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - 'src/gaia/version.py'
       - '.github/actions/install-lemonade/**'
@@ -40,6 +41,7 @@ on:
       - '.github/workflows/benchmark_cpp.yml'
       - '.github/actions/setup-venv/**'
       - 'installer/scripts/start-lemonade.ps1'
+      - 'util/check_cpp_sbom.py'
   merge_group:
   workflow_dispatch:
 
@@ -84,6 +86,10 @@ jobs:
         run: |
           ./.github/scripts/tests/CppBuildTools.Tests.ps1
           if ($LASTEXITCODE -ne 0) { throw "CppBuildTools unit tests failed" }
+
+      # A pinned dependency added or bumped without its SBOM entry fails here.
+      - name: Check cpp/SBOM.spdx.json matches pinned dependencies
+        run: python3 util/check_cpp_sbom.py
 
   build-and-test:
     name: C++ (${{ matrix.os }})
@@ -434,11 +440,13 @@ jobs:
             lemonade-server-stderr.log
             lemonade-server.log
 
-  # Performance benchmarks (runs after build passes)
+  # Performance benchmarks (runs after build passes). Not on pull requests: they
+  # only warn, and shared runners are too noisy for a PR to act on one; every
+  # merge to main still measures.
   benchmark:
     name: C++ Benchmarks
     needs: [build-and-test]
-    if: "!cancelled() && needs.build-and-test.result == 'success'"
+    if: "!cancelled() && needs.build-and-test.result == 'success' && github.event_name != 'pull_request'"
     uses: ./.github/workflows/benchmark_cpp.yml
 
   # Summary job

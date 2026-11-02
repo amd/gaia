@@ -84,7 +84,7 @@ param(
 if ($env:GITHUB_ACTIONS -eq "true") {
     $env:LEMONADE_BASE_URL = "http://localhost:$Port/api/v1"
     if ($env:GITHUB_ENV) {
-        "LEMONADE_BASE_URL=http://localhost:$Port/api/v1" >> $env:GITHUB_ENV
+        Add-Content -Path $env:GITHUB_ENV -Value "LEMONADE_BASE_URL=http://localhost:$Port/api/v1"
     }
 }
 
@@ -174,11 +174,13 @@ try {
     # just GITHUB_ENV, which only reaches *later* steps) so a caller that starts
     # the server and runs its tests in the SAME step can stop it in a finally.
     $env:LEMONADE_PROCESS_ID = "$($serverProcess.Id)"
+    # Add-Content, never `>>`: Windows PowerShell 5.1 appends UTF-16, and when this
+    # runs inside another action's step that file then fails to parse as output.
     if ($env:GITHUB_OUTPUT) {
-        "lemonade-process-id=$($serverProcess.Id)" >> $env:GITHUB_OUTPUT
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "lemonade-process-id=$($serverProcess.Id)"
     }
     if ($env:GITHUB_ENV) {
-        "LEMONADE_PROCESS_ID=$($serverProcess.Id)" >> $env:GITHUB_ENV
+        Add-Content -Path $env:GITHUB_ENV -Value "LEMONADE_PROCESS_ID=$($serverProcess.Id)"
     }
     Write-Host ""
 

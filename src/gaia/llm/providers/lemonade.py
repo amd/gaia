@@ -8,6 +8,7 @@ import re
 import time
 from typing import Callable, Iterator, List, Optional, Tuple, Union
 
+from gaia.llm.local_only import CloudDisabledError
 from gaia.utils import perf_trace
 
 from ..base_client import LLMClient
@@ -26,6 +27,7 @@ from ..lemonade_client import (
     local_sampling_defaults,
     requested_thinking,
     resolve_ctx_size,
+    runs_on_npu,
 )
 from ..lemonade_launcher import describe_client_hint
 from ..surface_hints import TUI_MODEL_SWITCH_HINT, TUI_PROVIDER_AUTH_HINT
@@ -370,6 +372,14 @@ class LemonadeAuthRejectedError(LemonadeError):
     user_message = f"The request was rejected as unauthorized. {TUI_PROVIDER_AUTH_HINT}"
 
 
+class LemonadeLocalOnlyError(LemonadeError):
+    """Local only refused a cloud model. Not a fault: no retry can change it,
+    and the refusal already says how to turn it off, so it is carried as-is."""
+
+    retryable = False
+    user_message = "Local only is on, so GAIA won't use a cloud AI model."
+
+
 def _classify_lemonade_response(
     response: dict, model: Optional[str] = None
 ) -> Tuple[Optional[LemonadeError], bool]:
@@ -494,11 +504,18 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
             return LemonadeAuthRejectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
             return LemonadeCloudModelUnavailableError(cur.model_id, cur.provider)
+        if isinstance(cur, CloudDisabledError):
+            return LemonadeLocalOnlyError(user_message=str(cur))
         chain_text.append(str(cur))
         cur = cur.__cause__ or cur.__context__
 
     raw = str(exc)
     text = raw.lower()
+    # A CloudDisabledError flattened to text by a wrapper: keep its own words,
+    # or a "couldn't read the catalog" refusal reads as a network outage.
+    local_only = re.search(r"Local only is on[^\n]*", "\n".join(chain_text))
+    if local_only:
+        return LemonadeLocalOnlyError(user_message=local_only.group(0).strip())
     # Wording from ``lemonade_client._cloud_request_error`` for HTTP 402/412. The
     # message itself is kept: it names the provider and where to add funds.
     refused = re.search(
@@ -969,6 +986,7 @@ class LemonadeProvider(LLMClient):
         usage_seen = False
         text_seen: list[str] = []
         reasoning_seen: list[str] = []
+        ran_past_call = False
 
         def close_thinking():
             nonlocal in_thinking, thought
@@ -1010,6 +1028,16 @@ class LemonadeProvider(LLMClient):
                             time.perf_counter() + TOOL_CALL_PROGRESS_INTERVAL_S
                         )
                 content = delta.get("content")
+                if (
+                    tool_calls
+                    and (content or choice.get("text"))
+                    and runs_on_npu(self._last_model)
+                ):
+                    # FastFlowLM does not stop at a tool call: what follows is an
+                    # invented tool result, then an answer from it.
+                    ran_past_call = True
+                    finish_reason = finish_reason or "tool_calls"
+                    break
                 if content:
                     # Close thinking block before yielding actual content
                     if in_thinking:
@@ -1057,6 +1085,15 @@ class LemonadeProvider(LLMClient):
                                 yield close_thinking()
                             text_seen.append(text)
                             yield text
+        if ran_past_call:
+            logger.warning(
+                "%s kept writing after its tool call; stopped the stream there",
+                self._last_model,
+            )
+            # Closing the stream stops the server generating the rest.
+            close = getattr(response, "close", None)
+            if close is not None:
+                close()
         self._last_reasoning = "".join(reasoning_seen) or None
         self._last_finish_reason = finish_reason or None
         if not finish_reason and not usage_seen:
