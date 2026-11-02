@@ -269,6 +269,9 @@ const state = {
 let mainWindowRef = null;
 /** Asks before an update restart would cut off running work (set by init). */
 let confirmRestartRef = null;
+// Put the update's backend in the local cache before the restart (set by init).
+let prefetchBackendRef = null;
+let isBackendPrefetchedRef = null;
 let checkInProgress = false;
 // True while a check nobody asked for runs, so its failure stays out of the UI.
 let backgroundCheck = false;
@@ -1207,21 +1210,40 @@ async function _requireInstallSpace() {
 }
 
 /**
- * Setup on the next launch needs PyPI, so restarting offline would leave no
- * working app until the connection returns. Only a PC with no network at all
- * counts: probing a host would block people behind proxies.
+ * Setup on the next launch needs PyPI unless the backend was prefetched, so
+ * restarting offline would leave no working app until the connection returns.
+ * Only a PC with no network at all counts: probing a host would block people
+ * behind proxies.
  */
 function _isOffline() {
   return Boolean(electronApi && electronApi.net && !electronApi.net.isOnline());
 }
 
+function _backendCached() {
+  return Boolean(isBackendPrefetchedRef && state.version && isBackendPrefetchedRef(state.version));
+}
+
 function _requireNetwork() {
-  if (_isOffline()) {
+  if (_isOffline() && !_backendCached()) {
     throw _userError(
       "offline",
       {},
       "GAIA needs the internet to finish this update. Connect, then restart from the update chip."
     );
+  }
+}
+
+/**
+ * Fetch the update's backend while the app still runs. A failure only means the
+ * first launch downloads it instead, as without a prefetch, so it is logged and
+ * the restart keeps its internet check.
+ */
+async function _prefetchBackend(version) {
+  if (!prefetchBackendRef || !version) return;
+  try {
+    await prefetchBackendRef(version);
+  } catch (err) {
+    log("warn", `Couldn't fetch the backend for ${version} ahead of the restart:`, err && err.message);
   }
 }
 
@@ -1416,6 +1438,8 @@ function wireAutoUpdaterEvents() {
 
   autoUpdaterRef.on("update-downloaded", async (info) => {
     abandonedDownload = false;
+    // Awaited only when there is one: the chip must not wait a tick for nothing.
+    if (prefetchBackendRef) await _prefetchBackend((info && info.version) || state.version);
     _applyInstallPolicy();
     setState({
       status: STATES.DOWNLOADED,
@@ -1537,6 +1561,10 @@ function unregisterIpcHandlers() {
  * @param {() => Promise<boolean>} options.confirmRestart - Whether "Restart now"
  *   may go ahead; asked before the installer starts. Required: without it an
  *   update restart would silently cut off a running answer.
+ * @param {(version: string) => Promise<void>} [options.prefetchBackend] - Fetch
+ *   the backend `version` needs before the restart, so its first launch is offline.
+ * @param {(version: string) => boolean} [options.isBackendPrefetched] - Whether
+ *   that fetch finished, so a restart no longer needs the internet.
  */
 function init(mainWindow, options = {}) {
   if (typeof options.confirmRestart !== "function") {
@@ -1546,6 +1574,10 @@ function init(mainWindow, options = {}) {
   }
   mainWindowRef = mainWindow || null;
   confirmRestartRef = options.confirmRestart;
+  if (options.prefetchBackend) {
+    prefetchBackendRef = options.prefetchBackend;
+    isBackendPrefetchedRef = options.isBackendPrefetched;
+  }
 
   // Disabled path — short-circuit BEFORE touching any Electron APIs so
   // this works in plain Node tests where require('electron') returns a
@@ -1687,7 +1719,7 @@ function _onBeforeQuit(event) {
     return;
   }
   // The chip's checks, for an install nobody clicks.
-  if (_isOffline() || _diskTooFullToInstall()) {
+  if ((_isOffline() && !_backendCached()) || _diskTooFullToInstall()) {
     log("info", "Can't finish an install now: leaving the update for a later quit");
     autoUpdaterRef.autoInstallOnAppQuit = false;
     return;

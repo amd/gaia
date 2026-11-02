@@ -211,14 +211,18 @@ test.each([[undefined], [{}], [{ confirmRestart: true }]])(
   }
 );
 
-test("main.cjs hands init the restart check", () => {
+test("main.cjs hands init the restart check and the backend prefetch", () => {
   // main.cjs can't be required without launching Electron; init() throwing
   // above is what makes a dropped option fail at startup, this pins main's call.
   const main = fs.readFileSync(
     path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui", "main.cjs"),
     "utf8"
   );
-  expect(main).toContain("autoUpdater.init(mainWindow, { confirmRestart: confirmUpdateRestart })");
+  expect(main).toContain(
+    "autoUpdater.init(mainWindow, { confirmRestart: confirmUpdateRestart, ...updateBackendHooks() })"
+  );
+  expect(main).toContain("autoUpdater.init(null, { confirmRestart: async () => true, ...updateBackendHooks() })");
+  expect(main).toMatch(/prefetchBackend: \(version\) => backendInstaller\.prefetchBackend\(version/);
 });
 
 test("turning auto-update off stops an unasked download from installing on quit", async () => {
@@ -746,6 +750,50 @@ describe("an install that can't finish", () => {
     await expect(clickRestartChip()).rejects.toThrow(/needs the internet to finish this update/);
     expect(mockUpdater.quitAndInstall).not.toHaveBeenCalled();
     expect(m.getState().status).toBe("downloaded");
+  });
+
+  test("offline, a restart goes ahead once the update's backend is cached", async () => {
+    const fetched = new Set();
+    const prefetchBackend = jest.fn(async (version) => {
+      fetched.add(version);
+    });
+    const m = initUpdater({
+      confirmRestart: async () => true,
+      prefetchBackend,
+      isBackendPrefetched: (version) => fetched.has(version),
+    });
+    await finishDownload();
+    expect(prefetchBackend).toHaveBeenCalledWith("0.26.0");
+    await clickRestartChip();
+    expect(mockUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    expect(m.getState().status).toBe("downloaded");
+  });
+
+  test("the chip offers the restart only after the backend fetch ends", async () => {
+    let finish;
+    const m = initUpdater({
+      confirmRestart: async () => true,
+      prefetchBackend: () => new Promise((resolve) => (finish = resolve)),
+      isBackendPrefetched: () => false,
+    });
+    await finishDownload();
+    expect(m.getState().status).not.toBe("downloaded");
+    finish();
+    await flush();
+    expect(m.getState().status).toBe("downloaded");
+  });
+
+  test("a failed backend fetch still offers the update, which then needs the internet", async () => {
+    const m = initUpdater({
+      confirmRestart: async () => true,
+      prefetchBackend: async () => {
+        throw new Error("PyPI is down");
+      },
+      isBackendPrefetched: () => false,
+    });
+    await finishDownload();
+    expect(m.getState().status).toBe("downloaded");
+    await expect(clickRestartChip()).rejects.toThrow(/needs the internet/);
   });
 
   test("a picked version's refused restart says so and stays on offer", async () => {

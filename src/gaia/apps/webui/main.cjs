@@ -853,6 +853,14 @@ async function chooseLemonadeInDialog(found, parent) {
   return response === 0 ? "external" : "gaia";
 }
 
+/** Lets an update fetch its backend before the restart, so the first launch is offline. */
+function updateBackendHooks() {
+  return {
+    prefetchBackend: (version) => backendInstaller.prefetchBackend(version, { isPackaged: app.isPackaged }),
+    isBackendPrefetched: backendInstaller.isBackendPrefetched,
+  };
+}
+
 /** Setup failed after an update: download the version before it and restart into it. */
 async function goBackToPreviousVersion(version) {
   const progress = installerProgressDialog.createProgressWindow({ revertingTo: version });
@@ -863,7 +871,7 @@ async function goBackToPreviousVersion(version) {
   let failed = false;
   let failure;
   try {
-    autoUpdater.init(null, { confirmRestart: async () => true });
+    autoUpdater.init(null, { confirmRestart: async () => true, ...updateBackendHooks() });
     await autoUpdater.revertUpdate();
   } catch (err) {
     failed = true;
@@ -1293,7 +1301,7 @@ app.whenReady().then(async () => {
   // Any failure here is logged and swallowed — the app continues to run
   // even if auto-update is unavailable.
   try {
-    autoUpdater.init(mainWindow, { confirmRestart: confirmUpdateRestart });
+    autoUpdater.init(mainWindow, { confirmRestart: confirmUpdateRestart, ...updateBackendHooks() });
   } catch (err) {
     console.error(
       "[main] Failed to init auto-updater:",
