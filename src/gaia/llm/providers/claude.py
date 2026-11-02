@@ -90,6 +90,37 @@ _FINISH_REASON_MAP = {
 }
 
 
+def _check_empty_reply(stop_reason: str, api_blocks: List[dict]) -> None:
+    """Explain a reply that has neither answer text nor a tool call.
+
+    A ``max_tokens`` stop is logged and left to the agent's cut-off recovery,
+    which reads ``finish_reason == "length"``. Any other empty reply raises,
+    because returning ``""`` would hide the API evidence needed to diagnose it.
+    """
+    block_types = [str(block.get("type") or "unknown") for block in api_blocks]
+    reported_stop_reason = stop_reason or "not reported"
+    logger.warning(
+        "Claude reply contained no text or tool call: stop_reason=%s block_types=%s",
+        reported_stop_reason,
+        ", ".join(block_types) or "none",
+    )
+    if stop_reason == "max_tokens":
+        return
+    thinking_only = bool(block_types) and all(
+        block_type in _THINKING_BLOCK_TYPES for block_type in block_types
+    )
+    if thinking_only:
+        raise RuntimeError(
+            "Claude returned only thinking blocks "
+            f"(stop_reason={reported_stop_reason}) and produced no answer text or "
+            "tool call. Retry the request."
+        )
+    raise RuntimeError(
+        "Claude returned no answer text or tool call "
+        f"(stop_reason={reported_stop_reason}; blocks={', '.join(block_types) or 'none'})."
+    )
+
+
 def _require_anthropic():
     if anthropic is None:
         raise ImportError(
@@ -963,7 +994,10 @@ class ClaudeProvider(LLMClient):
                     "content": "".join(text_parts) or None,
                 }
             )
-        return "".join(text_parts)
+        text = "".join(text_parts)
+        if not text:
+            _check_empty_reply(stop_reason, api_blocks)
+        return text
 
     def _stream_chat(
         self, params: dict, name_map: Dict[str, str], prefix_digest: str
@@ -980,11 +1014,13 @@ class ClaudeProvider(LLMClient):
         tool_slots: Dict[int, dict] = {}
         api_blocks: Dict[int, dict] = {}
         stop_reason = ""
+        saw_message_start = False
         usage_totals = _UsageTotals()
         try:
             for event in events:
                 etype = event.type
                 if etype == "message_start":
+                    saw_message_start = True
                     # The only event carrying the cache counters; message_delta
                     # then supersedes output_tokens with the final figure.
                     usage_totals.absorb(getattr(event.message, "usage", None))
@@ -1052,6 +1088,8 @@ class ClaudeProvider(LLMClient):
                     "content": "".join(text_parts) or None,
                 }
             )
+        elif not text_parts and saw_message_start:
+            _check_empty_reply(stop_reason, list(api_blocks.values()))
 
     def _capture_usage(self, usage: Any, elapsed: float) -> None:
         """Record one call's usage, cache counters included.
