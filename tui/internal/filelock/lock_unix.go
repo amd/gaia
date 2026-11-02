@@ -32,3 +32,6 @@ func Unlock(f *os.File) {
 // renameHeld is always false here: no other program can hold a file open
 // against a rename on POSIX, so there is nothing to wait out.
 func renameHeld(error) bool { return false }
+
+// errReadOnlyFS is what a write gets on a read-only filesystem.
+var errReadOnlyFS error = syscall.EROFS

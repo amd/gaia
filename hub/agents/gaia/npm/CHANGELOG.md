@@ -10,6 +10,13 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **A project's `.env` can only supply the Claude API key.** The sidecar reads
+  `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
+  Claude calls, and ignores every other name there with one warning. Settings
+  such as `TAVILY_API_KEY` or `LEMONADE_BASE_URL` kept in a project's `.env`
+  now have to be exported in the launch environment. A sidecar run from a
+  source checkout still loads the `.env` at or above GAIA's install (the
+  repo's `.env`) in full, as before; the packaged binary has no install `.env`.
 - **On Gemma 4 E4B the agent stops offering features that model fails.** The
   SQL scratchpad, email, image generation, and finding or installing skills
   failed GAIA's agent evals on Gemma, and their 16 tool descriptions were read
@@ -49,6 +56,14 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   and paid for it in tokens. `gaia config set project_context full|off|auto`
   changes the choice.
 
+### For integrators: contract 2.27
+
+- **A session's tools can be listed** (contract **2.27**).
+  `GET /v1/gaia/sessions/{session_id}/tools` returns the tools the session's
+  agent can call now, as `{ name, description, category }`, skills loaded so
+  far included. The Agent UI shows them in the chat's Agent info. An unknown
+  session is a `404`.
+
 ### For integrators: contract 2.26
 
 - **"Always" answers can be listed and revoked** (contract **2.26**).
@@ -67,6 +82,14 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **A printed test log no longer marks an answer verified.** A `run_python`
+  snippet that printed an old log with a pytest summary counted as a test run
+  (#4013). Python code now counts only when it runs a test runner itself:
+  `pytest.main()`, `unittest.main()`, or a launched process whose program is
+  the runner, such as `subprocess.run([sys.executable, '-m', 'pytest'])`,
+  `os.system('npm test')`, `sh -c 'pytest -q'` or `uv run pytest`. Reading a
+  log with `cat` or `type` does not count, whatever the log is named. A runner
+  reached only through an imported helper reads as unverified.
 - **A slide request gets a slide file, not a picture.** Asked for a slide or
   deck, the agent ran Stable Diffusion and handed back a blurry image of one.
   It now asks whether you want PowerPoint (.pptx) or HTML when you didn't say,

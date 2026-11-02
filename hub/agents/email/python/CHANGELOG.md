@@ -9,6 +9,22 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A chat that switches model mid-conversation gets the model it asked
+  for.** `POST /v1/email/query` with a `session_id` used to keep running the
+  session's agent on whatever model it was first built with, even when a later
+  turn named another `model`. That turn now rebuilds the session's agent on
+  the requested model, keeping the session's memory-off toggle and autonomy
+  level, and a failed rebuild is a 502 that leaves the session usable. Naming
+  the model the session already runs does not rebuild. This matters now that the Agent UI sends `session_id`, so a
+  follow-up can name a thread the previous turn showed. (#2834)
+
+- **`gaia email autonomy status` now says what the last cycle did.** Every
+  autonomy cycle, whether run over REST, from the CLI or on the scheduler,
+  records a counts-only summary (or a redacted error if it failed).
+  `GET /v1/email/agent/autonomy/{id}` returns it as `last_cycle`, so "ran,
+  nothing to do" is no longer indistinguishable from "never ran", and a run
+  whose caller timed out still has a readable result. (#2618)
+
 - **The served endpoint spec (`GET /v1/email/spec`) now documents `POST /v1/email/agent/autonomy/undo` and the `/v1/connections` intake routes.** A new test checks every route on the agent and connection routers against the rendered spec. (#3321)
 - **Concurrent startup no longer fails to open the email state database
   during SQLite WAL-mode setup.** The agent now uses GAIA core's bounded WAL
