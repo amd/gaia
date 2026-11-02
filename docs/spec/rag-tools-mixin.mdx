@@ -479,10 +479,10 @@ for search_key in search_keys:
 
 # 2. Keyword boost: the five best matches in any language, scored 0.6-0.9.
 # Rare words count for more, and query words side by side in a chunk count again.
-for chunk_idx, boost_score, _words in rank_keyword_chunks(
-    query, enumerate(self.rag.chunks)
-):
-    all_chunks.append(self.rag.chunks[chunk_idx])
+# Each chunk's words are read once and kept until the chunk list changes.
+keywords = keyword_index(self.rag)
+for chunk_idx, boost_score, _words in keywords.rank(query):
+    all_chunks.append(keywords.texts[chunk_idx])
     all_scores.append(boost_score)
 
 # 3. Hash-based deduplication (O(1))
