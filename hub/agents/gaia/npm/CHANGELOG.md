@@ -8,6 +8,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
+### Added
+
+- **The agent can use a Google or Outlook calendar.** Five new tools list
+  events, check free time, and create, change or cancel events, which brings the
+  registered tool count to 106. Every write asks first, and the prompt shows the
+  event's title, start and who gets notified; a call that misstates them is refused
+  before any prompt. A recurring event changes one occurrence at a time. Consent now
+  asks for `calendar.events` (Google) and `Calendars.ReadWrite` (Microsoft). Existing
+  connections keep reading mail, and a calendar call names the command that adds
+  the scope. Larger models only; Gemma 4 E4B doesn't get these tools. The calendar has
+  not yet been tried on a real account or measured by the agent evals.
+
 ### Changed
 
 - **A project's `.env` can only supply the Claude API key.** The sidecar reads

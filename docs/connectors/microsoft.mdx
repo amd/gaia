@@ -151,6 +151,12 @@ share one scope list in the catalog spec) and are listed at
 | `https://graph.microsoft.com/Calendars.Read` | Read your calendar events |
 | `https://graph.microsoft.com/Calendars.ReadWrite` | Manage your calendar events |
 
+The flagship [`gaia` agent](/guides/gaia) uses `Mail.ReadWrite` for mail and
+`Calendars.ReadWrite` for its calendar tools, which read your calendar and, once
+you approve each change, create, change or cancel events. A connection made before
+the calendar tools keeps reading mail; a calendar request names the command that
+adds the scope.
+
 ## Device-code sign-in
 
 The device-code flow skips the Azure app registration and the loopback

@@ -68,7 +68,7 @@ gaia connectors connect google --scopes https://www.googleapis.com/auth/gmail.re
 gaia connectors grants grant google installed:gaia --scopes https://www.googleapis.com/auth/gmail.readonly
 ```
 
-`gmail.readonly` is the whole ask — read-only is the whole capability. The second command is a local ledger write: no browser, no OAuth round-trip.
+`gmail.readonly` is all the mail tools need, and it is read-only. The second command is a local ledger write: no browser, no OAuth round-trip. To add the [calendar tools](/guides/gaia) as well, add `https://www.googleapis.com/auth/calendar.events` to both lists, or run `gaia connectors connect google --grant-agent installed:gaia`, which requests both.
 
 The first command prints an authorization URL. Open it in a browser **on the machine running GAIA** — the sign-in completes via a `127.0.0.1` callback on that box.
 
@@ -131,7 +131,7 @@ gaia connectors grants grant google installed:gaia \
   --scopes https://www.googleapis.com/auth/gmail.readonly
 ```
 
-That is a local ledger write — no browser, no OAuth round-trip. If your existing connection was authorized with a broader Gmail scope, pass that scope instead — the grant cannot ask for more than the connection carries.
+That is a local ledger write — no browser, no OAuth round-trip. It replaces the flagship's Google grant, so if it already holds `calendar.events`, list that scope too. If your existing connection was authorized with a broader Gmail scope, pass that scope instead — the grant cannot ask for more than the connection carries.
 
 ## Privacy
 
