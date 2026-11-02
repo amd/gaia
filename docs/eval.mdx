@@ -238,12 +238,24 @@ The fixer subprocess (`claude -p fixer.md`) receives the `scorecard.json` path, 
     ```
   </Step>
 
-  <Step title="Set up the judge model API key">
-    The benchmark uses Claude as the judge model. Export your API key:
+  <Step title="Authenticate the judge">
+    The benchmark uses Claude as the judge model. A Claude Code login is enough:
+
+    ```bash
+    claude
+    # then run /login
+    ```
+
+    To use the Messages API instead, explicitly export a console API key:
 
     ```bash
     export ANTHROPIC_API_KEY=sk-ant-...
     ```
+
+    In non-interactive CI, use `claude setup-token` and export
+    `CLAUDE_CODE_OAUTH_TOKEN`. A key loaded only from a `.env` file is ignored
+    by the eval driver and judge, so it cannot override a working Claude Code
+    login.
   </Step>
 
   <Step title="Start the Agent UI backend">
