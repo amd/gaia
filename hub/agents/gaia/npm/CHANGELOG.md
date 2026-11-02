@@ -10,6 +10,13 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **Images are read by the model setup chose, not always Gemma.** The image
+  tools loaded Gemma 4 E4B by name, so a PC running Qwen3.6, which reads images
+  itself, was asked to download Gemma on its first image question. They now use
+  `vision_model` from setup, else the chat model when it reads images, else
+  Gemma, the same rule document scans use. Requires the `gaia` Python CLI with
+  `resolve_default_vision_model` (the release that ships first-run setup in the
+  Agent UI).
 - **A project's `.env` can only supply the Claude API key.** The sidecar reads
   `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
   Claude calls, and ignores every other name there with one warning. Settings

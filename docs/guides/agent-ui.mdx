@@ -23,7 +23,7 @@ npm install -g @amd-gaia/agent-ui
 gaia-ui
 ```
 
-The first time it opens, the app sets itself up: it installs GAIA's local model server, downloads the models and checks they load, with each step shown in the window. No accounts or API keys are needed to run locally.
+The first time it opens, the app walks you through setup. It checks this PC, recommends models that fit and asks before downloading anything; then it fetches what you chose and tests that it works, with each step shown in the window. No accounts or API keys are needed to run locally.
 
 ---
 
@@ -182,8 +182,9 @@ Pick the install path that fits you best:
   <Tab title="Desktop installer (easiest)">
     Prebuilt desktop installers are published on the
     [GitHub Releases page](https://github.com/amd/gaia/releases) alongside
-    each tagged release. They bundle the Electron shell and Lemonade Server;
-    the default model is downloaded automatically on first launch. This is
+    each tagged release. They bundle the Electron shell and Lemonade Server
+    and download no models; on first launch the app asks which models to
+    download. This is
     the simplest path for non-developer end users.
 
     If that first-launch setup fails (for example, too little free memory to
@@ -314,6 +315,11 @@ Pick the install path that fits you best:
     broken model, an option to download it again. A test that doesn't finish
     in time stops with an error instead of hanging. Running `gaia init`
     yourself beforehand also works.
+
+    Each step keeps a log, collapsed under it until you open it. **Save a
+    troubleshooting report** on any step saves setup's logs, GAIA's logs and
+    this PC's details in one file, with keys and passwords left out; attach it
+    when you report a problem. A copy stays in `~/.gaia`.
 
     Later, if a job needs a model that isn't on this PC, GAIA says which one,
     how big it is and where it comes from, and offers **Download and

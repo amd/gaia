@@ -245,6 +245,23 @@ def test_a_busy_big_pc_shows_why_the_large_model_does_not_fit_now(running, free_
         sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
 
 
+def test_picking_the_large_model_on_a_busy_pc_is_kept_for_setup(
+    running, free_gb, config_file
+):
+    """It matches the memory recommendation, but setup would pick by free memory."""
+    from gaia.installer.init_command import resolve_init_chat_model
+
+    fake = running(BIG_GPU)
+    free_gb(fake, 10)
+    sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME, acknowledge_no_fit=True)
+    assert (
+        json.loads(config_file.read_text())["default_model"] == LARGE_DEFAULT_MODEL_NAME
+    )
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+    assert choice.model_id == LARGE_DEFAULT_MODEL_NAME
+    assert choice.user_set is True
+
+
 def test_picking_gemma_on_a_busy_pc_survives_a_later_idle_run(
     running, free_gb, config_file
 ):
