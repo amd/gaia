@@ -112,6 +112,25 @@ def build_rules() -> list[Rule]:
             "version",
             required=True,
         ),
+        # npm package-lock.json: the top-level version and the root package's
+        # packages[""].version — npm rewrites both, so both must move together.
+        Rule(
+            "npm package-lock.json (version)",
+            NPM_ROOT / "package-lock.json",
+            re.compile(r'(?m)^(  "version":\s*")([^"]+)(")'),
+            "version",
+            required=True,
+        ),
+        Rule(
+            'npm package-lock.json (packages[""].version)',
+            NPM_ROOT / "package-lock.json",
+            re.compile(
+                r'("packages":\s*\{\s*"":\s*\{\s*"name":\s*"[^"]*",\s*"version":\s*")'
+                r'([^"]+)(")'
+            ),
+            'packages[""].version',
+            required=True,
+        ),
         Rule(
             "binaries.lock.json (agentVersion)",
             NPM_ROOT / "binaries.lock.json",
@@ -243,8 +262,9 @@ def main(argv=None) -> int:
             print(
                 "\nA required version target is missing. Every core target "
                 "(gaia-agent.yaml, pyproject.toml, npm/package.json, "
-                "npm/binaries.lock.json) must exist and carry a stampable version "
-                "field before this package can be published."
+                "npm/package-lock.json, npm/binaries.lock.json) must exist and "
+                "carry a stampable version field before this package can be "
+                "published."
             )
         if result.mismatches:
             print(

@@ -29,6 +29,32 @@ sys.modules["stamp_version"] = stamp
 _spec.loader.exec_module(stamp)
 
 
+def _lockfile(version: str, *, root_version: str | None = None) -> str:
+    """An npm v3 lockfile in npm's own key order, with a dependency whose
+    version must never be stamped."""
+    return (
+        json.dumps(
+            {
+                "name": "@amd-gaia/agent-email",
+                "version": version,
+                "lockfileVersion": 3,
+                "requires": True,
+                "packages": {
+                    "": {
+                        "name": "@amd-gaia/agent-email",
+                        "version": root_version or version,
+                        "license": "MIT",
+                        "bin": {"agent-email": "dist/cli.js"},
+                    },
+                    "node_modules/zod": {"version": "3.0.0", "license": "MIT"},
+                },
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
 def _build_tree(root: Path, version: str, *, include_optional: bool = True) -> None:
     """Synthesize a complete agent-email tree, every target at ``version``."""
     email = root / "hub" / "agents" / "email" / "python"
@@ -55,6 +81,7 @@ def _build_tree(root: Path, version: str, *, include_optional: bool = True) -> N
         + "\n",
         encoding="utf-8",
     )
+    (npm / "package-lock.json").write_text(_lockfile(version), encoding="utf-8")
     (npm / "binaries.lock.json").write_text(
         json.dumps(
             {
@@ -216,3 +243,67 @@ def test_stamp_is_idempotent_and_minimal(tree):
     result = stamp.process("1.2.3", check_only=False)
     assert result.stamped == []  # already consistent — nothing rewritten
     assert lock_path.read_text(encoding="utf-8") == before  # byte-identical
+
+
+# --- npm package-lock.json (#4075) -------------------------------------------
+
+LOCK = "hub/agents/email/npm/package-lock.json"
+
+
+def test_check_fails_on_the_real_stale_lockfile(tree):
+    """The 0.6.0 release shipped a 0.5.0 lock: every other file moved, it didn't."""
+    for f in tree.rglob("*"):
+        if f.is_file():
+            f.write_text(
+                f.read_text(encoding="utf-8").replace("1.2.3", "0.6.0"),
+                encoding="utf-8",
+            )
+    vpy = tree / "hub/agents/email/python/gaia_agent_email/version.py"
+    vpy.write_text('AGENT_VERSION = "0.6.0"\nAPI_VERSION = "9.9.9"\n', encoding="utf-8")
+    (tree / LOCK).write_text(_lockfile("0.5.0"), encoding="utf-8")
+
+    assert stamp.main(["--check"]) == 1
+    mismatches = stamp.process("0.6.0", check_only=True).mismatches
+    assert len(mismatches) == 2
+    assert all("package-lock.json" in m and "0.5.0" in m for m in mismatches)
+
+
+def test_check_fails_when_only_the_root_package_entry_drifts(tree):
+    (tree / LOCK).write_text(_lockfile("1.2.3", root_version="1.0.0"), encoding="utf-8")
+    mismatches = stamp.process("1.2.3", check_only=True).mismatches
+    assert mismatches == [
+        'npm package-lock.json (packages[""].version): packages[""].version = 1.0.0 '
+        f"-- expected 1.2.3 ({stamp._rel(tree / LOCK)})"
+    ]
+
+
+def test_stamp_moves_both_lock_fields_and_no_dependency(tree):
+    (tree / LOCK).write_text(_lockfile("0.5.0"), encoding="utf-8")
+    assert stamp.main([]) == 0
+    lock = json.loads((tree / LOCK).read_text(encoding="utf-8"))
+    assert lock["version"] == "1.2.3"
+    assert lock["packages"][""]["version"] == "1.2.3"
+    assert lock["packages"]["node_modules/zod"]["version"] == "3.0.0"
+    assert stamp.main(["--check"]) == 0
+
+
+@pytest.mark.parametrize("mode", [[], ["--check"]])
+def test_missing_lockfile_fails_instead_of_skipping(tree, mode):
+    (tree / LOCK).unlink()
+    assert stamp.main(mode) == 1
+    errors = stamp.process("1.2.3", check_only=True).errors
+    assert len(errors) == 2 and all("file absent" in e for e in errors)
+
+
+def test_lockfile_without_a_root_entry_fails(tree):
+    (tree / LOCK).write_text(
+        '{\n  "name": "@amd-gaia/agent-email",\n  "version": "1.2.3",\n'
+        '  "lockfileVersion": 3,\n  "packages": {}\n}\n',
+        encoding="utf-8",
+    )
+    assert stamp.main(["--check"]) == 1
+    errors = stamp.process("1.2.3", check_only=True).errors
+    assert errors == [
+        'npm package-lock.json (packages[""].version): packages[""].version not found '
+        f"in {stamp._rel(tree / LOCK)}"
+    ]

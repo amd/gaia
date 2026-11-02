@@ -42,7 +42,11 @@ func readLastModel(p hostProbe) (LastModel, error) {
 	if path == "" {
 		return LastModel{}, nil
 	}
-	raw, err := p.readFile(path)
+	read := p.readConfig
+	if read == nil {
+		read = p.readFile
+	}
+	raw, err := read(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return LastModel{Path: path}, nil
 	}

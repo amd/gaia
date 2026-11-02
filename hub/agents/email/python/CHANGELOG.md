@@ -9,6 +9,7 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The served endpoint spec (`GET /v1/email/spec`) now documents `POST /v1/email/agent/autonomy/undo` and the `/v1/connections` intake routes.** A new test checks every route on the agent and connection routers against the rendered spec. (#3321)
 - **Concurrent startup no longer fails to open the email state database
   during SQLite WAL-mode setup.** The agent now uses GAIA core's bounded WAL
   retry helper when another email agent is opening the same `state.db`.

@@ -1139,6 +1139,22 @@ def test_select_local_model(client, lemonade, keys, db):
     assert keys["ensure"] == []
 
 
+def test_a_picked_npu_model_is_the_model_after_a_restart(client, lemonade, keys, db):
+    npu = "gemma4-it-e4b-FLM"
+    lemonade.models = [
+        *_CATALOG,
+        {"id": npu, "downloaded": True, "recipe": "flm", "labels": ["tool-calling"]},
+    ]
+    assert client.post("/api/providers/select", json={"model": npu}).status_code == 200
+    # A restart: a new backend run, nothing chosen yet in it.
+    providers.reset_restore_state()
+    db.set_setting("custom_model", None)
+    body = client.get("/api/providers/active").json()
+    assert body["restore"]["status"] == "restored"
+    assert body["model"] == npu
+    assert db.get_setting("custom_model") == npu
+
+
 def test_select_supersedes_a_failed_restore_notice(client, lemonade, keys, db):
     _write_config({"last_model": "fireworks.gone-model"})
     lemonade.models = _CATALOG

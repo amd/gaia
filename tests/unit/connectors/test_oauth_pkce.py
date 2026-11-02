@@ -478,7 +478,10 @@ class TestCatalogRegistration:
         from gaia.connectors.catalog.google import GOOGLE_SPEC
 
         assert "openid" in GOOGLE_SPEC.default_scopes
-        assert "email" in GOOGLE_SPEC.default_scopes
+        assert (
+            "https://www.googleapis.com/auth/userinfo.email"
+            in GOOGLE_SPEC.default_scopes
+        )
 
     def test_oauth_pkce_handler_registered_after_catalog_import(self):
         # The handler module auto-registers on import; it was already imported
