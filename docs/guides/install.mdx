@@ -32,7 +32,7 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
     3. On **Choose Components**, tick the desktop app, the terminal, or both.
     4. Click **Finish**, then open GAIA from its desktop shortcut.
 
-    Either choice also installs Lemonade Server, the local model runtime, from inside the installer, so the install itself works offline.
+    The installer itself works offline. The first time you open GAIA it sets up its own private Lemonade Server, the local model runtime, under `~/.gaia`, which needs the network once.
 
     **Updating or adding the other one:** run a newer (or the same) installer. It starts with what you already have ticked. Unticking something does not remove it — uninstall it instead (see [Uninstalling](#windows)).
 
@@ -91,9 +91,6 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 
     AppImages are self-contained and require no installation. Move it anywhere convenient (e.g., `~/Applications/`).
 
-    <Note>
-      `gaia install --lemonade` installs system-wide Lemonade via the Lemonade PPA on Ubuntu 24.04+ and Debian 13+. On Fedora, Arch, and other Linux distributions, use `gaia init` for GAIA's embedded Lemonade, or install Lemonade Server manually from [lemonade-server.ai](https://lemonade-server.ai) and set `LEMONADE_BASE_URL` to an existing server.
-    </Note>
   </Tab>
 </Tabs>
 
@@ -329,7 +326,7 @@ The CLI lets you escalate cleanup as far as you want — useful for reclaiming d
 gaia uninstall --purge --dry-run            # Preview the purge tier without deleting
 gaia uninstall --venv                       # Just the Python env
 gaia uninstall --purge                      # Venv + chats, documents, memory, sessions, undo snapshots, config, agents, saved keys + installer leftovers
-gaia uninstall --purge --purge-lemonade     # Also remove Lemonade Server install
+gaia uninstall --purge --purge-lemonade     # Also remove a system-wide Lemonade Server
 gaia uninstall --purge --purge-models       # Also remove downloaded Lemonade models
 gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 ```

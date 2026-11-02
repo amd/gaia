@@ -247,7 +247,7 @@ jobs:
                branch and stop.
 
                Then refresh `INSTALLER_SHA256` (src/gaia/installer/lemonade_installer.py)
-               the same way. `gaia install --lemonade` verifies the installer against it.
+               the same way. `gaia uninstall --purge-lemonade` verifies the MSI it downloads against it.
                Its keys are `v<version>/<asset name>`, because the MSI names carry no
                version, and its values are bare hex. First MOVE its two outgoing
                `v${{ steps.detect.outputs.current_version }}/lemonade.msi` and

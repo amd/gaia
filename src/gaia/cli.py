@@ -4052,29 +4052,6 @@ Examples:
         "minutes before failing.",
     )
 
-    # Install command (install specific components)
-    install_parser = subparsers.add_parser(
-        "install",
-        help="Install GAIA components",
-        parents=[parent_parser],
-    )
-    install_parser.add_argument(
-        "--lemonade",
-        action="store_true",
-        help="Install Lemonade Server",
-    )
-    install_parser.add_argument(
-        "--yes",
-        "-y",
-        action="store_true",
-        help="Skip confirmation prompts",
-    )
-    install_parser.add_argument(
-        "--silent",
-        action="store_true",
-        help="Silent installation (no UI, no desktop shortcuts)",
-    )
-
     # Uninstall command: tiered cleanup of the Python-side GAIA install.
     # The actual flag set + handler live in gaia.installer.uninstall_command
     # so every desktop installer (NSIS, DMG, DEB, AppImage) can delegate to
@@ -6465,82 +6442,6 @@ Let me know your answer!
             extra_models=args.download_model,
         )
         sys.exit(exit_code)
-
-    # Handle install command
-    if args.action == "install":
-        if args.lemonade:
-            from gaia.installer.lemonade_installer import (
-                LemonadeInstaller,
-                discard_download,
-                discard_kept_installers,
-            )
-            from gaia.version import LEMONADE_VERSION
-
-            installer = LemonadeInstaller()
-
-            # Check if already installed
-            info = installer.check_installation()
-            if info.installed and info.version:
-                # Use needs_install (returns True if current < target)
-                if not installer.needs_install(info):
-                    print(
-                        f"✅ Lemonade Server v{info.version} is already installed"
-                        f" (>= v{LEMONADE_VERSION})"
-                    )
-                    sys.exit(0)
-                else:
-                    print(f"Lemonade Server v{info.version} is installed")
-                    print(f"GAIA expects v{LEMONADE_VERSION}+")
-                    print("")
-                    print("To update, run:")
-                    print("  gaia uninstall --purge --purge-lemonade")
-                    print("  gaia install --lemonade")
-                    sys.exit(1)
-
-            # Confirm installation
-            if not args.yes:
-                response = input(f"Install Lemonade v{LEMONADE_VERSION}? [Y/n]: ")
-                if response.lower() == "n":
-                    print("Installation cancelled")
-                    sys.exit(0)
-
-            # Download and install
-            try:
-                if installer.system == "linux":
-                    print("Adding Lemonade PPA and installing lemonade-server...")
-                    installer_path = None
-                else:
-                    print("Downloading Lemonade Server...")
-                    download_started = time.time()
-                    installer_path = installer.download_installer()
-                    print("Installing...")
-                result = installer.install(installer_path, silent=args.silent)
-                # A failed install keeps the file: its retry hint names it.
-                if installer_path is not None and result.success:
-                    discard_download(installer_path)
-                    discard_kept_installers(installer_path.parent, download_started)
-                elif installer_path is not None:
-                    print(f"   The downloaded installer is kept at {installer_path}")
-
-                if result.success:
-                    # Verify installation
-                    verify_info = installer.check_installation()
-                    if verify_info.installed:
-                        print(f"✅ Installed Lemonade Server v{verify_info.version}")
-                    else:
-                        print(f"✅ Installed Lemonade Server v{result.version}")
-                    if result.restart_required:
-                        print(f"⚠️  {result.message}")
-                    sys.exit(0)
-                else:
-                    print(f"❌ Installation failed: {result.error}")
-                    sys.exit(1)
-            except Exception as e:
-                print(f"❌ Installation failed: {e}")
-                sys.exit(1)
-        else:
-            print("Specify what to install: --lemonade")
-            sys.exit(1)
 
     # Handle uninstall command — delegates to the shared implementation in
     # gaia.installer.uninstall_command so every desktop installer platform

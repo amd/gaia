@@ -5,7 +5,7 @@
 GAIA Installer Module
 
 Provides functionality for:
-- Installing Lemonade Server from GitHub releases
+- Detecting and removing a system-wide Lemonade Server
 - Downloading required models for different profiles
 - Initializing GAIA with a single command
 """

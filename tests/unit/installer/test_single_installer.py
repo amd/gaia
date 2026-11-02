@@ -30,6 +30,7 @@ INSTALLER_TUI = REPO_ROOT / "installer" / "tui"
 NSI = INSTALLER_TUI / "nsis" / "gaia-setup.nsi"
 BUILD_SETUP = INSTALLER_TUI / "nsis" / "build-setup.sh"
 SMOKE = INSTALLER_TUI / "nsis" / "smoke-test.ps1"
+INSTALLER_NSH = REPO_ROOT / "installer" / "nsis" / "installer.nsh"
 ELECTRON_BUILDER = (
     REPO_ROOT / "src" / "gaia" / "apps" / "webui" / "electron-builder.yml"
 )
@@ -210,13 +211,10 @@ def test_developer_build_is_refused_not_migrated():
     ).group(1)
     assert "${DEV_SETTINGS_KEY}" in on_init and "EXIT_CONFLICT" in on_init
     # gaia.nsi's uninstaller re-execs from %TEMP% and edits PATH; running it
-    # from here would race this setup's own PATH update. The only programs this
-    # setup runs are the Lemonade MSI and the embedded desktop app setup.
+    # from here would race this setup's own PATH update. The only program this
+    # setup runs is the embedded desktop app setup.
     launched = re.findall(r"^\s*ExecWait '([^']+)'", nsi, re.M)
-    assert launched == [
-        'msiexec /i "$PLUGINSDIR\\${LEMONADE_MSI_NAME}" /qn /norestart',
-        '"$PLUGINSDIR\\${UI_SETUP_NAME}" /S /currentuser',
-    ]
+    assert launched == ['"$PLUGINSDIR\\${UI_SETUP_NAME}" /S /currentuser']
 
 
 # ── fetch_agent_ui_setup ───────────────────────────────────────────────────
@@ -635,15 +633,19 @@ def test_documentation_links_open_the_docs_not_the_home_page():
     # The site root is the marketing page; the docs live under /docs/.
     nsi = _nsi()
     assert _define("DOCS_URL") == "https://amd-gaia.ai/docs"
-    assert _define("INSTALL_DOCS_URL").startswith("https://amd-gaia.ai/docs/")
     assert '!define MUI_FINISHPAGE_LINK_LOCATION "${DOCS_URL}"' in nsi
-    assert "Details: ${INSTALL_DOCS_URL}" in nsi
     assert "Details: ${PRODUCT_URL}" not in nsi
 
 
-def test_docs_urls_point_at_existing_pages():
-    # A renamed guide would otherwise leave Setup linking to a 404.
-    install = _define("INSTALL_DOCS_URL").removeprefix("https://amd-gaia.ai/docs/")
-    assert (REPO_ROOT / "docs" / f"{install}.mdx").is_file()
-    nav = (REPO_ROOT / "docs" / "docs.json").read_text(encoding="utf-8")
-    assert f'"{install}"' in nav
+def test_setup_leaves_lemonade_to_gaia():
+    # GAIA runs its own Lemonade under ~/.gaia. A bundled system MSI would add a
+    # second server, and its install kills every lemond.exe, GAIA's own included.
+    for script in (_nsi(), INSTALLER_NSH.read_text(encoding="utf-8")):
+        assert "msiexec" not in script.lower()
+        assert ".msi" not in script.lower()
+    for workflow in ("build-installers.yml", "windows_setup.yml"):
+        text = (REPO_ROOT / ".github" / "workflows" / workflow).read_text(
+            encoding="utf-8"
+        )
+        assert "lemonade-server-minimal.msi" not in text, workflow
+    assert "--lemonade-msi" not in BUILD_SETUP.read_text(encoding="utf-8")

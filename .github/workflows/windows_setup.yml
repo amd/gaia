@@ -223,29 +223,6 @@ jobs:
       - name: Stage the pinned IBM Plex Mono fonts
         run: python installer/tui/fetch_fonts.py --out stage/fonts
 
-      # Bundled, not downloaded at install time, so the setup works offline.
-      # Same pinned source and size guard as build-installers.yml.
-      - name: Download the pinned Lemonade MSI
-        run: |
-          set -euo pipefail
-          LEMONADE_VERSION=$(grep -oE 'LEMONADE_VERSION = "[^"]+"' src/gaia/version.py | cut -d'"' -f2)
-          if [ -z "$LEMONADE_VERSION" ]; then
-            echo "::error::Could not parse LEMONADE_VERSION from src/gaia/version.py" >&2
-            exit 1
-          fi
-          URL="https://github.com/lemonade-sdk/lemonade/releases/download/v${LEMONADE_VERSION}/lemonade-server-minimal.msi"
-          echo "Downloading Lemonade MSI v${LEMONADE_VERSION} from ${URL}"
-          curl -fsSL --retry 3 --retry-delay 5 "${URL}" -o installer/lemonade-server-minimal.msi
-          # The -minimal MSI is a bootstrap (~4-6MB) that fetches the runtime on
-          # first run, so this guards against a truncated download or an HTML
-          # error body rather than pinning a size that moves upstream.
-          SIZE=$(wc -c < installer/lemonade-server-minimal.msi)
-          echo "Downloaded MSI size: ${SIZE} bytes"
-          if [ "$SIZE" -lt 1048576 ]; then
-            echo "::error::MSI smaller than 1MB; download likely corrupt or a 404 HTML body." >&2
-            exit 1
-          fi
-
       - name: Install NSIS
         shell: pwsh
         run: |
@@ -294,7 +271,6 @@ jobs:
             --version "${{ inputs.version }}" \
             --payload stage/win-x64 \
             --out dist \
-            --lemonade-msi installer/lemonade-server-minimal.msi \
             --fonts stage/fonts \
             --agent-ui-setup "$(ls agent-ui/gaia-agent-ui-*-x64-setup.exe)"
 

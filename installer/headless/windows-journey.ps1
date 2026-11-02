@@ -241,7 +241,7 @@ function One-Shot {
     if (-not (Select-String -Path "$logs\oneshot.out" -Pattern 'fake model server' -Quiet)) { Fail 'the one-shot exited 0 but did not print the model''s answer' }
 }
 
-# The Windows setup always installs Lemonade (by design), so "no Lemonade" here
+# A runner may already have a system Lemonade answering, so "no Lemonade" here
 # is a Lemonade that does not answer: LEMONADE_BASE_URL on a closed port. The
 # one-shot must refuse quickly and say how to fix it -- not hang, not exit 0.
 function Preflight-NoLemonade {
@@ -481,8 +481,8 @@ switch ($Step) {
             $_.ProcessName -in @('gaia-desktop', 'gaia-tui', 'gaia-agent') -or ($_.Path -and $_.Path -like "$gaiaHome\venv\*")
         }
         foreach ($r in $running) { $problems += "still running: $($r.ProcessName) ($($r.Path))" }
-        # Kept on purpose: user data in ~\.gaia and Lemonade Server (the setup
-        # never uninstalls it; `gaia uninstall --purge-lemonade` does).
+        # Kept on purpose: user data in ~\.gaia and any system Lemonade Server
+        # (the setup never touches it; `gaia uninstall --purge-lemonade` removes it).
         Write-Host '--- kept by design ---'
         if (Test-Path $gaiaHome) { Get-ChildItem $gaiaHome -Force | Select-Object -First 30 | ForEach-Object { "  ~\.gaia\$($_.Name)" } }
         Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |

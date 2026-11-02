@@ -30,7 +30,8 @@ Tiers:
       plan names everything it keeps.
 
 Opt-in extras (only valid alongside ``--purge``):
-    * ``--purge-lemonade`` — best-effort Lemonade Server removal.
+    * ``--purge-lemonade`` — best-effort removal of a system-wide Lemonade
+      Server (GAIA's own goes with ``--purge``).
     * ``--purge-models``   — remove ``~/.cache/lemonade/models/``.
     * ``--purge-hf-cache`` — remove the HuggingFace hub cache (restores the
       legacy ``gaia uninstall --models`` cleanup capability).
@@ -963,7 +964,7 @@ def _print_no_flags_help(printer: Callable[[str], None] = print) -> None:
         "                                   (Tier 3)",
         "",
         "Optional extras (must be combined with --purge):",
-        "  --purge-lemonade                 Also uninstall Lemonade Server",
+        "  --purge-lemonade                 Also uninstall a system-wide Lemonade Server",
         "  --purge-models                   Also remove Lemonade's models cache",
         "  --purge-hf-cache                 Also remove the HuggingFace hub cache",
         "",
@@ -1842,7 +1843,7 @@ def register_subparser(
         "--purge-lemonade",
         action="store_true",
         dest="purge_lemonade",
-        help="Also uninstall Lemonade Server (requires --purge).",
+        help="Also uninstall a system-wide Lemonade Server (requires --purge).",
     )
     parser.add_argument(
         "--purge-models",

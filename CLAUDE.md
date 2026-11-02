@@ -772,7 +772,6 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 **Setup & utilities:**
 - `gaia init` - Setup Lemonade Server and download models
 - `gaia lemonade embedded {start|stop|status|install|install-backend}` - GAIA's private, self-contained Lemonade instance (#3121)
-- `gaia install` - Install helper (e.g. Lemonade on first run)
 - `gaia uninstall` - Tiered cleanup of `~/.gaia` and caches
 - `gaia config {show|get|set}` - Persistent config in `~/.gaia/config.json`
 - `gaia skill` - Author and manage agent skills (`SKILL.md` capabilities)
