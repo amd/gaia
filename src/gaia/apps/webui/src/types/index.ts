@@ -441,6 +441,10 @@ export interface Message {
     stopState?: 'stopped' | 'unconfirmed';
     /** Error the server reported while a stopped turn was closing. */
     stopError?: string;
+    /** Client-side: this reply stands in for a turn that failed before answering. */
+    failed?: boolean;
+    /** Client-side: the raw error, to recognize the server's saved copy of this failure. */
+    failureText?: string;
     /** Set when this turn pushed older turns out of the model's view. */
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
@@ -529,7 +533,7 @@ export interface DownloadProgress {
     downloaded_bytes: number;
     /** Sum of every file's ``bytes_total`` in this download. */
     total_bytes: number;
-    /** Populated only when state === 'error'. */
+    /** Set on 'error', and on 'starting' while a backend installs first. */
     message: string | null;
 }
 
@@ -829,6 +833,10 @@ export interface AgentStep {
     mcpOutput?: McpOutput;
     /** Tool call latency in milliseconds. */
     latencyMs?: number;
+    /** Card key the tool's result drew, persisted for reload (for type='tool'). */
+    render?: string;
+    /** That card's payload. */
+    data?: unknown;
 }
 
 /** The text an MCP tool returned, capped by the server. */

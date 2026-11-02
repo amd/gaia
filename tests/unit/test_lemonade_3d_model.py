@@ -114,6 +114,19 @@ def test_3d_tool_saves_glb_and_reloads_chat_model(model3d_tool, tmp_path):
     host.sd_client._ensure_model_loaded.assert_called_once_with("chat-model")
 
 
+@pytest.mark.parametrize("whitespace", ["\t", "\n", "\r"], ids=["tab", "lf", "cr"])
+def test_3d_tool_normalizes_model_whitespace(model3d_tool, tmp_path, whitespace):
+    _host, generate = model3d_tool
+    source = tmp_path / "source.png"
+    source.write_bytes(b"image")
+
+    result = generate(str(source), model=f"TRELLIS{whitespace}3D")
+
+    output = Path(result["model_path"])
+    assert output.name.startswith("model3d_TRELLIS_3D_")
+    assert not any(char in output.name for char in "\t\n\r")
+
+
 def test_3d_tool_keeps_saved_mesh_when_chat_reload_fails(model3d_tool, tmp_path):
     host, generate = model3d_tool
     host.model_id = "chat-model"

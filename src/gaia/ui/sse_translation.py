@@ -117,6 +117,7 @@ SUMMARY_VIEW_KEYS = (
     # What the tool wrote (``RESULT_PATH_KEYS`` in ``gaia.ui.sse_handler``).
     "file_path",
     "image_path",
+    "audio_path",
     # A ``search_web`` result's hits, so a relayed turn can cite them.
     "sources",
 )
@@ -433,7 +434,10 @@ class CanonicalTranslator:
             # nor the latency the preview line is made of.
             "preview": derive_preview(tool, event),
         }
-        render = self._render_tool_map.get(self._last_tool or "")
+        # A handler-attached card (e.g. an edit's diff) outranks the tool map.
+        render = event.get("render")
+        if not isinstance(render, str) or not render:
+            render = self._render_tool_map.get(self._last_tool or "")
         if render:
             canonical["render"] = render
         return [canonical]

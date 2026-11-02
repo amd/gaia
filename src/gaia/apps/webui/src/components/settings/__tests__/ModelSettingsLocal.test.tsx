@@ -172,6 +172,24 @@ describe('ModelSettings local models', () => {
         expect(screen.getByRole('progressbar', { name: 'Downloading Big Model' })).toBeInTheDocument();
     });
 
+    it("shows what a download is doing when the backend says, and the percent otherwise", async () => {
+        mockedApi.listProviderModels.mockResolvedValue({
+            provider: 'local', memory_gb: 112, memory_source: 'AMD iGPU', capacity_error: null,
+            models: [...MODELS,
+                local('Npu-FLM', {
+                    display_name: 'NPU Model', downloaded: false, state: 'not_downloaded',
+                    download_progress: { state: 'downloading', percent: 0, message: 'Installing the NPU backend' } as ProviderModel['download_progress'],
+                }),
+                local('Big-GGUF', {
+                    display_name: 'Big Model', downloaded: false, state: 'not_downloaded',
+                    download_progress: { state: 'downloading', percent: 40 } as ProviderModel['download_progress'],
+                })],
+        });
+        await renderLocal();
+        expect(screen.getByText('Installing the NPU backend')).toBeInTheDocument();
+        expect(screen.getByText('40%')).toBeInTheDocument();
+    });
+
     it('offers context sizes up to what fits, with Automatic first', async () => {
         await renderLocal();
         const select = await screen.findByLabelText('Context size');

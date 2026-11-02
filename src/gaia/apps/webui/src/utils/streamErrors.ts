@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { ApiError, parseErrorDetail, StreamTimeoutError } from '../services/api';
+import { getT, type Translate } from '../i18n/useT';
 
 /** How many times a turn's lost stream is re-attached before the view gives up. */
 export const MAX_STREAM_RECONNECTS = 3;
@@ -16,6 +17,11 @@ export const RUN_LOST_TEXT = 'The answer to your last message was lost: its run 
 /** The connection died while the run may still be going server-side, so re-attaching can recover it. */
 export function isStreamInterrupted(err: Error): boolean {
     return err.name === 'StreamStalledError' || err.name === 'StreamDroppedError';
+}
+
+/** The view lost the turn, but its run may still finish server-side; resending would ask twice. */
+export function mayStillFinish(err: Error): boolean {
+    return isStreamInterrupted(err) || err instanceof StreamTimeoutError;
 }
 
 /**
@@ -47,4 +53,26 @@ export function describeStreamError(err: Error): string | null {
         return `GAIA could not take this message (HTTP ${err.httpStatus})${detail ? `: ${detail}` : '.'}`;
     }
     return null;
+}
+
+export type ChatErrorKind = 'stream' | 'context' | 'model_server' | 'connection' | 'timeout' | 'unknown';
+
+const CONTEXT_RE = /context (window|size|length|limit)|exceeds the available context|maximum context|too many tokens/i;
+const MODEL_SERVER_RE = /lemonade|\bLLM\b|could not get response/i;
+const CONNECTION_RE = /failed to fetch|networkerror|\bfetch\b/i;
+const TIMEOUT_RE = /timed out|timeout/i;
+
+/**
+ * What a failed chat turn tells the user: the cause in plain words and what to
+ * do next. Never the raw error text, which goes to the console log instead.
+ */
+export function classifyChatError(err: Error, t: Translate = getT()): { kind: ChatErrorKind; text: string } {
+    const described = describeStreamError(err);
+    if (described) return { kind: 'stream', text: described };
+    const msg = err.message || '';
+    if (CONTEXT_RE.test(msg)) return { kind: 'context', text: t('chatError.context') };
+    if (MODEL_SERVER_RE.test(msg)) return { kind: 'model_server', text: t('chatError.modelServer') };
+    if (err instanceof TypeError || CONNECTION_RE.test(msg)) return { kind: 'connection', text: t('chatError.connection') };
+    if (TIMEOUT_RE.test(msg)) return { kind: 'timeout', text: t('chatError.timeout') };
+    return { kind: 'unknown', text: t('chatError.unknown') };
 }
