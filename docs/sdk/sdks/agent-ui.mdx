@@ -1444,10 +1444,10 @@ of that router's connector types.
   </Accordion>
 </AccordionGroup>
 
-### Session environment and outputs
+### Session environment, outputs and agent info
 
-What one chat may reach and what it produced, behind the session panel's
-Environment and Outputs sections. Folder and internet changes are stored with
+What one chat may reach, what it produced, and which tools its agent has,
+behind the session panel's Environment, Outputs and Agent info sections. Folder and internet changes are stored with
 the chat, applied to its agent before every turn, and applied to a running
 agent at once, so they take effect on its next step.
 
@@ -1539,6 +1539,43 @@ agent at once, so they take effect on its next step.
     show in their folder. `created_at` is UTC. Built from each answer's turn
     summary (`turn_summary.outputs`) and the undo snapshots, so it survives a
     restart.
+  </Accordion>
+
+  <Accordion title="GET /api/sessions/{session_id}/capabilities">
+    The tools this chat's agent can call, behind the session panel's Agent
+    info section:
+
+    ```json
+    {
+      "session_id": "...",
+      "agent_type": "gaia",
+      "tools": [
+        {"name": "query_documents", "description": "Search the indexed documents ...", "category": "rag"},
+        {"name": "mcp_github_list_issues", "description": "[MCP:github] List issues ...", "category": "mcp"}
+      ]
+    }
+    ```
+
+    Read from the agent the chat talks to: the one GAIA keeps for the chat
+    between turns, or, for an agent that runs as its own process (the Hub
+    GAIA agent), that agent's own session through the daemon (agent contract
+    2.27 or later). Skills loaded in earlier turns and connector tools are
+    included. `description` is the text the model is given. `category` is the
+    [`KNOWN_TOOLS`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)
+    name of the mixin that defines the tool (`rag`, `file_io`, `shell`, ...),
+    `mcp`, `skill`, or `agent` for a tool the agent class defines itself.
+
+    It never answers with an empty list in place of an error:
+
+    | Status | When |
+    |--------|------|
+    | 404 | No such chat |
+    | 409 | The chat's agent isn't running: no message yet, or GAIA restarted or switched the chat's model or agent since its last answer. It starts with the next message. |
+    | 502 | A relayed agent failed to answer, or sent a list with a malformed entry or the same tool twice |
+    | 503 | A relayed agent couldn't be started, or can't list its tools (older than contract 2.27, or the email agent) |
+
+    The SDK call behind it is `Agent.describe_tools()`, which returns the
+    same `{name, description, category}` list for any agent.
   </Accordion>
 </AccordionGroup>
 
