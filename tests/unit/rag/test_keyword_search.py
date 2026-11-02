@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """The keyword half of document search returns the best matches, in any language."""
 
-from gaia.rag.keyword_search import rank_keyword_chunks
+from gaia.rag.keyword_search import _chunk_features, rank_keyword_chunks
 
 
 def _top(query, texts, limit=5):
@@ -79,3 +79,29 @@ def test_chunk_keeps_its_own_index_and_matched_words():
 
 def test_limit_is_respected():
     assert len(_top("fee", ["fee a", "fee b", "fee c", "other"], limit=2)) == 2
+
+
+def test_chunk_features_are_cached_by_text_not_position():
+    _chunk_features.cache_clear()
+
+    first = _chunk_features("Large Business Subscriber")
+    assert _chunk_features("Large Business Subscriber") is first
+
+    # Reusing the text at a different index is safe; changing the text gets a
+    # distinct feature entry, so replacing a chunk cannot expose stale features.
+    second = _chunk_features("Different contract clause")
+    assert second is not first
+    assert _chunk_features.cache_info().hits == 1
+
+
+def test_large_chunk_set_reuses_features_without_changing_ranking():
+    _chunk_features.cache_clear()
+    chunks = [(index, f"common term {index}") for index in range(2_000)]
+    chunks.append((2_000, "rare target identifier"))
+
+    assert rank_keyword_chunks("rare target", chunks, limit=1)[0][0] == 2_000
+    before = _chunk_features.cache_info()
+    assert rank_keyword_chunks("rare target", chunks, limit=1)[0][0] == 2_000
+    after = _chunk_features.cache_info()
+
+    assert after.hits - before.hits == len(chunks)
