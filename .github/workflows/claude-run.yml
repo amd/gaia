@@ -640,7 +640,7 @@ jobs:
             printf '\n\n%s\n' "$COMMENT_MARKER" >> "$COMMENT_FILE"
           fi
           # util/check_review_verdict.py keys on this stamp, so it must stay the file's last one.
-          if [ -n "$REVIEWED_SHA" ]; then
+          if [ -n "${REVIEWED_SHA:-}" ]; then
             printf '\n<!-- reviewed-sha: %s -->\n' "$REVIEWED_SHA" >> "$COMMENT_FILE"
           fi
           if [ "$IS_PR" = "true" ]; then
