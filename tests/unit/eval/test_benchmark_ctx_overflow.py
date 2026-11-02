@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """A benchmark that outgrows its ctx window must say so, never report 0% (#2663)."""
 
+import json
 import sys
 
 import pytest
@@ -224,3 +225,82 @@ def test_cli_exits_nonzero_for_answer_path_overflow(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "2 of 2 experiment(s) hit the context window" in err
     assert "needed 19337 tokens but the window is 16384" in err
+
+
+def _tool_agent(*tool_contents):
+    class _Agent:
+        def process_query(self, prompt):
+            return {
+                "status": "success",
+                "result": "Done.",
+                "error_history": [],
+                "conversation": [{"role": "user", "content": prompt}]
+                + [
+                    {"role": "tool", "name": "triage_inbox", "content": c}
+                    for c in tool_contents
+                ],
+            }
+
+    return _Agent
+
+
+TOOL_OVERFLOW = json.dumps(
+    {
+        "ok": False,
+        "error": "LLMTriageError: LLM triage call failed for message 'm1': "
+        + LLAMA_OVERFLOW,
+    }
+)
+
+
+def test_overflow_inside_a_tool_is_reported():
+    """A per-email classifier overflow comes back as a failed tool result."""
+    row = run_benchmark(
+        "m",
+        mbox_path="ignored",
+        limit=100,
+        ctx_size=16384,
+        experiments=1,
+        agent_factory=_tool_agent(json.dumps({"ok": True, "data": {}}), TOOL_OVERFLOW),
+    )[0]
+    assert row["status"] == "ERRORED"
+    assert row["error_kind"] == "context_overflow"
+    assert (row["requested_tokens"], row["available_tokens"]) == (19337, 16384)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        # A successful result that merely quotes overflow wording (an email body).
+        json.dumps({"ok": True, "data": {"snippet": LLAMA_OVERFLOW}}),
+        {"status": "success", "result": LLAMA_OVERFLOW},
+        "Triaged 100 emails: " + LLAMA_OVERFLOW,
+        json.dumps({"ok": False, "error": "ConnectorsError: token expired"}),
+        {"status": "error", "error": "timed out"},
+        None,
+    ],
+)
+def test_tool_results_that_are_not_an_overflow(content):
+    row = run_benchmark(
+        "m",
+        mbox_path="ignored",
+        experiments=1,
+        agent_factory=_tool_agent(content),
+    )[0]
+    # A plain tool failure stays an ordinary ERRORED row; it is never an overflow.
+    assert "error_kind" not in row
+    assert "remedy" not in row
+
+
+def test_overflow_text_from_a_non_tool_message_is_ignored():
+    result = {
+        "conversation": [
+            {"role": "user", "content": {"ok": False, "error": LLAMA_OVERFLOW}},
+            {
+                "role": "assistant",
+                "content": {"status": "error", "error": LLAMA_OVERFLOW},
+            },
+            "not-a-message",
+        ]
+    }
+    assert benchmark.context_overflow_error_from_result(result) is None

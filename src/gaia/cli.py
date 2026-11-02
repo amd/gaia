@@ -6086,7 +6086,8 @@ Let me know your answer!
             if overflowed:
                 print(
                     f"[ERROR] {len(overflowed)} of {len(results)} experiment(s) hit "
-                    f"the context window. {overflowed[0]['remedy']}",
+                    "the context window, so no scorecard was written for any of "
+                    f"them. {overflowed[0]['remedy']}",
                     file=sys.stderr,
                 )
                 sys.exit(1)

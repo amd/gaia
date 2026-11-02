@@ -788,23 +788,35 @@ _RECOVERED_OVERFLOW_TYPES = frozenset({"llm_context_overflow_trimmed"})
 
 
 def context_overflow_error_from_result(agent_result: Any) -> str | None:
-    """The backend overflow text a run ended on, or ``None``.
+    """The backend overflow text a returned run hit, or ``None``.
 
-    The agent loop does not raise on an overflow it cannot trim away: it
-    records the backend error in ``error_history`` and returns a polite answer,
-    so the exception path alone never sees it.
+    The agent loop does not raise on an overflow: one it cannot trim away is
+    recorded in ``error_history`` and answered politely, and one inside a tool
+    (e.g. ``triage_inbox``'s per-email classifier) comes back as a failed tool
+    result. Either way the exception path never sees it.
     """
+    from gaia.agents.base.tool_outcome import (
+        tool_result_error_fields,
+        tool_result_failed,
+    )
     from gaia.llm.lemonade_client import is_context_overflow_error
 
     if not isinstance(agent_result, dict):
         return None
+    candidates: list[Any] = []
     for entry in agent_result.get("error_history") or ():
         if isinstance(entry, dict):
-            if entry.get("type") in _RECOVERED_OVERFLOW_TYPES:
-                continue
-            text = entry.get("error")
+            if entry.get("type") not in _RECOVERED_OVERFLOW_TYPES:
+                candidates.append(entry.get("error"))
         else:
-            text = entry
+            candidates.append(entry)
+    for message in agent_result.get("conversation") or ():
+        if not isinstance(message, dict) or message.get("role") != "tool":
+            continue
+        content = message.get("content")
+        if tool_result_failed(content):
+            candidates.append(tool_result_error_fields(content).get("error"))
+    for text in candidates:
         if isinstance(text, str) and is_context_overflow_error(text):
             return text
     return None
