@@ -35,11 +35,14 @@ import requests
 import yaml
 
 from gaia.eval.claude_outage import (
+    API_KEY_VAR,
     CREDENTIAL,
     HEADLINES,
     QUOTA,
     UNREACHABLE,
     classify_driver_failure,
+    dotenv_only_api_key,
+    driver_api_key,
     switch_to_backup_account,
 )
 from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
@@ -2011,7 +2014,37 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
-def _run_driver(cmd, *, input, timeout, cwd):  # pylint: disable=redefined-builtin
+_warned_dotenv_api_key = False
+
+
+def _driver_auth():
+    """Return ``(flags, env)`` for the ``claude -p`` driver's authentication.
+
+    ``--bare`` gives a clean subprocess (no hooks, no CLAUDE.md auto-load) but
+    also restricts auth to ``ANTHROPIC_API_KEY`` / ``apiKeyHelper`` — OAuth and
+    the keychain are never read. So it is used only with a key the operator
+    exported. A key that only a ``.env`` supplied is ignored *and* removed from
+    the child's environment, since the CLI prefers it over OAuth. ``env`` is
+    ``None`` when the child should inherit this process's environment as is.
+    """
+    global _warned_dotenv_api_key  # pylint: disable=global-statement
+    if driver_api_key():
+        return ["--bare"], None
+    if dotenv_only_api_key():
+        if not _warned_dotenv_api_key:
+            _warned_dotenv_api_key = True
+            logger.warning(
+                "Ignoring ANTHROPIC_API_KEY from a .env file for the eval driver "
+                "— it would disable your Claude Code login. Export it in the "
+                "shell to drive the eval with that key instead."
+            )
+        return [], {k: v for k, v in os.environ.items() if k != API_KEY_VAR}
+    return [], None
+
+
+def _run_driver(
+    cmd, *, input, timeout, cwd, env=None
+):  # pylint: disable=redefined-builtin
     """Run the eval driver; on timeout kill its whole process tree, then raise.
 
     Returns a ``CompletedProcess`` with text output, or raises
@@ -2031,6 +2064,7 @@ def _run_driver(cmd, *, input, timeout, cwd):  # pylint: disable=redefined-built
         encoding="utf-8",
         errors="replace",
         cwd=cwd,
+        env=env,
         **popen_kwargs,
     )
     try:
@@ -2119,18 +2153,8 @@ def run_scenario_subprocess(
 
     claude_bin = shutil.which("claude") or "claude"
 
-    # ``--bare`` gives a clean subprocess (skips hooks, CLAUDE.md auto-load,
-    # plugin sync, etc.) but per the Claude Code CLI docs it ALSO restricts
-    # Anthropic auth to ``ANTHROPIC_API_KEY`` / ``apiKeyHelper`` only —
-    # OAuth and keychain are never read. So on a subscription-only setup
-    # (the common case for Claude Code Max users), ``--bare`` makes the
-    # eval fail-fast with ``Not logged in · Please run /login`` because
-    # the SDK can't see the user's existing OAuth session. We opt in to
-    # ``--bare`` only when an explicit API key is available; otherwise we
-    # let the subprocess inherit the parent's OAuth credentials.
-    cmd = [claude_bin, "-p"]
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        cmd.append("--bare")
+    bare_flags, driver_env = _driver_auth()
+    cmd = [claude_bin, "-p", *bare_flags]
     cmd.extend(
         [
             "--no-session-persistence",  # don't save eval sessions to disk
@@ -2180,7 +2204,9 @@ def run_scenario_subprocess(
 
     assert_provider_permitted("the Claude Code CLI")
     try:
-        proc = _run_driver(cmd, input=prompt, timeout=timeout, cwd=str(REPO_ROOT))
+        proc = _run_driver(
+            cmd, input=prompt, timeout=timeout, cwd=str(REPO_ROOT), env=driver_env
+        )
         driver_proc = proc
         elapsed = time.time() - start
 
@@ -2915,14 +2941,17 @@ def compare_scorecards(baseline_path, current_path):
         # Corpus availability change — not a quality signal
         if b_skipped or c_skipped:
             corpus_changed.append(entry)
+            continue
         # This run produced no measurement — nothing to compare, including the
-        # wall clock, so this is checked ahead of the time-regression branch.
-        elif c_unmeasured:
+        # wall clock.
+        if c_unmeasured:
             unmeasured.append(entry)
-        elif entry.get("time_regressed"):
-            # Time regressions reported separately from score regressions
+            continue
+        # Slowness is a label on top of the status verdict, never a substitute
+        # for it — a PASS→FAIL that also ran long must still count as regressed.
+        if entry.get("time_regressed"):
             time_regressed.append(entry)
-        elif not b_pass and c_pass:
+        if not b_pass and c_pass:
             improved.append(entry)
         elif b_pass and not c_pass:
             regressed.append(entry)
@@ -3868,57 +3897,20 @@ class AgentEvalRunner:
 
 
 # ---------------------------------------------------------------------------
-# --generate-corpus: regenerate corpus documents and validate manifest
+# --generate-corpus: validate the committed corpus against manifest.json
 # ---------------------------------------------------------------------------
 
 
 def generate_corpus():
-    """Regenerate corpus documents and validate manifest.json.
+    """Validate the committed corpus documents against ``manifest.json``.
 
-    Steps:
-    1. Re-run CSV generator (gen_sales_csv_v2.py) with deterministic seed
-    2. Scan corpus/documents/ and corpus/adversarial/ for all files
-    3. Validate manifest.json facts are still reachable
-    4. Print a summary report
+    The corpus is committed ground truth — the manifest's facts were written
+    from these exact files — so nothing here rewrites it. Lists the documents,
+    then raises ``RuntimeError`` when the manifest is absent or names a file
+    that is not on disk.
     """
-    print("[CORPUS] Starting corpus regeneration...")
+    print("[CORPUS] Validating corpus against manifest.json...")
 
-    # Step 1: Regenerate CSV via gen_sales_csv_v2.py
-    gen_scripts = [
-        CORPUS_DIR / "gen_sales_csv_v2.py",
-        CORPUS_DIR / "gen_sales_csv.py",
-    ]
-    ran_generator = False
-    for script in gen_scripts:
-        if script.exists():
-            print(f"[CORPUS] Running CSV generator: {script.name}")
-            result = subprocess.run(
-                [sys.executable, str(script)],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                cwd=str(CORPUS_DIR),
-                check=False,
-            )
-            if result.returncode == 0:
-                print("[CORPUS] CSV generator OK")
-                ran_generator = True
-            else:
-                print(
-                    f"[CORPUS] CSV generator failed (exit {result.returncode}):",
-                    file=sys.stderr,
-                )
-                print(result.stderr[:300], file=sys.stderr)
-            break
-
-    if not ran_generator:
-        print(
-            "[CORPUS] No CSV generator found — skipping CSV regeneration",
-            file=sys.stderr,
-        )
-
-    # Step 2: Scan corpus directories
     docs_dir = CORPUS_DIR / "documents"
     adv_dir = CORPUS_DIR / "adversarial"
     all_files = []
@@ -3933,13 +3925,11 @@ def generate_corpus():
     for rel, size in all_files:
         print(f"  {str(rel):<45} {size:>8,} bytes")
 
-    # Step 3: Validate manifest
     if not MANIFEST.exists():
-        print(
-            f"\n[CORPUS] WARNING: manifest.json not found at {MANIFEST}",
-            file=sys.stderr,
+        raise RuntimeError(
+            f"Corpus manifest not found at {MANIFEST}. It is committed with the "
+            "repo; restore it with `git checkout -- eval/corpus/manifest.json`."
         )
-        return
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     doc_list = manifest.get("documents", [])
@@ -3952,22 +3942,19 @@ def generate_corpus():
 
     # Check every manifest file exists on disk
     missing = []
-    for doc in doc_list:
-        fn = doc.get("filename", "")
-        if not (docs_dir / fn).exists():
-            missing.append(fn)
-    for doc in adv_list:
-        fn = doc.get("filename", "")
-        if not (adv_dir / fn).exists():
-            missing.append(fn)
+    for base, entries in ((docs_dir, doc_list), (adv_dir, adv_list)):
+        for doc in entries:
+            fn = doc.get("filename") or ""
+            if not fn or not (base / fn).is_file():
+                missing.append(fn or f"<entry '{doc.get('id', '?')}' has no filename>")
 
     if missing:
-        print(f"[CORPUS] WARNING: {len(missing)} manifest file(s) missing from disk:")
-        for fn in missing:
-            print(f"  MISSING: {fn}")
-    else:
-        print("[CORPUS] All manifest files present on disk [OK]")
-
+        raise RuntimeError(
+            f"{len(missing)} file(s) named in {MANIFEST} are missing from "
+            f"{CORPUS_DIR}: {', '.join(missing)}. Restore them from git, or fix "
+            "the manifest entry if the document was renamed."
+        )
+    print("[CORPUS] All manifest files present on disk [OK]")
     print(f"\n[CORPUS] Done. Corpus at: {CORPUS_DIR}")
 
 

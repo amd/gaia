@@ -109,3 +109,35 @@ describe("backend port selection fails loudly", () => {
     expect(body).toMatch(/\}\)\.catch\(\(err\) => \{[^}]*_fatalHandler\(err\);/);
   });
 });
+
+describe("crash-loop safe mode (issue #938)", () => {
+  test("safe mode is decided from the counter at the threshold", () => {
+    expect(MAIN).toContain("const _crashCount = readCount(() => os.homedir());");
+    expect(MAIN).toContain("const _inSafeMode = _crashCount >= SAFE_MODE_THRESHOLD;");
+  });
+
+  test("the counter is read after the safety net is installed and before the log tee", () => {
+    const net = MAIN.indexOf("installSafetyNet({");
+    const decide = MAIN.indexOf("const _inSafeMode =");
+    const tee = MAIN.indexOf("if (!_inSafeMode) installMainLogTee();");
+    expect(net).toBeGreaterThan(-1);
+    expect(decide).toBeGreaterThan(net);
+    expect(tee).toBeGreaterThan(decide);
+  });
+
+  test("the log tee runs only through the safe-mode guard", () => {
+    expect(MAIN).not.toContain("(function installMainLogTee()");
+    expect(MAIN.match(/installMainLogTee\(\)/g)).toHaveLength(2);
+  });
+
+  test("safe mode prompts first thing on ready and returns before any start-up work", () => {
+    const body = whenReadyBody();
+    const guard = body.indexOf("if (_inSafeMode) {");
+    const ret = body.indexOf("return;", guard);
+    const seed = body.indexOf("agentSeeder.seedBundledAgents()");
+    expect(guard).toBeGreaterThan(-1);
+    expect(body.slice(guard, ret)).toContain("await runSafeModePrompt({");
+    expect(ret).toBeLessThan(seed);
+    expect(ret).toBeLessThan(body.indexOf("cleanupOrphanedBackend()"));
+  });
+});

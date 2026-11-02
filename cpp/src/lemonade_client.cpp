@@ -12,6 +12,71 @@
 
 namespace gaia {
 
+namespace {
+
+const json* findObject(const json& parent, const char* key) {
+    if (!parent.is_object()) return nullptr;
+    const auto it = parent.find(key);
+    return (it != parent.end() && it->is_object()) ? &*it : nullptr;
+}
+
+// One decoder for every error shape: Lemonade's nested llama-server error,
+// the OpenAI {"error":{"message":..}} object, and a bare {"error":"..."}.
+std::string describeServerError(const json& body) {
+    const auto it = body.find("error");
+    if (it == body.end()) return "LLM server error";
+    const json& err = *it;
+    if (err.is_string()) {
+        const std::string msg = err.get<std::string>();
+        return msg.empty() ? "LLM server error" : msg;
+    }
+
+    const json* inner = &err;
+    if (const json* details = findObject(err, "details")) {
+        if (const json* response = findObject(*details, "response")) {
+            if (const json* nested = findObject(*response, "error")) inner = nested;
+        }
+    }
+
+    auto stringField = [](const json& obj, const char* key) -> std::string {
+        if (!obj.is_object()) return "";
+        const auto f = obj.find(key);
+        return (f != obj.end() && f->is_string()) ? f->get<std::string>() : "";
+    };
+    auto intField = [](const json& obj, const char* key) -> int {
+        const auto f = obj.find(key);
+        return (f != obj.end() && f->is_number_integer()) ? f->get<int>() : 0;
+    };
+
+    std::string msg = stringField(*inner, "message");
+    if (msg.empty()) msg = stringField(err, "message");
+
+    if (msg.find("exceeds the available context size") != std::string::npos) {
+        return "Server context window too small: prompt is " +
+               std::to_string(intField(*inner, "n_prompt_tokens")) +
+               " tokens but server n_ctx=" + std::to_string(intField(*inner, "n_ctx")) +
+               ".\n"
+               "  Reload the model with a larger context via the helper script:\n"
+               "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
+    }
+    return msg.empty() ? "LLM server error" : msg;
+}
+
+// Lemonade answers some failures with HTTP 200 and an {"error":..} body.
+void throwIfErrorBody(const std::string& body) {
+    json parsed;
+    try {
+        parsed = json::parse(body);
+    } catch (const json::parse_error&) {
+        return; // not a JSON body -- the caller handles the raw text
+    }
+    if (parsed.is_object() && parsed.contains("error") && !parsed["error"].is_null()) {
+        throw std::runtime_error(describeServerError(parsed));
+    }
+}
+
+} // namespace
+
 // ---------------------------------------------------------------------------
 // URL normalization
 // ---------------------------------------------------------------------------
@@ -306,33 +371,7 @@ std::string LemonadeClient::chatCompletions(const json& requestBody, int timeout
     // Lemonade returns HTTP 200 even for server-side errors -- check the body
     // before returning so all callers get a proper exception instead of a
     // malformed response.
-    try {
-        json responseJson = json::parse(responseBody);
-        if (responseJson.contains("error")) {
-            std::string errMsg = "LLM server error";
-            try {
-                const auto& inner = responseJson["error"]["details"]["response"]["error"];
-                std::string msg = inner.value("message", "");
-                if (msg.find("exceeds the available context size") != std::string::npos) {
-                    int nCtx    = inner.value("n_ctx", 0);
-                    int nPrompt = inner.value("n_prompt_tokens", 0);
-                    errMsg =
-                        "Server context window too small: prompt is " +
-                        std::to_string(nPrompt) + " tokens but server n_ctx=" +
-                        std::to_string(nCtx) + ".\n" +
-                        "  Reload the model with a larger context via the helper script:\n" +
-                        "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
-                } else if (!msg.empty()) {
-                    errMsg = msg;
-                }
-            } catch (...) {}
-            throw std::runtime_error(errMsg);
-        }
-    } catch (const std::runtime_error&) {
-        throw;
-    } catch (...) {
-        // JSON parse failed — return raw body and let the caller handle it
-    }
+    throwIfErrorBody(responseBody);
 
     return responseBody;
 }
@@ -379,37 +418,24 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
         timeoutSec
     );
 
-    // If no tokens were extracted, the server may have returned an error or a
-    // non-streaming response. Apply the same embedded-error check as chatCompletions().
+    parser.finish();
+
+    if (parser.hasError()) {
+        throw std::runtime_error(describeServerError(parser.errorEvent()));
+    }
+    if (parser.malformedEventCount() > 0) {
+        throw std::runtime_error(
+            std::to_string(parser.malformedEventCount()) +
+            " streamed event(s) from " + baseUrl_ +
+            "/chat/completions were not valid chat-completion JSON, so part of the "
+            "response was lost. First bad event: " + parser.firstMalformedEvent() +
+            "\n  Check that the server speaks the OpenAI streaming format, or "
+            "disable streaming (AgentConfig::streaming = false).");
+    }
+
+    // A server that ignored "stream": true may answer with a plain JSON body.
     if (!parser.hasTokens() && !parser.hasToolCalls() && !rawBytes.empty()) {
-        try {
-            const json responseJson = json::parse(rawBytes);
-            if (responseJson.contains("error")) {
-                std::string errMsg = "LLM server error";
-                try {
-                    const auto& inner =
-                        responseJson["error"]["details"]["response"]["error"];
-                    std::string msg = inner.value("message", "");
-                    if (msg.find("exceeds the available context size") != std::string::npos) {
-                        int nCtx    = inner.value("n_ctx", 0);
-                        int nPrompt = inner.value("n_prompt_tokens", 0);
-                        errMsg =
-                            "Server context window too small: prompt is " +
-                            std::to_string(nPrompt) + " tokens but server n_ctx=" +
-                            std::to_string(nCtx) + ".\n" +
-                            "  Reload the model with a larger context via the helper script:\n" +
-                            "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
-                    } else if (!msg.empty()) {
-                        errMsg = msg;
-                    }
-                } catch (...) {}
-                throw std::runtime_error(errMsg);
-            }
-        } catch (const std::runtime_error&) {
-            throw;
-        } catch (...) {
-            // Not valid JSON — return raw bytes for caller's fallback handling
-        }
+        throwIfErrorBody(rawBytes);
     }
 
     // Only a completed stream yields complete argument strings. A connection
