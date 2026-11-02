@@ -988,6 +988,43 @@ def test_a_regrade_replaces_an_earlier_grade(pilot, fake_launch, tmp_path, monke
     assert ft.swebench_grade_run(out, pilot)["tasks"][0]["passed"] is True
 
 
+def test_a_regrade_never_passes_a_contaminated_task(
+    pilot, fake_launch, tmp_path, monkeypatch
+):
+    fake_launch.act = lambda workdir: (
+        (workdir / "sessions.py").write_text("x\n") or "done"
+    )
+    out = tmp_path / "out"
+    ft.run_suite(
+        "swebench",
+        "m",
+        out,
+        config=bench_config.resolve(work_root=str(pilot)),
+        instances=[REQUESTS],
+    )
+    card = ft.read_scorecard(out)
+    card["tasks"][0].update(
+        passed=False,
+        why="read the answer key: run_python named 'eval/tasks'",
+        contamination="run_python named 'eval/tasks'",
+    )
+    (out / "scorecard.json").write_text(json.dumps(card), encoding="utf-8")
+    monkeypatch.setattr(
+        swebench,
+        "evaluate",
+        lambda *a, **k: {
+            REQUESTS: swebench.Verdict(
+                REQUESTS, resolved=True, patch_applied=True, f2p_passed=1, f2p_total=1
+            )
+        },
+    )
+    for _ in range(2):
+        task = ft.swebench_grade_run(out, pilot)["tasks"][0]
+        assert task["passed"] is False
+        assert task["why"].startswith("read the answer key")
+    assert ft.summarize(ft.read_scorecard(out))["passed"] == 0
+
+
 def test_the_judge_grades_a_swebench_attempt_against_the_gold_patch(
     pilot, fake_launch, tmp_path, monkeypatch
 ):

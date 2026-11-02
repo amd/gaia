@@ -23,6 +23,8 @@ from __future__ import annotations
 import difflib
 import json
 import os
+import posixpath
+import re
 import shutil
 import statistics
 import subprocess
@@ -622,6 +624,122 @@ def workspace_diff(workdir: Path, original: Path) -> str:
 
 # ---------------------------------------------------------------------------
 # Running the flagship
+#: ``eval/tasks`` as a whole path segment; ``_names_task_dir`` then decides
+#: whether the path leading to it is this checkout's (``lm_eval/tasks`` and a
+#: project's own ``tests/eval/tasks`` are not).
+_ANSWER_KEY_PATH = re.compile(r"(?<![\w.-])eval[\\/]+tasks(?![\w.-])", re.IGNORECASE)
+#: Characters that end a path when walking back from ``eval/tasks``. A space
+#: does not: a checkout path may hold one (``OneDrive - AMD``).
+_PATH_STOP = frozenset("\t\r\n\"'`=;|&<>(){}[],")
+#: How a shell or script may spell the home folder.
+_HOME_SPELLINGS = ("~", "$HOME", "${HOME}", "%USERPROFILE%", "$env:USERPROFILE")
+_SLASHES = re.compile(r"[\\/]+")
+#: Field names only the task file carries.
+ANSWER_KEY_FIELDS = ("genuine_answer", "must_establish", "wrong_answers")
+#: One of them as a mapping key: JSON, JSON inside a JSON string, or a Python repr.
+_ANSWER_KEY_FIELD = re.compile(
+    r"[\"'](" + "|".join(ANSWER_KEY_FIELDS) + r")\\*[\"']\s*:"
+)
+
+
+def _text(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value, default=str)
+
+
+def _raw_call_requests(transcript: Mapping[str, Any]) -> List[Tuple[str, str]]:
+    """GAIA's native tool calls as the model sent them, before any parsing.
+
+    On the native tool-calling path a call's arguments live only on the
+    assistant turn that requested it, never on the tool entry.
+    """
+    found = []
+    for entry in transcript.get("conversation") or []:
+        if entry.get("role") != "assistant":
+            continue
+        content = entry.get("content")
+        for calls in (
+            entry.get("tool_calls"),
+            content.get("tool_calls") if isinstance(content, dict) else None,
+        ):
+            for call in calls if isinstance(calls, list) else ():
+                if isinstance(call, dict):
+                    name = call.get("name") or (call.get("function") or {}).get("name")
+                    found.append((str(name or "tool"), _text(call)))
+    return found
+
+
+def _norm_path(path: str) -> str:
+    return posixpath.normpath(_SLASHES.sub("/", path)).casefold()
+
+
+def _task_dir_spellings() -> Tuple[str, ...]:
+    """``TASKS_DIR`` as a tool may write it: native, ``/c/...`` (MSYS, WSL) or from home."""
+    native = str(TASKS_DIR)
+    found = {_norm_path(native)}
+    drive, rest = os.path.splitdrive(native)
+    if len(drive) == 2 and drive[1] == ":":
+        found.add(_norm_path(f"/{drive[0]}{rest}"))
+    home = Path(os.path.expanduser("~"))
+    if TASKS_DIR.is_relative_to(home):
+        rel = TASKS_DIR.relative_to(home).as_posix()
+        found.update(_norm_path(f"{h}/{rel}") for h in _HOME_SPELLINGS)
+    return tuple(found)
+
+
+def _names_task_dir(text: str, hit: "re.Match[str]", workdir: Optional[Path]) -> bool:
+    """Whether the path ending at *hit* is this checkout's ``eval/tasks``."""
+    spellings = _task_dir_spellings()
+    start = hit.start()
+    while start and text[start - 1] not in _PATH_STOP:
+        start -= 1
+    # The path may begin at the text's start, after a stop, or after any space.
+    begins = [0, start] + [
+        m.end() for m in re.finditer(r" +", text[: hit.start()]) if m.end() > start
+    ]
+    for begin in begins:
+        raw = _SLASHES.sub("/", text[begin : hit.end()])
+        # A command glued to a path (``cat ../x``): its ``..`` would eat the command.
+        glued = re.search(r"\s\.\.?(/|$)", raw)
+        # endswith, so a JSON escape glued to the front (``\nC:/...``) still matches.
+        if (raw.casefold() if glued else _norm_path(raw)).endswith(spellings):
+            return True
+        if glued or begin < start or workdir is None:
+            continue
+        if raw.startswith(("/", "~", "$", "%")) or re.match(r"[A-Za-z]:", raw):
+            continue
+        if _norm_path(os.path.join(str(workdir), raw)) in spellings:
+            return True
+    return False
+
+
+def answer_key_contact(
+    transcript: Mapping[str, Any], workdir: Optional[Path] = None
+) -> str:
+    """How the agent's tools reached the suite's answer key, or ``""``.
+
+    Read from the tool record, never the model's wording: a call that named
+    this checkout's ``eval/tasks`` (relative paths resolved against
+    *workdir*), or a tool result carrying the task file's own fields. Both
+    harnesses' transcripts are read (``transcripts.tool_calls``).
+    """
+    requests = [
+        (name, _text(args)) for name, args, _r in transcripts.tool_calls(transcript)
+    ]
+    for name, text in requests + _raw_call_requests(transcript):
+        for hit in _ANSWER_KEY_PATH.finditer(text):
+            if _names_task_dir(text, hit, workdir):
+                return f"{name} named {hit.group(0)!r}"
+    for name, _args, result in transcripts.tool_calls(transcript):
+        if result is None:
+            continue
+        # Two different fields as keys; a result showing only one passes this check.
+        fields = sorted(set(_ANSWER_KEY_FIELD.findall(_text(result))))
+        if len(fields) >= 2:
+            shown = ", ".join(repr(f) for f in fields)
+            return f"{name} returned the task file's {shown} fields"
+    return ""
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -661,6 +779,8 @@ class TaskResult:
     gh_blocked_writes: int = 0
     #: Tools that ran after the answer on work nobody asked for (``calls_after_answer``).
     after_answer: List[str] = field(default_factory=list)
+    #: How its tools reached the answer key (``answer_key_contact``); "" when clean.
+    contamination: str = ""
 
 
 _CALL_FIELDS = ("seconds", "first_byte_seconds", "tokens", "timings")
@@ -955,7 +1075,13 @@ def run_task(
                 result.after_answer = calls_after_answer(
                     ran.conversation, prompt, workdir
                 )
-            if ran.error:
+            result.contamination = answer_key_contact(ran.transcript, workdir)
+            if result.contamination:
+                # Fails whatever the project looks like: the fix may be copied.
+                result.passed = False
+                result.why = f"read the answer key: {result.contamination}"
+                result.error = ran.error
+            elif ran.error:
                 result.error = result.why = ran.error
             elif no_patch:
                 result.passed, result.why = False, no_patch
@@ -1576,7 +1702,7 @@ def _apply_verdict(entry: Dict[str, Any], task: Task) -> None:
     A SWE-bench task is not the judge's to pass: the official harness decides
     it (``swebench_grade_run``); the judge grades its quality only.
     """
-    if entry.get("error") or entry.get("after_answer"):
+    if entry.get("error") or entry.get("after_answer") or entry.get("contamination"):
         return
     grade = entry["judge"]
     if task.check == "stated" and grade.get("answers_correctly") is not None:
@@ -1618,8 +1744,9 @@ def swebench_grade_run(
 ) -> Dict[str, Any]:
     """Grade a ``swebench`` run's predictions with the official harness; update the scorecard.
 
-    A task the agent left without a patch, or that errored, keeps its result;
-    every other task's pass is the harness's ``resolved``.
+    A task the agent left without a patch, that errored, or that read the
+    answer key keeps its result; every other task's pass is the harness's
+    ``resolved``.
     """
     card = read_scorecard(run_dir)
     if card.get("suite") != swebench.SUITE:
@@ -1642,7 +1769,11 @@ def swebench_grade_run(
         # A pass already set by an earlier grading is the harness's to revise.
         graded_before = "swebench" in entry
         entry["swebench"] = verdict.as_dict()
-        if entry.get("error") or (entry.get("passed") is False and not graded_before):
+        if (
+            entry.get("error")
+            or entry.get("contamination")
+            or (entry.get("passed") is False and not graded_before)
+        ):
             continue
         if verdict.resolved is None:
             entry["passed"], entry["why"] = None, f"not graded: {verdict.error}"
@@ -1691,6 +1822,7 @@ def summarize(card: Mapping[str, Any]) -> Dict[str, Any]:
         "coding": len(coding),
         "verified": sum(1 for t in coding if t.get("verified") is True),
         "errors": sum(1 for t in tasks if t.get("error")),
+        "contaminated": sum(1 for t in tasks if t.get("contamination")),
         "unmeasured": sum(1 for t in tasks if t.get("error_kind") == "unavailable"),
         "judged": len(judged),
         "quality": (
@@ -1742,6 +1874,13 @@ def gate(card: Mapping[str, Any], expected: Mapping[str, Any]) -> List[GateCheck
     unjudged = f"{s['tasks'] - s['judged']} task(s) not judged"
     min_verified = expected.get("min_verified")
     return [
+        # Never absorbed by PASS_SLACK: one copied answer voids the comparison.
+        GateCheck(
+            "Tasks that read the answer key",
+            s["contaminated"],
+            "0",
+            s["contaminated"] == 0,
+        ),
         GateCheck(
             "Tasks measured",
             f"{s['tasks'] - s['unmeasured']}/{s['tasks']}",
@@ -1823,15 +1962,19 @@ def _task_row(t: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         "id": t["id"],
         "result": (
-            "NOT MEASURED"
-            if t.get("error_kind") == "unavailable"
+            "CONTAMINATED"
+            if t.get("contamination")
             else (
-                "ERROR"
-                if t.get("error")
+                "NOT MEASURED"
+                if t.get("error_kind") == "unavailable"
                 else (
-                    "AWAITING JUDGE"
-                    if t["passed"] is None
-                    else "PASS" if t["passed"] else "FAIL"
+                    "ERROR"
+                    if t.get("error")
+                    else (
+                        "AWAITING JUDGE"
+                        if t["passed"] is None
+                        else "PASS" if t["passed"] else "FAIL"
+                    )
                 )
             )
         ),
@@ -1854,6 +1997,11 @@ def propose_expectations(card: Mapping[str, Any]) -> Dict[str, Any]:
         raise ValueError(
             f"{s['unmeasured']} task(s) were not measured (the model backend was "
             "unreachable); re-run before proposing expectations from this run."
+        )
+    if s["contaminated"]:
+        raise ValueError(
+            f"{s['contaminated']} task(s) read the answer key; a baseline from "
+            "this run would bless copied answers. Re-run before proposing."
         )
     if s["judged"] != s["tasks"]:
         raise ValueError(
