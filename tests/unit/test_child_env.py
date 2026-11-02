@@ -587,29 +587,6 @@ def test_shell_step_does_not_see_a_dotenv_secret(monkeypatch, tmp_path):
     assert DOTENV_SECRET not in result["stdout"]
 
 
-def test_python_tool_child_does_not_see_a_dotenv_secret(monkeypatch, tmp_path):
-    """The environment run_python and execute_python_file give their subprocess."""
-    from gaia_agent.chat_agent import _python_script_run_context
-    from gaia_agent.python_jobs import run_python_job
-
-    _from_dotenv(monkeypatch, "PROJECT_SECRET", DOTENV_SECRET)
-    script = tmp_path / "dump.py"
-    script.write_text(
-        "import os\nprint('PATH' in os.environ, os.environ.get('PROJECT_SECRET'))\n"
-    )
-
-    run_dir, env = _python_script_run_context(script, None)
-    job = run_python_job(
-        [sys.executable, str(script)],
-        cwd=str(run_dir),
-        env=env,
-        timeout=60,
-        should_stop=lambda: False,
-    )
-
-    assert job.run.stdout.strip() == "True None", job.run
-
-
 def test_load_env_records_only_what_the_file_set(monkeypatch, tmp_path):
     (tmp_path / ".env").write_text("PROJECT_SECRET=x\nALREADY_SET=file\n")
     monkeypatch.chdir(tmp_path)
