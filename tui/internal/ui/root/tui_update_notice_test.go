@@ -4,8 +4,23 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/update"
 )
+
+func TestOnlyTheLaunchGateOffersAnUpdate(t *testing.T) {
+	if (FlagshipModel{}).preflightOptions().OfferUpdate {
+		t.Error("a host that does not run the install on exit must not offer it")
+	}
+	launch := FlagshipModel{}.WithUpdateCheck()
+	if !launch.preflightOptions().OfferUpdate {
+		t.Error("a user stuck on the launch gate has no other way to update")
+	}
+	launch.chat = &chat.ChatModel{}
+	if launch.preflightOptions().OfferUpdate {
+		t.Error("an /agents switch gate has a conversation behind it and /update in reach")
+	}
+}
 
 func TestTerminalUpdateNoticeNamesBothVersions(t *testing.T) {
 	m := FlagshipModel{terminalVersion: "0.25.1"}.noteTerminalUpdate("0.25.2")

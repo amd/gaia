@@ -37,6 +37,13 @@ export interface UpdateState {
     includePrereleases?: boolean;
     /** ~/.gaia/update-config.json could not be read; why, or null. */
     configError?: string | null;
+    /** The last install didn't land: what it tried, and what is still running. */
+    installFailed?: { target: string; from: string } | null;
+    lastCheckError?: string | null;
+    /** The older version a bad update can go back to, or null. */
+    previousVersion?: string | null;
+    /** The app opened but its backend never came up. */
+    startFailed?: boolean;
 }
 
 /** Info about a single published release, as returned by listReleases(). */
@@ -55,6 +62,7 @@ export interface GaiaUpdaterBridge {
     onStatusChange: (cb: (state: UpdateState) => void) => () => void;
     listReleases: () => Promise<ReleaseInfo[] | { error: string }>;
     installVersion: (tag: string) => Promise<UpdateState>;
+    revertUpdate: () => Promise<UpdateState>;
     resumeUpdates: () => Promise<UpdateState>;
     setAutoUpdate: (enabled: boolean) => Promise<UpdateState>;
     setIncludePrereleases: (enabled: boolean) => Promise<UpdateState>;

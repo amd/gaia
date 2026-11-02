@@ -4,6 +4,7 @@
 import { useCallback, useState } from 'react';
 import { Download, RefreshCw, AlertTriangle, X } from 'lucide-react';
 import { getUpdaterBridge, useUpdateStatus } from '../hooks/useUpdateStatus';
+import { useT } from '../i18n/useT';
 import { log } from '../utils/logger';
 import './UpdateIndicator.css';
 
@@ -19,10 +20,11 @@ import './UpdateIndicator.css';
  */
 export function UpdateIndicator() {
     const update = useUpdateStatus();
+    const t = useT();
     const [dismissed, setDismissed] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
 
-    const act = useCallback((what: 'downloadUpdate' | 'restart') => {
+    const act = useCallback((what: 'downloadUpdate' | 'restart' | 'revertUpdate') => {
         const updater = getUpdaterBridge();
         if (!updater) return;
         setActionError(null);
@@ -35,6 +37,56 @@ export function UpdateIndicator() {
 
     // States where we deliberately render nothing — keeps the UI calm.
     if (dismissed) return null;
+    const installFailedDetail = update.installFailed
+        ? t('update.chip.installFailedDetail', update.installFailed)
+        : null;
+    const busy = update.status === 'downloading' || update.status === 'downloaded';
+    if (update.startFailed && update.previousVersion && !busy) {
+        return (
+            <div className="update-chip update-chip--error" role="status">
+                <AlertTriangle size={13} className="update-chip__icon" />
+                <span className="update-chip__label" title={actionError ?? undefined}>
+                    {actionError ? t('update.chip.updateFailed') : t('update.chip.startFailed')}
+                </span>
+                <button
+                    type="button"
+                    className="update-chip__action"
+                    onClick={() => act('revertUpdate')}
+                >
+                    {t('update.chip.goBack', { version: update.previousVersion })}
+                </button>
+                <button
+                    type="button"
+                    className="update-chip__dismiss"
+                    onClick={() => setDismissed(true)}
+                    aria-label={t('update.chip.dismissError')}
+                >
+                    <X size={11} />
+                </button>
+            </div>
+        );
+    }
+    const offered = update.status === 'available' || update.status === 'downloaded';
+    if (installFailedDetail && !offered) {
+        return (
+            <div
+                className="update-chip update-chip--error"
+                role="status"
+                title={installFailedDetail ?? undefined}
+            >
+                <AlertTriangle size={13} className="update-chip__icon" />
+                <span className="update-chip__label">{t('update.chip.installFailed')}</span>
+                <button
+                    type="button"
+                    className="update-chip__dismiss"
+                    onClick={() => setDismissed(true)}
+                    aria-label={t('update.chip.dismissError')}
+                >
+                    <X size={11} />
+                </button>
+            </div>
+        );
+    }
     if (
         update.status === 'idle' ||
         update.status === 'checking' ||
@@ -51,11 +103,11 @@ export function UpdateIndicator() {
                 className="update-chip update-chip--downloading"
                 role="status"
                 aria-live="polite"
-                title={`Downloading update${update.version ? ` ${update.version}` : ''}…`}
+                title={t('update.chip.downloadingTitle', { version: update.version ?? '' })}
             >
                 <Download size={13} className="update-chip__icon" />
                 <span className="update-chip__label">
-                    Downloading update… {pct}%
+                    {t('update.chip.downloading', { pct })}
                 </span>
             </div>
         );
@@ -66,13 +118,15 @@ export function UpdateIndicator() {
             <div
                 className="update-chip update-chip--available"
                 role="status"
-                title={actionError || update.releaseNotes || 'A new version is available.'}
+                title={actionError || installFailedDetail || update.releaseNotes || t('update.chip.availableTitle')}
             >
                 <Download size={13} className="update-chip__icon" />
                 <span className="update-chip__label">
                     {actionError
-                        ? 'Update failed — try again'
-                        : `GAIA ${update.version ?? ''} is available`}
+                        ? t('update.chip.updateFailed')
+                        : installFailedDetail
+                          ? t('update.chip.installFailed')
+                          : t('update.chip.available', { version: update.version ?? '' })}
                 </span>
                 {!update.pinnedVersion && (
                     <button
@@ -80,14 +134,14 @@ export function UpdateIndicator() {
                         className="update-chip__action"
                         onClick={() => act('downloadUpdate')}
                     >
-                        Update now
+                        {t('update.chip.updateNow')}
                     </button>
                 )}
                 <button
                     type="button"
                     className="update-chip__dismiss"
                     onClick={() => setDismissed(true)}
-                    aria-label="Dismiss update notification"
+                    aria-label={t('update.chip.dismiss')}
                 >
                     <X size={11} />
                 </button>
@@ -107,9 +161,13 @@ export function UpdateIndicator() {
                     type="button"
                     className="update-chip__action"
                     onClick={() => act('restart')}
-                    title={actionError || 'Click to restart and apply the update'}
+                    title={actionError || installFailedDetail || t('update.chip.restartTitle')}
                 >
-                    {actionError ? 'Restart failed — try again' : 'Update ready — restart to apply'}
+                    {actionError
+                        ? t('update.chip.restartFailed')
+                        : installFailedDetail
+                          ? t('update.chip.installFailedRetry')
+                          : t('update.chip.ready')}
                 </button>
             </div>
         );
@@ -120,15 +178,15 @@ export function UpdateIndicator() {
             <div
                 className="update-chip update-chip--error"
                 role="status"
-                title={update.error || 'Update check failed.'}
+                title={update.error || t('update.chip.checkFailed')}
             >
                 <AlertTriangle size={13} className="update-chip__icon" />
-                <span className="update-chip__label">Update check failed</span>
+                <span className="update-chip__label">{t('update.chip.checkFailed')}</span>
                 <button
                     type="button"
                     className="update-chip__dismiss"
                     onClick={() => setDismissed(true)}
-                    aria-label="Dismiss update error"
+                    aria-label={t('update.chip.dismissError')}
                 >
                     <X size={11} />
                 </button>

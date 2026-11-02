@@ -446,7 +446,7 @@ The menu:
 - **Settings…** and **Quit GAIA**.
 
 The first time you close the window, GAIA says once that it is still running
-in the tray. If you quit, or choose **Restart now** for an update, while an
+in the tray. If you quit, or restart from the update chip, while an
 answer is being written or a document is indexing, GAIA asks first and says
 that the answer will be lost; when idle it doesn't ask. Keeping GAIA running
 puts an update off until you next quit.
@@ -827,12 +827,18 @@ Everything lives in **Settings → General → Updates** (desktop installer only
   candidate build is offered newer candidates either way.
 - **Check for updates**, then **Update to vX** when one is waiting. The corner chip
   offers the same **Update now**.
-- **Install a specific version…** — pick any published release, newer or older
-  (useful to step back from a regression). The app downloads it and shows a native
-  "Restart now?" prompt.
+- **Install a specific version…** — pick a recent release, newer or older
+  (useful to step back from a regression). The app downloads it and restarts into
+  it, asking first if an answer or indexing job is still running.
 
 **Pinning:** after installing a specific version, GAIA stays on it and offers no
 updates. The Updates section shows "Pinned to vX.Y.Z"; click **Unpin** to resume.
+
+**Going back:** after an update, **Go back to GAIA vX** in the Updates section installs
+the version you had before and pins it, so the update that went wrong isn't offered
+again until you click **Unpin**. If the update fails to finish setting up or start,
+GAIA offers the same button in that error box or on the corner chip. It downloads
+the older version, so it needs an internet connection.
 
 Checks read the [GitHub releases](https://github.com/amd/gaia/releases) and take the
 newest one on your channel that publishes this platform's update. When none does,

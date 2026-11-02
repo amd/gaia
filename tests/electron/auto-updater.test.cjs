@@ -5,7 +5,7 @@
  * Tests for auto-updater version-rollback additions (issue #1336).
  *
  * Covers:
- *   - listReleases(): parses, filters, maps and marks isCurrent/isPinned
+ *   - listReleases(): reads the atom feed, filters, maps and marks isCurrent/isPinned
  *   - listReleases(): surfaces a structured error on fetch failure
  *   - installVersion(): setFeedURL with generic/tag path, pin persist, checkForUpdates
  *   - pin gating: init() sets autoDownload=false when a pin is present
@@ -33,6 +33,14 @@ const INIT_OPTIONS = { confirmRestart: async () => true };
 // The mock is provided by moduleNameMapper → mocks/electron-updater.js.
 // Grab the singleton so we can inspect/reset it per test.
 const { autoUpdater: mockAutoUpdaterInstance } = require("electron-updater");
+const {
+  fetchedUrls,
+  httpResponse,
+  manifestName,
+  refuseFetch,
+  release,
+  serveReleases,
+} = require("./_helpers/github-releases.cjs");
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -49,6 +57,7 @@ beforeEach(() => {
   delete process.env.GAIA_DISABLE_UPDATE;
   delete process.env.GAIA_UPDATE_PRERELEASE;
   delete process.env.GAIA_UPDATE_FEED_URL;
+  refuseFetch();
 });
 
 afterEach(() => {
@@ -81,44 +90,6 @@ function makeMockWindow() {
   return win;
 }
 
-// ── GitHub API fixtures ───────────────────────────────────────────────────────
-
-function makeRelease({
-  tag = "v0.21.0",
-  version = "0.21.0",
-  draft = false,
-  prerelease = false,
-  platform = "win32",
-} = {}) {
-  const assetName =
-    platform === "win32"
-      ? `gaia-agent-ui-${version}-x64-setup.exe`
-      : platform === "darwin"
-      ? `gaia-agent-ui-${version}-arm64.zip`
-      : `gaia-agent-ui-${version}-x86_64.AppImage`;
-
-  return {
-    tag_name: tag,
-    name: `GAIA ${version}`,
-    draft,
-    prerelease,
-    published_at: "2026-06-01T00:00:00Z",
-    html_url: `https://github.com/amd/gaia/releases/tag/${tag}`,
-    assets: [
-      { name: assetName },
-      { name: "latest.yml" },
-    ],
-  };
-}
-
-function stubFetch(releases) {
-  global.fetch = jest.fn().mockResolvedValue({
-    ok: true,
-    status: 200,
-    json: async () => releases,
-  });
-}
-
 // A check that finds a release, the way electron-updater reports one.
 async function offerRelease() {
   mockAutoUpdaterInstance.emit("update-available", { version: "0.20.0" });
@@ -146,21 +117,10 @@ describe("listReleases()", () => {
   test("returns releases newest-first with isCurrent marking", async () => {
     const mod = loadModule();
 
-    const currentPlatform =
-      process.platform === "darwin"
-        ? "darwin"
-        : process.platform === "linux"
-        ? "linux"
-        : "win32";
-
-    // Feed the mock API a known-ordered list (newest first, as the GitHub API
-    // returns it). The mapped result must preserve that order index-for-index.
+    // Newest first, as the feed lists them. The mapped result must preserve
+    // that order index-for-index.
     const orderedVersions = ["0.21.0", "0.20.0", "0.19.0", "0.18.0"];
-    const releases = orderedVersions.map((v) =>
-      makeRelease({ tag: `v${v}`, version: v, platform: currentPlatform })
-    );
-
-    stubFetch(releases);
+    serveReleases(orderedVersions.map((v) => release(`v${v}`)));
     electronMock.app.getVersion = jest.fn(() => "0.21.0");
 
     const result = await mod.listReleases();
@@ -176,40 +136,35 @@ describe("listReleases()", () => {
     expect(result.slice(1).every((r) => r.isCurrent === false)).toBe(true);
   });
 
-  test("filters out draft releases", async () => {
+  test("leaves out tags that aren't app releases", async () => {
+    // Opted in, or the "-" in the tag would hide it as a candidate.
+    process.env.GAIA_UPDATE_PRERELEASE = "1";
     const mod = loadModule();
-
-    const currentPlatform = process.platform === "darwin" ? "darwin" : process.platform === "linux" ? "linux" : "win32";
-    const releases = [
-      makeRelease({ tag: "v0.22.0-draft", draft: true, platform: currentPlatform }),
-      makeRelease({ tag: "v0.21.0", version: "0.21.0", platform: currentPlatform }),
-    ];
-
-    stubFetch(releases);
+    serveReleases([release("agent-pkg-gaia-v0.3.3"), release("v0.21.0")]);
     electronMock.app.getVersion = jest.fn(() => "0.20.0");
 
     const result = await mod.listReleases();
-    expect(Array.isArray(result)).toBe(true);
-    expect(result.some((r) => r.tag === "v0.22.0-draft")).toBe(false);
-    expect(result.some((r) => r.tag === "v0.21.0")).toBe(true);
+    expect(result.map((r) => r.tag)).toEqual(["v0.21.0"]);
   });
 
   test("filters out prereleases when not opted in", async () => {
     const mod = loadModule();
     delete process.env.GAIA_UPDATE_PRERELEASE;
 
-    const currentPlatform = process.platform === "darwin" ? "darwin" : process.platform === "linux" ? "linux" : "win32";
-    const releases = [
-      makeRelease({ tag: "v0.22.0-beta1", prerelease: true, platform: currentPlatform }),
-      makeRelease({ tag: "v0.21.0", version: "0.21.0", platform: currentPlatform }),
-    ];
-
-    stubFetch(releases);
+    serveReleases([release("v0.22.0-rc1"), release("v0.21.0")]);
     electronMock.app.getVersion = jest.fn(() => "0.20.0");
 
     const result = await mod.listReleases();
-    expect(result.some((r) => r.tag === "v0.22.0-beta1")).toBe(false);
-    expect(result.some((r) => r.tag === "v0.21.0")).toBe(true);
+    expect(result.map((r) => r.tag)).toEqual(["v0.21.0"]);
+  });
+
+  test("leaves out a release this platform can't install", async () => {
+    const mod = loadModule();
+    serveReleases([release("v0.22.0", { installer: false }), release("v0.21.0")]);
+    electronMock.app.getVersion = jest.fn(() => "0.20.0");
+
+    const result = await mod.listReleases();
+    expect(result.map((r) => r.tag)).toEqual(["v0.21.0"]);
   });
 
   test("surfaces a structured error object (not []) on fetch failure", async () => {
@@ -228,22 +183,27 @@ describe("listReleases()", () => {
   test("surfaces a structured error on non-200 response", async () => {
     const mod = loadModule();
 
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: false,
-      status: 403,
-    });
+    serveReleases([], { respond: () => httpResponse(403) });
 
     const result = await mod.listReleases();
     expect(Array.isArray(result)).toBe(false);
     expect(result).toHaveProperty("error");
   });
 
+  test("a 500 on one release's manifest is an error, not a shorter list", async () => {
+    const mod = loadModule();
+    serveReleases([release("v0.22.0"), release("v0.21.0")], {
+      respond: (url) => (url.endsWith(`/v0.21.0/${manifestName()}`) ? httpResponse(500) : undefined),
+    });
+
+    const result = await mod.listReleases();
+    expect(result.error).toMatch(/HTTP 500/);
+  });
+
   test("maps release fields correctly", async () => {
     const mod = loadModule();
 
-    const currentPlatform = process.platform === "darwin" ? "darwin" : process.platform === "linux" ? "linux" : "win32";
-    const release = makeRelease({ tag: "v0.21.0", version: "0.21.0", platform: currentPlatform });
-    stubFetch([release]);
+    serveReleases([release("v0.21.0", { published: "2026-06-01T00:00:00Z" })]);
     electronMock.app.getVersion = jest.fn(() => "0.19.0");
 
     const result = await mod.listReleases();
@@ -251,9 +211,9 @@ describe("listReleases()", () => {
     const r = result.find((x) => x.tag === "v0.21.0");
     expect(r).toBeDefined();
     expect(r.tag).toBe("v0.21.0");
-    expect(r.version).toBeDefined();
+    expect(r.version).toBe("0.21.0");
     expect(r.date).toBe("2026-06-01T00:00:00Z");
-    expect(r.notesUrl).toContain("github.com/amd/gaia/releases");
+    expect(r.notesUrl).toBe("https://github.com/amd/gaia/releases/tag/v0.21.0");
     expect(r.isCurrent).toBe(false);
     expect(typeof r.isPinned).toBe("boolean");
   });
@@ -261,20 +221,9 @@ describe("listReleases()", () => {
   test("caps the list to the 10 most-recent installable releases", async () => {
     const mod = loadModule();
 
-    const currentPlatform =
-      process.platform === "darwin"
-        ? "darwin"
-        : process.platform === "linux"
-        ? "linux"
-        : "win32";
-
-    // 15 installable releases, newest-first (as the GitHub API returns them).
+    // 15 installable releases, newest-first.
     const versions = Array.from({ length: 15 }, (_, i) => `0.${30 - i}.0`);
-    const releases = versions.map((v) =>
-      makeRelease({ tag: `v${v}`, version: v, platform: currentPlatform })
-    );
-
-    stubFetch(releases);
+    serveReleases(versions.map((v) => release(`v${v}`)));
     electronMock.app.getVersion = jest.fn(() => "0.30.0");
 
     const result = await mod.listReleases();
@@ -283,6 +232,22 @@ describe("listReleases()", () => {
     // via the "browse all on GitHub" link in the picker.
     expect(result.length).toBe(10);
     expect(result.map((r) => r.version)).toEqual(versions.slice(0, 10));
+  });
+
+  test("reads further feed pages, so a run of candidates can't hide older finals", async () => {
+    const mod = loadModule();
+    const candidates = Array.from({ length: 10 }, (_, i) => release(`v0.26.0-rc${10 - i}`));
+    const finals = Array.from({ length: 12 }, (_, i) => release(`v0.25.${11 - i}`));
+    serveReleases([...candidates, ...finals]);
+    electronMock.app.getVersion = jest.fn(() => "0.25.0");
+
+    const result = await mod.listReleases();
+
+    expect(fetchedUrls()).toContain(
+      "https://github.com/amd/gaia/releases.atom?after=v0.26.0-rc1"
+    );
+    expect(fetchedUrls().filter((url) => url.includes(".atom"))).toHaveLength(3);
+    expect(result.map((r) => r.tag)).toEqual(finals.slice(0, 10).map((r) => r.tag));
   });
 });
 
@@ -472,7 +437,11 @@ describe("installVersion with auto-update and failures", () => {
     await expect(mod.installVersion("v0.20.0")).rejects.toThrow(/net down.*Still pinned to v0\.19\.0/s);
     expect(mod.getState().pinnedVersion).toBe("v0.19.0");
     expect(readUpdateConfig().pinnedVersion).toBe("v0.19.0");
-    expect(mockAutoUpdaterInstance._feedURL.url).toContain("/download/v0.19.0/");
+    expect(mockAutoUpdaterInstance._feedURL).toEqual({
+      provider: "generic",
+      url: "https://github.com/amd/gaia/releases/download/v0.19.0/",
+      useMultipleRangeRequest: false,
+    });
   });
 });
 
@@ -538,6 +507,7 @@ describe("setAutoUpdate / downloadUpdate / restart", () => {
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
     const downloadSpy = jest.spyOn(mockAutoUpdaterInstance, "downloadUpdate");
+    serveReleases([]);
     mockAutoUpdaterInstance.emit("update-available", { version: "0.26.0" });
 
     await electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", true);
@@ -561,8 +531,6 @@ describe("setAutoUpdate / downloadUpdate / restart", () => {
     const mod = loadModule();
     mod.init(makeMockWindow(), { confirmRestart });
     const quitSpy = jest.spyOn(mockAutoUpdaterInstance, "quitAndInstall");
-    // "Later" on the native dialog, so only the chip's restart is exercised.
-    electronMock.dialog.showMessageBox.mockResolvedValueOnce({ response: 1 });
     mockAutoUpdaterInstance.emit("update-downloaded", { version: "0.26.0" });
     await new Promise((r) => setImmediate(r));
     expect(mod.getState().status).toBe("downloaded");
@@ -572,18 +540,18 @@ describe("setAutoUpdate / downloadUpdate / restart", () => {
 
     confirmRestart.mockResolvedValue(true);
     await electronMock.ipcMain.simulateInvoke("gaia:update:restart");
-    expect(quitSpy).toHaveBeenCalledWith(false, true);
+    expect(quitSpy).toHaveBeenCalledWith(true, true);
   });
 });
 
 describe("release candidates (setIncludePrereleases)", () => {
-  const rc = { tag: "v0.27.0-rc1", version: "0.27.0-rc1", prerelease: true, platform: process.platform };
-  const final = { tag: "v0.26.0", version: "0.26.0", platform: process.platform };
+  const rc = release("v0.27.0-rc1");
+  const final = release("v0.26.0");
 
   test("off by default, and RCs stay out of the version list", async () => {
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
-    stubFetch([makeRelease(rc), makeRelease(final)]);
+    serveReleases([rc, final]);
 
     expect(mod.getState().includePrereleases).toBe(false);
     expect(mockAutoUpdaterInstance.allowPrerelease).toBe(false);
@@ -594,7 +562,7 @@ describe("release candidates (setIncludePrereleases)", () => {
   test("turning it on needs no auto-update, saves it, and lets RCs through", async () => {
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
-    stubFetch([makeRelease(rc), makeRelease(final)]);
+    serveReleases([rc, final]);
 
     const state = await electronMock.ipcMain.simulateInvoke(
       "gaia:update:set-include-prereleases",
@@ -609,6 +577,44 @@ describe("release candidates (setIncludePrereleases)", () => {
     expect(readUpdateConfig()).toEqual({ includePrereleases: true });
     const tags = (await mod.listReleases()).map((r) => r.tag);
     expect(tags).toEqual(["v0.27.0-rc1", "v0.26.0"]);
+  });
+
+  test("turning it on checks at once, so the newest candidate shows up", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const checkSpy = jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates").mockResolvedValue(null);
+    serveReleases([rc, final]);
+
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-include-prereleases", true);
+
+    expect(checkSpy).toHaveBeenCalledTimes(1);
+    expect(mockAutoUpdaterInstance._feedURL.url).toContain("/download/v0.27.0-rc1/");
+  });
+
+  test("turning it off changes the setting and starts no check", async () => {
+    writeUpdateConfig({ includePrereleases: true });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const checkSpy = jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates").mockResolvedValue(null);
+    serveReleases([rc, final]);
+
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-include-prereleases", false);
+
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  test("turning auto-update on checks at once; turning it off doesn't", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const checkSpy = jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates").mockResolvedValue(null);
+    serveReleases([final]);
+
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", true);
+    expect(checkSpy).toHaveBeenCalledTimes(1);
+
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", false);
+    expect(checkSpy).toHaveBeenCalledTimes(1);
   });
 
   test("turning auto-update off keeps the release-candidate channel", async () => {
@@ -628,7 +634,7 @@ describe("release candidates (setIncludePrereleases)", () => {
     jest.spyOn(electronMock.app, "getVersion").mockReturnValue("0.26.1-rc.2");
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
-    stubFetch([makeRelease(rc), makeRelease(final)]);
+    serveReleases([rc, final]);
 
     expect(mod.getState().includePrereleases).toBe(false);
     expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
@@ -819,6 +825,7 @@ describe("gaia:update:install-version IPC tag validation", () => {
     expect(mockAutoUpdaterInstance._feedURL).toEqual({
       provider: "generic",
       url: "https://github.com/amd/gaia/releases/download/v0.21.0-rc.1/",
+      useMultipleRangeRequest: false,
     });
     expect(checkSpy).toHaveBeenCalledTimes(1);
   });
@@ -842,7 +849,7 @@ describe("gaia:update:check IPC", () => {
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
     const checkSpy = jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates");
-    stubFetch([]);
+    serveReleases([]);
 
     const state = await invoke("gaia:update:check");
 
@@ -957,24 +964,29 @@ describe("listReleases says which way GitHub failed", () => {
     expect(result.error).toMatch(/GitHub didn't answer within 20 seconds/);
   });
 
-  test("garbled JSON is not called a connection problem", async () => {
+  test.each([
+    ["an HTML page", "<!DOCTYPE html><html>Sign in</html>"],
+    ["a JSON error", '{"message":"Not Found"}'],
+  ])("%s instead of a feed is not called a connection problem", async (_label, body) => {
     const mod = loadModule();
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => {
-        throw new SyntaxError("Unexpected token < in JSON");
-      },
-    });
+    serveReleases([], { respond: () => httpResponse(200, body) });
     const result = await mod.listReleases();
     expect(result.error).toMatch(/GitHub sent a response GAIA couldn't read/);
     expect(result.error).not.toMatch(/connection/);
   });
+});
 
-  test("an object instead of a list is an error, not a crash", async () => {
-    const mod = loadModule();
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ message: "Not Found" }) });
+describe("listReleases() on a release candidate", () => {
+  test("marks the running candidate current, whose tag has no dot", async () => {
+    const mod = require("../../src/gaia/apps/webui/services/auto-updater.cjs");
+    serveReleases([release("v0.25.4-rc3"), release("v0.25.4-rc2")]);
+    electronMock.app.getVersion = jest.fn(() => "0.25.4-rc.2");
+    process.env.GAIA_UPDATE_PRERELEASE = "1";
     const result = await mod.listReleases();
-    expect(result.error).toMatch(/couldn't read/);
+    delete process.env.GAIA_UPDATE_PRERELEASE;
+    expect(result.map((r) => [r.tag, r.isCurrent])).toEqual([
+      ["v0.25.4-rc3", false],
+      ["v0.25.4-rc2", true],
+    ]);
   });
 });

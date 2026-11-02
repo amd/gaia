@@ -1871,6 +1871,14 @@ async function installBackend(opts = {}) {
           : "") +
         "Ask IT to install the proxy's root CA in your system's trusted certificate store, then relaunch GAIA. " +
         "See https://amd-gaia.ai/docs/quickstart#cli-install";
+    } else if (isTransientNetworkError(output)) {
+      // The log file keeps pip's output; the box says what to do about it.
+      throw new InstallError("GAIA couldn't reach the internet to finish installing.", {
+        stage: STAGES.INSTALL_PACKAGE,
+        code: installResult.code,
+        suggestion:
+          "Check your connection, then choose Retry. If it keeps failing, the log file below says why. Your chats and settings are safe.",
+      });
     } else {
       suggestion = `Try installing manually:\n  uv pip install ${pipPackage} --python ${
         IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`

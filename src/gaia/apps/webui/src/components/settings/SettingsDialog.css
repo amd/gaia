@@ -169,6 +169,10 @@
     overflow-wrap: anywhere;
 }
 
+.settings-error .i18n-gloss.i18n-gloss {
+    color: inherit;
+}
+
 .settings-warning {
     display: flex;
     flex-direction: column;

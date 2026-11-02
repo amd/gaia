@@ -5,8 +5,6 @@ package update
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
 	"strings"
 	"testing"
 )
@@ -17,12 +15,16 @@ func TestCheckSkipsAReleaseWithNothingForThisMachine(t *testing.T) {
 	t.Cleanup(func() { Current = prev })
 	// v0.26.0 carries only the desktop app's setup; v0.25.0 shipped no
 	// Terminal UI Windows setup at all.
-	rs := []Release{
-		{Tag: "v0.26.0", Assets: []Asset{{Name: "gaia-agent-ui-0.26.0-x64-setup.exe"}, {Name: installerSums}}},
-		{Tag: "v0.25.1", Assets: []Asset{{Name: "gaia-0.25.1-win-x64-setup.exe"}, {Name: installerSums}}},
-		{Tag: "v0.25.0", Assets: []Asset{{Name: installerSums}, {Name: "gaia-windows-amd64.exe"}, {Name: tuiSums}}},
-	}
-	serveReleases(t, func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(rs) })
+	withGitHub(t, &fakeGitHub{
+		feed:   atom("v0.26.0", "v0.25.1", "v0.25.0"),
+		latest: "v0.26.0",
+		sums: map[string]string{
+			"v0.26.0/" + installerSums: sumsOf("gaia-agent-ui-0.26.0-x64-setup.exe"),
+			"v0.25.1/" + installerSums: sumsOf("gaia-0.25.1-win-x64-setup.exe"),
+			"v0.25.0/" + installerSums: sumsOf("gaia_0.25.0_amd64.deb"),
+			"v0.25.0/" + tuiSums:       sumsOf("gaia-windows-amd64.exe"),
+		},
+	})
 
 	withHome(t)
 	withExecutable(t, `C:\Programs\GAIA Terminal Hub\gaia-tui.exe`, "windows")

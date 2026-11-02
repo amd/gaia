@@ -440,6 +440,7 @@ async function startBackend() {
  * Quit. Invoked from child.on("exit") when the kill was NOT initiated by us.
  */
 async function handleBackendCrash(code, signal) {
+  autoUpdater.reportStartFailure();
   try {
     const choice = await showBackendCrashDialog({
       dialog,
@@ -838,6 +839,32 @@ async function chooseLemonadeInDialog(found, parent) {
   return response === 0 ? "external" : "gaia";
 }
 
+/** Setup failed after an update: download the version before it and restart into it. */
+async function goBackToPreviousVersion(version) {
+  const progress = installerProgressDialog.createProgressWindow({ revertingTo: version });
+  const ticker = setInterval(() => {
+    const percent = autoUpdater.getState().progress;
+    progress.onProgress("revert-download", percent, `${percent}%`);
+  }, 500);
+  try {
+    autoUpdater.init(null, { confirmRestart: async () => true });
+    await autoUpdater.revertUpdate();
+    return true;
+  } catch (err) {
+    clearInterval(ticker);
+    progress.close();
+    await dialog.showMessageBox({
+      type: "error",
+      title: "GAIA",
+      message: `GAIA couldn't go back to ${version}.`,
+      detail: `${(err && err.message) || err}\n\nYou can also download it from https://github.com/amd/gaia/releases.`,
+      buttons: ["OK"],
+      noLink: true,
+    });
+    return false;
+  }
+}
+
 /**
  * Ensure the Python backend is installed before the main window loads.
  *
@@ -879,7 +906,9 @@ async function bootstrapBackend() {
   // Slow path: need to install or upgrade. Show the progress window.
   let keepTrying = true;
   while (keepTrying) {
-    const progress = installerProgressDialog.createProgressWindow();
+    const progress = installerProgressDialog.createProgressWindow({
+      updating: Boolean(existingBin),
+    });
 
     try {
       await backendInstaller.ensureBackend({
@@ -900,6 +929,7 @@ async function bootstrapBackend() {
         message: (err && err.message) || "GAIA install failed.",
         stage: (err && err.stage) || null,
         suggestion: (err && err.suggestion) || null,
+        revertTo: autoUpdater.previousVersion(),
       };
 
       const choice = await installerProgressDialog.showFailureDialog(
@@ -909,6 +939,11 @@ async function bootstrapBackend() {
 
       if (choice === "retry") {
         continue; // loop
+      }
+      if (choice === "revert") {
+        // On success the installer is taking over, so this launch ends.
+        if (await goBackToPreviousVersion(errorInfo.revertTo)) return false;
+        continue;
       }
       if (choice === "manual") {
         // The user was directed to the docs in an external browser. Quit so
@@ -1258,6 +1293,14 @@ app.whenReady().then(async () => {
       console.warn("Backend did not respond within timeout.");
     }
   }
+  if (!backendReady) {
+    autoUpdater.reportStartFailure();
+    if (backendProcess) {
+      waitForBackend(STARTUP_TIMEOUT * 10).then((ready) => {
+        if (ready) autoUpdater.clearStartFailure();
+      });
+    }
+  }
 
   // Act on any gaia:// deep link that arrived during bootstrap or via the
   // cold-start command line (issue #1725) — after the backend is listening,
@@ -1331,7 +1374,7 @@ function askAboutRunningWork(action) {
   });
 }
 
-/** The update dialog's "Restart now": the installer starts at once, so ask first. */
+/** Restarting into an update: the installer starts at once, so ask first. */
 function confirmUpdateRestart() {
   return workCanBeLost() ? askAboutRunningWork(RESTART_FOR_UPDATE) : Promise.resolve(true);
 }
