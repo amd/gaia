@@ -131,6 +131,7 @@ func (m FlagshipModel) gateIsFor(agentID string) bool {
 // ctrl+c during preflight would have left that child running.
 func (m *FlagshipModel) closeGate() {
 	if m.preflight != nil {
+		m.preflight.Abandon()
 		m.preflight.Cancel()
 		m.preflight = nil
 	}

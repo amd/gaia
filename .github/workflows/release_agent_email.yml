@@ -209,6 +209,16 @@ jobs:
           PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
           "$PY" hub/agents/email/python/packaging/freeze.py --onefile
 
+      # GAIA must not ship GPL/AGPL code (GNU Readline, GNU dbm, PyInstaller's
+      # own package, PyMuPDF). Read off the built archive itself.
+      - name: Check the binary bundles no copyleft code
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" hub/agents/gaia/python/packaging/check_bundle_licenses.py \
+            "${FREEZE_DIST}/${{ matrix.frozen }}"
+
       - name: Smoke-test the frozen binary
         shell: bash
         run: |

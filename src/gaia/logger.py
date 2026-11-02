@@ -10,6 +10,7 @@ import warnings
 from pathlib import Path
 from typing import Optional
 
+from gaia.home import gaia_home
 from gaia.log_rotation import SharedRotatingFileHandler
 from gaia.tool_cancellation import AbandonedWorkerLogFilter
 
@@ -20,7 +21,9 @@ LOG_FILE_ENV = "GAIA_LOG_FILE"
 
 
 def _home_log_file():
-    """Return ``~/.gaia/gaia.log``, or ``None`` when the home dir is unresolvable.
+    """Return ``<gaia_home>/gaia.log``, or ``None`` when the home dir is unresolvable.
+
+    ``GAIA_HOME`` relocates it with the rest of GAIA's state.
 
     ``Path.home()`` raises ``RuntimeError`` on Windows when neither ``USERPROFILE``
     nor ``HOMEDRIVE``+``HOMEPATH`` is set -- common for services, scheduled tasks
@@ -28,7 +31,7 @@ def _home_log_file():
     ``import gaia`` at all.
     """
     try:
-        return Path.home() / ".gaia" / "gaia.log"
+        return gaia_home() / "gaia.log"
     except RuntimeError:
         return None
 

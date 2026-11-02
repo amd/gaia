@@ -742,6 +742,7 @@ export interface LoadedModelInfo {
   backend_source?: string | null;
   ctx_size?: number | null;
   device?: string | null;
+  model_type?: string | null;
   name?: string | null;
   recipe?: string | null;
 }
@@ -875,6 +876,7 @@ export interface ModelServerInfo {
   embedding_model?: LoadedModelInfo | null;
   embedding_note?: string | null;
   error?: string | null;
+  loaded_models?: LoadedModelInfo[];
   owner: string;
   port?: number | null;
   preferred_backend?: string | null;
@@ -1140,12 +1142,17 @@ export interface SettingsUpdateRequest {
  * ``skip_chat_model`` when the chat runs on a cloud provider;
  * ``gaia_lemonade`` to set up GAIA's own server instead of the user's;
  * ``acknowledge_low_disk`` to download past a too-small model drive;
- * ``keep_trying`` to wait up to two minutes out a dropped connection.
+ * ``keep_trying`` to wait up to two minutes out a dropped connection;
+ * ``extra_models`` to pull models beside the plan's (the user ticked them);
+ * ``server_only`` to start the model server and stop, so the models can be
+ * chosen against it before anything downloads.
  */
 export interface SetupRunRequest {
   acknowledge_low_disk?: boolean;
+  extra_models?: string[];
   gaia_lemonade?: boolean;
   keep_trying?: boolean;
+  server_only?: boolean;
   skip_chat_model?: boolean;
 }
 export interface SkipModelRequest {

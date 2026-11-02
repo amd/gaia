@@ -2043,6 +2043,85 @@ class TestLemonadeClientMock(unittest.TestCase):
         return json.loads(responses.calls[-1].request.body)
 
     @responses.activate
+    def test_chat_boundary_ends_normalized_assistant_history_with_user_turn(self):
+        """The HTTP request must not end in an assistant prefill."""
+        from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
+
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/chat/completions",
+            json={"id": "0", "choices": [{"message": {"content": "next"}}]},
+            status=200,
+        )
+        messages = [
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": "first"},
+            {"role": "assistant", "content": "recovery"},
+        ]
+        with patch.object(LemonadeClient, "_ensure_model_loaded"):
+            self.client.chat_completions(
+                model=LARGE_DEFAULT_MODEL_NAME,
+                messages=messages,
+            )
+
+        body = json.loads(responses.calls[-1].request.body)
+        assert [message["role"] for message in body["messages"]] == [
+            "user",
+            "assistant",
+            "user",
+        ]
+        assert body["messages"][1]["content"] == "first\n\nrecovery"
+        assert body["messages"][-1]["content"]
+        assert messages[-1]["content"] == "recovery"
+
+    @responses.activate
+    def test_chat_boundary_ends_tool_call_suffix_with_continuation_user_turn(self):
+        """Tool-call metadata survives without an assistant prefill."""
+        from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
+
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/chat/completions",
+            json={"id": "0", "choices": [{"message": {"content": "next"}}]},
+            status=200,
+        )
+        call = {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "search", "arguments": "{}"},
+        }
+        with patch.object(LemonadeClient, "_ensure_model_loaded"):
+            self.client.chat_completions(
+                model=LARGE_DEFAULT_MODEL_NAME,
+                messages=[
+                    {"role": "user", "content": "question"},
+                    {"role": "assistant", "content": None, "tool_calls": [call]},
+                    {"role": "assistant", "content": "recovery"},
+                ],
+            )
+
+        body = json.loads(responses.calls[-1].request.body)
+        assert body["messages"][-2]["role"] == "assistant"
+        assert body["messages"][-2]["tool_calls"] == [call]
+        assert body["messages"][-2]["content"] == "recovery"
+        assert body["messages"][-1]["role"] == "user"
+
+    def test_normalizer_flattens_mixed_multimodal_content(self):
+        from gaia.llm.lemonade_client import normalize_trailing_assistant_messages
+
+        normalized = normalize_trailing_assistant_messages(
+            [
+                {"role": "assistant", "content": [{"type": "image_url"}]},
+                {"role": "assistant", "content": "caption"},
+            ]
+        )
+
+        assert normalized[-1]["content"] == [
+            {"type": "image_url"},
+            {"type": "text", "text": "caption"},
+        ]
+
+    @responses.activate
     def test_large_default_thinks_because_gaia_says_so(self):
         """The thinking mode is GAIA's choice, sent on every request, not the
         chat template's default."""

@@ -92,8 +92,14 @@ def _log_skipped_run(event: JobExecutionEvent | JobSubmissionEvent) -> None:
 _MAX_MISSED_COUNTED = 100_000
 
 
+def _as_utc(moment: datetime) -> datetime:
+    # Local times in a DST fold compare wrongly: never equal across zones, and
+    # by wall clock within one. Compare the UTC instants instead.
+    return moment.astimezone(timezone.utc)
+
+
 def _utc(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).isoformat()
+    return _as_utc(moment).isoformat()
 
 
 def _parse(schedule: Schedule, field: str) -> Optional[datetime]:
@@ -121,8 +127,11 @@ def _latest_fire(trigger: CronTrigger, until: datetime, inclusive: bool):
     ):
         latest = None
         fire = trigger.get_next_fire_time(None, until - span)
-        while fire is not None and (fire < until or (inclusive and fire == until)):
-            latest = fire
+        while fire is not None:
+            due = _as_utc(fire)
+            if due > until or (due == until and not inclusive):
+                break
+            latest = due
             fire = trigger.get_next_fire_time(fire, fire)
         if latest is not None:
             return latest
@@ -141,6 +150,7 @@ def _missed_runs(
     time, so ``last_missed`` is still right.
     """
     trigger = CronTrigger.from_crontab(schedule.cron)
+    until = _as_utc(until)
     floor = max(
         moment
         for moment in (
@@ -159,10 +169,11 @@ def _missed_runs(
     )
     missed: List[datetime] = []
     while fire is not None and len(missed) < _MAX_MISSED_COUNTED:
-        if fire > until or (fire == until and not including_until):
+        due = _as_utc(fire)
+        if due > until or (due == until and not including_until):
             break
-        if fire > floor:
-            missed.append(fire)
+        if due > floor:
+            missed.append(due)
         fire = trigger.get_next_fire_time(fire, fire)
     capped = len(missed) >= _MAX_MISSED_COUNTED
     if capped:
@@ -192,7 +203,9 @@ def _account(
         if not schedule.enabled:
             return None
         trigger = CronTrigger.from_crontab(schedule.cron)
-        following = trigger.get_next_fire_time(until, until)
+        # In the trigger's zone: from UTC it returns the repeated DST hour again.
+        local = until.astimezone(trigger.timezone)
+        following = trigger.get_next_fire_time(local, local)
         next_run = _utc(following) if following else None
         if schedule.missed_since is None:
             # Saved before misses were counted: start counting from now.
@@ -228,7 +241,7 @@ def _account_for_submission(store: ScheduleStore, event: JobSubmissionEvent) -> 
     misfire grace; the executor then sends EVENT_JOB_MISSED from another
     thread, so it is decided here instead, once.
     """
-    latest = max(event.scheduled_run_times)
+    latest = max(_as_utc(due) for due in event.scheduled_run_times)
     too_late = (datetime.now(timezone.utc) - latest).total_seconds() > (
         MISFIRE_GRACE_SECONDS
     )

@@ -3,10 +3,10 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
-import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
+import type { AgentCapabilities, SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
@@ -60,20 +60,33 @@ export function parseErrorFields(errorText: string): string[] {
     }
 }
 
+/** `detail` when the backend sent an object (e.g. a 409 asking to confirm), else null. */
+function parseErrorBody(errorText: string): Record<string, unknown> | null {
+    try {
+        const parsed = JSON.parse(errorText).detail;
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
 /** A non-2xx answer: the message to show, the backend's own words, and its machine-readable reason. */
 export class ApiError extends Error {
     readonly httpStatus: number;
     readonly detail: string;
     readonly reason: string | null;
     readonly fields: string[];
+    /** The structured `detail` object, when the backend sent one. */
+    readonly body: Record<string, unknown> | null;
 
-    constructor(message: string, httpStatus: number, detail: string, reason: string | null, fields: string[] = []) {
+    constructor(message: string, httpStatus: number, detail: string, reason: string | null, fields: string[] = [], body: Record<string, unknown> | null = null) {
         super(message);
         this.name = 'ApiError';
         this.httpStatus = httpStatus;
         this.detail = detail;
         this.reason = reason;
         this.fields = fields;
+        this.body = body;
     }
 }
 
@@ -166,7 +179,7 @@ export async function apiFetch<T>(
         const errorText = await res.text().catch(() => '');
         log.api.error(`${method} ${url} - HTTP ${res.status}`, { errorText });
         const detail = parseErrorDetail(errorText);
-        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText), parseErrorFields(errorText));
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText), parseErrorFields(errorText), parseErrorBody(errorText));
     }
 
     // Some endpoints (DELETE, fire-and-forget POSTs) intentionally return no
@@ -289,40 +302,9 @@ export async function getAgentInstallStatus(id: string): Promise<AgentInstallSta
     return apiFetch('GET', `/agents/${encodeURIComponent(id)}/install-status`);
 }
 
-// -- First-run setup (same `gaia init` the TUI runs) ----------------------------
+// -- First-run setup and the GPU memory split: see setupApi.ts -----------------
 
-/** Hardware report (memory, disk, GPU, NPU) shown on the setup screen. */
-export async function getOnboardingPreflight(): Promise<PreflightReport> {
-    return apiFetch<PreflightReport>('GET', '/onboarding/preflight');
-}
-
-export async function checkSetup(skipChatModel = false): Promise<SetupCheck> {
-    return apiFetch('GET', `/setup/check?skip_chat_model=${skipChatModel}`);
-}
-
-/** `gaiaLemonade` sets up, and saves, GAIA's own Lemonade Server instead of the user's. */
-export async function startSetup(skipChatModel: boolean, gaiaLemonade = false): Promise<SetupRunStatus> {
-    return apiFetch('POST', '/setup/run', { skip_chat_model: skipChatModel, gaia_lemonade: gaiaLemonade });
-}
-
-export async function getSetupStatus(): Promise<SetupRunStatus> {
-    return apiFetch('GET', '/setup/status');
-}
-
-/** The Lemonade, chat model and download setup will use. Loads nothing. */
-export async function getSetupPlan(): Promise<SetupPlan> {
-    return apiFetch('GET', '/setup/plan');
-}
-
-/** Pick setup's chat model before it starts; returns the new plan. */
-export async function chooseSetupChatModel(modelId: string): Promise<SetupPlan> {
-    return apiFetch('POST', '/setup/chat-model', { model_id: modelId });
-}
-
-/** A new chat's task cards and working folder. */
-export async function getStartScreen(): Promise<StartScreen> {
-    return apiFetch('GET', '/onboarding/start');
-}
+export * from './setupApi';
 
 // -- Which Lemonade Server GAIA uses ---------------------------------------------
 
@@ -1258,6 +1240,11 @@ export async function setInternet(sessionId: string, on: boolean): Promise<Sessi
 
 export async function getOutputs(sessionId: string): Promise<SessionOutputs> {
     return apiFetch('GET', `${sessionPath(sessionId)}/outputs`);
+}
+
+/** The tools the chat's agent has; a 409 when it isn't running yet. */
+export async function getCapabilities(sessionId: string): Promise<AgentCapabilities> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/capabilities`);
 }
 
 export async function getSessionChanges(sessionId: string): Promise<SessionChanges> {

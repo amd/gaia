@@ -10,6 +10,7 @@ import { SetupScreen } from './components/SetupScreen';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
+import { DownloadChip } from './components/setup/DownloadChip';
 import { NotificationCenter } from './components/NotificationCenter';
 import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
 import { useChatStore } from './stores/chatStore';
@@ -78,6 +79,7 @@ function App() {
     const showMemoryDashboard = useChatStore((s) => s.showMemoryDashboard);
     const showSchedules = useChatStore((s) => s.showSchedules);
     const sidebarOpen = useChatStore((s) => s.sidebarOpen);
+    const sidebarCollapsed = useChatStore((s) => s.sidebarCollapsed);
     const setSidebarOpen = useChatStore((s) => s.setSidebarOpen);
     const setSystemStatus = useChatStore((s) => s.setSystemStatus);
     const setBackendConnected = useChatStore((s) => s.setBackendConnected);
@@ -121,6 +123,7 @@ function App() {
     const [showMobileAccess, setShowMobileAccess] = useState(false);
     const [tunnelActive, setTunnelActive] = useState(false);
     const [tunnelError, setTunnelError] = useState<string | null>(null);
+    const [tunnelSetup, setTunnelSetup] = useState<string[] | null>(null);
 
     // Set once the status poller and chat list exist further down.
     const refreshStatus = useRef<() => Promise<void>>(async () => {});
@@ -579,12 +582,20 @@ function App() {
     const openMobileAccess = useCallback(async () => {
         setShowMobileAccess(true);
         setTunnelError(null);
-        if (tunnelActive) return;
+        if (tunnelActive) {
+            setTunnelSetup(null);
+            return;
+        }
         try {
             const status = await api.startTunnel();
+            // Kept until the retry answers, so the setup panel doesn't flash to "Starting".
+            const notInstalled = status.reason === 'ngrok_not_installed';
+            setTunnelSetup(notInstalled ? status.installCommands ?? [] : null);
+            if (notInstalled) return;
             if (status.error) setTunnelError(status.error);
             else setTunnelActive(true);
         } catch (err) {
+            setTunnelSetup(null);
             setTunnelError(err instanceof Error ? err.message : 'Could not start mobile access');
         }
     }, [tunnelActive]);
@@ -629,7 +640,7 @@ function App() {
     if (setup.state === 'needed') {
         return (
             <div className="app">
-                <SetupScreen initial={setup.check} onReady={finishSetup} />
+                <SetupScreen onReady={finishSetup} />
             </div>
         );
     }
@@ -669,6 +680,8 @@ function App() {
                         <button type="button" className="link-btn" onClick={() => void checkSetup()}>Check again</button>
                     </div>
                 )}
+                {/* Model downloads, here when the sidebar that usually shows them is closed or collapsed. */}
+                {(!sidebarOpen || sidebarCollapsed) && <DownloadChip placement="main" />}
                 {flagshipMissing && <FlagshipAgentNotice onInstalled={loadAgents} />}
                 {restoreNotice && (
                     <div className={`app-notice${restoreNotice.ok ? '' : ' is-warning'}`} role="status">
@@ -701,6 +714,8 @@ function App() {
                         onClose={() => setShowMobileAccess(false)}
                         onStop={() => void stopMobileAccess()}
                         error={tunnelError}
+                        setupCommands={tunnelSetup}
+                        onRetry={() => void openMobileAccess()}
                     />
                 </Suspense>
             )}

@@ -7,13 +7,14 @@ Provides document retrieval, querying, and evaluation tools.
 """
 
 import contextvars
+import functools
 import os
 import re
 import threading
 import time
 import weakref
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.file_snapshots import before_change
@@ -27,7 +28,12 @@ from gaia.agents.tools.path_access import (
 from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
-from gaia.rag.sdk import EmbeddingUnavailableError
+from gaia.rag.keyword_search import rank_keyword_chunks
+from gaia.rag.sdk import (
+    EmbeddingUnavailableError,
+    folder_index_skip_reason,
+    text_scripts,
+)
 from gaia.tool_cancellation import raise_if_cancelled
 
 logger = get_logger(__name__)
@@ -43,6 +49,9 @@ _SESSION_SAVE_WARNING = (
 #: meeting summary off mid-sentence; a model that always reasons (Gemma 4)
 #: spends part of this before it writes anything.
 SUMMARY_MAX_TOKENS = 8192
+
+# Cap on skipped files listed in an index_directory result, to bound the reply.
+_MAX_SKIPPED_REPORTED = 50
 
 
 def _summary_text(chat: Any, prompt: str) -> str:
@@ -349,8 +358,46 @@ def _chunks_have_pages(chunks: List[Dict[str, Any]]) -> bool:
 
 _MARKER_NOTE = (
     "A chunk's 'page' is where it starts; text after a '[Page N]' marker inside "
-    "it is on page N, so cite N for facts that follow the marker."
+    "it is on page N, so cite N for facts that follow the marker and the page "
+    "before N for facts ahead of it."
 )
+
+
+def _question_language_note(question: str, chunks: List[Dict[str, Any]]) -> str:
+    """Name the question when the chunks could pull the answer into their language."""
+    asked = text_scripts(question)
+    if not asked or not chunks:
+        return ""
+    found = text_scripts(" ".join(chunk.get("content", "") for chunk in chunks))
+    if not found or found == asked[:1]:
+        return ""
+    return (
+        f"\n\nThe question you are answering is: {question[:300]}\n"
+        "Write your whole answer in the language of that question and translate "
+        "what you use from these chunks. Neither their language nor an earlier "
+        "turn's changes that."
+    )
+
+
+def _answers_in_question_language(mixin: Any):
+    """Restate the question where the model picks its answer's language: after reading."""
+
+    def wrap(search: Callable[..., Dict[str, Any]]):
+        @functools.wraps(search)
+        def wrapper(*args, **kwargs) -> Dict[str, Any]:
+            result = search(*args, **kwargs)
+            if result.get("status") == "success":
+                result["instruction"] = result.get(
+                    "instruction", ""
+                ) + _question_language_note(
+                    getattr(mixin, "_memory_turn_query", ""),
+                    result.get("chunks") or [],
+                )
+            return result
+
+        return wrapper
+
+    return wrap
 
 
 def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
@@ -505,6 +552,7 @@ class RAGToolsMixin:
         @tool(
             atomic=True,
         )
+        @_answers_in_question_language(self)
         def query_documents(
             query: str, debug: bool = False  # pylint: disable=unused-argument
         ) -> Dict[str, Any]:
@@ -634,79 +682,30 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
-                # HYBRID SEARCH: Boost scores of chunks containing keywords
-                # Instead of creating new text snippets, we boost the scores of existing chunks
-                query_lower = query.lower()
-
-                # Identify important terms (not common words)
-
-                query_words = re.findall(r"\b[a-z]+\b", query_lower)
-                stop_words = {
-                    "the",
-                    "is",
-                    "what",
-                    "of",
-                    "and",
-                    "a",
-                    "an",
-                    "in",
-                    "to",
-                    "for",
-                }
-                important_terms = [
-                    w for w in query_words if w not in stop_words and len(w) > 2
-                ]
-
+                # HYBRID SEARCH: add the chunks that best match the query's words
                 keyword_boost_info = []
+                for chunk_idx, boost_score, matching_terms in rank_keyword_chunks(
+                    query, enumerate(rag.chunks)
+                ):
+                    # Deduplication below keeps a chunk's higher score.
+                    all_chunks.append(rag.chunks[chunk_idx])
+                    all_scores.append(boost_score)
 
-                if important_terms:
-                    # Check each indexed chunk for keyword matches
-                    for chunk_idx, chunk_text in enumerate(rag.chunks):
-                        chunk_lower = chunk_text.lower()
+                    # Get source file for this chunk
+                    source_file = rag.chunk_to_file.get(chunk_idx, "Unknown")
 
-                        # Count matching terms in this chunk (whole word matching)
-                        matching_terms = []
-                        for term in important_terms:
-                            # Use word boundary regex for whole-word matching
-                            if re.search(r"\b" + re.escape(term) + r"\b", chunk_lower):
-                                matching_terms.append(term)
-
-                        if matching_terms:
-                            # Calculate boost score based on match ratio
-                            match_ratio = (
-                                len(matching_terms) / len(important_terms)
-                                if important_terms
-                                else 0
-                            )
-                            boost_score = 0.6 + (0.2 * match_ratio)  # Range: 0.6-0.8
-
-                            # Add this chunk with boosted score if not already in all_chunks
-                            if chunk_text not in all_chunks:
-                                all_chunks.append(chunk_text)
-                                all_scores.append(boost_score)
-
-                                # Get source file for this chunk
-                                source_file = rag.chunk_to_file.get(
-                                    chunk_idx, "Unknown"
-                                )
-
-                                keyword_boost_info.append(
-                                    {
-                                        "chunk_index": chunk_idx,
-                                        "source_file": (
-                                            Path(source_file).name
-                                            if source_file != "Unknown"
-                                            else "Unknown"
-                                        ),
-                                        "matching_terms": matching_terms,
-                                        "boost_score": boost_score,
-                                        "match_ratio": match_ratio,
-                                    }
-                                )
-
-                                # Limit boosted chunks
-                                if len(keyword_boost_info) >= 5:
-                                    break
+                    keyword_boost_info.append(
+                        {
+                            "chunk_index": chunk_idx,
+                            "source_file": (
+                                Path(source_file).name
+                                if source_file != "Unknown"
+                                else "Unknown"
+                            ),
+                            "matching_terms": matching_terms,
+                            "boost_score": boost_score,
+                        }
+                    )
 
                 # Capture debug info for keyword boosting
                 if debug_info and keyword_boost_info:
@@ -930,6 +929,7 @@ class RAGToolsMixin:
             # cap; at the default a big PDF is abandoned mid-index and re-indexed.
             timeout=600,
         )
+        @_answers_in_question_language(self)
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
             Query a specific file for fast, targeted retrieval.
@@ -1164,99 +1164,46 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
-                # HYBRID SEARCH: Boost scores of chunks containing keywords
-                # Instead of creating new text snippets, we boost the scores of existing chunks
+                # HYBRID SEARCH: add the chunks that best match the query's words
                 if (
                     str(target_file) in rag.file_metadata
                     and "full_text" in rag.file_metadata[str(target_file)]
                 ):
-                    query_lower = query.lower()
-
-                    # Identify important terms (not common words)
-
-                    query_words = re.findall(r"\b[a-z]+\b", query_lower)
-                    # Filter out common words
-                    stop_words = {
-                        "the",
-                        "is",
-                        "what",
-                        "of",
-                        "and",
-                        "a",
-                        "an",
-                        "in",
-                        "to",
-                        "for",
-                    }
-                    important_terms = [
-                        w for w in query_words if w not in stop_words and len(w) > 2
-                    ]
-
-                    if important_terms:
-                        file_keyword_info = []
-
-                        # Check each chunk from this file for keyword matches
-                        file_chunk_indices = rag.file_to_chunk_indices.get(
-                            str(target_file), []
+                    file_chunk_indices = rag.file_to_chunk_indices.get(
+                        str(target_file), []
+                    )
+                    file_keyword_info = []
+                    for chunk_idx, boost_score, matching_terms in rank_keyword_chunks(
+                        query,
+                        (
+                            (chunk_idx, rag.chunks[chunk_idx])
+                            for chunk_idx in file_chunk_indices
+                            if chunk_idx < len(rag.chunks)
+                        ),
+                    ):
+                        # Deduplication below keeps a chunk's higher score.
+                        all_chunks.append(rag.chunks[chunk_idx])
+                        all_scores.append(boost_score)
+                        file_keyword_info.append(
+                            {
+                                "chunk_index": chunk_idx,
+                                "matching_terms": matching_terms,
+                                "boost_score": boost_score,
+                            }
                         )
 
-                        for chunk_idx in file_chunk_indices:
-                            if chunk_idx < len(rag.chunks):
-                                chunk_text = rag.chunks[chunk_idx].lower()
-
-                                # Count matching terms in this chunk (whole word matching)
-                                matching_terms = []
-                                for term in important_terms:
-                                    # Use word boundary regex for whole-word matching
-                                    if re.search(
-                                        r"\b" + re.escape(term) + r"\b", chunk_text
-                                    ):
-                                        matching_terms.append(term)
-
-                                if matching_terms:
-                                    # Calculate boost score based on match ratio
-                                    match_ratio = (
-                                        len(matching_terms) / len(important_terms)
-                                        if important_terms
-                                        else 0
-                                    )
-                                    boost_score = 0.6 + (
-                                        0.2 * match_ratio
-                                    )  # Range: 0.6-0.8
-
-                                    # Add this chunk with boosted score if not already in all_chunks
-                                    chunk_content = rag.chunks[chunk_idx]
-                                    if chunk_content not in all_chunks:
-                                        all_chunks.append(chunk_content)
-                                        all_scores.append(boost_score)
-
-                                        file_keyword_info.append(
-                                            {
-                                                "chunk_index": chunk_idx,
-                                                "matching_terms": matching_terms,
-                                                "boost_score": boost_score,
-                                                "match_ratio": match_ratio,
-                                            }
-                                        )
-
-                                        # Limit boosted chunks
-                                        if len(file_keyword_info) >= 5:
-                                            break
-
-                        # Capture debug info for keyword search
-                        if debug_info and file_keyword_info:
-                            debug_info["keyword_retrieval"].append(
-                                {
-                                    "file": Path(target_file).name,
-                                    "chunks_boosted": len(file_keyword_info),
-                                    "boosted_chunks": file_keyword_info[
-                                        :5
-                                    ],  # Show first 5 boosted chunks
-                                }
-                            )
-                            logger.info(
-                                f"[DEBUG] Keyword search in {Path(target_file).name}: boosted {len(file_keyword_info)} chunks"
-                            )
+                    # Capture debug info for keyword search
+                    if debug_info and file_keyword_info:
+                        debug_info["keyword_retrieval"].append(
+                            {
+                                "file": Path(target_file).name,
+                                "chunks_boosted": len(file_keyword_info),
+                                "boosted_chunks": file_keyword_info,
+                            }
+                        )
+                        logger.info(
+                            f"[DEBUG] Keyword search in {Path(target_file).name}: boosted {len(file_keyword_info)} chunks"
+                        )
 
                 # Update debug info before deduplication - track which chunks before dedup
                 if debug_info:
@@ -2299,7 +2246,11 @@ references from the section summaries.
             """
             Index all supported files in a directory.
 
-            Returns statistics about indexed files.
+            Indexes PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx),
+            CSV, JSON, EPUB, text, Markdown and source-code files. Images and
+            other types are skipped; skipped_files lists each with a reason.
+
+            Returns statistics about indexed, failed and skipped files.
             """
             try:
                 if not self.rag:
@@ -2334,25 +2285,10 @@ references from the section summaries.
 
                 logger.info(f"Indexing directory: {dir_path} (recursive={recursive})")
 
-                # Supported file extensions
-                supported_extensions = {
-                    ".pdf",
-                    ".txt",
-                    ".csv",
-                    ".json",
-                    ".py",
-                    ".js",
-                    ".java",
-                    ".cpp",
-                    ".c",
-                    ".h",
-                    ".md",
-                }
-
                 indexed_files = []
                 failed_files = []
                 failure_reasons: Dict[str, str] = {}
-                skipped_files = []
+                skipped_files: List[Dict[str, str]] = []
                 embedding_failure: Optional[Dict[str, Any]] = None
 
                 # Get files to index
@@ -2362,11 +2298,19 @@ references from the section summaries.
                     files_to_index = [f for f in dir_path.iterdir() if f.is_file()]
 
                 for file_path in files_to_index:
+                    rel_name = file_path.relative_to(dir_path).as_posix()
                     # A link out of the folder, or a secret in it, is not indexed.
                     if not readable_entry(self, file_path):
-                        skipped_files.append(str(file_path))
+                        skipped_files.append(
+                            {
+                                "file": rel_name,
+                                "reason": "outside the allowed folders or a "
+                                "protected file",
+                            }
+                        )
                         continue
-                    if file_path.suffix.lower() in supported_extensions:
+                    skip_reason = folder_index_skip_reason(file_path)
+                    if skip_reason is None:
                         try:
                             # Use the RAG SDK to index the file
                             result = self.rag.index_document(str(file_path))
@@ -2387,7 +2331,7 @@ references from the section summaries.
                             failed_files.append(str(file_path))
                             failure_reasons[file_path.name] = f"{type(e).__name__}: {e}"
                     else:
-                        skipped_files.append(str(file_path))
+                        skipped_files.append({"file": rel_name, "reason": skip_reason})
 
                 # Update system prompt after indexing directory
                 if indexed_files:
@@ -2403,8 +2347,11 @@ references from the section summaries.
                         [Path(f).name for f in failed_files] if failed_files else []
                     ),
                     "failure_reasons": failure_reasons,
+                    "skipped_files": skipped_files[:_MAX_SKIPPED_REPORTED],
                     "message": f"Indexed {len(indexed_files)} files from {dir_path.name}",
                 }
+                if len(skipped_files) > _MAX_SKIPPED_REPORTED:
+                    result["skipped_files_truncated"] = True
                 if embedding_failure is not None:
                     return {**result, **embedding_failure}
                 if failed_files and not indexed_files:

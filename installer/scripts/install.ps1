@@ -636,17 +636,22 @@ function Show-NextSteps {
 
     Write-Host "Next steps:" -ForegroundColor $COLOR_CYAN
     Write-Host "  1. Open a new terminal window, so the gaia command is on your PATH" -ForegroundColor White
-    Write-Host "  2. Run: " -ForegroundColor White -NoNewline
-    Write-Host "gaia init" -ForegroundColor $COLOR_GREEN -NoNewline
-    Write-Host " to set up the local model runtime and download the models" -ForegroundColor White
-    Write-Host "     (~6 GB; ~28 GB on PCs whose GPU can run the larger model)" -ForegroundColor White
     if ($FlagshipInstalled) {
-        Write-Host "  3. Talk to the agent: " -ForegroundColor White -NoNewline
+        Write-Host "  2. Open GAIA: " -ForegroundColor White -NoNewline
         Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
-        Write-Host "     (it opens the GAIA agent; type " -ForegroundColor White -NoNewline
+        Write-Host "     On first launch it sets up the local model server and lets you" -ForegroundColor White
+        Write-Host "     choose which models to download before anything downloads." -ForegroundColor White
+        Write-Host "     (type " -ForegroundColor White -NoNewline
         Write-Host "/agents" -ForegroundColor $COLOR_GREEN -NoNewline
-        Write-Host " to list installed agents)" -ForegroundColor White
+        Write-Host " there to list installed agents)" -ForegroundColor White
+        Write-Host "  For a scripted or headless install, run " -ForegroundColor White -NoNewline
+        Write-Host "gaia init --yes" -ForegroundColor $COLOR_GREEN -NoNewline
+        Write-Host " instead." -ForegroundColor White
     } else {
+        Write-Host "  2. Run: " -ForegroundColor White -NoNewline
+        Write-Host "gaia init" -ForegroundColor $COLOR_GREEN -NoNewline
+        Write-Host " to set up the local model runtime and download the models" -ForegroundColor White
+        Write-Host "     (~6 GB; ~28 GB on PCs whose GPU can run the larger model)" -ForegroundColor White
         Write-Host "  3. Open the GAIA Terminal UI: " -ForegroundColor White -NoNewline
         Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
         Write-Host "     The GAIA agent was skipped - see the warning above - so this" -ForegroundColor $COLOR_YELLOW

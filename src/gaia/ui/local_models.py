@@ -84,17 +84,34 @@ def _size_gb(model: Dict[str, Any]) -> Optional[float]:
 
 def _fit(model: Dict[str, Any], size_gb: Optional[float], capacity) -> Optional[str]:
     """Why the model does not fit this PC's memory, '' when it does, None if unknown."""
-    from gaia.llm.lemonade_client import find_model_requirement
-    from gaia.llm.model_fit import check_fit, kv_cache_gb
+    from gaia.installer.model_choice import memory_reason
+    from gaia.llm.lemonade_client import find_model_requirement, runs_on_npu
+    from gaia.llm.model_fit import (
+        check_fit,
+        kv_cache_gb,
+        npu_capacity,
+        required_memory_gb,
+    )
 
     if capacity is None or size_gb is None:
         return None
+    if runs_on_npu(model["id"]) or model.get("recipe") == "flm":
+        # FLM models load into the NPU's system RAM, not the GPU's memory.
+        capacity = npu_capacity(capacity)
+        if capacity is None:
+            return "runs on a Ryzen AI NPU, and Lemonade reports none on this PC"
     req = find_model_requirement(model["id"])
     kv = kv_cache_gb(req.kv_bytes_per_token, req.min_ctx_size) if req else 0.0
     # A downloaded model's disk is already spent.
     cap = replace(capacity, disk_free_gb=None) if model.get("downloaded") else capacity
     verdict = check_fit(size_gb, cap, kv)
-    return "" if verdict.fits else verdict.reason
+    if verdict.fits:
+        return ""
+    need = required_memory_gb(size_gb, kv)
+    # In decimal GB, like memory_gb beside it; the verdict stays model_fit's.
+    return (
+        memory_reason(need, capacity) if need > capacity.memory_gb else verdict.reason
+    )
 
 
 def annotate_local_models(

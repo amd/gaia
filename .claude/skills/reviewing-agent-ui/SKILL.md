@@ -46,6 +46,7 @@ in Settings → General. Cover the states, not just the happy one:
 | Nothing is hard-coded English | A string outside `useT`, including text from the backend |
 | Padding and position use logical properties | `margin-left` left behind in a component |
 | Window controls blend in | A pale block over the sidebar, or bright controls beside a dim modal |
+| The English in brackets is quiet | Same size or weight as the Arabic; check a dark palette too, where primary buttons are mid-tone |
 
 The mirror bites in English: a `dir="auto"` label holding an Arabic filename sits at
 the far right of its row unless it is pinned left. Check the English UI with an

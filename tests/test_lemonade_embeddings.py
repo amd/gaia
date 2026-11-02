@@ -11,6 +11,8 @@ import pytest
 
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("require_lemonade")]
+
 
 class TestLemonadeEmbeddings:
     """Test suite for Lemonade embeddings API."""

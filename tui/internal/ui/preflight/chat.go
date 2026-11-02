@@ -177,8 +177,20 @@ func (l localRunner) localFit(ctx context.Context, rep Report, models []gaiainit
 	return fitLine(capacity, chat, ok)
 }
 
+// gbPerGiB turns Lemonade's GiB into the decimal GB setup shows.
+const gbPerGiB = 1.073741824
+
 func fitLine(c lemonade.Capacity, chat gaiainit.Model, known bool) string {
-	have := fmt.Sprintf("this PC has %.0f GB for models (%s)", c.MemoryGB, c.MemorySource)
+	if strings.HasSuffix(strings.ToLower(chat.ID), "-flm") {
+		npu, ok := c.NPU()
+		if !ok {
+			return chat.ID + " will not fit: it runs on a Ryzen AI NPU, and Lemonade reports none on this PC."
+		}
+		c = npu
+	}
+	// Lemonade counts GiB; shown in decimal GB with one decimal, the figure
+	// the setup plan reports (model_choice.to_decimal_gb), so both agree.
+	have := fmt.Sprintf("this PC has %.1f GB for models (%s)", c.MemoryGB*gbPerGiB, c.MemorySource)
 	if !known || chat.SizeGB == nil {
 		return "Setup picks the model that fits; " + have + "."
 	}

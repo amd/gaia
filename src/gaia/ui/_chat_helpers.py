@@ -38,10 +38,7 @@ from gaia.agents.install_hints import (
 )
 from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
-from gaia.llm.inference_location import (
-    InferenceLocation,
-    resolve_inference_location,
-)
+from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
 from gaia.llm.providers.lemonade import classify_lemonade_exception
 from gaia.security import (
     BLOCKED_DIRECTORIES,
@@ -84,16 +81,9 @@ from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
-from .session_environment import (
-    apply_environment,
-    folders_refusal,
-    held_internet_off,
-)
+from .session_environment import apply_environment, folders_refusal, held_internet_off
 from .session_environment import load as load_environment
-from .session_environment import (
-    with_folder_note,
-    withheld_refusal,
-)
+from .session_environment import with_folder_note, withheld_refusal
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
 from .utils import UPLOAD_LINK_RE, attached_upload_paths, managed_documents_dir
@@ -1658,6 +1648,14 @@ def evict_all_session_agents() -> int:
 # ── Chat Helpers ─────────────────────────────────────────────────────────────
 
 
+def _append_index_failures(answer: str, failures: list[str]) -> str:
+    """Tell the user when an attached document could not be indexed."""
+    if not failures:
+        return answer
+    notice = "\n".join(failures)
+    return f"{answer.rstrip()}\n\n{notice}" if answer else notice
+
+
 def _build_history_pairs(messages: list) -> list:
     """Build user/assistant conversation pairs from message history.
 
@@ -2276,6 +2274,20 @@ def cached_session_agent(session_id: str):
     with _agent_cache_lock:
         entry = _agent_cache.get(session_id)
         return entry["agent"] if entry is not None else None
+
+
+def cached_session_agent_of(session_id: str, agent_type: str):
+    """The session's cached agent if it is still a *agent_type* agent, else None.
+
+    A chat switched to another agent keeps the old one cached until its next
+    turn; that one no longer speaks for the chat.
+    """
+    canonical = _canonical_agent_type(agent_type)
+    with _agent_cache_lock:
+        entry = _agent_cache.get(session_id)
+        if entry is None or entry.get("agent_type") != canonical:
+            return None
+        return entry["agent"]
 
 
 def _restore_model_history(
@@ -3015,6 +3027,10 @@ _EMPTY_MODEL_ANSWER_MSG = (
 )
 
 
+#: Card kinds that record what a tool did rather than answer the user, so a
+#: turn that shows only these and no text still ends as "no answer".
+_NON_ANSWER_RENDERS = frozenset({"diff"})
+
 _NO_ANSWER_AFTER_TOOLS_MSG = (
     "GAIA ran its tools but didn't write an answer. Send your message again, "
     "or try another model."
@@ -3096,9 +3112,10 @@ def _empty_answer_outcome(
       * cancelled → ``("Cancelled.", "done", True)`` — a user Stop, not a
         failure; keep the tool steps executed before the cancel and don't
         blame Lemonade.
-      * a render card was shown → ``("", "done", True)`` — the card is the
-        answer (e.g. an echoed card the echo-guard stripped to empty); keep
-        the steps so the card survives a reload.
+      * an answer card was shown (a render not in _NON_ANSWER_RENDERS) →
+        ``("", "done", True)`` — the card is the answer (e.g. an echoed card
+        the echo-guard stripped to empty); keep the steps so the card survives
+        a reload.
       * steps but no card → ``(<no-answer copy>, "failed", True)`` — the agent
         ran tools and ended without answering; say so and keep the steps.
         *has_steps* counts tool steps only, never thinking, plan or error steps.
@@ -3708,6 +3725,7 @@ async def _get_chat_response(
         working_directory = _session_working_directory(
             load_environment(db, session_id)["folders"]
         )
+        index_failures = []
 
         if cached_agent is not None:
             from gaia.agents.base.console import SilentConsole
@@ -3723,13 +3741,22 @@ async def _get_chat_response(
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
                 for fpath in new_paths:
+                    doc_name = Path(fpath).name
                     try:
                         result_idx = agent.rag.index_document(fpath)
                         if result_idx.get("success"):
                             agent.indexed_files.add(fpath)
                             agent.rebuild_system_prompt()
+                        else:
+                            error = result_idx.get("error", "Unknown error")
+                            logger.warning("Failed to index %s: %s", fpath, error)
+                            index_failures.append(
+                                f"Failed to index {doc_name}: {error}"
+                            )
                     except Exception as _idx_err:
                         logger.warning("Failed to index %s: %s", fpath, _idx_err)
+                        index_failures.append(f"Failed to index {doc_name}: {_idx_err}")
+
             logger.info(
                 "chat: Agent cache hit for session %s (agent_type=%s)",
                 session_id[:8],
@@ -3810,7 +3837,7 @@ async def _get_chat_response(
                         mail_provider=_session_mail_provider(session),
                     )
                 if rag_file_paths and hasattr(agent, "_index_documents") and agent.rag:
-                    agent._index_documents(rag_file_paths)
+                    index_failures.extend(agent._index_documents(rag_file_paths) or [])
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
                     agent_type,
@@ -3830,9 +3857,10 @@ async def _get_chat_response(
 
         _apply_memory_state(agent, session, db)
         apply_environment(agent, session_id, db)
-        query = with_folder_note(
-            request.message, load_environment(db, session_id)["folders"]
-        )
+        message = request.message
+        if index_failures:
+            message += "\n\n" + "\n".join(index_failures)
+        query = with_folder_note(message, load_environment(db, session_id)["folders"])
 
         _restore_model_history(agent, db, session_id, query)
 
@@ -3878,11 +3906,13 @@ async def _get_chat_response(
             # Use explicit None check so an intentional empty string isn't
             # overridden by fallback to "answer".
             val = result.get("result")
-            return val if val is not None else result.get("answer", "")
-        result_str = str(result) if result else ""
-        # Strip JSON envelope (e.g. {"answer": "..."}) emitted by agents
-        # whose system prompt requires JSON output format.
-        return _clean_answer_json(result_str)
+            answer = val if val is not None else result.get("answer", "")
+        else:
+            result_str = str(result) if result else ""
+            # Strip JSON envelope (e.g. {"answer": "..."}) emitted by agents
+            # whose system prompt requires JSON output format.
+            answer = _clean_answer_json(result_str)
+        return _append_index_failures(answer, index_failures)
 
     try:
         idle = _TurnIdleClock(_turn_clock())
@@ -5076,7 +5106,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             content, sse_type, keep_steps = _empty_answer_outcome(
                 turn_cancelled,
                 bool(tool_steps),
-                any(step.get("render") for step in captured_steps),
+                any(
+                    step.get("render") and step["render"] not in _NON_ANSWER_RENDERS
+                    for step in captured_steps
+                ),
                 backend_problem,
                 turn_reported_error=any(
                     s.get("type") == "error" for s in captured_steps

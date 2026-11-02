@@ -33,29 +33,45 @@ def _free_for_another_thread():
 class _Agent:
     """Records whether the setup lock was free while its documents were indexed."""
 
-    def __init__(self, rag_documents):
+    def __init__(self, rag_documents, index_failures=None, cache_index_result=None):
         self.rag_documents = rag_documents
         self.indexed = []
+        self.index_failures = index_failures or []
+        self.cache_index_result = cache_index_result or {"success": True}
         self.lock_free_during_index = None
         self.indexed_files = set()
-        self.rag = object()
+        self.rag = SimpleNamespace(index_document=self._index_document)
         self.console = None
         self.conversation_history = []
         self.model_id = "M-GGUF"
+        self.query = None
         if rag_documents:
             self._index_documents(rag_documents)
+
+    def _index_document(self, _path):
+        return self.cache_index_result
+
+    def _register_tools(self):
+        pass
+
+    def rebuild_system_prompt(self):
+        pass
 
     def _index_documents(self, documents):
         self.lock_free_during_index = _free_for_another_thread()
         self.indexed.extend(documents)
+        return self.index_failures
 
-    def process_query(self, _message):
+    def process_query(self, message):
+        self.query = message
         return "ok"
 
 
 class _Registry:
-    def __init__(self):
+    def __init__(self, index_failures=None, cache_index_result=None):
         self.agent = None
+        self.index_failures = index_failures or []
+        self.cache_index_result = cache_index_result or {"success": True}
 
     def get(self, _agent_type):
         return SimpleNamespace(is_sidecar=False)
@@ -67,7 +83,11 @@ class _Registry:
         return "M-GGUF"
 
     def create_agent(self, _agent_type, **kwargs):
-        self.agent = _Agent(kwargs.get("rag_documents") or [])
+        self.agent = _Agent(
+            kwargs.get("rag_documents") or [],
+            self.index_failures,
+            self.cache_index_result,
+        )
         return self.agent
 
 
@@ -97,3 +117,37 @@ def test_a_non_streaming_turn_indexes_outside_the_setup_lock(turn):
 
     assert registry.agent.indexed == [doc]
     assert registry.agent.lock_free_during_index is True
+
+
+def test_a_non_streaming_turn_tells_the_agent_when_indexing_failed(turn):
+    db, session, registry, _doc = turn
+    registry.index_failures = ["Failed to index report.pdf: encrypted PDF"]
+    request = ChatRequest(
+        session_id=session["id"], message="Summarise it", stream=False
+    )
+
+    assert asyncio.run(helpers._get_chat_response(db, session, request)) == (
+        "ok\n\nFailed to index report.pdf: encrypted PDF"
+    )
+
+    assert registry.agent.query == (
+        "Summarise it\n\nFailed to index report.pdf: encrypted PDF"
+    )
+
+
+def test_a_cached_non_streaming_turn_tells_the_agent_when_indexing_failed(turn):
+    db, session, registry, _doc = turn
+    first = ChatRequest(session_id=session["id"], message="First", stream=False)
+    assert asyncio.run(helpers._get_chat_response(db, session, first)) == "ok"
+    registry.agent.cache_index_result = {"success": False, "error": "encrypted PDF"}
+    request = ChatRequest(
+        session_id=session["id"], message="Summarise it", stream=False
+    )
+
+    assert asyncio.run(helpers._get_chat_response(db, session, request)) == (
+        "ok\n\nFailed to index report.pdf: encrypted PDF"
+    )
+
+    assert registry.agent.query == (
+        "Summarise it\n\nFailed to index report.pdf: encrypted PDF"
+    )
