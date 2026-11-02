@@ -91,12 +91,12 @@ _FINISH_REASON_MAP = {
 }
 
 
-def _raise_empty_reply_error(stop_reason: str, api_blocks: List[dict]) -> None:
-    """Fail loudly when Claude produced neither answer text nor a tool call.
+def _check_empty_reply(stop_reason: str, api_blocks: List[dict]) -> None:
+    """Explain a reply that has neither answer text nor a tool call.
 
-    Thinking is intentionally never surfaced as answer text, but silently
-    returning an empty string hides the useful API evidence needed to diagnose
-    a thinking-only or budget-exhausted response.
+    A ``max_tokens`` stop is logged and left to the agent's cut-off recovery,
+    which reads ``finish_reason == "length"``. Any other empty reply raises,
+    because returning ``""`` would hide the API evidence needed to diagnose it.
     """
     block_types = [str(block.get("type") or "unknown") for block in api_blocks]
     reported_stop_reason = stop_reason or "not reported"
@@ -105,14 +105,11 @@ def _raise_empty_reply_error(stop_reason: str, api_blocks: List[dict]) -> None:
         reported_stop_reason,
         ", ".join(block_types) or "none",
     )
+    if stop_reason == "max_tokens":
+        return
     thinking_only = bool(block_types) and all(
         block_type in _THINKING_BLOCK_TYPES for block_type in block_types
     )
-    if stop_reason == "max_tokens" and thinking_only:
-        raise RuntimeError(
-            "Claude used its whole output token budget on thinking and produced no "
-            "answer text. Increase max_tokens or retry with a smaller request."
-        )
     if thinking_only:
         raise RuntimeError(
             "Claude returned only thinking blocks "
@@ -999,7 +996,7 @@ class ClaudeProvider(LLMClient):
             )
         text = "".join(text_parts)
         if not text:
-            _raise_empty_reply_error(stop_reason, api_blocks)
+            _check_empty_reply(stop_reason, api_blocks)
         return text
 
     def _stream_chat(
@@ -1092,7 +1089,7 @@ class ClaudeProvider(LLMClient):
                 }
             )
         elif not text_parts and saw_message_start:
-            _raise_empty_reply_error(stop_reason, list(api_blocks.values()))
+            _check_empty_reply(stop_reason, list(api_blocks.values()))
 
     def _capture_usage(self, usage: Any, elapsed: float) -> None:
         """Record one call's usage, cache counters included.
