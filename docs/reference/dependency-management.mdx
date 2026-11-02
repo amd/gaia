@@ -40,7 +40,7 @@ The workflow at `.github/workflows/dependabot-automerge.yml` enrols a Dependabot
   - `update-type == version-update:semver-patch`, OR
   - `update-type == version-update:semver-minor` AND `dependency-type` includes `direct:development` AND does NOT include `direct:production`.
 
-GitHub then merges the PR only after required status checks pass — `Code Quality (Lint)` and `Unit Tests` (the merge-queue gates) plus any required ecosystem checks. If CI fails, GitHub cancels the merge and the PR stays open.
+GitHub then merges the PR only after the base branch's **required** status checks pass; if CI fails, GitHub cancels the merge and the PR stays open. Auto-merge waits for nothing else, so when the base branch requires no status checks (in branch protection or a ruleset) the workflow refuses to enable it and its run fails with an error naming the missing setting. Add required checks to `main` to turn auto-merge on ([#3260](https://github.com/amd/gaia/issues/3260)).
 
 **What requires human review:**
 
@@ -94,7 +94,7 @@ See the [official Dependabot docs](https://docs.github.com/en/code-security/depe
 - **First Monday after re-enablement may be busy.** The soft-disabled era accumulated months of skipped updates; the first batch will be larger than steady state (~6–8 grouped PRs across all ecosystems).
 - **Grouped PRs that mix prod + dev deps don't auto-merge.** This is by design — bundling a production patch with a dev minor is exactly the case a human should look at. Manually merge with `gh pr merge --auto --squash <PR>` after review if you want it enrolled in the queue.
 - **Pre-merge maintainer setting:** "Allow auto-merge" AND "Allow squash merging" must both be enabled in repo Settings → General → Pull Requests. Without either, `gh pr merge --auto --squash` queues successfully but GitHub cancels the merge. Verify: `gh api repos/amd/gaia --jq '{allow_auto_merge: .allow_auto_merge, allow_squash_merge: .allow_squash_merge}'`.
-- **Diagnosing "why didn't this PR auto-merge?":** the workflow logs `dependency-names`, `dependency-type`, and `update-type` for every run. Check the workflow run's "Log metadata for debugging" step.
+- **Diagnosing "why didn't this PR auto-merge?":** the workflow logs `dependency-names`, `dependency-type`, and `update-type` for every run. Check the workflow run's "Log metadata for debugging" step. A red run with "No required checks on main" means neither branch protection nor a ruleset requires status checks on `main`; verify with `gh api repos/amd/gaia/branches/main --jq .protection.required_status_checks` and `gh api repos/amd/gaia/rules/branches/main`.
 
 ## MCP connector catalog pins
 

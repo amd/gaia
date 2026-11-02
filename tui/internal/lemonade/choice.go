@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/filelock"
 )
 
 const (
@@ -81,7 +82,7 @@ func ReadChoice() (Choice, error) {
 		return Choice{}, nil
 	}
 	c := Choice{Path: path}
-	raw, err := os.ReadFile(path)
+	raw, err := filelock.ReadFile(path)
 	if os.IsNotExist(err) {
 		return c, nil
 	}

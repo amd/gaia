@@ -1,0 +1,13 @@
+{
+  "name": "website-router",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker fronting the amd-gaia.ai apex (see README.md).",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  }
+}

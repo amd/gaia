@@ -125,7 +125,7 @@ See the [Code Index SDK Reference](/sdk/sdks/code-index) for the full `CodeIndex
     └── index.faiss      # FAISS IndexFlatL2 vectors
 ```
 
-Both files are written atomically (temp file + rename). The cache is keyed by the resolved repo path. If you switch embedding models the metadata mismatch is detected and `search()` raises a `ValueError` naming both models until you re-index (call `index_repository()`, or `clear_index()` first).
+Both files are written atomically (temp file + rename), and the metadata records a SHA-256 of the index file it was written with. If the two ever stop matching (an interrupted write, or a file copied from another index), `search()` raises `CodeIndexCacheError` and `get_status()` reports `indexed: False` with the reason. Re-index to rebuild. The cache is keyed by the resolved repo path. If you switch embedding models the metadata mismatch is detected and `search()` raises a `ValueError` naming both models until you re-index (call `index_repository()`, or `clear_index()` first).
 
 ## Privacy
 

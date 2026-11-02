@@ -47,6 +47,23 @@ class MCPTransport(ABC):
         ...
 
     @abstractmethod
+    def send_notification(
+        self, method: str, params: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Send a JSON-RPC notification, which has no id and gets no reply.
+
+        Args:
+            method: The notification method (e.g., "notifications/initialized")
+            params: Optional parameters dictionary
+
+        Raises:
+            RuntimeError: If connection is not established or the server
+                rejected the notification
+            TimeoutError: If the write times out
+        """
+        ...
+
+    @abstractmethod
     def is_connected(self) -> bool:
         """Check if transport is currently connected.
 
