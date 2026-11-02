@@ -940,6 +940,22 @@ const messages: Messages = {
     'mobile.copied': 'تم النسخ',
     'mobile.downloadPage': 'صفحة تنزيل ngrok',
     'mobile.retry': 'إعادة المحاولة',
+
+    // Approving a calendar change
+    'permission.calendar.event': 'الحدث',
+    'permission.calendar.title': 'العنوان',
+    'permission.calendar.when': 'الموعد',
+    'permission.calendar.allDay': 'طوال اليوم',
+    'permission.calendar.account': 'الحساب',
+    'permission.calendar.location': 'المكان',
+    'permission.calendar.description': 'الوصف',
+    'permission.calendar.newTitle': 'العنوان الجديد',
+    'permission.calendar.newTime': 'الموعد الجديد',
+    'permission.calendar.newLocation': 'المكان الجديد',
+    'permission.calendar.newDescription': 'الوصف الجديد',
+    'permission.calendar.notifies.one': 'سيتم إشعار {n} شخص',
+    'permission.calendar.notifies.other': 'سيتم إشعار {n} أشخاص',
+    'permission.calendar.noOne': 'لن يتم إشعار أحد',
 };
 
 export const ar: Locale = {

@@ -454,6 +454,62 @@ test('window controls take the color of the sidebar beneath them', async ({ page
     await expect.poll(() => lastColor(page)).toBe(sidebar);
 });
 
+const LONG_TITLE = 'Quarterly budget review with finance, engineering and the regional leads, including the follow-up on the September numbers';
+const MANY_ATTENDEES = Array.from({ length: 30 }, (_, i) => `person.number.${i + 1}@example.com`);
+const CALENDAR_PROMPTS = {
+    create: { title: LONG_TITLE, start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00', notify_attendees: MANY_ATTENDEES, calendar_account: 'me@example.com', location: 'Room 4', description: 'Bring the Q3 numbers.' },
+    update: { event_id: 'abc', expected_title: LONG_TITLE, expected_start: '2026-11-03T14:00:00Z', notify_attendees: ['dana@example.com'], new_title: 'Budget sync', new_start: '2026-11-04T14:00:00Z', new_end: '2026-11-04T15:00:00Z' },
+    cancel: { event_id: 'abc', expected_title: 'اجتماع الميزانية', expected_start: '2026-11-03T14:00:00Z', notify_attendees: [] },
+} as const;
+
+/** A reply that asks one calendar approval and stays open: a closed stream dismisses the prompt. */
+async function replyWithCalendarApproval(page: Page, kind: keyof typeof CALENDAR_PROMPTS): Promise<void> {
+    const label = { create: 'creating', update: 'changing', cancel: 'cancelling' }[kind];
+    const event = JSON.stringify({ type: 'permission_request', tool: `${kind}_calendar_event`, tool_label: `${label} calendar event`, args: CALENDAR_PROMPTS[kind], confirm_id: `perm-${kind}` });
+    await page.addInitScript((line) => {
+        const realFetch = window.fetch;
+        window.fetch = (input, init) => (String(input).endsWith('/chat/send')
+            ? Promise.resolve(new Response(new ReadableStream({
+                start: (out) => out.enqueue(new TextEncoder().encode(`data: ${line}\n\n`)),
+            }), { headers: { 'Content-Type': 'text/event-stream' } }))
+            : realFetch(input, init));
+    }, event);
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const kind of ['create', 'update', 'cancel'] as const) {
+        test(`calendar approval, ${kind} (${locale})`, async ({ page }, info) => {
+            await open(page, `#${ANSWER_SESSION}`, locale, (p) => replyWithCalendarApproval(p, kind));
+            await page.locator('textarea').first().fill('Handle my calendar');
+            await page.keyboard.press('Enter');
+            const facts = page.getByTestId('perm-calendar');
+            await expect(facts).toBeVisible();
+            // The buttons stay reachable however many people are on the event.
+            await expect(page.locator('.perm-card-actions')).toBeInViewport();
+            expect(await facts.locator('bdi[dir="ltr"]').count()).toBeGreaterThan(0);
+            await page.locator('.perm-card').screenshot({ path: info.outputPath(`calendar-${kind}-${locale}.png`) });
+            await page.screenshot({ path: info.outputPath(`calendar-${kind}-${locale}-page.png`) });
+            expect(await audit(page)).toEqual([]);
+        });
+    }
+}
+
+test('calendar approval fits a phone (ar)', async ({ page }, info) => {
+    await page.setViewportSize({ width: 390, height: 780 });
+    await open(page, `#${ANSWER_SESSION}`, 'ar', (p) => replyWithCalendarApproval(p, 'create'));
+    await page.locator('textarea').first().fill('Handle my calendar');
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('perm-calendar')).toBeVisible();
+    await page.screenshot({ path: info.outputPath('calendar-create-ar-phone.png') });
+    const offScreen = await page.locator('.perm-card *').evaluateAll((els) =>
+        els.filter((el) => {
+            const box = el.getBoundingClientRect();
+            return box.width > 0 && (box.left < -1 || box.right > innerWidth + 1);
+        }).length,
+    );
+    expect(offScreen).toBe(0);
+});
+
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await open(page);
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');

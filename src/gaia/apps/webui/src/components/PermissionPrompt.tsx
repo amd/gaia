@@ -13,6 +13,7 @@ import {
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import { isEscapeClaimed } from '../hooks/useEscapeToClose';
+import { CalendarApproval, CALENDAR_WRITE_TOOLS } from './CalendarApproval';
 import './PermissionPrompt.css';
 
 /** One-line description of a tool call, e.g. `run_shell_command · git status`. */
@@ -134,6 +135,8 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
         ? splitCommandSummary(notification.summary ?? '')
         : null;
 
+    const calendar = CALENDAR_WRITE_TOOLS.has(notification.tool ?? '');
+
     // Take focus from the composer so its Enter can't land on a button here.
     useEffect(() => { cardRef.current?.focus({ preventScroll: true }); }, []);
 
@@ -201,7 +204,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {relayed?.folder && <p className="perm-card-detail">in <code>{relayed.folder}</code></p>}
                     {relayed?.extras && <p className="perm-card-detail">{relayed.extras}</p>}
                     {relayed?.note && <p className="perm-card-risk" role="note">{relayed.note}</p>}
-                    {!detail && !code && notification.summary && !relayed && <p className="perm-card-detail">{notification.summary}</p>}
+                    {calendar && hasArgs && <CalendarApproval tool={notification.tool!} args={args} />}
+                    {calendar && !hasArgs && notification.summary && <pre className="perm-card-pre perm-card-exact" data-testid="perm-exact-summary">{notification.summary}</pre>}
+                    {!detail && !code && !calendar && notification.summary && !relayed && <p className="perm-card-detail">{notification.summary}</p>}
                     {freshConsent && notification.message && <p className="perm-card-detail">{notification.message}</p>}
                 </div>
                 {remaining !== null && !expired && (

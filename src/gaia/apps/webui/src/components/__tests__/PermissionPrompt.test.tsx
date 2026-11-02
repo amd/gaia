@@ -211,4 +211,90 @@ describe('PermissionPrompt', () => {
         render(<PermissionPrompt sessionId="chat-1" />);
         expect(screen.getByRole('alertdialog')).toHaveTextContent('delete_file');
     });
+
+    describe('calendar writes show what is being approved without a click', () => {
+        const ask = (tool: string, toolArgs: Record<string, unknown>) => {
+            useNotificationStore.getState().addNotification(request({ tool, toolArgs }));
+            render(<PermissionPrompt sessionId="chat-1" />);
+            return screen.getByTestId('perm-calendar');
+        };
+        const local = (iso: string) => new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+
+        it('create: title, readable time, account and everyone notified', () => {
+            const facts = ask('create_calendar_event', {
+                title: 'Budget review', start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00',
+                notify_attendees: ['dana@x.com', 'sam@x.com'], calendar_account: 'me@x.com',
+                location: 'Room 4', description: 'Bring the Q3 numbers',
+            });
+            expect(facts).toHaveTextContent('Budget review');
+            expect(facts).toHaveTextContent('Nov 3, 2026');
+            expect(facts.textContent).toContain(local('2026-11-03T14:00:00Z').replace(/\s?[AP]M/, ''));
+            expect(facts).toHaveTextContent('me@x.com');
+            expect(facts).toHaveTextContent('Notifies 2 people');
+            expect(facts).toHaveTextContent('dana@x.com');
+            expect(facts).toHaveTextContent('sam@x.com');
+            expect(facts).toHaveTextContent('Room 4');
+            expect(facts).toHaveTextContent('Bring the Q3 numbers');
+            expect(facts.querySelector('bdi[dir="ltr"]')).not.toBeNull();
+        });
+
+        it('update: the event and what changes', () => {
+            const facts = ask('update_calendar_event', {
+                event_id: 'abc', expected_title: 'Budget review', expected_start: '2026-11-03T14:00:00Z',
+                notify_attendees: ['dana@x.com'], new_title: 'Budget sync',
+                new_start: '2026-11-04T14:00:00Z', new_end: '2026-11-04T15:00:00Z',
+                new_location: 'Room 9', new_description: 'New agenda',
+            });
+            expect(facts).toHaveTextContent('Budget review');
+            expect(facts).toHaveTextContent('New title');
+            expect(facts).toHaveTextContent('Budget sync');
+            expect(facts).toHaveTextContent('New time');
+            expect(facts).toHaveTextContent('Nov 4, 2026');
+            expect(facts).toHaveTextContent('Room 9');
+            expect(facts).toHaveTextContent('New agenda');
+            expect(facts).toHaveTextContent('Notifies 1 person');
+        });
+
+        it('cancel: says plainly when nobody is told', () => {
+            const facts = ask('cancel_calendar_event', {
+                event_id: 'abc', expected_title: 'Budget review', expected_start: '2026-11-03T14:00:00Z', notify_attendees: [],
+            });
+            expect(facts).toHaveTextContent('Budget review');
+            expect(facts).toHaveTextContent('Nobody is notified');
+            expect(facts).not.toHaveTextContent('abc');
+        });
+
+        it('an all-day date stays on its own day in any zone', () => {
+            const facts = ask('create_calendar_event', {
+                title: 'Day off', start: '2026-11-03', end: '2026-11-04', notify_attendees: [], calendar_account: 'me@x.com',
+            });
+            expect(facts).toHaveTextContent(/Nov 3.*Nov 4/);
+            expect(facts).toHaveTextContent('all day');
+        });
+
+        it('hides the untrusted-text markers a model copied into the call', () => {
+            const facts = ask('cancel_calendar_event', {
+                event_id: 'abc', expected_title: '<<<UNTRUSTED_TEXT>>>Budget review<<<END_UNTRUSTED_TEXT>>>',
+                expected_start: '2026-11-03T14:00:00Z', notify_attendees: [],
+            });
+            expect(facts.textContent).not.toContain('UNTRUSTED');
+            expect(facts).toHaveTextContent('Budget review');
+        });
+
+        it('an unreadable time still shows, as written', () => {
+            const facts = ask('cancel_calendar_event', {
+                event_id: 'abc', expected_title: 'Sync', expected_start: 'tomorrow at nine', notify_attendees: [],
+            });
+            expect(facts).toHaveTextContent('tomorrow at nine');
+        });
+
+        it('a relayed prompt with no args keeps the lines of its summary', () => {
+            useNotificationStore.getState().addNotification(request({
+                tool: 'cancel_calendar_event', toolArgs: undefined,
+                summary: 'Budget review\nWhen: 2026-11-03T14:00:00Z\nNotifies: dana@x.com',
+            }));
+            render(<PermissionPrompt sessionId="chat-1" />);
+            expect(screen.getByTestId('perm-exact-summary').textContent).toContain('\nNotifies: dana@x.com');
+        });
+    });
 });

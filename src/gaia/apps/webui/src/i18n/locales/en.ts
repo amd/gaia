@@ -940,6 +940,22 @@ export const enMessages = {
     'mobile.copied': 'Copied',
     'mobile.downloadPage': 'ngrok download page',
     'mobile.retry': 'Retry',
+
+    // Approving a calendar change
+    'permission.calendar.event': 'Event',
+    'permission.calendar.title': 'Title',
+    'permission.calendar.when': 'When',
+    'permission.calendar.allDay': 'all day',
+    'permission.calendar.account': 'Account',
+    'permission.calendar.location': 'Location',
+    'permission.calendar.description': 'Description',
+    'permission.calendar.newTitle': 'New title',
+    'permission.calendar.newTime': 'New time',
+    'permission.calendar.newLocation': 'New location',
+    'permission.calendar.newDescription': 'New description',
+    'permission.calendar.notifies.one': 'Notifies {n} person',
+    'permission.calendar.notifies.other': 'Notifies {n} people',
+    'permission.calendar.noOne': 'Nobody is notified',
 } as const;
 
 export const en: Locale = {
