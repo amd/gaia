@@ -3358,7 +3358,7 @@ gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 |--------|------|---------|-------------|
 | `--name` | string | _required_ | Unique schedule name |
 | `--cron` | string | - | Repeat on a cron expression, e.g. `"0 7 * * 1-5"` (one of `--cron`/`--at` is required) |
-| `--at` | string | - | Run once: an ISO datetime, local time unless it has an offset (`"2026-11-02T09:00"`, `"2026-11-02T09:00Z"`), or a delay from now (`+30m`, `+2h`, `+1d12h`). A time in the past, a date with no time, or anything else unreadable is rejected and nothing is stored |
+| `--at` | string | - | Run once: an ISO datetime, local time unless it has an offset (`"2026-11-02T09:00"`, `"2026-11-02T09:00Z"`), or a delay from now (`+30m`, `+2h`, `+1d12h`). A time in the past or more than 100 years ahead, a date with no time, or anything else unreadable is rejected and nothing is stored |
 | `--prompt` | string | - | Prompt to run on each fire (mutually exclusive with `--skill`) |
 | `--skill` | string | - | Skill to run — not supported yet, rejected at add time; see note below |
 | `--sink` | string | stdout | Where output goes: `stdout` \| `file:<path>` \| `notification` \| `telegram` |
