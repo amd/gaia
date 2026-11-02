@@ -370,13 +370,95 @@ class TestGraphWrites:
         assert body["isAllDay"] is False
         assert body["attendees"][0]["emailAddress"]["address"] == "d@x.com"
 
-    def test_all_day_create_has_midnight_bounds_and_is_all_day(self):
+    def test_all_day_create_has_midnight_bounds_in_this_computers_zone(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "tzlocal.get_localzone_name", lambda: "America/Los_Angeles"
+        )
         seen, handler = _recording(GRAPH_RAW, status=201)
         _graph(handler).create_event(NewEvent("Off", ALL_DAY))
         body = json.loads(seen[0].content)
         assert body["isAllDay"] is True
-        assert body["start"]["dateTime"] == "2026-11-03T00:00:00"
-        assert body["end"]["dateTime"] == "2026-11-04T00:00:00"
+        for endpoint, day in ((body["start"], "03"), (body["end"], "04")):
+            assert endpoint == {
+                "dateTime": f"2026-11-{day}T00:00:00",
+                "timeZone": "America/Los_Angeles",
+            }
+
+    @pytest.mark.parametrize("name", ["local", "Not/AZone"])
+    def test_all_day_refuses_when_the_zone_cant_be_named(self, monkeypatch, name):
+        monkeypatch.setattr("tzlocal.get_localzone_name", lambda: name)
+        seen, handler = _recording(GRAPH_RAW, status=201)
+        with pytest.raises(CalendarError, match="time zone"):
+            _graph(handler).create_event(NewEvent("Off", ALL_DAY))
+        assert seen == []
+
+    def test_a_timed_event_needs_no_local_zone(self, monkeypatch):
+        monkeypatch.setattr("tzlocal.get_localzone_name", lambda: "local")
+        seen, handler = _recording(GRAPH_RAW, status=201)
+        _graph(handler).create_event(NewEvent("Sync", TIMED))
+        assert json.loads(seen[0].content)["start"]["timeZone"] == "UTC"
+
+    @staticmethod
+    def _all_day(start, end, **over):
+        return {
+            **GRAPH_RAW,
+            "isAllDay": True,
+            "start": {"dateTime": start, "timeZone": "UTC"},
+            "end": {"dateTime": end, "timeZone": "UTC"},
+            **over,
+        }
+
+    @pytest.mark.parametrize(
+        "zones",
+        [
+            {"originalStartTimeZone": "Tokyo Standard Time"},
+            {"originalStartTimeZone": "Asia/Tokyo"},
+        ],
+    )
+    def test_an_all_day_value_off_midnight_keeps_its_own_day(self, zones):
+        # Tokyo's midnight on Nov 3 is 15:00 UTC on Nov 2.
+        raw = self._all_day(
+            "2026-11-02T15:00:00.0000000", "2026-11-03T15:00:00.0000000", **zones
+        )
+        _, handler = _recording(raw)
+        event = _graph(handler).get_event("m1")
+        assert (event.start, event.end) == ("2026-11-03", "2026-11-04")
+
+    def test_the_end_uses_its_own_original_zone(self):
+        raw = self._all_day(
+            "2026-11-02T15:00:00.0000000",
+            "2026-11-04T05:00:00.0000000",
+            originalStartTimeZone="Asia/Tokyo",
+            originalEndTimeZone="America/New_York",
+        )
+        _, handler = _recording(raw)
+        assert _graph(handler).get_event("m1").end == "2026-11-04"
+
+    @pytest.mark.parametrize(
+        "zones",
+        [
+            {"originalStartTimeZone": "tzone://Microsoft/Custom"},
+            {"originalStartTimeZone": None},
+            # Known zone, but this value isn't midnight there either.
+            {"originalStartTimeZone": "Asia/Kolkata"},
+        ],
+    )
+    def test_an_all_day_value_off_midnight_is_refused_if_unexplained(self, zones):
+        raw = self._all_day(
+            "2026-11-02T15:00:00.0000000", "2026-11-03T15:00:00.0000000", **zones
+        )
+        _, handler = _recording(raw)
+        with pytest.raises(CalendarError, match="all-day"):
+            _graph(handler).get_event("m1")
+
+    def test_an_all_day_value_in_another_zone_is_refused(self):
+        raw = self._all_day("2026-11-03T00:00:00", "2026-11-04T00:00:00")
+        raw["start"]["timeZone"] = "Pacific Standard Time"
+        _, handler = _recording(raw)
+        with pytest.raises(CalendarError, match="all-day"):
+            _graph(handler).get_event("m1")
 
     def test_patch_sends_only_changed_fields(self):
         seen, handler = _recording(GRAPH_RAW)

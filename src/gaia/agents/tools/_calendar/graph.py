@@ -4,11 +4,14 @@
 
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import datetime, timezone, tzinfo
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
+import tzlocal
+from tzlocal.windows_tz import win_tz
 
 from gaia.agents.tools._calendar.errors import (
     CalendarAuthError,
@@ -33,7 +36,7 @@ GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 _PREFER_UTC = 'outlook.timezone="UTC"'
 _SELECT = (
     "id,subject,start,end,isAllDay,location,attendees,isOrganizer,organizer,webLink,"
-    "type,showAs,responseStatus,isCancelled,originalStartTimeZone"
+    "type,showAs,responseStatus,isCancelled,originalStartTimeZone,originalEndTimeZone"
 )
 _MAX_PAGE = 100
 _MAX_PAGES = 50
@@ -63,18 +66,54 @@ def _utc_value(endpoint: Optional[Dict[str, Any]], event_id: Any) -> str:
     return parse_instant(f"{value}Z").isoformat()
 
 
+def _named_zone(name: Optional[str]) -> Optional[tzinfo]:
+    """*name* as a zone, IANA or Windows spelling; Graph may send either."""
+    for candidate in (name, win_tz.get(name or "")):
+        if not candidate:
+            continue
+        try:
+            return ZoneInfo(candidate)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+    return None
+
+
+def _all_day_value(
+    endpoint: Optional[Dict[str, Any]], original_zone: Optional[str], event_id: Any
+) -> str:
+    """The calendar date of a Graph all-day bound, or a refusal rather than a guess.
+
+    An all-day bound is midnight in the zone it was written in. Asked for UTC, Graph
+    can return that same moment off midnight, and its date is then a day out.
+    """
+    endpoint = endpoint or {}
+    value = endpoint.get("dateTime")
+    moment = None
+    if value and endpoint.get("timeZone") == "UTC":
+        moment = parse_instant(f"{value}Z")
+        if moment.time() == datetime.min.time():
+            return moment.date().isoformat()
+        zone = _named_zone(original_zone)
+        if zone is not None:
+            moment = moment.astimezone(zone)
+            if moment.time() == datetime.min.time():
+                return moment.date().isoformat()
+    raise CalendarError(
+        f"Microsoft Graph returned all-day event {event_id} with time {value!r} in "
+        f"zone {endpoint.get('timeZone')!r}, originally {original_zone!r}. That isn't "
+        "midnight in either, so its date can't be known. Check it in Outlook."
+    )
+
+
 def _parse_event(raw: Dict[str, Any]) -> CalendarEvent:
     if not raw.get("id"):
         raise CalendarError("Microsoft Graph returned an event with no id.")
     all_day = bool(raw.get("isAllDay"))
     if all_day:
-        # Midnight-anchored; only the date is meaningful.
-        start = ((raw.get("start") or {}).get("dateTime") or "")[:10]
-        end = ((raw.get("end") or {}).get("dateTime") or "")[:10]
-        if not start or not end:
-            raise CalendarError(
-                f"Microsoft Graph returned all-day event {raw['id']} with no dates."
-            )
+        start_zone = raw.get("originalStartTimeZone")
+        end_zone = raw.get("originalEndTimeZone") or start_zone
+        start = _all_day_value(raw.get("start"), start_zone, raw["id"])
+        end = _all_day_value(raw.get("end"), end_zone, raw["id"])
     else:
         start = _utc_value(raw.get("start"), raw["id"])
         end = _utc_value(raw.get("end"), raw["id"])
@@ -111,9 +150,23 @@ def _parse_event(raw: Dict[str, Any]) -> CalendarEvent:
     )
 
 
+def _this_computers_zone() -> str:
+    """Outlook pins an all-day event to a zone; UTC would show a day off elsewhere."""
+    try:
+        name = tzlocal.get_localzone_name()
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise CalendarError(
+            "This computer's time zone can't be named, so an all-day Outlook event "
+            "might land on the wrong day. Nothing was changed. Set the system time "
+            "zone, or set TZ to an IANA name such as America/New_York, then retry."
+        ) from exc
+    return name
+
+
 def _endpoint(value: str, *, all_day: bool) -> Dict[str, str]:
     if all_day:
-        return {"dateTime": f"{value}T00:00:00", "timeZone": "UTC"}
+        return {"dateTime": f"{value}T00:00:00", "timeZone": _this_computers_zone()}
     moment = parse_instant(value).astimezone(timezone.utc)
     return {
         "dateTime": moment.strftime("%Y-%m-%dT%H:%M:%S"),
