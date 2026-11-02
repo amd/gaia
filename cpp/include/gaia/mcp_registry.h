@@ -65,7 +65,7 @@ public:
 ///   }
 /// @endcode
 /// Ids are whatever the file uses; servers added by `gaia connectors` are keyed
-/// by their catalog id (`mcp-github`, `mcp-tavily`, `mcp-memory`, `mcp-git`).
+/// by their catalog id (for example `mcp-github` or `mcp-memory`).
 /// Unknown top-level keys are ignored, so the package-shipped descriptor at
 /// `src/gaia/mcp/mcp.json` (which also carries `clients`, `tools`, …) loads
 /// unchanged. `servers` is accepted as an alias for `mcpServers`, matching
@@ -125,8 +125,8 @@ public:
     ///         malformed, or the entry exists but is not launchable: missing
     ///         `command`, `disabled: true`, a non-stdio `type`, or a `$keyring`
     ///         credential reference. That last one is how `gaia connectors`
-    ///         stores secrets, so servers configured with one (`mcp-github`,
-    ///         `mcp-tavily`) are Python-only until the C++ runtime grows
+    ///         stores secrets, so servers configured with one (such as
+    ///         `mcp-github`) are Python-only until the C++ runtime grows
     ///         keychain support.
     std::optional<json> resolve(const std::string& id) const;
 
