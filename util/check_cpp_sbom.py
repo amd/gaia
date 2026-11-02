@@ -38,6 +38,24 @@ _PROJECT_RE = re.compile(
     r"^\s*project\s*\(\s*gaia-cpp\s+VERSION\s+([0-9][0-9.]*)", re.MULTILINE
 )
 _TAG_RE = re.compile(r"/refs/tags/v?([^/]+?)\.(?:tar\.gz|zip)$")
+# These CMake commands can fetch third-party code without producing a pin the
+# checker can compare with the SBOM. FetchContent_Populate(name) without direct
+# arguments remains allowed because it consumes a prior FetchContent_Declare.
+_UNTRACKED_DEPENDENCY_RE = re.compile(
+    r"""
+    (?P<external>\bExternalProject_Add\s*\()
+    |(?P<populate>\bFetchContent_Populate\s*\(\s*[^()\s]+\s+(?=[^)]*\S))
+    |(?P<cpm>\bCPMAddPackage\s*\()
+    |(?P<download>\bfile\s*\(\s*DOWNLOAD\b)
+    """,
+    re.DOTALL | re.IGNORECASE | re.VERBOSE,
+)
+_UNTRACKED_COMMAND_NAMES = {
+    "external": "ExternalProject_Add",
+    "populate": "FetchContent_Populate with direct arguments",
+    "cpm": "CPMAddPackage",
+    "download": "file(DOWNLOAD)",
+}
 
 
 @dataclass(frozen=True)
@@ -65,7 +83,14 @@ def fetchcontent_dependencies(cmake_text: str, origin: str) -> List[Dependency]:
     """Every FetchContent_Declare in a CMakeLists, as (url, sha256, version)."""
     deps: List[Dependency] = []
     errors: List[str] = []
-    for block in _DECLARE_RE.findall(_strip_comments(cmake_text)):
+    cmake_text = _strip_comments(cmake_text)
+    for match in _UNTRACKED_DEPENDENCY_RE.finditer(cmake_text):
+        name = _UNTRACKED_COMMAND_NAMES[match.lastgroup or "external"]
+        errors.append(
+            f"{origin} uses {name}; declare an archive with "
+            "FetchContent_Declare(URL + URL_HASH SHA256=...) so the SBOM can track it"
+        )
+    for block in _DECLARE_RE.findall(cmake_text):
         args = [a.strip('"') for a in block.split()]
         name = args[0] if args else "<unnamed>"
         where = f"{origin} FetchContent_Declare({name})"
@@ -102,9 +127,9 @@ def cmake_sources(cpp_dir: Path) -> List[Path]:
     found = []
     for path in sorted(cpp_dir.rglob("*")):
         rel = path.relative_to(cpp_dir).parts
-        if any(p in _SKIP_DIRS or p.startswith("build") for p in rel[:-1]):
+        if any(p in _SKIP_DIRS or p == "build" or p.startswith("build-") for p in rel[:-1]):
             continue
-        if path.name == "CMakeLists.txt" or path.suffix == ".cmake":
+        if path.name == "CMakeLists.txt" or path.suffix == ".cmake" or path.name.endswith(".cmake.in"):
             found.append(path)
     return found
 
