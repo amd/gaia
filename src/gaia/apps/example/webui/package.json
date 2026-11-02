@@ -47,7 +47,7 @@
     "@electron-forge/cli": "^8.0.1",
     "@electron-forge/maker-squirrel": "^8.0.1",
     "@electron-forge/maker-zip": "^8.0.1",
-    "electron": "^45.0.0"
+    "electron": "^45.1.0"
   },
   "overrides": {
     "tar": ">=7.5.8"
