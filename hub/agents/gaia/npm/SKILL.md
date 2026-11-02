@@ -395,7 +395,9 @@ content under `~/.gaia/skills` and removing one deletes it, and
 **`cancel_calendar_event`**, because they change a real calendar and can email the
 people on the event. `update_calendar_event` and `cancel_calendar_event` take
 `expected_title`, `expected_start` and `notify_attendees`, and a call whose values
-don't match the real event is refused before any approval is asked. A capture that does
+don't match the real event is refused before any approval is asked.
+`create_calendar_event` takes `calendar_account`, refused the same way unless it names
+the account the event lands on. A capture that does
 land is additionally **code-inert**: its instructions load, but any
 `tools.py`/scripts stay unregistered until a human runs
 `gaia skill promote <name>` in a terminal. Everything else — reading,

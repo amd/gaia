@@ -327,9 +327,7 @@ class TestCancel:
 class TestUpdate:
     def test_a_wrong_id_says_no_event_was_found(self, make_agent):
         agent = make_agent(_FakeGoogle(event={}))
-        result = _run(
-            agent, "update_calendar_event", **TARGET, new_title="Budget sync"
-        )
+        result = _run(agent, "update_calendar_event", **TARGET, new_title="Budget sync")
         assert result["success"] is False
         assert "No event with id" in result["error"]
         assert agent.console.asked == []
@@ -623,7 +621,8 @@ class TestAConnectionThatChanged:
         monkeypatch.setattr(
             "gaia.agents.tools._calendar.GoogleCalendarBackend",
             lambda fn: real_google(
-                fn, http_client=httpx.Client(transport=httpx.MockTransport(google_handler))
+                fn,
+                http_client=httpx.Client(transport=httpx.MockTransport(google_handler)),
             ),
         )
         monkeypatch.setattr(

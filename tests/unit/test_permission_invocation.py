@@ -77,9 +77,9 @@ class TestCalendarSummary:
     PEOPLE = [f"person{i}@example.com" for i in range(60)]
 
     def _summary(self, tool, **args):
-        events = CanonicalTranslator(
-            run_id="r", agent_id="gaia"
-        ).translate({"type": "permission_request", "tool": tool, "args": args})
+        events = CanonicalTranslator(run_id="r", agent_id="gaia").translate(
+            {"type": "permission_request", "tool": tool, "args": args}
+        )
         return events[0]["summary"]
 
     def test_create_keeps_the_title_and_every_attendee_however_long_the_list(self):

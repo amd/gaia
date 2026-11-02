@@ -407,9 +407,7 @@ class TestGraphWrites:
     def test_all_day_create_has_midnight_bounds_in_this_computers_zone(
         self, monkeypatch
     ):
-        monkeypatch.setattr(
-            "tzlocal.get_localzone_name", lambda: "America/Los_Angeles"
-        )
+        monkeypatch.setattr("tzlocal.get_localzone_name", lambda: "America/Los_Angeles")
         seen, handler = _recording(GRAPH_RAW, status=201)
         _graph(handler).create_event(NewEvent("Off", ALL_DAY))
         body = json.loads(seen[0].content)
