@@ -486,13 +486,67 @@ describe('SetupScreen: the rail', () => {
         expect(railStep('Download')).toHaveClass('is-failed');
     });
 
-    it('locks every step once the download has started', async () => {
+    it('opens an earlier step during the download without stopping it', async () => {
         const run = runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: 1e9, bytes_total: 23.3e9 })]);
         mockedApi.startSetup.mockResolvedValue(run);
         mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(run);
         await startLocal();
         await screen.findByRole('button', { name: 'Cancel' });
-        expect(rail().queryAllByRole('button')).toEqual([]);
+        // Not yet reached: nothing to open.
+        expect(rail().queryByRole('button', { name: /Test/ })).toBeNull();
+
+        fireEvent.click(rail().getByRole('button', { name: /Your setup/ }));
+        expect(await screen.findByRole('heading', { name: 'Your setup' })).toBeInTheDocument();
+        expect(railStep('Your setup')).toHaveAttribute('aria-current', 'step');
+        expect(railStep('Download')).toHaveClass('is-active');
+        // The choices that would start a run wait for this one.
+        expect(screen.getByRole('status')).toHaveTextContent('Setup is running');
+        expect(screen.getByRole('button', { name: /Download and start/ })).toBeDisabled();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Back to Download' }));
+        expect(await screen.findByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+        expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
+        expect(mockedApi.cancelSetup).not.toHaveBeenCalled();
+    });
+
+    it('after setup finished, models can be changed and downloaded again', async () => {
+        mockedApi.startSetup.mockResolvedValue(READY);
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(READY);
+        await startLocal();
+        await startChatting();
+        fireEvent.click(rail().getByRole('button', { name: /Your setup/ }));
+        await screen.findByRole('heading', { name: 'Your setup' });
+        await toModels();
+        expect(railStep('Ready')).toHaveClass('is-done');
+        clickContinue();
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(2));
+        expect(await startChatting()).toBeInTheDocument();
+    });
+
+    it('before any download, Next returns to a Customize step already seen', async () => {
+        await open();
+        await toPc();
+        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+        await screen.findByRole('heading', { name: 'Your setup' });
+        const steps = within(screen.getByRole('navigation', { name: 'Move between setup steps' }));
+        fireEvent.click(steps.getByRole('button', { name: 'Next' }));
+        expect(await screen.findByRole('heading', { name: 'What we found on this PC' })).toBeInTheDocument();
+    });
+
+    it('Back and Next walk the steps setup has reached', async () => {
+        const run = runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: 1e9, bytes_total: 23.3e9 })]);
+        mockedApi.startSetup.mockResolvedValue(run);
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(run);
+        await startLocal();
+        await screen.findByRole('button', { name: 'Cancel' });
+        const steps = () => within(screen.getByRole('navigation', { name: 'Move between setup steps' }));
+        fireEvent.click(steps().getByRole('button', { name: 'Back' }));
+        expect(await screen.findByRole('heading', { name: 'Your setup' })).toBeInTheDocument();
+        fireEvent.click(steps().getByRole('button', { name: 'Back' }));
+        expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        fireEvent.click(steps().getByRole('button', { name: 'Next' }));
+        fireEvent.click(steps().getByRole('button', { name: 'Next' }));
+        expect(await screen.findByRole('button', { name: 'Cancel' })).toBeInTheDocument();
     });
 });
 
@@ -658,14 +712,16 @@ describe('SetupScreen: downloading', () => {
         progress({ id: GEMMA.id, roles: ['vision'], state: 'queued', bytes_total: 5.97e9 }),
     ]);
 
-    it('shows each model and the overall progress, with Cancel instead of Back', async () => {
+    it('shows each model and the overall progress, with Cancel, and Back only looks', async () => {
         mockedApi.startSetup.mockResolvedValue(running);
         mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(running);
         await startLocal();
         expect(await screen.findByRole('progressbar', { name: 'Qwen3.6-35B-A3B, Downloading' })).toBeInTheDocument();
         expect(screen.getByRole('progressbar', { name: 'Overall download' })).toHaveAttribute('aria-valuenow', '26');
         expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument();
+        // Back only looks at an earlier step; the download keeps going.
+        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+        expect(mockedApi.cancelSetup).not.toHaveBeenCalled();
     });
 
     it('lists every component coming to this PC, with its state from the run', async () => {

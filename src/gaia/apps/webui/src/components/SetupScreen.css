@@ -55,6 +55,11 @@ button.setup-rail-step:hover {
 
 .setup-rail-step.is-current,
 .setup-rail-step.is-active {
+    color: var(--text-primary);
+}
+
+/* The step on screen, which is where setup is unless the user went back. */
+.setup-rail-step.is-shown {
     background: var(--bg-primary);
     color: var(--text-primary);
     font-weight: 600;
@@ -677,4 +682,8 @@ button.setup-rail-step:hover {
 
 .setup-report-button > span {
     min-inline-size: 0;
+}
+
+.setup-stepnav {
+    margin-top: 20px;
 }

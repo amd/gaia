@@ -250,6 +250,7 @@ interface SetupScreenProps {
 
 /** Where the user is. Download and Test are one run; the run's rows say which. */
 type Phase = 'check' | 'plan' | 'pc' | 'gpu' | 'models' | 'key' | 'download';
+type Stage = Phase | 'test' | 'ready';
 
 /** What a confirmation sheet is asking. */
 type Confirm =
@@ -275,6 +276,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const [choice, setChoice] = useState<ProviderId>('local');
     const [phase, setPhase] = useState<Phase>('check');
     const [customizing, setCustomizing] = useState(false);
+    /** A step opened from the rail or Back/Next while setup is further on; null shows where setup is. */
+    const [viewing, setViewing] = useState<Stage | null>(null);
+    /** Steps already shown, so Next and the rail can return to them. */
+    const [visited, setVisited] = useState<Set<Stage>>(() => new Set<Stage>(['check']));
+    // Where setup really is, read by stepTo before this render computes it.
+    const liveRef = useRef<Stage>('check');
     const [hardware, setHardware] = useState<PreflightReport | null>(null);
     const [hardwareError, setHardwareError] = useState<string | null>(null);
     const [run, setRun] = useState<SetupRunStatus | null>(null);
@@ -451,6 +458,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             lastRun.current = { gaiaLemonade, options };
             const s = await api.startSetup(cloud, gaiaLemonade, options);
             setRun(s);
+            setViewing(null);
             const extras = options.extraModels ?? [];
             if (extras.length) setNotFetched((n) => n.filter((id) => !extras.includes(id)));
             if (!options.serverOnly) setPhase('download');
@@ -542,46 +550,53 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         }
     }, [plan, selection, cloud, noFitAcked, download]);
 
-    const backToPlan = useCallback(() => {
+    const stepTo = useCallback((id: Stage) => {
         setActionError(null);
-        setCustomizing(false);
+        if (phase === 'download') {
+            setViewing(id === liveRef.current ? null : id);
+            return;
+        }
+        setViewing(null);
+        setPhase(id === 'test' || id === 'ready' ? 'download' : id);
+    }, [phase]);
+
+    // Customize's steps stay on the rail, so Next can return to them.
+    const backToPlan = useCallback(() => {
         setChoice('local');
-        setPhase('plan');
-    }, []);
+        stepTo('plan');
+    }, [stepTo]);
 
     const customize = useCallback(() => {
-        setActionError(null);
         setChoice('local');
         setCustomizing(true);
-        setPhase('pc');
-    }, []);
+        stepTo('pc');
+    }, [stepTo]);
 
     const useCloud = useCallback(() => {
-        setActionError(null);
         setCustomizing(false);
         setChoice(readChoice() === 'amd' ? 'amd' : 'fireworks');
-        setPhase('key');
-    }, []);
+        stepTo('key');
+    }, [stepTo]);
 
     const showGpu = !!gpu?.applies;
     const backOne = useCallback(() => {
-        setActionError(null);
-        setPhase((p) => (p === 'models' ? (showGpu ? 'gpu' : 'pc') : p === 'gpu' ? 'pc' : 'plan'));
-    }, [showGpu]);
+        const at = viewing ?? phase;
+        stepTo(at === 'models' ? (showGpu ? 'gpu' : 'pc') : at === 'gpu' ? 'pc' : 'plan');
+    }, [showGpu, stepTo, viewing, phase]);
 
-    // Alt+Left goes back a step, like the Back button.
+    // Alt+Left and Alt+Right go back and on a step, like Back and Next.
+    const navRef = useRef<{ prev: Stage | null; next: Stage | null }>({ prev: null, next: null });
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (!e.altKey || e.key !== 'ArrowLeft' || confirm) return;
-            if (phase === 'pc' || phase === 'gpu' || phase === 'models' || phase === 'key') {
-                e.preventDefault();
-                if (phase === 'pc' || phase === 'key') backToPlan();
-                else backOne();
-            }
+            if (!e.altKey || confirm) return;
+            const to = e.key === 'ArrowLeft' ? navRef.current.prev : e.key === 'ArrowRight' ? navRef.current.next : null;
+            if (!to) return;
+            e.preventDefault();
+            stepTo(to);
         };
         document.addEventListener('keydown', onKey);
         return () => document.removeEventListener('keydown', onKey);
-    }, [phase, backOne, backToPlan, confirm]);
+    }, [stepTo, confirm]);
 
     const cancel = useCallback(async () => {
         try {
@@ -712,34 +727,47 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
 
     const blocked = !!hardware && !hardware.compatible && hardware.blockers.length > 0;
 
-    const stage: 'check' | 'plan' | 'pc' | 'gpu' | 'models' | 'key' | 'download' | 'test' | 'ready' =
-        canFinish ? 'ready' : phase === 'download' && testing ? 'test' : phase;
-    const trail: Array<{ id: typeof stage; label: string; sub?: boolean }> = [
-        { id: 'check', label: t('setup.check.title') },
-        { id: 'plan', label: t('setup.plan.step') },
+    const liveStage: Stage = canFinish ? 'ready' : phase === 'download' && testing ? 'test' : phase;
+    liveRef.current = liveStage;
+    const stage: Stage = viewing ?? liveStage;
+    useEffect(() => {
+        setVisited((v) => (v.has(stage) ? v : new Set(v).add(stage)));
+    }, [stage]);
+    const trail: Array<{ id: Stage; label: string; key: MessageKey; sub?: boolean }> = [
+        { id: 'check', label: t('setup.check.title'), key: 'setup.check.title' },
+        { id: 'plan', label: t('setup.plan.step'), key: 'setup.plan.step' },
         ...(customizing ? [
-            { id: 'pc' as const, label: t('setup.pc.step'), sub: true },
-            ...(showGpu ? [{ id: 'gpu' as const, label: t('setup.gpu.step'), sub: true }] : []),
-            { id: 'models' as const, label: t('setup.models.step'), sub: true },
+            { id: 'pc' as const, label: t('setup.pc.step'), key: 'setup.pc.step' as MessageKey, sub: true },
+            ...(showGpu ? [{ id: 'gpu' as const, label: t('setup.gpu.step'), key: 'setup.gpu.step' as MessageKey, sub: true }] : []),
+            { id: 'models' as const, label: t('setup.models.step'), key: 'setup.models.step' as MessageKey, sub: true },
         ] : []),
-        ...(cloud ? [{ id: 'key' as const, label: t('setup.key.step'), sub: true }] : []),
-        { id: 'download', label: t('setup.download.step') },
-        { id: 'test', label: t('setup.test.step') },
-        { id: 'ready', label: t('setup.ready.step') },
+        ...(cloud ? [{ id: 'key' as const, label: t('setup.key.step'), key: 'setup.key.step' as MessageKey, sub: true }] : []),
+        { id: 'download', label: t('setup.download.step'), key: 'setup.download.step' },
+        { id: 'test', label: t('setup.test.step'), key: 'setup.test.step' },
+        { id: 'ready', label: t('setup.ready.step'), key: 'setup.ready.step' },
     ];
-    const at = trail.findIndex((s) => s.id === stage);
-    const reopenable = ['plan', 'pc', 'gpu', 'models', 'key'];
+    const at = trail.findIndex((s) => s.id === liveStage);
+    // A step can be opened once setup has reached it.
+    const reachable = (id: Stage, i: number) => i <= at || visited.has(id);
     const railSteps: RailStep[] = trail.map((s, i) => ({
         id: s.id,
         label: s.label,
         sub: s.sub,
         status: i < at ? 'done'
             : i > at ? 'pending'
-                : stage === 'ready' ? 'done'
-                    : runFailed && (stage === 'download' || stage === 'test' || stage === 'check') ? 'failed'
-                        : running && (stage === 'download' || stage === 'test') ? 'active' : 'current',
-        onOpen: i < at && phase !== 'download' && reopenable.includes(s.id) ? () => setPhase(s.id as Phase) : undefined,
+                : liveStage === 'ready' ? 'done'
+                    : runFailed && (liveStage === 'download' || liveStage === 'test' || liveStage === 'check') ? 'failed'
+                        : running && (liveStage === 'download' || liveStage === 'test') ? 'active' : 'current',
+        shown: s.id === stage,
+        onOpen: s.id !== stage && reachable(s.id, i) ? () => stepTo(s.id) : undefined,
     }));
+    const shownAt = trail.findIndex((s) => s.id === stage);
+    const prevStep = shownAt > 0 ? trail[shownAt - 1].id : null;
+    const nextStep = shownAt >= 0 && shownAt < trail.length - 1 && reachable(trail[shownAt + 1].id, shownAt + 1) ? trail[shownAt + 1].id : null;
+    navRef.current = { prev: prevStep, next: nextStep };
+    const choiceStep = stage === 'pc' || stage === 'gpu' || stage === 'models' || stage === 'key';
+    // Opened from further on while a run is going: the choices there wait for it.
+    const runGoing = viewing != null && running;
 
     const expectedTests: SetupTest['job'][] = ['server'];
     if (!cloud) expectedTests.push('chat');
@@ -823,7 +851,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 {biggerOption && biggerOption.id !== chatEntry?.id && <li><bdi>{biggerOption.name}</bdi>: {tooBigText(biggerOption, t)}</li>}
                             </ul>
                             <div className="setup-row">
-                                <button type="button" className="btn-primary" onClick={() => (short ? setConfirm({ kind: 'low_disk' }) : void commit(false))} disabled={busy || blocked}>
+                                <button type="button" className="btn-primary" onClick={() => (short ? setConfirm({ kind: 'low_disk' }) : void commit(false))} disabled={busy || blocked || runGoing}>
                                     {busy && <Loader2 size={13} className="spin" aria-hidden="true" />} {pending.length ? t('setup.plan.start') : t('setup.plan.startNoDownload')}
                                 </button>
                                 <button type="button" className="link-btn" onClick={customize}>{t('setup.plan.customize')}</button>
@@ -862,7 +890,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <ExistingLemonadeOffer onChosen={(mode) => { setUsersServer(mode === 'external'); loadHardware(); void loadPlan(); }} />
                         <div className="setup-row setup-nav">
                             <button type="button" className="btn-secondary" onClick={backToPlan}>{t('setup.back')}</button>
-                            <button type="button" className="btn-primary" onClick={() => setPhase(showGpu ? 'gpu' : 'models')}>{t('setup.continue')}</button>
+                            <button type="button" className="btn-primary" onClick={() => stepTo(showGpu ? 'gpu' : 'models')}>{t('setup.continue')}</button>
                         </div>
                     </>
                 )}
@@ -878,8 +906,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             headingId="setup-title"
                             names={names}
                             onBack={backOne}
-                            onSkip={() => setPhase('models')}
-                            onContinue={() => setPhase('models')}
+                            onSkip={() => stepTo('models')}
+                            onContinue={() => stepTo('models')}
                         />
                     </>
                 )}
@@ -899,7 +927,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             onKeepTrying={setKeepTrying}
                             onBack={backOne}
                             onContinue={(ack) => void commit(ack)}
-                            busy={busy}
+                            busy={busy || runGoing}
                             error={actionError ?? startError}
                         />
                     </>
@@ -1121,6 +1149,20 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     <div className="setup-row">
                         <button type="button" className="link-btn" onClick={onClose}>{t('setup.again.notNow')}</button>
                     </div>
+                )}
+                {runGoing && (choiceStep || stage === 'plan') && (
+                    <p className="setup-hint" role="status">{t('setup.nav.runGoing')}</p>
+                )}
+                {(!choiceStep || viewing != null) && (prevStep || nextStep || viewing) && (
+                    <nav className="setup-row setup-stepnav" aria-label={t('setup.nav.label')}>
+                        {prevStep && !choiceStep && <button type="button" className="btn-secondary" onClick={() => stepTo(prevStep)}>{t('setup.back')}</button>}
+                        {nextStep && <button type="button" className="btn-secondary" onClick={() => stepTo(nextStep)}>{t('setup.next')}</button>}
+                        {viewing && (
+                            <button type="button" className="link-btn" onClick={() => setViewing(null)}>
+                                {t.compose((say) => say('setup.nav.toLive', { step: say(trail.find((s) => s.id === liveStage)?.key ?? 'setup.download.step') }))}
+                            </button>
+                        )}
+                    </nav>
                 )}
                 <StageLogs run={run} />
             </div>
