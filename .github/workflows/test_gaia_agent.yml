@@ -186,6 +186,12 @@ jobs:
           # binary).
           python hub/agents/gaia/python/packaging/capability_matrix.py --check
 
+      # Catch a partial version bump on the PR, not at release time: every
+      # version file (manifest, pyproject, npm package.json + package-lock.json,
+      # binaries.lock.json) must match __version__.
+      - name: Verify version references are in sync
+        run: python hub/agents/gaia/python/packaging/stamp_version.py --check
+
       - name: Run Gaia Agent Package Tests
         env:
           GAIA_MEMORY_DISABLED: "1"

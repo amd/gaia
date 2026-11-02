@@ -407,7 +407,7 @@ The manifest also defines adversarial documents (`empty.txt`, `unicode_test.txt`
 | `--scenario ID` | -- | Run one scenario by ID |
 | `--category NAME` | -- | Run all scenarios in a category |
 | `--audit-only` | `false` | Check architecture constraints without running LLM calls |
-| `--generate-corpus` | `false` | Regenerate corpus documents and validate `manifest.json` |
+| `--generate-corpus` | `false` | Validate the committed corpus documents against `manifest.json`; fails if a listed file is missing |
 | `--backend URL` | `http://localhost:4200` | Agent UI backend URL |
 | `--model MODEL` | `claude-opus-5` | Driver **and** judge — it runs each scenario as well as scoring it, so it must match the baseline you compare against |
 | `--agent-model MODEL` | -- | Local model the agent must run (e.g. `Gemma-4-E4B-it-GGUF`). Each scenario's session is checked, and one that ran another model is discarded as `INFRA_ERROR`. It verifies, it does not switch: set `default_model` in the backend's GAIA home first |

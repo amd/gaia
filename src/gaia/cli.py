@@ -2034,7 +2034,7 @@ Examples:
   # Run all scenarios in a category
   gaia eval agent --category rag_quality
 
-  # Regenerate corpus documents and validate manifest
+  # Validate the corpus documents against manifest.json
   gaia eval agent --generate-corpus
 
   # Run architecture audit only (no LLM calls)
@@ -2104,7 +2104,10 @@ Examples:
     agent_eval_parser.add_argument(
         "--generate-corpus",
         action="store_true",
-        help="Regenerate corpus documents (CSV, etc.) and validate manifest.json",
+        help=(
+            "Validate the committed corpus documents against manifest.json "
+            "(fails if a listed file is missing)"
+        ),
     )
     agent_eval_parser.add_argument(
         "--backend",
@@ -2353,8 +2356,8 @@ Examples:
   gaia eval sessions --dataset-only --out eval/results/sessions
 
 A TUI must already be running with --control-port; this drives THAT session so
-the run is visible on screen. Judging needs ANTHROPIC_API_KEY (the repo .env is
-read automatically).
+the run is visible on screen. The judge uses your Claude Code login (the
+`claude` CLI), or ANTHROPIC_API_KEY when it is set.
 """,
     )
     sessions_eval_parser.add_argument(
@@ -5532,11 +5535,15 @@ Let me know your answer!
                 capture_session(capture_sid)
                 return
 
-            # --generate-corpus: regenerate corpus documents and validate manifest
+            # --generate-corpus: validate the committed corpus against its manifest
             if getattr(args, "generate_corpus", False):
                 from gaia.eval.runner import generate_corpus
 
-                generate_corpus()
+                try:
+                    generate_corpus()
+                except RuntimeError as e:
+                    print(f"[ERROR] {e}", file=sys.stderr)
+                    sys.exit(1)
                 return
 
             # --compare: diff two scorecard files, no eval run needed
@@ -5835,10 +5842,10 @@ Let me know your answer!
                     "--control <path to its control.json>."
                 )
 
-            from gaia.eval.claude import ClaudeClient
+            from gaia.eval.judge_client import make_judge_client
 
             driver = TUIDriver(Path(control))
-            client = ClaudeClient()
+            client = make_judge_client()
 
             def _progress(index, total, result):
                 mark = "OK " if result.passed else ("ERR" if result.error else "LOW")
