@@ -355,6 +355,7 @@ class MCPClient:
         transport (MCPTransport): Transport implementation
         debug (bool): Debug logging enabled
         server_info (Dict[str, Any]): Server information from initialize response
+        protocol_version (Optional[str]): MCP revision the server agreed to
     """
 ```
 
@@ -371,6 +372,7 @@ def __init__(self, name: str, transport: MCPTransport, debug: bool = False):
 
     Attributes initialized:
         server_info: Empty dict (populated on connect)
+        protocol_version: None (populated on connect)
         _tools: None (populated on list_tools)
     """
 ```
@@ -466,17 +468,23 @@ def connect(self) -> bool:
     This method:
     1. Establishes transport connection (starts subprocess)
     2. Sends MCP initialize request with client info
-    3. Stores server_info from response
+    3. Checks the server answered with a protocol version GAIA supports
+       (gaia.mcp.protocol.SUPPORTED_PROTOCOL_VERSIONS) and stores it in
+       protocol_version
+    4. Stores server_info from response
+    5. Sends the notifications/initialized notification
 
     Initialize request format:
         {
-            "protocolVersion": "1.0.0",
+            "protocolVersion": "2025-11-25",  # gaia.mcp.protocol.MCP_PROTOCOL_VERSION
             "clientInfo": {"name": "GAIA MCP Client", "version": "0.15.2"},
             "capabilities": {}
         }
 
     Returns:
-        bool: True if connection and initialization successful
+        bool: True if connection and initialization successful. A server
+        that answers with an unsupported (or missing) protocolVersion fails
+        the connect, with the reason in last_error.
 
     Note:
         Disconnects automatically if initialization fails.
@@ -920,6 +928,26 @@ def send_request(
     """
 ```
 
+#### send_notification (Abstract)
+
+```python
+@abstractmethod
+def send_notification(
+    self, method: str, params: Dict[str, Any] = None
+) -> None:
+    """Send a JSON-RPC notification, which has no id and gets no reply.
+
+    Args:
+        method (str): The notification method (e.g., "notifications/initialized")
+        params (Dict[str, Any], optional): Parameters dictionary
+
+    Raises:
+        RuntimeError: If connection is not established or the server
+            rejected the notification
+        TimeoutError: If the write times out
+    """
+```
+
 #### is_connected (Abstract)
 
 ```python
@@ -1243,6 +1271,8 @@ sequenceDiagram
     Transport->>Server: JSON-RPC request
     Server-->>Transport: JSON-RPC response
     Transport-->>Client: response with server_info
+    Client->>Transport: send_notification("notifications/initialized")
+    Transport->>Server: JSON-RPC notification (no reply)
     Client-->>Manager: connected client
     Manager-->>Mixin: client
     Mixin->>Client: list_tools()
@@ -1779,6 +1809,10 @@ class HttpTransport(MCPTransport):
 
     def send_request(self, method: str, params: Dict = None) -> Dict:
         # Implement HTTP request
+        pass
+
+    def send_notification(self, method: str, params: Dict = None) -> None:
+        # Send a message with no "id"; the server sends no reply
         pass
 
     def is_connected(self) -> bool:

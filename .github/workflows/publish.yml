@@ -661,6 +661,8 @@ jobs:
     needs: [validate]
     runs-on: ubuntu-latest
     strategy:
+      # Every leg reports, so one broken target does not hide the state of the rest.
+      fail-fast: false
       matrix:
         include:
           - { goos: linux,   goarch: amd64 }
@@ -1100,21 +1102,41 @@ jobs:
         with:
           name: windows-installer
           path: release-assets
-        continue-on-error: true
 
       - name: Download Desktop Installer (macOS DMG)
         uses: actions/download-artifact@v8
         with:
           name: macos-installer
           path: release-assets
-        continue-on-error: true
 
       - name: Download Desktop Installer (Linux DEB + AppImage)
         uses: actions/download-artifact@v8
         with:
           name: linux-installer
           path: release-assets
-        continue-on-error: true
+
+      # The release notes name these four installers, and electron-updater reads
+      # the manifests and blockmaps from the release, so none may be missing (#3520).
+      - name: Check every desktop installer is attached
+        env:
+          NPM_VERSION: ${{ needs.validate.outputs.npm_version }}
+        run: |
+          set -euo pipefail
+          v="${NPM_VERSION}"
+          expected=(
+            "gaia-agent-ui-${v}-x64-setup.exe" "gaia-agent-ui-${v}-x64-setup.exe.blockmap" latest.yml
+            "gaia-agent-ui-${v}-arm64.dmg" "gaia-agent-ui-${v}-arm64.dmg.blockmap" latest-mac.yml
+            "gaia-agent-ui-${v}-amd64.deb" "gaia-agent-ui-${v}-x86_64.AppImage" latest-linux.yml
+          )
+          missing=()
+          for f in "${expected[@]}"; do
+            [ -s "release-assets/${f}" ] || missing+=("${f}")
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::the release is missing desktop installer files: ${missing[*]}. The release notes promise them and the desktop app's updater reads them, so it must not ship without them. release-assets holds: $(find release-assets -maxdepth 1 -type f -printf '%f ')"
+            exit 1
+          fi
+          ls -l "${expected[@]/#/release-assets/}"
 
       - name: Create GitHub Release
         if: needs.validate.outputs.is_rc != 'true'
