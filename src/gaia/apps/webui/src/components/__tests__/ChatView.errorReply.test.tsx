@@ -248,22 +248,20 @@ describe('Try again on a failed turn', () => {
     });
 
     it('offers no Try again when the answer may still finish', async () => {
-        const dropped = new Error('stream dropped');
-        dropped.name = 'StreamDroppedError';
+        // The send got no answer in time; the run may still be going on the server.
+        const timedOut = Object.assign(new api.StreamTimeoutError('send', 30_000), {
+            endpoint: 'send', timeoutMs: 30_000, message: 'GAIA did not start answering within 30 s.',
+        });
         render(<ChatView sessionId={SESSION.id} />);
         await act(async () => {
             fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'summarize the report' } });
             fireEvent.click(screen.getByLabelText('Send'));
         });
-        // Give up on reconnecting straight away.
-        for (let i = 0; i < 10 && useChatStore.getState().isStreaming; i++) {
-            await act(async () => {
-                sends[0].cbs.onError(dropped);
-                await new Promise((r) => setTimeout(r, 0));
-            });
-        }
+        await act(async () => {
+            sends[0].cbs.onError(timedOut);
+        });
         const last = () => useChatStore.getState().messages[useChatStore.getState().messages.length - 1];
-        await waitFor(() => expect(last()?.content).toContain('The answer may still finish'));
+        await waitFor(() => expect(last()?.content).toContain('did not start this answer'));
         expect(last()?.failed).toBe(false);
         expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     });
