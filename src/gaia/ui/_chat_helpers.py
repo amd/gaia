@@ -3013,6 +3013,10 @@ _EMPTY_MODEL_ANSWER_MSG = (
 )
 
 
+#: Card kinds that record what a tool did rather than answer the user, so a
+#: turn that shows only these and no text still ends as "no answer".
+_NON_ANSWER_RENDERS = frozenset({"diff"})
+
 _NO_ANSWER_AFTER_TOOLS_MSG = (
     "GAIA ran its tools but didn't write an answer. Send your message again, "
     "or try another model."
@@ -3094,9 +3098,10 @@ def _empty_answer_outcome(
       * cancelled → ``("Cancelled.", "done", True)`` — a user Stop, not a
         failure; keep the tool steps executed before the cancel and don't
         blame Lemonade.
-      * a render card was shown → ``("", "done", True)`` — the card is the
-        answer (e.g. an echoed card the echo-guard stripped to empty); keep
-        the steps so the card survives a reload.
+      * an answer card was shown (a render not in _NON_ANSWER_RENDERS) →
+        ``("", "done", True)`` — the card is the answer (e.g. an echoed card
+        the echo-guard stripped to empty); keep the steps so the card survives
+        a reload.
       * steps but no card → ``(<no-answer copy>, "failed", True)`` — the agent
         ran tools and ended without answering; say so and keep the steps.
         *has_steps* counts tool steps only, never thinking, plan or error steps.
@@ -5087,7 +5092,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             content, sse_type, keep_steps = _empty_answer_outcome(
                 turn_cancelled,
                 bool(tool_steps),
-                any(step.get("render") for step in captured_steps),
+                any(
+                    step.get("render") and step["render"] not in _NON_ANSWER_RENDERS
+                    for step in captured_steps
+                ),
                 backend_problem,
                 turn_reported_error=any(
                     s.get("type") == "error" for s in captured_steps

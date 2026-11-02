@@ -1559,7 +1559,11 @@ Used to reach the UI from a phone.
   <Accordion title="GET /api/tunnel/status">
     Current tunnel status — active/inactive, public URL, provider, uptime, and
     `device`: `{"name": "iPhone", "lastSeen": "..."}` for the latest
-    authenticated request through the tunnel, or null.
+    authenticated request through the tunnel, or null. When ngrok is not
+    installed, `reason` is `"ngrok_not_installed"` and `installCommands` lists
+    this OS's install commands (empty where none is known); `error` still
+    carries the same instructions as text. Both `start` and `status` return
+    this shape.
   </Accordion>
 </AccordionGroup>
 
@@ -2249,15 +2253,15 @@ Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/approve">
-    Approve an agent-inferred goal for autonomous execution.
+    Approve an agent-inferred goal for autonomous execution. Only a goal in `pending_approval` can be approved; approving an already-queued goal just returns it, marked approved. Any other state returns 409, so a rejected, cancelled or finished goal is never re-queued.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/reject">
-    Reject an agent-inferred goal.
+    Reject an agent-inferred goal. Only a goal in `pending_approval` can be rejected; rejecting an already-rejected goal just returns it. Any other state returns 409.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/cancel">
-    Cancel a queued or in-progress goal.
+    Cancel a queued or in-progress goal; cancelling an already-cancelled goal just returns it. Any other state returns 409.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/status">

@@ -32,12 +32,17 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
     ```
   </Step>
 
-  <Step title="Set your Anthropic API key">
-    The benchmark uses Claude as the judge model:
+  <Step title="Authenticate Claude">
+    The benchmark uses Claude to drive and judge each scenario. A Claude Code login
+    (`claude`, then `/login`) is enough. To use an API key instead, export it in the
+    shell:
 
     ```bash
     export ANTHROPIC_API_KEY=sk-ant-...
     ```
+
+    The scenario driver ignores an `ANTHROPIC_API_KEY` that only a `.env` file sets,
+    so a stale key in a parent directory can't override a working login.
   </Step>
 
   <Step title="Install Claude Code CLI">
@@ -277,7 +282,7 @@ Fix mode runs in a loop:
 4. Compare results -- stop when `--target-pass-rate` is reached
 
 <Warning>
-  Fix mode patches `src/gaia/` source files directly. Always review diffs before committing. Run `python util/lint.py --all --fix` after fix iterations.
+  Fix mode patches `src/gaia/` source files directly, so it refuses to start while tracked files have uncommitted changes — commit your work or run it from a separate worktree. A fixer iteration that times out or fails stops the loop; check `git diff` for partial edits. Always review diffs before committing. Run `python util/lint.py --all --fix` after fix iterations.
 </Warning>
 
 ### Capturing Real Sessions
@@ -330,6 +335,16 @@ gaia eval agent --output-format markdown
 <Tip>
   Start with `--audit-only` (free) to understand expected failures, then run individual categories to control costs during development.
 </Tip>
+
+### Which Claude account pays
+
+The judged evals (email drafting, action items, briefings, `gaia eval sessions`, retrieval) and PDF corpus generation choose their Claude transport the way `gaia eval agent` does:
+
+- **`ANTHROPIC_API_KEY` set:** the Messages API, billed per token to that console account.
+- **Otherwise:** your Claude Code subscription, through `claude -p`. The CLI's own login is enough. Where no interactive login is possible (CI), set `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. A subscription token is not an API key, so never export it as `ANTHROPIC_API_KEY`.
+- **Neither** (no key and no `claude` on `PATH`): the run stops with an error naming both options. It never falls back to a weaker scorer.
+
+On the subscription path, token counts and `total_cost_usd` come from the CLI's JSON output. The cost is the list price of those tokens, not money spent. Token counting (`count_tokens`) and inline PDF analysis exist only on the API path.
 
 ---
 

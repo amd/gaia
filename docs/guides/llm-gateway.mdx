@@ -209,6 +209,10 @@ that session only. Every new session starts on the in-text format again, so a
 model that follows it, such as `DeepSeek-V4.1-Flash`, is not moved to the
 costlier native format for good by one stray reply.
 
+Claude models (`amd.Claude-*`) are the exception: they go through the
+gateway's Anthropic route, which takes native tool calls and caches the tool
+schemas, so they get native calls from their first request.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |

@@ -169,6 +169,7 @@ def test_the_final_release_job_steps(publish):
         "Download Desktop Installer (Windows NSIS)",
         "Download Desktop Installer (macOS DMG)",
         "Download Desktop Installer (Linux DEB + AppImage)",
+        "Check every desktop installer is attached",
         "Create GitHub Release",
     ]
 

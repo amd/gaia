@@ -758,6 +758,94 @@ class TestCompareScorecards:
         )
         result = compare_scorecards(base, curr)
         assert len(result["time_regressed"]) == 1
+        # Slower but still passing at the same score — status verdict unchanged.
+        assert [e["scenario_id"] for e in result["unchanged"]] == ["s1"]
+        assert result["regressed"] == []
+
+    def _scenario(self, sid, status, score, elapsed):
+        return {
+            "scenario_id": sid,
+            "status": status,
+            "overall_score": score,
+            "elapsed_s": elapsed,
+        }
+
+    def test_slower_pass_to_fail_counts_as_regression(self, tmp_path, capsys):
+        base = tmp_path / "base.json"
+        curr = tmp_path / "curr.json"
+        self._write_scorecard(
+            base,
+            [
+                self._scenario("smart_discovery", "PASS", 9.45, 179.1),
+                self._scenario("fixed", "FAIL", 3.0, 10.0),
+            ],
+        )
+        self._write_scorecard(
+            curr,
+            [
+                self._scenario("smart_discovery", "FAIL", 2.72, 452.0),
+                self._scenario("fixed", "PASS", 9.0, 10.0),
+            ],
+        )
+        result = compare_scorecards(base, curr)
+        assert [e["scenario_id"] for e in result["regressed"]] == ["smart_discovery"]
+        assert [e["scenario_id"] for e in result["time_regressed"]] == [
+            "smart_discovery"
+        ]
+        assert [e["scenario_id"] for e in result["improved"]] == ["fixed"]
+        out = capsys.readouterr().out
+        assert "0 regressions" not in out
+        assert "[WARN] 1 regression(s) detected!" in out
+
+    def test_slower_fail_to_pass_counts_as_improvement(self, tmp_path):
+        base = tmp_path / "base.json"
+        curr = tmp_path / "curr.json"
+        self._write_scorecard(base, [self._scenario("s1", "FAIL", 3.0, 10.0)])
+        self._write_scorecard(curr, [self._scenario("s1", "PASS", 9.0, 50.0)])
+        result = compare_scorecards(base, curr)
+        assert len(result["improved"]) == 1
+        assert len(result["time_regressed"]) == 1
+
+    def test_slower_score_drop_counts_as_score_regression(self, tmp_path):
+        base = tmp_path / "base.json"
+        curr = tmp_path / "curr.json"
+        self._write_scorecard(base, [self._scenario("s1", "PASS", 9.0, 10.0)])
+        self._write_scorecard(curr, [self._scenario("s1", "PASS", 6.0, 50.0)])
+        result = compare_scorecards(base, curr)
+        assert len(result["score_regressed"]) == 1
+        assert len(result["time_regressed"]) == 1
+
+    def test_exactly_double_time_is_not_a_time_regression(self, tmp_path):
+        base = tmp_path / "base.json"
+        curr = tmp_path / "curr.json"
+        self._write_scorecard(base, [self._scenario("s1", "PASS", 9.0, 10.0)])
+        self._write_scorecard(curr, [self._scenario("s1", "FAIL", 2.0, 20.0)])
+        result = compare_scorecards(base, curr)
+        assert result["time_regressed"] == []
+        assert len(result["regressed"]) == 1
+
+    def test_skipped_or_unmeasured_never_time_regressed(self, tmp_path):
+        base = tmp_path / "base.json"
+        curr = tmp_path / "curr.json"
+        self._write_scorecard(
+            base,
+            [
+                self._scenario("skip", "PASS", 9.0, 10.0),
+                self._scenario("err", "PASS", 9.0, 10.0),
+            ],
+        )
+        self._write_scorecard(
+            curr,
+            [
+                self._scenario("skip", "SKIPPED_NO_DOCUMENT", None, 500.0),
+                self._scenario("err", "INFRA_ERROR", None, 500.0),
+            ],
+        )
+        result = compare_scorecards(base, curr)
+        assert result["time_regressed"] == []
+        assert result["regressed"] == []
+        assert len(result["corpus_changed"]) == 1
+        assert len(result["unmeasured"]) == 1
 
 
 # ---------------------------------------------------------------------------

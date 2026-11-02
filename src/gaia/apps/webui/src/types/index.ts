@@ -739,6 +739,10 @@ export interface TunnelStatus {
     token: string | null;
     startedAt: string | null;
     error: string | null;
+    /** `ngrok_not_installed` when the failure is a one-time setup step. */
+    reason?: 'ngrok_not_installed' | null;
+    /** This OS's ngrok install commands, set only with that reason. */
+    installCommands?: string[];
     publicIp: string | null;
     /** The device behind the latest authenticated remote request. */
     device?: { name: string; lastSeen: string } | null;
