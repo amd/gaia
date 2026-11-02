@@ -2034,7 +2034,7 @@ Examples:
   # Run all scenarios in a category
   gaia eval agent --category rag_quality
 
-  # Regenerate corpus documents and validate manifest
+  # Validate the corpus documents against manifest.json
   gaia eval agent --generate-corpus
 
   # Run architecture audit only (no LLM calls)
@@ -2104,7 +2104,10 @@ Examples:
     agent_eval_parser.add_argument(
         "--generate-corpus",
         action="store_true",
-        help="Regenerate corpus documents (CSV, etc.) and validate manifest.json",
+        help=(
+            "Validate the committed corpus documents against manifest.json "
+            "(fails if a listed file is missing)"
+        ),
     )
     agent_eval_parser.add_argument(
         "--backend",
@@ -5528,11 +5531,15 @@ Let me know your answer!
                 capture_session(capture_sid)
                 return
 
-            # --generate-corpus: regenerate corpus documents and validate manifest
+            # --generate-corpus: validate the committed corpus against its manifest
             if getattr(args, "generate_corpus", False):
                 from gaia.eval.runner import generate_corpus
 
-                generate_corpus()
+                try:
+                    generate_corpus()
+                except RuntimeError as e:
+                    print(f"[ERROR] {e}", file=sys.stderr)
+                    sys.exit(1)
                 return
 
             # --compare: diff two scorecard files, no eval run needed
