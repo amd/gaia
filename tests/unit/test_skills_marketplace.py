@@ -982,7 +982,7 @@ def test_search_with_no_matching_word_is_empty(tmp_path):
     search = _word_search_hub(tmp_path)
 
     assert search("kubernetes helm chart") == []
-    assert search("summarization") == []  # whole words only, no stemming
+    assert search("summarization") == []  # substring per word, no stemming
     assert search("!!! ??? ...") == []
 
 
