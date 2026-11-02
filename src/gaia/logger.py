@@ -61,12 +61,16 @@ def configure_console_encoding():
                     check=False,
                     timeout=10,
                 )
-            except (subprocess.SubprocessError, OSError, FileNotFoundError):
-                pass  # Ignore if chcp command fails
+            except (subprocess.SubprocessError, OSError) as e:
+                logging.getLogger(__name__).debug(
+                    "chcp 65001 failed; console code page unchanged: %s", e
+                )
 
-        except Exception:
-            # If configuration fails, fall back to original streams
-            pass
+        except (OSError, ValueError, LookupError) as e:
+            # The streams keep their original encoding; output still works.
+            logging.getLogger(__name__).debug(
+                "UTF-8 console setup failed; using the original streams: %s", e
+            )
 
 
 class GaiaLogger:
