@@ -660,8 +660,6 @@ _HOME_TOKEN = re.compile(
 #: ``eval/tasks`` as whole segments of normalized text (literal first, for speed).
 _TASK_DIR = re.compile(r"eval/tasks(?<![\w.-]eval/tasks)(?![\w.-])")
 _DRIVE = re.compile(r"[a-z]:")
-#: Walk-back allowance beyond the path lengths, for quotes, escapes and extra ``..``.
-_WALK_BACK_SLACK = 128
 #: Field names only the task file carries.
 ANSWER_KEY_FIELDS = ("genuine_answer", "must_establish", "wrong_answers")
 #: One of them as a mapping key: JSON, JSON inside a JSON string, or a Python repr.
@@ -674,26 +672,30 @@ def _text(value: Any) -> str:
     return value if isinstance(value, str) else json.dumps(value, default=str)
 
 
-def _strings(value: Any, depth: int = 0) -> Iterator[str]:
-    """Every string in a tool call, JSON-encoded ones decoded, so escapes are real."""
-    if isinstance(value, str):
-        if depth < 4 and value.lstrip()[:1] in ("{", "["):
-            try:
-                decoded = json.loads(value)
-            except ValueError:
-                decoded = None
-            if isinstance(decoded, (dict, list)):
-                yield from _strings(decoded, depth + 1)
-                return
-        yield value
-    elif isinstance(value, Mapping):
-        for item in value.values():
-            yield from _strings(item, depth)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            yield from _strings(item, depth)
-    elif value is not None and not isinstance(value, (bool, int, float)):
-        yield str(value)
+def _strings(value: Any) -> Iterator[str]:
+    """Every string in a tool call, JSON-encoded ones decoded, so escapes are real.
+
+    Walked with an explicit stack: a tool call may nest deeper than Python recurses.
+    """
+    stack: List[Tuple[Any, int]] = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, str):
+            if depth < 4 and item.lstrip()[:1] in ("{", "["):
+                try:
+                    decoded = json.loads(item)
+                except (ValueError, RecursionError):
+                    decoded = None  # too deep or not JSON: scanned as written
+                if isinstance(decoded, (dict, list)):
+                    stack.append((decoded, depth + 1))
+                    continue
+            yield item
+        elif isinstance(item, Mapping):
+            stack.extend((v, depth) for v in reversed(list(item.values())))
+        elif isinstance(item, (list, tuple)):
+            stack.extend((v, depth) for v in reversed(item))
+        elif item is not None and not isinstance(item, (bool, int, float)):
+            yield str(item)
 
 
 def _raw_call_requests(transcript: Mapping[str, Any]) -> List[Tuple[str, Any]]:
@@ -736,9 +738,8 @@ class _TaskDirMatcher:
     """Whether a string names this checkout's ``eval/tasks``.
 
     Linear in the string's length: a substring search for the absolute
-    path, then a walk back from each ``eval/tasks`` that ends at the window
-    or a set number of mentions back, so no text is walked more than that
-    many times.
+    path, then a walk back from each ``eval/tasks`` that stops a set number
+    of mentions back, so no text is walked more than that many times.
     """
 
     def __init__(self, workdir: Optional[Path]):
@@ -746,7 +747,9 @@ class _TaskDirMatcher:
         target = _normalize(str(TASKS_DIR)).rstrip("/")
         self.drive = _DRIVE.match(target) is not None
         self.parts = [self._fold(p) for p in target.split("/")]
-        self.exact = re.compile(re.escape(target) + r"(?![\w.-])")
+        # A rooted POSIX path inside a longer one (``/backup/home/...``, a URL) is not it.
+        left = "" if self.drive else r"(?<![\w.-])"
+        self.exact = re.compile(left + re.escape(target) + r"(?![\w.-])")
         base = _normalize(str(workdir)).rstrip("/") if workdir else ""
         self.base = [self._fold(p) for p in base.split("/")] if base else []
         self.common = 0
@@ -755,7 +758,6 @@ class _TaskDirMatcher:
                 break
             self.common += 1
         self.longest = max(len(p) for p in self.parts) + 3
-        self.window = 2 * len(target) + 2 * len(base) + _WALK_BACK_SLACK
         # A walk may pass back through one other ``eval/tasks`` (``x/eval/tasks/../..``).
         self.chain = len(_TASK_DIR.findall(target)) + 1
         # From a workdir outside the checkout, every path to it names its folder.
@@ -788,9 +790,7 @@ class _TaskDirMatcher:
     def _walks_to_target(self, text: str) -> bool:
         ends: List[int] = []
         for hit in _TASK_DIR.finditer(text):
-            lo = max(0, hit.start() - self.window)
-            if len(ends) >= self.chain:
-                lo = max(lo, ends[-self.chain])
+            lo = ends[-self.chain] if len(ends) >= self.chain else 0
             if not self.anchor or text.rfind(self.anchor, lo, hit.start()) >= 0:
                 if self._walk(text, hit.start(), lo):
                     return True
@@ -811,10 +811,15 @@ class _TaskDirMatcher:
             end = pos - 1
             slash = text.rfind("/", lo, end)
             start = slash + 1 if slash >= 0 else lo
+            seg = text[start:end]
+            # A path starting after trailing begin characters (``x (/..``) is rooted.
+            name_end = start + len(seg.rstrip(_BEGIN))
+            if name_end < end and self._starts("", owed, kept):
+                return True
             # Starts inside this folder; any longer than a target folder is
             # a name the next ``..`` removes, so one check covers them all.
-            tail = max(start, end - self.longest)
-            run = find_run(text, tail, end)
+            tail = max(start, name_end - self.longest)
+            run = find_run(text, tail, name_end)
             inside = run is not None or (
                 owed and tail > start and find_run(text, start, tail)
             )
@@ -822,15 +827,14 @@ class _TaskDirMatcher:
                 first = text[run.end() : end]
                 if self._starts(first, owed, kept):
                     return True
-                run = find_run(text, run.end(), end)
+                run = find_run(text, run.end(), name_end)
                 # A path starts inside this name (``x && cat ..``): not a folder.
-                if run is None and (first in ("", ".", "..") or first[1:2] == ":"):
+                if run is None and (first in (".", "..") or first[1:2] == ":"):
                     return False
             if inside and owed and self._relative(owed - 1, kept):
                 return True
             if slash < 0:
-                return start == 0 and self._starts(text[:end], owed, kept)
-            seg = text[start:end]
+                return start == 0 and self._starts(seg, owed, kept)
             if seg == "..":
                 owed += 1
             elif seg == ".":

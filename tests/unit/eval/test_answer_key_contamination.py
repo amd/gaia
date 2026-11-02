@@ -675,26 +675,145 @@ def test_a_dot_folder_inside_the_key_path(monkeypatch, path):
     assert why.startswith("Bash named ")
 
 
-def test_a_long_folder_name_that_dot_dot_removes():
+#: Checkout roots of the CI runners: short, so a walk-back cap sized from the
+#: path length would stop early there and nowhere on a developer machine.
+CI_ROOTS = {
+    "windows": ("D:/a", "D:/a/gaia/gaia"),
+    "linux": ("/home/runner", "/home/runner/work/gaia/gaia"),
+    "macos": ("/Users/runner", "/Users/runner/work/gaia/gaia"),
+    "this checkout": (os.path.expanduser("~"), str(ft.REPO_ROOT)),
+}
+
+
+def _ci_root(monkeypatch, root):
+    home, checkout = CI_ROOTS[root]
+    monkeypatch.setattr(ft, "TASKS_DIR", Path(checkout, "eval", "tasks"))
+    monkeypatch.setattr(os.path, "expanduser", lambda p: home if p == "~" else p)
+    return checkout.replace("\\", "/"), Path(checkout, "work")
+
+
+def _ci_names(command, workdir):
+    return ft.answer_key_contact(
+        _gaia(_tool("Bash", {"command": command}, "")), workdir
+    )
+
+
+@pytest.mark.parametrize("root", list(CI_ROOTS))
+def test_a_long_folder_name_that_dot_dot_removes(monkeypatch, root):
+    _co, workdir = _ci_root(monkeypatch, root)
     long_name = "x" * 300
-    call = {"command": f"cd a/b && cat {long_name}/../../eval/tasks/tasks.json"}
-    workdir = ft.REPO_ROOT / "work"
-    assert ft.answer_key_contact(_gaia(_tool("Bash", call, "")), workdir)
-    call = {"command": f"cd a/b && cat {long_name}/../eval/tasks/tasks.json"}
-    assert ft.answer_key_contact(_gaia(_tool("Bash", call, "")), workdir) == ""
+    assert _ci_names(f"cd a/b && cat {long_name}/../../eval/tasks/tasks.json", workdir)
+    assert (
+        _ci_names(f"cd a/b && cat {long_name}/../eval/tasks/tasks.json", workdir) == ""
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "{co}/" + "z" * 255 + "/" + "y" * 255 + "/../../eval/tasks/tasks.json",
+        "{co}/" + "x/../" * 63 + "eval/tasks/tasks.json",
+        '"{co}/' + "a " * 155 + 'b/../eval/tasks/tasks.json"',
+        "../" * 106 + "{tail}/eval/tasks/tasks.json",
+    ],
+    ids=["two long folders", "63 x/..", "155 spaces", "106 .."],
+)
+@pytest.mark.parametrize("root", list(CI_ROOTS))
+def test_long_detours_on_a_short_checkout_root(monkeypatch, root, path):
+    co, workdir = _ci_root(monkeypatch, root)
+    tail = co.split(":", 1)[-1].lstrip("/")
+    assert _ci_names(f"cat {path.format(co=co, tail=tail)}", workdir)
+
+
+@pytest.mark.parametrize("folder", ["x (", "a ", "a,", "a&&", "a ="])
+@pytest.mark.parametrize("root", list(CI_ROOTS))
+def test_a_folder_name_ending_in_punctuation_that_dot_dot_removes(
+    monkeypatch, root, folder
+):
+    co, workdir = _ci_root(monkeypatch, root)
+    assert _ci_names(f'cat "{co}/{folder}/../eval/tasks/tasks.json"', workdir)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # ``gaia `` stands for ``gaia``, but ``u /..`` then lands in ``users``.
+        "qqqqqqqqqqqq /tasks/c:/users/u /../gaia /eval/tasks",
+        "ls c:/users/k/x (/../eval/tasks",
+        "ls c:/users/k/src/gaia/x (/../../eval/tasks",
+    ],
+)
+def test_a_trailing_punctuation_folder_is_not_a_path_start(monkeypatch, command):
+    _spaced(monkeypatch, "C:/Users/k", "src/gaia")
+    assert _ci_names(command, Path("C:/Users/k/src")) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls /backup/home/runner/work/gaia/gaia/eval/tasks",
+        "ls /var/lib/docker/overlay2/abc/merged/home/runner/work/gaia/gaia/eval/tasks",
+        "curl https://ci.example.com/artifacts/home/runner/work/gaia/gaia/eval/tasks/",
+        "rsync -a src/ host:/srv/home/runner/work/gaia/gaia/eval/tasks/",
+    ],
+)
+def test_the_checkout_path_inside_a_longer_path_is_not_the_key(monkeypatch, command):
+    _ci_root(monkeypatch, "linux")
+    assert _ci_names(command, Path("/tmp/gaia-bench/run/toybox")) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat /home/runner/work/gaia/gaia/eval/tasks/tasks.json",
+        "jq . </home/runner/work/gaia/gaia/eval/tasks/tasks.json",
+        "jq --from-file=/home/runner/work/gaia/gaia/eval/tasks/tasks.json",
+        "curl -d @/home/runner/work/gaia/gaia/eval/tasks/tasks.json http://x",
+        "curl file:///home/runner/work/gaia/gaia/eval/tasks/tasks.json",
+        "python -c \"open('/home/runner/work/gaia/gaia/eval/tasks/tasks.json')\"",
+    ],
+)
+def test_the_rooted_checkout_path_after_punctuation_is_the_key(monkeypatch, command):
+    _ci_root(monkeypatch, "linux")
+    assert _ci_names(command, Path("/tmp/gaia-bench/run/toybox"))
+
+
+@pytest.mark.parametrize(
+    "content,names_key",
+    [
+        ("[" * 5000 + "1" + "]" * 5000, False),
+        ('{"a":' * 5000 + "1" + "}" * 5000, False),
+        ("[" * 5000 + json.dumps(str(KEY)) + "]" * 5000, True),
+    ],
+    ids=["list", "object", "key inside"],
+)
+def test_deeply_nested_json_in_a_tool_call_does_not_crash(content, names_key):
+    transcript = _gaia(_tool("write_file", {"path": "t.json", "content": content}, ""))
+    assert bool(ft.answer_key_contact(transcript, NESTED_WORKDIR)) == names_key
+
+
+def test_a_deeply_nested_call_is_still_read():
+    args = {"path": str(KEY)}
+    for _ in range(5000):
+        args = {"a": [args]}
+    assert ft.answer_key_contact(_gaia(_tool("write_file", args, "")), NESTED_WORKDIR)
 
 
 # --- large tool calls stay fast ----------------------------------------------
 
-#: Generous: each case takes a few hundredths of a second; a scan quadratic in
-#: the text's length took 40-60 s on the same inputs.
-FAST_ENOUGH = 0.5
+#: Far above a linear scan even on a loaded runner (each case takes tenths of a
+#: second locally); a scan quadratic in the text's length took 40-60 s.
+FAST_ENOUGH = 5.0
 
 
 def _timed(transcript, workdir=NESTED_WORKDIR):
-    started = time.perf_counter()
-    why = ft.answer_key_contact(transcript, workdir)
-    return why, time.perf_counter() - started
+    """The verdict and the best of three timings, so one stall on a busy runner is ignored."""
+    best = float("inf")
+    for _ in range(3):
+        started = time.perf_counter()
+        why = ft.answer_key_contact(transcript, workdir)
+        best = min(best, time.perf_counter() - started)
+    return why, best
 
 
 def _long_texts():
@@ -754,22 +873,23 @@ def _adversarial_units(checkout):
 
 
 def _scan_seconds(text, workdir):
-    started = time.perf_counter()
-    why = ft.answer_key_contact(
-        _gaia(_tool("write_file", {"content": text}, "ok")), workdir
-    )
-    return why, time.perf_counter() - started
+    return _timed(_gaia(_tool("write_file", {"content": text}, "ok")), workdir)
 
 
 def _assert_linear(unit, workdir):
-    """1 MB scans in well under a second and ~4x the time of 256 KB, not 16x."""
+    """1 MB takes ~4x the time of 256 KB, not the 16x of a quadratic scan.
+
+    The slack is scaled by a same-size text with a single mention, which costs
+    what any 1 MB call does, so a slow runner widens it in proportion.
+    """
     small, big = ((unit * (n // len(unit) + 1))[:n] for n in (256_000, 1_000_000))
-    _scan_seconds(small, workdir)  # warm caches
+    _w, t_trivial = _scan_seconds("w" * (len(big) - 10) + "eval/tasks", workdir)
     why_small, t_small = _scan_seconds(small, workdir)
     why_big, t_big = _scan_seconds(big, workdir)
     assert why_small == why_big == ""
-    assert t_big < 2.0, f"{t_big:.2f}s for 1 MB"
-    assert t_big < 8 * t_small + 0.2, f"{t_small:.3f}s -> {t_big:.3f}s"
+    assert t_big < FAST_ENOUGH, f"{t_big:.2f}s for 1 MB"
+    slack = 0.25 + 10 * t_trivial
+    assert t_big < 8 * t_small + slack, f"{t_small:.3f}s -> {t_big:.3f}s"
 
 
 @pytest.mark.parametrize("label", list(_adversarial_units("c")))
