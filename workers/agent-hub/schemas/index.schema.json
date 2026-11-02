@@ -197,6 +197,11 @@
           "maximum": 100,
           "description": "Aggregate eval score (0-100) parsed from the latest version's scorecard front matter; absent when none was published or parseable."
         },
+        "eval_score_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Agent version the scorecard was measured at: the front matter's inherited_from for a carried-forward card, else agent.version. Often behind latest_version. Absent when no scorecard was published or it's unparseable."
+        },
         "npm_package": {
           "type": "string",
           "description": "npm package name when the agent is distributed via npm (e.g. \"@amd-gaia/agent-email\"); absent otherwise."
@@ -279,6 +284,24 @@
                   "type": "integer",
                   "minimum": 0,
                   "description": "Number of non-blocking findings the audit surfaced."
+                },
+                "attestation": {
+                  "type": "string",
+                  "enum": ["publisher-asserted", "unaudited"],
+                  "description": "How much the verdict is worth: publisher-asserted means the Worker checked the publisher's report is self-consistent, not that the audit provably ran. Absent on records written before it was recorded."
+                },
+                "cleared_tiers": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Tiers the audit reported as cleared; empty when unaudited."
+                },
+                "content_digest": {
+                  "type": "string",
+                  "description": "sha256 over the audited skill tree, as reported; empty string when unaudited."
+                },
+                "manifest_digest": {
+                  "type": "string",
+                  "description": "sha256 over the audited SKILL.md, verified against the uploaded manifest; empty string when unaudited."
                 }
               }
             }
