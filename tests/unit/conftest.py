@@ -34,6 +34,30 @@ def python_with_pip(tmp_path_factory):
     return str(env_dir / bin_dir / Path(sys.executable).name)
 
 
+class _OsNamed:
+    """``os`` as one module sees it, with only ``name`` overridden."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
+@pytest.fixture
+def fake_os_name(monkeypatch):
+    """Make one module see another ``os.name`` without touching the real one.
+
+    Patching the real os.name makes pathlib, pytest and coverage build the
+    wrong Path flavour, which crashes the xdist worker.
+    """
+
+    def _set(module, name):
+        monkeypatch.setattr(module, "os", _OsNamed(name))
+
+    return _set
+
+
 @pytest.fixture
 def mock_home(tmp_path, monkeypatch):
     """Redirect the process home directory at a per-test ``tmp_path``.
