@@ -123,6 +123,7 @@ function App() {
     const [showMobileAccess, setShowMobileAccess] = useState(false);
     const [tunnelActive, setTunnelActive] = useState(false);
     const [tunnelError, setTunnelError] = useState<string | null>(null);
+    const [tunnelSetup, setTunnelSetup] = useState<string[] | null>(null);
 
     // Set once the status poller and chat list exist further down.
     const refreshStatus = useRef<() => Promise<void>>(async () => {});
@@ -581,12 +582,20 @@ function App() {
     const openMobileAccess = useCallback(async () => {
         setShowMobileAccess(true);
         setTunnelError(null);
-        if (tunnelActive) return;
+        if (tunnelActive) {
+            setTunnelSetup(null);
+            return;
+        }
         try {
             const status = await api.startTunnel();
+            // Kept until the retry answers, so the setup panel doesn't flash to "Starting".
+            const notInstalled = status.reason === 'ngrok_not_installed';
+            setTunnelSetup(notInstalled ? status.installCommands ?? [] : null);
+            if (notInstalled) return;
             if (status.error) setTunnelError(status.error);
             else setTunnelActive(true);
         } catch (err) {
+            setTunnelSetup(null);
             setTunnelError(err instanceof Error ? err.message : 'Could not start mobile access');
         }
     }, [tunnelActive]);
@@ -705,6 +714,8 @@ function App() {
                         onClose={() => setShowMobileAccess(false)}
                         onStop={() => void stopMobileAccess()}
                         error={tunnelError}
+                        setupCommands={tunnelSetup}
+                        onRetry={() => void openMobileAccess()}
                     />
                 </Suspense>
             )}
