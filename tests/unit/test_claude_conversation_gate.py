@@ -6,9 +6,9 @@ Claude follows up in threads it is part of, without an @claude mention (#1408).
 Before, issue-handler fired only on a new issue or a comment containing
 ``@claude``. On #1394 a reporter answered Claude's own repro question and sat
 unanswered for 90 minutes until a maintainer typed the mention. Now a cheap
-``conversation-gate`` job lets a mention-less comment through when the thread
-is labelled ``claude`` or is an issue the bot already replied on, and the
-prompt decides whether replying adds anything.
+``conversation-gate`` job lets a maintainer's mention-less comment through when
+the thread is labelled ``claude`` or the comment directly follows a bot reply
+on an issue, and the prompt decides whether replying adds anything.
 
 What these tests pin:
 
@@ -29,7 +29,8 @@ import os
 import re
 import shutil
 import subprocess
-from datetime import datetime, timedelta, timezone
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -167,13 +168,26 @@ def test_prompt_carries_the_self_gate(handler):
 
 # --- behaviour: run the gate's real script ----------------------------------
 
-# Each page prints "<bot comments> <bot comments in the last hour>"; STUB_PAGES
-# holds the pages comma-separated.
+BOT = "github-actions[bot]"
+TRIGGER_ID = 999
+# The stub plays gh's --jq output: one "<id> <login> <epoch>" line per comment.
 _GH_STUB = """#!/bin/sh
 echo "$*" >> "$STUB_LOG"
 if [ -n "$STUB_FAIL" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
-echo "$STUB_PAGES" | tr ',' '\\n'
+cat "$STUB_COMMENTS"
 """
+
+
+def _thread(*earlier, trigger=True, after=()):
+    """(login, minutes_ago) pairs, oldest first; the trigger comment is appended."""
+    now = int(time.time())
+    rows = [
+        (100 + i, login, now - mins * 60) for i, (login, mins) in enumerate(earlier)
+    ]
+    if trigger:
+        rows.append((TRIGGER_ID, "amd-pworfolk", now))
+    rows += [(2000 + i, login, now) for i, login in enumerate(after)]
+    return "".join(f"{i} {login} {ts}\n" for i, login, ts in rows)
 
 
 def _run_gate(
@@ -183,7 +197,7 @@ def _run_gate(
     association="MEMBER",
     labelled="false",
     is_pr="false",
-    pages="0 0",
+    comments=None,
     fail="",
 ):
     bash = shutil.which("bash")
@@ -194,6 +208,12 @@ def _run_gate(
     stub = bindir / "gh"
     stub.write_text(_GH_STUB, encoding="utf-8", newline="\n")
     stub.chmod(0o755)
+    feed = tmp_path / "comments.txt"
+    feed.write_text(
+        _thread((BOT, 10)) if comments is None else comments,
+        encoding="utf-8",
+        newline="\n",
+    )
     out = tmp_path / "out"
     log = tmp_path / "gh.log"
     (step,) = gate["steps"]
@@ -202,10 +222,11 @@ def _run_gate(
         "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
         "GITHUB_OUTPUT": str(out),
         "STUB_LOG": str(log),
-        "STUB_PAGES": pages,
+        "STUB_COMMENTS": str(feed),
         "STUB_FAIL": fail,
         "REPO": "amd/gaia",
         "NUMBER": "1394",
+        "COMMENT_ID": str(TRIGGER_ID),
         "ASSOCIATION": association,
         "LABELLED": labelled,
         "IS_PR": is_pr,
@@ -223,9 +244,15 @@ def _run_gate(
     return res, written, calls
 
 
+def test_gate_reads_the_comment_it_was_triggered_by(gate):
+    env = gate["steps"][0]["env"]
+    assert env["COMMENT_ID"] == "${{ github.event.comment.id }}"
+    assert env["ASSOCIATION"] == "${{ github.event.comment.author_association }}"
+
+
 @pytest.mark.parametrize("association", MAINTAINER_ROLES)
-def test_maintainer_follow_up_is_engaged(gate, tmp_path, association):
-    res, out, _ = _run_gate(gate, tmp_path, association=association, pages="1 0")
+def test_maintainer_answering_claude_is_engaged(gate, tmp_path, association):
+    res, out, _ = _run_gate(gate, tmp_path, association=association)
     assert res.returncode == 0, res.stderr
     assert out.strip() == "engaged=true"
 
@@ -236,7 +263,7 @@ def test_maintainer_follow_up_is_engaged(gate, tmp_path, association):
 )
 def test_outsider_is_not_engaged_and_costs_no_api_call(gate, tmp_path, association):
     res, out, calls = _run_gate(
-        gate, tmp_path, association=association, labelled="true", pages="5 0"
+        gate, tmp_path, association=association, labelled="true"
     )
     assert res.returncode == 0, res.stderr
     assert out.strip() == "engaged=false"
@@ -245,53 +272,72 @@ def test_outsider_is_not_engaged_and_costs_no_api_call(gate, tmp_path, associati
 
 def test_outside_issue_author_answering_claude_is_not_engaged(gate, tmp_path):
     """A reporter's comment carries NONE even on their own issue: @claude only."""
-    res, out, calls = _run_gate(gate, tmp_path, association="NONE", pages="1 0")
+    res, out, calls = _run_gate(gate, tmp_path, association="NONE")
     assert out.strip() == "engaged=false"
     assert calls == []
     assert "@claude" in res.stdout
 
 
 def test_labelled_thread_is_engaged_for_a_maintainer(gate, tmp_path):
-    res, out, calls = _run_gate(gate, tmp_path, labelled="true", is_pr="true")
+    res, out, calls = _run_gate(
+        gate, tmp_path, labelled="true", is_pr="true", comments=_thread()
+    )
     assert res.returncode == 0, res.stderr
-    assert out.strip() == "engaged=true"
+    assert out.strip() == "engaged=true", "a labelled thread needs no prior bot reply"
     assert sum(c.startswith("api ") for c in calls) == 1
     call = "\n".join(calls)
     assert call.startswith("api --paginate repos/amd/gaia/issues/1394/comments")
 
 
-def test_unlabelled_pr_is_not_engaged_even_with_bot_comments(gate, tmp_path):
-    res, out, calls = _run_gate(gate, tmp_path, is_pr="true", pages="3 0")
+def test_unlabelled_pr_is_not_engaged_even_right_after_a_bot_comment(gate, tmp_path):
+    res, out, calls = _run_gate(gate, tmp_path, is_pr="true")
     assert res.returncode == 0, res.stderr
     assert out.strip() == "engaged=false"
     assert calls == []
 
 
-def test_issue_claude_replied_on_is_engaged(gate, tmp_path):
-    res, out, calls = _run_gate(gate, tmp_path, pages="1 0")
+def test_issue_comment_right_after_claude_is_engaged(gate, tmp_path):
+    res, out, calls = _run_gate(
+        gate, tmp_path, comments=_thread(("alice", 90), (BOT, 60))
+    )
     assert res.returncode == 0, res.stderr
     assert out.strip() == "engaged=true"
     assert sum(c.startswith("api ") for c in calls) == 1
-    call = "\n".join(calls)
-    assert call.startswith("api --paginate repos/amd/gaia/issues/1394/comments")
-    assert 'select(.user.login == "github-actions[bot]")' in call
 
 
-def test_replies_on_a_later_page_count(gate, tmp_path):
-    _, out, _ = _run_gate(gate, tmp_path, pages="0 0,0 0,2 0")
-    assert out.strip() == "engaged=true"
-
-
-def test_issue_without_a_bot_reply_is_not_engaged(gate, tmp_path):
-    res, out, _ = _run_gate(gate, tmp_path, pages="0 0,0 0")
+@pytest.mark.parametrize(
+    "earlier",
+    [
+        (),  # Claude never replied
+        ((BOT, 600), ("alice", 300)),  # someone else spoke after Claude
+        ((BOT, 600), ("amd-pworfolk", 5)),  # a second maintainer comment in a row
+        (("github-actions", 5),),  # a user named like the bot is not the bot
+        (("claude[bot]", 5),),  # another bot is not this one
+    ],
+)
+def test_issue_comment_not_answering_claude_is_not_engaged(gate, tmp_path, earlier):
+    res, out, _ = _run_gate(gate, tmp_path, comments=_thread(*earlier))
     assert res.returncode == 0, res.stderr
+    assert out.strip() == "engaged=false"
+    assert "does not directly follow" in res.stdout
+
+
+def test_trigger_missing_from_the_listing_fails_closed(gate, tmp_path):
+    _, out, _ = _run_gate(gate, tmp_path, comments=_thread((BOT, 5), trigger=False))
     assert out.strip() == "engaged=false"
 
 
-def test_api_failure_fails_the_gate_instead_of_guessing(gate, tmp_path):
+def test_later_comments_do_not_change_what_the_trigger_follows(gate, tmp_path):
+    feed = _thread((BOT, 5), after=("alice", BOT))
+    _, out, _ = _run_gate(gate, tmp_path, comments=feed)
+    assert out.strip() == "engaged=true"
+
+
+def test_api_failure_fails_the_gate_loudly(gate, tmp_path):
     res, out, _ = _run_gate(gate, tmp_path, fail="1")
     assert res.returncode != 0
     assert "engaged=" not in out
+    assert "::error::" in res.stdout and "#1394" in res.stdout
 
 
 # --- burst / loop guard ------------------------------------------------------
@@ -302,44 +348,43 @@ def test_cap_is_small(cap):
 
 
 def test_just_below_the_hourly_cap_is_engaged(gate, tmp_path, cap):
-    _, out, _ = _run_gate(gate, tmp_path, labelled="true", pages=f"9 {cap - 1}")
+    old = [(BOT, 600 + i) for i in range(9)]
+    recent = [(BOT, 30 - i) for i in range(cap - 1)]
+    _, out, _ = _run_gate(gate, tmp_path, comments=_thread(*old, *recent))
     assert out.strip() == "engaged=true"
 
 
 @pytest.mark.parametrize("labelled", ["true", "false"])
 def test_hourly_cap_stops_a_loop(gate, tmp_path, cap, labelled):
-    res, out, _ = _run_gate(gate, tmp_path, labelled=labelled, pages=f"{cap} {cap}")
+    recent = [(BOT, 50 - i) for i in range(cap)]
+    res, out, _ = _run_gate(
+        gate, tmp_path, labelled=labelled, comments=_thread(*recent)
+    )
     assert res.returncode == 0, res.stderr
     assert out.strip() == "engaged=false"
     assert "last hour" in res.stdout
 
 
-def test_hourly_cap_sums_across_pages(gate, tmp_path, cap):
-    _, out, _ = _run_gate(gate, tmp_path, pages=",".join(["1 1"] * cap))
-    assert out.strip() == "engaged=false"
+def test_replies_older_than_an_hour_do_not_count(gate, tmp_path, cap):
+    old = [(BOT, 61 + i) for i in range(cap * 3)]
+    _, out, _ = _run_gate(gate, tmp_path, comments=_thread(*old))
+    assert out.strip() == "engaged=true"
 
 
-def test_jq_filter_counts_recent_bot_replies(gate):
+def test_jq_filter_emits_id_login_epoch(gate):
     """Run the gate's real jq filter over a comments page."""
     jq = shutil.which("jq")
     if jq is None:
         pytest.skip("jq not available")
     m = re.search(r"--jq '(.*?)'", gate["steps"][0]["run"], re.S)
     assert m, "gate lost its --jq filter"
-    now = datetime.now(timezone.utc)
-
-    def comment(login, age):
-        return {
-            "user": {"login": login},
-            "created_at": (now - age).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-
     page = [
-        comment("github-actions[bot]", timedelta(minutes=5)),
-        comment("github-actions[bot]", timedelta(minutes=50)),
-        comment("github-actions[bot]", timedelta(days=2)),
-        comment("amd-pworfolk", timedelta(minutes=1)),
-        comment("github-actions", timedelta(minutes=1)),
+        {"id": 7, "user": {"login": BOT}, "created_at": "2026-06-04T16:56:10Z"},
+        {
+            "id": 8,
+            "user": {"login": "amd-pworfolk"},
+            "created_at": "2026-06-04T16:53:38Z",
+        },
     ]
     res = subprocess.run(
         [jq, "-r", m.group(1)],
@@ -348,4 +393,8 @@ def test_jq_filter_counts_recent_bot_replies(gate):
         text=True,
         check=True,
     )
-    assert res.stdout.strip() == "3 2"
+    expected = [
+        f"7 {BOT} {int(datetime(2026, 6, 4, 16, 56, 10, tzinfo=timezone.utc).timestamp())}",
+        f"8 amd-pworfolk {int(datetime(2026, 6, 4, 16, 53, 38, tzinfo=timezone.utc).timestamp())}",
+    ]
+    assert res.stdout.splitlines() == expected

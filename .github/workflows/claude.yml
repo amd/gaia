@@ -704,12 +704,12 @@ jobs:
         --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Decides whether a comment WITHOUT @claude is a follow-up Claude should consider
-  # (#1408). A cheap API read, so the Opus run below only starts for threads Claude is
-  # already part of: labelled `claude`, or an issue the bot has already replied on (the
-  # #1394 case, where a repro answer sat unanswered until a maintainer typed @claude).
-  # PRs are not counted on bot replies alone: every PR carries the bot's review, and a
-  # human-to-human PR thread would otherwise start an Opus run per comment. The prompt
-  # below makes the final respond-or-stay-silent call.
+  # (#1408). A cheap API read, so the Opus run below only starts when a maintainer is
+  # talking to Claude: in a thread labelled `claude`, or on an issue where the comment
+  # directly follows a bot reply. "Any bot reply on the issue" is not enough: the bot
+  # answers nearly every new issue, so that would start an Opus run per comment.
+  # Unlabelled PRs always need @claude, since every PR carries the bot's review. The
+  # prompt below makes the final respond-or-stay-silent call.
   #
   # Cost guards, so no one outside the project can spend Opus runs without a mention:
   # - only OWNER / MEMBER / COLLABORATOR comments pass. Outsiders, including the person
@@ -740,6 +740,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
           ASSOCIATION: ${{ github.event.comment.author_association }}
           LABELLED: ${{ contains(github.event.issue.labels.*.name, 'claude') }}
           IS_PR: ${{ github.event.issue.pull_request != null }}
@@ -759,14 +760,23 @@ jobs:
           if [ "$LABELLED" != "true" ] && [ "$IS_PR" = "true" ]; then
             not_engaged "Unlabelled PR conversation."
           fi
-          # One line per page: "<bot comments> <bot comments in the last hour>".
-          counts=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" \
-            --jq '[.[] | select(.user.login == "github-actions[bot]")]
-                  | "\(length) \([.[] | select((.created_at | fromdateiso8601) > (now - 3600))] | length)"' \
-            | awk '{ t += $1; r += $2 } END { print t + 0, r + 0 }')
-          read -r replies recent <<< "$counts"
-          if [ "$LABELLED" != "true" ] && [ "$replies" -eq 0 ]; then
-            not_engaged "Claude has not replied on this issue."
+          # gh prints "<id> <login> <epoch>" per comment, oldest first, across pages.
+          # awk prints "<bot comments> <bot comments in the last hour> <1 if the
+          # comment right before this one is the bot's, else 0>".
+          since=$(( $(date +%s) - 3600 ))
+          if ! counts=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" \
+            --jq '.[] | "\(.id) \(.user.login) \(.created_at | fromdateiso8601)"' \
+            | awk -v bot='github-actions[bot]' -v id="$COMMENT_ID" -v since="$since" '
+                $1 == id { found = 1; prev_bot = (last == bot) }
+                { last = $2 }
+                $2 == bot { t++; if ($3 > since) r++ }
+                END { print t + 0, r + 0, (found && prev_bot) ? 1 : 0 }'); then
+            echo "::error::Could not read the comments on #$NUMBER, so the follow-up gate cannot decide. See the gh error above."
+            exit 1
+          fi
+          read -r replies recent follows_bot <<< "$counts"
+          if [ "$LABELLED" != "true" ] && [ "$follows_bot" != "1" ]; then
+            not_engaged "This comment does not directly follow a Claude reply."
           fi
           if [ "$recent" -ge "$MAX_RECENT_REPLIES" ]; then
             not_engaged "Claude already replied $recent times here in the last hour."
@@ -859,7 +869,7 @@ jobs:
             - **PR conversation comments** - Focus on PR content (pr-diff.txt available)
             - **Issue comments with @claude** - Answer questions about the issue
             - **Follow-ups without @claude** (DIRECT MENTION is false) - a maintainer's comment
-              in a thread labelled `claude`, or on an issue you already replied on. Reply only
+              in a thread labelled `claude`, or right after your reply on an issue. Reply only
               if you clear the value bar below.
 
             ## Respond or stay silent - decide this FIRST, after reading the whole thread
