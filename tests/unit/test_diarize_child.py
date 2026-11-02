@@ -94,9 +94,11 @@ def test_stop_kills_the_child(tmp_path):
 
 
 def test_the_child_entry_point_reports_errors_on_stderr(tmp_path, capsys):
-    code = diarize._child_main(
-        [str(tmp_path / "missing.wav"), str(tmp_path / "o.json"), "0", "0.65"]
-    )
+    missing = diarize.DiarizationError("No such audio file: missing.wav")
+    with patch.object(diarize, "diarize", side_effect=missing):
+        code = diarize._child_main(
+            [str(tmp_path / "missing.wav"), str(tmp_path / "o.json"), "0", "0.65"]
+        )
 
     assert code == 3
     assert "No such audio file" in capsys.readouterr().err

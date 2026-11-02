@@ -17,6 +17,7 @@ from typing import Callable, Dict, List, Optional
 from gaia.agents.base.file_snapshots import SnapshotError, before_change
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.workspace_paths import _workspace_target
+from gaia.home import gaia_home
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -25,7 +26,7 @@ logger = get_logger(__name__)
 DEFAULT_CONFIDENCE_THRESHOLD = 0.6
 
 # Transcripts land here unless the caller names a path.
-TRANSCRIPT_DIR = Path.home() / ".gaia" / "transcripts"
+TRANSCRIPT_DIR = gaia_home() / "transcripts"
 
 # Finished chunks of a long recording, kept until its transcript is written.
 CHUNK_CHECKPOINT_DIR = TRANSCRIPT_DIR / ".partial"

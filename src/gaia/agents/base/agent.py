@@ -6394,11 +6394,16 @@ Do NOT wrap conversational replies in JSON.
         # user's, not the tool's: abandoning there strands a live prompt. Time
         # the PC sleeps is nobody's: the awake clock leaves it out.
         stop = getattr(self, "_cancel_event", None)
+        console = getattr(self, "console", None)
+        console_stop = getattr(console, "cancelled", None)
         try:
             started = awake_clock.monotonic()
             while worker.is_alive():
                 # The user's Stop reaches a tool that polls for cancellation.
-                if (stop is not None and stop.is_set()) or self._console_cancelled():
+                if any(
+                    isinstance(e, threading.Event) and e.is_set()
+                    for e in (stop, console_stop)
+                ):
                     cancel.set()
                 remaining = (
                     started + timeout + user_wait.waited() - awake_clock.monotonic()

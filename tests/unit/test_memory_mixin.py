@@ -6200,11 +6200,20 @@ class TestSideRequestsDisableThinking:
         assert "chat_template_kwargs" not in host.chat.send_messages.call_args.kwargs
 
     def test_extraction_sends_no_switch_to_a_cloud_model(self, host):
-        host.chat = _chat_for("fireworks.deepseek-v4p1-flash")
+        host.chat = _chat_for("fireworks.kimi-k3")
 
         host._extract_via_llm("I prefer tabs over spaces", "Noted.", [])
 
         assert "chat_template_kwargs" not in host.chat.send_messages.call_args.kwargs
+
+    def test_extraction_turns_thinking_off_on_cloud_deepseek(self, host):
+        """DeepSeek reasons through most of a side call's budget and accepts the switch."""
+        host.chat = _chat_for("fireworks.deepseek-v4p1-flash")
+
+        host._extract_via_llm("I prefer tabs over spaces", "Noted.", [])
+
+        sent = host.chat.send_messages.call_args.kwargs
+        assert sent["chat_template_kwargs"] == {"enable_thinking": False}
 
     def test_reasoning_only_extraction_logs_an_error(self, host, caplog):
         """Budget spent with no answer is a loud ERROR, not a quiet empty list."""
