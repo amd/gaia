@@ -14,13 +14,15 @@
 #         → post-publish smoke test (PyPI install verification)
 #         → github release (sigstore + desktop installers + Windows setup)
 #           → terminal installers (.pkg/.deb/.rpm + checksums)
-#             → website redeploy
+#             → release-assets-complete + website redeploy
 #
 # Every tag, final or RC, attaches every installer from this run: the macOS
 # .pkg and Linux .deb/.rpm (tui-installers, required before anything publishes;
 # attached by github-release-installers) and the combined Windows setup
-# (windows-setup). None of those jobs takes an environment, so a final's
-# installers never wait on release_components.yml's Agent Hub approval.
+# (windows-setup, required before a final publishes). None of those jobs takes
+# an environment, so a final's installers never wait on release_components.yml's
+# Agent Hub approval. release-assets-complete then reads the published release
+# and fails the run if a promised file is not on it.
 #
 # Release candidates: a `vX.Y.Z-rcN` tag runs the same pipeline with these
 # differences (a `vX.Y.Z` final is untouched by them):
@@ -436,7 +438,7 @@ jobs:
 
   approve-publish:
     name: Approve Publishing
-    needs: [validate, build-pypi, build-npm, build-desktop-installers, rc-flagship, tui-installers-complete, ci-green]
+    needs: [validate, build-pypi, build-npm, build-desktop-installers, rc-flagship, tui-installers-complete, windows-setup, ci-green]
     if: >-
       !cancelled() &&
       needs.build-pypi.result == 'success' &&
@@ -444,6 +446,7 @@ jobs:
       needs.build-desktop-installers.result == 'success' &&
       needs.ci-green.result == 'success' &&
       needs.tui-installers-complete.result == 'success' &&
+      (needs.validate.outputs.is_rc == 'true' || needs.windows-setup.outputs.ok == 'true') &&
       (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     runs-on: ubuntu-latest
     environment: ${{ needs.validate.outputs.is_rc == 'true' && 'publish-rc' || 'publish' }}
@@ -455,6 +458,7 @@ jobs:
           echo "  Desktop Installers: ${{ needs.build-desktop-installers.result }}"
           echo "  RC flagship agent:  ${{ needs.rc-flagship.result }}"
           echo "  Terminal pkgs:      ${{ needs.tui-installers-complete.result }}"
+          echo "  Windows setup ok:   ${{ needs.windows-setup.outputs.ok }}"
           echo "  CI on this commit:  ${{ needs.ci-green.result }}"
           echo ""
           echo "All builds passed. Publishing approved."
@@ -836,8 +840,9 @@ jobs:
       sidecar: ${{ needs.validate.outputs.is_rc == 'true' && 'artifact' || 'pinned' }}
       agent_ui_publish_run_sha: ${{ github.sha }}
 
-  # The release still ships without the setup (an RC's notes say so), and this
-  # job turns the run red so it is never mistaken for a complete release.
+  # A final does not publish without the setup: its notes promise it. An RC
+  # ships without it and its notes say so; this job turns the run red so that
+  # is never mistaken for a complete release.
   windows-setup-missing:
     name: Windows setup missing
     needs: [validate, windows-setup]
@@ -850,14 +855,14 @@ jobs:
       - env:
           NPM_VERSION: ${{ needs.validate.outputs.npm_version }}
         run: |
-          echo "::error::gaia-${NPM_VERSION}-win-x64-setup.exe did not build and pass its clean-runner smoke test, so the release does not carry it. Fix the 'Windows setup' failure, then 'Re-run failed jobs': that rebuilds the setup and re-runs GitHub Release, which attaches it."
+          echo "::error::gaia-${NPM_VERSION}-win-x64-setup.exe did not build and pass its clean-runner smoke test. A final publishes nothing until it does; a release candidate ships without it. Fix the 'Windows setup' failure, then 'Re-run failed jobs': that rebuilds the setup and re-runs GitHub Release, which attaches it."
           exit 1
 
   github-release:
     name: GitHub Release
-    # windows-setup is waited for, not required: its own timeouts bound the
-    # wait, and a failure is reported by windows-setup-missing rather than by
-    # holding back the release.
+    # windows-setup is required for a final, whose notes promise it, and only
+    # waited for on an RC, whose notes say when it is missing. Its own timeouts
+    # bound the wait, and windows-setup-missing reports a failure either way.
     # build-tui IS required: install.sh / install.ps1 download these binaries
     # from the latest release, so one missing leg breaks installs on that
     # platform until the next release.
@@ -871,6 +876,7 @@ jobs:
       needs.build-desktop-installers.result == 'success' &&
       needs.build-tui.result == 'success' &&
       needs.tui-installers-complete.result == 'success' &&
+      (needs.validate.outputs.is_rc == 'true' || needs.windows-setup.outputs.ok == 'true') &&
       (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     runs-on: ubuntu-latest
     permissions:
@@ -1255,6 +1261,38 @@ jobs:
           gh release upload "${TAG}" "${files[@]/#/dist/}" dist/gaia-installers-SHA256SUMS.txt \
             --repo "${GITHUB_REPOSITORY}" --clobber
           echo "✓ attached ${#files[@]} terminal installers and their checksums to ${TAG}"
+
+  # Reads the published release, not job results: v0.25.3 went out with a green
+  # run because the job that should have attached its installers failed in
+  # another workflow. Runs even when the attach failed, to name what is missing.
+  release-assets-complete:
+    name: Release carries every installer
+    needs: [validate, github-release, github-release-installers, windows-setup]
+    if: >-
+      !cancelled() &&
+      needs.github-release.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Check the published release's assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+          IS_RC: ${{ needs.validate.outputs.is_rc }}
+          WINDOWS_SETUP_OK: ${{ needs.windows-setup.outputs.ok }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "${IS_RC}" = "true" ] && [ "${WINDOWS_SETUP_OK}" != "true" ]; then
+            args+=(--skip-windows-setup)
+          fi
+          python3 util/check_release_assets.py --repo "${GITHUB_REPOSITORY}" --tag "${TAG_NAME}" "${args[@]}"
 
   # The website builds its download links and release entries from the GitHub
   # releases at deploy time, so a new release only appears after a rebuild.
