@@ -32,7 +32,7 @@ Reacts to issue/PR activity. The main jobs:
 |-----|-----------|--------------|
 | **pr-review** | PR opened / reopened / marked ready | Full diff review (works on fork PRs too) |
 | **pr-rereview** | New commits pushed to a PR (`synchronize`) | Lightweight Sonnet re-check; flags only *new* regressions, silent otherwise |
-| **conversation-gate** | A comment without `@claude` | Cheap check: is the thread labelled `claude`, or an issue Claude already replied on? Bots never pass it |
+| **conversation-gate** | A maintainer's (OWNER / MEMBER / COLLABORATOR) comment without `@claude` | Cheap check: is the thread labelled `claude`, or an issue Claude already replied on, and has Claude replied fewer than 3 times there in the last hour? Outsiders, the thread's own author included, bots, and edits never pass it; they reach Claude through a new issue or `@claude` |
 | **issue-handler** | New issue opened, `@claude` in an issue/PR comment, or a follow-up `conversation-gate` let through | Conversational reply. On a follow-up it replies only when it adds something (an answer to its own question, a doc link, a correction) and otherwise stays silent |
 | **pr-comment** | Review comment left on a PR | Responds (non-fork PRs only — GitHub hides secrets from forks on this event) |
 | **auto-fix** | Issue gets the `bug` label (or a bug issue is reopened) | Attempts the fix: creates branch, opens a PR (draft + manual test plan if it can't self-validate), comments on the issue with test steps |
