@@ -32,6 +32,7 @@ Catalog reads reuse :mod:`gaia.hub.catalog` (its cache, its offline fallback, it
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -127,6 +128,69 @@ class SkillSearchResult:
         return len(self.entries)
 
 
+#: Words that say nothing about which skill fits a request.
+_SEARCH_STOPWORDS = frozenset(
+    """a an and or the to for of in on at by with from into about is are be
+    i me my we our you your it its this that these those what which who there
+    any some can could would should will do does did get got find want need
+    help please something anything thing things how up out skill skills""".split()
+)
+
+_SEARCH_SUFFIXES = ("ings", "ing", "ies", "es", "ed", "s")
+
+
+def _stem(word: str) -> str:
+    """Strip one common suffix, keeping at least four letters ("feeds" -> "feed")."""
+    for suffix in _SEARCH_SUFFIXES:
+        if word.endswith(suffix) and len(word) - len(suffix) >= 4:
+            return word[: -len(suffix)]
+    return word
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def rank_skill_entries(
+    entries: list[dict[str, Any]], query: str
+) -> list[dict[str, Any]]:
+    """*entries* that match *query*, best match first.
+
+    Each query word (stopwords dropped, one suffix stemmed) counts when it starts
+    a word in the skill's name, description, or declared tool names. A hit in the
+    name outweighs one in the description, and an exact phrase match ranks first.
+    Entries matching no word are dropped; ties keep catalog order. A query of
+    only stopwords falls back to an exact-phrase match.
+    """
+    needle = query.strip().lower()
+    if not needle:
+        return list(entries)
+    terms = [_stem(w) for w in _words(needle) if w not in _SEARCH_STOPWORDS]
+
+    scored = []
+    for position, entry in enumerate(entries):
+        metadata = entry.get("skill_metadata") or {}
+        tools = " ".join(
+            str(t.get("name", ""))
+            for t in (metadata.get("tools") or [])
+            if isinstance(t, dict)
+        )
+        name = f"{entry.get('id', '')} {entry.get('name', '')}".lower()
+        haystack = f"{name} {entry.get('description', '')} {tools}".lower()
+        name_words = _words(name)
+        all_words = _words(haystack)
+
+        score = 100 if needle in haystack else 0
+        for term in terms:
+            if any(w.startswith(term) for w in name_words):
+                score += 3
+            elif any(w.startswith(term) for w in all_words):
+                score += 1
+        if score:
+            scored.append((-score, position, entry))
+    return [entry for _score, _position, entry in sorted(scored, key=lambda t: t[:2])]
+
+
 def search_skills(
     query: str = "",
     *,
@@ -137,9 +201,8 @@ def search_skills(
 ) -> SkillSearchResult:
     """Catalog skill entries matching *query* (empty query = every skill).
 
-    Matches case-insensitively against name, description, and declared tool
-    names — the three things a user would type. Ordering is catalog order (by id),
-    so results are stable between runs.
+    Matching is per word (see :func:`rank_skill_entries`), so "summarizing RSS
+    feeds" finds ``rss-digest`` without the user guessing an exact phrase.
 
     Args:
         query: Substring to match; empty returns the whole skills lane.
@@ -171,29 +234,7 @@ def search_skills(
 
     entries = skill_entries(index.agents)
 
-    needle = query.strip().lower()
-
-    def haystack(entry: dict[str, Any]) -> str:
-        metadata = entry.get("skill_metadata") or {}
-        tools = " ".join(
-            str(t.get("name", ""))
-            for t in (metadata.get("tools") or [])
-            if isinstance(t, dict)
-        )
-        return " ".join(
-            [
-                str(entry.get("id", "")),
-                str(entry.get("name", "")),
-                str(entry.get("description", "")),
-                tools,
-            ]
-        ).lower()
-
-    matched = (
-        entries
-        if not needle
-        else [entry for entry in entries if needle in haystack(entry)]
-    )
+    matched = rank_skill_entries(entries, query)
     if index.offline:
         log.warning(
             "Serving %d skill(s) from the offline catalog cache, last refreshed %s "

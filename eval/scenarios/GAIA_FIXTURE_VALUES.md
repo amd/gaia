@@ -302,6 +302,9 @@ Set up by the eval workflow, not by scenarios:
 | `tui` | ladder-equivalent subset (L1–L7 + follow-up canaries) for the local TUI mode |
 | `requires_asr` | needs the Lemonade ASR model (`DEFAULT_ASR_MODEL`) downloaded and ffmpeg on PATH; skipped as `SKIPPED_NO_MODEL` otherwise |
 | `requires_vlm` | needs the VLM model (`DEFAULT_VLM_MODEL`) downloaded; skipped as `SKIPPED_NO_MODEL` otherwise |
+| `requires_sd` | needs `SDXL-Turbo` downloaded; skipped as `SKIPPED_NO_MODEL` otherwise |
+| `requires_music` | needs `ACE-Step-Music` downloaded; skipped as `SKIPPED_NO_MODEL` otherwise |
+| `requires_full_tier` / `requires_compact_tier` | runs only when the agent model (the pinned `--agent-model`, else the default) has that feature tier (`model_features.py`); skipped as `SKIPPED_NO_MODEL` otherwise. Pairs a skill's use scenario on `full` with its honest-refusal scenario on `compact` |
 | `local_blocked_no_embedder` | cannot run without Lemonade embeddings (memory store, RAG, code index, dynamic tool selection) — excluded mechanically from the local Haiku run |
 
 ## Capability-tier expansion fixtures

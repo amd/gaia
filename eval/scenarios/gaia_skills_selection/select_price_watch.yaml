@@ -1,0 +1,33 @@
+# FIXTURE-SYNC: http://127.0.0.1:8765/price_nimbusbook.html — NimbusBook 14 at
+# $899 (see GAIA_FIXTURE_VALUES.md).
+id: select_price_watch
+name: "Skill Selection — A Price-Drop Request Picks price-watch"
+category: gaia_skills_selection
+severity: high
+tags: [t1_basic, local_blocked_no_embedder]
+description: |
+  The user asks to be told when something gets cheaper without naming a skill.
+  The agent must pick price-watch from its skill catalogue and use it.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  notes: "Every hub skill except rss-digest is installed (stage_eval_env.py); fixture server on 127.0.0.1:8765."
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all). Then send this turn: ask the agent to watch the NimbusBook page for a price drop below $949"
+    user_message: "can you keep an eye on this laptop and tell me if it gets cheaper? http://127.0.0.1:8765/price_nimbusbook.html — the lowest i've seen it is $949"
+    ground_truth:
+      expected_answer: "NimbusBook 14 is $899 now — a new low, $50 under the $949 the user had seen"
+    success_criteria: |
+      agent_tools[] shows load_skill("price-watch") and a fetch of the page.
+      The answer reports $899 as a new low against $949. FAIL if no skill is
+      loaded, or a different skill (source-watch, rss-digest, research-report)
+      is loaded instead of price-watch. A wrong price is a FAIL.
+
+expected_outcome: |
+  The catalogue description alone is enough for the agent to pick price-watch
+  and get the real price.

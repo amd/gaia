@@ -4,6 +4,7 @@
 
     python util/run_eval_lane.py --lane gaia-signal
     python util/run_eval_lane.py --category gaia_memory --category gaia_honesty
+    python util/run_eval_lane.py --category gaia_skills_tasks --scenario task_rss_digest
 
 A hand-rolled local run drifts from CI in ways that change scores or do harm:
 the backend started from the checkout instead of the staged ``~/gaia-eval``
@@ -221,11 +222,21 @@ def main() -> int:
         help="Local model the agent runs (written as default_model in each "
         "category's GAIA home). Default: what a fresh home resolves, as in CI.",
     )
+    parser.add_argument(
+        "--scenario",
+        action="append",
+        default=[],
+        metavar="ID[,ID...]",
+        help="Run only these scenario ids (repeatable); each must be in a selected category",
+    )
     parser.add_argument("--out", type=Path, default=REPO_ROOT / "eval-out")
     args = parser.parse_args()
     args.judge_model = args.judge_model or baseline_eval_model()
 
     categories = lane_categories(args.lane) if args.lane else args.category
+    args.scenarios_by_category = scenarios_by_category(categories, args.scenario)
+    if args.scenario:
+        categories = [c for c in categories if args.scenarios_by_category[c]]
     home = Path.home()
     p = plan(categories, home, args.port)
     args.out.mkdir(parents=True, exist_ok=True)
@@ -291,6 +302,26 @@ def main() -> int:
         for child in children:
             _stop_tree(child)
         shutil.rmtree(homes, ignore_errors=True)
+
+
+def scenarios_by_category(categories: list[str], wanted: list[str]) -> dict:
+    """The requested scenario ids in each category; fails on an id in none of them."""
+    import yaml
+
+    ids = [i.strip() for value in wanted for i in value.split(",") if i.strip()]
+    found = {c: [] for c in categories}
+    for category in categories:
+        for path in sorted((REPO_ROOT / "eval" / "scenarios" / category).glob("*.yaml")):
+            sid = yaml.safe_load(path.read_text(encoding="utf-8")).get("id")
+            if sid in ids:
+                found[category].append(sid)
+    missing = sorted(set(ids) - {i for got in found.values() for i in got})
+    if missing:
+        raise SystemExit(
+            f"Scenario id(s) {missing} are not in the selected categories "
+            f"{categories}; add the category that holds them."
+        )
+    return found
 
 
 def category_home(cat_home: Path, staged_home: Path) -> dict[str, str]:
@@ -382,6 +413,11 @@ def _run_category(category: str, env: dict, p: dict, args) -> int:
                     *(
                         ["--agent-model", args.agent_model]
                         if getattr(args, "agent_model", None)
+                        else []
+                    ),
+                    *(
+                        ["--scenario", ",".join(ids)]
+                        if (ids := getattr(args, "scenarios_by_category", {}).get(category))
                         else []
                     ),
                     *p["extra_args"],

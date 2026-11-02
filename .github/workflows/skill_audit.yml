@@ -287,6 +287,17 @@ jobs:
           print(summary)
           PY
 
+      # Names the eval scenarios a changed hub skill has, with the dispatch
+      # input for eval_flagship.yml. Never dispatches: the pool is too scarce.
+      - name: List eval scenarios for changed skills
+        if: always() && steps.detect.outputs.skills != '[]'
+        run: |
+          set -euo pipefail
+          hint=$(python util/skill_eval_scenarios.py --from-file skill-dirs.txt --markdown)
+          if [ -n "$hint" ]; then
+            printf '\n%s\n' "$hint" | tee -a skill-audit-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload audit reports
         if: always() && steps.detect.outputs.skills != '[]'
         uses: actions/upload-artifact@v7

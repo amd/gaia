@@ -1,0 +1,31 @@
+# FIXTURE-SYNC: ~/gaia-eval/csv/sales.csv — total revenue $18,600; top product
+# Gadget Pro at $7,200; North region $6,150 (see GAIA_FIXTURE_VALUES.md).
+id: select_data_explore
+name: "Skill Selection — A CSV Totals Question Picks data-explore"
+category: gaia_skills_selection
+severity: high
+tags: [t1_basic, requires_full_tier]
+description: |
+  A spreadsheet question with no skill named. data-explore's catalogue line
+  ("CSV ... totals, trends, outliers") is the cue; the answer must come from
+  real SQL over the file.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Every hub skill except rss-digest is installed; staged fixture CSV at ~/gaia-eval/csv/sales.csv. data-explore needs the scratchpad, which only full-tier models get."
+
+turns:
+  - turn: 1
+    objective: "Ask for total revenue and the top product in ~/gaia-eval/csv/sales.csv"
+    user_message: "what's the total revenue in ~/gaia-eval/csv/sales.csv, and which product sold the most?"
+    ground_truth:
+      expected_answer: "Total revenue $18,600; top product Gadget Pro at $7,200"
+    success_criteria: |
+      agent_tools[] shows load_skill("data-explore") and scratchpad SQL
+      (create_table / insert_data / query_data). Both numbers match. FAIL if
+      no skill is loaded or a different one is, or if the totals are wrong.
+
+expected_outcome: |
+  data-explore is chosen from the catalogue and the answer comes from queries.

@@ -1,0 +1,31 @@
+# FIXTURE-SYNC: ~/gaia-eval/media/facilities_update.wav — fire drill moved to
+# Thursday, October 9, 2:15 PM; north parking lot by the blue bike racks.
+id: select_transcribe_not_summarize
+name: "Skill Selection — Notes on a Recording Pick transcribe-meeting, Not summarize"
+category: gaia_skills_selection
+severity: high
+tags: [t2_compound, requires_asr]
+description: |
+  "Take notes on this recording" overlaps summarize and transcribe-meeting.
+  Only transcribe-meeting handles audio, so it must be the one loaded.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Every hub skill except rss-digest is installed; clip staged at ~/gaia-eval/media/facilities_update.wav."
+
+turns:
+  - turn: 1
+    objective: "Ask for notes on the recording at ~/gaia-eval/media/facilities_update.wav"
+    user_message: "take notes on this recording for me: ~/gaia-eval/media/facilities_update.wav"
+    ground_truth:
+      expected_answer: "Notes from the transcript: the fire drill moved to Thursday, October 9 at 2:15 PM; gather at the north parking lot by the blue bike racks"
+    success_criteria: |
+      agent_tools[] shows load_skill("transcribe-meeting") and
+      transcribe_media on the .wav. The notes carry the drill time and place.
+      FAIL if summarize or document-brief is loaded instead, if no audio is
+      transcribed, or if the facts differ from the recording.
+
+expected_outcome: |
+  The audio skill is chosen over the text summarizer, and the notes are real.

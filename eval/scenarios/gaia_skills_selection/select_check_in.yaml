@@ -1,0 +1,36 @@
+id: select_check_in
+name: "Skill Selection — A Morning Check-In Picks check-in"
+category: gaia_skills_selection
+severity: medium
+tags: [t1_basic, local_blocked_no_embedder]
+description: |
+  "Good morning, quick check-in" is check-in's stated trigger. The agent must
+  load it and record what the user says they will do.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  notes: "Every hub skill except rss-digest is installed."
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all). Then send this turn: a morning check-in naming two things to do this week"
+    user_message: "good morning! quick check-in: this week i need to finish my slide deck by thursday and book a dentist appointment"
+    ground_truth:
+      expected_behavior: "Loads check-in and records both items"
+    success_criteria: |
+      agent_tools[] shows load_skill("check-in") and a memory write (remember
+      / update_memory) for the items. FAIL if no skill is loaded, a different
+      one is, or nothing is stored.
+
+  - turn: 2
+    objective: "Ask what the agent noted"
+    user_message: "what did you write down?"
+    ground_truth:
+      expected_answer: "Slide deck due Thursday; book a dentist appointment"
+    success_criteria: "Both items, nothing invented."
+
+expected_outcome: |
+  check-in is chosen from a greeting and the items are really stored.

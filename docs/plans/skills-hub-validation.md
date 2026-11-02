@@ -1,104 +1,58 @@
 # Skills hub validation
 
-**Status:** plan. Nothing built.
+**Status:** Phases 1–5 built; Phase 6 (baselines) waits on a real sweep on the eval pool.
 **Goal:** every skill published to the hub is proven usable by the flagship agent: the agent can find it in the hub, install it, pick it for a plain request, and do the job with it, on each model tier GAIA ships.
 
-Today's checks prove a skill is well-formed and safe to merge. They do not prove the agent can find or use it. Six of the 17 published skills have no behavioural eval, almost every task eval tells the agent which skill to load, and the last baseline scored the skill categories at 50–57%.
+Before this work, checks proved a skill was well-formed and safe to merge, not that the agent could find or use it. Four of the 17 published skills had no behavioural eval, 22 of 23 task evals told the agent which skill to load, hub search missed most plain-language queries, and the last baseline scored the skill categories at 50–57%.
 
-## What exists today
+## What existed
 
 | Layer | When | What it proves |
 |---|---|---|
 | `gaia skill audit` (`skill_audit.yml`) | Every PR, required | No known-bad code, permissions match the code, supply-chain checks. Claude review is advisory. |
-| Format and load tests (`tests/unit/test_starter_skills.py`, `test_skill_catalog.py`, ~40 `test_skill*` files) | Every PR | Each `hub/skills/*` skill parses, is publishable, names only real tools, discovers, loads into an agent, imports via the CLI from a clean home; the catalogue stays within budget. Parametrized over the lane, so new skills are covered automatically. |
-| Publish (`release_skills.yml`) | Final release | Signs and uploads. Nothing afterwards reads the live hub back. |
+| Format and load tests (`tests/unit/test_starter_skills.py`, `test_skill_catalog.py`, ~40 `test_skill*` files) | PRs touching skills or code | Each `hub/skills/*` skill parses, is publishable, names only real tools, discovers, loads into an agent, imports via the CLI from a clean home; the catalogue stays within budget. |
+| Scenario coverage (`tests/unit/eval/test_skill_scenario_coverage.py`) | PRs touching code | Each skill has `skill_<name>_*.yaml` scenarios or a `DEFERRED` reason. Only four skills were credited; 13 were deferred. |
+| Publish (`release_skills.yml`) | Final release | Signs and uploads. Nothing read the live hub back. |
 | Agent evals (`eval_flagship.yml`) | RC tags, Strix Halo pool, fixture hub | `gaia_skills_tasks` (23), `gaia_skills_lifecycle` (14), `gaia_skills_capture` (10). |
 
-## Gaps
+## Gaps and what closed them
 
-1. **No task scenario for six skills:** `image-gen`, `inbox-triage`, `music-gen`, `transcribe-meeting`, `summarize`, `file-ops`. Other categories exercise the underlying tools, never the skill.
-2. **Skill selection is unmeasured.** 22 of 23 task scenarios open with "Load the X skill", which skips catalogue discovery. A request like "tell me when this gets cheaper" reaching `price-watch` on its own is never scored.
-3. **Hub search never runs against the real catalogue.** Lifecycle evals point `GAIA_HUB_URL` at `tests/fixtures/gaia/fixture_hub`. Whether a query finds the right skill among the 17 real ones, and whether a published, signed skill installs from production, is unchecked.
-4. **Tier availability is implicit.** The `compact` tier (Gemma-4-E4B, GPU and FLM — the default on most PCs) withholds `search_skill_hub`/`install_skill`/`remove_skill`, the scratchpad, email and image generation (`src/gaia/agents/base/model_features.py`). So `data-explore`, `inbox-triage` and `image-gen` cannot run there, and the agent cannot browse the hub. No test states which skills each tier can run or what the agent tells the user when one can't.
-5. **Stale, partial baseline.** `gaia-flagship/` is from 2026-10-03 and predates most scenarios (18/23 task, 7/14 lifecycle, 4/10 capture). `skills_hub_search` and `skills_install_from_hub` failed. `gaia-flagship-qwen/` is empty.
-6. **Skill-only PRs get no behavioural check** before the next RC.
-7. **Hub search is a literal substring match.** `search_skills` (`src/gaia/skills/hub.py`) keeps entries whose name, description or tool names contain the whole query string, in catalogue order. "track price" or "meeting notes" return nothing even though `price-watch` and `transcribe-meeting` fit. Whether the agent finds a skill depends on it guessing a phrase that appears word-for-word.
+| # | Gap | Fix |
+|---|---|---|
+| 1 | No scenario exercised `image-gen`, `inbox-triage`, `music-gen` or `transcribe-meeting`; `coding` and `recommendations` had one each. The coverage test credited only `skill_*` filenames, so it deferred skills the task scenarios already covered. | Ten task scenarios (two per uncovered skill, one edge case each for `coding` and `recommendations`). The coverage test now also credits a `gaia_skills_tasks` scenario whose first turn is "Load the X skill."; `DEFERRED` is empty and every skill has at least two. |
+| 2 | Skill selection was unmeasured. | New `gaia_skills_selection` category (9 scenarios): pick the skill from a plain request, pick none, choose between overlapping skills, and decline honestly on a compact model. |
+| 3 | Hub search was never checked against the real catalogue, and nothing read the live hub after a publish. | `tests/unit/test_skill_hub_findability.py` publishes every hub skill to an in-memory hub through the real publish path and checks 35 plain queries. `util/verify_published_skills.py` installs every skill from the live hub and checks its version and AMD signature; `release_skills.yml` runs it after each publish. |
+| 4 | Which skills each tier can run was implicit. | `tests/unit/test_skill_tier_matrix.py` pins it (compact cannot run `data-explore`, `image-gen`, `inbox-triage`) and checks the compact catalogue hides them and `load_skill` refuses them with "needs a larger model". |
+| 5 | Stale, partial baseline. | Open — Phase 6. |
+| 6 | Skill-only PRs got no pointer to behavioural checks. | `skill_audit.yml` lists the changed skills' scenarios and the `scenarios` input for `eval_flagship.yml` in its summary and PR comment. |
+| 7 | Hub search matched the whole query as one substring. | `search_skills` matches per word (stopwords dropped, one suffix stemmed) and ranks name hits and exact phrases first. Against the live catalogue, the intended skill was found for 11 of 28 plain queries before and ranks first for 28 of 28 after. |
 
-## Plan
+## Run only when relevant
 
-Ordered so each phase is useful on its own. Phases 1 and 3 need no eval hardware; Phase 2's scenarios can be written anywhere but only run on the pool.
-
-### Run only when relevant
-
-Nothing in this plan adds work to a PR that doesn't touch skills. Every new check is scoped to the files it reads:
+Nothing here adds work to a PR that doesn't touch skills:
 
 | Check | Runs when | Mechanism |
 |---|---|---|
-| Phase 1 and 3 unit tests | A PR touches `hub/skills/**`, `src/gaia/skills/**`, `src/gaia/agents/tools/skill_library_tools.py`, `src/gaia/agents/base/model_features.py`, or `eval/scenarios/gaia_skills_*/**` | They live in `tests/unit/`, so `test_unit.yml`'s `paths:` filter and its per-change test selection already apply. Add `eval/scenarios/gaia_skills_*/**` to that filter, since the coverage test reads it. No new workflow. |
-| Phase 5 scenario list and dispatch link | A PR touches a skill directory | A step in `skill_audit.yml` after its existing changed-skill detection; it no-ops otherwise. Never dispatches an eval itself. |
-| Post-publish smoke | A skills release, or manual dispatch | A job in `release_skills.yml`. No schedule. |
-| Agent evals (Phases 2 and 4) | RC tags (smoke subset), the nominated RC (full), or manual dispatch | The existing `eval_flagship.yml` triggers. Never on PRs. |
+| Tier matrix, findability, verify-script tests | A PR touches `src/**`, `hub/skills/**` or `tests/**` | `tests/unit/`, under `test_unit.yml`'s existing `paths:` filter and per-change test selection. |
+| Scenario coverage test | Also when a PR touches `eval/scenarios/**` | One extra step in `test_eval.yml`, whose filter already covers scenarios. `test_unit.yml` is unchanged. |
+| Scenario list and dispatch input | A PR touches a skill directory | A step in `skill_audit.yml` gated on its existing changed-skill detection. Never dispatches. |
+| Live hub verification | After a real (non-dry-run) skills publish | A `verify` job in `release_skills.yml`. No schedule. |
+| Agent evals | RC tags, the nominated RC, or manual dispatch | The existing `eval_flagship.yml` triggers. Never on PRs. |
 
-`skill_audit.yml` keeps its no-`paths:` design because it is a required check; the new step rides on its skill detection rather than adding a second always-on job.
+## Model-dependent scenarios
 
-### Phase 1 — Static coverage guards (unit lane, path-scoped)
+Scenarios that need a model the machine may lack skip with `SKIPPED_NO_MODEL` and the reason, like `requires_asr` already did:
 
-- **Coverage manifest.** A unit test that fails when a `hub/skills/<name>` has no scenario under `gaia_skills_tasks` that names it in `setup` and exercises it, so a new skill can't ship without one. Mirror the parametrization in `test_starter_skills.py`.
-- **Tier matrix test.** For each tier in `model_features.TIERS`, compute which hub skills have all `tools_required` available after `withheld_tools()`. Pin the result in a small checked-in table and assert it, so a tier change or a new skill requirement is a visible diff. The skill catalogue shown to a compact model must omit, or mark unavailable, the skills it cannot run.
-Done when: both tests are in `tests/unit/`, green, and the coverage test currently fails on the six uncovered skills (marked `xfail` with the tracking issue until Phase 2 lands).
+- `requires_sd` (SDXL-Turbo) and `requires_music` (ACE-Step-Music).
+- `requires_full_tier` / `requires_compact_tier`: run only when the agent model has that feature tier, so a skill's use scenario and its honest-refusal scenario never score against the wrong model.
 
-### Phase 2 — Fill task coverage (scenarios)
+## Phase 6 — Baselines and targets (open)
 
-One scenario per uncovered skill, using fixtures that already exist where possible, each started from a cold `~/.gaia/skills`:
-
-| Skill | Fixture | Pass means |
-|---|---|---|
-| `inbox-triage` | `tests/fixtures/gaia/email/eval_inbox.mbox` | Groups planted messages, flags the planted urgent one, invents none |
-| `transcribe-meeting` | `tests/fixtures/gaia/media/facilities_update.wav` | Transcript carries the planted fact; brief lists the planted action item |
-| `summarize` | a long fixture doc with a fact planted in the back half | Summary keeps the back-half fact |
-| `file-ops` | temp tree | Edits only the asked file; confirms before a delete |
-| `image-gen` | none (needs SD model) | `generate_image` called; reports the output path that exists |
-| `music-gen` | none (needs ACE-Step) | `generate_music` called; WAV exists and is non-empty |
-
-`image-gen` and `music-gen` need models the pool may not have; gate them on model availability and report `BLOCKED_BY_ARCHITECTURE` rather than passing or skipping silently. Each scenario also gets a compact-tier expectation where the skill is unavailable there (see Phase 4).
-
-### Phase 3 — Real-catalogue and publish verification
-
-- **Make search match words, not one substring.** Change `search_skills` to match on query tokens (every token, or a simple score over name/description/tool hits) and order by score. Keep it deterministic and dependency-free.
-- **Search findability on the real catalogue.** A deterministic test that builds a catalogue index from `hub/skills/` in the shape the hub serves, injects it through `search_skills(fetcher=..., cache_path=tmp)`, and runs ~3 short, plain queries per skill (what a user or the agent would type: "price drop", "meeting notes", "csv totals"). Assert the intended skill is returned, in the top 3 once ranking exists. No LLM; runs only when a PR touches skills or search (see above). Queries live next to the test, so a description edit that breaks findability fails CI. Written first, it documents gap 7 as failing cases.
-- **Post-publish smoke** in `release_skills.yml`, after upload: list the production hub and diff names and versions against `hub/skills/`; install every skill into a clean `GAIA_CONFIG_DIR` from the production URL and verify its signature. Fails the release job loudly; never retries into success.
-- **On-demand live check.** The same smoke is runnable by `workflow_dispatch` when a hub or Worker problem is suspected between releases. No schedule.
-
-### Phase 4 — Selection and end-to-end agent evals
-
-New category `gaia_skills_selection`:
-
-- **Pick the skill.** For each hub skill, one or two plain requests that don't name it. Pass: the agent loads the intended skill (`load_skill` in `agent_tools[]`) and completes the turn using its tools. Reuses Phase 2's fixtures.
-- **Pick none.** Requests no skill fits; pass if no skill is loaded.
-- **Disambiguate overlaps.** `summarize` vs `document-brief` vs `transcribe-meeting`; `source-watch` vs `price-watch` vs `rss-digest`; `research-report` vs `daily-brief`.
-- **Find, install, use.** Skill not installed; the request needs it. Pass: search, then install with the user's confirmation, then load and use, all in one conversation. Run against the fixture hub populated from the real `hub/skills/` (signed with the throwaway dry-run key), not the hand-made fixture set.
-- **Compact tier honesty.** On Gemma-4-E4B, a request needing an unavailable skill (`data-explore`, `inbox-triage`, `image-gen`) or hub install. Pass: the agent says plainly that this model can't do it and what changes that, without fabricating results. This is also the evidence for turning `skill_hub` back on for compact in `model_features.py`.
-
-Add the category to a lane in `eval/ci_lanes.json` (the `gaia_skills_tasks` lane has room) and to the RC smoke tier for a handful of scenarios.
-
-### Phase 5 — Per-PR targeted eval for skill changes
-
-`eval_flagship.yml` already accepts `categories` / `scenarios` on dispatch. Add a lightweight job to `skill_audit.yml` that, when a PR touches `hub/skills/<name>`, posts the exact scenario list covering that skill and a one-click dispatch link. It does not auto-dispatch; the Strix Halo pool is too scarce for per-PR runs. The scenario list comes from the Phase 1 coverage manifest.
-
-### Phase 6 — Baselines and targets
-
-- Re-capture `gaia-flagship/` for the three skill categories plus `gaia_skills_selection` from a real full sweep on the pool, once Phases 2 and 4 land. Same for `gaia-flagship-qwen/`.
-- Target 80% per skill category on each model (a goal, not a gate, matching the flagship target), plus a per-skill pass matrix in the scorecard so a single skill dropping is visible.
-- Never edit baseline numbers by hand; replace from a newer real run.
-
-## Success criteria
-
-- Every hub skill has a task scenario and a selection scenario; CI fails when one is missing.
-- The real catalogue's search relevance is checked on every PR that touches skills or search, and on no other; each release verifies the live hub matches the repo and every skill installs with a valid signature.
-- The tier matrix is checked in, and on the compact tier the agent explains rather than fabricates when a skill is unavailable.
-- Fresh Gemma and Qwen baselines exist for every skill category, with a per-skill matrix.
+- Re-capture `gaia-flagship/` for `gaia_skills_tasks`, `gaia_skills_lifecycle`, `gaia_skills_capture` and `gaia_skills_selection` from a real full sweep on the pool; same for `gaia-flagship-qwen/`.
+- Target 80% per skill category on each model (a goal, not a gate).
+- Never edit baseline numbers by hand.
 
 ## Open questions
 
-- Should the catalogue hide unavailable skills on compact, or list them as unavailable so the agent can explain? The plan assumes "list as unavailable"; it is the one that makes the honesty eval meaningful.
-- Do `image-gen` and `music-gen` models belong on the eval pool image, or do those two stay `BLOCKED_BY_ARCHITECTURE` in CI and get covered by a manual on-hardware run each release?
+- Compact models hide unavailable skills from the catalogue and refuse them at load. Should the catalogue instead list them as unavailable, so the agent can explain before trying? The honesty scenarios measure today's behaviour either way.
+- Should SDXL-Turbo and ACE-Step-Music be on the eval pool image? Until they are, `image-gen` and `music-gen` scenarios skip in CI.
