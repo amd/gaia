@@ -27,13 +27,6 @@ export GAIA_API_STREAMING="1"  # stream LLM responses over the API
 # environment, so a project .env cannot switch it on.
 export GAIA_AUTO_APPROVE_TOOLS="1"
 
-# GAIA loads the nearest .env at or above the working directory; a variable
-# already set in the environment wins over it. What a .env sets is for GAIA
-# only: the processes GAIA starts (shell commands, Python runs, MCP servers…)
-# get none of it except GAIA_CONFIG_DIR, GAIA_CONFIG_FILE, GAIA_CTX_SIZE,
-# GAIA_HOME, GAIA_LEMONADE_EMBEDDED, LEMONADE_BASE_URL, LEMONADE_CTX_SIZE,
-# LEMONADE_HOST, LEMONADE_MODEL, LEMONADE_PORT and LEMONADE_SERVER_PATH.
-# Export a variable for real, or set it in an MCP server's own env, to pass it on.
 # Skip loading .env files ("1", "true", "yes" or "on"). For an app that embeds
 # GAIA and supplies its own environment. Read from the startup environment, so
 # a .env file cannot turn it on or off.
@@ -48,6 +41,20 @@ export GAIA_CHILD_ENV_DENY="MY_APP_TOKEN,MY_DB_PASSWORD"
 # API Keys (for cloud providers)
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
+
+### `.env` files
+
+GAIA reads two kinds of `.env` file. A variable already set in your environment
+always wins over both, and `GAIA_NO_DOTENV` turns both off.
+
+- **The `.env` at or above GAIA's install** (the repo's `.env` in a source
+  checkout) loads in full, as an ordinary set of environment variables.
+- **The nearest `.env` at or above the working directory**, when it is a
+  different file, may belong to any project you run GAIA from. GAIA reads only
+  `ANTHROPIC_API_KEY` from it, uses that key for its own Claude calls, and does
+  not pass it to any program it starts. Every other name in that file is
+  ignored, and GAIA logs one warning naming them. To use one of those
+  settings, export it in your shell instead.
 
 <Note>
 GAIA has no `GAIA_LOG_LEVEL` environment variable. Log levels are set

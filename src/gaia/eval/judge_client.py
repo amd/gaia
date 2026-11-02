@@ -34,7 +34,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 
-from gaia.env import load_env
+from gaia.env import credential, load_env
 from gaia.eval.claude_usage import TOKEN_FIELDS, usage_from_cli
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
 from gaia.llm.local_only import assert_provider_permitted
@@ -91,7 +91,7 @@ def judge_credential_present() -> bool:
     *accepted* — for that, probe it (see :func:`probe_judge_credential`).
     """
     return (
-        any((os.getenv(var) or "").strip() for var in JUDGE_CREDENTIAL_VARS)
+        any((credential(var) or "").strip() for var in JUDGE_CREDENTIAL_VARS)
         or shutil.which("claude") is not None
     )
 
@@ -281,7 +281,7 @@ def make_judge_client(model: str | None = None, max_tokens: int | None = None):
     CLI's own login. Raises when neither is available; never returns a
     degraded scorer. ``max_tokens`` applies to the API transport only.
     """
-    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    api_key = (credential("ANTHROPIC_API_KEY") or "").strip()
     oauth_token = (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
 
     if api_key:
