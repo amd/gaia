@@ -304,3 +304,93 @@ def test_overflow_text_from_a_non_tool_message_is_ignored():
         ]
     }
     assert benchmark.context_overflow_error_from_result(result) is None
+
+
+def test_triage_succeeded_summary_overflowed_is_scored():
+    """Only the closing summary overflowed: the triage measured real accuracy."""
+
+    class _Agent:
+        def process_query(self, prompt):
+            return {
+                "status": "success",
+                "result": "Sorry.",
+                "error_history": [
+                    {"step": 2, "error": LLAMA_OVERFLOW, "type": "llm_error"}
+                ],
+                "conversation": [
+                    {
+                        "role": "tool",
+                        "name": "triage_inbox",
+                        "content": json.dumps(
+                            {
+                                "ok": True,
+                                "data": {"results": [{"id": "m1", "category": "FYI"}]},
+                            }
+                        ),
+                    }
+                ],
+            }
+
+    row = run_benchmark(
+        "m",
+        mbox_path="ignored",
+        experiments=1,
+        ground_truth={"m1": {"category": "FYI"}},
+        agent_factory=_Agent,
+    )[0]
+    assert row["status"] == "PASS"
+    assert "error_kind" not in row
+    assert row["quality"]["category_accuracy"] == 1.0
+
+
+QUOTED_MODEL_OUTPUT = (
+    "LLMTriageError: LLM triage returned no JSON object for message 'm1'; got: "
+    + repr("The thread got too long to follow. Max length reached for me.")
+)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        QUOTED_MODEL_OUTPUT,
+        # repr switches to double quotes when the reply has an apostrophe.
+        "LLMTriageError: LLM triage returned no JSON object for message 'm1'; "
+        "got: " + repr("It's got too long, sorry"),
+        # An overflow envelope the model echoed is still the model's words.
+        "LLMTriageError: LLM triage returned malformed JSON for message 'm1': "
+        "Expecting value; got: "
+        + repr('{"error": {"message": "request exceeds the available context size"}}'),
+        # A non-overflow server envelope that quotes the model's prompt text.
+        'LemonadeError: {"error": {"message": "invalid grammar", '
+        '"prompt": "my inbox got too long"}}',
+    ],
+)
+def test_quoted_model_output_is_not_overflow(message):
+    assert context_overflow_detail(message, 16384, 50) is None
+    assert (
+        benchmark.context_overflow_error_from_result(
+            {
+                "conversation": [
+                    {"role": "tool", "content": {"ok": False, "error": message}}
+                ]
+            }
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        # Server envelope followed by trailing text the plain JSON parse rejects.
+        'LemonadeError: 400 {"error": {"message": "request (19337 tokens) exceeds '
+        'the available context size (16384 tokens)"}} (status 400)',
+        "FastFlowLM can't continue: Max length reached!",
+        'LemonadeError: {"error": {"message": "proxy failed", "details": '
+        '{"response": {"error": {"message": "Max length reached!"}}}}}',
+    ],
+)
+def test_server_overflow_message_still_classified(message):
+    assert context_overflow_detail(message, 16384, 50)["error_kind"] == (
+        "context_overflow"
+    )

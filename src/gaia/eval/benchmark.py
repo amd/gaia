@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import statistics as _stats
 import time
 from datetime import datetime, timezone
@@ -753,6 +754,52 @@ def _verify_ctx_readback(client: Any, model_id: str, requested_ctx: int) -> int:
     return readback
 
 
+# Python-repr literals (``got: '...'``) carry model output or ids, never the
+# server's words; the lookarounds keep apostrophes ("can't") from opening one.
+_REPR_LITERAL_RE = re.compile(r"(?<!\w)'(?:[^'\\]|\\.)*'(?!\w)")
+_DOUBLE_QUOTED_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _backend_error_messages(text: str) -> list[str]:
+    """The ``error.message`` of every JSON error envelope embedded in *text*."""
+    decoder = json.JSONDecoder()
+    messages: list[str] = []
+    start = text.find("{")
+    while start != -1:
+        try:
+            payload, end = decoder.raw_decode(text, start)
+        except ValueError:
+            start = text.find("{", start + 1)
+            continue
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(error, dict):
+            details = error.get("details")
+            response = details.get("response") if isinstance(details, dict) else None
+            nested = response.get("error") if isinstance(response, dict) else None
+            source = nested if isinstance(nested, dict) else error
+            if source.get("message"):
+                messages.append(str(source["message"]))
+        start = text.find("{", end)
+    return messages
+
+
+def _is_backend_overflow(error_text: str) -> bool:
+    """Classify on the server's own overflow message, never on quoted output.
+
+    ``LLMTriageError`` quotes the model's reply, and a reply that says "got
+    too long" must not read as a context overflow.
+    """
+    from gaia.llm.lemonade_client import is_context_overflow_error
+
+    if not isinstance(error_text, str) or not error_text:
+        return False
+    unquoted = _REPR_LITERAL_RE.sub("''", error_text)
+    server_messages = _backend_error_messages(unquoted)
+    if server_messages:
+        return any(is_context_overflow_error(m) for m in server_messages)
+    return is_context_overflow_error(_DOUBLE_QUOTED_RE.sub('""', unquoted))
+
+
 def context_overflow_detail(
     error_text: str, ctx_size: int | None, limit: int
 ) -> dict[str, Any] | None:
@@ -764,9 +811,8 @@ def context_overflow_detail(
     Returns ``None`` for every other failure.
     """
     from gaia.agents.base.context_eviction import overflow_numbers
-    from gaia.llm.lemonade_client import is_context_overflow_error
 
-    if not is_context_overflow_error(error_text):
+    if not _is_backend_overflow(error_text):
         return None
     detail: dict[str, Any] = {"error_kind": "context_overflow"}
     numbers = overflow_numbers(error_text)
@@ -799,7 +845,6 @@ def context_overflow_error_from_result(agent_result: Any) -> str | None:
         tool_result_error_fields,
         tool_result_failed,
     )
-    from gaia.llm.lemonade_client import is_context_overflow_error
 
     if not isinstance(agent_result, dict):
         return None
@@ -817,9 +862,24 @@ def context_overflow_error_from_result(agent_result: Any) -> str | None:
         if tool_result_failed(content):
             candidates.append(tool_result_error_fields(content).get("error"))
     for text in candidates:
-        if isinstance(text, str) and is_context_overflow_error(text):
+        if isinstance(text, str) and _is_backend_overflow(text):
             return text
     return None
+
+
+def _has_triage_results(agent_result: Any) -> bool:
+    """Whether the run produced per-email verdicts that :func:`build_result` scores."""
+    if not isinstance(agent_result, dict):
+        return False
+    conversation = [
+        m for m in agent_result.get("conversation") or () if isinstance(m, dict)
+    ]
+    try:
+        results, _ = _extract_triage_results(conversation)
+    except ValueError:
+        # Malformed envelope: nothing was measured either way.
+        return False
+    return bool(results)
 
 
 def _close_agent_db(agent: Any) -> None:
@@ -971,7 +1031,13 @@ def run_benchmark(
                 # and the remaining experiments still run.
                 failure = f"{type(exc).__name__}: {exc}"
             else:
-                failure = context_overflow_error_from_result(agent_result)
+                # Triage results mean the run measured something even if a
+                # later turn (e.g. the closing summary) overflowed; score it.
+                failure = (
+                    None
+                    if _has_triage_results(agent_result)
+                    else context_overflow_error_from_result(agent_result)
+                )
             if failure is not None:
                 total_duration_ms = int((time.monotonic() - start) * 1000)
                 row = build_result(
