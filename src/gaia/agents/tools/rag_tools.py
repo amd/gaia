@@ -28,7 +28,7 @@ from gaia.agents.tools.path_access import (
 from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
-from gaia.rag.keyword_search import rank_keyword_chunks
+from gaia.rag.keyword_search import keyword_index
 from gaia.rag.sdk import EmbeddingUnavailableError, text_scripts
 from gaia.tool_cancellation import raise_if_cancelled
 
@@ -677,11 +677,10 @@ class RAGToolsMixin:
 
                 # HYBRID SEARCH: add the chunks that best match the query's words
                 keyword_boost_info = []
-                for chunk_idx, boost_score, matching_terms in rank_keyword_chunks(
-                    query, enumerate(rag.chunks)
-                ):
+                keywords = keyword_index(rag)
+                for chunk_idx, boost_score, matching_terms in keywords.rank(query):
                     # Deduplication below keeps a chunk's higher score.
-                    all_chunks.append(rag.chunks[chunk_idx])
+                    all_chunks.append(keywords.texts[chunk_idx])
                     all_scores.append(boost_score)
 
                     # Get source file for this chunk
@@ -1166,16 +1165,13 @@ class RAGToolsMixin:
                         str(target_file), []
                     )
                     file_keyword_info = []
-                    for chunk_idx, boost_score, matching_terms in rank_keyword_chunks(
+                    keywords = keyword_index(rag)
+                    for chunk_idx, boost_score, matching_terms in keywords.rank(
                         query,
-                        (
-                            (chunk_idx, rag.chunks[chunk_idx])
-                            for chunk_idx in file_chunk_indices
-                            if chunk_idx < len(rag.chunks)
-                        ),
+                        [i for i in file_chunk_indices if i < len(keywords)],
                     ):
                         # Deduplication below keeps a chunk's higher score.
-                        all_chunks.append(rag.chunks[chunk_idx])
+                        all_chunks.append(keywords.texts[chunk_idx])
                         all_scores.append(boost_score)
                         file_keyword_info.append(
                             {
