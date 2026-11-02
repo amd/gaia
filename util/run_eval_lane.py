@@ -62,6 +62,62 @@ JUDGE_CREDENTIALS = (
 )
 FIXTURE_PORT = 8765
 MCP_STUB = "tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py"
+#: Modules whose origin proves which checkout the backend and eval run.
+ANCHOR_MODULES = ("gaia", "gaia_agent")
+_ORIGINS_SCRIPT = """
+import importlib, json, sys
+out = {}
+for name in sys.argv[1:]:
+    try:
+        out[name] = importlib.import_module(name).__file__
+    except ImportError as e:
+        out[name] = "ImportError: " + str(e)
+print(json.dumps(out))
+"""
+
+
+def source_roots() -> list[Path]:
+    """This checkout's import roots: ``src`` and each hub agent's ``python`` dir."""
+    return [REPO_ROOT / "src"] + [
+        init.parent.parent
+        for init in sorted(REPO_ROOT.glob("hub/agents/*/python/*/__init__.py"))
+    ]
+
+
+def pin_checkout(env: dict) -> dict:
+    """*env* with this checkout's source roots at the front of ``PYTHONPATH``."""
+    roots = [str(root) for root in source_roots()]
+    inherited = env.get("PYTHONPATH", "").split(os.pathsep)
+    tail = [p for p in inherited if p and p not in roots]
+    return {**env, "PYTHONPATH": os.pathsep.join(roots + tail)}
+
+
+def require_checkout_imports(env: dict) -> None:
+    """Refuse to run when a child started with *env* imports another checkout."""
+    if env.get("GAIA_ALLOW_EXTERNAL_IMPORTS") == "1":
+        return
+    out = subprocess.run(
+        [sys.executable, "-c", _ORIGINS_SCRIPT, *ANCHOR_MODULES],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    strays = []
+    for name, origin in json.loads(out.strip().splitlines()[-1]).items():
+        if not origin or origin.startswith("ImportError"):
+            strays.append(f"{name} -> {origin or 'no __file__'}")
+        elif REPO_ROOT not in Path(origin).resolve().parents:
+            strays.append(f"{name} -> {Path(origin).resolve()}")
+    if strays:
+        raise SystemExit(
+            "The backend and eval would not run this checkout:\n  "
+            + "\n  ".join(strays)
+            + f"\n\nThis checkout: {REPO_ROOT}\n"
+            "Re-run `uv pip install -e .` from here, or set "
+            "GAIA_ALLOW_EXTERNAL_IMPORTS=1 to score the installed packages."
+        )
 
 
 def lane_categories(lane: str) -> list[str]:
@@ -180,7 +236,8 @@ def main() -> int:
             "the eval must drive a backend started with this lane's environment."
         )
 
-    env = {**os.environ, **p["env"]}
+    env = pin_checkout({**os.environ, **p["env"]})
+    require_checkout_imports(env)
     # Absolute: eval_gaia_home.py check compares the exported paths verbatim.
     homes = (args.out / "gaia-homes").resolve()
     if homes.exists():

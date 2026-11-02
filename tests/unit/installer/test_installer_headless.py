@@ -664,6 +664,20 @@ class TestWorkflow:
                 entry["kind"] in script
             ), f"{row}: kind {entry['kind']} unknown to its script"
 
+    def test_windows_uninstall_waits_for_the_deferred_venv_delete(self):
+        # gaia uninstall hands the venv to a helper that runs after it exits;
+        # checking leftovers straight away races it.
+        windows = (HEADLESS / "windows-journey.ps1").read_text(encoding="utf-8")
+        step = windows[windows.index("'uninstall' {") : windows.index("'leftovers' {")]
+        run = step.index('gaia.exe" uninstall --purge')
+        wait = step.index('while ((Test-Path "$gaiaHome\\venv")')
+        assert run < wait < step.index("} else {", wait)
+        assert "gaia-uninstall-venv-*.log" in step
+        uninstall_src = (
+            REPO / "src" / "gaia" / "installer" / "uninstall_command.py"
+        ).read_text(encoding="utf-8")
+        assert 'f"gaia-uninstall-venv-{os.getpid()}.log"' in uninstall_src
+
     def test_pull_request_trigger_has_no_base_branch_filter(self):
         wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         assert "branches" not in wf[True]["pull_request"]
