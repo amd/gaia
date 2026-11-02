@@ -320,6 +320,36 @@ def repo_root_from_agent_dev_src_dir(dev_src_dir: Path, agent_id: str) -> Path:
     return Path(*dev_src_dir.parts[: -len(expected_tail)])
 
 
+def agent_binary_lock_path(repo_root: Path, agent_id: str) -> Path:
+    """The per-agent ``binaries.lock.json`` under a repo root.
+
+    Single owner of the ``hub/agents/<id>/npm`` lock layout, so the daemon's
+    own lock and a caller's (issue #2596) are always joined the same way.
+    """
+    return repo_root / "hub" / "agents" / agent_id / "npm" / "binaries.lock.json"
+
+
+def repo_root_from_agent_binary_lock_path(lock_path: Path, agent_id: str) -> Path:
+    """Invert :func:`agent_binary_lock_path`: the repo root a lock path was
+    joined from, named in a "restart the daemon" remedy.
+
+    Raises:
+        DevSrcDirResolutionError: *lock_path* does not end in
+            ``hub/agents/<agent_id>/npm/binaries.lock.json`` — no repo root is
+            guessed from an unexpected shape.
+    """
+    tail = ("hub", "agents", agent_id, "npm", "binaries.lock.json")
+    parts = lock_path.parts
+    if len(parts) <= len(tail) or tuple(p.lower() for p in parts[-len(tail) :]) != (
+        tuple(t.lower() for t in tail)
+    ):
+        raise DevSrcDirResolutionError(
+            f"'{lock_path}' does not end in the expected "
+            f"{'/'.join(tail)} layout, so no repo root can be derived from it."
+        )
+    return Path(*parts[: -len(tail)])
+
+
 def _default_email_src_dir() -> Path:
     # src/gaia/daemon/sidecars/spec.py -> repo root is parents[4]. This
     # follows the Python environment that launched the DAEMON, never a
@@ -365,6 +395,55 @@ def _normalize_git_toplevel(raw: str) -> Path:
             drive, rest = match.groups()
             text = f"{drive}:/{rest}"
     return Path(text)
+
+
+def _caller_git_toplevel(cwd: Path) -> Path:
+    """``git rev-parse --show-toplevel`` for *cwd*, normalized for this OS.
+
+    Raises:
+        DevSrcDirResolutionError: *cwd* is not inside a git work tree, or
+            ``git`` is missing or fails.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+    ) as exc:
+        raise DevSrcDirResolutionError(
+            f"could not determine your checkout root from {cwd} "
+            f"({exc}). Run this command from inside a git work tree, or pass "
+            "--dev-src-dir <path> to name the source directory explicitly."
+        ) from exc
+    return _normalize_git_toplevel(result.stdout)
+
+
+def resolve_caller_binary_lock(
+    agent_id: str, *, cwd: Optional[Path] = None
+) -> Optional[Path]:
+    """The CALLER's own ``binaries.lock.json`` for a user-mode start (#2596).
+
+    The user-mode mirror of :func:`resolve_caller_dev_src_dir`: the caller's
+    checkout is its *cwd*'s git work tree, never ``__file__``. Returns
+    ``None`` when the caller is not in a checkout carrying a lock for
+    *agent_id* — an installed GAIA pins no binary, so there is nothing to
+    compare. The daemon only ever compares this file's digest against its own
+    lock; it never reads a caller-supplied path.
+    """
+    try:
+        repo_root = _caller_git_toplevel(cwd or Path.cwd())
+    except DevSrcDirResolutionError:
+        return None
+    lock = agent_binary_lock_path(repo_root, agent_id).expanduser().resolve()
+    return lock if lock.is_file() else None
 
 
 def resolve_caller_dev_src_dir(
@@ -414,28 +493,7 @@ def resolve_caller_dev_src_dir(
             raise DevSrcDirResolutionError(_dev_src_dir_shape_error(resolved, agent_id))
         return resolved
 
-    resolved_cwd = cwd or Path.cwd()
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(resolved_cwd),
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=30,
-        )
-    except (
-        subprocess.CalledProcessError,
-        subprocess.TimeoutExpired,
-        FileNotFoundError,
-    ) as exc:
-        raise DevSrcDirResolutionError(
-            f"could not determine your checkout root from {resolved_cwd} "
-            f"({exc}). Run this command from inside a git work tree, or pass "
-            "--dev-src-dir <path> to name the source directory explicitly."
-        ) from exc
-
-    repo_root = _normalize_git_toplevel(result.stdout)
+    repo_root = _caller_git_toplevel(cwd or Path.cwd())
     return agent_dev_src_dir(repo_root, agent_id).expanduser().resolve()
 
 

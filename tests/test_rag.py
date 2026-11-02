@@ -1036,7 +1036,11 @@ class TestMemoryLimits:
                 show_stats=False,
             )
 
-            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+            with (
+                patch("gaia.rag.sdk.RAGSDK._check_dependencies"),
+                # The mocked faiss index holds no vectors to copy on removal.
+                patch("gaia.rag.sdk.RAGSDK._index_without_rows"),
+            ):
                 rag = RAGSDK(config)
 
                 # Create two temp PDF files with different names
