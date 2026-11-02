@@ -15,6 +15,24 @@ import addFormats from "ajv-formats";
 import { describe, expect, it } from "vitest";
 
 import worker from "../src/index";
+import type {
+  AgentManifest,
+  ArtifactInfo,
+  CatalogIndex,
+  Channels,
+  IndexEntry,
+  IndexRequirements,
+  Interfaces,
+  PackageFile,
+  PackageInfo,
+  Requirements,
+  SkillAuditRecord,
+  SkillHardware,
+  SkillMetadata,
+  SkillRequirements,
+  SkillToolDecl,
+  VersionEntry,
+} from "../src/types";
 import {
   allowAudit,
   makeEnv,
@@ -210,5 +228,128 @@ describe("index.json validates against schemas/index.schema.json", () => {
     };
     index.agents[0].skill_metadata.audit.signer = "nobody";
     expect(validateIndex(index)).toBe(false);
+  });
+});
+
+// A fixture only proves the fields it happens to emit. These inventories list
+// every key of each emitted type — `satisfies` fails typecheck when a type gains
+// or loses a key, or a key's optionality changes — and the test below then fails
+// until the schema declares exactly that key set.
+type Inventory<T> = { [K in keyof T]-?: {} extends Pick<T, K> ? "optional" : "always" };
+
+const INDEX_SHAPES: Array<[string, string[], Record<string, string>]> = [
+  ["CatalogIndex", [], {
+    schema_version: "always", generated_at: "always", agents: "always",
+  } satisfies Inventory<CatalogIndex>],
+  ["IndexEntry", ["definitions", "indexEntry"], {
+    id: "always", name: "always", description: "always", category: "always",
+    latest_version: "always", icon: "always", language: "always", type: "always",
+    author: "always", security_tier: "always", download_size_bytes: "always",
+    tags: "always", tools_count: "always", models: "always", min_gaia_version: "always",
+    min_gaia_versions: "optional", channels: "optional", permissions: "always",
+    deprecated: "always", deprecation_message: "optional", requirements: "always",
+    readme: "always", changelog: "always", spec: "always", skill: "always",
+    evaluation: "always", capability_matrix: "always", scorecard: "always",
+    npm_package: "optional", playground_url: "optional", eval_scorecard_url: "optional",
+    eval_score: "optional", eval_score_version: "optional", package: "optional",
+    skill_metadata: "optional",
+  } satisfies Inventory<IndexEntry>],
+  ["IndexRequirements", ["definitions", "indexEntry", "properties", "requirements"], {
+    min_memory_gb: "always", min_disk_gb: "always", min_context_size: "always",
+    platforms: "always", npu: "always", gpu_vram_gb: "always",
+  } satisfies Inventory<IndexRequirements>],
+  ["Channels (index)", ["definitions", "indexEntry", "properties", "channels"], {
+    stable: "always", next: "always",
+  } satisfies Inventory<Channels>],
+  ["PackageInfo", ["definitions", "indexEntry", "properties", "package"], {
+    filename: "always", size_bytes: "always", files: "always",
+  } satisfies Inventory<PackageInfo>],
+  ["PackageFile", ["definitions", "indexEntry", "properties", "package", "properties", "files", "items"], {
+    name: "always", size_bytes: "always",
+  } satisfies Inventory<PackageFile>],
+  ["SkillMetadata", ["definitions", "indexEntry", "properties", "skill_metadata"], {
+    tools: "always", tools_required: "always", requirements: "always", audit: "always",
+  } satisfies Inventory<SkillMetadata>],
+  ["SkillToolDecl", ["definitions", "indexEntry", "properties", "skill_metadata", "properties", "tools", "items"], {
+    name: "always", description: "always",
+  } satisfies Inventory<SkillToolDecl>],
+  ["SkillRequirements", ["definitions", "indexEntry", "properties", "skill_metadata", "properties", "requirements"], {
+    model: "always", context: "always", python: "always", dependencies: "always",
+    node_dependencies: "always", env_vars: "always", hardware: "always",
+  } satisfies Inventory<SkillRequirements>],
+  ["SkillHardware", ["definitions", "indexEntry", "properties", "skill_metadata", "properties", "requirements", "properties", "hardware"], {
+    npu: "always", gpu_vram: "always",
+  } satisfies Inventory<SkillHardware>],
+  ["SkillAuditRecord", ["definitions", "indexEntry", "properties", "skill_metadata", "properties", "audit"], {
+    verdict: "always", engine: "always", audited_at: "always", findings: "always",
+    attestation: "optional", cleared_tiers: "optional", content_digest: "optional",
+    manifest_digest: "optional",
+  } satisfies Inventory<SkillAuditRecord>],
+];
+
+const MANIFEST_SHAPES: Array<[string, string[], Record<string, string>]> = [
+  ["AgentManifest", [], {
+    id: "always", name: "always", description: "always", author: "always",
+    license: "always", language: "always", type: "always", category: "always",
+    tags: "always", icon: "always", security_tier: "always", min_gaia_version: "optional",
+    models: "always", tools_count: "always", permissions: "always", requirements: "always",
+    interfaces: "always", latest_version: "always", deprecated: "always",
+    deprecation_message: "optional", npm_package: "optional", playground_url: "optional",
+    channels: "optional", versions: "always", next_versions: "optional",
+  } satisfies Inventory<AgentManifest>],
+  ["Requirements", ["definitions", "requirements"], {
+    platforms: "always", min_memory_gb: "always", min_disk_gb: "always",
+    min_context_size: "always", npu: "always", gpu_vram_gb: "always",
+  } satisfies Inventory<Requirements>],
+  ["Interfaces", ["definitions", "interfaces"], {
+    tui: "optional", cli: "optional", pipe: "optional", api_server: "optional",
+    mcp_server: "optional",
+  } satisfies Inventory<Interfaces>],
+  ["Channels (manifest)", ["properties", "channels"], {
+    stable: "always", next: "always",
+  } satisfies Inventory<Channels>],
+  ["VersionEntry", ["definitions", "versionEntry"], {
+    version: "always", published_at: "always", publisher: "always", deprecated: "always",
+    min_gaia_version: "optional", artifact: "always", artifacts: "always",
+  } satisfies Inventory<VersionEntry>],
+  ["ArtifactInfo", ["definitions", "artifact"], {
+    filename: "always", path: "always", size_bytes: "always", sha256: "always",
+    content_type: "always",
+  } satisfies Inventory<ArtifactInfo>],
+];
+
+interface SchemaNode {
+  $ref?: string;
+  properties?: Record<string, SchemaNode>;
+  required?: string[];
+  items?: SchemaNode;
+  [k: string]: unknown;
+}
+
+function nodeAt(root: SchemaNode, path: string[]): SchemaNode {
+  let node: SchemaNode = root;
+  for (const key of path) {
+    node = node[key] as SchemaNode;
+    expect(node, `schema has no ${path.join(".")}`).toBeDefined();
+    if (node.$ref) {
+      node = nodeAt(root, node.$ref.replace(/^#\//, "").split("/"));
+    }
+  }
+  return node;
+}
+
+describe.each([
+  ["index.schema.json", INDEX_SHAPES],
+  ["manifest.schema.json", MANIFEST_SHAPES],
+])("%s declares exactly the keys the Worker's types emit", (file, shapes) => {
+  const root = loadSchema(file) as SchemaNode;
+
+  it.each(shapes)("%s", (_type, path, inventory) => {
+    const node = nodeAt(root, path);
+    const declared = Object.keys(node.properties ?? {}).sort();
+    expect(declared).toEqual(Object.keys(inventory).sort());
+    // A key the schema requires but the Worker may omit would fail validation.
+    const optional = (node.required ?? []).filter((k) => inventory[k] !== "always");
+    expect(optional).toEqual([]);
   });
 });
