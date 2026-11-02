@@ -904,7 +904,8 @@ def grounding_correction(findings: Sequence[Finding]) -> str:
         "[check:grounding] "
         + " ".join(f.correction for f in findings)
         + " Then give your complete answer again: it replaces the one above, "
-        "which the user will not see."
+        "which the user will not see. Write it for the user, in the language of "
+        "their question, and don't mention this check or what changed."
     )
 
 
