@@ -18,3 +18,11 @@ def _full_feature_tier():
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv(TIER_ENV, "full")
         yield
+
+
+@pytest.fixture(autouse=True)
+def _empty_hub_skill_catalog(monkeypatch):
+    """Capture consults the hub catalog; these tests see an empty one by default."""
+    from gaia.skills import capture
+
+    monkeypatch.setattr(capture, "published_skill_names", lambda: frozenset())
