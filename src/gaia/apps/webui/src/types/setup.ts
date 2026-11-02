@@ -16,7 +16,7 @@ export interface SetupModelProgress {
     speed_bps: number;
     eta_s: number | null;
     error: string | null;
-    error_kind: 'network' | 'disk_full' | 'lemonade' | 'verify' | null;
+    error_kind: 'network' | 'disk_full' | 'path_too_long' | 'lemonade' | 'verify' | null;
     can_retry: boolean;
     /** Unix seconds while a keep-trying wait runs; the state stays `downloading`. */
     retrying_until: number | null;

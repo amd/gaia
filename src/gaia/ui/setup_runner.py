@@ -630,7 +630,7 @@ def overall(models: List[ModelProgress]) -> Dict[str, Any]:
 
 
 def _failure_text(model_id: str, kind: Optional[str]) -> str:
-    """What the row says; Lemonade's own words go to the log, not the screen."""
+    """What the row's Details says, in plain words; Lemonade's own go to its log."""
     if kind == "disk_full":
         return (
             f"Ran out of disk space while downloading {model_id}. Free some space "
@@ -642,9 +642,16 @@ def _failure_text(model_id: str, kind: Optional[str]) -> str:
             f"The connection dropped while downloading {model_id}. Press Retry "
             "to continue from where it stopped."
         )
+    if kind == "path_too_long":
+        return (
+            f"Windows couldn't save {model_id}: the path to the models folder is "
+            "too long. Turn on long file paths in Windows, or use a models folder "
+            "with a shorter path, then press Retry."
+        )
+    # Lemonade's own words can name paths on this PC: they go to the row's log.
     return (
-        f"Lemonade couldn't download {model_id}. Press Retry; the full error is "
-        "in the GAIA server log."
+        f"Lemonade couldn't download {model_id}. Its download log has "
+        "Lemonade's message; press Retry to try again."
     )
 
 

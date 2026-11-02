@@ -74,6 +74,12 @@ _NETWORK_RE = re.compile(
     r"temporarily unavailable|name resolution|unreachable|remote end closed",
     re.IGNORECASE,
 )
+# Windows' 260-character path limit; retrying can never get past it.
+_PATH_TOO_LONG_RE = re.compile(
+    r"filename or extension is too long|path too long|file name too long|"
+    r"enametoolong|winerror 206",
+    re.IGNORECASE,
+)
 _DISK_FULL_RE = re.compile(
     r"no space|disk full|not enough (disk|space)|insufficient disk|enospc",
     re.IGNORECASE,
@@ -389,9 +395,11 @@ def disk_shortfall(
 
 
 def error_kind(message: Optional[str]) -> Optional[str]:
-    """``disk_full`` / ``network`` / ``lemonade`` for a failed pull's message."""
+    """Why a pull failed: disk_full, path_too_long, network or lemonade."""
     if not message:
         return None
+    if _PATH_TOO_LONG_RE.search(message):
+        return "path_too_long"
     if _DISK_FULL_RE.search(message):
         return "disk_full"
     if _NETWORK_RE.search(message):

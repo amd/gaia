@@ -40,6 +40,10 @@ export function SetupChecks({ hardware, hardwareError, plan, serverRun, awaiting
     const [open, setOpen] = useState(false);
     const serverUp = !!plan?.lemonade.reachable;
     const serverFailed = serverRun?.state === 'failed' || serverRun?.state === 'cancelled';
+    const whose = t(plan?.lemonade.mode === 'external' ? 'setup.found.serverYours' : 'setup.found.serverOwn');
+    const serverFound = plan?.system?.lemonade_version
+        ? t('setup.checks.serverFound', { version: plan.system.lemonade_version, whose })
+        : whose;
     const hwState: RowState = hardware ? 'done' : hardwareError ? 'failed' : 'active';
     const device = [hardware?.gpu_name, hardware?.npu_detected ? t('setup.checks.npu') : null].filter(Boolean).join(' · ');
     const rows: Row[] = [
@@ -60,7 +64,8 @@ export function SetupChecks({ hardware, hardwareError, plan, serverRun, awaiting
         {
             id: 'server',
             label: t('setup.checks.server'),
-            value: serverUp ? t('setup.checks.serverUp') : awaitingChoice ? t('setup.checks.serverChoose') : null,
+            // What answered, not that something is running: which Lemonade, and whose.
+            value: serverUp ? serverFound : awaitingChoice ? t('setup.checks.serverChoose') : null,
             // Waiting on the user is not work in progress: no spinner.
             state: serverUp ? 'done' : serverFailed ? 'failed' : awaitingChoice ? 'question' : hardware ? 'active' : 'waiting',
         },
@@ -68,7 +73,7 @@ export function SetupChecks({ hardware, hardwareError, plan, serverRun, awaiting
             id: 'models',
             label: t('setup.checks.backends'),
             value: serverUp && plan?.catalog
-                ? t('setup.checks.backendsValue', { models: String(plan.catalog.length) })
+                ? t('setup.checks.backendsValue', { models: String(plan.catalog.length), downloaded: String(plan.catalog.filter((e) => e.downloaded).length) })
                 : null,
             state: serverUp && plan?.catalog ? 'done' : serverUp ? 'active' : 'waiting',
         },

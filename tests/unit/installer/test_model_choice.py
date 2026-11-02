@@ -202,6 +202,11 @@ def test_a_remote_server_that_does_not_say_is_unknown():
         ("Connection reset by peer", "network"),
         ("Read timed out", "network"),
         ("checkpoint not found on Hugging Face", "lemonade"),
+        (
+            "Failed to create directory 'C:\\Users\\you\\.cache\\huggingface\\hub\\models--x': "
+            "The filename or extension is too long.",
+            "path_too_long",
+        ),
         (None, None),
     ],
 )

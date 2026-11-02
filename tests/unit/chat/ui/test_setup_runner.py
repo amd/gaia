@@ -1198,6 +1198,23 @@ def test_a_full_disk_fails_the_model_with_what_to_do():
     assert runner.status()["overall"]["failed"] == 1
 
 
+def test_a_path_too_long_for_windows_says_so_instead_of_pointing_at_a_log():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event(
+        {
+            "event": "error",
+            "model": QWEN,
+            "message": "Failed to create directory 'C:/Users/you/.cache/huggingface/"
+            "hub/models--x/snapshots/abc': The filename or extension is too long.",
+        }
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "failed" and qwen["error_kind"] == "path_too_long"
+    assert "path to the models folder is too long" in qwen["error"]
+    assert "server log" not in qwen["error"]
+
+
 def test_keep_trying_shows_the_wait_not_a_failure():
     runner = sr.SetupRunner()
     runner._on_event(json.loads(_plan_event()))
@@ -1407,7 +1424,9 @@ def test_a_failed_pull_shows_fixed_words_and_logs_lemonades(caplog):
     )
     row = _models(runner)[QWEN]
     assert row["error_kind"] == "lemonade"
-    assert "/secret/path" not in row["error"] and "server log" in row["error"]
+    assert "/secret/path" not in row["error"] and "download log" in row["error"]
+    # The row's own log, under its chevron, has Lemonade's words.
+    assert "Failed: HTTP 500 at /secret/path" in row["log"]
     assert "/secret/path" in caplog.text
 
 

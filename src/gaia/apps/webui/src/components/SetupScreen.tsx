@@ -20,6 +20,8 @@ import { formatFitGb, formatSize } from './setup/format';
 import { GpuMemoryPanel } from './setup/GpuMemoryPanel';
 import { tooBigText } from './setup/ModelChecklist';
 import { StageLogs } from './setup/StageLogs';
+import { SetupFooter, SetupFooterSlot } from './setup/SetupFooter';
+import { BackendChoice } from './setup/BackendChoice';
 import { DetectedSummary } from './setup/DetectedSummary';
 import { SetupChecks } from './setup/SetupChecks';
 import { SetupRail, type RailStep } from './setup/SetupRail';
@@ -281,6 +283,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const [customizing, setCustomizing] = useState(false);
     // GPU memory isn't a step: it opens from Check this PC or Customize, and goes back there.
     const [gpuFrom, setGpuFrom] = useState<'check' | 'models'>('models');
+    const [footerSlot, setFooterSlot] = useState<HTMLElement | null>(null);
     /** A step opened from the rail or Back/Next while setup is further on; null shows where setup is. */
     const [viewing, setViewing] = useState<Stage | null>(null);
     /** Steps already shown, so Next and the rail can return to them. */
@@ -844,6 +847,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     return (
         <main className="setup" aria-labelledby="setup-title">
             <SetupRail steps={railSteps} />
+            <SetupFooterSlot value={footerSlot}>
+            <div className="setup-pane">
             <div className="setup-inner">
                 {shownAt >= 0 && (
                     <nav className="setup-topnav" aria-label={t('setup.nav.label')}>
@@ -880,9 +885,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} awaitingChoice={!!lemonadeFound && !lemonadeSettled} />
                             {checksDone && plan && <DetectedSummary plan={plan} hardware={hardware} onChangeMemory={showGpu && viewing == null ? () => openGpu('check') : undefined} />}
                             {checksDone && viewing == null && (
-                                <div className="setup-row setup-found-next">
+                                <SetupFooter>
                                     <button type="button" className="btn-primary" onClick={() => stepTo('plan')}>{t('setup.continue')}</button>
-                                </div>
+                                </SetupFooter>
                             )}
                             {/* Before GAIA starts its own server, and after, so the user can still switch to theirs. */}
                             {statusRead && plan && ((!plan.lemonade.reachable && !serverRun) || (checksDone && viewing == null && plan.lemonade.mode !== 'external')) && (
@@ -934,10 +939,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <li>{t('setup.plan.why.private')}</li>
                                     {biggerOption && biggerOption.id !== chatEntry?.id && <li><bdi>{biggerOption.name}</bdi>: {tooBigText(biggerOption, t)}</li>}
                                 </ul>
-                                <div className="setup-row">
+                                <SetupFooter>
                                     <button type="button" className="btn-primary" onClick={() => (short ? setConfirm({ kind: 'low_disk' }) : void commit(false))} disabled={busy || blocked || runGoing}>
                                         {busy && <Loader2 size={13} className="spin" aria-hidden="true" />} {pending.length ? t('setup.plan.start') : t('setup.plan.startNoDownload')}
                                     </button>
+                                </SetupFooter>
+                                <div className="setup-row">
                                     <button type="button" className="link-btn" onClick={customize} disabled={runGoing}>{t('setup.plan.customize')}</button>
                                     <button type="button" className="link-btn" onClick={useCloud} disabled={runGoing}>{t('setup.plan.cloud')}</button>
                                     {onClose && <button type="button" className="link-btn" onClick={onClose}>{t('setup.again.notNow')}</button>}
@@ -973,6 +980,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     {stage === 'models' && (
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.models.title')}</h1>
+                            <BackendChoice disabled={busy || runGoing} />
                             {showGpu && gpu?.total_gb != null && gpu.gpu_gb != null && (
                                 <p className="setup-hint setup-gpu-option">
                                     {t('setup.models.gpu', { gpu: formatSize(gpu.gpu_gb), total: formatSize(gpu.total_gb) })}{' '}
@@ -998,7 +1006,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     )}
 
                     {stage === 'key' && (
-                        <form onSubmit={(e) => { e.preventDefault(); void connect(); }} className="setup-form">
+                        <form id="setup-key-form" onSubmit={(e) => { e.preventDefault(); void connect(); }} className="setup-form">
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.key.title')}</h1>
                             <div className="setup-choices" role="radiogroup" aria-label={t('setup.key.provider')}>
                                 {CHOICES.filter((c) => c.id !== 'local').map((c) => (
@@ -1049,16 +1057,16 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     placeholder={t('setup.key.placeholder')}
                                     aria-label={t('setup.key.label')}
                                 />}
-                                <button type="submit" className="btn-primary" disabled={keyState.busy || unreachable(choice) || runGoing}>
-                                    {keyState.busy && <Loader2 size={13} className="spin" />} {t('setup.key.connect')}
-                                </button>
                             </div>
                             {keyState.busy && !keyState.waiting && <p className="setup-hint" role="status">{t('setup.key.testing')}</p>}
                             {keyState.busy && keyState.waiting && <p className="setup-hint" role="status">{keyState.waiting}</p>}
                             {keyState.error && <p className="setup-error" role="alert">{keyState.error}</p>}
-                            <div className="setup-row setup-nav">
+                            <SetupFooter>
                                 <button type="button" className="btn-secondary" onClick={backToPlan} disabled={keyState.busy}>{t('setup.back')}</button>
-                            </div>
+                                <button type="submit" form="setup-key-form" className="btn-primary" disabled={keyState.busy || unreachable(choice) || runGoing}>
+                                    {keyState.busy && <Loader2 size={13} className="spin" />} {t('setup.key.connect')}
+                                </button>
+                            </SetupFooter>
                         </form>
                     )}
 
@@ -1131,10 +1139,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     )
                             )}
                             {runFailed && downloadDone && (
-                                <div className="setup-row">
-                                    <button type="button" className="btn-primary" onClick={retryRun} disabled={busy}>{t('setup.finish')}</button>
-                                    <span className="setup-hint">{t('setup.download.finishNote')}</span>
-                                </div>
+                                <>
+                                    <p className="setup-hint">{t('setup.download.finishNote')}</p>
+                                    <SetupFooter>
+                                        <button type="button" className="btn-primary" onClick={retryRun} disabled={busy}>{t('setup.finish')}</button>
+                                    </SetupFooter>
+                                </>
                             )}
                             {runFailed && !downloadDone && !(fullRun.models ?? []).some((m) => m.state === 'failed' || m.state === 'cancelled') && (
                                 <>
@@ -1183,10 +1193,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                             answering ? say(cloud ? 'setup.ready.answersCloud' : 'setup.ready.answersLocal', { model: cloud ? shortModelName(answering) : (names[answering] ?? finalPlan?.catalog?.find((e) => e.id === answering)?.name ?? shortModelName(answering)) }) : null,
                                         ].filter(Boolean).join(' '))}
                                     </p>
+                                </div>
+                                <SetupFooter>
                                     <button type="button" className="btn-primary" onClick={() => void finish()} autoFocus>
                                         {t('setup.ready.start')}
                                     </button>
-                                </div>
+                                </SetupFooter>
                                 {!cloud && finalPlan && <ReadySummary plan={finalPlan} chatModel={answering} gpu={gpu} />}
                                 {startError && <p className="setup-error" role="alert">{startError}</p>}
                                 {(fullRun?.tests ?? []).filter((r) => r.state === 'failed').map((r) => (
@@ -1220,6 +1232,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 )}
                 <StageLogs run={run} before={{ check: checkNotes }} />
             </div>
+            <div className="setup-footer" ref={setFooterSlot} />
+            </div>
+            </SetupFooterSlot>
 
             {confirm?.kind === 'no_fit' && (
                 <ConfirmSheet

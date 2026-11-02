@@ -8,6 +8,7 @@ import { useT } from '../../i18n/useT';
 import type { Say } from '../../i18n/registry';
 import type { GpuMemoryPreset, GpuMemoryStatus } from '../../types';
 import { ConfirmSheet } from './ConfirmSheet';
+import { SetupFooter } from './SetupFooter';
 import { formatSize } from './format';
 
 type Outcome = { kind: 'applied' } | { kind: 'denied' } | { kind: 'error'; message: string } | null;
@@ -379,14 +380,14 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                             })}
                         </ol>
                     )}
-                    <div className="setup-row">
+                    <SetupFooter>
+                        <button type="button" className="btn-secondary" onClick={() => setGuided(false)} disabled={busy !== null}>{t('gpu.guided.back')}</button>
                         {!canApply && guidedValue !== null && (
                             <button type="button" className="btn-primary" onClick={() => void doneByHand()} disabled={busy !== null || target == null}>
                                 {busy === 'done' && <Loader2 size={13} className="spin" aria-hidden="true" />} {t('gpu.guided.done')}
                             </button>
                         )}
-                        <button type="button" className="btn-secondary" onClick={() => setGuided(false)} disabled={busy !== null}>{t('gpu.guided.back')}</button>
-                    </div>
+                    </SetupFooter>
                 </div>
             )}
 
@@ -401,31 +402,43 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
             )}
             {outcome?.kind === 'error' && <p className="setup-error" role="alert">{outcome.message}</p>}
 
-            {!guided && (
-                <div className="setup-row gpu-actions">
-                    {mode === 'setup' && onBack && <button type="button" className="btn-secondary" onClick={onBack}>{t('setup.back')}</button>}
-                    {!restartPending && canApply && presets.length > 0 && (
-                        <button type="button" className="btn-primary" onClick={() => setSheet('apply')} disabled={busy !== null || target == null}>
-                            {outcome?.kind === 'denied' || pending?.state === 'not_applied' ? t('gpu.tryAgain') : t('gpu.apply')}
-                        </button>
-                    )}
-                    {!restartPending && presets.length > 0 && canGuide && (
-                        <button type="button" className={canApply ? 'btn-secondary' : 'btn-primary'} onClick={() => void showSteps()} disabled={busy !== null}>
-                            {t('gpu.showMe')}
-                        </button>
-                    )}
-                    {mode === 'settings' && status.revert?.available && (
-                        <button type="button" className="btn-secondary" onClick={() => setSheet('revert')} disabled={busy !== null}>
-                            <RotateCcw size={13} aria-hidden="true" /> {t('gpu.undo')}
-                        </button>
-                    )}
-                    {mode === 'setup' && (restartPending ? (
-                        onContinue && <button type="button" className="btn-primary" onClick={onContinue} autoFocus>{t('setup.continue')}</button>
-                    ) : (
-                        onSkip && <button type="button" className="btn-secondary" onClick={onSkip} disabled={busy !== null}>{t('gpu.skip')}</button>
-                    ))}
-                </div>
-            )}
+            {!guided && (() => {
+                const apply = !restartPending && canApply && presets.length > 0 && (
+                    <button type="button" className="btn-primary" onClick={() => setSheet('apply')} disabled={busy !== null || target == null}>
+                        {outcome?.kind === 'denied' || pending?.state === 'not_applied' ? t('gpu.tryAgain') : t('gpu.apply')}
+                    </button>
+                );
+                const showMe = !restartPending && presets.length > 0 && canGuide && (
+                    <button type="button" className={canApply ? 'btn-secondary' : 'btn-primary'} onClick={() => void showSteps()} disabled={busy !== null}>
+                        {t('gpu.showMe')}
+                    </button>
+                );
+                if (mode === 'setup') {
+                    // Back first, then the ways on, the main one last.
+                    return (
+                        <SetupFooter>
+                            {onBack && <button type="button" className="btn-secondary" onClick={onBack}>{t('setup.back')}</button>}
+                            {restartPending
+                                ? onContinue && <button type="button" className="btn-primary" onClick={onContinue} autoFocus>{t('setup.continue')}</button>
+                                : <>
+                                    {onSkip && <button type="button" className="btn-secondary" onClick={onSkip} disabled={busy !== null}>{t('gpu.skip')}</button>}
+                                    {canApply ? <>{showMe}{apply}</> : showMe}
+                                </>}
+                        </SetupFooter>
+                    );
+                }
+                return (
+                    <div className="setup-row gpu-actions">
+                        {apply}
+                        {showMe}
+                        {status.revert?.available && (
+                            <button type="button" className="btn-secondary" onClick={() => setSheet('revert')} disabled={busy !== null}>
+                                <RotateCcw size={13} aria-hidden="true" /> {t('gpu.undo')}
+                            </button>
+                        )}
+                    </div>
+                );
+            })()}
 
             {sheet === 'apply' && target != null && (
                 <ConfirmSheet

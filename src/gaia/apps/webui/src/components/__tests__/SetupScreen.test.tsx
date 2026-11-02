@@ -10,7 +10,7 @@ import type { LemonadeFound, LemonadeTarget, PreflightReport, SetupPlan, SetupRu
 import {
     COLD_BIG, COMPONENTS, EMBED, FLM, GEMMA, GEMMA_CHAT, QWEN, QWEN_READS, WHISPER, gpuStatus, plan, progress, runStatus,
 } from '../setup/__tests__/fixtures';
-import { NO_GPU_SPLIT } from '../../test/setupApiMocks';
+import { NO_BACKENDS, NO_GPU_SPLIT } from '../../test/setupApiMocks';
 
 vi.mock('../../services/api', async (importOriginal) => {
     const real = await importOriginal<typeof api>();
@@ -79,6 +79,7 @@ beforeEach(() => {
     mockedApi.getLemonadeTarget.mockResolvedValue({ ...TARGET, offer: false });
     mockedApi.getSetupPlan.mockResolvedValue(COLD_BIG());
     mockedApi.getGpuMemory.mockResolvedValue(NO_GPU_SPLIT);
+    mockedApi.getModelServer.mockResolvedValue(NO_BACKENDS);
     mockedApi.getStartScreen.mockResolvedValue(START);
     mockedApi.listProviders.mockResolvedValue({ providers: [], active: null, lemonade_error: null } as unknown as Awaited<ReturnType<typeof api.listProviders>>);
     mockedApi.getActiveModel.mockResolvedValue({ provider: 'local', model: QWEN.id, label: 'Qwen', remote: false, is_default: true });
@@ -450,6 +451,19 @@ describe('SetupScreen: the rail', () => {
         await open();
         expect(railLabels()).toEqual(['Check this PC', 'Your setup', 'Download', 'Test', 'Ready']);
         expect(railStep('Your setup')).toHaveAttribute('aria-current', 'step');
+    });
+
+    it("puts every screen's main action in the bar at the bottom, last in it", async () => {
+        renderSetup();
+        await screen.findByRole('region', { name: 'What setup found' });
+        const bar = () => document.querySelector('.setup-footer') as HTMLElement;
+        const last = () => { const all = bar().querySelectorAll('button'); return all[all.length - 1]; };
+        expect(last()).toHaveTextContent('Continue');
+        fireEvent.click(last()!);
+        await screen.findByRole('region', { name: 'Recommended setup' });
+        expect(last()).toHaveTextContent(/Download and start|Test and start/);
+        await toModels();
+        expect([...bar().querySelectorAll('button')].map((b) => b.textContent?.trim())).toEqual(['Back', 'Continue']);
     });
 
     it('keeps the steps flat: Customize is a screen of Your setup, not a step', async () => {

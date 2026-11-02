@@ -89,6 +89,41 @@ button.setup-rail-step:hover {
     color: var(--danger);
 }
 
+/* The scrolling page, then one bar that holds every screen's actions. */
+.setup-pane {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-inline-size: 0;
+    min-block-size: 0;
+}
+
+.setup-footer {
+    flex: none;
+    border-block-start: 1px solid var(--border);
+    background: var(--bg-primary);
+}
+
+.setup-footer:empty {
+    display: none;
+}
+
+/* Back at the start, the step's main action at the end, on every screen. */
+.setup-footer-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    max-inline-size: 720px;
+    margin-inline: auto;
+    padding: 12px 24px;
+}
+
+.setup-footer-row > .btn-secondary:first-child {
+    margin-inline-end: auto;
+}
+
 .setup-inner {
     --setup-pad-block: 48px;
     display: flex;
@@ -768,8 +803,12 @@ button.setup-rail-step:hover {
 }
 
 .found-table td:last-child {
-    inline-size: 100%;
     color: var(--text-secondary);
+}
+
+/* Words wrap; names, versions and sizes stay whole. */
+.found-table td:not(:has(bdi)) {
+    white-space: normal;
 }
 
 .found-table td.is-installed {

@@ -53,6 +53,8 @@ function failureText(m: SetupModelProgress, name: string, freeGb: number | null,
         }
         case 'verify':
             return t('setup.fail.verify', { name });
+        case 'path_too_long':
+            return t('setup.fail.pathTooLong', { name });
         default:
             return t('setup.fail.lemonade', { name });
     }
@@ -164,10 +166,11 @@ function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume,
             {m.state === 'failed' && (
                 <div className="dl-fail">
                     <p className="dl-error" id={errId}>{failureText(m, name, freeGb, t)}</p>
-                    {m.error && (
+                    {/* What Lemonade said, in this download's log; the line above says it plainly. */}
+                    {(lines.length > 0 || m.error) && (
                         <details className="dl-details">
                             <summary>{t('setup.progress.details')}</summary>
-                            <pre>{m.error}</pre>
+                            <pre dir="ltr">{lines.length > 0 ? lines.join('\n') : m.error}</pre>
                         </details>
                     )}
                     {retryLater ? <p className="dl-detail">{t('setup.progress.retryLater')}</p> : (

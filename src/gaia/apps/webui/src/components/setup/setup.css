@@ -658,3 +658,9 @@
 .setup-checks-toggle svg.is-open { transform: rotate(90deg); }
 [dir="rtl"] .setup-checks-toggle svg:last-child:not(.is-open) { transform: scaleX(-1); }
 .setup-checks-done .setup-rows { margin-block-start: 8px; }
+
+.setup-backend {
+    display: grid;
+    gap: 8px;
+    justify-items: start;
+}

@@ -203,6 +203,7 @@ describe('DownloadProgress', () => {
         ['network', 'The connection dropped while downloading Qwen3.6-35B-A3B. Press Retry to continue from where it stopped.'],
         ['disk_full', 'Ran out of disk space after 14.2 GB of Qwen3.6-35B-A3B. Free 7.1 GB and press Retry. Nothing was lost; the download continues from where it stopped.'],
         ['lemonade', 'Lemonade couldn’t download Qwen3.6-35B-A3B. Details has its message.'],
+        ['path_too_long', "Windows couldn't save Qwen3.6-35B-A3B: the path to the models folder is too long. Turn on long file paths in Windows, or use a models folder with a shorter path, then press Retry."],
     ] as const)('words a %s failure with what to do, and Retry works', (kind, text) => {
         const onRetry = vi.fn();
         render(<DownloadProgress
@@ -218,6 +219,17 @@ describe('DownloadProgress', () => {
         fireEvent.click(retry);
         expect(onRetry).toHaveBeenCalledWith(QWEN.id, kind);
         expect(within(row).getByText('Details')).toBeInTheDocument();
+    });
+
+    it("Details shows Lemonade's own message from the download's log", () => {
+        render(<DownloadProgress
+            status={runStatus([progress({ id: QWEN.id, state: 'failed', error_kind: 'lemonade', error: 'Lemonade could not download it.', log: ['Downloading', 'Failed: checkpoint not found'] })], { state: 'failed' })}
+            names={NAMES}
+            onRetry={vi.fn()}
+        />);
+        const row = rowOf('Qwen3.6-35B-A3B');
+        fireEvent.click(within(row).getByText('Details'));
+        expect(within(row).getByText(/Failed: checkpoint not found/)).toBeInTheDocument();
     });
 
     it('shows how many failed in the overall line, and offers Skip this model', () => {

@@ -66,13 +66,18 @@ describe('what setup found', () => {
         const found = screen.getByRole('region', { name: 'What setup found' });
         // Runtimes are a table: one row each, its device, version and state in their own cells.
         const kokoro = within(found).getByRole('rowheader', { name: 'Kokoro' }).closest('tr') as HTMLElement;
-        expect([...kokoro.querySelectorAll('td')].map((c) => c.textContent)).toEqual(['cpu', 'b17', 'Update needed']);
-        expect(within(found).getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
+        // Lemonade still calls it out of date after updating it on first use: it reads as installed.
+        expect([...kokoro.querySelectorAll('td')].map((c) => c.textContent)).toEqual(['cpu', 'b17', 'Installed']);
+        expect(within(found).getAllByRole('columnheader', { name: 'Status' })).toHaveLength(2);
         expect(found).toHaveTextContent('http://127.0.0.1:13305/api/v1');
         expect(found).toHaveTextContent('0.3.3');
         expect(found).toHaveTextContent('AMD Radeon(TM) 8060S Graphics (gfx1151)');
         expect(found).toHaveTextContent('16 cores, 32 threads');
-        expect(within(found).getAllByRole('heading').map((h) => h.textContent)).toEqual(['What setup found', 'Software', 'Runs models with', 'Hardware']);
+        expect(within(found).getAllByRole('heading').map((h) => h.textContent)).toEqual(['What setup found', 'Software', 'Runs models with', 'Models GAIA supports here', 'Hardware']);
+        // Every model setup knows for this PC, with its job and whether it is here yet.
+        const qwen = within(found).getByRole('rowheader', { name: 'Qwen3.6-35B-A3B' }).closest('tr') as HTMLElement;
+        expect(qwen).toHaveTextContent('Chat');
+        expect(qwen).toHaveTextContent('Not downloaded');
         expect(found).not.toHaveTextContent('Not here');
         expect(found).not.toHaveTextContent('ds4');
     });

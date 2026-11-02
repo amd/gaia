@@ -9,6 +9,7 @@ import { JobModels } from './setup/JobModels';
 import { ChecklistLoading, SelectionSummary, tooBigText } from './setup/ModelChecklist';
 import { formatSize } from './setup/format';
 import { Reveal } from './setup/Reveal';
+import { SetupFooter } from './setup/SetupFooter';
 import { gpuGbAtSetting, restartLine } from './setup/GpuMemoryPanel';
 import {
     catalogOf, isEmbedding, isVision, pendingDownloads, resolveVision, shortfall, recommendedSelection,
@@ -84,13 +85,13 @@ export function ModelsStep({
         return (
             <div className="setup-present" role="status">
                 <p><Check size={14} aria-hidden="true" /> {t('setup.models.allPresent')}</p>
-                <div className="setup-row">
+                <button type="button" className="link-btn" onClick={() => setChanging(true)}>{t('setup.models.change')}</button>
+                <SetupFooter>
                     <button type="button" className="btn-secondary" onClick={onBack} disabled={busy}>{t('setup.back')}</button>
                     <button type="button" className="btn-primary" onClick={() => onContinue(false)} disabled={busy}>
                         {busy && <Loader2 size={13} className="spin" aria-hidden="true" />} {t('setup.finish')}
                     </button>
-                    <button type="button" className="link-btn" onClick={() => setChanging(true)}>{t('setup.models.change')}</button>
-                </div>
+                </SetupFooter>
                 {error && <p className="setup-error" role="alert">{error}</p>}
             </div>
         );
@@ -116,7 +117,7 @@ export function ModelsStep({
                 </Reveal>
                 {big.length > 0 && <span className="visually-hidden">{big.map((e) => tooBigText(e, t)).join(' ')}</span>}
                 {error && <p className="setup-error" role="alert">{error}</p>}
-                <div className="setup-row setup-nav">
+                <SetupFooter>
                     <button type="button" className="btn-secondary" onClick={onBack} disabled={busy}>{t('setup.back')}</button>
                     <button
                         type="button"
@@ -127,7 +128,7 @@ export function ModelsStep({
                     >
                         {busy && <Loader2 size={13} className="spin" aria-hidden="true" />} {continueLabel}
                     </button>
-                </div>
+                </SetupFooter>
             </div>
         </div>
     );

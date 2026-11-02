@@ -219,7 +219,7 @@ const hero = (page: Page) => page.locator('.setup-hero');
 /** The checks stop on what they found; Continue goes on to the plan. */
 export async function toPlan(page: Page): Promise<void> {
     await expect(page.locator('.found')).toBeVisible();
-    await page.locator('.setup-found-next .btn-primary').click();
+    await page.locator('.setup-footer .btn-primary').click();
     await expect(hero(page)).toBeVisible();
 }
 
@@ -288,7 +288,7 @@ export const SETUP_SCENES: SetupScene[] = [
         answers: { plan: PLAN_TOO_BIG },
         reach: async (page) => {
             await toPlan(page);
-            await hero(page).locator('.btn-primary').click();
+            await page.locator('.setup-footer .btn-primary').click();
             await expect(page.getByRole('alertdialog')).toBeVisible();
         },
     },
@@ -308,7 +308,7 @@ export const SETUP_SCENES: SetupScene[] = [
             await page.locator('.setup-checks-toggle').click();
             await page.locator('.found-more').click();
             await expect(page.locator('.setup-checks-done .setup-rows')).toBeVisible();
-            await expect(page.locator('.found-table')).toBeVisible();
+            await expect(page.locator('.found-table').last()).toBeVisible();
         },
     },
     {

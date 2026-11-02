@@ -7,7 +7,7 @@ import { SetupScreen } from '../SetupScreen';
 import * as api from '../../services/api';
 import type { PreflightReport, SetupRunStatus } from '../../types';
 import { EMBED, GEMMA, QWEN, WHISPER, plan, progress, runStatus } from '../setup/__tests__/fixtures';
-import { NO_GPU_SPLIT } from '../../test/setupApiMocks';
+import { NO_BACKENDS, NO_GPU_SPLIT } from '../../test/setupApiMocks';
 
 vi.mock('../../services/api', async (importOriginal) => {
     const real = await importOriginal<typeof api>();
@@ -22,6 +22,7 @@ beforeEach(() => {
     mockedApi.getLemonadeTarget.mockResolvedValue({ offer: false, source: 'gaia' } as unknown as Awaited<ReturnType<typeof api.getLemonadeTarget>>);
     mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED, WHISPER]));
     mockedApi.getGpuMemory.mockResolvedValue(NO_GPU_SPLIT);
+    mockedApi.getModelServer.mockResolvedValue(NO_BACKENDS);
     mockedApi.getStartScreen.mockResolvedValue({ cards: [] } as unknown as Awaited<ReturnType<typeof api.getStartScreen>>);
 });
 

@@ -5,7 +5,8 @@ import { AlertCircle, Check, ChevronRight, Copy, FolderOpen } from 'lucide-react
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useT } from '../../i18n/useT';
 import * as api from '../../services/api';
-import type { PreflightReport, SetupDevice, SetupGaiaBuild, SetupPlan } from '../../types';
+import type { MessageKey } from '../../i18n/registry';
+import type { PreflightReport, SetupDevice, SetupGaiaBuild, SetupPlan, SetupRole } from '../../types';
 import { formatSize, totalMemory } from './format';
 
 /** A technical value: names, versions and paths read the same in every language. */
@@ -81,7 +82,7 @@ function facts(plan: SetupPlan, hardware: PreflightReport | null) {
         software: [
             gaiaVersion(sys?.gaia_build, sys?.gaia_version) ? `GAIA ${gaiaVersion(sys?.gaia_build, sys?.gaia_version)}` : null,
             sys?.lemonade_version ? `Lemonade ${sys.lemonade_version}` : null,
-            ...runtimes.filter(({ b }) => CHAT_RUNTIMES.has(b.recipe) && b.state === 'installed')
+            ...runtimes.filter(({ b }) => CHAT_RUNTIMES.has(b.recipe) && installed(b))
                 .map(({ name, b }) => `${name} ${b.version ?? b.backend}`),
         ].filter((x): x is string => !!x),
         totalMemory: totalMemory(sys?.physical_memory, hardware?.ram_gb),
@@ -91,7 +92,18 @@ function facts(plan: SetupPlan, hardware: PreflightReport | null) {
     };
 }
 
-const STATE_WORDS: Record<string, string> = { installed: 'installed', update_required: 'update needed' };
+// Lemonade updates an outdated backend itself on first use, and keeps reporting it as outdated after.
+const STATE_WORDS: Record<string, string> = { installed: 'installed', update_required: 'installed, updates on first use' };
+const installed = (b: Backend) => b.state === 'installed' || b.state === 'update_required';
+
+const JOB_KEYS: Record<SetupRole, MessageKey> = {
+    chat: 'setup.job.chat',
+    vision: 'setup.job.vision',
+    embedding: 'setup.job.documents',
+    speech: 'setup.job.speech',
+    voice: 'setup.job.voice',
+    image_creation: 'setup.job.images',
+};
 
 /** The summary as plain text, in English, for pasting into a bug report or a chat. */
 export function specText(plan: SetupPlan, hardware: PreflightReport | null): string {
@@ -239,8 +251,34 @@ export function DetectedSummary({ plan, hardware, onChangeMemory }: { plan: Setu
                                         <th scope="row"><Tech>{name}</Tech></th>
                                         <td><Tech>{b.backend}</Tech></td>
                                         <td><Tech>{b.version ?? ''}</Tech></td>
-                                        <td className={b.state === 'installed' ? 'is-installed' : undefined}>
-                                            {t(b.state === 'installed' ? 'setup.pc.backend.installed' : b.state === 'update_required' ? 'setup.found.update' : 'setup.pc.backend.available')}
+                                        <td className={installed(b) ? 'is-installed' : undefined}>
+                                            {t(installed(b) ? 'setup.pc.backend.installed' : 'setup.pc.backend.available')}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    ) : <p className="found-muted">{t('setup.found.unknown')}</p>}
+
+                    <h4 className="found-group">{t('setup.found.models')}</h4>
+                    {(plan.catalog ?? []).length ? (
+                        <table className="found-table">
+                            <thead className="visually-hidden">
+                                <tr>
+                                    <th scope="col">{t('setup.found.col.model')}</th>
+                                    <th scope="col">{t('setup.found.col.job')}</th>
+                                    <th scope="col">{t('setup.found.col.size')}</th>
+                                    <th scope="col">{t('setup.found.col.state')}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {(plan.catalog ?? []).map((e) => (
+                                    <tr key={e.id}>
+                                        <th scope="row" title={e.id}><bdi>{e.name}</bdi></th>
+                                        <td>{e.roles[0] ? t(JOB_KEYS[e.roles[0]]) : ''}</td>
+                                        <td><Tech>{e.full_size_gb ?? e.size_gb ? formatSize((e.full_size_gb ?? e.size_gb) as number) : ''}</Tech></td>
+                                        <td className={e.downloaded ? 'is-installed' : undefined}>
+                                            {t(e.downloaded ? 'setup.models.status.onPc' : 'setup.found.notDownloaded')}
                                         </td>
                                     </tr>
                                 ))}
