@@ -18,6 +18,7 @@ package filelock
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -48,7 +49,7 @@ func LockPath(target string) string {
 // Acquire takes the lock guarding target, polling until timeout.
 func Acquire(target string, timeout time.Duration) (*Lock, error) {
 	path := LockPath(target)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("cannot create %s: %w", filepath.Dir(path), err)
 	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
@@ -81,6 +82,69 @@ func (l *Lock) Release() {
 	Unlock(l.f)
 	l.f.Close()
 	l.f = nil
+}
+
+// ReadFile reads target while holding the same lock used by writers. The lock
+// is intentionally exclusive: Windows may reject a read during os.Rename, and
+// a short critical section keeps readers from observing a replacement in
+// progress without requiring platform-specific shared-lock semantics.
+//
+// A read never creates anything: when target's folder is missing or is not a
+// folder, or the folder cannot be written to (read-only media, no permission),
+// it reads without the lock, since no GAIA writer can be working there either.
+func ReadFile(target string) ([]byte, error) {
+	return readFile(target, Acquire, os.ReadFile, probeWritable)
+}
+
+type acquireFunc func(string, time.Duration) (*Lock, error)
+
+type readFunc func(string) ([]byte, error)
+
+type probeFunc func(dir string) error
+
+func readFile(target string, acquire acquireFunc, read readFunc, probe probeFunc) ([]byte, error) {
+	dir := filepath.Dir(target)
+	info, err := os.Stat(dir)
+	if err != nil {
+		return read(target)
+	}
+	if !info.IsDir() {
+		return nil, &fs.PathError{Op: "open", Path: target, Err: fs.ErrNotExist}
+	}
+	lock, err := acquire(target, Timeout)
+	if err != nil {
+		if lockUnwritable(err, dir, probe) {
+			return read(target)
+		}
+		return nil, err
+	}
+	defer lock.Release()
+	return read(target)
+}
+
+// lockUnwritable reports whether err only means the folder cannot take a lock
+// file. Lock contention and every other failure stay loud.
+func lockUnwritable(err error, dir string, probe probeFunc) bool {
+	if isReadOnlyFS(err) {
+		return true
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		return false
+	}
+	perr := probe(dir)
+	return perr != nil && (errors.Is(perr, fs.ErrPermission) || isReadOnlyFS(perr))
+}
+
+func isReadOnlyFS(err error) bool { return errors.Is(err, errReadOnlyFS) }
+
+// probeWritable creates and removes a scratch file in dir.
+func probeWritable(dir string) error {
+	f, err := os.CreateTemp(dir, ".gaia-write-probe-*")
+	if err != nil {
+		return err
+	}
+	f.Close()
+	return os.Remove(f.Name())
 }
 
 // WriteAtomic replaces path with data. The bytes go to a temp file in the same

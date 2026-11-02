@@ -94,7 +94,7 @@ export function ModelRow({ model: m, label, current, remote, busy, confirmingRem
                 {current ? (
                     <span className="model-row-current"><Check size={13} aria-hidden="true" /> {t('settings.model.inUse')}</span>
                 ) : m.available === false ? null : progress ? (
-                    <span className="model-row-current"><Loader2 size={13} className="spin" /> <bdi dir="ltr">{Math.round(progress.percent)}%</bdi></span>
+                    <span className="model-row-current"><Loader2 size={13} className="spin" /> {progress.message ? <bdi>{progress.message}</bdi> : <bdi dir="ltr">{Math.round(progress.percent)}%</bdi>}</span>
                 ) : !m.downloaded ? (
                     <button type="button" className="btn-secondary" onClick={onDownload} disabled={busy !== null} aria-label={t('settings.model.downloadAria', { name: label })}>
                         {busy === `dl:${m.id}` ? <Loader2 size={13} className="spin" /> : null} {t('settings.model.download')}

@@ -177,11 +177,10 @@ class LemonadeSupervisor:
         """Make sure a Lemonade Server is answering, starting one if it is not.
 
         Args:
-            ctx_size: the context window a started server must come up with. A
-                server started without one answers ``/health`` and then fails
-                every long request, which reads as an agent bug rather than a
-                launch bug — so callers pass their profile's window
-                (``lemonade_client.profile_ctx_size``).
+            ctx_size: the caller's profile window
+                (``lemonade_client.profile_ctx_size``). Only the legacy
+                Lemonade CLI takes it at start; modern Lemonade
+                reads no start-time window and gets it on each ``/load``.
             timeout: how long a freshly started server gets to answer.
 
         Raises:

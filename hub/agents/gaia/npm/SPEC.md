@@ -258,7 +258,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.26"`                  |
+| Contract version   | `API_VERSION = "2.27"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -279,6 +279,7 @@ the header.
 | `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.23) |
 | `GET`  | `/v1/gaia/sessions/{session_id}/grants` | The session's "always" answers, `{ key, label }` each (≥ 2.26) |
 | `DELETE` | `/v1/gaia/sessions/{session_id}/grants` | Revoke one (`?key=`) or all of them (≥ 2.26) |
+| `GET`  | `/v1/gaia/sessions/{session_id}/tools` | The tools the session's agent can call now, `{ name, description, category }` each; an unknown session is a `404` (≥ 2.27) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 #### `/query` request body
@@ -621,6 +622,12 @@ server — never inherit the sidecar token or GAIA's other internal credentials
 (the model-broker token, custody secret and engineering pairing token): their
 environment comes from `gaia.env.child_env`, which also drops any name listed
 in `GAIA_CHILD_ENV_DENY` (comma or space separated). User credentials such as `GH_TOKEN` pass through unchanged.
+From a `.env` in its working directory the sidecar reads only
+`ANTHROPIC_API_KEY`, for its own Claude calls; it ignores every other name in
+that file and logs one warning listing them. Export other settings in the
+launch environment instead. A sidecar run from a source checkout still loads
+the `.env` at or above GAIA's install (the repo's `.env`) in full, as before;
+the packaged binary has no install `.env`.
 `GAIA_NO_DOTENV=1` in the sidecar's launch environment stops it loading `.env`
 files; a `.env` file cannot set that switch itself.
 

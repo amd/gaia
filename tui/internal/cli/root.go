@@ -183,7 +183,11 @@ var rootCmd = &cobra.Command{
 		// The saved preference is the default; an explicit --full-access
 		// overrides it in either direction, which is what makes
 		// --full-access=false a one-launch opt-out.
-		saved := preflight.ReadFullAccess().Enabled
+		savedConfig := preflight.ReadFullAccess()
+		if savedConfig.Err != nil {
+			return fmt.Errorf("could not read the saved full-access setting: %w", savedConfig.Err)
+		}
+		saved := savedConfig.Enabled
 		fullAccess, fromSaved := saved, saved
 		if cmd.Flags().Changed("full-access") {
 			fullAccess, fromSaved = fullAccessFlag, false

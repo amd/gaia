@@ -169,15 +169,29 @@ def test_non_claims_are_not_detected(answer):
     assert _claims_file_write(answer) is False
 
 
+def _fastest_scan(answer: str, tries: int = 3) -> float:
+    best = float("inf")
+    for _ in range(tries):
+        started = time.perf_counter()
+        _claims_file_write(answer)
+        best = min(best, time.perf_counter() - started)
+    return best
+
+
 def test_a_long_unbroken_token_does_not_stall_the_process():
     """A 32KB hex digest in one line used to cost >1s of GIL-held scanning."""
-    answer = "I saved it to " + "0123456789abcdef" * 2000 + " ok"
+    small = "I saved it to " + "0123456789abcdef" * 250 + " ok"
+    large = "I saved it to " + "0123456789abcdef" * 2000 + " ok"
 
-    started = time.perf_counter()
-    _claims_file_write(answer)
-    elapsed = time.perf_counter() - started
+    small_s = _fastest_scan(small)
+    large_s = _fastest_scan(large)
 
-    assert elapsed < 0.2, f"scan took {elapsed:.2f}s"
+    # 8x the input: linear scanning grows ~8x, the old quadratic scan ~64x.
+    # Compared to the same machine's small run, so a busy runner can't fail it.
+    assert large_s < 24 * max(
+        small_s, 1e-4
+    ), f"scan took {large_s:.3f}s for 32KB vs {small_s:.4f}s for 4KB"
+    assert large_s < 1.0, f"scan took {large_s:.2f}s"
 
 
 def test_a_path_longer_than_the_scan_bound_is_still_detected():

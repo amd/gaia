@@ -34,6 +34,7 @@ const SCOPE_LABELS: Record<string, string> = {
     'https://www.googleapis.com/auth/spreadsheets.readonly': 'Read Google Sheets',
     'https://www.googleapis.com/auth/spreadsheets':          'Edit Google Sheets',
     'openid':   'Identify you',
+    'https://www.googleapis.com/auth/userinfo.email': 'See your email address',
     'email':    'See your email address',
     'profile':  'See your basic profile info',
     // Microsoft Graph — email agent scopes (#1770)

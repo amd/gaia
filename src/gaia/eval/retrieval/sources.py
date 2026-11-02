@@ -16,12 +16,20 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
+from urllib.parse import urlparse
 
 from gaia.config import gaia_home
 
 CACHE_ENV = "GAIA_RETRIEVAL_CACHE"
 _MANIFEST = Path("eval") / "retrieval" / "sources.json"
 _USER_AGENT = "Mozilla/5.0 (gaia-eval-retrieval; +https://github.com/amd/gaia)"
+# amd.com's CDN stalls any non-browser agent; Hugging Face 403s a browser one.
+_HOST_USER_AGENTS = {
+    "www.amd.com": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+    ),
+}
 _repo_root: Optional[Path] = None
 
 
@@ -83,6 +91,10 @@ def cache_dir() -> Path:
     return gaia_home() / "cache" / "eval-retrieval"
 
 
+def user_agent_for(url: str) -> str:
+    return _HOST_USER_AGENTS.get(urlparse(url).hostname or "", _USER_AGENT)
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as f:
@@ -131,7 +143,7 @@ def fetch(
         dest.parent.mkdir(parents=True, exist_ok=True)
         part = dest.with_name(dest.name + ".part")
         request = urllib.request.Request(
-            entry["url"], headers={"User-Agent": _USER_AGENT}
+            entry["url"], headers={"User-Agent": user_agent_for(entry["url"])}
         )
         try:
             with (
@@ -157,6 +169,23 @@ def fetch(
             "update its sha256 in eval/retrieval/sources.json and re-check the labels."
         )
     return dest
+
+
+def drop_stale(manifest: Optional[Dict[str, dict]] = None) -> List[Path]:
+    """Delete cached files whose checksum is not the one the manifest now pins.
+
+    For a persistent cache after a re-pin: ``fetch`` refuses a mismatched file
+    rather than replace it, so an old copy would fail every run until removed.
+    """
+    manifest = manifest or load_manifest()
+    dropped = []
+    for source, entry in manifest.items():
+        for rel, pinned in entry["files"].items():
+            path = local_path(source, rel)
+            if path.is_file() and _sha256(path) != pinned["sha256"]:
+                path.unlink()
+                dropped.append(path)
+    return dropped
 
 
 def fetch_many(
