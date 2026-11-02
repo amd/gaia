@@ -5,7 +5,7 @@ a procedure written for a model to follow, plus the tools it needs. Unlike an
 agent, it does not run on its own, so it is a separate lane with its own package
 format and publish contract ([#2467](https://github.com/amd/gaia/issues/2467)).
 
-This directory is the AMD **starter pack** (#893): fourteen worked examples, each
+This directory is the AMD **starter pack** (#893): worked examples, each
 demonstrating a different platform primitive (RAG, scratchpad SQL, memory,
 browser, file I/O, image generation). They are meant to be copied and edited,
 not used verbatim — see the
@@ -37,7 +37,7 @@ only create two places for the same facts to disagree.
 ## Use one
 
 Every skill here is published to the hub with each GAIA release, signed by the AMD
-key GAIA trusts out of the box. Browse them at https://amd-gaia.ai/hub.
+key GAIA trusts out of the box (v0.25.4 and later). Browse them at https://amd-gaia.ai/hub.
 
 ```bash
 gaia skill search report
@@ -72,6 +72,7 @@ touches a skill — `BLOCK` fails outright, `REVIEW` holds for maintainer sign-o
 Merging is not a tier promotion: the audit verdict plus publisher signing decide
 the tier.
 
-Contributing your own skill? It goes in
-[`skills/community/`](../../skills/community/), not here. Full route in the
-[skill format spec](https://amd-gaia.ai/docs/spec/agent-skills).
+Contributing your own skill? It goes **here**, in `hub/skills/<name>/`, by pull
+request. Once it merges, the next final release publishes it with the rest. The
+walkthrough is [Build and Publish a Skill](https://amd-gaia.ai/docs/guides/building-skills);
+the format is in the [skill format spec](https://amd-gaia.ai/docs/spec/agent-skills).

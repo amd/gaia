@@ -899,9 +899,10 @@ agent id (the hub rejects the publish).
   release.
 - **Skills enter the catalog by pull request.** Publishing is not open to the
   public — the Worker authenticates against a maintainer-held `PUBLISH_TOKENS`
-  secret, the same curation model agents use. A contributor opens a PR against
-  `skills/community/<name>/`, the audit runs as a required check, and a maintainer
-  publishes after merge. Merging is not itself a tier promotion.
+  secret, the same curation model agents use. A contributor opens a PR adding
+  `hub/skills/<name>/`, the audit runs as a required check, and the next final
+  release publishes it, signed by AMD's key. See
+  [Build and Publish a Skill](/guides/building-skills). Merging is not itself a tier promotion.
 - The **pre-publish security audit**
   ([#2468](https://github.com/amd/gaia/issues/2468)) gates the tier a skill may
   claim. `community` and `verified` are refused without a cleared report, and a

@@ -25,37 +25,56 @@ The pack lives in the hub's skills lane,
 [`hub/skills/`](https://github.com/amd/gaia/tree/main/hub/skills) — one directory
 per skill, alongside `hub/agents/` and `hub/components/`.
 
-## Install one
+## Find and install skills from the hub
+
+Every skill in the pack, and any skill added since, is published to the GAIA hub
+and signed by AMD. Browse them at [amd-gaia.ai/hub](https://amd-gaia.ai/hub), or
+from the terminal:
 
 ```bash
-# From a GAIA checkout
-gaia skill import hub/skills/research-report
-
-gaia skill list                       # see what's installed, and from which root
-gaia skill info research-report       # the manifest: permissions, tools, tier
-gaia skill info research-report --body   # ...and the full procedure
+gaia skill search summarize          # one word works best; no word lists them all
+gaia skill install summarize         # latest version, signed by AMD
+gaia skill list                      # what is installed, its version and tier
+gaia skill info summarize --body     # permissions, tools, and the full procedure
 ```
 
-`import` audits the folder, copies it into `~/.gaia/skills/`, and stamps it
-`security_tier: experimental` — **imported skills always re-earn trust**,
-whatever tier the file claims. That is deliberate: the tier records what *you*
-have verified, not what the author asserted. It follows that a skill asking for
-more than `experimental` allows — `coding` and `github-triage` want
-`shell:execute:<binary>` — is refused at import, and a skill that ships
-`tools.py` needs `--allow-experimental`.
+`install` needs GAIA v0.25.4 or later, which trusts AMD's signing key out of the
+box. It prints the provenance (`signed by AMD`) and the tier it installed at; no
+flags are needed for these skills. To update, run
+`gaia skill install <name> --force`, which replaces the installed copy with the
+newest version (`<name>@<range>` pins one). To remove one, run
+`gaia skill remove <name>`.
+
+You can also just ask the GAIA agent in chat: "find a skill that summarizes
+meetings and install it". It searches the hub (`search_skill_hub`) and installs
+(`install_skill`), but an installed skill is not active until it is loaded
+(`load_skill`), which the agent does when you ask it to use the skill. The agent
+will not install a skill that is unsigned or asks for a dangerous permission; it
+tells you, and you can approve it yourself in a terminal with
+`gaia skill install <name> --allow-experimental` or `--yes`.
+
+Writing your own? See [Build and Publish a Skill](/guides/building-skills).
+
+### From a checkout or a local folder
+
+`gaia skill import <folder>` copies a skill folder, such as one in a GAIA
+checkout, into `~/.gaia/skills/`:
+
+```bash
+gaia skill import hub/skills/research-report
+```
+
+`import` audits the folder and stamps it `security_tier: experimental`:
+**imported skills always re-earn trust**, whatever tier the file claims, because
+the tier records what *you* have verified, not what the author asserted. It
+follows that a skill asking for more than `experimental` allows (`coding` and
+`github-triage` want `shell:execute:<binary>`) is refused at import, and a skill
+that ships `tools.py` needs `--allow-experimental`.
 
 ## Use one
 
-<Warning>
-**Phase 1 loads skills programmatically, not from a chat flag.** The skills
-runtime that ships today ([#888](https://github.com/amd/gaia/issues/888)) covers
-the format, discovery, validation, permission bridge, tool loading, and the
-`gaia skill` CLI. Wiring a skill into an interactive `gaia chat` session with a
-flag is not part of it. Until it lands, the two ways to run a starter skill are
-the SDK call below and simply reading the procedure yourself.
-</Warning>
-
-Any agent built on GAIA's base `Agent` can load a skill by name:
+In chat, ask the GAIA agent to use the skill by name. From code, any agent
+built on GAIA's base `Agent` can load a skill by name:
 
 ```python
 from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
