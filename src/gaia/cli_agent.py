@@ -9,7 +9,9 @@ gates that publishing requires:
 * ``gaia agent init <name> --language python|cpp`` — scaffold a package that
   mirrors ``tests/fixtures/agents/hello-world/`` (the SDK reference package).
 * ``gaia agent version <patch|minor|major>`` — bump the SemVer in
-  ``gaia-agent.yaml`` (and keep ``pyproject.toml`` / ``__init__.py`` in sync).
+  ``gaia-agent.yaml`` and every other version file of the package (via its
+  ``packaging/stamp_version.py`` for the npm side), or fail naming the ones it
+  cannot move.
 * ``gaia agent test`` — quality gates in two modes:
   * ``--lint`` (default, CI-safe, no LLM): manifest valid + complete, package
     structure sound, Python sources parse, ``black``/``isort`` clean.
@@ -462,7 +464,15 @@ def _scaffold_cpp(pkg_dir: Path, names: _Names) -> None:
 
 
 def cmd_version(args) -> None:
-    """Bump the SemVer version in gaia-agent.yaml (and keep siblings in sync)."""
+    """Bump the SemVer in gaia-agent.yaml and every other file that declares it.
+
+    The manifest, ``pyproject.toml`` and the Python package's version literal
+    are moved here. A package that ships a ``packaging/stamp_version.py`` (the
+    hub agents) then has that stamper move everything downstream — npm
+    ``package.json`` / ``package-lock.json``, ``binaries.lock.json``, pinned doc
+    links — and its ``--check`` must pass. Any declaration that cannot be moved
+    fails the command, naming it, before a single file is written.
+    """
     pkg_dir = Path(args.path).expanduser().resolve()
     manifest_path = pkg_dir / "gaia-agent.yaml" if pkg_dir.is_dir() else pkg_dir
     if not manifest_path.exists():
@@ -479,20 +489,103 @@ def cmd_version(args) -> None:
         )
     new = _bump_semver(old, args.bump)
 
-    _replace_yaml_scalar(manifest_path, "version", new)
-    print(f"{manifest_path.name}: {old} -> {new}")
-
-    # Keep the package's other version declarations in sync so they don't drift.
     base = manifest_path.parent
     pyproject = base / "pyproject.toml"
-    if pyproject.exists() and _replace_pyproject_version(pyproject, new):
-        print(f"pyproject.toml: -> {new}")
+    stamper = base / "packaging" / "stamp_version.py"
+    npm_package = base.parent / "npm" / "package.json"
+    sources, unmovable = _python_version_sources(base)
+    pyproject_text = pyproject.read_text(encoding="utf-8") if pyproject.exists() else ""
+    pyproject_static = bool(_PYPROJECT_VERSION_RE.search(pyproject_text))
+    if (
+        pyproject.exists()
+        and not pyproject_static
+        and not _PYPROJECT_DYNAMIC_VERSION_RE.search(pyproject_text)
+    ):
+        unmovable.append(f"{pyproject}: no 'version = \"...\"' line")
+    if npm_package.exists() and not stamper.exists():
+        unmovable.append(
+            f"{npm_package.parent}: package.json and package-lock.json are only "
+            f"moved by a packaging/stamp_version.py, and {base} has none"
+        )
+    if unmovable:
+        raise AgentWorkflowError(
+            f"cannot bump {manifest_path.name} to {new}: these version "
+            f"declarations cannot be moved with it, so the package would ship "
+            f"mismatched versions. Nothing was changed.\n  "
+            + "\n  ".join(unmovable)
+            + '\nDeclare each as a plain literal (e.g. __version__ = "0.1.0") '
+            "or remove it, then re-run."
+        )
 
-    names_id = _read_yaml_scalar(manifest_path, "id")
-    if names_id:
-        init_py = base / f"gaia_agent_{names_id.replace('-', '_')}" / "__init__.py"
-        if init_py.exists() and _replace_dunder_version(init_py, new):
-            print(f"{init_py.name}: -> {new}")
+    _replace_yaml_scalar(manifest_path, "version", new)
+    print(f"{manifest_path.name}: {old} -> {new}")
+    if pyproject_static:
+        _replace_pyproject_version(pyproject, new)
+        print(f"pyproject.toml: -> {new}")
+    for source in sources:
+        _replace_python_version(source, new)
+        print(f"{source.relative_to(base)}: -> {new}")
+
+    if stamper.exists():
+        for extra in ([], ["--check"]):
+            try:
+                run = subprocess.run(
+                    [sys.executable, str(stamper), *extra],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=_STAMPER_TIMEOUT_S,
+                )
+            except subprocess.TimeoutExpired as e:
+                raise AgentWorkflowError(
+                    f"{stamper} {' '.join(extra)} did not finish within "
+                    f"{_STAMPER_TIMEOUT_S}s after bumping to {new}; the package's "
+                    f"version files may now disagree. Run it by hand to see where "
+                    f"it hangs."
+                ) from e
+            if run.returncode != 0:
+                raise AgentWorkflowError(
+                    f"{stamper} {' '.join(extra)} failed after bumping to {new} "
+                    f"(exit {run.returncode}); the package's version files now "
+                    f"disagree. Fix what it names below, then re-run the "
+                    f"stamper.\n{run.stdout}{run.stderr}"
+                )
+        print(f"{stamper.name}: every target -> {new}")
+
+
+# A stamper only rewrites a handful of local files; anything longer is a hang.
+_STAMPER_TIMEOUT_S = 60
+_PYPROJECT_VERSION_RE = re.compile(r'(?m)^version\s*=\s*"[^"]*"\s*$')
+_PYPROJECT_DYNAMIC_VERSION_RE = re.compile(r'(?m)^dynamic\s*=\s*\[[^\]]*"version"')
+_PY_VERSION_RE = re.compile(r'(?m)^((?:__version__|AGENT_VERSION)\s*=\s*)"[^"]*"')
+
+
+def _python_version_sources(base: Path) -> Tuple[List[Path], List[str]]:
+    """Files holding each top-level package's version literal, plus failures.
+
+    A package declares its version in ``version.py`` (re-exported by
+    ``__init__``) and/or as ``__version__`` in ``__init__.py``; both are moved.
+    A package whose ``__init__`` mentions ``__version__`` without a literal in
+    either file is returned as unmovable — a declaration the bump would miss.
+    """
+    sources: List[Path] = []
+    unmovable: List[str] = []
+    for pkg in sorted(p for p in base.iterdir() if (p / "__init__.py").is_file()):
+        if pkg.name == "tests":
+            continue
+        found = [
+            f
+            for f in (pkg / "version.py", pkg / "__init__.py")
+            if f.is_file() and _PY_VERSION_RE.search(f.read_text(encoding="utf-8"))
+        ]
+        if found:
+            sources.extend(found)
+        elif "__version__" in (pkg / "__init__.py").read_text(encoding="utf-8"):
+            unmovable.append(
+                f"{pkg / '__init__.py'}: __version__ is not a plain string literal "
+                f"here or in {pkg.name}/version.py"
+            )
+    return sources, unmovable
 
 
 def _bump_semver(version: str, part: str) -> str:
@@ -1234,18 +1327,12 @@ def _replace_pyproject_version(path: Path, value: str) -> bool:
     return False
 
 
-def _replace_dunder_version(path: Path, value: str) -> bool:
-    pattern = re.compile(r'^(__version__\s*=\s*)"[^"]*"(\s*)$')
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    for i, line in enumerate(lines):
-        stripped = line.rstrip("\n")
-        m = pattern.match(stripped)
-        if m:
-            newline = "\n" if line.endswith("\n") else ""
-            lines[i] = f'{m.group(1)}"{value}"{newline}'
-            path.write_text("".join(lines), encoding="utf-8")
-            return True
-    return False
+def _replace_python_version(path: Path, value: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        _PY_VERSION_RE.sub(lambda m: f'{m.group(1)}"{value}"', text, count=1),
+        encoding="utf-8",
+    )
 
 
 # ---------------------------------------------------------------------------

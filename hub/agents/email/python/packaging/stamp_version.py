@@ -19,8 +19,8 @@ Usage:
       # verify every present target matches AGENT_VERSION; print each mismatch and
       # exit non-zero (the CI / publish-time gate). Mirrors bump-ui-version.mjs --check.
 
-Targets that are absent (file missing, or the version field/URL not found) are
-SKIPPED WITH A WARNING, never failed — some targets (npm README image URL,
+Optional targets that are absent (file missing, or the version field/URL not
+found) are SKIPPED WITH A WARNING, never failed — some targets (npm README image URL,
 assets/architecture.html) live on other in-flight branches and aren't on main
 yet, so the script must work across that partial state and stamp them correctly
 once those branches merge.
@@ -66,6 +66,8 @@ class Rule:
     pattern: re.Pattern
     # Human-readable name of the field this rule targets (for warnings).
     field: str
+    # A required target that is absent fails instead of skipping.
+    required: bool = False
 
 
 @dataclass
@@ -74,6 +76,7 @@ class Result:
     already_ok: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     mismatches: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
 
 def read_agent_version() -> str:
@@ -116,6 +119,26 @@ def build_rules() -> list[Rule]:
             NPM_ROOT / "package.json",
             re.compile(r'(?m)^(  "version":\s*")([^"]+)(")'),
             "version",
+        ),
+        # npm package-lock.json: the top-level version and the root package's
+        # packages[""].version. Required: a stale lock shipped 0.5.0 inside the
+        # 0.6.0 release, and a skip here would hide exactly that.
+        Rule(
+            "npm package-lock.json (version)",
+            NPM_ROOT / "package-lock.json",
+            re.compile(r'(?m)^(  "version":\s*")([^"]+)(")'),
+            "version",
+            required=True,
+        ),
+        Rule(
+            'npm package-lock.json (packages[""].version)',
+            NPM_ROOT / "package-lock.json",
+            re.compile(
+                r'("packages":\s*\{\s*"":\s*\{\s*"name":\s*"[^"]*",\s*"version":\s*")'
+                r'([^"]+)(")'
+            ),
+            'packages[""].version',
+            required=True,
         ),
         # binaries.lock.json: agentVersion field.
         Rule(
@@ -160,14 +183,14 @@ def process(version: str, check_only: bool) -> Result:
     result = Result()
     for rule in build_rules():
         if not rule.path.exists():
-            result.skipped.append(f"{rule.label}: file absent ({_rel(rule.path)})")
+            msg = f"{rule.label}: file absent ({_rel(rule.path)})"
+            (result.errors if rule.required else result.skipped).append(msg)
             continue
         text = rule.path.read_text(encoding="utf-8")
         matches = list(rule.pattern.finditer(text))
         if not matches:
-            result.skipped.append(
-                f"{rule.label}: {rule.field} not found in {_rel(rule.path)}"
-            )
+            msg = f"{rule.label}: {rule.field} not found in {_rel(rule.path)}"
+            (result.errors if rule.required else result.skipped).append(msg)
             continue
 
         current_values = {m.group(2) for m in matches}
@@ -221,6 +244,17 @@ def main(argv=None) -> int:
 
     for line in result.skipped:
         print(f"  SKIP  {line}")
+
+    if result.errors:
+        print()
+        for line in result.errors:
+            print(f"  FAIL  {line}  [REQUIRED TARGET]")
+        print(
+            "\nA required version target is missing or has no stampable version "
+            "field. Restore it (e.g. `npm install` in hub/agents/email/npm "
+            "regenerates package-lock.json) before stamping or publishing."
+        )
+        return 1
 
     if args.check:
         for label in result.already_ok:

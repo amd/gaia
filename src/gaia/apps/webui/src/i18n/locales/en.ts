@@ -508,6 +508,14 @@ export const enMessages = {
     'out.goToAria': 'Go to the turn that made {name}',
     'out.fewer': 'Show fewer',
     'out.more': 'Show {n} more',
+    'tools.title': 'Agent info',
+    'tools.listLabel': 'Tools this chat\'s agent can use',
+    'tools.listError': 'Couldn\'t list this agent\'s tools: {error}',
+    'tools.empty': 'This agent has no tools: it answers from the model alone.',
+    'tools.notRunning': 'This chat\'s agent isn\'t running yet. It starts with your next message, and its tools show here after that.',
+    'tools.cat.mcp': 'Connectors',
+    'tools.cat.skill': 'Skills',
+    'tools.cat.agent': 'Built in',
     'chg.title': 'Changes',
     'chg.files.one': '{n} file',
     'chg.files.other': '{n} files',
@@ -906,6 +914,19 @@ export const enMessages = {
     'download.chip': 'Downloading {done} of {count} · {pct}%',
     'download.chipFailed': 'A download failed',
     'download.chipAria': 'Model downloads. Open Settings to see them.',
+
+    // Mobile access: ngrok not installed
+    'mobile.ngrokRequired': 'ngrok required',
+    'mobile.setupTitle': 'Set up ngrok (one-time)',
+    'mobile.setupIntro': 'Mobile access uses ngrok to reach this PC from your phone.',
+    'mobile.setupInstall': 'Install it with the command below, then press Retry.',
+    'mobile.setupDownload': 'Download it for your system, then press Retry.',
+    'mobile.installCommand': 'ngrok install command',
+    'mobile.copyCommand': 'Copy command',
+    'mobile.copy': 'Copy',
+    'mobile.copied': 'Copied',
+    'mobile.downloadPage': 'ngrok download page',
+    'mobile.retry': 'Retry',
 } as const;
 
 export const en: Locale = {

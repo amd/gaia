@@ -18,6 +18,7 @@ package filelock
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -48,7 +49,7 @@ func LockPath(target string) string {
 // Acquire takes the lock guarding target, polling until timeout.
 func Acquire(target string, timeout time.Duration) (*Lock, error) {
 	path := LockPath(target)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("cannot create %s: %w", filepath.Dir(path), err)
 	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
@@ -81,6 +82,33 @@ func (l *Lock) Release() {
 	Unlock(l.f)
 	l.f.Close()
 	l.f = nil
+}
+
+// ReadFile reads target while holding the same lock used by writers. The lock
+// is intentionally exclusive: Windows may reject a read during os.Rename, and
+// a short critical section keeps readers from observing a replacement in
+// progress without requiring platform-specific shared-lock semantics.
+func ReadFile(target string) ([]byte, error) {
+	return readFile(target, Acquire, os.ReadFile)
+}
+
+type acquireFunc func(string, time.Duration) (*Lock, error)
+
+type readFunc func(string) ([]byte, error)
+
+func readFile(target string, acquire acquireFunc, read readFunc) ([]byte, error) {
+	lock, err := acquire(target, Timeout)
+	if err != nil {
+		// A provisioned GAIA_CONFIG_FILE may be readable but live in a directory
+		// where the TUI cannot create its sibling lock. Preserve that read-only
+		// configuration mode; lock contention and every other failure remain loud.
+		if errors.Is(err, fs.ErrPermission) {
+			return read(target)
+		}
+		return nil, err
+	}
+	defer lock.Release()
+	return read(target)
 }
 
 // WriteAtomic replaces path with data. The bytes go to a temp file in the same
