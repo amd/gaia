@@ -73,9 +73,10 @@ something like *"Summarise today's messages in #general."*
 
 With a bot token the useful tools are `channels_list`,
 `conversations_history`, `conversations_replies`, `users_search`, and
-`usergroups_list`. The server lists a few more (unread counts, saved items,
-user-group edits) that need a user token or a scope this setup doesn't add,
-so they return a Slack error if an agent calls them.
+`usergroups_list`. The server also lists tools that change things: join,
+leave, and mark-as-read for channels, and user-group create and edit. The bot
+scopes in Step 1 don't cover them, so Slack refuses each one with
+`missing_scope`, and GAIA asks you before an agent calls any of them.
 
 ## Common issues
 
@@ -91,6 +92,16 @@ reinstall the app to the workspace, then **Disconnect** the tile (or
 `gaia connectors disconnect mcp-slack`) and configure it again with the new
 token.
 
+### The connector times out on its first start
+
+On a cold start, `slack-mcp-server` fetches your workspace's full user and
+channel list before it answers GAIA. GAIA waits 10 seconds for MCP servers to
+connect, which a very large workspace can exceed. Add a longer `timeout`
+(seconds, at most 600) to the `mcp-slack` entry in `~/.gaia/mcp_servers.json`,
+for example `"timeout": 120`. Configuring the connector again rewrites the
+entry, so add it back afterwards. Later starts read the cached lists and
+connect quickly.
+
 ### `npx: command not found`
 
 `slack-mcp-server` is started through `npx`. Install Node 18+ and make sure
@@ -105,6 +116,11 @@ token.
 - **From Slack:** open your app at
   [api.slack.com/apps](https://api.slack.com/apps) → **OAuth & Permissions** →
   **Revoke All OAuth Tokens**, or uninstall the app from the workspace.
+- **Cached lists:** `slack-mcp-server` keeps your workspace's users and
+  channels in `*_users_cache.json` and `*_channels_cache_v2.json` files, and
+  **Disconnect** doesn't remove them. Delete the `slack-mcp-server` folder
+  under `%LocalAppData%` on Windows, `~/Library/Caches` on macOS, or
+  `~/.cache` on Linux.
 
 ## See also
 
