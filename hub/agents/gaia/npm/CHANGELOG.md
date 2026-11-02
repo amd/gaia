@@ -10,6 +10,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **A project's `.env` can only supply the Claude API key.** The sidecar reads
+  `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
+  Claude calls, and ignores every other name there with one warning. Settings
+  such as `TAVILY_API_KEY` or `LEMONADE_BASE_URL` kept in a project's `.env`
+  now have to be exported in the launch environment.
 - **On Gemma 4 E4B the agent stops offering features that model fails.** The
   SQL scratchpad, email, image generation, and finding or installing skills
   failed GAIA's agent evals on Gemma, and their 16 tool descriptions were read

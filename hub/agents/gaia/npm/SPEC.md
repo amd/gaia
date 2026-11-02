@@ -622,6 +622,10 @@ server — never inherit the sidecar token or GAIA's other internal credentials
 (the model-broker token, custody secret and engineering pairing token): their
 environment comes from `gaia.env.child_env`, which also drops any name listed
 in `GAIA_CHILD_ENV_DENY` (comma or space separated). User credentials such as `GH_TOKEN` pass through unchanged.
+From a `.env` in its working directory the sidecar reads only
+`ANTHROPIC_API_KEY`, for its own Claude calls; it ignores every other name in
+that file and logs one warning listing them. Export other settings in the
+launch environment instead.
 `GAIA_NO_DOTENV=1` in the sidecar's launch environment stops it loading `.env`
 files; a `.env` file cannot set that switch itself.
 

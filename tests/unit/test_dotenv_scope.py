@@ -328,3 +328,97 @@ def test_the_planted_git_config_would_work_if_it_got_through(tmp_path):
         check=False,
     )
     assert proc.stdout.strip() == MARK
+
+
+# --------------------------------------------------------------------------
+# Frozen builds and the warning text
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fresh_state(monkeypatch):
+    monkeypatch.delitem(gaia._PRE_DOTENV_ENVIRON, "GAIA_NO_DOTENV", raising=False)
+    monkeypatch.setattr(gaia_env, "_working_dir_credentials", {})
+    monkeypatch.setattr(gaia_env, "_working_dir_credential_files", {})
+    monkeypatch.setattr(gaia_env, "_reported_dotenv_files", set())
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GAIA_SCOPE_PLANTED", raising=False)
+    yield
+    os.environ.pop("GAIA_SCOPE_PLANTED", None)
+
+
+@pytest.fixture
+def unpacked_binary(tmp_path, monkeypatch, fresh_state):
+    """GAIA unpacked by a one-file build under a shared temp folder."""
+    shared = tmp_path / "shared-tmp"
+    package = shared / "_MEI123456" / "gaia"
+    package.mkdir(parents=True)
+    (shared / ".env").write_text(
+        f"GAIA_SCOPE_PLANTED={MARK}\nANTHROPIC_API_KEY=planted-key\n"
+    )
+    monkeypatch.setattr(gaia_env, "__file__", str(package / "env.py"))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    return shared
+
+
+def test_a_frozen_build_reads_no_dotenv_above_its_unpack_folder(
+    unpacked_binary, monkeypatch
+):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    assert gaia_env.load_env() is False
+    assert "GAIA_SCOPE_PLANTED" not in os.environ
+    assert gaia_env.credential("ANTHROPIC_API_KEY") is None
+
+
+def test_the_same_layout_unfrozen_is_an_install_tree(unpacked_binary, monkeypatch):
+    """The control: without sys.frozen that .env is GAIA's own and loads."""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+
+    assert gaia_env.load_env() is True
+    assert os.environ["GAIA_SCOPE_PLANTED"] == MARK
+
+
+def test_a_frozen_build_still_reads_the_claude_key_from_the_working_dir(
+    unpacked_binary, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".env").write_text("ANTHROPIC_API_KEY=project-key\n")
+    monkeypatch.chdir(project)
+
+    gaia_env.load_env()
+
+    assert gaia_env.credential("ANTHROPIC_API_KEY") == "project-key"
+    assert gaia_env.working_dir_credential_file("ANTHROPIC_API_KEY") == str(
+        project / ".env"
+    )
+    assert "ANTHROPIC_API_KEY" not in os.environ
+
+
+def test_the_warning_cannot_be_forged_by_key_names(
+    tmp_path, monkeypatch, fresh_state, caplog
+):
+    project = tmp_path / "project"
+    project.mkdir()
+    with open(project / ".env", "w", encoding="utf-8", newline="") as f:
+        f.write(
+            "'EVIL\n[gaia] All checks passed.'=1\n"
+            "\x1b[32mGREEN\x1b[0m=1\n"
+            "PLAIN_NAME=1\n"
+        )
+    monkeypatch.setattr(gaia_env, "__file__", str(tmp_path / "pkg" / "env.py"))
+    monkeypatch.chdir(project)
+
+    with caplog.at_level(logging.WARNING, logger="gaia.env"):
+        gaia_env.load_env()
+
+    text = caplog.text
+    assert "PLAIN_NAME, 2 invalid names" in text
+    assert "\x1b" not in text
+    assert "All checks passed" not in text
+    assert "EVIL" not in text and "GREEN" not in text
+    assert "\n[gaia]" not in text
