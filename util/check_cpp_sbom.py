@@ -44,7 +44,7 @@ _TAG_RE = re.compile(r"/refs/tags/v?([^/]+?)\.(?:tar\.gz|zip)$")
 _UNTRACKED_DEPENDENCY_RE = re.compile(
     r"""
     (?P<external>\bExternalProject_Add\s*\()
-    |(?P<populate>\bFetchContent_Populate\s*\(\s*[^()\s]+\s+(?=[^)]*\S))
+    |(?P<populate>\bFetchContent_Populate\s*\(\s*[^()\s]+\s+[^)\s])
     |(?P<cpm>\bCPMAddPackage\s*\()
     |(?P<download>\bfile\s*\(\s*DOWNLOAD\b)
     """,
@@ -85,7 +85,7 @@ def fetchcontent_dependencies(cmake_text: str, origin: str) -> List[Dependency]:
     errors: List[str] = []
     cmake_text = _strip_comments(cmake_text)
     for match in _UNTRACKED_DEPENDENCY_RE.finditer(cmake_text):
-        name = _UNTRACKED_COMMAND_NAMES[match.lastgroup or "external"]
+        name = _UNTRACKED_COMMAND_NAMES[match.lastgroup]
         errors.append(
             f"{origin} uses {name}; declare an archive with "
             "FetchContent_Declare(URL + URL_HASH SHA256=...) so the SBOM can track it"

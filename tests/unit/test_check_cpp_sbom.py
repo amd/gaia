@@ -334,7 +334,11 @@ def test_declared_populate_and_generated_cmake_config_are_allowed(cpp_tree):
     config = cpp_tree / "buildsys" / "gaiaConfig.cmake.in"
     config.parent.mkdir()
     config.write_text(
-        "FetchContent_Populate(json)\nfind_dependency(OpenSSL)\n", encoding="utf-8"
+        "FetchContent_Populate(json)\n"
+        "FetchContent_Populate(json )\n"
+        "FetchContent_Populate(\n  json\n)\n"
+        "find_dependency(OpenSSL)\n",
+        encoding="utf-8",
     )
     assert _errors(cpp_tree, _sbom(_good_packages())) == []
 
