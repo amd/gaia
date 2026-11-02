@@ -119,16 +119,26 @@ LONG_INPUTS = {
 }
 
 
-@pytest.mark.parametrize("name", LONG_INPUTS)
-def test_masking_stays_fast_on_long_input(name):
-    text = LONG_INPUTS[name]
+def _masking_elapsed(text):
     started = time.perf_counter()
-
     MemoryMixin._mask_credentials(text)
     MemoryMixin._looks_like_credential(text)
+    return time.perf_counter() - started
 
-    # ~0.2s locally; the bound catches runaway backtracking, not a busy CI runner.
-    assert time.perf_counter() - started < 5.0
+
+@pytest.mark.parametrize("name", LONG_INPUTS)
+def test_masking_scales_linearly_on_long_input(name):
+    text = LONG_INPUTS[name]
+    # Compare the same input shape at two sizes and keep the fastest sample so
+    # a temporarily busy parallel runner cannot turn this ReDoS guard flaky.
+    one_size = min(_masking_elapsed(text) for _ in range(3))
+    four_sizes = min(_masking_elapsed(text * 4) for _ in range(3))
+
+    # A fourfold input is about 4x for linear work but about 16x for quadratic
+    # backtracking, leaving a stable gap for the regression guard.
+    assert one_size < 10.0
+    assert four_sizes < 10.0
+    assert four_sizes / one_size < 8.0
 
 
 def test_remember_refuses_a_pin(store):
