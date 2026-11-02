@@ -56,10 +56,11 @@ std::string describeServerError(const json& body) {
                std::to_string(intField(*inner, "n_prompt_tokens")) +
                " tokens but server n_ctx=" + std::to_string(intField(*inner, "n_ctx")) +
                ".\n"
-               "  Restart Lemonade with a larger context:\n"
-               "    set LEMONADE_CTX_SIZE=32768 in the environment before starting the server\n"
-               "  or via the helper script:\n"
-               "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
+               "  Reload the model with a larger window, e.g. 65536:\n"
+               "    set GAIA_CONTEXT_SIZE=65536 (or AgentConfig::contextSize) and restart\n"
+               "    the agent; it reloads its model at that window\n"
+               "  or save it for the model in Lemonade:\n"
+               "    lemonade load <model> --ctx-size 65536 --save-options";
     }
     return msg.empty() ? "LLM server error" : msg;
 }

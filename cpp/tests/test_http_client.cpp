@@ -468,8 +468,10 @@ TEST(LemonadeErrorDecodeTest, StreamingSseErrorEventSurfacesContextRemedy) {
     EXPECT_NE(msg.find("Server context window too small"), std::string::npos) << msg;
     EXPECT_NE(msg.find("prompt is 40000 tokens"), std::string::npos) << msg;
     EXPECT_NE(msg.find("n_ctx=16384"), std::string::npos) << msg;
-    EXPECT_NE(msg.find("LEMONADE_CTX_SIZE"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("GAIA_CONTEXT_SIZE"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("--ctx-size"), std::string::npos) << msg;
     EXPECT_EQ(msg.find("lemonade-server serve"), std::string::npos) << msg;
+    EXPECT_EQ(msg.find("start-lemonade.ps1"), std::string::npos) << msg;
 }
 
 TEST(LemonadeErrorDecodeTest, StreamingUnterminatedErrorEventIsNotLost) {
