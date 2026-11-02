@@ -147,8 +147,36 @@ class TestParseAt:
         with pytest.raises(ValueError, match="more than 100 years away"):
             parse_at(value, NOW)
 
-    def test_just_under_the_limit_is_accepted(self):
-        assert parse_at(f"+{100 * 365}d", NOW) == NOW + timedelta(days=100 * 365)
+    def test_exactly_100_calendar_years_is_the_limit(self):
+        # 2026-11-01 to 2126-11-01 is 36,524 days (24 leap days).
+        limit = datetime(2126, 11, 1, 12, 0, tzinfo=timezone.utc)
+        assert parse_at("2126-11-01T12:00Z", NOW) == limit
+        assert parse_at("+36524d", NOW) == limit
+        with pytest.raises(ValueError, match="more than 100 years away"):
+            parse_at("2126-11-02T12:00Z", NOW)
+        with pytest.raises(ValueError, match="more than 100 years away"):
+            parse_at("+36525d", NOW)
+        with pytest.raises(ValueError, match="more than 100 years away"):
+            parse_at("2126-11-01T12:01Z", NOW)
+
+    def test_limit_from_feb_29_lands_on_feb_28(self):
+        leap = datetime(2000, 2, 29, 12, 0, tzinfo=timezone.utc)
+        assert parse_at("2100-02-28T12:00Z", leap) == datetime(
+            2100, 2, 28, 12, 0, tzinfo=timezone.utc
+        )
+        with pytest.raises(ValueError, match="more than 100 years away"):
+            parse_at("2100-03-01T12:00Z", leap)
+
+    @pytest.mark.parametrize(
+        "value",
+        ["+" + "9" * 5000 + "d", "+1d" + "9" * 5000 + "m", "+" + "9" * 13 + "h"],
+    )
+    def test_over_long_delay_is_the_normal_error(self, value):
+        with pytest.raises(ValueError, match="more than 100 years away"):
+            parse_at(value, NOW)
+
+    def test_leading_zeros_do_not_count_as_digits(self):
+        assert parse_at("+" + "0" * 50 + "2h", NOW) == NOW + timedelta(hours=2)
 
     def test_year_one_local_time_is_a_value_error(self):
         # Linux raises ValueError, Windows OSError, converting it from local.
@@ -240,7 +268,12 @@ class TestScheduleModel:
         )
         with pytest.raises(ValueError, match="quoted ISO datetime") as exc:
             store.get("x").due_at()
-        assert "'x'" in str(exc.value) and "schedules.toml" in str(exc.value)
+        message = str(exc.value)
+        assert "'x'" in message and "schedules.toml" in message
+        # Deleting only the at line would leave an entry the store can't load.
+        assert "delete the whole [schedules.x] entry" in message
+        assert "gaia schedule remove x" in message
+        assert "delete that line" not in message
 
     @pytest.mark.parametrize(
         "at", ["0001-01-01T00:00", "9999-12-31T23:59-14:00", "not-a-time"]

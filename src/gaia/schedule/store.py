@@ -54,11 +54,20 @@ ONE_SHOT_STATES = (
 _RELATIVE_AT = re.compile(r"\+((?:\d+[dhm])+)")
 _RELATIVE_PART = re.compile(r"(\d+)([dhm])")
 _UNIT_SECONDS = {"d": 86400, "h": 3600, "m": 60}
-#: The furthest ahead ``--at`` reaches, the same on every OS and timezone.
-_MAX_AHEAD = timedelta(days=100 * 365)
+#: Longest number a relative ``--at`` part may have; more is past the limit.
+_MAX_DELAY_DIGITS = 12
 _AT_EXAMPLES = (
     "an ISO datetime like 2026-11-02T09:00 or a delay like +30m, +2h or +1d12h"
 )
+
+
+def _latest_at(now: datetime) -> datetime:
+    """100 calendar years after *now*: the furthest ahead ``--at`` reaches."""
+    try:
+        return now.replace(year=now.year + 100)
+    except ValueError:
+        # Feb 29 in a year whose +100 is not a leap year.
+        return now.replace(year=now.year + 100, day=28)
 
 
 def parse_at(value: str, now: Optional[datetime] = None) -> datetime:
@@ -70,20 +79,21 @@ def parse_at(value: str, now: Optional[datetime] = None) -> datetime:
     """
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     text = value.strip()
+    too_far = f"--at {value!r} is more than 100 years away; give {_AT_EXAMPLES}"
+    latest = _latest_at(now)
     relative = _RELATIVE_AT.fullmatch(text)
     if relative:
-        seconds = sum(
-            int(n) * _UNIT_SECONDS[unit]
-            for n, unit in _RELATIVE_PART.findall(relative.group(1))
-        )
+        parts = _RELATIVE_PART.findall(relative.group(1))
+        # Checked before int(): Python refuses to parse very long digit strings.
+        if any(len(n.lstrip("0")) > _MAX_DELAY_DIGITS for n, _ in parts):
+            raise ValueError(too_far)
+        seconds = sum(int(n) * _UNIT_SECONDS[unit] for n, unit in parts)
         if seconds <= 0:
             raise ValueError(
                 f"--at {value!r} is not in the future; give {_AT_EXAMPLES}"
             )
-        if seconds > _MAX_AHEAD.total_seconds():
-            raise ValueError(
-                f"--at {value!r} is more than 100 years away; give {_AT_EXAMPLES}"
-            )
+        if seconds > (latest - now).total_seconds():
+            raise ValueError(too_far)
         return (now + timedelta(seconds=seconds)).replace(microsecond=0)
     # A date alone would silently mean midnight.
     if text.startswith("+") or not re.search(r"\d[T ]\d", text):
@@ -100,9 +110,7 @@ def parse_at(value: str, now: Optional[datetime] = None) -> datetime:
         ) from e
     # Decided by year first: OSes disagree on converting years near 1 or 9999.
     if moment.year > now.year + 100:
-        raise ValueError(
-            f"--at {value!r} is more than 100 years away; give {_AT_EXAMPLES}"
-        )
+        raise ValueError(too_far)
     if moment.year < now.year - 1:
         raise ValueError(
             f"--at {value!r} is in the past; give a future time, {_AT_EXAMPLES}"
@@ -123,10 +131,8 @@ def parse_at(value: str, now: Optional[datetime] = None) -> datetime:
             f"--at {value!r} is in the past (it is now "
             f"{now.astimezone():%Y-%m-%d %H:%M %Z}); give a future time"
         )
-    if moment - now > _MAX_AHEAD:
-        raise ValueError(
-            f"--at {value!r} is more than 100 years away; give {_AT_EXAMPLES}"
-        )
+    if moment > latest:
+        raise ValueError(too_far)
     return moment
 
 
@@ -191,7 +197,9 @@ class Schedule:
         unreadable = (
             f"schedule {self.name!r} has an unreadable at {self.at!r} in the "
             "schedule store; write it as a quoted ISO datetime, like "
-            'at = "2027-01-01T09:00:00", or delete that line in schedules.toml'
+            'at = "2027-01-01T09:00:00", or delete the whole '
+            f"[schedules.{self.name}] entry in schedules.toml, or run "
+            f"`gaia schedule remove {self.name}`"
         )
         # An unquoted TOML datetime loads as a datetime, not a string.
         if not isinstance(self.at, str):
