@@ -33,10 +33,29 @@ describe('persistedQuestion', () => {
         expect(persistedQuestion(server, local, local[2])).toBeNull();
     });
 
-    it('throws when the server holds a different question in that place', () => {
+    it('skips an earlier question the server never saved', () => {
+        const server = [msg(1, 'user', 'q2'), msg(2, 'assistant', 'oops')];
+        const local = [
+            msg(1_780_000_000_000, 'user', 'q1'), msg(1_780_000_000_002, 'assistant', 'lost', { failed: true }),
+            msg(1_780_000_000_100, 'user', 'q2'), msg(1_780_000_000_102, 'assistant', 'x', { failed: true }),
+        ];
+        expect(persistedQuestion(server, local, local[2])?.id).toBe(1);
+    });
+
+    it('pairs saved questions that still carry temporary ids in order', () => {
+        const server = [msg(1, 'user', 'q1'), msg(2, 'assistant', 'e1'), msg(3, 'user', 'q2'), msg(4, 'assistant', 'e2')];
+        const local = [
+            msg(1_780_000_000_000, 'user', 'q1'), msg(1_780_000_000_002, 'assistant', 'e1'),
+            msg(1_780_000_000_100, 'user', 'q2'), msg(1_780_000_000_102, 'assistant', 'e2'),
+        ];
+        expect(persistedQuestion(server, local, local[0])?.id).toBe(1);
+        expect(persistedQuestion(server, local, local[2])?.id).toBe(3);
+    });
+
+    it('is null when the server holds a different question after the shared rows', () => {
         const server = [msg(1, 'user', 'a'), msg(2, 'user', 'other')];
         const local = [server[0], msg(1_780_000_000_000, 'user', 'b')];
-        expect(() => persistedQuestion(server, local, local[1])).toThrow(/different question/);
+        expect(persistedQuestion(server, local, local[1])).toBeNull();
     });
 
     it('throws for a question no longer in the view', () => {
@@ -61,9 +80,15 @@ describe('keepFailedReply', () => {
         expect(keepFailedReply(ok, server)).toBe(server);
     });
 
-    it('leaves them alone when the server has a different number of rows', () => {
+    it('leaves them alone when the server moved on to another question', () => {
         const server = [msg(1, 'user', 'q'), msg(2, 'assistant', 'a'), msg(3, 'user', 'more'), msg(4, 'assistant', 'b')];
         expect(keepFailedReply(local, server)).toBe(server);
+    });
+
+    it('keeps Try again when an earlier unsaved turn makes the lists differ in length', () => {
+        const withLost = [msg(1_779_000_000_000, 'user', 'lost'), msg(1_779_000_000_002, 'assistant', 'x', { failed: true }), ...local];
+        const server = [msg(1, 'user', 'q'), msg(2, 'assistant', 'Sorry, something went wrong.')];
+        expect(keepFailedReply(withLost, server)[1].failed).toBe(true);
     });
 
     it('never marks a question as a failed reply', () => {

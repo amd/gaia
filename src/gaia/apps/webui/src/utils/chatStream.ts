@@ -78,26 +78,34 @@ export function fromApiMessages(raw: unknown[] | undefined): Message[] {
 /**
  * The server's row for *target*, a question shown in *local*. A question sent
  * from this view keeps its temporary id until the list reloads, so it is matched
- * by its place among the questions. Null when the server never saved it.
+ * by its text, in order, among the questions the server saved since the last row
+ * both sides know. Null when the server never saved it.
  */
 export function persistedQuestion(server: Message[], local: Message[], target: Message): Message | null {
     const byId = server.find((m) => m.id === target.id && m.role === 'user');
     if (byId) return byId;
-    const place = local.filter((m) => m.role === 'user').findIndex((m) => m.id === target.id);
-    if (place < 0) throw new Error(`Message ${target.id} is no longer in this chat.`);
-    const row = server.filter((m) => m.role === 'user')[place];
-    if (!row) return null;
-    if (row.content !== target.content) {
-        throw new Error(`The server holds a different question in place of message ${target.id}.`);
+    const at = local.findIndex((m) => m.id === target.id);
+    if (at < 0) throw new Error(`Message ${target.id} is no longer in this chat.`);
+    // Pair the questions after the last row both sides share, skipping ones the server never saved.
+    const known = new Set(server.map((m) => m.id));
+    let anchor = at - 1;
+    while (anchor >= 0 && !known.has(local[anchor].id)) anchor--;
+    const from = anchor < 0 ? 0 : server.findIndex((m) => m.id === local[anchor].id) + 1;
+    const saved = server.slice(from).filter((m) => m.role === 'user');
+    let next = 0;
+    for (const m of local.slice(anchor + 1, at)) {
+        if (m.role === 'user' && saved[next]?.content === m.content) next++;
     }
-    return row;
+    return saved[next]?.content === target.content ? saved[next] : null;
 }
 
 /** The server's rows, keeping Try again on a failed reply they stand in for. */
 export function keepFailedReply(local: Message[], server: Message[]): Message[] {
     const last = local[local.length - 1];
     const twin = server[server.length - 1];
-    if (!last?.failed || server.length !== local.length || twin?.role !== 'assistant') return server;
+    if (!last?.failed || twin?.role !== 'assistant') return server;
+    const lastQuestion = (rows: Message[]) => [...rows].reverse().find((m) => m.role === 'user')?.content;
+    if (lastQuestion(local) !== lastQuestion(server)) return server;
     return [...server.slice(0, -1), { ...twin, failed: true }];
 }
 

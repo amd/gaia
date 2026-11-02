@@ -15,7 +15,7 @@ import { refreshActiveRuns } from '../services/activeRuns';
 import { claimView, dispatchNext, idleByPoll, isBusyError, markActivity, requeueRefused, type QueuedSend, type SendOutcome } from '../services/queueDispatch';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
-import { classifyChatError, isStreamInterrupted, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
+import { classifyChatError, isStreamInterrupted, mayStillFinish, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
 import { ConnectorRetryBanner } from './ConnectorRetryBanner';
 import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } from '../types';
@@ -1253,7 +1253,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     content: errorContent,
                     created_at: new Date().toISOString(),
                     rag_sources: null,
-                    failed: true,
+                    failed: !mayStillFinish(err),
                 };
                 addMessage(errMsg);
                 setStreaming(false);

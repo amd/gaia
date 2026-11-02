@@ -19,6 +19,11 @@ export function isStreamInterrupted(err: Error): boolean {
     return err.name === 'StreamStalledError' || err.name === 'StreamDroppedError';
 }
 
+/** The view lost the turn, but its run may still finish server-side; resending would ask twice. */
+export function mayStillFinish(err: Error): boolean {
+    return isStreamInterrupted(err) || err instanceof StreamTimeoutError;
+}
+
 /**
  * Plain words and a next step for a chat-stream failure the client can name,
  * or null to leave the message to the caller's generic handling.

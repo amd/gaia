@@ -246,6 +246,27 @@ describe('Try again on a failed turn', () => {
         expect(useChatStore.getState().messages.some((m) => m.failed)).toBe(false);
     });
 
+    it('offers no Try again when the answer may still finish', async () => {
+        const dropped = new Error('stream dropped');
+        dropped.name = 'StreamDroppedError';
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'summarize the report' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        // Give up on reconnecting straight away.
+        for (let i = 0; i < 10 && useChatStore.getState().isStreaming; i++) {
+            await act(async () => {
+                sends[0].cbs.onError(dropped);
+                await new Promise((r) => setTimeout(r, 0));
+            });
+        }
+        const last = () => useChatStore.getState().messages[useChatStore.getState().messages.length - 1];
+        await waitFor(() => expect(last()?.content).toContain('The answer may still finish'));
+        expect(last()?.failed).toBe(false);
+        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    });
+
     it('sends once when Try again is clicked twice', async () => {
         await sendAndFail(new Error('Lemonade returned 500'));
         const button = screen.getByRole('button', { name: 'Try again' });
