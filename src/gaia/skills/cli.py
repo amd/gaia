@@ -303,7 +303,7 @@ def _add_marketplace_subparsers(sub: argparse._SubParsersAction) -> None:
         "search", help="Search the Agent Hub's skills lane for a published skill"
     )
     p_search.add_argument(
-        "query", nargs="?", default="", help="Substring to match (omit to list all)"
+        "query", nargs="?", default="", help="Words to match (omit to list all)"
     )
     p_search.add_argument(
         "--json",
