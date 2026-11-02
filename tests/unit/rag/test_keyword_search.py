@@ -62,6 +62,15 @@ def test_word_in_every_chunk_of_a_small_document_still_matches():
     assert len(_top("contract", ["contract one", "contract two"])) == 2
 
 
+def test_distinctive_word_matches_in_a_document_of_any_size():
+    chunk = "Finance handles reimbursement of travel costs"
+    for size in range(1, 12):
+        texts = [chunk] + [f"general clause {n} on scope" for n in range(size - 1)]
+
+        assert _top("Who handles reimbursement?", texts) == [0], size
+    assert _top("Who approves reimbursement?", [chunk]) == [0]
+
+
 def test_nothing_matching_returns_nothing():
     assert rank_keyword_chunks("zebra", [(0, "contract"), (1, "terms")]) == []
     assert rank_keyword_chunks("", [(0, "contract")]) == []
