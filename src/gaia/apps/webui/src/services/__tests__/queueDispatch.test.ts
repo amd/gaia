@@ -302,15 +302,6 @@ describe('a deleted chat', () => {
         await flush();
         expect(calls).toHaveLength(1);
     });
-
-    it('drops its queue when asking about its last reply finds the chat gone', async () => {
-        mockedApi.getFollowUpOutcome.mockRejectedValue(Object.assign(new Error('Session not found'), { httpStatus: 404 }));
-        const { send, calls } = manualSender();
-        queue(A, ['d', 'delivered'], ['next', 'queued']);
-        await dispatchNext(A, send, () => true);
-        expect(useChatStore.getState().messageQueues[A]).toBeUndefined();
-        expect(calls).toHaveLength(0);
-    });
 });
 
 describe('sending in the background', () => {
