@@ -205,7 +205,26 @@ func installerAsset(r Release, kind Kind) (Asset, error) {
 			return a, nil
 		}
 	}
-	return Asset{}, fmt.Errorf("GAIA %s has no %s installer for this machine — pick another release at %s", r.Tag, kind, ReleasesPage)
+	// Releases before the installers existed (v0.25.3 and older) publish none.
+	if _, ok := r.Asset(installerSums); !ok {
+		return Asset{}, fmt.Errorf("GAIA %s came out before GAIA had a %s installer, so this install can't switch to it — pick a newer release at %s", r.Tag, kind.label(), ReleasesPage)
+	}
+	return Asset{}, fmt.Errorf("GAIA %s has no %s installer for this machine — pick another release at %s", r.Tag, kind.label(), ReleasesPage)
+}
+
+// label names kind the way a person would.
+func (k Kind) label() string {
+	switch k {
+	case KindWindowsSetup:
+		return "Windows setup"
+	case KindMacPkg:
+		return "macOS package"
+	case KindDeb:
+		return ".deb package"
+	case KindRpm:
+		return ".rpm package"
+	}
+	return string(k)
 }
 
 // installFile is the file installing r on this machine needs from the release.

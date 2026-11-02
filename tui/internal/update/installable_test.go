@@ -123,3 +123,22 @@ func TestInstallerNamesRejectPathSeparators(t *testing.T) {
 		}
 	}
 }
+
+func TestGoingBackBeforeTheInstallersExistedSaysWhy(t *testing.T) {
+	// v0.25.3 shipped the Terminal UI binaries only: no setup, .pkg, .deb or .rpm.
+	withGitHub(t, &fakeGitHub{
+		feed:   atom("v0.25.4", "v0.25.3"),
+		latest: "v0.25.4",
+		sums: map[string]string{
+			"v0.25.4/" + installerSums: sumsOf("gaia-0.25.4-win-x64-setup.exe"),
+			"v0.25.3/" + tuiSums:       sumsOf("gaia-windows-amd64.exe"),
+		},
+	})
+	withHome(t)
+	withExecutable(t, `C:\Programs\GAIA Terminal Hub\gaia-tui.exe`, "windows")
+
+	_, err := PlanTag(context.Background(), "v0.25.3")
+	if err == nil || !strings.Contains(err.Error(), "came out before GAIA had a Windows setup installer") {
+		t.Fatalf("going back to v0.25.3 from a Windows setup install said %v; want why it can't", err)
+	}
+}
