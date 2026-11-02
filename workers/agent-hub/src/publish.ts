@@ -27,13 +27,14 @@ import {
 import { HttpError, json } from "./http";
 import { parseManifest } from "./manifest";
 import {
-  ARTIFACT_FILENAME_RE,
+  assertArtifactFilename,
   maxBytes,
   maxReferencedBytes,
   optionalTextPart,
   sha256Hex,
 } from "./multipart";
 import {
+  AGENT_RESERVED_FILENAMES,
   aliasOf,
   artifactKey,
   capabilityMatrixKey,
@@ -398,14 +399,11 @@ export async function handlePublish(
     );
   }
 
-  if (!ARTIFACT_FILENAME_RE.test(filename)) {
-    throw new HttpError(
-      400,
-      "invalid_artifact",
-      `Artifact filename ${JSON.stringify(filename)} is invalid. Use a single path ` +
-        `segment of letters, digits, '.', '_', '+', '-' (e.g. 'gaia_agent_chat-0.1.0-py3-none-any.whl').`
-    );
-  }
+  assertArtifactFilename(
+    filename,
+    AGENT_RESERVED_FILENAMES,
+    "gaia_agent_chat-0.1.0-py3-none-any.whl"
+  );
 
   // One id namespace across every catalog lane (#2467): hub URLs, install
   // commands, and the catalog are keyed by id, so an agent may not shadow a

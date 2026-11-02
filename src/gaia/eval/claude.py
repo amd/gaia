@@ -102,15 +102,12 @@ class ClaudeClient:
         if not self.api_key:
             error_msg = (
                 "ANTHROPIC_API_KEY not found in environment.\n\n"
-                "Two ways to set this up:\n"
-                "  1. SUBSCRIPTION (recommended if you have Claude Code Max):\n"
-                "     Run `claude setup-token` in a terminal, follow the\n"
-                "     browser prompt, then export the printed token:\n"
-                "       export ANTHROPIC_API_KEY=<token>\n"
-                "  2. API KEY (alternative — billed to your Anthropic console):\n"
-                "       export ANTHROPIC_API_KEY=sk-ant-...\n"
-                "Either path can also be added to a `.env` file in the\n"
-                "repo root for persistence.\n"
+                "ClaudeClient calls the Messages API and needs a console API key:\n"
+                "  export ANTHROPIC_API_KEY=sk-ant-...\n"
+                "To use a Claude Code subscription instead, build the client with\n"
+                "gaia.eval.judge_client.make_judge_client(), which drives the\n"
+                "logged-in `claude` CLI (or CLAUDE_CODE_OAUTH_TOKEN). A subscription\n"
+                "token is not an API key; do not export it as ANTHROPIC_API_KEY.\n"
             )
             self.log.error(error_msg)
             raise ValueError(error_msg)

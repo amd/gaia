@@ -114,6 +114,48 @@ server.start()
 
 ---
 
+## 8.3 Code Index MCP Server
+
+**Import:** `from gaia.mcp.servers.code_index_mcp import CodeIndexService, create_code_index_mcp`
+
+Exposes [`CodeIndexSDK`](https://github.com/amd/gaia/blob/main/src/gaia/code_index/sdk.py)
+for one repository, so Claude Code, Cursor, or any MCP client can search the
+code by meaning. Embeddings run on the local Lemonade Server; nothing leaves
+the machine. Requires the `[mcp]` and `[rag]` extras.
+
+From the CLI (stdio):
+
+```bash
+gaia mcp code-index --repo /path/to/repo
+
+# Register it with Claude Code from inside the repository
+claude mcp add gaia-code-index -- gaia mcp code-index --repo .
+```
+
+| Tool | Arguments | Returns |
+|------|-----------|---------|
+| `search_code` | `query`, `scope` (`"all"` or `"code"`, default `"all"`), `top_k` (1-50, default 10) | Ranked chunks with `file_path`, `start_line`, `end_line`, `symbol_name`, `symbol_type`, `language`, `score`, `content` |
+| `get_index_status` | none | `indexed`, chunk and file counts, `embedding_model`, `rebuild_running`, and `progress` while a rebuild runs |
+| `rebuild_index` | `max_files` (default 5000), `model` (Lemonade embedding model) | `files_indexed`, `chunks_created`, `duration_seconds`, and `chunks_dropped` with a warning when some chunks failed to embed |
+
+The first `rebuild_index` embeds every file and can take minutes on a large
+repository; later calls reuse unchanged files. Until an index exists,
+`search_code` returns an error that says to call `rebuild_index`. Only one
+rebuild runs at a time, and searches keep using the previous index while it
+does. The server refuses to start on your home directory.
+
+From Python:
+
+```python
+from gaia.code_index.sdk import CodeIndexConfig
+from gaia.mcp.servers.code_index_mcp import CodeIndexService, create_code_index_mcp
+
+service = CodeIndexService(CodeIndexConfig(repo_path="/path/to/repo"))
+create_code_index_mcp(service).run(transport="stdio")
+```
+
+---
+
 ## Related Topics
 
 - [Core Agent System](../core/agent-system) - Learn about the base Agent class

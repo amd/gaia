@@ -189,6 +189,9 @@ def _profile_ctx_size() -> int:
     model load outright.
     """
     from gaia.config import GaiaConfig
-    from gaia.llm.lemonade_client import profile_ctx_size
+    from gaia.llm.lemonade_client import npu_ctx_ceiling, profile_ctx_size, runs_on_npu
 
-    return profile_ctx_size(GaiaConfig.load().default_device)
+    config = GaiaConfig.load()
+    if runs_on_npu(config.default_model):
+        return npu_ctx_ceiling(config.default_model)
+    return profile_ctx_size(config.default_device)

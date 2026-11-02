@@ -90,7 +90,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **101 tools** — the 66 of the Chat agent's `full` profile, plus 8 skill-library tools, 8 live-browser tools, 8 read-only email tools, 4 code-search tools, 3 image-generation tools, 3 audio-generation tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
+On a larger model the default construction registers **101 tools** — the 66 of the Chat agent's `full` profile, plus 8 skill-library tools, 8 live-browser tools, 8 read-only email tools, 4 code-search tools, 3 image-generation tools, 3 audio-generation tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -118,6 +118,12 @@ How long a command may run depends on what it is — a test run gets 15 minutes,
 **Mail is treated as data, never as instructions.** Every message body the email tools return arrives fenced between `<<<UNTRUSTED_EMAIL_BODY_START>>>` and `<<<UNTRUSTED_EMAIL_BODY_END>>>`, and a message showing phishing signals comes back flagged with the reason it was flagged. A flagged message is never reported as something that needs action, however urgent it sounds, and the agent will not repeat its call to action as advice — it says what the message claims, that it looks like a lure, and to leave it alone.
 
 **Image *generation* costs you a model reload.** Drawing a picture pulls Stable Diffusion into Lemonade and evicts the resident chat model, so the first reply after an image waits for the chat model to load again. The trade is worth it on the flagship, which is general-purpose; the Chat agent's doc and file profiles leave the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) off for exactly that reason.
+
+### Smaller models
+
+On Gemma 4 E4B, on the GPU or the NPU, the agent leaves out four features that failed GAIA's agent evals on that model: the SQL scratchpad (`create_table` through `drop_table`), email, image generation, and finding, installing or removing skills (`search_skill_hub`, `install_skill`, `remove_skill`). That is 16 fewer tool descriptions for the model to read on every step. The skills built on them (`data-explore`, `image-gen`, `inbox-triage`) are left out of the skill list too. Asked for one of these features, Gemma says it can't do it; if it tries to load one of those skills anyway, the load is refused with a message that it needs a larger model.
+
+`analyze_data_file` still answers questions about CSV and Excel files, and installed skills still load. For the full set, pick a larger model in the model list; switching mid-chat gives the tools back, and switching to Gemma takes them away again. `GAIA_FEATURE_TIER=full` gives Gemma every tool anyway, and `GAIA_FEATURE_TIER=compact` gives any model the smaller set.
 
 ### Setting up a CLI a skill needs
 

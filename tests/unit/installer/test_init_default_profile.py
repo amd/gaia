@@ -169,7 +169,7 @@ class TestExplicitProfilesUnchanged:
         and device keys differ."""
         npu = INIT_PROFILES["npu"]
         assert npu["agent"] == FLAGSHIP_AGENT_ID
-        assert npu["models"] == ["gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"]
+        assert npu["models"] == ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"]
         assert npu["required_device"] == "amd_npu"
 
     def test_minimal_shortcut_still_wins_over_the_default(self):
