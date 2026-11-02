@@ -9409,7 +9409,7 @@ class LemonadeClient:
         This method:
         1. Checks if lemonade-server is installed
         2. Checks if server is running (health endpoint)
-        3. Auto-starts with ctx-size=32768 if not running
+        3. Auto-starts the server if not running
         4. Validates context size and shows warning if too small
 
         With auto-download enabled, models are downloaded on-demand when needed,
@@ -9533,10 +9533,7 @@ class LemonadeClient:
 
         # Auto-start server
         if not quiet:
-            print(
-                f"{_emoji('🚀', '[START]')} Starting Lemonade Server "
-                f"with ctx-size={required_ctx}..."
-            )
+            print(f"{_emoji('🚀', '[START]')} Starting Lemonade Server...")
 
         try:
             self.launch_server(ctx_size=required_ctx, background="terminal")
