@@ -232,6 +232,12 @@ jobs:
           echo "Diff generated: $(wc -l < pr-diff.txt) lines"
           echo "Files changed: $(wc -l < pr-files.txt) files"
 
+      # The reviewer reads evidence-bundle.md as this run's evidence, so one committed in
+      # the PR's tree (a fork's included) would be relayed as if the harness produced it.
+      - name: Drop any evidence-bundle.md the PR tree carries
+        if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment'
+        run: rm -f evidence-bundle.md
+
       # --- Real-world evidence stage (opt-in via generate_evidence; pr-review only) ---
       # SECURITY: every step here is gated on head.repo.fork == false. A fork PR's code
       # is untrusted and this job holds secrets under pull_request_target, so we NEVER
@@ -260,6 +266,7 @@ jobs:
           fi
 
       - name: Set up GAIA for evidence
+        id: evidence_setup
         if: steps.surface.outputs.testable == 'true'
         continue-on-error: true   # a failed install must not block the review; reviewer notes evidence unavailable
         uses: actions/setup-python@v7
@@ -267,6 +274,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install GAIA (evidence lane)
+        id: evidence_install
         if: steps.surface.outputs.testable == 'true'
         continue-on-error: true
         run: pip install -e ".[dev]"
@@ -360,20 +368,68 @@ jobs:
             --max-turns 100 \
             --model claude-opus-5-5
 
-      # Fail loudly, don't mask: the step above is continue-on-error, so a broken evidence
-      # harness (auth / install / rate-limit) leaves NO bundle — which otherwise reads as
-      # "nothing to test". Write a visible sentinel so the review says the harness broke, not
-      # that the surface was clean. A silent-green evidence stage is exactly how #2417 hid.
-      - name: Flag evidence-harness failure (no silent green)
-        if: steps.surface.outputs.testable == 'true' && steps.evidence.outcome == 'failure' && steps.evidence_secondary.outcome != 'success'
+      # Fail loudly, don't mask: the evidence steps are continue-on-error, so a broken
+      # harness leaves no bundle, which otherwise reads as "nothing to test". Two shapes
+      # hide that: a step that errored, and one that exited 0 without writing a bundle.
+      # Both get a sentinel naming the cause, a job-summary line, and the red gate at the
+      # end of this job (#3855; a silent-green evidence stage is how #2417 hid).
+      - name: Check the evidence harness produced a bundle
+        id: evidence_check
+        if: "!cancelled() && steps.surface.outputs.testable == 'true'"
+        env:
+          SETUP_OUTCOME: ${{ steps.evidence_setup.outcome }}
+          INSTALL_OUTCOME: ${{ steps.evidence_install.outcome }}
+          PRIMARY_OUTCOME: ${{ steps.evidence.outcome }}
+          QUOTA: ${{ steps.evidence_quota.outputs.quota }}
+          SECONDARY_OUTCOME: ${{ steps.evidence_secondary.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/evidence-primary.log"
+          ran=false
+          if [ "$PRIMARY_OUTCOME" = "success" ] || [ "$SECONDARY_OUTCOME" = "success" ]; then
+            ran=true
+          fi
+          # Match the log, never echo it: the cause lands in a public PR comment.
+          tail_text=$(tail -c 4000 "$log" 2>/dev/null || true)
+          if [ "$SETUP_OUTCOME" = "failure" ] || [ "$INSTALL_OUTCOME" = "failure" ]; then
+            cause='GAIA failed to install on the evidence runner (setup-python or pip install -e ".[dev]")'
+          elif [ "$ran" = "true" ] && [ -s evidence-bundle.md ]; then
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+            echo "Evidence bundle produced ($(wc -c < evidence-bundle.md) bytes)."
+            exit 0
+          elif [ "$ran" = "true" ]; then
+            cause='the evidence run exited cleanly but wrote no evidence-bundle.md (out of turns, or it skipped the write)'
+          elif [ "$QUOTA" = "true" ] && [ "$HAS_SECONDARY" = "true" ]; then
+            cause='both Claude accounts are out of quota (the secondary retry failed too)'
+          elif [ "$QUOTA" = "true" ]; then
+            cause='the Claude account is out of quota and CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set'
+          elif printf '%s' "$tail_text" | grep -qiE "$CREDENTIAL_RE"; then
+            cause='Claude rejected the credential: CLAUDE_CODE_OAUTH_TOKEN is expired or missing'
+          elif [ ! -s "$log" ]; then
+            cause='the Claude CLI never started (its npm install failed, or the runner died first)'
+          else
+            cause='the evidence run errored; see the "Generate real-world evidence" step log'
+          fi
           {
             echo "⚠️ EVIDENCE HARNESS FAILED TO RUN — this is NOT \"nothing to test\"."
             echo
-            echo "The evidence stage errored before producing evidence (auth / install / rate-limit"
-            echo "— see this run's logs). The changed surface was NOT exercised; the verdict below"
-            echo "rests on static review only."
+            echo "Cause: $cause."
+            echo
+            echo "The changed surface was NOT exercised; the verdict below rests on static review"
+            echo "only. Re-run the review job once the cause is fixed, or attach manual evidence"
+            echo "to the PR before merging. Log: $RUN_URL"
           } > evidence-bundle.md
+          {
+            echo "### ⚠️ Evidence harness failed"
+            echo
+            echo "Cause: $cause. The PR's surface was not exercised."
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "failed=true"
+            echo "cause=$cause"
+          } >> "$GITHUB_OUTPUT"
+          echo "Evidence harness failed: $cause"
 
       # --- Attempt 1 ---
       # continue-on-error: a rate-limit / expired-token / outage / install-crash must
@@ -677,3 +733,15 @@ jobs:
             exit 1
           fi
           echo "::warning title=Claude $KIND crashed before starting::$msg"
+
+      # Last, so the review has already posted. Red on purpose, unlike an outage of the
+      # review itself on optional lanes: a harness failure on a testable PR is a missing
+      # gate, and "N/A" must never be what it looks like at merge time (#3855).
+      - name: Evidence harness failed — this PR's surface was not exercised
+        if: "!cancelled() && steps.evidence_check.outputs.failed == 'true'"
+        env:
+          CAUSE: ${{ steps.evidence_check.outputs.cause }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          echo "::error title=Evidence harness failed::The real-world evidence stage did not run, so this PR's changed surface was NOT exercised and the review rests on static reading only. Cause: $CAUSE. Fix the cause and re-run this job, or attach manual evidence to the PR before merging. Log: $RUN_URL"
+          exit 1

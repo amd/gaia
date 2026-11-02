@@ -49,22 +49,16 @@ never writes a token to a plaintext file.
   <Card title="Tavily" icon="globe" href="/connectors/tavily">
     Web search and content extraction for agents via the Tavily MCP server.
   </Card>
+  <Card title="Git" icon="code-branch" href="/connectors/git">
+    Status, diff, log, branch, and commit tools for a local repository. No API key.
+  </Card>
+  <Card title="Memory" icon="brain" href="/connectors/memory">
+    A knowledge-graph scratchpad agents can persist to. No API key.
+  </Card>
   <Card title="Slack" icon="slack" href="/connectors/slack">
     Read channels, threads, and DMs in your Slack workspace with a bot token.
   </Card>
 </CardGroup>
-
-## Also available today
-
-Two more MCP servers ship in the catalog and work now. Neither needs an
-API key, so there's no dedicated setup page — enable them per agent from
-Settings → Connectors or the CLI:
-
-- **Git** — `mcp-git`: `status`, `diff`, `log`, `show`, branch, and commit
-  tools for a local repository. It runs through `uvx`, so install
-  [uv](https://docs.astral.sh/uv/) and make sure `uvx` is on your `PATH`.
-- **Memory** — `mcp-memory`: a knowledge-graph scratchpad agents can
-  persist to across a conversation.
 
 Run `gaia connectors list` to see every connector the catalog currently
 ships — it is the source of truth for what you can configure today.
