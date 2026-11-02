@@ -1388,6 +1388,14 @@ Deleting a chat deletes its copies.
   <Accordion title="GET /api/files/image">
     Stream an image file from the filesystem for display in the UI.
   </Accordion>
+
+  <Accordion title="GET /api/media/{kind}/{name}">
+    Serve an image (`kind=image`) or audio file (`kind=audio`) GAIA generated,
+    for the chat's inline `image` and `audio` cards. `name` must be one plain
+    file name sitting directly in the generation tools' output folder
+    (`~/.gaia/cache/sd/images` or `~/.gaia/cache/audio/generations`); paths,
+    `..`, symlinks and other suffixes get a 404.
+  </Accordion>
 </AccordionGroup>
 
 ### Agents
