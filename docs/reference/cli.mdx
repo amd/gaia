@@ -2337,7 +2337,7 @@ gaia eval agent [OPTIONS]
 | `--timeout` | integer | `900` | Per-scenario timeout in seconds (auto-scaled for complex scenarios) |
 | `--audit-only` | flag | false | Run architecture audit without LLM calls (free) |
 | `--generate-corpus` | flag | false | Validate the committed corpus documents against `manifest.json`; fails if a listed file is missing |
-| `--fix` | flag | false | Auto-invoke Claude Code to diagnose and repair failures, then re-evaluate |
+| `--fix` | flag | false | Auto-invoke Claude Code to diagnose and repair failures, then re-evaluate. Refuses to start with uncommitted tracked changes; stops if a fixer iteration times out or fails |
 | `--agent-model` | string | -- | Local model the agent must run (e.g. `Gemma-4-E4B-it-GGUF`). Each scenario's session is checked, and one that ran another model is discarded as `INFRA_ERROR`. It does not change the model; set `default_model` in the backend's GAIA home |
 | `--require-complete` | flag | false | With `--compare`, fail when baseline scenarios are missing or unmeasured |
 | `--max-fix-iterations` | integer | `3` | Maximum repair cycles in `--fix` mode |
