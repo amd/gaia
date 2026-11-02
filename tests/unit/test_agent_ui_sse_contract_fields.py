@@ -10,7 +10,6 @@ from pathlib import Path
 
 from gaia.ui.sse_translation import CanonicalTranslator
 
-
 ROOT = Path(__file__).resolve().parents[2]
 OPENAPI = ROOT / "hub" / "agents" / "gaia" / "python" / "openapi.gaia.json"
 CONTRACT = ROOT / "docs" / "spec" / "agent-ui-query-sse-contract.md"
@@ -30,9 +29,21 @@ def test_openapi_and_human_contract_document_emitted_final_fields():
     ]["post"]["responses"]["200"]["description"]
     contract = CONTRACT.read_text(encoding="utf-8")
 
-    for field in ("reasoning {delta}", "performance?", "context?", "context_error?", "model_messages?"):
+    for field in (
+        "reasoning {delta}",
+        "performance?",
+        "context?",
+        "context_error?",
+        "model_messages?",
+    ):
         assert field in description, field
-    for field in ("reasoning", "performance?", "context?", "context_error?", "model_messages?"):
+    for field in (
+        "reasoning",
+        "performance?",
+        "context?",
+        "context_error?",
+        "model_messages?",
+    ):
         assert field in contract, field
 
 
