@@ -71,7 +71,7 @@ export function StageLogs({ run }: { run: SetupRunStatus | null }) {
             <div className="setup-report">
                 <button type="button" className="btn-secondary setup-report-button" onClick={() => void save()} disabled={saving}>
                     {saving ? <Loader2 size={13} className="spin" aria-hidden="true" /> : <FileDown size={13} aria-hidden="true" />}
-                    {t('setup.logs.report')}
+                    <span>{t('setup.logs.report')}</span>
                 </button>
                 <span className="setup-hint">{t('setup.logs.reportNote')}</span>
                 {saved && (

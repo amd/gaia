@@ -315,7 +315,8 @@ button.setup-rail-step:hover {
     display: block;
 }
 
-.setup-wrap-btn {
+/* Doubled with .btn-secondary, whose nowrap would push a long model name out. */
+.btn-secondary.setup-wrap-btn {
     max-inline-size: 100%;
     overflow-wrap: anywhere;
     white-space: normal;
@@ -646,4 +647,34 @@ button.setup-rail-step:hover {
     overflow: visible;
     text-overflow: clip;
     white-space: normal;
+}
+
+.setup-logs {
+    margin-top: 16px;
+}
+
+.setup-report {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 20px;
+}
+
+/* Doubled with .btn-secondary, whose nowrap would push the gloss out of the button. */
+.btn-secondary.setup-report-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-inline-size: 100%;
+    white-space: normal;
+    text-align: start;
+}
+
+.setup-report-button svg {
+    flex-shrink: 0;
+}
+
+.setup-report-button > span {
+    min-inline-size: 0;
 }

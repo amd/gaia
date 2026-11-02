@@ -92,6 +92,10 @@ const RUN = {
     state: 'running', text: 'Downloading the models', chat_model: GEMMA_ID, skip_chat_model: false,
     steps: [], log_tail: [], command: 'gaia init --profile gaia',
     components: { server: 'done', backend: 'active' },
+    logs: {
+        check: ['$ gaia init --profile gaia --server-only', 'Step 1/5: Starting Lemonade Server...', 'server: done', 'The local model server is running'],
+        download: ['$ gaia init --profile gaia', `Plan: ${EMBED_ID}, ${GEMMA_ID}`, 'backend: active', `${EMBED_ID}: downloaded`, `Downloading: ${GEMMA_ID} [====------] 34% (2.0 GB/5.97 GB)`],
+    },
     models: [
         row(EMBED_ID, ['embedding'], 'verifying', 330e6, 330e6),
         row(GEMMA_ID, ['chat', 'vision'], 'downloading', 2e9, 5.97e9),
@@ -402,7 +406,7 @@ export const SETUP_SCENES: SetupScene[] = [
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['plan', 'pc', 'models', 'models-long', 'key', 'download-failed', 'test-long', 'ready'];
+export const NARROW_SCENES = ['plan', 'pc', 'models', 'models-long', 'key', 'download-running', 'download-failed', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

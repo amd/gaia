@@ -155,6 +155,24 @@ const audit = (page: Page): Promise<string[]> =>
             if (Number(style.fontWeight) > 400) problems.push(`gloss is bold: ${label(gloss)}`);
         }
 
+        // A button cut off by the window's edge can't be read or pressed; one in
+        // a strip that scrolls sideways is reached by scrolling it.
+        const inScroller = (el: Element) => {
+            for (let p = el.parentElement; p; p = p.parentElement) {
+                const x = getComputedStyle(p).overflowX;
+                // A strip: it scrolls sideways and has nothing to scroll down to.
+                const strip = p.scrollWidth > p.clientWidth && p.scrollHeight <= p.clientHeight + 1;
+                if ((x === 'auto' || x === 'scroll') && strip) return true;
+            }
+            return false;
+        };
+        for (const button of document.querySelectorAll('button')) {
+            if (!shown(button) || inScroller(button)) continue;
+            const r = button.getBoundingClientRect();
+            if (r.left < -1 || r.right > window.innerWidth + 1) problems.push(`button runs off the window: ${label(button)}`);
+            if (button.scrollWidth > button.clientWidth + 1) problems.push(`label spills out of its button: ${label(button)}`);
+        }
+
         // An icon and its label need space between them, in either direction.
         for (const button of document.querySelectorAll('button')) {
             const icon = button.querySelector(':scope > svg');
