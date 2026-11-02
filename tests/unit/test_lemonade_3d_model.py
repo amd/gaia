@@ -160,3 +160,16 @@ def test_3d_tool_removes_staging_file_when_snapshot_fails(
     assert result["status"] == "error"
     assert "snapshot unavailable" in result["error"]
     assert not list(tmp_path.glob("*.part"))
+
+
+def test_3d_tool_replaces_whitespace_in_model_name(model3d_tool, tmp_path):
+    _host, generate = model3d_tool
+    source = tmp_path / "source.png"
+    source.write_bytes(b"image")
+
+    result = generate(str(source), model="TRELLIS\t3D\nlarge")
+
+    name = Path(result["model_path"]).name
+    assert result["status"] == "success"
+    assert name.startswith("model3d_TRELLIS_3D_large_")
+    assert not any(ch in name for ch in "\t\n\r ")

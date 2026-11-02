@@ -439,6 +439,19 @@ class TestSDToolsMixinSaveImage:
         assert ":" not in path.stem
         assert "<" not in path.stem
 
+    def test_save_image_replaces_every_whitespace_kind(
+        self, tmp_path, mock_lemonade_client
+    ):
+        """Tabs and line breaks are invalid in Windows file names."""
+        mixin = SDToolsMixin()
+        mixin.init_sd(output_dir=str(tmp_path))
+
+        path = mixin._save_image("a red fox\tin snow\nat\r\ndusk", b"png", "SD-Turbo")
+
+        assert path.exists()
+        assert path.name.startswith("a_red_fox_in_snow_at_dusk_SD-Turbo_")
+        assert not any(ch in path.name for ch in "\t\n\r ")
+
 
 class TestSDHealthCheckRemedy:
     """The 'no SD models' remedy must name the model this instance will ask for.
