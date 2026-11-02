@@ -142,6 +142,7 @@
                   "connectors/git",
                   "connectors/memory",
                   "connectors/slack",
+                  "connectors/discord",
                   "security/connections",
                   "security/connectors"
                 ]
