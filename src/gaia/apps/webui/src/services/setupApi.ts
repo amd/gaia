@@ -36,6 +36,8 @@ export interface SetupRunOptions {
     extraModels?: string[];
     /** Only start the model server, so models are chosen against it. */
     serverOnly?: boolean;
+    /** Replace GAIA's older embedded Lemonade without downloading models again. */
+    upgradeEmbedded?: boolean;
 }
 
 /** `gaiaLemonade` sets up, and saves, GAIA's own Lemonade Server instead of the user's. */
@@ -47,6 +49,7 @@ export async function startSetup(skipChatModel: boolean, gaiaLemonade = false, o
         keep_trying: !!options.keepTrying,
         extra_models: options.extraModels ?? [],
         server_only: !!options.serverOnly,
+        upgrade_embedded: !!options.upgradeEmbedded,
     });
 }
 

@@ -1010,7 +1010,7 @@ export interface SetupStep {
 /** `gaia init --check --json`: ready, or the stage and reasons it is not. */
 export interface SetupCheck {
     ready: boolean;
-    stage?: 'setup' | 'server' | 'load' | string;
+    stage?: 'setup' | 'upgrade' | 'server' | 'load' | string;
     reasons?: string[];
     models?: Array<{ id: string; role: string; size_gb: number | null; loaded: boolean; error: string | null }>;
     steps: SetupStep[];
@@ -1049,6 +1049,8 @@ export interface SetupRunStatus {
     model_failed?: boolean;
     /** The run only starts the model server; models are chosen and pulled after. */
     server_only?: boolean;
+    /** The run replaces an older embedded Lemonade artifact without model downloads. */
+    upgrade_embedded?: boolean;
     /** The chat model setup chose, once it has said. */
     chat_model?: string | null;
     /** Each model's download, the run's and any single download's. */

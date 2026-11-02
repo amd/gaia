@@ -375,6 +375,19 @@ describe('first-run setup', () => {
         expect(screen.queryByText('Starting GAIA…')).not.toBeInTheDocument();
     });
 
+    it('upgrades an older embedded Lemonade before entering chat without opening first-run setup', async () => {
+        mocked.checkSetup
+            .mockResolvedValueOnce({ ready: false, stage: 'upgrade', steps: [] })
+            .mockResolvedValueOnce(READY);
+        mocked.startSetup.mockResolvedValue({ state: 'running', upgrade_embedded: true } as never);
+        mocked.getSetupStatus.mockResolvedValue({ state: 'ready' } as never);
+        render(<App />);
+
+        expect(await screen.findByLabelText('Message')).toBeInTheDocument();
+        expect(mocked.startSetup).toHaveBeenCalledWith(false, false, { upgradeEmbedded: true });
+        expect(mocked.checkSetup).toHaveBeenCalledTimes(2);
+    });
+
     /** Where GAIA runs, then setup's own model set (this suite has no plan to choose from). */
     async function runSetup() {
         await userEvent.click(await screen.findByRole('button', { name: 'Continue' }));

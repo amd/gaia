@@ -153,6 +153,7 @@ def run_args(
     keep_trying: bool = False,
     extra_models: Optional[List[str]] = None,
     server_only: bool = False,
+    upgrade_embedded: bool = False,
 ) -> List[str]:
     # --yes: nobody can answer a prompt on a pipe. --skip-webui-build: a source
     # checkout would otherwise rebuild the very UI that is running this.
@@ -174,8 +175,11 @@ def run_args(
         args.append("--skip-chat-model")
     if gaia_lemonade:
         args.append("--gaia-lemonade")
-    if server_only:
+    if server_only or upgrade_embedded:
         args.append("--skip-models")
+    if upgrade_embedded:
+        # Replace the pinned embedded artifact without downloading model data.
+        args.append("--force-reinstall")
     for model_id in extra_models or []:
         args += ["--download-model", model_id]
     return args
@@ -553,6 +557,8 @@ class SetupRun:
     keep_trying: bool = False
     #: Only start the model server; the models are chosen and pulled after.
     server_only: bool = False
+    #: Upgrade an existing embedded Lemonade artifact without model downloads.
+    upgrade_embedded: bool = False
     #: Models pulled beside the profile's; setup has no load check for them.
     extra_models: List[str] = field(default_factory=list)
     #: A model's download failed in this run: its row already says why.
@@ -589,6 +595,7 @@ class SetupRun:
             "skip_chat_model": self.skip_chat_model,
             "gaia_lemonade": self.gaia_lemonade,
             "server_only": self.server_only,
+            "upgrade_embedded": self.upgrade_embedded,
             "model_failed": self.model_failed,
             "chat_model": None if self.skip_chat_model else self.chat_model,
         }
@@ -659,11 +666,14 @@ class SetupRunner:
         keep_trying: bool = False,
         extra_models: Optional[List[str]] = None,
         server_only: bool = False,
+        upgrade_embedded: bool = False,
     ) -> Dict[str, Any]:
         """Start setup; *gaia_lemonade* sets up and saves GAIA's own server.
 
         *extra_models* are pulled beside the plan's. *server_only* starts the
         model server and stops there, so the models can be chosen against it.
+        *upgrade_embedded* replaces a mismatched embedded server without
+        re-running first-time model setup.
         """
         if gaia_lemonade:
             from gaia.llm.lemonade_choice import env_override_note
@@ -688,6 +698,7 @@ class SetupRunner:
                 allow_low_disk=allow_low_disk,
                 keep_trying=keep_trying,
                 server_only=server_only,
+                upgrade_embedded=upgrade_embedded,
                 extra_models=list(extra_models or []),
             )
             command = run_command(skip_chat_model, gaia_lemonade)
@@ -701,6 +712,7 @@ class SetupRunner:
                             keep_trying,
                             extra_models,
                             server_only,
+                            upgrade_embedded,
                         )
                     ),
                     stdout=subprocess.PIPE,
@@ -975,9 +987,15 @@ class SetupRunner:
                     f"{run.error or _last_line(chr(10).join(run.log))}"
                 )
                 return
-            if run.server_only:
-                # Nothing downloaded yet, so there is nothing to load.
-                run.state, run.text = "ready", "The local model server is running"
+            if run.server_only or run.upgrade_embedded:
+                # Neither path downloads or verifies models: server-only is the
+                # first-install chooser, while upgrade_embedded preserves the
+                # user's existing model cache and returns them to chat.
+                run.state, run.text = "ready", (
+                    "The local model server is running"
+                    if run.server_only
+                    else "Lemonade Server upgraded"
+                )
                 return
             run.state = "verifying"
             run.phase = PHASE_FINISH

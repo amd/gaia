@@ -73,7 +73,15 @@ def test_run_args_switch_to_gaias_own_server():
 def test_run_args_server_only_downloads_nothing():
     args = sr.run_args(False, server_only=True)
     assert "--skip-models" in args and "--download-model" not in args
+    assert "--force-reinstall" not in args
     assert "--skip-models" not in sr.run_args(False)
+
+
+def test_run_args_upgrade_replaces_only_the_embedded_server():
+    args = sr.run_args(False, upgrade_embedded=True)
+    assert "--skip-models" in args
+    assert "--force-reinstall" in args
+    assert "--download-model" not in args
 
 
 def test_run_args_pull_each_ticked_extra_model():

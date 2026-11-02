@@ -1181,8 +1181,8 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertFalse(status.ready)
         self.assertIn("pid 77", status.reasons[0])
 
-    def test_older_embedded_version_is_not_ready(self):
-        """init would replace it, so --check must not call it ready."""
+    def test_older_embedded_version_requests_an_upgrade_not_first_run_setup(self):
+        """An app upgrade replaces the embedded server but keeps model data."""
         from gaia.installer.init_command import check_setup_status
 
         running = self._status(
@@ -1192,6 +1192,7 @@ class TestCheckSetupStatus(unittest.TestCase):
             status = check_setup_status(profile="chat")
 
         self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "upgrade")
         self.assertIn("v0.0.1", status.reasons[0])
 
     def test_ready_when_server_up_and_required_models_present(self):

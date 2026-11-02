@@ -43,9 +43,11 @@ const DocumentLibrary = lazy(() => import('./components/DocumentLibrary').then((
 const FileBrowser = lazy(() => import('./components/FileBrowser').then((m) => ({ default: m.FileBrowser })));
 const MobileAccessModal = lazy(() => import('./components/MobileAccessModal').then((m) => ({ default: m.MobileAccessModal })));
 
-/** `checking` until `gaia init --check` answers; `needed` shows first-run setup. */
+/** `checking` waits for readiness; `upgrading` quietly replaces an embedded server;
+ * `needed` is the actual first-run flow. */
 type SetupGate =
     | { state: 'checking' }
+    | { state: 'upgrading' }
     | { state: 'ready' }
     | { state: 'needed'; check: SetupCheck }
     | { state: 'addingLocal' }
@@ -61,6 +63,22 @@ const BACKEND_START_WAIT_MS = 60_000;
 // fetch rejects with a TypeError only when no response arrived: nothing is listening yet.
 const isRefused = (err: unknown) => err instanceof TypeError;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const UPGRADE_WAIT_MS = 5 * 60_000;
+
+async function waitForEmbeddedUpgrade(): Promise<void> {
+    const deadline = Date.now() + UPGRADE_WAIT_MS;
+    for (;;) {
+        const status = await api.getSetupStatus();
+        if (status.state === 'ready') return;
+        if (status.state === 'failed' || status.state === 'cancelled') {
+            throw new Error(status.error || 'Embedded Lemonade upgrade did not finish.');
+        }
+        if (Date.now() >= deadline) {
+            throw new Error('Embedded Lemonade upgrade took too long. Check the GAIA server log.');
+        }
+        await sleep(RETRY_INITIAL_MS);
+    }
+}
 
 function Loading() {
     return <div className="loading-spinner" role="status" aria-label="Loading" />;
@@ -149,6 +167,19 @@ function App() {
                     await sleep(RETRY_INITIAL_MS);
                     waited += RETRY_INITIAL_MS;
                     continue;
+                }
+                // A pinned embedded-server change is an application upgrade,
+                // not first-run setup. Keep the existing chat visible while the
+                // server artifact is replaced; the model cache is untouched.
+                if (!check.ready && check.stage === 'upgrade' && !active?.remote) {
+                    setSetup({ state: 'upgrading' });
+                    try {
+                        await api.startSetup(false, false, { upgradeEmbedded: true });
+                        await waitForEmbeddedUpgrade();
+                        check = await api.checkSetup(false);
+                    } catch (err) {
+                        throw err;
+                    }
                 }
                 // Read status and chats before showing the app, so it never flashes "lost connection" or "no chats".
                 if (waited > 0) await Promise.all([refreshStatus.current(), reloadSessions.current()]);

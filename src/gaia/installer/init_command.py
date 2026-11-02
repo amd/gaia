@@ -303,9 +303,11 @@ class SetupStatus:
 
     ready: bool
     reasons: list
-    #: "setup" when `gaia init` still has work to do, "server" when the model
-    #: server is installed but will not answer, "load" when everything is
-    #: downloaded but a model would not load — which re-running setup cannot fix.
+    #: "setup" when `gaia init` still has work to do, "upgrade" when GAIA can
+    #: update an existing embedded Lemonade without downloading models, "server"
+    #: when the model server is installed but will not answer, "load" when
+    #: everything is downloaded but a model would not load — which re-running
+    #: setup cannot fix.
     stage: Optional[str] = None
     #: One ModelLoad per model the load check tried; empty unless ``load=True``.
     models: list = field(default_factory=list)
@@ -722,7 +724,9 @@ def check_setup_status(
                     f"GAIA's Lemonade Server is v{status.version}; this GAIA "
                     f"needs v{embedded.version}"
                 ],
-                stage="setup",
+                # The embedded artifact is an application upgrade, not first-run
+                # setup: its existing models remain in the shared cache.
+                stage="upgrade",
             )
         base_url = status.base_url
 
