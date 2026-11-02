@@ -422,6 +422,29 @@ function _savePin(pinnedVersion) {
 }
 
 /**
+ * An error the UI shows in the user's language: `code` names the message
+ * update.err.<code> and `params` fills it. The message is the English, for logs.
+ */
+function _userError(code, params, message) {
+  return Object.assign(new Error(message), { code, params: params || {} });
+}
+
+// Marks an error message as a coded one, for the renderer to translate.
+const USER_ERROR_MARK = "gaia-update-error:";
+
+/** Node codes (ENOENT, EPERM) name the cause, not a message the UI has. */
+function _isUserCode(code) {
+  return typeof code === "string" && !/^E[A-Z]/.test(code);
+}
+
+/** IPC keeps only an error's message, so the code travels inside it. */
+function _forRenderer(err) {
+  if (!err || !_isUserCode(err.code)) return err;
+  const { code, params, note } = err;
+  return new Error(`${USER_ERROR_MARK}${JSON.stringify({ code, params, note, message: err.message })}`);
+}
+
+/**
  * Merge `patch` into update-config.json. Propagates write errors so a failed
  * pin write can abort a rollback (AC2 must not be silently broken). Callers
  * that can tolerate a failed write (e.g. clearPin) should catch.
@@ -521,7 +544,9 @@ function _withConfigLock(fn) {
             `${path.dirname(UPDATE_CONFIG_PATH)}.`
         );
       }
-      throw new Error(
+      throw _userError(
+        "configBusy",
+        {},
         `${UPDATE_CONFIG_PATH} is busy (another GAIA app holds ${lock}) — try again in a moment.`
       );
     }
@@ -779,7 +804,9 @@ async function installVersion(tag) {
     );
   }
   if (checkInProgress) {
-    throw new Error(
+    throw _userError(
+      "checkBusy",
+      {},
       "An update check is already in progress — try again in a moment."
     );
   }
@@ -795,7 +822,10 @@ async function installVersion(tag) {
     _savePin(tag);
   } catch (err) {
     const msg = (err && err.message) || String(err);
-    throw new Error(
+    if (err && err.code === "configBusy") throw err;
+    throw _userError(
+      "pinFailed",
+      { path: UPDATE_CONFIG_PATH, reason: msg },
       `Failed to persist version pin — rollback aborted: ${msg}`
     );
   }
@@ -824,10 +854,12 @@ async function installVersion(tag) {
     // restarts into it.
     await autoUpdaterRef.checkForUpdates();
     if (state.status !== STATES.AVAILABLE) {
-      throw new Error(
+      throw _userError(
+        "noInstaller",
+        { tag, url: RELEASES_PAGE },
         `GAIA ${tag} has no installer for this platform at its release feed` +
           (state.error ? `: ${state.error}` : ".") +
-          " Download it from https://github.com/amd/gaia/releases instead."
+          ` Download it from ${RELEASES_PAGE} instead.`
       );
     }
     setState({ status: STATES.DOWNLOADING, progress: 0, error: null });
@@ -838,7 +870,13 @@ async function installVersion(tag) {
     const pinNote = _restorePinAfterFailedInstall(previousPin, tag);
     const msg = (err && err.message) || String(err);
     setState({ status: STATES.ERROR, error: msg });
-    throw new Error(`${msg} ${pinNote}`);
+    // A coded cause keeps its code; any other shows its own text.
+    const coded = err && _isUserCode(err.code);
+    throw Object.assign(new Error(`${msg} ${pinNote.message}`), {
+      code: coded ? err.code : "failedWith",
+      params: coded ? err.params : { reason: msg },
+      note: { code: pinNote.code, params: pinNote.params },
+    });
   } finally {
     checkInProgress = false;
   }
@@ -857,18 +895,22 @@ function _restorePinAfterFailedInstall(previousPin, failedTag) {
   } catch (err) {
     // The file still pins failedTag; say so rather than claim otherwise.
     log("error", "Failed to restore the pin after a failed install:", err && err.message);
-    return (
-      `The pin to ${failedTag} could not be undone in ${UPDATE_CONFIG_PATH} ` +
-      `(${(err && err.message) || err}) — fix that file, then use Unpin in Settings → General → Updates.`
-    );
+    const reason = (err && err.message) || String(err);
+    return {
+      code: "pinStuck",
+      params: { tag: failedTag, path: UPDATE_CONFIG_PATH, reason },
+      message:
+        `The pin to ${failedTag} could not be undone in ${UPDATE_CONFIG_PATH} ` +
+        `(${reason}) — fix that file, then use Unpin in Settings → General → Updates.`,
+    };
   }
   if (!previousPin) {
     clearPin();
-    return "Updates are not paused.";
+    return { code: "notPaused", params: {}, message: "Updates are not paused." };
   }
   setState({ pinnedVersion: previousPin });
   autoUpdaterRef.setFeedURL(_releaseFeed(previousPin));
-  return `Still pinned to ${previousPin}.`;
+  return { code: "stillPinned", params: { tag: previousPin }, message: `Still pinned to ${previousPin}.` };
 }
 
 // ── clearPin / resumeUpdates ──────────────────────────────────────────────────
@@ -917,8 +959,12 @@ async function setAutoUpdate(enabled) {
   try {
     _writeConfig({ autoUpdate: enabled });
   } catch (err) {
-    throw new Error(
-      `Couldn't save the auto-update setting to ${UPDATE_CONFIG_PATH}: ${(err && err.message) || err}`
+    if (err && err.code === "configBusy") throw err;
+    const reason = (err && err.message) || String(err);
+    throw _userError(
+      "saveFailed",
+      { path: UPDATE_CONFIG_PATH, reason },
+      `Couldn't save the auto-update setting to ${UPDATE_CONFIG_PATH}: ${reason}`
     );
   }
   setState({ autoUpdate: enabled });
@@ -941,8 +987,12 @@ async function setIncludePrereleases(enabled) {
   try {
     _writeConfig({ includePrereleases: enabled });
   } catch (err) {
-    throw new Error(
-      `Couldn't save the release-candidate setting to ${UPDATE_CONFIG_PATH}: ${(err && err.message) || err}`
+    if (err && err.code === "configBusy") throw err;
+    const reason = (err && err.message) || String(err);
+    throw _userError(
+      "saveFailed",
+      { path: UPDATE_CONFIG_PATH, reason },
+      `Couldn't save the release-candidate setting to ${UPDATE_CONFIG_PATH}: ${reason}`
     );
   }
   setState({ includePrereleases: enabled });
@@ -1023,7 +1073,9 @@ function _tagForVersion(version) {
 async function revertUpdate() {
   const version = previousVersion();
   if (!version) {
-    throw new Error(
+    throw _userError(
+      "noEarlier",
+      { url: RELEASES_PAGE },
       `There is no earlier GAIA version to go back to on this PC. Pick one in Settings → General → Updates, or download it from ${RELEASES_PAGE}.`
     );
   }
@@ -1144,9 +1196,12 @@ async function _requireInstallSpace() {
     return;
   }
   if (free < MIN_INSTALL_FREE_BYTES) {
-    throw new Error(
+    const mb = Math.round(free / (1024 * 1024));
+    throw _userError(
+      "diskSpace",
+      { mb },
       `GAIA needs about 1 GB free to install this update, and this disk has ` +
-        `${Math.round(free / (1024 * 1024))} MB. Free some space, then restart from the update chip.`
+        `${mb} MB. Free some space, then restart from the update chip.`
     );
   }
 }
@@ -1162,7 +1217,9 @@ function _isOffline() {
 
 function _requireNetwork() {
   if (_isOffline()) {
-    throw new Error(
+    throw _userError(
+      "offline",
+      {},
       "GAIA needs the internet to finish this update. Connect, then restart from the update chip."
     );
   }
@@ -1189,7 +1246,11 @@ async function downloadUpdate() {
     installRequested = false;
     _applyInstallPolicy();
     setState({ status: STATES.ERROR, error: message });
-    throw new Error(`Downloading GAIA ${state.version || ""} failed: ${message}`);
+    throw _userError(
+      "downloadFailed",
+      { version: state.version || "", reason: message },
+      `Downloading GAIA ${state.version || ""} failed: ${message}`
+    );
   }
 }
 
@@ -1384,7 +1445,16 @@ function wireAutoUpdaterEvents() {
 
 function registerIpcHandlers() {
   if (ipcHandlersRegistered || !electronApi || !electronApi.ipcMain) return;
-  const { ipcMain } = electronApi;
+  const ipcMain = {
+    handle: (channel, fn) =>
+      electronApi.ipcMain.handle(channel, async (...args) => {
+        try {
+          return await fn(...args);
+        } catch (err) {
+          throw _forRenderer(err);
+        }
+      }),
+  };
 
   ipcMain.handle("gaia:update:get-status", () => getState());
   ipcMain.handle("gaia:update:check", async () => {

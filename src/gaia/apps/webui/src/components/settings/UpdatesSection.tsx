@@ -7,6 +7,7 @@ import type { GaiaUpdaterBridge, UpdateState } from '../../hooks/useUpdateStatus
 import { useT, type Translate } from '../../i18n/useT';
 import { ref, type MessageKey } from '../../i18n/registry';
 import { log } from '../../utils/logger';
+import { updateErrorReason } from '../../hooks/updateError';
 import { VersionPicker } from '../VersionPicker';
 
 const RELEASES_PAGE = 'https://github.com/amd/gaia/releases';
@@ -63,8 +64,7 @@ export function UpdatesSection() {
             await call(bridge);
         } catch (err) {
             log.system.error(`${what} failed`, err);
-            const reason = err instanceof Error ? err.message : String(err);
-            setError(t('update.settings.failed', { action: ref(what), reason }));
+            setError(t('update.settings.failed', { action: ref(what), reason: updateErrorReason(err) }));
         } finally {
             setBusy(false);
         }

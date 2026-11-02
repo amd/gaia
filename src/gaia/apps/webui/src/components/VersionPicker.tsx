@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReleaseInfo } from '../hooks/useUpdateStatus';
+import { updateErrorReason } from '../hooks/updateError';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useT } from '../i18n/useT';
@@ -122,8 +123,7 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
             // installVersion downloads, then restarts into it; running work asks first.
             onClose();
         } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            setView({ kind: 'error', message: t('update.picker.failed', { reason: msg }) });
+            setView({ kind: 'error', message: t('update.picker.failed', { reason: updateErrorReason(err) }) });
         }
     }
 

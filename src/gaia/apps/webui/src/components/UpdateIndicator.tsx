@@ -4,6 +4,7 @@
 import { useCallback, useState } from 'react';
 import { Download, RefreshCw, AlertTriangle, X } from 'lucide-react';
 import { getUpdaterBridge, useUpdateStatus } from '../hooks/useUpdateStatus';
+import { updateErrorText } from '../hooks/updateError';
 import { useT } from '../i18n/useT';
 import { log } from '../utils/logger';
 import './UpdateIndicator.css';
@@ -29,11 +30,10 @@ export function UpdateIndicator() {
         if (!updater) return;
         setActionError(null);
         updater[what]().catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
             log.system.error(`Update ${what} failed`, err);
-            setActionError(msg);
+            setActionError(updateErrorText(err, t));
         });
-    }, []);
+    }, [t]);
 
     // States where we deliberately render nothing — keeps the UI calm.
     if (dismissed) return null;

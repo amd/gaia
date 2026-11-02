@@ -537,6 +537,22 @@ describe("setAutoUpdate / downloadUpdate / restart", () => {
     expect(downloadSpy).toHaveBeenCalledTimes(1);
   });
 
+  test("a refusal reaches the window with its code, for the UI to translate", async () => {
+    const statfs = jest
+      .spyOn(fs.promises, "statfs")
+      .mockResolvedValue({ bavail: 100, bsize: 1024 * 1024 });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    mockAutoUpdaterInstance.emit("update-downloaded", { version: "0.26.0" });
+    await new Promise((r) => setImmediate(r));
+
+    const err = await electronMock.ipcMain.simulateInvoke("gaia:update:restart").catch((e) => e);
+    const coded = JSON.parse(err.message.slice(err.message.indexOf("{")));
+    expect(coded).toMatchObject({ code: "diskSpace", params: { mb: 100 } });
+    expect(coded.message).toMatch(/needs about 1 GB free/);
+    statfs.mockRestore();
+  });
+
   test("restart with nothing downloaded fails loudly", async () => {
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
