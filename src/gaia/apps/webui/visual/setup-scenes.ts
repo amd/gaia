@@ -85,7 +85,7 @@ const GPU = {
     method_reason: 'On Windows this is set in AMD Software.', total_gb: 128, gpu_gb: 16, cpu_gb: 112,
     setting: { name: 'Variable Graphics Memory', current_gb: 16, min_gb: 4, max_gb: 96 }, reserve_gb: 16,
     needs_admin: true, needs_restart: true,
-    presets: [{ setting_gb: 32, gpu_gb: 32, unlocks: [QWEN_ID] }, { setting_gb: 48, gpu_gb: 48, unlocks: [QWEN_ID] }],
+    presets: [{ setting_gb: 32, gpu_gb: 32, unlocks: [QWEN_ID] }, { setting_gb: 48, gpu_gb: 48, unlocks: [QWEN_ID] }, { setting_gb: 96, gpu_gb: 96, unlocks: [QWEN_ID] }],
     recommended_setting_gb: 32, models: [], pending: null, revert: { available: false, previous_setting_gb: null },
     guided_steps: ['Open AMD Software.', 'Set Variable Graphics Memory to 30 GiB.'],
 };
@@ -323,6 +323,17 @@ export const SETUP_SCENES: SetupScene[] = [
             await toPc(page);
             await page.locator('.setup-nav .btn-primary').click();
             await expect(page.locator('.gpu-presets')).toBeVisible();
+        },
+    },
+    {
+        // Max picked, with its warning; the split already runs the default model, so keeping it is the advice.
+        name: 'gpu-max',
+        answers: { gpu: { ...GPU, recommended_setting_gb: null, models: [{ id: QWEN_ID, size_gb: 23.3, need_gb: 26.8, default: true, fits_now: true, fits_at_setting_gb: null }] } },
+        reach: async (page) => {
+            await toPc(page);
+            await page.locator('.setup-nav .btn-primary').click();
+            await page.locator('.gpu-preset').last().click();
+            await expect(page.locator('.gpu-unlock.is-warn')).toBeVisible();
         },
     },
     {

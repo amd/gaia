@@ -3,9 +3,15 @@
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as api from '../../../services/api';
 import type { SetupPlan } from '../../../types';
 import { DetectedSummary, specText } from '../DetectedSummary';
 import { COLD_BIG } from './fixtures';
+
+vi.mock('../../../services/api', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../../services/api')>();
+    return { ...actual, openFileOrFolder: vi.fn() };
+});
 
 const PLAN = (): SetupPlan => ({
     ...COLD_BIG(),
@@ -43,8 +49,10 @@ describe('what setup found', () => {
         expect(found).toHaveTextContent('103.1 GB of 128.0 GB');
         expect(found).toHaveTextContent('653.2 GB');
         expect(found).toHaveTextContent('GAIA 0.25.4 · Lemonade 2026.44.1 · llama.cpp b11393 · FastFlowLM v1.0.7');
-        expect(found).toHaveTextContent('C:\\Users\\you\\.cache\\huggingface\\hub');
-        expect(found).toHaveTextContent('C:\\Users\\you\\.gaia');
+        // Folders are links that open them; the long path is only in the tooltip.
+        expect(found).not.toHaveTextContent('huggingface');
+        expect(screen.getByRole('button', { name: 'Open the models folder' })).toHaveAttribute('title', 'C:\\Users\\you\\.cache\\huggingface\\hub');
+        expect(screen.getByRole('button', { name: "Open GAIA's data and logs" })).toHaveAttribute('title', 'C:\\Users\\you\\.gaia');
         // The rest waits behind All details.
         expect(found).not.toHaveTextContent('Kokoro');
         expect(found).not.toHaveTextContent('16 cores');
@@ -120,6 +128,17 @@ describe('what setup found', () => {
         expect(specText(withBuild({ version: '0.25.4', kind: 'local', rc: null, commit: null }), null)).toContain('GAIA: 0.25.4, local build');
         rerender(<DetectedSummary plan={withBuild({ version: '0.25.4', kind: 'release', rc: null, commit: null })} hardware={null} />);
         expect(found()).not.toHaveTextContent('Local build');
+    });
+
+    it('opens a folder in the file browser, and says why when it cannot', async () => {
+        const opener = vi.mocked(api.openFileOrFolder);
+        opener.mockResolvedValueOnce({ status: 'ok', path: '' });
+        render(<DetectedSummary plan={PLAN()} hardware={null} />);
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Open the models folder' })); });
+        expect(opener).toHaveBeenCalledWith('C:\\Users\\you\\.cache\\huggingface\\hub', false);
+        opener.mockRejectedValueOnce(new Error('Path not found'));
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: "Open GAIA's data and logs" })); });
+        expect(screen.getByRole('alert')).toHaveTextContent("Couldn't open the folder: Path not found");
     });
 
     it('links to the memory split when this PC has one to change', () => {

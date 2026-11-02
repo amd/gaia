@@ -100,11 +100,13 @@ interface PresetPickerProps {
     presets: GpuMemoryPreset[];
     value: number | null;
     onChange: (settingGb: number) => void;
+    recommended: number | null;
+    max: number | null;
     disabled?: boolean;
 }
 
 /** A radiogroup of safe sizes; arrow keys move between them. */
-function PresetPicker({ presets, value, onChange, disabled }: PresetPickerProps) {
+function PresetPicker({ presets, value, onChange, recommended, max, disabled }: PresetPickerProps) {
     const t = useT();
     const refs = useRef<Array<HTMLButtonElement | null>>([]);
     const at = Math.max(0, presets.findIndex((p) => p.setting_gb === value));
@@ -134,6 +136,8 @@ function PresetPicker({ presets, value, onChange, disabled }: PresetPickerProps)
                     onClick={() => onChange(p.setting_gb)}
                 >
                     <bdi>{t('gpu.presets.gpu', { gb: formatSize(p.gpu_gb) })}</bdi>
+                    {p.setting_gb === recommended && <>{' '}<span className="gpu-tag is-recommended">{t('gpu.presets.recommended')}</span></>}
+                    {p.setting_gb === max && <>{' '}<span className="gpu-tag is-max">{t('gpu.presets.max')}</span></>}
                 </button>
             ))}
         </div>
@@ -182,6 +186,12 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
     const [copied, setCopied] = useState<string | null>(null);
 
     const preset = presets.find((p) => p.setting_gb === target) ?? null;
+    const recommended = status.recommended_setting_gb ?? null;
+    // The top preset is the most GAIA allows: the CPU keeps only its floor there.
+    const max = presets.length > 0 && presets[presets.length - 1].setting_gb === status.setting?.max_gb ? presets[presets.length - 1].setting_gb : null;
+    const cpuLeft = preset && status.total_gb != null ? Math.max(0, status.total_gb - preset.gpu_gb) : null;
+    // No raise unlocks a default model: the split already runs the best one GAIA picks.
+    const fitsNow = recommended == null ? (status.models ?? []).find((m) => m.default && m.fits_now) : undefined;
     const unlocks = (preset?.unlocks ?? []).slice(0, 2).map((id) => names[id] ?? id);
     const pending = status.pending ?? null;
     const canApply = status.method === 'apply';
@@ -316,12 +326,22 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
 
             {!restartPending && !guided && presets.length > 0 && (
                 <>
-                    <PresetPicker presets={presets} value={target} onChange={setTarget} disabled={busy !== null} />
+                    {fitsNow && (
+                        <p className="gpu-unlock is-keep">
+                            <Check size={13} aria-hidden="true" /> {t('gpu.keepRecommended', { model: names[fitsNow.id] ?? fitsNow.id })}
+                        </p>
+                    )}
+                    <PresetPicker presets={presets} value={target} onChange={setTarget} recommended={recommended} max={max} disabled={busy !== null} />
                     {preset && (
                         <p className="gpu-unlock">
                             {unlocks.length > 0
                                 ? t(unlocks.length > 1 ? 'gpu.unlock.two' : 'gpu.unlock.one', { gb: formatSize(preset.gpu_gb), a: unlocks[0], b: unlocks[1] ?? '' })
                                 : t('gpu.unlock.none', { gb: formatSize(preset.gpu_gb) })}
+                        </p>
+                    )}
+                    {preset && preset.setting_gb === max && cpuLeft != null && (
+                        <p className="gpu-unlock is-warn" role="note">
+                            <AlertTriangle size={13} aria-hidden="true" /> {t('gpu.maxWarn', { cpu: formatSize(cpuLeft), os: osName(status.os) })}
                         </p>
                     )}
                     <p className="setup-hint">

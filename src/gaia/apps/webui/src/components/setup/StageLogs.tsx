@@ -6,6 +6,7 @@ import { ChevronRight, FileDown, Loader2 } from 'lucide-react';
 import { useT } from '../../i18n/useT';
 import * as api from '../../services/api';
 import type { SetupLogStage, SetupRunStatus } from '../../types';
+import { FollowLog } from './FollowLog';
 import { formatBytes } from './format';
 
 const STAGES: SetupLogStage[] = ['check', 'download', 'test'];
@@ -67,7 +68,7 @@ export function StageLogs({ run, before = {} }: { run: SetupRunStatus | null; be
                         <button type="button" className="setup-log-toggle" onClick={() => toggle(stage)} aria-expanded={shown}>
                             <ChevronRight size={13} className={shown ? 'is-open' : ''} aria-hidden="true" /> {t(`setup.logs.${stage}`)}
                         </button>
-                        {shown && <pre className="setup-log-pre" dir="ltr">{lines.join('\n')}</pre>}
+                        {shown && <FollowLog lines={lines} className="setup-log-pre" />}
                     </div>
                 );
             })}

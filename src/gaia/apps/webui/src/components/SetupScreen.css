@@ -695,7 +695,6 @@ button.setup-rail-step:hover {
 }
 
 .found-glance,
-.found-paths,
 .found-details {
     display: grid;
     gap: 10px 24px;
@@ -707,14 +706,18 @@ button.setup-rail-step:hover {
 }
 
 .found-paths {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 20px;
     padding-block-start: 12px;
     border-block-start: 1px solid var(--border);
 }
 
-.found-paths dd {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    user-select: all;
+.found-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
 }
 
 .found-details {

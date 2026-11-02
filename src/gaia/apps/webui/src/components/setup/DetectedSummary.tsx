@@ -1,9 +1,10 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { AlertCircle, Check, ChevronRight, Copy } from 'lucide-react';
+import { AlertCircle, Check, ChevronRight, Copy, FolderOpen } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useT } from '../../i18n/useT';
+import * as api from '../../services/api';
 import type { PreflightReport, SetupDevice, SetupGaiaBuild, SetupPlan } from '../../types';
 import { formatSize } from './format';
 
@@ -128,6 +129,16 @@ export function DetectedSummary({ plan, hardware, onChangeMemory }: { plan: Setu
     const f = facts(plan, hardware);
     const [open, setOpen] = useState(false);
     const [copied, setCopied] = useState<'done' | 'failed' | null>(null);
+    const [openError, setOpenError] = useState<string | null>(null);
+    // The folder itself, in the PC's file browser; the full path is in the link's tooltip and the copy.
+    const openFolder = async (path: string) => {
+        setOpenError(null);
+        try {
+            await api.openFileOrFolder(path, false);
+        } catch (err) {
+            setOpenError(t('setup.found.openFailed', { error: err instanceof Error ? err.message : String(err) }));
+        }
+    };
     const unknown = <span className="found-muted">{t('setup.found.unknown')}</span>;
     const warnings = [...(hardware?.blockers ?? []), ...(hardware?.warnings ?? [])];
 
@@ -180,10 +191,16 @@ export function DetectedSummary({ plan, hardware, onChangeMemory }: { plan: Setu
                 </Row>
             </dl>
 
-            <dl className="found-paths">
-                <Row label={t('setup.found.modelsFolder')}>{f.modelsPath ? <Tech>{f.modelsPath}</Tech> : unknown}</Row>
-                <Row label={t('setup.found.gaiaFolder')}>{f.gaiaHome ? <Tech>{f.gaiaHome}</Tech> : unknown}</Row>
-            </dl>
+            <div className="found-paths">
+                {([['setup.found.modelsFolder', f.modelsPath], ['setup.found.gaiaFolder', f.gaiaHome]] as const).map(([key, path]) => (
+                    path && (
+                        <button key={key} type="button" className="link-btn found-open" onClick={() => void openFolder(path)} title={path}>
+                            <FolderOpen size={13} aria-hidden="true" /> {t(key)}
+                        </button>
+                    )
+                ))}
+                {openError && <p className="setup-error" role="alert">{openError}</p>}
+            </div>
 
             {warnings.length > 0 && (
                 <ul className="found-warnings">

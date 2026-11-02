@@ -6,6 +6,7 @@ import { AlertCircle, Check, ChevronRight, Pause, RotateCw } from 'lucide-react'
 import { useT, type Translate } from '../../i18n/useT';
 import type { SetupModelProgress, SetupModelState, SetupRunStatus } from '../../types';
 import { ConfirmSheet } from './ConfirmSheet';
+import { FollowLog } from './FollowLog';
 import { DownloadMeter, STALL_NOTICE_S, STALL_STUCK_S, formatBytes, formatEta, formatSize, formatSpeed, ltrIn, spokenEta, type Estimate } from './format';
 import { usePageVisible } from './motion';
 
@@ -74,31 +75,6 @@ interface RowProps {
     checking: boolean;
     /** Seconds this row has been checked, once past 10. */
     checkingFor: number;
-}
-
-/** A download's own output, following the newest line unless the reader scrolled up. */
-function RowLog({ lines, id }: { lines: string[]; id: string }) {
-    const box = useRef<HTMLPreElement>(null);
-    const pinned = useRef(true);
-    useEffect(() => {
-        const el = box.current;
-        if (el && pinned.current) el.scrollTop = el.scrollHeight;
-    }, [lines]);
-    return (
-        <pre
-            ref={box}
-            id={id}
-            className="dl-log"
-            dir="ltr"
-            tabIndex={0}
-            onScroll={(e) => {
-                const el = e.currentTarget;
-                pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
-            }}
-        >
-            {lines.join('\n')}
-        </pre>
-    );
 }
 
 function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume, onSkip, onRestart, busy, retryLater, checking, checkingFor }: RowProps) {
@@ -184,7 +160,7 @@ function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume,
                 <span className="dl-fill" style={{ inlineSize: `${m.state === 'verifying' ? 100 : pct}%` }} />
             </div>
             {detail && <p className="dl-detail"><bdi>{detail}</bdi></p>}
-            {showLog && lines.length > 0 && <RowLog lines={lines} id={logId} />}
+            {showLog && lines.length > 0 && <FollowLog lines={lines} id={logId} className="dl-log" />}
             {m.state === 'failed' && (
                 <div className="dl-fail">
                     <p className="dl-error" id={errId}>{failureText(m, name, freeGb, t)}</p>
