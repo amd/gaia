@@ -24,7 +24,7 @@ Two invariants hold for every migration:
    bridges instruction-only and connector-backed skills; a source that shells
    out (``requires.bins``) or reads config files (``requires.config``) maps onto
    ``shell`` / ``filesystem``, which have no enforcement until the Phase 2
-   sandbox (`#1019 <https://github.com/amd/gaia/issues/1019>`_). Such a skill is
+   sandbox (`#2863 <https://github.com/amd/gaia/issues/2863>`_). Such a skill is
    reported **unmigratable with the reason** rather than quietly stripped of the
    permission to make the migration "succeed".
 

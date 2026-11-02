@@ -149,11 +149,11 @@ def _refuse_ungated_code(skill: Any) -> Dict[str, Any]:
     tier gate). Declaring the skill in ``gaia-agent.yaml``, or importing it into
     ``~/.gaia/skills``, keeps that decision with the human where it belongs.
     """
-    from gaia.skills.capture import _shell_path
+    from gaia.skills.capture import shell_path
 
     # Importing code is refused without the opt-in, and this skill ships code.
     import_command = (
-        f"gaia skill import {_shell_path(skill.directory)} --allow-experimental"
+        f"gaia skill import {shell_path(skill.directory)} --allow-experimental"
     )
     logger.warning(
         "Refusing model-issued load of '%s': it ships tool(s) %s from the "

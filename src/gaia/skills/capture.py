@@ -671,7 +671,7 @@ def code_is_deferred(skill: Skill) -> bool:
     return False
 
 
-def _shell_path(path: Path) -> str:
+def shell_path(path: Path) -> str:
     """*path* quoted for pasting into this platform's shell."""
     if sys.platform == "win32":
         return subprocess.list2cmdline([str(path)])
@@ -691,7 +691,7 @@ def deferred_remedy(skill: Skill) -> str:
     if skill.root == ROOT_CLAUDE_PROJECT:
         flag = " --allow-experimental" if skill.gaia.tools else ""
         return (
-            f"`gaia skill import {_shell_path(skill.directory)}{flag}`, then {promote}"
+            f"`gaia skill import {shell_path(skill.directory)}{flag}`, then {promote}"
         )
     return promote
 
