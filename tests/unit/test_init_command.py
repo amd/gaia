@@ -10,7 +10,7 @@ These tests use mocking to avoid actual network calls and installations.
 import io
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from gaia.installer.lemonade_installer import (
     InstallResult,
@@ -1595,6 +1595,37 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("Ubuntu 22.04", result.error)
         mock_run.assert_not_called()
+
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=('ID=fedora\nVERSION_ID="41"\nPRETTY_NAME="Fedora Linux 41"\n'),
+    )
+    def test_check_linux_version_rejects_non_debian_distros_with_manual_remedy(
+        self, mock_os_release
+    ):
+        """Non-Debian systems do not receive an apt command they cannot run."""
+        error = LemonadeInstaller._check_linux_version()
+
+        self.assertIsNotNone(error)
+        self.assertIn("Fedora Linux 41", error)
+        self.assertIn("Lemonade PPA", error)
+        self.assertIn("lemonade-server.ai", error)
+        self.assertIn("LEMONADE_BASE_URL", error)
+
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=(
+            'ID=pop\nID_LIKE="ubuntu debian"\n'
+            'VERSION_ID="24.04"\nPRETTY_NAME="Pop!_OS 24.04 LTS"\n'
+        ),
+    )
+    def test_check_linux_version_accepts_ubuntu_family_derivative(
+        self, mock_os_release
+    ):
+        """Ubuntu-family derivatives retain the PPA path via ID_LIKE."""
+        assert LemonadeInstaller._check_linux_version() is None
 
     @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value=None)
