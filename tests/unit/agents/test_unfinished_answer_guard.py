@@ -297,3 +297,37 @@ def test_completed_answer_is_not_reprompted(agent):
 )
 def test_answer_style_let_me_phrases_are_not_narration(answer):
     assert _unfinished_answer_kind(answer) is None
+
+
+def _stub_raw_chat(agent, *texts):
+    texts = list(texts)
+    sent = []
+
+    def _send(messages, *_, **__):
+        sent.append([dict(m) for m in messages])
+        resp = MagicMock()
+        resp.text = texts.pop(0)
+        resp.stats = {}
+        return resp
+
+    agent.chat = MagicMock(send_messages=MagicMock(side_effect=_send))
+    return sent
+
+
+def test_empty_reply_is_reprompted_then_answer_accepted(agent):
+    sent = _stub_raw_chat(agent, "", json.dumps({"thought": "", "answer": "71/100."}))
+
+    result = agent.process_query("Summarize the audit", max_steps=10)
+
+    assert len(sent) == 2
+    assert "Your last reply was empty" in sent[1][-1]["content"]
+    assert _final_text(result) == "71/100."
+
+
+def test_empty_reply_reprompts_are_bounded(agent):
+    sent = _stub_raw_chat(agent, *[""] * 5)
+
+    result = agent.process_query("Summarize the audit", max_steps=20)
+
+    assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
+    assert "empty response from the language model" in _final_text(result)

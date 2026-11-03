@@ -5943,6 +5943,7 @@ Do NOT wrap conversational replies in JSON.
                 "thought": "LLM returned empty response",
                 "goal": "Handle empty response error",
                 "answer": answer,
+                "empty_response": True,
             }
 
         response = response.strip()
@@ -11684,6 +11685,27 @@ Do NOT wrap conversational replies in JSON.
                 answer_candidate = _with_answer_beside_tool_calls(
                     parsed["answer"], answer_beside_tool_calls
                 )
+                # FastFlowLM occasionally ends a long prefill with zero tokens.
+                if (
+                    parsed.get("empty_response")
+                    and steps_taken < steps_limit - 1
+                    and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+                ):
+                    unfinished_answer_reprompts += 1
+                    logger.warning(
+                        "[WORKFLOW] Empty model reply at step %d; asking again",
+                        steps_taken,
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your last reply was empty. Make the next tool "
+                                "call, or answer the user from the results above."
+                            ),
+                        }
+                    )
+                    continue
                 completion_gaps = []
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after
