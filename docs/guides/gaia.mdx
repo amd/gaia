@@ -74,7 +74,7 @@ Inference runs locally by default. The sidecar's `/query` endpoint accepts `prov
 
 ### Check it's ready before you ask it anything
 
-`GET /v1/gaia/init` is a read-only preflight: it probes Lemonade, compares its version against the 10.2.0 floor, and confirms the model is downloaded. It never pulls or loads a model.
+`GET /v1/gaia/init` is a read-only preflight: it probes Lemonade, compares its version against the 2026.44.1 floor, and confirms the model is downloaded. It never pulls or loads a model.
 
 ```bash
 curl -s http://127.0.0.1:8141/v1/gaia/init

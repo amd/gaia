@@ -30,7 +30,9 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   `min_version: "2026.44.1"` (was `10.2.0`) and answers not-ready on anything
   older. Its `hint` no longer tells you to run `gaia init --force-reinstall`:
   GAIA upgrades its own Lemonade when it next starts it, and a Lemonade you
-  run yourself is pointed at https://lemonade-server.ai.
+  run yourself is pointed at https://lemonade-server.ai. This hint needs the
+  `gaia` CLI from the same release; the release that ships it raises the
+  `amd-gaia` floor.
 - **A project's `.env` can only supply the Claude API key.** The sidecar reads
   `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
   Claude calls, and ignores every other name there with one warning. Settings

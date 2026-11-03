@@ -82,7 +82,10 @@ class TestEnsure:
         assert ensured.port == 60000
         assert ensured.pid == 7
         embedded.start.assert_called_once_with(
-            install_if_missing=False, owner_pid=OWNER, owner_started=mock.ANY
+            install_if_missing=False,
+            owner_pid=OWNER,
+            owner_started=mock.ANY,
+            upgrade_older=True,
         )
 
     def test_older_version_is_upgraded_not_reported(self):
@@ -92,7 +95,10 @@ class TestEnsure:
 
         assert ensured.started is True
         embedded.start.assert_called_once_with(
-            install_if_missing=False, owner_pid=OWNER, owner_started=mock.ANY
+            install_if_missing=False,
+            owner_pid=OWNER,
+            owner_started=mock.ANY,
+            upgrade_older=True,
         )
 
     def test_newer_version_is_reported_not_replaced(self):
@@ -180,7 +186,10 @@ class TestEnsure:
         assert ensured.started is True
         embedded.stop.assert_called_once_with()
         embedded.start.assert_called_once_with(
-            install_if_missing=False, owner_pid=OWNER, owner_started=mock.ANY
+            install_if_missing=False,
+            owner_pid=OWNER,
+            owner_started=mock.ANY,
+            upgrade_older=True,
         )
 
     def test_old_version_a_crashed_daemon_left_is_reaped_and_replaced(self):

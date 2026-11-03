@@ -262,6 +262,7 @@ class EmbeddedLemonadeOwner:
                 install_if_missing=False,
                 owner_pid=self._owner_pid,
                 owner_started=self._owner_started,
+                upgrade_older=True,
             )
             logger.info(
                 "daemon: started embedded Lemonade %s on port %s",
