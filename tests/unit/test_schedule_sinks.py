@@ -57,14 +57,14 @@ class TestValidate:
         with pytest.raises(ValueError, match=match):
             sinks.validate(sink, sink_args)
 
-    @pytest.mark.parametrize("system", ["Darwin", "Linux"])
+    @pytest.mark.parametrize("system", ["Darwin", "Linux", "Windows"])
     def test_notification_passes_where_supported(self, mocker, system):
         mocker.patch(_PLATFORM_SYSTEM, return_value=system)
         sinks.validate("notification", {})
 
-    def test_notification_rejected_on_windows(self, mocker):
-        mocker.patch(_PLATFORM_SYSTEM, return_value="Windows")
-        with pytest.raises(NotImplementedError, match="Windows"):
+    def test_notification_rejected_on_unsupported_os(self, mocker):
+        mocker.patch(_PLATFORM_SYSTEM, return_value="Plan9")
+        with pytest.raises(NotImplementedError, match="Plan9"):
             sinks.validate("notification", {})
 
 
@@ -219,6 +219,33 @@ class TestNotificationSink:
         mock_run.assert_called_once()
         args = mock_run.call_args.args[0]
         assert args == ["notify-send", "T", "body"]
+
+    def test_windows_posts_toast_via_powershell(self, mocker):
+        mocker.patch(_PLATFORM_SYSTEM, return_value="Windows")
+        mock_run = mocker.patch(_SUBPROCESS_RUN)
+        payload = "done'); Remove-Item C:\\ -Recurse; ('"
+
+        sinks.dispatch("notification", {"title": "T"}, payload)
+
+        mock_run.assert_called_once()
+        args = mock_run.call_args.args[0]
+        kwargs = mock_run.call_args.kwargs
+        assert args[0] == "powershell"
+        assert "-NoProfile" in args and "-NonInteractive" in args
+        assert args[-2:] == ["-Command", sinks._WIN_TOAST_PS_SCRIPT]
+        assert "ToastNotificationManager" in args[-1]
+        # Run output travels only through the environment, never the script.
+        assert payload not in args[-1]
+        assert kwargs["env"][sinks._WIN_MESSAGE_ENV_VAR] == payload
+        assert kwargs["env"][sinks._WIN_TITLE_ENV_VAR] == "T"
+        assert kwargs["check"] is True
+        assert kwargs["timeout"] == 30
+
+    def test_windows_missing_powershell_names_it(self, mocker):
+        mocker.patch(_PLATFORM_SYSTEM, return_value="Windows")
+        mocker.patch(_SUBPROCESS_RUN, side_effect=FileNotFoundError("no powershell"))
+        with pytest.raises(FileNotFoundError, match="'powershell' on PATH"):
+            sinks.dispatch("notification", {}, "hi")
 
     def test_called_process_error_raises_runtime_error(self, mocker):
         import subprocess

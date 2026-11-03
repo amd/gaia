@@ -18,8 +18,36 @@ from typing import Any, Dict
 
 import requests
 
+from gaia.env import child_env
+
 TELEGRAM_API = "https://api.telegram.org"
-_NOTIFICATION_SYSTEMS = ("Darwin", "Linux")
+_NOTIFICATION_SYSTEMS = ("Darwin", "Linux", "Windows")
+
+# Title and body reach PowerShell as environment values, never as script text,
+# so a quote in run output cannot become PowerShell code.
+_WIN_TITLE_ENV_VAR = "GAIA_NOTIFY_TITLE"
+_WIN_MESSAGE_ENV_VAR = "GAIA_NOTIFY_MESSAGE"
+# Windows PowerShell's AUMID: toasts need a registered app id to show.
+_WIN_TOAST_APP_ID = (
+    "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe"
+)
+_WIN_TOAST_PS_SCRIPT = (
+    "$ErrorActionPreference = 'Stop'; "
+    "$m = [Windows.UI.Notifications.ToastNotificationManager, "
+    "Windows.UI.Notifications, ContentType = WindowsRuntime]; "
+    "$x = $m::GetTemplateContent("
+    "[Windows.UI.Notifications.ToastTemplateType]::ToastText02); "
+    "$t = $x.GetElementsByTagName('text'); "
+    f"[void]$t.Item(0).AppendChild($x.CreateTextNode([string]$env:{_WIN_TITLE_ENV_VAR})); "
+    f"[void]$t.Item(1).AppendChild($x.CreateTextNode([string]$env:{_WIN_MESSAGE_ENV_VAR})); "
+    f"$m::CreateToastNotifier('{_WIN_TOAST_APP_ID}')"
+    ".Show([Windows.UI.Notifications.ToastNotification]::new($x))"
+)
+_NOTIFICATION_TOOLS = {
+    "Darwin": "osascript",
+    "Linux": "notify-send",
+    "Windows": "powershell",
+}
 
 
 def validate(sink: str, sink_args: Dict[str, Any]) -> None:
@@ -108,13 +136,29 @@ def _to_notification(output: str, sink_args: Dict[str, Any]) -> None:
             subprocess.run(["osascript", "-e", script], check=True, timeout=30)
         elif system == "Linux":
             subprocess.run(["notify-send", title, output], check=True, timeout=30)
+        elif system == "Windows":
+            subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    _WIN_TOAST_PS_SCRIPT,
+                ],
+                env=child_env(
+                    {_WIN_TITLE_ENV_VAR: title, _WIN_MESSAGE_ENV_VAR: output}
+                ),
+                stdin=subprocess.DEVNULL,
+                check=True,
+                timeout=30,
+            )
         else:
             raise NotImplementedError(
                 f"notification sink is not implemented for {system!r}; "
                 f"use --sink stdout, file:<path>, or telegram instead"
             )
     except FileNotFoundError as e:
-        tool = "osascript" if system == "Darwin" else "notify-send"
+        tool = _NOTIFICATION_TOOLS[system]
         raise FileNotFoundError(
             f"notification sink needs {tool!r} on PATH ({system}): {e}. "
             f"Install it or choose a different --sink."
