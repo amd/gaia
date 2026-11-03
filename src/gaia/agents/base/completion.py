@@ -222,7 +222,7 @@ _CODE_NAME = re.compile(r"^_|[()=<>]|::")
 
 def _path_token(match: re.Match) -> str | None:
     value = next(g for g in match.groups() if g is not None).strip()
-    value = value.lstrip("([（「")
+    value = value.lstrip("([（「【《")
     value = value.rstrip(".,;:)]?!؟،؛。？！，；：、」）】》")
     if not value or "://" in value or "@" in value or "\x00" in value:
         return None

@@ -181,9 +181,16 @@ def test_named_targets_are_files_and_project_symbols(query, expected):
     assert named_targets(query) == expected
 
 
-@pytest.mark.parametrize("mark", ["؟", "。", "،", "；", "？", "！"])
-def test_mentioned_paths_strip_unicode_sentence_punctuation(mark):
-    assert mentioned_paths(f"toybox/dates.py{mark}") == ["toybox/dates.py"]
+@pytest.mark.parametrize(
+    "text",
+    [
+        *(f"toybox/dates.py{mark}" for mark in ["؟", "。", "،", "；", "？", "！"]),
+        "请看 《toybox/dates.py》",
+        "请看 【toybox/dates.py】",
+    ],
+)
+def test_mentioned_paths_strip_unicode_sentence_punctuation(text):
+    assert mentioned_paths(text) == ["toybox/dates.py"]
 
 
 # ---------------------------------------------------------------------------
