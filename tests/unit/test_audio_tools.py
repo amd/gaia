@@ -683,6 +683,61 @@ class TestTimedTranscripts:
         assert "**Lunges** (00:05 → 00:09)" in report.read_text(encoding="utf-8")
         assert not list(tmp_path.glob("*.progress.json"))
 
+    def test_each_section_is_shown_while_the_rest_are_read(self, tmp_path):
+        segments = [{"start": 5.0, "end": 9.0, "text": "Do ten lunges."}]
+        raw = self._timed(tmp_path, segments)
+        reply = json.dumps(
+            {
+                "items": [
+                    {"title": "Lunges", "start": "00:05", "end": "00:05", "fields": {}}
+                ],
+                "summary": "Lunges.",
+            }
+        )
+        phases = []
+        host = Host()
+        host.console = type(
+            "Console",
+            (),
+            {"report_phase": lambda self, phase, msg, **f: phases.append((phase, f))},
+        )()
+
+        with patch.object(Host, "_analysis_reply", return_value=reply):
+            assert host._analyze_transcript(str(raw), "x", [])["status"] == "success"
+
+        found = [fields for phase, fields in phases if phase == "recording_found"]
+        assert found == [
+            {
+                "section": 1,
+                "sections": 1,
+                "start": "00:05",
+                "end": "00:09",
+                "summary": "Lunges.",
+                "items": [{"title": "Lunges", "start": "00:05", "seconds": 5.0}],
+            }
+        ]
+
+    def test_sections_use_the_agents_memory_embedder_when_it_has_one(self):
+        embedded = []
+
+        class WithMemory(Host):
+            def _active_embedding_model(self):
+                return "embed-model"
+
+            def _get_embedder(self):
+                return type(
+                    "Embedder",
+                    (),
+                    {
+                        "embed": lambda _s, texts, model: embedded.append(model)
+                        or [[1.0]] * len(texts)
+                    },
+                )()
+
+        assert Host()._transcript_embedder() is None
+        assert WithMemory()._transcript_embedder()(["a", "b"]) == [[1.0], [1.0]]
+        assert embedded == ["embed-model"]
+
     def test_analyze_failure_says_finished_sections_are_kept(self, tmp_path):
         raw = self._timed(tmp_path, [{"start": 0.0, "end": 1.0, "text": "Hi."}])
 

@@ -877,6 +877,14 @@ export type StreamEventType =
     | 'followup_unavailable' // The running turn can't take a message mid-turn
     | 'context_usage';    // What this turn's model call holds, by kind
 
+/** One thing found in a recording section, before the whole recording is read. */
+export interface FoundItem {
+    title: string;
+    /** `MM:SS` or `H:MM:SS`. */
+    start: string;
+    seconds: number;
+}
+
 export interface StreamEvent {
     type: StreamEventType;
     content?: string;
@@ -897,6 +905,12 @@ export interface StreamEvent {
     state?: number;
     percent?: number;
     eta_seconds?: number;
+    /** On a `recording_found` phase: one section's results, while the rest are read. */
+    section?: number;
+    sections?: number;
+    start?: string;
+    end?: string;
+    items?: FoundItem[];
     step?: number;
     total?: number;
     tool?: string;

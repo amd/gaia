@@ -999,6 +999,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         setLiveHistoryNotice(historyNotice ?? null);
                         return;
                     }
+                    if (event.phase === 'recording_found' && event.section != null) {
+                        useChatStore.getState().addRecordingSection({
+                            section: event.section,
+                            sections: event.sections ?? event.section,
+                            start: event.start ?? '',
+                            end: event.end ?? '',
+                            summary: event.summary ?? '',
+                            items: event.items ?? [],
+                        });
+                        return;
+                    }
                     if (event.phase === 'recording' && event.stage != null) {
                         useChatStore.getState().setRecordingStage(event.stage, {
                             state: event.state ?? 0,

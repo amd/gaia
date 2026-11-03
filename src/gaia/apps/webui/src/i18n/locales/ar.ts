@@ -388,6 +388,8 @@ const messages: Messages = {
     'recording.stage.prepare': 'تجهيز النص',
     'recording.stage.analyze': 'التحليل',
     'recording.skipped': 'تم التخطي',
+    'recording.found.title': 'ما وُجد حتى الآن',
+    'recording.found.count': 'قُرئ {done} من {total} أقسام',
     'recording.leftUnderMinute': 'أقل من دقيقة متبقية',
     'recording.leftMinutes': 'نحو {minutes} دقيقة متبقية',
     'docs.progress.reading': 'قراءة الصفحة {done} من {total}',

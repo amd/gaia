@@ -94,6 +94,63 @@
     to { transform: translateX(-300%); }
 }
 
+.recording-found {
+    margin-block-start: 12px;
+    padding-block-start: 10px;
+    border-block-start: 1px solid var(--border-light);
+    max-block-size: 320px;
+    overflow-y: auto;
+}
+
+.recording-found-title {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 0 0 8px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.recording-found-count {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.recording-found-section + .recording-found-section { margin-block-start: 10px; }
+
+.recording-found-span {
+    display: flex;
+    gap: 8px;
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.recording-found-items {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.recording-found-items li {
+    display: flex;
+    gap: 8px;
+    min-inline-size: 0;
+}
+
+.recording-found-time {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
 @media (prefers-reduced-motion: reduce) {
     .recording-progress-row.is-running .recording-progress-track.is-indeterminate .recording-progress-fill {
         animation: none;

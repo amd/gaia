@@ -1208,6 +1208,8 @@ class AudioToolsMixin:
                 complete_json=self._analysis_json_reply,
                 parallel=self._analysis_parallelism(),
                 check=raise_if_cancelled,
+                embed=self._transcript_embedder(),
+                on_found=self._report_found,
             )
         except ToolCancelled:
             logger.warning("Analysis of %s cancelled", source)
@@ -1749,6 +1751,48 @@ class AudioToolsMixin:
         if eta is not None:
             fields["eta_seconds"] = eta
         console.report_phase("recording", message, **fields)
+
+    def _transcript_embedder(self):
+        """Embeds transcript lines with the agent's memory embedder, if it has one.
+
+        Without one, analysis windows end at pauses and sentence ends instead
+        of where the topic changes.
+        """
+        get_embedder = getattr(self, "_get_embedder", None)
+        if get_embedder is None:
+            logger.info("No embedder on this agent: sections end at pauses only")
+            return None
+        model = self._active_embedding_model()
+
+        def embed(texts):
+            return get_embedder().embed(texts, model=model)
+
+        return embed
+
+    def _report_found(self, index, total, window, items, summary) -> None:
+        """Show one section's results while the rest are still being read."""
+        from gaia.audio.transcript_analysis import format_timestamp
+
+        console = getattr(self, "console", None)
+        if console is None or not hasattr(console, "report_phase"):
+            return
+        console.report_phase(
+            "recording_found",
+            f"Section {index} of {total}: {len(items)} found",
+            section=index,
+            sections=total,
+            start=format_timestamp(window.start),
+            end=format_timestamp(window.end),
+            summary=summary,
+            items=[
+                {
+                    "title": item.title,
+                    "start": format_timestamp(item.start),
+                    "seconds": item.start,
+                }
+                for item in items
+            ],
+        )
 
     def _report_progress(self, message: str) -> None:
         """Surface a progress line if the agent has a console attached.

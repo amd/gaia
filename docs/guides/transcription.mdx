@@ -44,6 +44,12 @@ running stage has a progress bar, a percentage and the time left. Early estimate
 from the recording's length and sharpen as parts finish. Press **Stop** at any time.
 Finished work is kept, so asking again continues from where it stopped.
 
+While the recording is analyzed, the same card shows **Found so far**: each section
+already read, with its times, a short summary and what it found, so you can start
+reading before the last section is done. The first section is a third of the usual
+size, so it arrives sooner. Something found twice where two sections overlap shows
+once here, and the finished report merges it.
+
 Recordings go in the chat, not the Document Library. After the transcript exists,
 ask anything about it and the answer quotes the time it was said.
 
@@ -101,6 +107,12 @@ A summary drops things by design. When you want every recipe, every question fro
 the audience or every product shown, `analyze_transcript` reads the whole transcript
 in overlapping sections, and the model reports what it finds in each one. GAIA then
 assembles the report in code, so a long list cannot be cut off by a reply limit.
+
+Sections end where the recording changes subject, not wherever the size limit falls.
+Near the limit, GAIA picks the strongest break: a change of topic, measured with the
+local embedding model that memory uses, or else a long pause, the end of a sentence
+or a change of speaker. An agent without that model still splits at pauses and
+sentence ends.
 
 Three things make the result trustworthy:
 

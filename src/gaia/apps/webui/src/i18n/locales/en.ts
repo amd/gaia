@@ -388,6 +388,8 @@ export const enMessages = {
     'recording.stage.prepare': 'Preparing transcript',
     'recording.stage.analyze': 'Analyzing',
     'recording.skipped': 'Skipped',
+    'recording.found.title': 'Found so far',
+    'recording.found.count': '{done} of {total} sections read',
     'recording.leftUnderMinute': 'Under a minute left',
     'recording.leftMinutes': 'About {minutes} min left',
     'docs.progress.reading': 'Reading page {done} of {total}',

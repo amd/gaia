@@ -1373,6 +1373,19 @@ Deleting a chat deletes its copies.
     running, 1 done or 2 skipped. `percent` and `eta_seconds` are present once known;
     both are estimates until a part of the recording finishes. `message` is an English
     line for clients that draw no stages.
+
+    During analysis, each section that finishes also sends `"phase": "recording_found"`,
+    so a client can show results before the whole recording is read:
+
+    ```json
+    {"type": "status", "status": "working", "phase": "recording_found",
+     "message": "Section 1 of 3: 2 found", "section": 1, "sections": 3,
+     "start": "00:00", "end": "03:31", "summary": "...",
+     "items": [{"title": "...", "start": "00:21", "seconds": 21.0}]}
+    ```
+
+    Sections overlap, so an item near a seam can arrive in two of them; the finished
+    report merges it. Sections reused from an interrupted run arrive first.
   </Accordion>
   <Accordion title="POST /api/files/upload-media">
     Save an audio or video recording as a chat attachment, for the agent to

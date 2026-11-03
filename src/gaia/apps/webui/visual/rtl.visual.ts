@@ -213,6 +213,61 @@ for (const [title, locale] of [
     });
 }
 
+// Sections read so far while the rest are analyzed, one in each script.
+const FOUND_EVENTS = [
+    { type: 'status', status: 'working', message: 'x', phase: 'recording', stage: 5, state: 0, percent: 67, eta_seconds: 40 },
+    {
+        type: 'status', status: 'working', message: 'x', phase: 'recording_found',
+        section: 1, sections: 3, start: '00:00', end: '03:31',
+        summary: 'The speaker introduces the talk and begins his first story about dropping out of college.',
+        items: [{ title: 'Introduction and three stories', start: '00:21', seconds: 21 }, { title: 'Story 1: connecting the dots', start: '00:55', seconds: 55 }],
+    },
+    {
+        type: 'status', status: 'working', message: 'x', phase: 'recording_found',
+        section: 2, sections: 3, start: '02:06', end: '1:08:54',
+        summary: 'يتحدث عن تركه الجامعة وعن دروس الخط العربي.',
+        items: [{ title: 'ترك الجامعة واتباع الفضول', start: '02:06', seconds: 126 }],
+    },
+];
+
+for (const [title, locale] of [
+    ['recording found so far, Arabic', 'ar'],
+    ['recording found so far, English', 'en'],
+] as const) {
+    test(title, async ({ page }, info) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, FOUND_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+        await page.locator('textarea').first().fill('Transcribe this');
+        await page.keyboard.press('Enter');
+        const found = page.locator('.recording-found');
+        await expect(found.locator('.recording-found-section')).toHaveCount(2);
+        expect(await audit(page)).toEqual([]);
+        // Times read left to right in both directions, and sit at the start edge.
+        const span = found.locator('.recording-found-span .recording-found-time').nth(1);
+        await expect(span).toHaveText('02:06–1:08:54');
+        await expect(span).toHaveAttribute('dir', 'ltr');
+        const row = found.locator('.recording-found-items li').first();
+        const [time, rowBox] = [await row.locator('.recording-found-time').boundingBox(), await row.boundingBox()];
+        const atStart = locale === 'ar'
+            ? Math.abs(time!.x + time!.width - (rowBox!.x + rowBox!.width))
+            : Math.abs(time!.x - rowBox!.x);
+        expect(atStart).toBeLessThan(1);
+        await found.screenshot({ path: info.outputPath(`recording-found-${locale}.png`) });
+    });
+}
+
 for (const [title, locale, name] of [
     ['recording ready to send', 'ar', 'Quarterly business review recording with a very long file name 2026.mp4'],
     ['recording with an Arabic name, in English', 'en', 'تسجيل مراجعة الأعمال الفصلية.m4a'],

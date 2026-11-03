@@ -10,6 +10,8 @@ import time
 import pytest
 
 from gaia.audio.transcript_analysis import (
+    FIRST_WINDOW_SHARE,
+    WINDOW_CHARS,
     Item,
     MalformedReply,
     ReplyOverflow,
@@ -116,6 +118,44 @@ class TestWindows:
 
     def test_silence_produces_no_windows(self):
         assert build_windows([{"start": 0, "end": 1, "text": "  "}]) == []
+
+    def test_the_first_window_is_smaller_so_results_start_sooner(self):
+        windows = build_windows(_segments(4000))
+
+        assert len(windows[0].text) <= WINDOW_CHARS * FIRST_WINDOW_SHARE
+        assert len(windows[1].text) > len(windows[0].text) * 2
+
+    # The second window starts near line 73 and has room for about 390 lines, so
+    # it looks for its end from about line 305 to line 460.
+    BREAK_LINE = 400
+
+    def test_a_window_ends_at_the_longest_pause_near_its_limit(self):
+        segments = _segments(1000)
+        for seg in segments[self.BREAK_LINE :]:
+            seg["start"] += 10.0
+            seg["end"] += 10.0
+
+        windows = build_windows(segments)
+
+        assert windows[1].starts[-1] == segments[self.BREAK_LINE - 1]["start"]
+
+    def test_with_an_embedder_a_window_ends_where_the_topic_changes(self):
+        segments = _segments(1000)
+        topic_change = self.BREAK_LINE
+
+        def embed(texts):
+            return [
+                [1.0, 0.0] if int(t.rsplit(" ", 1)[1]) < topic_change else [0.0, 1.0]
+                for t in texts
+            ]
+
+        windows = build_windows(segments, embed=embed)
+
+        assert windows[1].starts[-1] == segments[topic_change - 1]["start"]
+
+    def test_an_embedder_returning_the_wrong_count_fails_loudly(self):
+        with pytest.raises(RuntimeError, match="vectors"):
+            build_windows(_segments(400), embed=lambda texts: [[1.0]] * 2)
 
     def test_speakers_are_named_only_when_there_is_more_than_one(self):
         solo = [{"start": 0, "end": 1, "text": "Hello", "speaker": "Speaker 1"}]
@@ -270,6 +310,57 @@ class TestAnalyze:
         result = analyze_segments(_segments(4), "x", [], FakeModel(lambda _p: _reply()))
         assert result.items == []
         assert "Nothing in the recording matched" in render_analysis(result, "r", "s")
+
+    def test_each_window_is_reported_as_soon_as_it_is_read(self):
+        def reply(prompt):
+            stamp = _first_stamp(prompt)
+            return _reply(_item(f"Move at {stamp}", stamp, stamp), summary=stamp)
+
+        seen = []
+        model = FakeModel(reply)
+        result = analyze_segments(
+            _segments(4000),
+            "every move",
+            [],
+            model,
+            on_found=lambda i, n, w, items, summary: seen.append(
+                (i, n, [it.title for it in items], summary, model.window_calls)
+            ),
+        )
+
+        assert [s[0] for s in seen] == list(range(1, result.windows + 1))
+        assert all(s[1] == result.windows for s in seen)
+        # Reported before the next window is read, not all at the end.
+        assert [s[4] for s in seen] == list(range(1, result.windows + 1))
+        assert seen[0][2] == ["Move at 00:00"] and seen[0][3] == "00:00"
+
+    def test_windows_from_a_saved_run_are_reported_before_any_is_read(self, tmp_path):
+        checkpoint = tmp_path / "progress.json"
+        calls = []
+
+        def failing_second(prompt):
+            calls.append(prompt)
+            if len(calls) == 2:
+                raise RuntimeError("model went away")
+            return _reply(_item("Move", _first_stamp(prompt), _first_stamp(prompt)))
+
+        with pytest.raises(RuntimeError):
+            analyze_segments(
+                _segments(4000), "x", [], FakeModel(failing_second), checkpoint
+            )
+
+        seen = []
+        model = FakeModel(lambda p: _reply())
+        analyze_segments(
+            _segments(4000),
+            "x",
+            [],
+            model,
+            checkpoint,
+            on_found=lambda i, *_: seen.append((i, model.window_calls)),
+        )
+
+        assert seen[0] == (1, 0), "the saved window shows before reading resumes"
 
     def test_no_request_and_no_speech_are_refused(self):
         with pytest.raises(ValueError):

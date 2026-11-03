@@ -40,6 +40,21 @@ WINDOW_OVERLAP_CHARS = 1500
 # A window this small that still overflows is not failing because of its size.
 MIN_WINDOW_LINES = 8
 
+# The first window is smaller, so the first results reach the user sooner.
+FIRST_WINDOW_SHARE = 1 / 3
+
+# A window ends at the strongest break in its last 40%, not at the size limit.
+CUT_SEARCH_FROM = 0.6
+
+# A pause this long or longer counts as a full break.
+FULL_BREAK_PAUSE_SECONDS = 4.0
+
+# Lines either side compared to judge whether the topic changed there.
+TOPIC_SPAN_LINES = 3
+
+# Lines embedded per request.
+EMBED_BATCH = 64
+
 # A model picks the nearest line, not always the exact one.
 TIMESTAMP_TOLERANCE_SECONDS = 2.0
 
@@ -75,6 +90,9 @@ class MalformedReply(ValueError):
 
 
 Complete = Callable[[str], str]
+
+#: Embeds texts; one vector per text, in order.
+Embed = Callable[[List[str]], List[List[float]]]
 
 
 @dataclass(frozen=True)
@@ -163,23 +181,87 @@ def transcript_lines(segments: Sequence[dict]) -> List[str]:
     return lines
 
 
+def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm = (sum(x * x for x in a) * sum(y * y for y in b)) ** 0.5
+    return dot / norm if norm else 1.0
+
+
+def _mean(vectors: Sequence[Sequence[float]]) -> List[float]:
+    return [sum(column) / len(vectors) for column in zip(*vectors)]
+
+
+def _topic_shifts(spoken: Sequence[dict], embed: Embed) -> List[float]:
+    """How far the meaning moves at each line, from 0 (same topic) up."""
+    texts = [seg["text"].strip() for seg in spoken]
+    vectors: List[List[float]] = []
+    for first in range(0, len(texts), EMBED_BATCH):
+        batch = texts[first : first + EMBED_BATCH]
+        got = embed(batch)
+        if len(got) != len(batch):
+            raise RuntimeError(
+                f"The embedding model returned {len(got)} vectors for "
+                f"{len(batch)} transcript lines."
+            )
+        vectors.extend(got)
+    shifts = [0.0] * len(texts)
+    for i in range(1, len(texts)):
+        before = vectors[max(0, i - TOPIC_SPAN_LINES) : i]
+        after = vectors[i : i + TOPIC_SPAN_LINES]
+        shifts[i] = 1.0 - _cosine(_mean(before), _mean(after))
+    return shifts
+
+
+def _break_scores(spoken: Sequence[dict], embed: Optional[Embed]) -> List[float]:
+    """How good a place to end a window each line start is."""
+    shifts = _topic_shifts(spoken, embed) if embed else [0.0] * len(spoken)
+    scores = [0.0] * len(spoken)
+    for i in range(1, len(spoken)):
+        previous, current = spoken[i - 1], spoken[i]
+        pause = max(0.0, current["start"] - previous["end"])
+        score = min(pause, FULL_BREAK_PAUSE_SECONDS) / FULL_BREAK_PAUSE_SECONDS
+        if previous["text"].rstrip().endswith((".", "?", "!")):
+            score += 0.5
+        if previous.get("speaker") and previous.get("speaker") != current.get(
+            "speaker"
+        ):
+            score += 0.5
+        scores[i] = score + 2 * shifts[i]
+    return scores
+
+
 def build_windows(
     segments: Sequence[dict],
     max_chars: int = WINDOW_CHARS,
     overlap_chars: int = WINDOW_OVERLAP_CHARS,
+    embed: Optional[Embed] = None,
 ) -> List[Window]:
-    """Cut timed segments into overlapping windows of at most about ``max_chars``."""
+    """Cut timed segments into overlapping windows of at most about ``max_chars``.
+
+    Each window ends at the best break near its size limit: a pause, the end of
+    a sentence, a change of speaker and, with ``embed``, a change of topic. The
+    first window is a third of the size, so its results arrive sooner.
+    """
     spoken = sorted(_speech_segments(segments), key=lambda seg: seg["start"])
     lines = transcript_lines(spoken)
+    scores = _break_scores(spoken, embed) if len(lines) > 1 else []
     windows: List[Window] = []
     first = 0
     while first < len(lines):
-        last, size = first, 0
-        while last < len(lines) and (
-            last == first or size + len(lines[last]) <= max_chars
-        ):
+        limit = max_chars if windows else max(1, int(max_chars * FIRST_WINDOW_SHARE))
+        last, size, sizes = first, 0, []
+        while last < len(lines) and (last == first or size + len(lines[last]) <= limit):
             size += len(lines[last]) + 1
             last += 1
+            sizes.append(size)
+        if last < len(lines):
+            candidates = [
+                first + offset
+                for offset, reached in enumerate(sizes[:-1], start=1)
+                if reached >= limit * CUT_SEARCH_FROM
+            ]
+            if candidates:
+                last = max(candidates, key=lambda cut: (scores[cut], cut))
         windows.append(_window(spoken, lines, first, last))
         if last == len(lines):
             break
@@ -554,6 +636,8 @@ def analyze_segments(
     complete_json: Optional[Complete] = None,
     parallel: int = 1,
     check: Optional[Callable[[], None]] = None,
+    embed: Optional[Embed] = None,
+    on_found: Optional[Callable[[int, int, Window, List[Item], str], None]] = None,
 ) -> Analysis:
     """Answer *request* across a whole timed transcript.
 
@@ -574,6 +658,13 @@ def analyze_segments(
         parallel: Windows to read at once. Leave at 1 for a local model, which
             serves one request at a time.
         check: Polled during a parallel read. It may raise to stop the run.
+        embed: Embeds transcript lines, so windows end where the topic changes.
+            Without it they end at pauses, sentence ends and speaker changes.
+        on_found: Called with each window's items and summary as soon as that
+            window is kept, and for each reused window before any is read, so a
+            client can show results while the rest is still being read. Items
+            in the overlap between two windows can come up twice here; the
+            returned analysis has them merged.
 
     Raises:
         ValueError: No request, or no speech in ``segments``.
@@ -584,7 +675,7 @@ def analyze_segments(
         raise ValueError("Say what to find in the recording.")
     wanted = [name.strip() for name in fields if name.strip()] or [DEFAULT_FIELD]
 
-    windows = build_windows(segments, max_chars=max_chars)
+    windows = build_windows(segments, max_chars=max_chars, embed=embed)
     if not windows:
         raise ValueError("The transcript contains no speech to analyze.")
 
@@ -603,12 +694,23 @@ def analyze_segments(
             complete_json or complete,
         )
 
+    def report(index: int) -> None:
+        if on_found:
+            entry = done[str(index)]
+            found = [Item(**raw) for raw in entry["items"]]
+            on_found(index, len(windows), windows[index - 1], found, entry["summary"])
+
     def keep(index: int, found: List[Item], summary: str) -> None:
         done[str(index)] = {
             "items": [asdict(item) for item in found],
             "summary": summary,
         }
         _save_checkpoint(checkpoint, key, done)
+        report(index)
+
+    for index in range(1, len(windows) + 1):
+        if str(index) in done:
+            report(index)
 
     if parallel > 1:
         _read_in_parallel(pending, windows, read, keep, on_window, parallel, check)

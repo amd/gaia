@@ -3,7 +3,7 @@
 
 import { Check, Minus } from 'lucide-react';
 import { useT, type Translate } from '../i18n/useT';
-import { useChatStore, type RecordingStage } from '../stores/chatStore';
+import { useChatStore, type RecordingSection, type RecordingStage } from '../stores/chatStore';
 import type { MessageKey } from '../i18n/registry';
 import './RecordingProgress.css';
 
@@ -67,10 +67,67 @@ function StageRow({ index, stage }: { index: number; stage: RecordingStage | und
     );
 }
 
+// Same as BOUNDARY_GAP_SECONDS in transcript_analysis.py: nearer than this, one item.
+const SAME_ITEM_SECONDS = 120;
+
+/**
+ * Sections in recording order, each with only the items an earlier section has
+ * not already shown: neighbouring sections overlap, so an item near a seam is
+ * found twice until the finished report merges it.
+ */
+export function foundSoFar(sections: Record<number, RecordingSection>): RecordingSection[] {
+    const shown: { title: string; seconds: number }[] = [];
+    return Object.values(sections)
+        .sort((a, b) => a.section - b.section)
+        .map((section) => {
+            const items = section.items.filter((item) => {
+                const title = item.title.trim().toLowerCase();
+                const repeat = shown.some((s) => s.title === title && Math.abs(s.seconds - item.seconds) < SAME_ITEM_SECONDS);
+                if (!repeat) shown.push({ title, seconds: item.seconds });
+                return !repeat;
+            });
+            return { ...section, items };
+        });
+}
+
+/** What the sections read so far contain, so there is something to read while the rest are read. */
+function FoundSoFar({ sections }: { sections: Record<number, RecordingSection> }) {
+    const t = useT();
+    const shown = foundSoFar(sections);
+    const total = shown[0]?.sections ?? 0;
+    return (
+        <section className="recording-found" aria-label={t('recording.found.title')}>
+            <h4 className="recording-found-title">
+                {t('recording.found.title')}
+                <span className="recording-found-count">{t('recording.found.count', { done: shown.length, total })}</span>
+            </h4>
+            {shown.map((section) => (
+                <div key={section.section} className="recording-found-section">
+                    <p className="recording-found-span">
+                        <bdi dir="ltr" className="recording-found-time">{section.start}–{section.end}</bdi>
+                        {section.summary && <span dir="auto">{section.summary}</span>}
+                    </p>
+                    {section.items.length > 0 && (
+                        <ul className="recording-found-items">
+                            {section.items.map((item) => (
+                                <li key={`${item.seconds}-${item.title}`}>
+                                    <bdi dir="ltr" className="recording-found-time">{item.start}</bdi>
+                                    <span dir="auto">{item.title}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            ))}
+        </section>
+    );
+}
+
 /** Every stage of the recording being worked on, with a bar on the one running. */
 export function RecordingProgress() {
     const t = useT();
     const stages = useChatStore((s) => s.recordingStages);
+    const sections = useChatStore((s) => s.recordingSections);
     if (!stages) return null;
     return (
         <section className="recording-progress" aria-label={t('recording.title')}>
@@ -79,6 +136,7 @@ export function RecordingProgress() {
                     <StageRow key={index} index={index} stage={stages[index]} />
                 ))}
             </ol>
+            {sections && <FoundSoFar sections={sections} />}
         </section>
     );
 }
