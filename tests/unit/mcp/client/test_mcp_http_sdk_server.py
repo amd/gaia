@@ -12,6 +12,7 @@ the rest fake ``urlopen`` for replies it doesn't produce on its own.
 from __future__ import annotations
 
 import http.client
+import io
 import threading
 import time
 import urllib.error
@@ -125,6 +126,7 @@ def test_reconnect_works_after_the_server_forgets_the_session(sdk_server):
 
     with pytest.raises(RuntimeError, match="no longer knows this session"):
         client.list_tools(refresh=True)
+    assert not client.is_connected()
 
     try:
         assert client.connect(), client.last_error
@@ -141,10 +143,13 @@ def test_reconnect_works_after_the_server_forgets_the_session(sdk_server):
 class _Reply:
     def __init__(self, body="", content_type="application/json", headers=None):
         self.headers = {"Content-Type": content_type, **(headers or {})}
-        self._body = body.encode("utf-8")
+        self.stream = io.BytesIO(body.encode("utf-8"))
 
     def read(self):
-        return self._body
+        return self.stream.read()
+
+    def readline(self):
+        return self.stream.readline()
 
     def __enter__(self):
         return self
@@ -182,6 +187,17 @@ def test_sse_reply_after_a_server_notification_is_found(monkeypatch):
     response = HTTPTransport("http://mcp.test").send_request("ping")
 
     assert response["result"] == {"ok": True}
+
+
+def test_sse_reading_stops_at_the_reply(monkeypatch):
+    reply = '{"jsonrpc": "2.0", "id": 0, "result": {}}'
+    stream = _Reply(_sse(reply) + ": keep-alive\r\n\r\n", "text/event-stream")
+    _fake_urlopen(monkeypatch, stream)
+
+    HTTPTransport("http://mcp.test").send_request("ping")
+
+    # A server may keep the stream open after the reply; nothing past it is read.
+    assert stream.stream.read() == b": keep-alive\r\n\r\n"
 
 
 def test_sse_stream_without_the_reply_raises(monkeypatch):
@@ -240,11 +256,13 @@ def test_an_expired_session_says_to_reconnect(monkeypatch):
     gone = urllib.error.HTTPError("http://mcp.test", 404, "Not Found", {}, None)
     _fake_urlopen(monkeypatch, _Reply(init, headers={"Mcp-Session-Id": "abc"}), gone)
     transport = HTTPTransport("http://mcp.test")
+    transport.connect()
     transport.send_request("initialize")
 
     with pytest.raises(RuntimeError, match="no longer knows this session") as excinfo:
         transport.send_request("tools/list")
     assert "abc" not in str(excinfo.value)
+    assert not transport.is_connected()
 
 
 def test_disconnect_tolerates_a_server_that_refuses_delete(monkeypatch):

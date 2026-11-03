@@ -7,13 +7,15 @@ import http.client
 import json
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, TypeVar
 
 from gaia.logger import get_logger
 
 from .base import MCPTransport
 
 logger = get_logger(__name__)
+
+T = TypeVar("T")
 
 
 class HTTPTransport(MCPTransport):
@@ -115,14 +117,9 @@ class HTTPTransport(MCPTransport):
             self.session_id = None
             self.protocol_version = None
 
-        content_type, body = self._post(request)
-        if "text/event-stream" in content_type:
-            response_json = self._reply_from_sse(body, request["id"])
-        else:
-            try:
-                response_json = json.loads(body)
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid JSON response: {e}")
+        response_json = self._post(
+            request, lambda response: self._read_reply(response, request["id"])
+        )
 
         if self.debug:
             logger.debug(f"Received response: {json.dumps(response_json, indent=2)}")
@@ -136,36 +133,57 @@ class HTTPTransport(MCPTransport):
 
         return response_json
 
-    def _reply_from_sse(self, body: str, request_id: int) -> Dict[str, Any]:
+    def _read_reply(self, response: Any, request_id: int) -> Dict[str, Any]:
+        """Read the JSON-RPC reply to ``request_id`` from a POST response."""
+        if "text/event-stream" in response.headers.get("Content-Type", ""):
+            return self._reply_from_sse(response, request_id)
+        try:
+            return json.loads(response.read().decode("utf-8"))
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON response: {e}")
+
+    def _reply_from_sse(self, response: Any, request_id: int) -> Dict[str, Any]:
         """Return the message answering ``request_id`` from an SSE stream.
 
-        The stream can carry the server's own notifications before the reply,
-        so those are skipped. An error with a null id is the server refusing
-        the request itself, so it is returned.
+        Reads one event at a time and stops at the reply, since the server
+        may keep the stream open after it. The stream can carry the server's
+        own notifications before the reply, so those are skipped. An error
+        with a null id is the server refusing the request itself, so it is
+        returned.
         """
-        for event in body.replace("\r\n", "\n").split("\n\n"):
-            data = "\n".join(
-                line[5:].removeprefix(" ")
-                for line in event.split("\n")
-                if line.startswith("data:")
-            )
-            if not data:
+        data_lines = []
+        while True:
+            raw = response.readline()
+            line = raw.decode("utf-8").rstrip("\r\n")
+            if line.startswith("data:"):
+                data_lines.append(line[5:].removeprefix(" "))
+            if line and raw:
                 continue
-            try:
-                message = json.loads(data)
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid JSON in SSE event from {self.url}: {e}")
-            if not isinstance(message, dict):
-                continue
-            if message.get("id") == request_id:
+            # A blank line ends an event; so does the end of the stream.
+            message = self._sse_message("\n".join(data_lines))
+            data_lines = []
+            if message is not None and (
+                message.get("id") == request_id
+                or (message.get("id") is None and "error" in message)
+            ):
                 return message
-            if message.get("id") is None and "error" in message:
-                return message
+            if not raw:
+                break
         raise ValueError(
             f"MCP server at {self.url} closed the SSE stream without "
             f"answering request {request_id}. Resuming a stream with "
             f"Last-Event-ID is not supported yet."
         )
+
+    def _sse_message(self, data: str) -> Optional[Dict[str, Any]]:
+        """Parse one SSE event's data; None for events that carry no message."""
+        if not data:
+            return None
+        try:
+            message = json.loads(data)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in SSE event from {self.url}: {e}")
+        return message if isinstance(message, dict) else None
 
     def send_notification(self, method: str, params: Dict[str, Any] = None) -> None:
         """POST a JSON-RPC notification; the server answers 202 with no body.
@@ -182,7 +200,9 @@ class HTTPTransport(MCPTransport):
         if self.debug:
             logger.debug(f"Sending HTTP notification: {json.dumps(message, indent=2)}")
 
-        body = self._post(message)[1].strip()
+        body = self._post(
+            message, lambda response: response.read().decode("utf-8")
+        ).strip()
         if not body:
             return
         try:
@@ -204,8 +224,8 @@ class HTTPTransport(MCPTransport):
             headers["MCP-Protocol-Version"] = self.protocol_version
         return headers
 
-    def _post(self, message: Dict[str, Any]) -> Tuple[str, str]:
-        """POST one JSON-RPC message; return the reply's content type and body."""
+    def _post(self, message: Dict[str, Any], read: Callable[[Any], T]) -> T:
+        """POST one JSON-RPC message and return ``read(response)``."""
         req = urllib.request.Request(
             self.url,
             data=json.dumps(message).encode("utf-8"),
@@ -221,12 +241,12 @@ class HTTPTransport(MCPTransport):
                 session_id = response.headers.get("Mcp-Session-Id")
                 if session_id:
                     self.session_id = session_id
-                content_type = response.headers.get("Content-Type", "")
-                return content_type, response.read().decode("utf-8")
+                return read(response)
         except urllib.error.URLError as e:
             if getattr(e, "code", None) == 404 and self.session_id:
                 self.session_id = None
                 self.protocol_version = None
+                self._connected = False
                 raise RuntimeError(
                     f"MCP server at {self.url} no longer knows this session. "
                     f"Reconnect to start a new one."
