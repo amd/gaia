@@ -234,8 +234,7 @@ class GatewayState:
     non_streaming_models: List[str] = field(default_factory=list)
     # Native tool calling, learned by one probe per model when the catalog's
     # labels don't say: the AMD gateway labels no model ``tool-calling``, yet
-    # most take ``tools=``. Running a capable model on the in-text JSON format
-    # costs it accuracy on every tool call.
+    # most take ``tools=``.
     tool_calling_models: List[str] = field(default_factory=list)
     no_tool_calling_models: List[str] = field(default_factory=list)
     # When a model's tool-calling probe last failed, ``{model_id: "<UTC ISO>"}``,
@@ -266,6 +265,12 @@ class GatewayState:
                 f"Gateway settings at {target} could not be read: {e}. "
                 f"Delete the file to start fresh, then re-run `gaia gateway install`."
             ) from e
+        if not isinstance(raw, dict):
+            raise GatewayError(
+                f"Gateway settings at {target} hold a JSON "
+                f"{type(raw).__name__}, not an object. Fix the file or delete it "
+                f"to start fresh, then re-run `gaia gateway install`."
+            )
         return cls(
             base_url=raw.get("base_url") or DEFAULT_GATEWAY_BASE_URL,
             enabled_models=list(raw.get("enabled_models") or []),
@@ -277,6 +282,8 @@ class GatewayState:
                 str(k): str(v)
                 for k, v in (raw.get("tool_calling_probe_failures") or {}).items()
             },
+            # ``own_tool_markup_models`` is not read: own markup switches only
+            # the session that wrote it, never later ones.
             unavailable_models={
                 str(k): dict(v)
                 for k, v in (raw.get("unavailable_models") or {}).items()
@@ -566,27 +573,35 @@ def gateway_anthropic_base_url(state: Optional[GatewayState] = None) -> str:
     )
 
 
-def resolve_gateway_token() -> str:
-    """The gateway token GAIA itself sends, for routes Lemonade doesn't carry.
+def resolve_gateway_token_with_source() -> tuple[str, str]:
+    """Return GAIA's gateway token and the non-secret source name.
 
-    Same sources as the rest of GAIA, in order: ``LEMONADE_AMD_API_KEY``,
-    ``GAIA_GATEWAY_TOKEN``, then the OS credential store.
+    The source is used only for diagnostics; the token value is never included
+    in an error message. Keeping it beside resolution lets Claude explain when
+    its source differs from the key Lemonade currently uses.
     """
-    # No prompt to fall back on here, so a broken store must say so.
-    token = (
-        os.getenv(GATEWAY_ENV_VAR)
-        or os.getenv("GAIA_GATEWAY_TOKEN")
-        or read_stored_token()
+    token = os.getenv(GATEWAY_ENV_VAR)
+    if token and token.strip():
+        return token.strip(), GATEWAY_ENV_VAR
+    token = os.getenv("GAIA_GATEWAY_TOKEN")
+    if token and token.strip():
+        return token.strip(), "GAIA_GATEWAY_TOKEN"
+    token = read_stored_token()
+    if token and token.strip():
+        return token.strip(), "OS credential store"
+    raise GatewayError(
+        f"No AMD LLM gateway token found, and Claude gateway models need one "
+        f"in GAIA's own process. Run `gaia gateway auth` (without "
+        f"--no-remember) to store it in the OS credential store, or set "
+        f"{GATEWAY_ENV_VAR} or GAIA_GATEWAY_TOKEN in GAIA's environment. "
+        f"See https://amd-gaia.ai/docs/guides/llm-gateway."
     )
-    if not token or not token.strip():
-        raise GatewayError(
-            f"No AMD LLM gateway token found, and Claude gateway models need one "
-            f"in GAIA's own process. Run `gaia gateway auth` (without "
-            f"--no-remember) to store it in the OS credential store, or set "
-            f"{GATEWAY_ENV_VAR} or GAIA_GATEWAY_TOKEN in GAIA's environment. "
-            f"See https://amd-gaia.ai/docs/guides/llm-gateway."
-        )
-    return token.strip()
+
+
+def resolve_gateway_token() -> str:
+    """The gateway token GAIA itself sends, for routes Lemonade doesn't carry."""
+    token, _source = resolve_gateway_token_with_source()
+    return token
 
 
 class GatewayManager:
@@ -968,9 +983,9 @@ class GatewayManager:
             return False
         return True
 
-    def status(self) -> GatewayStatus:
+    def status(self, *, timeout: int = _REQUEST_TIMEOUT) -> GatewayStatus:
         """Registration and auth state for the gateway provider."""
-        info = self._request("GET", "system-info")
+        info = self._request("GET", "system-info", timeout=timeout)
         providers = (info.get("cloud") or {}).get("providers") or []
         for entry in providers:
             if entry.get("name") != GATEWAY_PROVIDER:

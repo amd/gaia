@@ -366,6 +366,9 @@ def _with_network(view: Dict[str, Any]) -> Dict[str, Any]:
 
 def _is_chat_model(model: Dict[str, Any]) -> bool:
     labels = {str(label).lower() for label in model.get("labels") or []}
+    if "single-turn" in labels:
+        # FLM builds that answer one message at a time cannot hold a conversation.
+        return False
     # ``chat`` wins: FLM omni models are labeled both ``chat`` and ``audio``.
     return "chat" in labels or not labels & _NON_CHAT_LABELS
 
@@ -392,6 +395,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
         _model_ids_match,
         catalog_context_window,
         find_model_requirement,
+        runs_on_npu,
     )
     from gaia.llm.recommended_models import rank
 
@@ -437,12 +441,12 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
                 "price": None if provider == LOCAL else price_card(model_id),
             }
         )
-    # A custom model Lemonade has not registered yet is not in its list; a
-    # missing built-in is one this Lemonade cannot pull, so it stays out.
+    # A custom model Lemonade has not registered yet is not in its list, nor is
+    # an FLM model before the NPU backend is in (its download installs that). Any
+    # other missing built-in is one this Lemonade cannot pull, so it stays out.
     for model_id in offered:
-        if model_id.startswith("user.") and not any(
-            _model_ids_match(model_id, m["id"]) for m in out
-        ):
+        unlisted = model_id.startswith("user.") or runs_on_npu(model_id)
+        if unlisted and not any(_model_ids_match(model_id, m["id"]) for m in out):
             req = find_model_requirement(model_id)
             out.append(
                 {
@@ -450,7 +454,8 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
                     "context_length": None,
                     "downloaded": False,
                     "labels": [],
-                    "recipe": req.recipe if req else None,
+                    "recipe": (req.recipe if req else None)
+                    or ("flm" if runs_on_npu(model_id) else None),
                     "size_gb": req.size_gb if req else None,
                     "rank": None,
                     "note": None,
@@ -1080,6 +1085,7 @@ def _preferred_backend() -> Optional[str]:
 
 
 def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, Any]:
+    from gaia.installer.model_choice import to_decimal_gb
     from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
 
     from ..local_models import annotate_local_models, measured_speeds
@@ -1105,7 +1111,10 @@ def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, A
         m["download_progress"] = _get_download_progress(m["id"])
     return {
         "models": annotated,
-        "memory_gb": round(capacity.memory_gb, 1) if capacity else None,
+        # Decimal GB, as the setup plan and the GPU memory pane report it.
+        "memory_gb": (
+            round(to_decimal_gb(capacity.memory_gb), 1) if capacity else None
+        ),
         "memory_source": capacity.memory_source if capacity else None,
         "capacity_error": capacity_error,
     }
@@ -1230,11 +1239,12 @@ def _context_view(model_id: str) -> Dict[str, Any]:
         _raise(e)
     except (ModelFitError, GaiaConfigError) as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    from gaia.llm.lemonade_client import GPU_CTX_SIZE, NPU_CTX_SIZE, runs_on_npu
+    from gaia.llm.lemonade_client import GPU_CTX_SIZE, npu_default_ctx, runs_on_npu
+    from gaia.llm.model_fit import NPU_RAM
 
     span = context_range(model_id, capacity, trained)
     # A model GAIA has no entry for loads at its device's flat window.
-    flat = NPU_CTX_SIZE if runs_on_npu(model_id) else GPU_CTX_SIZE
+    flat = npu_default_ctx(model_id) if runs_on_npu(model_id) else GPU_CTX_SIZE
     name = display_name(model_id)
     return {
         "model": model_id,
@@ -1245,7 +1255,7 @@ def _context_view(model_id: str) -> Dict[str, Any]:
         "max_fit": span["max_fit"] if span else None,
         "options": span["options"] if span else [],
         "loaded_ctx": loaded_ctx,
-        "memory_source": capacity.memory_source,
+        "memory_source": NPU_RAM if runs_on_npu(model_id) else capacity.memory_source,
         "note": _context_note(span, name),
     }
 

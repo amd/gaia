@@ -12,13 +12,50 @@ This conftest auto-clears ``GAIA_MEMORY_DISABLED`` when collecting tests
 from any ``test_memory_*.py`` file so the per-test mocks take effect.
 """
 
+import importlib.util
 import os
 import socket
 import sys
 import tempfile
+import venv
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(scope="session")
+def python_with_pip(tmp_path_factory):
+    """A Python with ``-m pip``, which a ``uv venv`` dev environment does not have."""
+    if importlib.util.find_spec("pip") is not None:
+        return sys.executable
+    env_dir = tmp_path_factory.mktemp("pip-venv")
+    venv.create(env_dir, with_pip=True)
+    bin_dir = "Scripts" if sys.platform == "win32" else "bin"
+    return str(env_dir / bin_dir / Path(sys.executable).name)
+
+
+class _OsNamed:
+    """``os`` as one module sees it, with only ``name`` overridden."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
+@pytest.fixture
+def fake_os_name(monkeypatch):
+    """Make one module see another ``os.name`` without touching the real one.
+
+    Patching the real os.name makes pathlib, pytest and coverage build the
+    wrong Path flavour, which crashes the xdist worker.
+    """
+
+    def _set(module, name):
+        monkeypatch.setattr(module, "os", _OsNamed(name))
+
+    return _set
 
 
 @pytest.fixture
@@ -34,6 +71,8 @@ def mock_home(tmp_path, monkeypatch):
     real_expanduser = os.path.expanduser
 
     def fake_expanduser(path):
+        # Like the real one, accept any path-like (matplotlib passes a Path).
+        path = os.fspath(path)
         if path == "~":
             return str(tmp_path)
         if path.startswith(("~/", "~\\")):
@@ -88,8 +127,11 @@ _RUN_HOME = Path.home()
 
 def _patch_default_gaia_home(mp, default_gaia_home) -> None:
     from gaia import config as config_mod
+    from gaia import home as home_mod
     from gaia.connectors import _refresh_lock
 
+    # gaia_home() lives in gaia.home; config re-exports it.
+    mp.setattr(home_mod, "default_gaia_home", default_gaia_home)
     mp.setattr(config_mod, "default_gaia_home", default_gaia_home)
     # Bound at import; the connector lock is the one writer among those names.
     mp.setattr(_refresh_lock, "default_gaia_home", default_gaia_home)
@@ -214,6 +256,17 @@ def _forbid_daemon_spawn(monkeypatch):
     yield
     if attempts:
         pytest.fail(_DAEMON_SPAWN_MESSAGE, pytrace=False)
+
+
+@pytest.fixture(autouse=True)
+def _empty_hub_skill_catalog(monkeypatch):
+    """Capture consults the hub catalog; unit tests see an empty one.
+
+    Tests of that check patch ``published_skill_names`` back in themselves.
+    """
+    from gaia.skills import capture
+
+    monkeypatch.setattr(capture, "published_skill_names", lambda: frozenset())
 
 
 @pytest.fixture(autouse=True)

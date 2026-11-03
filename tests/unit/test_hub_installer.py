@@ -1650,7 +1650,9 @@ class TestAgentIdPathSafety:
 # ---------------------------------------------------------------------------
 
 
-def test_install_real_wheel_lands_in_site_packages_and_is_importable(tmp_path):
+def test_install_real_wheel_lands_in_site_packages_and_is_importable(
+    tmp_path, python_with_pip
+):
     """Regression guard for the #1655-shaped "already there" trap: assert the
     fixture package is NOT importable before the install (cold-state
     precondition), then prove a REAL pip subprocess made it importable.
@@ -1685,7 +1687,7 @@ def test_install_real_wheel_lands_in_site_packages_and_is_importable(tmp_path):
 
     def real_run_pip(args):
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", *args],
+            [python_with_pip, "-m", "pip", "install", *args],
             check=True,
             capture_output=True,
             text=True,
@@ -1743,7 +1745,7 @@ def test_install_real_wheel_lands_in_site_packages_and_is_importable(tmp_path):
 
 
 def test_default_run_pip_falls_back_to_python_pip_when_uv_missing(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, python_with_pip
 ):
     """`_default_run_pip` must fall back to `python -m pip install` and
     actually install the wheel when `uv` is unavailable, not raise.
@@ -1752,6 +1754,7 @@ def test_default_run_pip_falls_back_to_python_pip_when_uv_missing(
 
     from tests.fixtures.wheel_builder import build_chat_shaped_fixture_wheel
 
+    monkeypatch.setattr(sys, "executable", python_with_pip)
     real_popen = installer.subprocess.Popen
     uv_calls = []
     pip_calls = []

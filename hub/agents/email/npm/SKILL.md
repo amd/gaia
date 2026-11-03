@@ -343,7 +343,8 @@ const report = await r.json();
 const status = await (await fetch(`${base}/v1/email/agent/autonomy/s1`, {
   headers: { authorization: auth },
 })).json();
-// { level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes:[…] }
+// { level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes:[…],
+//   last_cycle: null | { outcome, finished_at, executed, proposals, skipped, … } }
 ```
 
 The agent **learns from your corrections**: undoing an auto-executed action —

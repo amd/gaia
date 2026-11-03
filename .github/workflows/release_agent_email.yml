@@ -51,9 +51,8 @@
 #                              approved.
 #     CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY
 #                            — Claude judge credential for the eval-gate's
-#                              voice-drafting eval. judge_client uses the API key
-#                              when both are set; workflow env selection can blank
-#                              the key to select the subscription. ONE is REQUIRED:
+#                              voice-drafting eval. judge_client uses the
+#                              subscription first, then the API key. ONE is REQUIRED:
 #                              eval_drafting_report.py exits 1 when neither is set
 #                              (no silent skip — CLAUDE.md fail-loudly), so the
 #                              eval-gate step FAILS the release and never ships an
@@ -208,6 +207,16 @@ jobs:
           set -euo pipefail
           PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
           "$PY" hub/agents/email/python/packaging/freeze.py --onefile
+
+      # GAIA must not ship GPL/AGPL code (GNU Readline, GNU dbm, PyInstaller's
+      # own package, PyMuPDF). Read off the built archive itself.
+      - name: Check the binary bundles no copyleft code
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" hub/agents/gaia/python/packaging/check_bundle_licenses.py \
+            "${FREEZE_DIST}/${{ matrix.frozen }}"
 
       - name: Smoke-test the frozen binary
         shell: bash

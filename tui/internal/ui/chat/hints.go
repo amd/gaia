@@ -79,6 +79,11 @@ func (m ChatModel) statusHints() []hint {
 	if m.fullAccess {
 		hints = append(hints, hint{text: "/full-access off", rank: rankFullAccess})
 	}
+	// A /models download running in the background, so the user can keep
+	// chatting and still see how far it is.
+	if dl := m.downloadHint(); dl != "" {
+		hints = append(hints, hint{text: dl, rank: rankMode + 1})
+	}
 	// A mode the user switched into outranks the scroll hints; the default one
 	// only takes a column nothing else wanted.
 	// A pending prompt names the mode itself, one row up.

@@ -91,11 +91,8 @@ def test_namespaced_id_matches_source_of_truth():
 
 # ---------------------------------------------------------------------------
 # AC-1 — agent (mailbox) scopes agree across every surface. Identity scopes
-# are deliberately NOT folded into this check: the catalog spec's
-# default_scopes and the raw OAuthProvider's default_scopes legitimately
-# differ in literal form today (#2730 checkpoint-1 finding, tracked as its
-# own follow-up) — lumping them together would make this guard either fail
-# spuriously or get written loosely enough to miss real agent-scope drift.
+# have one spelling too (#2738); test_identity_scope_spelling.py guards them
+# without needing the email wheel.
 # ---------------------------------------------------------------------------
 
 

@@ -88,7 +88,7 @@ print(result)
 - **Voice Integration** — Whisper ASR + Kokoro TTS for speech interaction (P0 enabling technology)
 - **Vision Models** — Extract text from images with Qwen3-VL-4B
 - **MCP Integration** — Connect to any MCP server for external tool access
-- **Skills** — Extend the GAIA agent with a `SKILL.md`, no code required ([guide](https://amd-gaia.ai/docs/guides/composing-skills))
+- **Skills** — Extend the GAIA agent with a `SKILL.md`, no code required ([guide](https://amd-gaia.ai/docs/guides/starter-skills))
 
 ---
 
