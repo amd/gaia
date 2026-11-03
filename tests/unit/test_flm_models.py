@@ -443,7 +443,9 @@ def test_a_pc_without_an_npu_is_told_so_instead_of_installing():
 def test_a_cold_stream_pull_reports_the_missing_npu_as_a_progress_error():
     client = _Lemonade(_system_info(state="unsupported"))
     seen = []
-    with pytest.raises(LemonadeClientError, match="Failed to download model 'gemma4-it-e4b-FLM'"):
+    with pytest.raises(
+        LemonadeClientError, match="Failed to download model 'gemma4-it-e4b-FLM'"
+    ):
         client.ensure_model_downloaded(
             "gemma4-it-e4b-FLM", show_progress=False, on_progress=seen.append
         )

@@ -41,7 +41,9 @@ def test_a_failed_stream_is_reported_once_with_its_reason(client):
 
     client.pull_model_stream = stream
     seen = []
-    with pytest.raises(LemonadeClientError, match="Failed to download model 'm': Read timed out"):
+    with pytest.raises(
+        LemonadeClientError, match="Failed to download model 'm': Read timed out"
+    ):
         client.ensure_model_downloaded("m", on_progress=seen.append)
     assert seen[-1] == {"event": "error", "error": "Read timed out"}
 
@@ -53,7 +55,10 @@ def test_a_server_error_event_is_not_reported_twice(client):
 
     client.pull_model_stream = stream
     seen = []
-    with pytest.raises(LemonadeClientError, match="Failed to download model 'm': Failed to open file for writing"):
+    with pytest.raises(
+        LemonadeClientError,
+        match="Failed to download model 'm': Failed to open file for writing",
+    ):
         client.ensure_model_downloaded("m", on_progress=seen.append)
     assert [e["event"] for e in seen] == ["error"]
 
@@ -127,6 +132,16 @@ def test_a_pull_outlasts_the_servers_silent_hash_check(client):
         list(client.pull_model_stream("Qwen3.6-35B-A3B-GGUF"))
     _connect, idle = post.call_args.kwargs["timeout"]
     assert idle >= 15 * 60
+
+
+def test_polling_timeout_raises_with_the_model_name(client):
+    client.list_models.return_value = {"data": []}
+    with patch("gaia.llm.lemonade_client.time.sleep"):
+        with pytest.raises(
+            LemonadeClientError,
+            match="Download of 'm' did not finish within 1 seconds",
+        ):
+            client._wait_for_model_download("m", timeout=1, show_progress=False)
 
 
 def test_a_cancelled_stream_is_not_converted_to_a_failed_download(client):

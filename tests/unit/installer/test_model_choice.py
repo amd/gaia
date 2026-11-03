@@ -11,7 +11,11 @@ import pytest
 import gaia.config
 from gaia.installer import model_choice as mc
 from gaia.llm.gpu_memory import GB_PER_GIB
-from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL_NAME
+from gaia.llm.lemonade_client import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_MODEL_NAME,
+    LemonadeClientError,
+)
 from gaia.llm.model_fit import MachineCapacity
 
 QWEN = "Qwen3.6-35B-A3B-GGUF"
@@ -219,8 +223,9 @@ class _FlakyClient:
     def ensure_model_downloaded(self, model_id, on_progress=None, **kwargs):
         self.calls.append((model_id, kwargs))
         if self.errors:
-            on_progress({"event": "error", "error": self.errors.pop(0)})
-            return False
+            message = self.errors.pop(0)
+            on_progress({"event": "error", "error": message})
+            raise LemonadeClientError(message)
         return True
 
 

@@ -7756,9 +7756,11 @@ class LemonadeClient:
             download_task: Optional DownloadTask for cancellation support
 
         Returns:
-            True if model download completed, False if timeout or error
+            True if model download completed.
 
         Raises:
+            LemonadeClientError: If the download does not complete before the
+                timeout or a status check fails.
             ModelDownloadCancelledError: If download is cancelled
         """
         poll_interval = 30  # Check every 30 seconds for large downloads
@@ -7808,7 +7810,9 @@ class LemonadeClient:
                 f"{_emoji('⏰', '[TIMEOUT]')} Download timeout ({minutes} minutes) "
                 f"reached for {model_name}"
             )
-        return False
+        raise LemonadeClientError(
+            f"Download of '{model_name}' did not finish within {timeout} seconds."
+        )
 
     @staticmethod
     def _find_loaded_entry(status: "LemonadeStatus", model: str) -> Optional[dict]:
