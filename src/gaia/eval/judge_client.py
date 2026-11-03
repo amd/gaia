@@ -18,9 +18,9 @@ content blocks with a ``.text`` attribute, so the three judge factories
 (``draft_quality`` / ``action_item_quality`` / ``briefing_quality``) consume
 either without caring which is in play.
 
-The rule is the runner's: an exported API key means the API; otherwise the
-subscription, through the CLI. There is no fallback between them — a rejected
-credential raises rather than retrying on the other one.
+Which one is used follows :mod:`gaia.eval.claude_credential`: the subscription
+first, then ``ANTHROPIC_API_KEY`` from the environment, then from a ``.env``.
+A rejected credential raises rather than retrying on the next one.
 """
 
 from __future__ import annotations
@@ -34,7 +34,15 @@ import sys
 import tempfile
 from dataclasses import dataclass
 
-from gaia.env import credential, load_env, working_dir_credential_file
+from gaia.env import load_env
+from gaia.eval.claude_credential import (  # noqa: F401 (re-exported)
+    API_KEY_VAR,
+    MISSING_CREDENTIAL_ERROR,
+    TOKEN_WITHOUT_CLI_ERROR,
+    announce,
+    credential_present,
+    resolve_claude_credential,
+)
 from gaia.eval.claude_usage import TOKEN_FIELDS, usage_from_cli
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
 from gaia.llm.local_only import assert_provider_permitted
@@ -47,10 +55,6 @@ log = get_logger(__name__)
 #: Seconds a single judge call may take. Judge prompts carry a full case inbox,
 #: and the CLI pays a process cold-start the SDK does not.
 DEFAULT_CLI_TIMEOUT = 300.0
-
-#: Env vars that can carry a judge credential, in the order they are preferred
-#: by :func:`make_judge_client`.
-JUDGE_CREDENTIAL_VARS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")
 
 #: Replaces Claude Code's agent system prompt so the CLI judge scores from the
 #: rubric alone, like the SDK judge whose baselines are committed.
@@ -66,34 +70,15 @@ _DISALLOWED_TOOLS = (
     "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,Task,TodoWrite,NotebookEdit"
 )
 
-MISSING_CREDENTIAL_ERROR = (
-    "No Claude judge available: the `claude` CLI is not on PATH and "
-    "ANTHROPIC_API_KEY is not set.\n\n"
-    "The judged evals (drafting, action-item, briefing, sessions, corpus "
-    "generation) need Claude and cannot produce a result without it. Use either:\n"
-    "  1. SUBSCRIPTION (recommended if you have Claude Code Max): install the\n"
-    "     CLI (`npm install -g @anthropic-ai/claude-code`) and log in (`claude`,\n"
-    "     then `/login`). Where no interactive login is possible (CI), run\n"
-    "     `claude setup-token` and export CLAUDE_CODE_OAUTH_TOKEN=<token>.\n"
-    "  2. API KEY (billed to your Anthropic console):\n"
-    "       export ANTHROPIC_API_KEY=sk-ant-...\n"
-    "In CI, add the matching repository secret — see the judge-credential "
-    "preflight in .github/workflows/test_email_agent_eval.yml.\n"
-)
-
 
 def judge_credential_present() -> bool:
-    """True when some transport could drive the judge.
+    """True when some credential could drive the judge.
 
-    An API key, a subscription token, or a ``claude`` CLI on PATH (which may be
-    logged in). The eval report scripts guard on this before spending Lemonade
-    time. It deliberately does not say whether the credential will be
-    *accepted* — for that, probe it (see :func:`probe_judge_credential`).
+    The eval report scripts guard on this before spending Lemonade time. It
+    deliberately does not say whether the credential will be *accepted* — for
+    that, probe it (see :func:`probe_judge_credential`).
     """
-    return (
-        any((credential(var) or "").strip() for var in JUDGE_CREDENTIAL_VARS)
-        or shutil.which("claude") is not None
-    )
+    return credential_present()
 
 
 @dataclass(frozen=True)
@@ -206,6 +191,8 @@ class ClaudeCliClient:
                 errors="replace",
                 timeout=self.timeout,
                 cwd=self._workdir.name,
+                # The CLI prefers an inherited API key to the subscription.
+                env={k: v for k, v in os.environ.items() if k != API_KEY_VAR},
                 check=False,
             )
         except subprocess.TimeoutExpired as e:
@@ -273,30 +260,18 @@ def _split_cost(model: str, input_tokens: int, output_tokens: int, total: float)
 
 
 def make_judge_client(model: str | None = None, max_tokens: int | None = None):
-    """Build the judge client the available credential can actually drive.
+    """Build the judge client for the first available Claude credential.
 
-    The runner's rule: ``ANTHROPIC_API_KEY`` means the Messages API (the
-    workflow blanks it when it wants the subscription path). Otherwise the
-    subscription through ``claude -p`` — a ``CLAUDE_CODE_OAUTH_TOKEN`` or the
-    CLI's own login. A key that only a working-directory ``.env`` supplied
-    comes last, so a project's file cannot override the user's login. Raises
-    when none is available; never returns a degraded scorer. ``max_tokens``
-    applies to the API transport only.
+    Order: Claude Code subscription, then ``ANTHROPIC_API_KEY`` (env, then ``.env``).
+    The subscription runs through ``claude -p``, a key through the Messages API.
+    Prints which one it uses. Raises when none is available; never returns a
+    degraded scorer. ``max_tokens`` applies to the API transport only.
     """
-    env_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
-    oauth_token = (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
-
-    if env_key:
-        return _api_judge(model, max_tokens)
-    if oauth_token or shutil.which("claude"):
+    credential = resolve_claude_credential()
+    if credential.is_subscription:
+        announce(credential)
         return ClaudeCliClient(model=model)
-    if (credential("ANTHROPIC_API_KEY") or "").strip():
-        log.warning(
-            "Using ANTHROPIC_API_KEY from %r for the judge.",
-            working_dir_credential_file("ANTHROPIC_API_KEY"),
-        )
-        return _api_judge(model, max_tokens)
-    raise ValueError(MISSING_CREDENTIAL_ERROR)
+    return _api_judge(model, max_tokens)
 
 
 def _api_judge(model: str | None, max_tokens: int | None):

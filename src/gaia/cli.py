@@ -2512,7 +2512,7 @@ Examples:
 
 A TUI must already be running with --control-port; this drives THAT session so
 the run is visible on screen. The judge uses your Claude Code login (the
-`claude` CLI), or ANTHROPIC_API_KEY when it is set.
+`claude` CLI) first, then ANTHROPIC_API_KEY.
 """,
     )
     sessions_eval_parser.add_argument(

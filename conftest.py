@@ -365,6 +365,24 @@ _EMBEDDED_ACTIONS = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_claude_login(monkeypatch):
+    """Never ask the developer's real ``claude`` CLI whether it is logged in.
+
+    A ``claude`` on PATH (real or stubbed) reads as logged in. Tests of the
+    login check patch ``claude_credential._auth_status`` themselves.
+    """
+    from gaia.eval import claude_credential
+
+    monkeypatch.setattr(
+        claude_credential,
+        "_auth_status",
+        lambda _bin, _env: {"loggedIn": True, "authMethod": "claude.ai"},
+    )
+    monkeypatch.setattr(claude_credential, "_login_cache", {})
+    monkeypatch.setattr(claude_credential, "_announced", set())
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _guard_real_gaia_home():
     """Fail a test that would act on the developer's real ``~/.gaia`` Lemonade.

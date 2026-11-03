@@ -618,7 +618,8 @@ jobs:
         timeout-minutes: ${{ github.event_name != 'pull_request' && 60 || 30 }}
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Blank when the OAuth token is set: the judge adds --bare only with a key.
+          # Only without a subscription token. The token would win anyway, and the
+          # key then never reaches the job.
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -1056,9 +1057,8 @@ jobs:
       - name: Preflight — judge key, baselines, Lemonade
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Blank when the OAuth token is present, deliberately: runner.py adds
-          # `--bare` only when ANTHROPIC_API_KEY is set, and `--bare` restricts
-          # auth to the key alone, so leaving both set would ignore the token.
+          # Only without a subscription token. The token would win anyway, and the
+          # key then never reaches the job.
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           $ErrorActionPreference = "Stop"
@@ -1542,9 +1542,8 @@ jobs:
         timeout-minutes: 360
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Blank when the OAuth token is present, deliberately: runner.py adds
-          # `--bare` only when ANTHROPIC_API_KEY is set, and `--bare` restricts
-          # auth to the key alone, so leaving both set would ignore the token.
+          # Only without a subscription token. The token would win anyway, and the
+          # key then never reaches the job.
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
           # The other account. The eval moves to it once if the first runs out of
           # quota mid-run, and stops with a partial scorecard if both are out.

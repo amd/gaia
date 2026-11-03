@@ -71,9 +71,11 @@ gaia eval sessions --dataset-only --out eval/results/sessions
   The dataset and results contain your own prompts and the answers Claude Code gave you. `eval/results/sessions*/` is gitignored for that reason; don't commit it or upload it as a CI artifact.
 </Warning>
 
-Judging uses Claude: your Claude Code login (the `claude` CLI, or
-`CLAUDE_CODE_OAUTH_TOKEN`), or `ANTHROPIC_API_KEY` when it is set. The repo's
-`.env` supplies it when you run from the checkout; see
+Judging uses the first Claude credential it finds: your Claude Code subscription
+(`CLAUDE_CODE_OAUTH_TOKEN`, or the `claude` CLI's own login), then
+`ANTHROPIC_API_KEY` from the environment, then `ANTHROPIC_API_KEY` from a `.env`
+file. Each run prints which one it uses, for example
+`Claude judge: using the Claude Code CLI login`. See
 [Configuration](/sdk/configuration#env-files) for which `.env` files GAIA reads.
 
 ### What gets scored
