@@ -206,10 +206,12 @@ document.addEventListener('click',function(e){var td=e.target.closest&&e.target.
   var col=td.cellIndex,on=!td.classList.contains('wide');td.closest('table').querySelectorAll('tr').forEach(function(tr){var c=tr.cells[col];if(c&&c.classList.contains('trunc'))c.classList.toggle('wide',on);});e.stopPropagation();markClipped(td.closest('table'));});
 /* Every table sorts by any column: first click ascending, second descending, third back to the original order. */
 var SORT={},UNIT={s:1,min:60,h:3600,d:86400,day:86400,days:86400,w:604800,week:604800,weeks:604800,k:1e3,M:1e6};
-/* A cell's sort value: numbers (with units: 54s < 5 min < 1.2 h < 3 days), else lower-case text; null for an empty cell. */
+/* A cell's sort value: numbers (with units: 54s < 5 min < 1.2 h < 3 days; 3/7 by its rate; "new" lowest), ISO dates as text, else lower-case text; null for an empty cell. */
 function cellKey(td){if(!td)return null;var v=td.getAttribute('data-v'),t=(v!=null?v:td.textContent).trim();if(!t||t==='—'||t==='-')return null;
   if(v!=null&&v!==''&&!isNaN(+v))return +v;
-  var m=/^\d{4}-\d\d-\d\d/.test(t)?null:t.replace(/,/g,'').match(/^([+\-−]?)\$?(\d*\.?\d+)\s*(%|×|min|s|h|days?|d|weeks?|w|k|M|pts)?(?![A-Za-z])/);
+  if(t==='±0')return 0;if(t==='new')return -Infinity;
+  var f=t.replace(/,/g,'').match(/^(\d+)\/(\d+)$/);if(f)return +f[2]?f[1]/f[2]:null;
+  var m=/^\d{4}-\d\d/.test(t)?null:t.replace(/,/g,'').match(/^([+\-−]?)\$?(\d*\.?\d+)\s*(%|×|min|s|h|days?|d|weeks?|w|k|M|pts)?(?![A-Za-z])/);
   if(m)return parseFloat(m[2])*(m[1]&&m[1]!=='+'?-1:1)*(UNIT[m[3]]||1);
   return t.toLowerCase();}
 function sortRows(t,ci,d){var rows=[].slice.call(t.rows).filter(function(r){return r._i!=null;});
@@ -227,7 +229,8 @@ function sortable(root){(root||document).querySelectorAll('table').forEach(funct
   var s=SORT[key];if(s&&s.d)sortRows(t,s.c,s.d);});}
 new MutationObserver(function(){sortable();clearTimeout(markClipped.t);markClipped.t=setTimeout(function(){markClipped();},60);}).observe(document.querySelector('main'),{childList:true,subtree:true});
 document.addEventListener('toggle',function(){markClipped();},true);
-function tableView(head,rows){return '<details class="tv"><summary>Table view</summary><div class="scroll"><table><tr>'+head.map(function(h,i){return '<th'+(i?' class="n"':'')+'>'+esc(h)+'</th>';}).join('')+'</tr>'+rows.map(function(r){return '<tr>'+r.map(function(c,i){return '<td'+(i?' class="n"':'')+'>'+c+'</td>';}).join('')+'</tr>';}).join('')+'</table></div></details>';}
+/* A cell is HTML, or {h:HTML,v:sort key} when its text does not sort (an ISO date behind "Oct 29, 2026"). */
+function tableView(head,rows){return '<details class="tv"><summary>Table view</summary><div class="scroll"><table><tr>'+head.map(function(h,i){return '<th'+(i?' class="n"':'')+'>'+esc(h)+'</th>';}).join('')+'</tr>'+rows.map(function(r){return '<tr>'+r.map(function(c,i){var o=c!=null&&typeof c==='object';return '<td'+(i?' class="n"':'')+(o?' data-v="'+esc(c.v)+'"':'')+'>'+(o?c.h:c)+'</td>';}).join('')+'</tr>';}).join('')+'</table></div></details>';}
 /* Place value labels without overlap: largest values first, skip any that would collide. */
 function placeLabels(cands,minX,maxX){var placed=[],out='';cands.sort(function(a,b){return b.v-a.v;}).forEach(function(c){var w=c.text.length*6.8+10,x0=c.x-w/2,x1=c.x+w/2;if(x0<minX||x1>maxX)return;
   for(var i=0;i<placed.length;i++){var p=placed[i];if(x0<p[1]&&x1>p[0]&&Math.abs(c.y-p[2])<16)return;}placed.push([x0,x1,c.y]);out+='<text x="'+c.x.toFixed(1)+'" y="'+c.y.toFixed(1)+'" class="vl" text-anchor="middle">'+esc(c.text)+'</text>';});return out;}
@@ -286,7 +289,7 @@ function draw(id){
   for(i=0;i<n;i++)s+='<rect class="hit" x="'+(L+i*cw).toFixed(1)+'" y="'+T+'" width="'+cw.toFixed(1)+'" height="'+(H-T-B)+'" data-i="'+i+'"/>';
   var leg='<div class="legend">'+(spec.series.length>1?spec.series.map(function(se){var off=!!hid[se.name];return '<span role="button" tabindex="0" aria-pressed="'+!off+'" title="Click to '+(off?'show':'hide')+' '+esc(se.name)+'" data-leg="'+esc(se.name)+'"'+(off?' class="off"':'')+'><i style="background:'+se.color+'"></i>'+esc(se.name)+'</span>';}).join(''):'')+'</div>';
   var tv=tableView([spec.cats?(spec.catName||'Bucket'):(spec.gran==='week'?'Week of':spec.gran==='month'?'Month':'Day')].concat(spec.series.map(function(se){return se.name;})),
-    spec.keys.map(function(k,i){return [esc(spec.catsLong?spec.catsLong[i]:spec.cats?spec.cats[i]:longLab(k,spec.gran).replace('Week of ',''))].concat(spec.series.map(function(se){var v=se.vals[i];return v==null?'—':(se.fmt||fmt)(v);}));}).reverse());
+    spec.keys.map(function(k,i){return [spec.catsLong||spec.cats?esc(spec.catsLong?spec.catsLong[i]:spec.cats[i]):{h:esc(longLab(k,spec.gran).replace('Week of ','')),v:k}].concat(spec.series.map(function(se){var v=se.vals[i];return v==null?'—':(se.fmt||fmt)(v);}));}).reverse());
   box.innerHTML=(n>3||z?zoomBar(id,!!z):'')+leg+'<svg class="c" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(spec.title||'chart')+'">'+s+'</svg>'+(spec.cover?'<div class="cover">'+esc(spec.cover)+'</div>':'')+(spec.note?'<div class="ks" style="padding:2px 8px 6px">'+spec.note+'</div>':'')+tv;
   box.querySelectorAll('[data-leg]').forEach(function(sp){var tg=function(){var nm=sp.getAttribute('data-leg'),h=HID[id]||(HID[id]={});
     if(h[nm])delete h[nm];else if(spec.series.filter(function(x){return !h[x.name];}).length>1)h[nm]=1;draw(id);};
