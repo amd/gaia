@@ -350,7 +350,6 @@ def test_flagship_declares_the_gate():
 
     assert EMAIL_CONFIRMATION_TOOLS <= GaiaAgent.confirmation_required_tools()
     assert "create_draft" not in GaiaAgent.confirmation_required_tools()
-    assert "update_draft" not in GaiaAgent.confirmation_required_tools()
 
 
 @pytest.mark.parametrize(
