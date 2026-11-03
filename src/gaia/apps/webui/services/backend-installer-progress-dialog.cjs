@@ -20,7 +20,7 @@
  *
  * Exposed API:
  *   - createProgressWindow() → { window, onProgress, close }
- *   - showFailureDialog(parentWindow, errorInfo) → Promise<'retry'|'manual'|'quit'>
+ *   - showFailureDialog(parentWindow, errorInfo) → Promise<'retry'|'revert'|'manual'|'quit'>
  */
 
 "use strict";
@@ -83,6 +83,7 @@ const STAGE_LABELS = Object.freeze({
   "install-package": "Installing GAIA",
   "gaia-init": "Getting the AI model ready",
   verify: "Finishing up",
+  "revert-download": "Downloading",
 });
 const NEUTRAL_STAGE_LABEL = "Setting up GAIA";
 
@@ -110,7 +111,7 @@ function escapeHtml(text) {
  * HTML payload for the progress window. Rendered via `loadURL('data:...')`.
  * The script uses `window.gaiaInstall` exposed by preload.cjs.
  */
-function buildProgressHtml({ logPath }) {
+function buildProgressHtml({ logPath, updating, revertingTo }) {
   const escapedLog = escapeHtml(logPath || "");
   return `<!DOCTYPE html>
 <html lang="en">
@@ -230,8 +231,8 @@ function buildProgressHtml({ logPath }) {
 </style>
 </head>
 <body>
-  <h1>Setting up GAIA</h1>
-  <p class="subtitle">First-time setup — this can take a few minutes</p>
+  <h1>${revertingTo ? `Going back to GAIA ${escapeHtml(revertingTo)}` : updating ? "Finishing the update" : "Setting up GAIA"}</h1>
+  <p class="subtitle">${updating || revertingTo ? "This takes a moment" : "First-time setup — this can take a few minutes"}</p>
   <div class="stage" id="stage">Starting…</div>
   <div class="bar"><div class="fill indeterminate" id="fill"></div></div>
   <div class="percent" id="percent"></div>
@@ -285,7 +286,7 @@ function buildProgressHtml({ logPath }) {
  *     close: () => void,
  *   }
  */
-function createProgressWindow() {
+function createProgressWindow({ updating = false, revertingTo = null } = {}) {
   registerIpcHandlers();
 
   const window = new BrowserWindow({
@@ -310,7 +311,7 @@ function createProgressWindow() {
 
   window.setMenuBarVisibility(false);
 
-  const html = buildProgressHtml({ logPath: installer.getLogPath() });
+  const html = buildProgressHtml({ logPath: installer.getLogPath(), updating, revertingTo });
   window.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
 
   window.once("ready-to-show", () => {
@@ -381,6 +382,7 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
     message = "GAIA backend install failed.",
     stage = null,
     suggestion = null,
+    revertTo = null,
   } = errorInfo;
 
   const logPath = installer.getLogPath();
@@ -401,6 +403,7 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
   const actions = [
     ...(uvFailed ? [["install-uv", "Install uv (auto)"]] : []),
     ["retry", "Retry"],
+    ...(revertTo ? [["revert", `Go back to GAIA ${revertTo}`]] : []),
     ["manual", "Manual install instructions"],
     ["copy-log", "Copy log path"],
     ["open-log", "Open log file"],
@@ -442,6 +445,8 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
       }
       case "retry":
         return "retry";
+      case "revert":
+        return "revert";
       case "manual": {
         try {
           await shell.openExternal("https://amd-gaia.ai/docs/quickstart#cli-install");

@@ -195,6 +195,12 @@ func (m Model) footer(w int) string {
 	if m.cfg.AgentID == "gaia" && !m.Busy() {
 		keys = append(keys, [2]string{"p", "AI provider"})
 	}
+	if m.offersUpdate() {
+		keys = append(keys, [2]string{"u", "update GAIA"})
+	}
+	if m.offersBack() {
+		keys = append(keys, [2]string{"b", "back to " + m.previous})
+	}
 	keys = append(keys, [2]string{"r", "re-check"})
 	keys = append(keys, [2]string{"d", "details"})
 	// `enter` is offered whenever pressing it would actually do something:

@@ -1839,12 +1839,6 @@ class InitCommand:
                     "answering -- restarting it..."
                 )
                 embedded.stop()
-            elif current.running and current.version != embedded.version:
-                self._print(
-                    f"   Replacing Lemonade Server v{current.version} with "
-                    f"v{embedded.version}..."
-                )
-                embedded.stop()
             elif current.running and self.force_reinstall:
                 self._print("   Stopping Lemonade Server to reinstall it...")
                 embedded.stop()
@@ -1852,6 +1846,14 @@ class InitCommand:
             if self.force_reinstall:
                 # A reinstall overwrites the running version's files.
                 self._install_embedded(embedded)
+
+            # Stopped only now: a failed download must leave the old server up.
+            if current.running and current.version != embedded.version:
+                self._print(
+                    f"   Replacing Lemonade Server v{current.version} with "
+                    f"v{embedded.version}..."
+                )
+                embedded.stop()
 
             status = embedded.start(install_if_missing=False)
         except EmbeddedLemonadeError as e:
