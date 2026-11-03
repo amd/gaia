@@ -27,6 +27,7 @@ from gaia.agents.base.claims import (
     claims_success,
     passing_test_claim,
 )
+from gaia.agents.base.completion import mentioned_paths
 from gaia.agents.base.grounding import (
     ACTION,
     CONTENT,
@@ -170,10 +171,19 @@ def _locate(path):
         ("You are working in C:\\work\\toybox. Tidy it up.", []),
         ("Build a Node.js app that prints hello.", []),
         ("What does os.path.join() do? And print()?", []),
+        ("ما الذي يفعله toybox/dates.py؟", ["toybox/dates.py"]),
+        ("请检查 toybox/dates.py。", ["toybox/dates.py"]),
+        ("هل toybox/dates.py، يعمل؟", ["toybox/dates.py"]),
+        ("toybox/dates.py？", ["toybox/dates.py"]),
     ],
 )
 def test_named_targets_are_files_and_project_symbols(query, expected):
     assert named_targets(query) == expected
+
+
+@pytest.mark.parametrize("mark", ["؟", "。", "،", "；", "？", "！"])
+def test_mentioned_paths_strip_unicode_sentence_punctuation(mark):
+    assert mentioned_paths(f"toybox/dates.py{mark}") == ["toybox/dates.py"]
 
 
 # ---------------------------------------------------------------------------
