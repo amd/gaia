@@ -189,6 +189,17 @@ def _who_gets_told(event: CalendarEvent) -> List[str]:
     return list(event.attendees) if event.organizer_is_self else []
 
 
+WEEKDAYS = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+
+
 def _display_time(value: str) -> str:
     """A timed value in this computer's zone, so the wall clock reads naturally."""
     return parse_instant(value).astimezone().isoformat(timespec="seconds")
@@ -197,15 +208,19 @@ def _display_time(value: str) -> str:
 def _event_payload(event: CalendarEvent) -> Dict[str, Any]:
     if event.all_day:
         start = event.start
+        start_day = parse_date(event.start)
         # Both providers store an exclusive end; people and the tools use the last day.
         end = (parse_date(event.end) - timedelta(days=1)).isoformat()
     else:
         start = _display_time(event.start)
+        start_day = parse_instant(start)
         end = _display_time(event.end)
     payload = {
         "id": event.id,
         "title": wrap_untrusted_field(event.title) if event.title else "",
         "start": start,
+        # Models miscount weekdays for far-off dates, so state it.
+        "start_weekday": WEEKDAYS[start_day.weekday()],
         "end": end,
         "all_day": event.all_day,
         "time_zone": event.time_zone,

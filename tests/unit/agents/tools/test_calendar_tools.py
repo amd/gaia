@@ -1124,3 +1124,45 @@ class TestGating:
             "gaia.agents.tools.calendar_tools",
             "CalendarToolsMixin",
         )
+
+
+class TestEventsStateTheirWeekday:
+    def _weekday(self, **over):
+        from gaia.agents.tools._calendar.model import CalendarEvent
+        from gaia.agents.tools.calendar_tools import _event_payload
+
+        base = dict(
+            id="e1",
+            title="x",
+            start="2030-01-11T20:00:00+00:00",
+            end="2030-01-11T21:00:00+00:00",
+            all_day=False,
+            time_zone="UTC",
+            location=None,
+            attendees=(),
+            organizer_is_self=True,
+            html_link=None,
+            recurring_instance=False,
+            series_master=False,
+            blocks_time=True,
+            cancelled=False,
+        )
+        return _event_payload(CalendarEvent(**{**base, **over}))["start_weekday"]
+
+    def test_all_day_event(self):
+        assert (
+            self._weekday(start="2030-01-11", end="2030-01-12", all_day=True)
+            == "Friday"
+        )
+
+    def test_timed_event_uses_the_local_day_it_displays(self, monkeypatch):
+        import time
+
+        monkeypatch.setenv("TZ", "Asia/Tokyo")
+        time.tzset()
+        try:
+            # 20:00 UTC Friday is already Saturday morning in Tokyo.
+            assert self._weekday() == "Saturday"
+        finally:
+            monkeypatch.undo()
+            time.tzset()
