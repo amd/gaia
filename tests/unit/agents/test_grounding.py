@@ -1044,19 +1044,10 @@ def test_a_claimed_check_of_a_candidate_never_opened_is_still_caught():
     assert "`resize/lanczos.c`" in findings[0].correction
 
 
-def test_the_correction_keeps_the_answer_addressed_to_the_user():
-    """A reply to the check, not the user, once reached an Arabic speaker in English."""
-    correction = grounding_correction(
-        ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
-    )
-
-    assert "language of their question" in correction
-    assert "don't mention this check" in correction
-
-
+#: A reply to the check, not the user, once reached an Arabic speaker in English.
 _TO_THE_USER = (
     "Write it for the user, in the language of their question, and don't mention "
-    "this check or what changed."
+    "this check."
 )
 
 
@@ -1095,3 +1086,14 @@ def test_the_correction_the_model_gets_ends_on_the_user_addressed_ask(agent):
     assert correction.startswith("[check:grounding] ")
     assert correction.endswith(_TO_THE_USER)
     assert _final_text(result) == GROUNDED
+
+
+def test_the_ask_leaves_room_to_admit_what_was_not_done():
+    """The gaps offer "say plainly that you didn't" as a way out; the ask must not close it."""
+    correction = grounding_correction(
+        ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
+    )
+    ask = correction[correction.index("Then give your complete answer") :]
+
+    assert "what changed" not in ask
+    assert "didn't" in correction[: correction.index(ask)]
