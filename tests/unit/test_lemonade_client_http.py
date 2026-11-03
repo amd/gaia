@@ -1564,10 +1564,12 @@ class TestLemonadeClientMock(unittest.TestCase):
         """Test get_required_models returns all unique models."""
         model_ids = self.client.get_required_models("all")
 
-        # All profiles use gemma-4-e4b; some also use embeddinggemma
+        # All profiles use Gemma; RAG also uses the embedding model, and Talk
+        # declares Kokoro explicitly for its downloadable speech model.
         self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
         self.assertIn("user.embeddinggemma-300m-GGUF", model_ids)
-        self.assertEqual(len(model_ids), 2)
+        self.assertIn("kokoro-v1", model_ids)
+        self.assertEqual(len(model_ids), 3)
 
     def test_get_required_models_unknown_agent(self):
         """Test get_required_models returns empty list for unknown agent."""

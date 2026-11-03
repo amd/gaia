@@ -2002,6 +2002,8 @@ Examples:
   gaia download --clear-cache
 
 Available agents: chat, bash, talk, rag, vlm, minimal, mcp, sd
+
+Use `gaia download --agent talk` to download the local Kokoro TTS model.
         """,
     )
     download_parser.add_argument(

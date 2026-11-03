@@ -210,7 +210,8 @@ schemas live in [`schemas/`](./schemas):
   was published), the optional `eval_scorecard_url` + `eval_score` +
   `eval_score_version` (the raw scorecard's public URL, its parsed 0–100
   aggregate, and the agent version it was measured at, all absent when no
-  scorecard was published), the optional `npm_package` /
+  scorecard was published; a scorecard whose aggregate falls outside 0–100 is
+  refused at publish with `400 invalid_eval_score`), the optional `npm_package` /
   `playground_url` (present only when the manifest declares them — they drive the
   hub page's npm install method and playground launcher), and the optional
   `package` (`{ filename, size_bytes, files: [{name, size_bytes}] }` — the
