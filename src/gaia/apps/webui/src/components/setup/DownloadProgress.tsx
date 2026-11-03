@@ -393,12 +393,12 @@ export function DownloadProgress({ status, names, freeGb = null, onCancel, onRet
             </ul>
             {active && <p className="setup-hint dl-controls">{t('setup.progress.keepsGoing')}</p>}
             {/* In setup, the screen's actions sit in its bottom bar like every other step's. */}
-            {((active && onCancel) || (!active && cancelled.length > 1 && onResumeAll)) && (
+            {((active && onCancel) || (!active && cancelled.length > 0 && onResumeAll)) && (
                 <SetupFooter>
                     {active && onCancel && (
                         <button type="button" className="btn-secondary" onClick={cancel} disabled={busy}>{t('setup.progress.cancel')}</button>
                     )}
-                    {!active && cancelled.length > 1 && onResumeAll && (
+                    {!active && cancelled.length > 0 && onResumeAll && (
                         <button type="button" className="btn-primary" onClick={onResumeAll} disabled={busy}>{t('setup.progress.resumeAll')}</button>
                     )}
                 </SetupFooter>

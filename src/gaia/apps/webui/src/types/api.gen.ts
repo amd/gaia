@@ -1324,6 +1324,7 @@ export interface VisionModelRequest {
 export interface WorkInProgress {
   answers: RunningAnswer[];
   indexing: RunningIndexJob[];
+  setup?: boolean;
 }
 export interface Gaia_Ui_Routers_Setup__DownloadModelRequest {
   acknowledge_low_disk?: boolean;

@@ -50,12 +50,9 @@ _SERVER_DOWN = (
 )
 _PLAN_FAILED = (
     "GAIA couldn't work out the setup plan. Check that the model server is "
-    "running and that ~/.gaia/config.json is valid, then try again. " + _LOG
+    "running, then try again. " + _LOG
 )
-_CHECK_FAILED = (
-    "GAIA couldn't check whether setup is done. Run `gaia init --check` in a "
-    "terminal to see why. " + _LOG
-)
+_CHECK_FAILED = "GAIA couldn't check whether setup is done. Try again. " + _LOG
 _BUSY = (
     "Setup or that model's download is already running. Wait for it or cancel "
     "it, then try again."
@@ -64,10 +61,7 @@ _OVERRIDDEN = (
     "LEMONADE_BASE_URL points GAIA at another server, so setup can't switch to "
     "GAIA's own. Unset it and restart GAIA."
 )
-_START_FAILED = (
-    "Setup couldn't start. Run `gaia init --profile gaia` in a terminal to see "
-    "why. " + _LOG
-)
+_START_FAILED = "Setup couldn't start. Try again. " + _LOG
 
 
 def _plan_error(e: SetupPlanError, unknown_model: str) -> HTTPException:

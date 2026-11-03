@@ -206,7 +206,7 @@ def _profile_models(profile: str, client) -> List[str]:
     if client is None:
         raise ServerNotRunning(
             f"The '{profile}' profile's models come from the model server, which "
-            "is not running yet. Run `gaia init --skip-models` to start it first."
+            "is not running yet. Start setup first, then try again."
         )
     return client.get_required_models(config["agent"])
 

@@ -16,6 +16,8 @@ const WHY: Record<string, Parameters<Translate>[0]> = {
     stuck: 'setup.test.why.stuck',
     missing: 'setup.test.why.missing',
     agent: 'setup.test.why.agent',
+    answer: 'setup.test.why.answer',
+    window: 'setup.test.why.window',
 };
 
 function jobLabel(job: SetupTest['job'], t: Translate): string {
@@ -45,12 +47,15 @@ interface Props {
     catalog: SetupCatalogEntry[];
     onRetry: () => void;
     onChooseAnother: () => void;
-    onDownloadAgain: (id: string) => void;
+    /** Stops the tests while they run. */
+    onCancel?: () => void;
+    /** Absent on the user's own server, where GAIA deletes nothing. */
+    onDownloadAgain?: (id: string) => void;
     busy: boolean;
 }
 
 /** "Test": each job runs for real, and setup is ready only when they pass. */
-export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnother, onDownloadAgain, busy }: Props) {
+export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnother, onCancel, onDownloadAgain, busy }: Props) {
     const t = useT();
     const rows = run.tests ?? [];
     const seen = new Set(rows.map((r) => r.job));
@@ -61,9 +66,15 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
     const failed = rows.filter((r) => r.state === 'failed');
     const required = failed.filter((r) => !catalog.find((e) => e.id === r.subject)?.roles.some((role) => ['speech', 'voice', 'image_creation'].includes(role)));
     const stopped = run.state === 'failed' || run.state === 'cancelled';
-    const broken = [...new Set(required.filter((r) => r.kind === 'broken' && r.subject).map((r) => r.subject as string))];
+    const broken = onDownloadAgain
+        ? [...new Set(required.filter((r) => r.kind === 'broken' && r.subject).map((r) => r.subject as string))]
+        : [];
     const [again, setAgain] = useState<string | null>(null);
     const againSize = catalog.find((e) => e.id === again)?.full_size_gb;
+    // The assistant never installed (no download server, or no internet): its test can't run.
+    const agentNotInstalled = stopped && run.components?.agent === 'failed';
+    // Only a model's own failure is helped by choosing another model.
+    const modelAtFault = required.some((r) => r.subject);
     return (
         <>
             <section className="setup-card" aria-label={t('setup.test.title')}>
@@ -84,7 +95,7 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
                             {r.error && (
                                 <div className="setup-result-error">
                                     {/* A plain reason first; the engine's own words, paths and codes, behind Details. */}
-                                    <p>{t(WHY[r.kind ?? ''] ?? 'setup.test.why.other')}</p>
+                                    <p>{t(r.kind === 'broken' && !onDownloadAgain ? 'setup.test.why.brokenYours' : WHY[r.kind ?? ''] ?? 'setup.test.why.other')}</p>
                                     <details className="dl-details">
                                         <summary>{t('setup.progress.details')}</summary>
                                         <pre dir="ltr">{r.error}</pre>
@@ -93,21 +104,35 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
                             )}
                         </li>
                     ))}
-                    {waiting.map((job) => (
+                    {waiting.map((job) => (job === 'agent' && agentNotInstalled ? (
+                        <li key={job} className="setup-result is-failed">
+                            <Icon state="failed" />
+                            <span className="setup-result-label">{jobLabel(job, t)}</span>
+                            <span className="setup-result-value">{t('setup.test.failed')}</span>
+                            <div className="setup-result-error"><p>{t('setup.test.why.hub')}</p></div>
+                        </li>
+                    ) : (
                         <li key={job} className="setup-result is-waiting">
                             <Icon state="waiting" />
                             <span className="setup-result-label">{jobLabel(job, t)}</span>
                             <span className="setup-result-value">{t('setup.test.waiting')}</span>
                         </li>
-                    ))}
+                    )))}
                 </ul>
             </section>
+            {run.state === 'verifying' && onCancel && (
+                <SetupFooter>
+                    <button type="button" className="btn-secondary" onClick={onCancel} disabled={busy}>{t('setup.progress.cancel')}</button>
+                </SetupFooter>
+            )}
             {stopped && (
                 <div className="setup-failure" role="alert">
-                    <p>{required.some((r) => r.kind === 'memory') ? t('setup.test.failedMemory') : t('setup.test.failedHelp')}</p>
+                    <p>{run.state === 'cancelled' ? t('setup.test.cancelled') : required.some((r) => r.kind === 'memory') ? t('setup.test.failedMemory') : t('setup.test.failedHelp')}</p>
                     {/* The way on sits in the bar like every step's; a damaged file's fix is downloading it again. */}
                     <SetupFooter>
-                        <button type="button" className="btn-secondary" onClick={onChooseAnother} disabled={busy}>{t('setup.test.chooseAnother')}</button>
+                        {modelAtFault && (
+                            <button type="button" className="btn-secondary" onClick={onChooseAnother} disabled={busy}>{t('setup.test.chooseAnother')}</button>
+                        )}
                         <button type="button" className={broken.length ? 'btn-secondary' : 'btn-primary'} onClick={onRetry} disabled={busy}>{t('setup.test.tryAgain')}</button>
                         {broken.map((id) => (
                             <button key={id} type="button" className="btn-primary setup-wrap-btn" onClick={() => setAgain(id)} disabled={busy}>
@@ -123,7 +148,7 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
                     title={t('setup.redownload.title', { name: names[again] ?? again })}
                     confirmLabel={t('setup.redownload.confirm')}
                     cancelLabel={t('setup.redownload.keep')}
-                    onConfirm={() => { const id = again; setAgain(null); onDownloadAgain(id); }}
+                    onConfirm={() => { const id = again; setAgain(null); onDownloadAgain?.(id); }}
                     onCancel={() => setAgain(null)}
                 >
                     <p>{t('setup.redownload.body', { name: names[again] ?? again, size: againSize != null ? formatSize(againSize) : '' })}</p>

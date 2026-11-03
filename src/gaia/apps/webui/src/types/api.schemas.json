@@ -5217,6 +5217,11 @@
         },
         "title": "Indexing",
         "type": "array"
+      },
+      "setup": {
+        "default": false,
+        "title": "Setup",
+        "type": "boolean"
       }
     },
     "required": [

@@ -150,16 +150,22 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
 
     if (checkError || unchecked.length > 0) {
         return (
-            <div className="setup-row">
-                <span className="setup-hint">
-                    {checkError
-                        ? <>{t('setup.offer.checkFailed')} <bdi dir="ltr">{checkError}</bdi></>
-                        : t('setup.offer.noAnswer', { url: unchecked.join(', ') })}
-                </span>
-                <button type="button" className="btn-secondary" disabled={checking} onClick={() => void detect()}>
-                    {checking && <Loader2 size={13} className="spin" />} {t('setup.offer.checkAgain')}
-                </button>
-            </div>
+            <>
+                <p className="setup-hint">
+                    {checkError ? t('setup.offer.checkFailed') : t('setup.offer.noAnswer', { url: unchecked.join(', ') })}
+                </p>
+                {checkError && (
+                    <details className="dl-details">
+                        <summary>{t('setup.progress.details')}</summary>
+                        <pre dir="ltr">{checkError}</pre>
+                    </details>
+                )}
+                <SetupFooter>
+                    <button type="button" className="btn-secondary" disabled={checking} onClick={() => void detect()}>
+                        {checking && <Loader2 size={13} className="spin" />} {t('setup.offer.checkAgain')}
+                    </button>
+                </SetupFooter>
+            </>
         );
     }
     if (!offer) {
@@ -205,7 +211,10 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
                     aria-label={t('setup.offer.keyLabel')}
                 />
             )}
-            {error && <p className="setup-error" role="alert">{error}</p>}
+            {/* A rejected key names the setting it came from; say what to do instead. */}
+            {error && (needsKey
+                ? <p className="setup-error" role="alert">{t('setup.offer.keyRejected')}</p>
+                : <SetupAlert text={error} />)}
             <SetupFooter>
                 <button type="submit" form="setup-lemonade-form" className="btn-secondary" disabled={!!busy || (needsKey && !key.trim())}>
                     {busy === 'external' && <Loader2 size={13} className="spin" />} {t('setup.offer.useMine')}
@@ -225,7 +234,13 @@ function ServerProblem({ problem, onRetry, onUseGaia }: { problem: SetupProblem;
     const switchFirst = problem.kind === 'server_too_old' && problem.use_gaia;
     return (
         <>
-            {problem.start && <p className="setup-hint"><bdi dir="ltr">{problem.start}</bdi></p>}
+            {/* How to start it can be a command, so it waits behind Details. */}
+            {problem.start && (
+                <details className="dl-details">
+                    <summary>{t('setup.server.howToStart')}</summary>
+                    <pre dir="ltr">{problem.start}</pre>
+                </details>
+            )}
             <SetupFooter>
                 <button type="button" className={switchFirst ? 'btn-secondary' : 'btn-primary'} onClick={onRetry}>{t('setup.tryAgain')}</button>
                 {problem.use_gaia && (
@@ -235,8 +250,30 @@ function ServerProblem({ problem, onRetry, onUseGaia }: { problem: SetupProblem;
             {problem.use_gaia && (
                 <p className="setup-hint">{t('setup.server.useGaiaNote')}</p>
             )}
-            {problem.switch_hint && <p className="setup-hint"><bdi dir="ltr">{problem.switch_hint}</bdi></p>}
+            {problem.switch_hint && (
+                <>
+                    <p className="setup-hint">{t('setup.server.setOutside')}</p>
+                    <details className="dl-details">
+                        <summary>{t('setup.progress.details')}</summary>
+                        <pre dir="ltr">{problem.switch_hint}</pre>
+                    </details>
+                </>
+            )}
         </>
+    );
+}
+
+/** A failure only the backend's words name: a plain sentence, those words behind Details. */
+function SetupAlert({ text }: { text: string }) {
+    const t = useT();
+    return (
+        <div className="setup-error" role="alert">
+            <p>{t('setup.failedLead')}</p>
+            <details className="dl-details">
+                <summary>{t('setup.progress.details')}</summary>
+                <pre dir="ltr">{text}</pre>
+            </details>
+        </div>
     );
 }
 
@@ -256,7 +293,8 @@ function RunError({ run }: { run: SetupRunStatus }) {
     }
     return (
         <div className="setup-error" role="alert">
-            <p>{t('setup.stopped')}</p>
+            {/* GAIA's own AI engine is downloaded first, so a failure there is usually the internet. */}
+            <p>{t(run.components?.server === 'failed' ? 'setup.server.ownFailed' : 'setup.stopped')}</p>
             {run.error && (
                 <details className="dl-details">
                     <summary>{t('setup.progress.details')}</summary>
@@ -342,6 +380,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const [notFetched, setNotFetched] = useState<string[]>([]);
     // GAIA uses a Lemonade the user runs, so the Connect step changes nothing there.
     const [usersServer, setUsersServer] = useState(false);
+    /** GAIA restarted during a download; the plan offers to pick it up. */
+    const [interrupted, setInterrupted] = useState(false);
     // What the last run was started with, so Resume and Retry repeat it.
     const lastRun = useRef<{ gaiaLemonade: boolean; options: api.SetupRunOptions }>({ gaiaLemonade: false, options: {} });
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -368,7 +408,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const running = run?.state === 'running' || run?.state === 'verifying';
     const installed = fullRun?.state === 'ready';
     const moving = downloadsActive(run);
-    const testing = (fullRun?.tests?.length ?? 0) > 0 || fullRun?.state === 'verifying';
+    // A model downloading again shows on the Download step, not under old test results.
+    const pulling = (fullRun?.models ?? []).some((m) => m.state === 'downloading' || m.state === 'queued');
+    const testing = !pulling && ((fullRun?.tests?.length ?? 0) > 0 || fullRun?.state === 'verifying');
 
     const loadHardware = useCallback(() => {
         setHardwareError(null);
@@ -423,7 +465,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 // key step lets the user switch if this guess is wrong.
                 if (s.skip_chat_model) setChoice(readChoice() === 'amd' ? 'amd' : 'fireworks');
             })
-            .catch((err) => setStartError(t('setup.progressUnread', { error: errorText(err) })))
+            .catch((err) => setStartError(errorText(err)))
             .finally(() => setStatusRead(true));
     }, [loadHardware, loadPlan, again, t]);
 
@@ -451,11 +493,19 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         try {
             const s = await api.getSetupStatus();
             setLostContact(null);
+            // GAIA restarted and lost the run: back to the plan, which offers to resume.
+            if (s.state === 'idle' && !s.models?.length) {
+                setRun(null);
+                setPhase('plan');
+                setInterrupted(true);
+                void loadPlan();
+                return;
+            }
             setRun(s);
         } catch (err) {
             setLostContact(errorText(err));
         }
-    }, []);
+    }, [loadPlan, t]);
 
     useEffect(() => {
         if (!moving && !lostContact) return stopPolling;
@@ -486,6 +536,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         setStartError(null);
         setActionError(null);
         setResumeOffer(false);
+        setInterrupted(false);
         try {
             saveChoice(choice);
             lastRun.current = { gaiaLemonade, options };
@@ -903,12 +954,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     <div className="setup-banner" role="status">
                         <Info size={14} aria-hidden="true" />
                         <span>{t('setup.resume.banner')}</span>
-                        <span className="setup-row">
-                            <button type="button" className="btn-primary" onClick={() => void download(false)}>{t('setup.resume.resume')}</button>
-                            <button type="button" className="btn-secondary" onClick={() => { setResumeOffer(false); customize(); }}>{t('setup.models.change')}</button>
-                        </span>
                     </div>
                 )}
+                {interrupted && phase !== 'download' && <p className="setup-hint" role="status">{t('setup.interrupted')}</p>}
 
                 <div key={stage} className={`setup-stage is-${stepDir.current}`}>
                     {stage === 'check' && (
@@ -927,20 +975,24 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <RunError run={serverRun} />
                                     {serverRun.problem
                                         ? <ServerProblem problem={serverRun.problem} onRetry={() => void start(false, { serverOnly: true })} onUseGaia={() => void start(true, { serverOnly: true })} />
-                                        : <button type="button" className="btn-primary setup-start" onClick={() => void start(!!serverRun.gaia_lemonade, { serverOnly: true })}>{t('setup.tryAgain')}</button>}
+                                        : (
+                                            <SetupFooter>
+                                                <button type="button" className="btn-primary" onClick={() => void start(!!serverRun.gaia_lemonade, { serverOnly: true })}>{t('setup.tryAgain')}</button>
+                                            </SetupFooter>
+                                        )}
                                 </>
                             )}
                             {planError && !plan && (
                                 <>
-                                    <p className="setup-error" role="alert">{planError}</p>
-                                    <div className="setup-row">
-                                        <button type="button" className="btn-primary" onClick={() => void loadPlan()}>{t('setup.tryAgain')}</button>
+                                    <SetupAlert text={planError} />
+                                    <SetupFooter>
                                         <button type="button" className="btn-secondary" onClick={() => void start(false, { keepTrying })}>{t('setup.models.useRecommended')}</button>
-                                    </div>
+                                        <button type="button" className="btn-primary" onClick={() => void loadPlan()}>{t('setup.tryAgain')}</button>
+                                    </SetupFooter>
                                     <p className="setup-hint">{t('setup.models.useRecommendedNote')}</p>
                                 </>
                             )}
-                            {startError && <p className="setup-error" role="alert">{startError}</p>}
+                            {startError && <SetupAlert text={startError} />}
                             {/* Before GAIA starts its own server, and after, so the user can still switch to theirs. */}
                             {statusRead && plan && ((!plan.lemonade.reachable && !serverRun) || (checksDone && viewing == null && plan.lemonade.mode !== 'external')) && (
                                 <ExistingLemonadeOffer
@@ -984,9 +1036,17 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <button type="button" className="link-btn" onClick={useCloud} disabled={runGoing}>{t('setup.plan.cloud')}</button>
                                     {onClose && <button type="button" className="link-btn" onClick={onClose}>{t('setup.backToGaia')}</button>}
                                 </div>
-                                {blocked && <p className="setup-error" role="alert"><bdi dir="ltr">{hardware?.blockers.join(' ')}</bdi></p>}
+                                {blocked && (
+                                    <div className="setup-error" role="alert">
+                                        <p>{t('setup.blocked')}</p>
+                                        <details className="dl-details">
+                                            <summary>{t('setup.progress.details')}</summary>
+                                            <pre dir="ltr">{hardware?.blockers.join('\n')}</pre>
+                                        </details>
+                                    </div>
+                                )}
                                 {short && <p className="setup-error" role="alert">{t('setup.summary.short', { need: formatSize(short.needGb), free: formatSize(short.freeGb), drive: t('setup.summary.theDrive'), freeUp: formatSize(short.freeUpGb) })}</p>}
-                                {(actionError ?? startError) && <p className="setup-error" role="alert">{actionError ?? startError}</p>}
+                                {(actionError ?? startError) && <SetupAlert text={(actionError ?? startError)!} />}
                             </section>
                             <details className="setup-disclosure">
                                 <summary>{t('setup.plan.whatDownloads')}</summary>
@@ -1137,7 +1197,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     />
                                 </div>
                             ) : running ? (
-                                <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {fullRun.text}</p>
+                                <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.download.working')}</p>
                             ) : null}
                             {optional.length > 0 && (
                                 <section className="setup-card" aria-label={t('setup.optional.title')}>
@@ -1162,10 +1222,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 </section>
                             )}
                             {lostContact && (
-                                <div className="setup-row" role="alert">
-                                    <span className="setup-error">{t('setup.lostContact', { error: lostContact })}</span>
-                                    <button type="button" className="btn-secondary" onClick={() => void poll()}>{t('setup.reconnect')}</button>
-                                </div>
+                                <>
+                                    <p className="setup-error" role="alert">{t('setup.lostContact', { error: lostContact })}</p>
+                                    <SetupFooter>
+                                        <button type="button" className="btn-primary" onClick={() => void poll()}>{t('setup.reconnect')}</button>
+                                    </SetupFooter>
+                                </>
                             )}
                             {runFailed && downloadDone && fullRun.state === 'failed' && !fullRun.model_failed && (
                                 fullRun.problem
@@ -1195,10 +1257,14 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <RunError run={fullRun} />
                                     {fullRun.problem
                                         ? <ServerProblem problem={fullRun.problem} onRetry={retryRun} onUseGaia={() => void start(true, lastRun.current.options)} />
-                                        : <button type="button" className="btn-primary setup-start" onClick={() => void start(!!fullRun.gaia_lemonade, lastRun.current.options)}>{t('setup.tryAgain')}</button>}
+                                        : (
+                                            <SetupFooter>
+                                                <button type="button" className="btn-primary" onClick={() => void start(!!fullRun.gaia_lemonade, lastRun.current.options)}>{t('setup.tryAgain')}</button>
+                                            </SetupFooter>
+                                        )}
                                 </>
                             )}
-                            {(actionError || startError) && <p className="setup-error" role="alert">{actionError ?? startError}</p>}
+                            {(actionError || startError) && <SetupAlert text={(actionError ?? startError)!} />}
                         </>
                     )}
 
@@ -1213,7 +1279,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 catalog={catalog}
                                 onRetry={retryRun}
                                 onChooseAnother={customize}
-                                onDownloadAgain={(id) => void retryModel(id, 'verify')}
+                                onCancel={() => void cancel()}
+                                // GAIA never deletes a model on the user's own server.
+                                onDownloadAgain={plan?.lemonade.mode === 'external' ? undefined : (id) => void retryModel(id, 'verify')}
                                 busy={busy}
                             />
                             {/* A failed test already shows this under its own row. */}
@@ -1223,7 +1291,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <pre dir="ltr">{fullRun.error}</pre>
                                 </details>
                             )}
-                            {(actionError || startError) && <p className="setup-error" role="alert">{actionError ?? startError}</p>}
+                            {(actionError || startError) && <SetupAlert text={(actionError ?? startError)!} />}
                         </>
                     )}
 
@@ -1245,7 +1313,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     </button>
                                 </SetupFooter>
                                 {!cloud && finalPlan && <ReadySummary plan={finalPlan} chatModel={answering} gpu={gpu} />}
-                                {startError && <p className="setup-error" role="alert">{startError}</p>}
+                                {startError && <SetupAlert text={startError} />}
                                 {(fullRun?.tests ?? []).filter((r) => r.state === 'failed').map((r) => (
                                     <p key={`${r.job}:${r.subject ?? ''}`} className="setup-failed-extra" role="alert">
                                         {t('setup.ready.extraFailed', { job: t(`setup.test.job.${r.job}`) })}
@@ -1269,7 +1337,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 </div>
                 {onClose && !running && stage !== 'plan' && stage !== 'ready' && (
                     <div className="setup-row">
-                        <button type="button" className="link-btn" onClick={onClose}>{t('setup.backToGaia')}</button>
+                        <button type="button" className="link-btn setup-close" onClick={onClose}>{t('setup.backToGaia')}</button>
                     </div>
                 )}
                 {runGoing && (choiceStep || stage === 'plan') && (

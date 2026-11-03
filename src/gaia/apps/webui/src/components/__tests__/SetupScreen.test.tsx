@@ -911,24 +911,17 @@ describe('SetupScreen: downloading', () => {
 
     const HALF = () => plan([{ ...QWEN, partial: true, partial_gb: 7.6, size_gb: 15.7 }, GEMMA, EMBED]);
 
-    it("offers to resume last time's download on reopen, and never resumes on its own", async () => {
+    it("says last time's download didn't finish, never resumes on its own, and the bar's start picks it up", async () => {
         mockedApi.getSetupPlan.mockResolvedValue(HALF());
         renderSetup();
-        const banner = await screen.findByText('Last time’s download didn’t finish. Resume?');
+        const banner = await screen.findByText(/Last time’s download didn’t finish/);
+        // The banner only says so; its actions are the step's own, in the bar.
+        expect(within(banner.closest('.setup-banner') as HTMLElement).queryByRole('button')).toBeNull();
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
         await planScreen();
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
-        fireEvent.click(within(banner.closest('.setup-banner') as HTMLElement).getByRole('button', { name: 'Resume' }));
+        fireEvent.click(screen.getByRole('button', { name: /Download and start/ }));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1));
-    });
-
-    it('opens the choices from the resume offer on Change models, and drops the offer', async () => {
-        mockedApi.getSetupPlan.mockResolvedValue(HALF());
-        await open();
-        fireEvent.click(screen.getByRole('button', { name: 'Change models' }));
-        expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
-        expect(screen.queryByText('Last time’s download didn’t finish. Resume?')).not.toBeInTheDocument();
-        expect(mockedApi.startSetup).not.toHaveBeenCalled();
     });
 
     it('says it lost contact with GAIA, dims the rows, and reconnects', async () => {
@@ -1316,12 +1309,13 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         expect(document.body.textContent).not.toContain('sk-secret');
     });
 
-    it("shows the server's rejection verbatim and reveals the key field", async () => {
+    it('says plainly that the key was rejected, without naming a setting, and reveals the key field', async () => {
         await offer(FOUND);
         const message = 'The Lemonade Server at http://localhost:13305/api/v1 rejected the API key. Check the key it was started with (its LEMONADE_API_KEY).';
         mockedApi.setLemonadeTarget.mockRejectedValue(Object.assign(new Error(message), { reason: 'bad_key' }));
         fireEvent.click(await screen.findByRole('button', { name: 'Use the one I have' }));
-        expect(await screen.findByRole('alert')).toHaveTextContent(message);
+        expect(await screen.findByRole('alert')).toHaveTextContent("That key wasn't accepted.");
+        expect(screen.queryByText(/LEMONADE_API_KEY/)).toBeNull();
         expect(screen.getByLabelText('Lemonade API key')).toBeInTheDocument();
     });
 

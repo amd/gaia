@@ -901,6 +901,14 @@ class CheckTimedOut(str):
     """A verification that never finished, such as a server stuck reloading."""
 
 
+class WrongAnswer(str):
+    """The model loaded but its answer was empty or wrong: not a damaged file."""
+
+
+class WindowTooSmall(str):
+    """The model loaded with a smaller context window than GAIA needs: not a damaged file."""
+
+
 #: A model gets this long to load and answer, plus _TEST_S_PER_GB per GB of size.
 _TEST_MIN_S = 300
 _TEST_S_PER_GB = 15
@@ -2148,13 +2156,29 @@ class InitCommand:
 
         Skipped on a server the user runs: GAIA changes nothing there.
         """
+        from gaia.config import GaiaConfig
         from gaia.llm.lemonade_client import LemonadeClient
+        from gaia.llm.model_server_info import available_llamacpp_backends
 
         if self.skip_models or self._uses_saved_server() or self._lemonade_base_url:
             return True
-        backend = LemonadeClient(verbose=self.verbose)._default_llamacpp_backend()
+        client = LemonadeClient(verbose=self.verbose)
+        # Vulkan is the GPU backend GAIA has tested: fetch it, and make it GAIA's choice.
+        tested = [
+            b["name"] for b in available_llamacpp_backends(client.get_system_info())
+        ]
+        if tested:
+            backend = tested[0]
+            if GaiaConfig.load().llamacpp_backend != backend:
+                GaiaConfig.save_key("llamacpp_backend", backend)
+            return self._install_backend(f"llamacpp:{backend}", "llamacpp")
+        backend = client._default_llamacpp_backend()
         if not backend:
             return True
+        self._print_warning(
+            f"Lemonade offers no backend GAIA has tested on this PC, so models run on "
+            f"its '{backend}' backend."
+        )
         return self._install_backend(f"llamacpp:{backend}", "llamacpp")
 
     def _install_backend(
@@ -2689,7 +2713,12 @@ class InitCommand:
                             )
                     elif actual_ctx:
                         # Context was set but is too small
-                        return (False, f"Context {actual_ctx} < {min_ctx} required")
+                        return (
+                            False,
+                            WindowTooSmall(
+                                f"Context {actual_ctx} < {min_ctx} required"
+                            ),
+                        )
                     else:
                         # Inference still runs, so warn rather than fail.
                         log.warning(
@@ -2729,7 +2758,7 @@ class InitCommand:
                 if problem is None:
                     problem = image_problem(image_bytes)
                 if problem is not None:
-                    return (False, f"No usable image: {problem}")
+                    return (False, WrongAnswer(f"No usable image: {problem}"))
                 return (True, None)
             elif is_embedding_model:
                 # Test embedding model with a simple text
@@ -2742,8 +2771,8 @@ class InitCommand:
                     embedding = response["data"][0].get("embedding", [])
                     if embedding and len(embedding) > 0:
                         return (True, None)
-                    return (False, "Empty embedding")
-                return (False, "Invalid response format")
+                    return (False, WrongAnswer("Empty embedding"))
+                return (False, WrongAnswer("Invalid response format"))
             else:
                 # Test LLM with a minimal chat request
                 response = client.chat_completions(
@@ -2758,8 +2787,8 @@ class InitCommand:
                     message = response["choices"][0].get("message", {})
                     if message.get("content") or message.get("reasoning_content"):
                         return (True, None)
-                    return (False, "Empty response")
-                return (False, "Invalid response format")
+                    return (False, WrongAnswer("Empty response"))
+                return (False, WrongAnswer("Invalid response format"))
 
         except InsufficientMemoryError as e:
             # Kept whole: the remedy (close apps, or another model) is in it.
@@ -2833,7 +2862,12 @@ class InitCommand:
         )
         if "red" in said.lower():
             return (True, None)
-        return (False, f"Couldn't read a test image: it answered {said.strip()[:80]!r}")
+        return (
+            False,
+            WrongAnswer(
+                f"Couldn't read a test image: it answered {said.strip()[:80]!r}"
+            ),
+        )
 
     def _within_limit(self, model_id: str, test, *args) -> tuple:
         """Run one test on a daemon thread, so a stuck server can't hold setup open."""
@@ -2869,13 +2903,16 @@ class InitCommand:
         seconds: Optional[float] = None,
     ) -> None:
         """One row of the Test step: ``running``, ``passed``, ``failed`` or ``skipped``."""
+        # Only "broken" means the file didn't load, so only it offers a fresh download.
+        kinds = (
+            (MemoryShortfall, "memory"),
+            (CheckTimedOut, "stuck"),
+            (WrongAnswer, "answer"),
+            (WindowTooSmall, "window"),
+        )
         kind = None
         if error is not None:
-            kind = (
-                "memory"
-                if isinstance(error, MemoryShortfall)
-                else "stuck" if isinstance(error, CheckTimedOut) else "broken"
-            )
+            kind = next((k for cls, k in kinds if isinstance(error, cls)), "broken")
         self.events.emit(
             "test",
             job=job,

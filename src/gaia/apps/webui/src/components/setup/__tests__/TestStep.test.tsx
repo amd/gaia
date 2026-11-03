@@ -13,8 +13,8 @@ const row = (job: SetupTest['job'], state: SetupTest['state'], over: Partial<Set
 
 const NAMES = { [QWEN.id]: QWEN.name, [GEMMA.id]: GEMMA.name, [WHISPER.id]: WHISPER.name };
 
-function show(tests: SetupTest[], state: 'verifying' | 'failed' | 'cancelled' = 'verifying', expected: SetupTest['job'][] = []) {
-    const handlers = { onRetry: vi.fn(), onChooseAnother: vi.fn(), onDownloadAgain: vi.fn() };
+function show(tests: SetupTest[], state: 'verifying' | 'failed' | 'cancelled' = 'verifying', expected: SetupTest['job'][] = [], usersServer = false) {
+    const handlers = { onRetry: vi.fn(), onChooseAnother: vi.fn(), onDownloadAgain: usersServer ? undefined : vi.fn() };
     render(
         <TestStep
             run={runStatus([], { state, tests })}
@@ -90,6 +90,23 @@ describe('Test step', () => {
         expect(onDownloadAgain).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole('button', { name: 'Delete and download again' }));
         expect(onDownloadAgain).toHaveBeenCalledExactlyOnceWith(QWEN.id);
+    });
+
+    it.each<[SetupTest['kind'], string]>([
+        ['answer', 'gave an empty or wrong answer'],
+        ['window', 'less room for a conversation than GAIA needs'],
+    ])('for a model that loaded but failed (%s) says why, and never offers to delete it', (kind, why) => {
+        show([row('chat', 'failed', { subject: QWEN.id, kind, error: 'Empty response' })], 'failed');
+        expect(rowOf(/Chat: loads and answers/)).toHaveTextContent(why);
+        expect(screen.queryByRole('button', { name: /Download .*again/ })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Test again' })).toHaveClass('btn-primary');
+    });
+
+    it("on the user's own server, a broken model gets no re-download and no advice to download", () => {
+        show([row('chat', 'failed', { subject: QWEN.id, kind: 'broken', error: 'bad file' })], 'failed', [], true);
+        expect(rowOf(/Chat: loads and answers/)).toHaveTextContent("didn't load on your AI engine");
+        expect(rowOf(/Chat: loads and answers/)).not.toHaveTextContent('Downloading it again');
+        expect(screen.queryByRole('button', { name: /Download .*again/ })).not.toBeInTheDocument();
     });
 
     it('offers no re-download for a broken test with no model behind it', () => {

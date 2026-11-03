@@ -20,6 +20,8 @@ from gaia.installer.init_command import (
     InitCommand,
     InitEvents,
     MemoryShortfall,
+    WindowTooSmall,
+    WrongAnswer,
     _solid_red_png,
     _test_limit_s,
     _tone_wav,
@@ -135,6 +137,9 @@ def test_a_bigger_model_gets_longer():
         ("boom", "broken"),
         (MemoryShortfall("close apps"), "memory"),
         (CheckTimedOut("too slow"), "stuck"),
+        # Loaded but answered badly: not a damaged file, so no re-download.
+        (WrongAnswer("Empty response"), "answer"),
+        (WindowTooSmall("Context 4096 < 65536 required"), "window"),
     ],
 )
 def test_a_failed_test_says_what_kind_of_failure(error, kind):

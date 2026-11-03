@@ -860,7 +860,7 @@ def test_a_command_that_cannot_start_is_an_error(monkeypatch):
 
     monkeypatch.setattr(sr.subprocess, "Popen", popen)
     runner = sr.SetupRunner()
-    with pytest.raises(sr.SetupError, match="Run it in a terminal"):
+    with pytest.raises(sr.SetupError, match="Could not start setup"):
         runner.start(False)
     assert runner.status() is None
 
@@ -1072,7 +1072,8 @@ def test_check_route_unanswered_is_503(client, monkeypatch):
     assert resp.status_code == 503
     detail = resp.json()["detail"]
     assert "exit 2" not in detail
-    assert "gaia init --check" in detail and "server log" in detail
+    assert "Try again" in detail and "server log" in detail
+    assert "gaia init" not in detail
 
 
 def test_status_route_idle(client):

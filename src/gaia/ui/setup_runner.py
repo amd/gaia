@@ -245,8 +245,7 @@ def check(skip_chat_model: bool = False, load: bool = False) -> Dict[str, Any]:
         )
     except subprocess.TimeoutExpired as e:
         raise SetupError(
-            "Checking setup took too long. Run `gaia init --check` in a terminal "
-            "to see where it stops."
+            "Checking setup took too long. Try again; its log shows where it stopped."
         ) from e
     if proc.returncode not in (0, _NOT_READY_EXIT, _LOAD_FAILED_EXIT):
         raise SetupError(
@@ -912,7 +911,7 @@ class SetupRunner:
                 )
             except OSError as e:
                 raise SetupError(
-                    f"Could not start `{command}`: {e}. Run it in a terminal instead."
+                    f"Could not start setup ({e}). Try again; GAIA's log has the details."
                 ) from e
             self._run = run
             self._models = {}
@@ -971,6 +970,13 @@ class SetupRunner:
                     stopped = True
             if model_id is not None:
                 return stopped
+            if self._run is not None and self._run.state == "verifying":
+                # The checks stop at their next step and their results are dropped.
+                self._run.state = "cancelled"
+                self._run.text = "Setup stopped"
+                self._run.note("Stopped by the user while checking the models")
+                self._end_rows(self._run, cancelled=True)
+                return True
             if self._proc is None or self._run is None or self._run.state != "running":
                 return stopped
             self._run.state = "cancelled"
@@ -1155,6 +1161,9 @@ class SetupRunner:
     @staticmethod
     def _record_test(run: SetupRun, event: Dict[str, Any]) -> None:
         """One Test row. Caller holds the lock."""
+        # A check still finishing after Cancel must not repaint the stopped run.
+        if run.state == "cancelled":
+            return
         row = {
             k: event.get(k)
             for k in ("job", "subject", "state", "error", "kind", "seconds")

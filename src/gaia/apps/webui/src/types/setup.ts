@@ -63,7 +63,8 @@ export interface SetupTest {
     subject: string | null;
     state: 'running' | 'passed' | 'failed' | 'skipped';
     error: string | null;
-    kind: 'memory' | 'stuck' | 'broken' | null;
+    /** Why it failed. Only `broken`, a model file that didn't load, offers a fresh download. */
+    kind: 'memory' | 'stuck' | 'broken' | 'answer' | 'window' | 'missing' | 'agent' | null;
     seconds: number | null;
 }
 

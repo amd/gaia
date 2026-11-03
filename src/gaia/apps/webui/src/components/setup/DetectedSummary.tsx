@@ -207,10 +207,14 @@ export function DetectedSummary({ plan, hardware, onChangeMemory }: { plan: Setu
                 {openError && <p className="setup-error" role="alert">{openError}</p>}
             </div>
 
+            {/* The backend's own words, in English, wait behind a translated heading. */}
             {warnings.length > 0 && (
-                <ul className="found-warnings">
-                    {warnings.map((w) => <li key={w}><AlertCircle size={13} aria-hidden="true" /> <Tech>{w}</Tech></li>)}
-                </ul>
+                <details className="dl-details found-warnings">
+                    <summary><AlertCircle size={13} aria-hidden="true" /> {t('setup.found.noticed')}</summary>
+                    <ul>
+                        {warnings.map((w) => <li key={w}><Tech>{w}</Tech></li>)}
+                    </ul>
+                </details>
             )}
 
             <button type="button" className="setup-log-toggle found-more" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
