@@ -48,6 +48,7 @@ type SetupGate =
     | { state: 'checking' }
     | { state: 'ready' }
     | { state: 'needed'; check: SetupCheck }
+    | { state: 'addingLocal' }
     | { state: 'unknown'; error: string };
 
 const LEMONADE_FAIL_THRESHOLD = 3;
@@ -123,6 +124,7 @@ function App() {
     const [showMobileAccess, setShowMobileAccess] = useState(false);
     const [tunnelActive, setTunnelActive] = useState(false);
     const [tunnelError, setTunnelError] = useState<string | null>(null);
+    const [tunnelSetup, setTunnelSetup] = useState<string[] | null>(null);
 
     // Set once the status poller and chat list exist further down.
     const refreshStatus = useRef<() => Promise<void>>(async () => {});
@@ -538,6 +540,20 @@ function App() {
         startChat(first.prompt).catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
     }, [checkSystemStatus, startChat, reloadAgentsAfterSetup]);
 
+    const leaveLocalSetup = useCallback(() => {
+        setSetup({ state: 'ready' });
+        void checkSystemStatus();
+    }, [checkSystemStatus]);
+
+    useEffect(() => {
+        const open = () => {
+            useChatStore.getState().closeSettings();
+            setSetup({ state: 'addingLocal' });
+        };
+        window.addEventListener('gaia:set-up-local', open);
+        return () => window.removeEventListener('gaia:set-up-local', open);
+    }, []);
+
     // ── Keyboard shortcuts ─────────────────────────────────────────────
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
@@ -581,12 +597,20 @@ function App() {
     const openMobileAccess = useCallback(async () => {
         setShowMobileAccess(true);
         setTunnelError(null);
-        if (tunnelActive) return;
+        if (tunnelActive) {
+            setTunnelSetup(null);
+            return;
+        }
         try {
             const status = await api.startTunnel();
+            // Kept until the retry answers, so the setup panel doesn't flash to "Starting".
+            const notInstalled = status.reason === 'ngrok_not_installed';
+            setTunnelSetup(notInstalled ? status.installCommands ?? [] : null);
+            if (notInstalled) return;
             if (status.error) setTunnelError(status.error);
             else setTunnelActive(true);
         } catch (err) {
+            setTunnelSetup(null);
             setTunnelError(err instanceof Error ? err.message : 'Could not start mobile access');
         }
     }, [tunnelActive]);
@@ -628,10 +652,11 @@ function App() {
         );
     }
 
-    if (setup.state === 'needed') {
+    if (setup.state === 'needed' || setup.state === 'addingLocal') {
         return (
             <div className="app">
-                <SetupScreen onReady={finishSetup} />
+                <SetupScreen onReady={finishSetup} onClose={setup.state === 'addingLocal' ? leaveLocalSetup : undefined} />
+                <UpdateIndicator />
             </div>
         );
     }
@@ -705,6 +730,8 @@ function App() {
                         onClose={() => setShowMobileAccess(false)}
                         onStop={() => void stopMobileAccess()}
                         error={tunnelError}
+                        setupCommands={tunnelSetup}
+                        onRetry={() => void openMobileAccess()}
                     />
                 </Suspense>
             )}

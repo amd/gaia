@@ -308,9 +308,10 @@ fetcher will not be talked into it.
 
 - Guide: <https://amd-gaia.ai/docs/guides/gaia>
 - Technical reference: [`SPEC.md`](./SPEC.md)
-- Eval card: [`SCORECARD.md`](./SCORECARD.md) — a recorded harness-validation
-  result with its exact reproduction recipe. It is not the product baseline
-  until a full self-hosted 13-category run has been published.
+- Eval scorecard: [`SCORECARD.md`](./SCORECARD.md) — the current committed card
+  is a harness-validation result for agent 0.1.1 on 11 `gaia_core` scenarios,
+  not a product baseline for the full 13-category corpus; the card records its
+  exact runner, model, and reproduction recipe
 - Changes: [`CHANGELOG.md`](./CHANGELOG.md)
 - Issues: <https://github.com/amd/gaia/issues>
 

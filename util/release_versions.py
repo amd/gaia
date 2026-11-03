@@ -46,8 +46,8 @@ CORE_PY = "src/gaia/version.py"
 FLAGSHIP_INIT = "hub/agents/gaia/python/gaia_agent/__init__.py"
 CHAT_PYPROJECT = "hub/agents/chat/python/pyproject.toml"
 
-# The flagship 0.3.1 binary is frozen from hub/agents/{gaia,chat}/python, and its
-# publish reads the npm lock, so these stay as shipped until v0.25.1 final (#5172).
+# The flagship 0.3.1 binary is frozen from hub/agents/{gaia,chat}/python, so the
+# chat shim's __version__ stays as shipped until v0.25.1 final (#5172).
 _HELD = "left as shipped until v0.25.1 final and flagship 0.3.1 publish (#5172)"
 
 _CORE_RE = re.compile(r"^(?P<base>\d+\.\d+\.\d+)(?:rc(?P<rc>[1-9]\d*))?$")
@@ -175,7 +175,6 @@ TARGETS: tuple[Target, ...] = (
         _lock_root("@amd-gaia/gaia"),
         "flagship",
         count=2,
-        held=_HELD,
     ),
     Target(
         "hub/agents/gaia/npm/binaries.lock.json",

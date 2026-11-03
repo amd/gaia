@@ -105,10 +105,21 @@
     color: var(--text-secondary);
 }
 
-.model-row-confirm {
-    display: inline-flex;
-    gap: 6px;
-    flex-shrink: 0;
+.model-badge.is-device {
+    background: var(--accent-dim);
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.model-badge.is-rank {
+    gap: 4px;
+    background: var(--accent-dim);
+    color: var(--accent);
+}
+
+.model-badge.is-size {
+    background: var(--bg-hover);
+    color: var(--text-secondary);
 }
 
 /* Settings › Model: adding a model from a Hugging Face link */
@@ -151,16 +162,6 @@
 .custom-model-checks li.is-ok svg { color: var(--accent-green); }
 .custom-model-checks li.is-failed { color: var(--danger); }
 .custom-model-checks li.is-warning { color: var(--accent-yellow); }
-
-.model-unavailable summary {
-    cursor: pointer;
-    color: var(--text-secondary);
-    font-size: 13px;
-}
-
-.model-unavailable .model-row {
-    opacity: 0.75;
-}
 
 /* Sidebar status popover */
 

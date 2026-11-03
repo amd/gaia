@@ -37,4 +37,5 @@ def test_readme_describes_a_harness_only_scorecard_as_non_baseline():
     readme = _read("hub/agents/gaia/npm/README.md")
     assert "[`SCORECARD.md`](./SCORECARD.md)" in readme
     if "HARNESS-VALIDATION" in _scorecard_front_matter(card):
-        assert "not the product baseline" in readme
+        assert "harness-validation" in readme
+        assert "not a product baseline" in readme

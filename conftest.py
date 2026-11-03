@@ -365,6 +365,52 @@ _EMBEDDED_ACTIONS = (
 )
 
 
+_REAL_WHICH = shutil.which
+
+
+@pytest.fixture(autouse=True)
+def _no_real_claude_login(monkeypatch):
+    """Hide the developer's real ``claude`` CLI and login from credential choice.
+
+    CI has no ``claude``, so by default no test sees one and no login. A test
+    that stubs ``shutil.which`` sees its stub; one that needs a login uses the
+    ``claude_login`` fixture.
+    """
+    from gaia.eval import claude_credential
+
+    monkeypatch.setattr(
+        claude_credential,
+        "_claude_bin",
+        lambda: None if shutil.which is _REAL_WHICH else shutil.which("claude"),
+    )
+    monkeypatch.setattr(
+        claude_credential,
+        "_auth_status",
+        lambda _bin, _env: {"loggedIn": False, "authMethod": "none"},
+    )
+    monkeypatch.setattr(claude_credential, "_login_cache", {})
+    monkeypatch.setattr(claude_credential, "_announced", set())
+
+
+@pytest.fixture
+def claude_login(monkeypatch):
+    """A ``claude`` CLI on PATH, logged in to a subscription."""
+    from gaia.eval import claude_credential
+
+    def which(name, *args, **kwargs):
+        if name == "claude":
+            return "/usr/bin/claude"
+        return _REAL_WHICH(name, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "which", which)
+    monkeypatch.setattr(
+        claude_credential,
+        "_auth_status",
+        lambda _bin, _env: {"loggedIn": True, "authMethod": "claude.ai"},
+    )
+    return "/usr/bin/claude"
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _guard_real_gaia_home():
     """Fail a test that would act on the developer's real ``~/.gaia`` Lemonade.
@@ -373,7 +419,8 @@ def _guard_real_gaia_home():
     real home, and a daemon spawned without ``GAIA_HOME`` -- that daemon owns,
     and on shutdown stops, the real home's server.
     """
-    from gaia.daemon import client
+    from gaia.daemon import client, paths as daemon_paths
+    from gaia.llm import lemonade_service
     from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
     def _guard_method(name, real):
@@ -393,6 +440,21 @@ def _guard_real_gaia_home():
         return guarded
 
     real_spawn = client._spawn_and_wait
+    real_post_start = lemonade_service._post_start
+
+    def guarded_post_start(*args, **kwargs):
+        daemon_home = daemon_paths.host_dir()
+        if _is_real_gaia_home(daemon_home):
+            pytest.fail(
+                _REAL_HOME_MESSAGE.format(
+                    action="ask the daemon in",
+                    home=daemon_home,
+                    harm=_LEMONADE_HARM,
+                    hint=_LEMONADE_HINT,
+                ),
+                pytrace=False,
+            )
+        return real_post_start(*args, **kwargs)
 
     def guarded_spawn(*args, **kwargs):
         home = _child_gaia_home(os.environ)
@@ -416,6 +478,7 @@ def _guard_real_gaia_home():
                 _guard_method(name, getattr(EmbeddedLemonade, name)),
             )
         mp.setattr(client, "_spawn_and_wait", guarded_spawn)
+        mp.setattr(lemonade_service, "_post_start", guarded_post_start)
         # sqlite3.dbapi2 is the module SQLAlchemy and other drivers bind.
         for module in (sqlite3, sqlite3.dbapi2):
             mp.setattr(module, "connect", _guard_connect(module.connect))
