@@ -41,7 +41,8 @@ def test_a_failed_stream_is_reported_once_with_its_reason(client):
 
     client.pull_model_stream = stream
     seen = []
-    assert not client.ensure_model_downloaded("m", on_progress=seen.append)
+    with pytest.raises(LemonadeClientError, match="Failed to download model 'm': Read timed out"):
+        client.ensure_model_downloaded("m", on_progress=seen.append)
     assert seen[-1] == {"event": "error", "error": "Read timed out"}
 
 
@@ -52,7 +53,8 @@ def test_a_server_error_event_is_not_reported_twice(client):
 
     client.pull_model_stream = stream
     seen = []
-    assert not client.ensure_model_downloaded("m", on_progress=seen.append)
+    with pytest.raises(LemonadeClientError, match="Failed to download model 'm': Failed to open file for writing"):
+        client.ensure_model_downloaded("m", on_progress=seen.append)
     assert [e["event"] for e in seen] == ["error"]
 
 
