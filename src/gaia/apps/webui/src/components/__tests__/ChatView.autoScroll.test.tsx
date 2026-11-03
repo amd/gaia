@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** Scrolling up while a reply streams must hold the view; scrolling back down resumes following (#6395). */
+/** Scrolling up while a reply streams must hold the view; scrolling back down resumes following. */
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -123,8 +123,8 @@ describe('auto-scroll edge cases', () => {
         const list = await mountList();
         scrollTo(list, 1500);
         // Mid smooth-scroll (20px short of the end), a 300px card above collapses; anchoring moves scrollTop up.
-        scrollTo(list, 1480);
-        scrollTo(list, 1180, 1700);
+        scrollTo(list, 1580, 2100);
+        scrollTo(list, 1280, 1800);
         expect(await followsNext('After the collapse')).toBe(true);
     });
 
@@ -233,6 +233,23 @@ describe('auto-scroll edge cases', () => {
         expect(await followsNext('Still reading')).toBe(false);
         scrollTo(list, 1450);
         expect(await followsNext('Back near the end')).toBe(true);
+    });
+
+    it('stops following when the reader scrolls up in the same frame a card above collapses', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        // The card takes 300px with it; the reader's own 200px up is what remains.
+        scrollTo(list, 1000, 1700);
+        expect(await followsNext('More text')).toBe(false);
+    });
+
+    it('stays put when content above a reader inside the 80px band grows', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        scrollTo(list, 1460);
+        // An image loads above: anchoring pushes scrollTop down by its height, 40px short of the end still.
+        scrollTo(list, 1760, 2300);
+        expect(await followsNext('More text')).toBe(false);
     });
 
     it('resumes from the scroll-to-bottom button', async () => {

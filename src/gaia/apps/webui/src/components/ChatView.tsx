@@ -218,7 +218,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
      *  earlier messages won't be interrupted by new streaming content. */
     const isNearBottomRef = useRef(true);
     const lastScrollTopRef = useRef(0);
-    const lastScrollHeightRef = useRef(0);
+    const lastDistFromBottomRef = useRef(0);
 
     // True once the user has navigated to another session. The store's
     // currentSessionId flips synchronously on switch (the displayed view lags
@@ -417,15 +417,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const el = messagesScrollRef.current;
         if (!el) return;
         const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-        // Shrinking content (a collapsed card, a wider window) moves scrollTop up without the user.
-        const shrank = el.scrollHeight < lastScrollHeightRef.current;
-        const movedUp = !shrank && el.scrollTop < lastScrollTopRef.current;
+        // Anchoring moves scrollTop and scrollHeight together, leaving the distance to the
+        // bottom unchanged; a user scroll changes it.
+        const lastDist = lastDistFromBottomRef.current;
+        const movedUp = el.scrollTop < lastScrollTopRef.current && distFromBottom > lastDist;
         lastScrollTopRef.current = el.scrollTop;
-        lastScrollHeightRef.current = el.scrollHeight;
+        lastDistFromBottomRef.current = distFromBottom;
         // Any upward move stops auto-follow, even inside the 80px band; nothing else does.
         if (distFromBottom <= AT_BOTTOM_PX) isNearBottomRef.current = true;
         else if (movedUp) isNearBottomRef.current = false;
-        else if (distFromBottom <= 80) isNearBottomRef.current = true;
+        else if (distFromBottom <= 80 && distFromBottom < lastDist) isNearBottomRef.current = true;
         setShowScrollBtn(distFromBottom > 200);
     }, []);
 
