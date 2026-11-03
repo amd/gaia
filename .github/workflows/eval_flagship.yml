@@ -182,8 +182,8 @@ on:
   # pool is too scarce for either - per-PR runs queued for hours and had to be
   # cancelled. An LLM-affecting PR names the categories to watch; the next RC's
   # run covers it. A tag run checks out the tagged commit, compares it with the
-  # committed baseline in report mode, and files an issue when it does not pass
-  # (release-escalation below). `v*.*.*` already matches the -rc tags; the
+  # committed baseline in report mode, and files an issue when a scenario
+  # regressed against it (release-escalation below). `v*.*.*` already matches the -rc tags; the
   # second pattern says so out loud. Agent-package tags (agent-pkg-*) match
   # neither.
   push:
@@ -468,8 +468,9 @@ jobs:
   # traps, ~7 tasks). Each suite is judged and gated on its own against
   # eval/tasks/expectations/<model>.<suite>.json once they are committed (from
   # `gaia eval tasks propose` over repeated TASK_MODEL runs on this pool); until
-  # then the gate reports only. A failing tag run files an issue naming the
-  # suite (release-escalation below).
+  # then the gate reports only. A failing gate is named in the tag run's
+  # summary (release-escalation below); it cannot yet tell a missed expectation
+  # from an unreachable backend, so it files no issue on its own.
   #
   # A lane in everything but the matrix. It stays its own job because its
   # steps are a different shape - embedded Lemonade, `gaia eval tasks` - not
@@ -2627,29 +2628,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python util/eval_tiers.py verify-final
 
-  # A release or RC tag run that does not pass files an issue, one per tier
-  # and tag, and a tag run that passes closes the issues its pass disproves.
-  # The nightly that used to catch environment drift (a Lemonade bump, a
-  # re-quantised model, a runner-image change) is gone, so the tag run is now the
-  # only recurring measurement - and its annotations would otherwise go unread.
-  # It does not block publish.yml: the release proceeds, the issue records why
-  # the eval did not pass. A dispatch does not file one; the dispatcher is
-  # watching. A skipped RC (`[skip eval]`) files nothing.
+  # A release or RC tag run files an `eval-failure` issue only when it MEASURED
+  # a quality drop: a scenario in the stable smoke set (eval/ci_tiers.json, each
+  # passed 90%+ of 10+ runs) that passed in the committed baseline now fails.
+  # A PASS -> FAIL anywhere else is a "watch" line in the summary: the baseline
+  # is one run and ~18% of scenarios flip between runs (#5493). The issue names
+  # each regression with the judge's root cause. A run that measured
+  # nothing - lanes skipped or cancelled, Claude out of quota, no baseline for
+  # the model under test, a final tag (which only checks a full sweep exists) -
+  # files nothing and says in its job summary what was not measured and why.
+  # A run that compared every category it ran and found nothing closes the
+  # open issue. util/eval_failure_notice.py decides, using the same
+  # compare_scorecards diff `gaia eval agent --compare` prints.
+  #
+  # One issue for the flagship, edited in place by the next regressed tag, so
+  # failures never pile up as one issue per tag. It does not block publish.yml.
+  # A dispatch does not file one; the dispatcher is watching.
   #
   # This job claims NO lane's concurrency group. A caller that holds the group
   # its callee needs deadlocks the callee before a job record exists, so
-  # `needs.*.result` reads `failure` for a job that never ran and the issue filed
-  # describes nothing. The now-deleted weekly caller did exactly that, every run
-  # for ten days, filing issues about a job that never started.
-  #
-  # A job a tier deliberately leaves out reads `skipped` (outcomes on an RC
-  # smoke, every lane on a final), so only `failure` and `cancelled` count.
-  # A final tag files one when verify-final finds no full sweep.
-  #
-  # Which issues a pass closes depends on what the pass measured. A smoke pass
-  # disproves earlier smoke failures on the line, not a failed full sweep; a
-  # full pass disproves both. A final tag measures nothing (verify-final only
-  # checks that a full sweep exists), so it closes only its own verify issue.
+  # `needs.*.result` reads `failure` for a job that never ran. Its own group
+  # only keeps two tag runs from editing the one issue at the same time.
   release-escalation:
     name: File (or close) the release eval issue
     needs: [eval-gate, lanes, agent-eval, flagship-tasks, aggregate, verify-final]
@@ -2660,107 +2659,96 @@ jobs:
     permissions:
       contents: read
       issues: write
+    concurrency:
+      group: eval-failure-issue-flagship
+      cancel-in-progress: false
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: setup.py
+
+      # compare_scorecards lives in gaia.eval.runner.
+      - name: Install gaia
+        run: pip install -e .
+
+      - name: Download every lane's artifact
+        uses: actions/download-artifact@v8
+        with:
+          pattern: eval-*
+          path: lane-artifacts
+        # A lane that uploaded nothing is reported by the next step, by name.
+        continue-on-error: true
+
+      # Scenario text and judge output are untrusted: they reach the issue only
+      # through notice/body.md, never through an expression in a script.
       - name: Decide what this run proved
-        id: outcome
+        id: notice
         env:
           TIER: ${{ needs.eval-gate.outputs.tier }}
+          MATRIX: ${{ needs.lanes.outputs.matrix }}
+          BASELINE_DIR: ${{ needs.lanes.outputs.baseline_dir }}
           LANES_JOB: ${{ needs.lanes.result }}
           LANES_RESULT: ${{ needs.agent-eval.result }}
           OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
+          OUTCOMES_FAILED: ${{ needs.flagship-tasks.outputs.failed_suites }}
           VERIFY_RESULT: ${{ needs.verify-final.result }}
+          REF: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          for r in "$LANES_JOB" "$LANES_RESULT" "$OUTCOMES_RESULT" "$VERIFY_RESULT"; do
-            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
-              echo "state=failed" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          done
-          # The jobs this tier must run green before its pass may close anything.
-          case "$TIER" in
-            smoke) required=("$LANES_JOB" "$LANES_RESULT") ;;
-            full) required=("$LANES_JOB" "$LANES_RESULT" "$OUTCOMES_RESULT") ;;
-            verify) required=("$VERIFY_RESULT") ;;
-            *)
-              echo "::error::release-escalation has no rule for tier '${TIER}' on a tag push. Add one here when util/eval_tiers.py decides a new tag tier."
-              exit 1
-              ;;
-          esac
-          for r in "${required[@]}"; do
-            if [ "$r" != "success" ]; then
-              echo "::notice title=Release eval issue::Tier ${TIER} did not run every job it needs (one read '${r}'), so this run neither files nor closes an issue."
-              echo "state=unproven" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          done
-          echo "state=passed" >> "$GITHUB_OUTPUT"
-
-      - name: Check out the auto-issue action
-        if: steps.outcome.outputs.state == 'failed' || steps.outcome.outputs.state == 'passed'
-        uses: actions/checkout@v7
-        with:
-          sparse-checkout: .github/actions/auto-issue
-          persist-credentials: false
+          [ -n "$MATRIX" ] || MATRIX='{"include": []}'
+          args=(--target flagship --tier "$TIER" --ref "$REF" --run-url "$RUN_URL"
+            --matrix-json "$MATRIX" --artifacts-dir lane-artifacts
+            --job "lanes=$LANES_JOB" --job "scenarios=$LANES_RESULT"
+            --job "outcomes=$OUTCOMES_RESULT" --job "verify=$VERIFY_RESULT"
+            --outcomes-failed "$OUTCOMES_FAILED"
+            --out-dir notice --github-output "$GITHUB_OUTPUT"
+            --step-summary "$GITHUB_STEP_SUMMARY")
+          [ -n "$BASELINE_DIR" ] && args+=(--baseline-dir "$BASELINE_DIR")
+          python util/eval_failure_notice.py "${args[@]}"
 
       - name: Ensure the eval-failure label exists
-        if: steps.outcome.outputs.state == 'failed'
+        if: steps.notice.outputs.verdict == 'regressed'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh label create eval-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
             --description "Automated eval failure" --force
 
-      # One issue per tier and tag; a re-run of the same tag comments on it.
-      - name: File (or update) the issue for this tag
-        if: steps.outcome.outputs.state == 'failed'
+      - name: File (or update) the flagship regression issue
+        if: steps.notice.outputs.verdict == 'regressed'
         uses: ./.github/actions/auto-issue
         with:
           mode: report
-          key: eval-flagship/${{ needs.eval-gate.outputs.tier }}/${{ github.ref_name }}
-          title: Flagship eval did not pass on ${{ github.ref_name }}
+          key: eval-regression/flagship
+          title: ${{ steps.notice.outputs.title }}
+          body-file: ${{ github.workspace }}/notice/body.md
+          update: edit
           labels: eval-failure
-          body: |
-            The flagship eval on release tag `${{ github.ref_name }}` did not pass. Publishing is not blocked by it.
 
-            - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-            - Tier: `${{ needs.eval-gate.outputs.tier }}` (eval/ci_tiers.json)
-            - Scenario lanes: `${{ needs.agent-eval.result }}`
-            - Outcomes (`gaia eval tasks`): `${{ needs.flagship-tasks.result }}`${{ needs.flagship-tasks.outputs.failed_suites && format(' - gate failed for: {0}', needs.flagship-tasks.outputs.failed_suites) || '' }}
-            - Final tag, full sweep found for this commit or an RC: `${{ needs.verify-final.result }}` (`skipped` on an RC)
-
-            Start with the run's summary page: it names which lanes measured, which measured nothing, and
-            how long each took. Then download the failing lane's `eval-<lane>` artifact - it carries the
-            transcripts, judge rationales, backend log and Lemonade logs. Those machines are ephemeral and
-            already destroyed, so the artifact is the only copy, and it expires in 14 days.
-
-            Compare with the previous tag's run first. A failure no change since then explains usually means
-            the environment moved, not the code: a Lemonade version bump, a re-quantised model, a driver or
-            runner-image change.
-
-            `cancelled` rather than `failure` means no measurement happened at all - a manual cancel, or a
-            lane that waited out GitHub's 24h queue limit. Re-dispatch the workflow on the tag.
-
-            A passing re-run closes this issue, and so does a later passing tag on the same major.minor line
-            whose tier covers this one (a full sweep covers smoke). A final tag's issue closes only on its own
-            passing re-run.
-
-      - name: Close the eval issues this pass disproves
-        if: steps.outcome.outputs.state == 'passed' && needs.eval-gate.outputs.tier != 'verify'
+      - name: Close the flagship regression issue
+        if: steps.notice.outputs.verdict == 'passed'
         uses: ./.github/actions/auto-issue
         with:
           mode: resolve
-          key-prefix: |
-            eval-flagship/smoke/
-            ${{ needs.eval-gate.outputs.tier == 'full' && 'eval-flagship/full/' || '' }}
-          legacy-title-prefix: ${{ needs.eval-gate.outputs.tier == 'full' && 'Flagship eval did not pass on ' || '' }}
+          key: eval-regression/flagship
+          note: "The flagship eval passed on `${{ github.ref_name }}` with no regression against the baseline (run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Closing automatically; reopen if this still needs a look."
+
+      # The per-tag issues filed before this job named regressions, up to this
+      # tag on its major.minor line.
+      - name: Close earlier tags' per-tag eval issues
+        if: steps.notice.outputs.verdict == 'passed'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key-prefix: eval-flagship/
+          legacy-title-prefix: "Flagship eval did not pass on "
           up-to-version: ${{ github.ref_name }}
-          note: "The flagship eval (`${{ needs.eval-gate.outputs.tier }}` tier) passed on `${{ github.ref_name }}` in run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Closing automatically; reopen if this failure still needs a look."
-
-      - name: Close this final tag's own verify issue
-        if: steps.outcome.outputs.state == 'passed' && needs.eval-gate.outputs.tier == 'verify'
-        uses: ./.github/actions/auto-issue
-        with:
-          mode: resolve
-          key: eval-flagship/verify/${{ github.ref_name }}
-          note: "A re-run on `${{ github.ref_name }}` found the full sweep that measured this release (run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Closing automatically."
+          note: "The flagship eval passed on `${{ github.ref_name }}` with no regression against the baseline (run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Closing automatically; reopen if this still needs a look."
