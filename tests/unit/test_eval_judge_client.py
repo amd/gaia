@@ -138,9 +138,6 @@ def test_api_key_wins_when_both_are_set(monkeypatch, fake_claude_bin):
     assert make_judge_client() is sentinel
 
 
-
-
-
 def test_max_tokens_reaches_only_the_sdk_client(monkeypatch):
     _set_api_key(monkeypatch, "sk-ant-api-test")
     sentinel = _stub_sdk_client(monkeypatch)
